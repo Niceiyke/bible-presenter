@@ -1,0 +1,31 @@
+# Node
+node_modules/
+dist/
+release/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Desktop Build Artifacts
+out/
+release/
+
+# Electron
+dist/
+
+# Large AI Models (if downloaded locally)
+*.bin
+*.pt
+*.onnx
+
+# SQLite
+*.db-journal
+*.db-wal
+*.db-shm
+
+# OS
+.DS_Store
+Thumbs.db

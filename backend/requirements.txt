@@ -1,0 +1,25 @@
+
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Database
+aiosqlite
+
+# AI/ML
+sentence-transformers
+chromadb
+
+# Speech Recognition
+faster-whisper
+openai-whisper
+torch
+torchaudio
+
+# NLP
+spacy
+
+# Utilities
+python-dotenv
+aiofiles
+requests
