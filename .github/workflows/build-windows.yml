@@ -47,6 +47,13 @@ jobs:
             exit 1
           fi
 
+          if [ -f "desktop/src/core-engine/bible_data/embeddings.npy" ]; then
+             cp -f "desktop/src/core-engine/bible_data/embeddings.npy" "desktop-rs/src-tauri/bible_data/embeddings.npy"
+          else
+             echo "Error: desktop/src/core-engine/bible_data/embeddings.npy not found!"
+             exit 1
+          fi
+
           echo "Verifying files..."
           ls -R desktop-rs/src-tauri/models/
           ls -R desktop-rs/src-tauri/bible_data/
