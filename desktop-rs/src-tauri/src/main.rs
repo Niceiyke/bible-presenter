@@ -23,12 +23,16 @@ struct AppState {
 #[tauri::command]
 async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
     let engine = state.engine.as_ref().ok_or("AI Models not loaded. Please ensure models are present in the resources directory.")?.clone();
+    let audio = state.audio.clone();
+    let store = state.store.clone();
+    drop(state);
     
     let (tx, mut rx) = tokio::sync::mpsc::channel(50);
-    let mut audio = state.audio.lock();
-    let store = state.store.clone();
-
-    audio.start_capturing(tx).map_err(|e: anyhow::Error| e.to_string())?;
+    
+    {
+        let mut audio_guard = audio.lock();
+        audio_guard.start_capturing(tx).map_err(|e: anyhow::Error| e.to_string())?;
+    }
 
     tokio::spawn(async move {
         let mut buffer = Vec::new();
