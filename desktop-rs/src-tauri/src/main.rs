@@ -169,12 +169,18 @@ fn main() {
         .setup(|app| {
             let resolver = app.path();
             let resource_path = resolver.resource_dir().expect("Failed to get resource dir");
+            println!("Resource Dir: {:?}", resource_path);
             
             let whisper_path = resource_path.join("resources/models/whisper-base.bin");
             let embedding_model_path = resource_path.join("resources/models/all-minilm-l6-v2.onnx");
             let tokenizer_path = resource_path.join("resources/models/tokenizer.json");
             let db_path = resource_path.join("resources/bible_data/bible.db");
             let embeddings_path = resource_path.join("resources/bible_data/embeddings.npy");
+
+            println!("Looking for DB at: {:?}", db_path);
+            if !db_path.exists() {
+                eprintln!("CRITICAL: Bible Database missing at {:?}", db_path);
+            }
 
             // Load Engine (Non-fatal if missing, just warn)
             let engine = match engine::TranscriptionEngine::new(
