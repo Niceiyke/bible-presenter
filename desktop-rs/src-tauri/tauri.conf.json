@@ -36,7 +36,11 @@
     "active": true,
     "targets": "all",
     "resources": [
-      "resources/**/*"
+      "resources/models/all-minilm-l6-v2.onnx",
+      "resources/models/whisper-base.bin",
+      "resources/models/tokenizer.json",
+      "resources/bible_data/bible.db",
+      "resources/bible_data/embeddings.npy"
     ]
   }
 }
