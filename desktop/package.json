@@ -2,7 +2,7 @@
   "name": "desktop",
   "version": "1.0.0",
   "description": "",
-  "main": "dist/main/index.js",
+  "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build && electron-builder",
@@ -15,8 +15,10 @@
       "output": "release"
     },
     "files": [
-      "dist/**/*",
-      "src/core-engine/**/*"
+      "out/**/*",
+      "src/core-engine/engine.py",
+      "src/core-engine/bible_data/**/*",
+      "src/core-engine/models/**/*"
     ],
     "extraResources": [
       {
@@ -26,9 +28,10 @@
     ],
     "win": {
       "target": [
-        "nsis"
+        "nsis",
+        "portable"
       ],
-      "artifactName": "${productName}-Setup-${version}.${ext}"
+      "artifactName": "${productName}-${version}-${ext}.${ext}"
     },
     "nsis": {
       "oneClick": false,

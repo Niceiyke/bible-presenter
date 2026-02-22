@@ -6,6 +6,7 @@ const OperatorView = () => {
   const [isListening, setIsListening] = useState(false)
   const audioContextRef = useRef<AudioContext | null>(null)
   const processorRef = useRef<ScriptProcessorNode | null>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
 
   const startListening = async () => {
     try {
@@ -13,7 +14,6 @@ const OperatorView = () => {
       audioContextRef.current = new AudioContext({ sampleRate: 16000 });
       const source = audioContextRef.current.createMediaStreamSource(stream);
       
-      // Using ScriptProcessor for simple PCM streaming
       processorRef.current = audioContextRef.current.createScriptProcessor(4096, 1, 1);
       
       source.connect(processorRef.current);
@@ -21,7 +21,6 @@ const OperatorView = () => {
 
       processorRef.current.onaudioprocess = (e) => {
         const inputData = e.inputBuffer.getChannelData(0);
-        // Convert to Int16 for Faster-Whisper
         const pcmData = new Int16Array(inputData.length);
         for (let i = 0; i < inputData.length; i++) {
           pcmData[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
@@ -45,9 +44,27 @@ const OperatorView = () => {
   };
 
   useEffect(() => {
-    (window as any).electron.on('transcription-update', (text: string) => {
-      setTranscription(prev => (prev.length > 500 ? text : prev + ' ' + text));
-      simulateDetection(text);
+    (window as any).electron.on('transcription-update', (data: any) => {
+      // Handle the new data structure from the hybrid engine
+      if (typeof data === 'string') {
+        setTranscription(prev => (prev.length > 1000 ? data : prev + ' ' + data));
+      } else {
+        setTranscription(prev => (prev.length > 1000 ? data.text : prev + ' ' + data.text));
+        
+        // Handle detected verses (explicit + semantic)
+        const allMatches = [...(data.matches || []), ...(data.semantic_matches || [])];
+        if (allMatches.length > 0) {
+          setDetectedVerses(prev => {
+            const newVerses = allMatches.filter(m => !prev.some(v => v.reference === m.reference));
+            return [...newVerses, ...prev].slice(0, 50); // Keep last 50
+          });
+        }
+      }
+      
+      // Auto-scroll transcription
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      }
     });
 
     (window as any).electron.on('verse-found', (verse: any) => {
@@ -73,56 +90,76 @@ const OperatorView = () => {
     <div className="p-8 w-screen h-screen bg-slate-900 text-white flex flex-col overflow-hidden">
       <header className="mb-8 flex justify-between items-center shrink-0">
         <div>
-           <h1 className="text-3xl font-bold text-bible-gold">Bible Presenter Core</h1>
-           <p className="text-slate-400 text-sm">Real-time Broadcast Mode Active</p>
+           <h1 className="text-3xl font-bold text-bible-gold font-serif">Bible Presenter</h1>
+           <p className="text-slate-400 text-sm tracking-widest uppercase">Hybrid Intelligence Mode</p>
         </div>
         <div className="flex gap-4">
           <input 
             type="text" 
-            placeholder="Manual search (e.g. John 3:16)"
-            className="bg-slate-800 px-4 py-2 rounded-lg border border-slate-700 w-64 focus:border-bible-gold outline-none"
+            placeholder="Quick Jump (e.g. John 3:16)"
+            className="bg-slate-800 px-4 py-2 rounded-lg border border-slate-700 w-64 focus:border-bible-gold outline-none transition-all"
             onKeyDown={handleManualSearch}
           />
           {!isListening ? (
             <button 
               onClick={startListening}
-              className="px-4 py-2 bg-bible-gold text-slate-900 rounded-lg font-bold hover:bg-yellow-500"
+              className="px-6 py-2 bg-bible-gold text-slate-900 rounded-lg font-bold hover:bg-yellow-500 shadow-lg shadow-yellow-900/20"
             >
-              Start Listening
+              Start AI Engine
             </button>
           ) : (
             <button 
               onClick={stopListening}
-              className="px-4 py-2 bg-red-600 text-white rounded-lg font-bold hover:bg-red-500"
+              className="px-6 py-2 bg-red-600 text-white rounded-lg font-bold hover:bg-red-500"
             >
-              Stop Listening
+              Stop AI Engine
             </button>
           )}
         </div>
       </header>
       
       <main className="flex-1 grid grid-cols-2 gap-8 overflow-hidden min-h-0">
-        <section className="bg-slate-800 p-6 rounded-xl flex flex-col overflow-hidden">
-          <h2 className="text-xl mb-4 font-semibold shrink-0">Live Transcription</h2>
-          <div className="flex-1 bg-slate-950 p-4 rounded-lg overflow-y-auto text-lg leading-relaxed text-slate-300 italic">
-            {transcription || 'Waiting for sermon audio...'}
-            <p className="mt-4 text-xs text-slate-500 italic">(Simulated: Search "John 3:16" in the manual box above to see detection in action)</p>
+        <section className="bg-slate-800/50 border border-slate-700 p-6 rounded-2xl flex flex-col overflow-hidden backdrop-blur-sm">
+          <h2 className="text-xs uppercase tracking-widest text-slate-500 mb-4 font-bold shrink-0">Live Sermon Context</h2>
+          <div ref={scrollRef} className="flex-1 bg-slate-950/50 p-6 rounded-xl overflow-y-auto text-xl leading-relaxed text-slate-200 font-serif italic border border-slate-800">
+            {transcription || 'AI Engine is offline. Start the engine to begin tracking.'}
           </div>
         </section>
 
-        <section className="bg-slate-800 p-6 rounded-xl flex flex-col overflow-hidden">
-          <h2 className="text-xl mb-4 font-semibold shrink-0">Detected Scriptures</h2>
-          <div className="flex-1 space-y-4 overflow-y-auto pr-2">
+        <section className="bg-slate-800/50 border border-slate-700 p-6 rounded-2xl flex flex-col overflow-hidden backdrop-blur-sm">
+          <h2 className="text-xs uppercase tracking-widest text-slate-500 mb-4 font-bold shrink-0">Detected & Suggested Scriptures</h2>
+          <div className="flex-1 space-y-4 overflow-y-auto pr-2 custom-scrollbar">
+            {detectedVerses.length === 0 && (
+                <div className="h-full flex flex-col items-center justify-center text-slate-600 italic">
+                    <p>Scriptures will appear here</p>
+                    <p className="text-xs">as the sermon progresses...</p>
+                </div>
+            )}
             {detectedVerses.map((v, i) => (
-                <div key={i} className="bg-bible-indigo p-4 rounded-lg border-l-4 border-bible-gold animate-in slide-in-from-right duration-300">
-                    <p className="text-xs uppercase text-slate-400 font-bold mb-1">Detected Reference</p>
-                    <p className="text-xl font-serif">{v.reference}</p>
-                    <p className="text-sm text-slate-300 line-clamp-2 italic my-2">{v.text}</p>
+                <div key={i} className={`p-5 rounded-xl border-l-4 animate-in slide-in-from-right duration-500 ${
+                    v.type === 'explicit' 
+                        ? 'bg-bible-indigo border-bible-gold' 
+                        : 'bg-slate-800 border-indigo-400 opacity-90'
+                }`}>
+                    <div className="flex justify-between items-start mb-2">
+                        <span className={`text-[10px] uppercase font-black px-2 py-0.5 rounded ${
+                            v.type === 'explicit' ? 'bg-bible-gold text-slate-900' : 'bg-indigo-500 text-white'
+                        }`}>
+                            {v.type === 'explicit' ? 'Direct Reference' : `Semantic Match (${Math.round(v.score * 100)}%)`}
+                        </span>
+                        <span className="text-xs text-slate-500 font-mono">#{i + 1}</span>
+                    </div>
+                    <p className="text-2xl font-serif text-white">{v.reference}</p>
+                    <p className="text-sm text-slate-300 line-clamp-3 italic my-3 leading-relaxed">"{v.text}"</p>
                     <button 
                         onClick={() => projectVerse(v)}
-                        className="mt-2 w-full py-2 bg-bible-gold text-slate-900 rounded font-bold hover:bg-yellow-500 transition-colors"
+                        className={`mt-2 w-full py-2.5 rounded-lg font-bold transition-all ${
+                            v.type === 'explicit' 
+                                ? 'bg-bible-gold text-slate-900 hover:bg-yellow-500' 
+                                : 'bg-indigo-600 text-white hover:bg-indigo-500'
+                        }`}
                     >
-                        Project to Screen
+                        Project to Output
                     </button>
                 </div>
             ))}
@@ -142,20 +179,20 @@ const OutputView = () => {
     });
   }, []);
 
-  if (!verse) return <div className="bg-transparent w-screen h-screen"></div>;
+  if (!verse) return <div className="bg-slate-950 w-screen h-screen"></div>;
 
   return (
-    <div className="w-screen h-screen flex flex-col justify-center items-center p-20 bg-slate-900 animate-in fade-in duration-500">
-      <div className="max-w-5xl text-center">
-        <h2 className="text-5xl font-serif text-white leading-tight mb-12 drop-shadow-lg">
+    <div className="w-screen h-screen flex flex-col justify-center items-center p-24 bg-slate-950 overflow-hidden">
+      <div className="max-w-6xl text-center animate-in zoom-in-95 fade-in duration-700">
+        <h2 className="text-6xl font-serif text-white leading-tight mb-16 drop-shadow-2xl">
           "{verse.text}"
         </h2>
-        <div className="flex items-center justify-center gap-4">
-            <div className="h-[2px] w-20 bg-bible-gold"></div>
-            <p className="text-4xl font-sans text-bible-gold font-bold uppercase tracking-[0.2em]">
+        <div className="flex items-center justify-center gap-6">
+            <div className="h-[1px] w-32 bg-gradient-to-r from-transparent to-bible-gold"></div>
+            <p className="text-4xl font-sans text-bible-gold font-bold uppercase tracking-[0.3em] drop-shadow">
                 {verse.reference}
             </p>
-            <div className="h-[2px] w-20 bg-bible-gold"></div>
+            <div className="h-[1px] w-32 bg-gradient-to-l from-transparent to-bible-gold"></div>
         </div>
       </div>
     </div>
@@ -172,10 +209,10 @@ function App() {
   }, []);
 
   return (
-    <div className="app bg-slate-950">
+    <div className="app bg-slate-950 selection:bg-bible-gold selection:text-slate-900">
       {view === 'operator' ? <OperatorView /> : <OutputView />}
     </div>
   )
 }
 
-export default App
+export default App;

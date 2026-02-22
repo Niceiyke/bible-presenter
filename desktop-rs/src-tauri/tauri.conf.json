@@ -1,0 +1,46 @@
+{
+  "productName": "Bible Presenter RS",
+  "version": "0.1.0",
+  "identifier": "com.biblepresenter.rs",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Bible Presenter - Operator",
+        "width": 1200,
+        "height": 800,
+        "label": "main"
+      },
+      {
+        "title": "Bible Presenter - Output",
+        "label": "output",
+        "width": 1920,
+        "height": 1080,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "fullscreen": false,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: https://asset.localhost;"
+    }
+  },
+    "bundle": {
+      "active": true,
+      "targets": "all",
+      "resources": [
+        "models/all-minilm-l6-v2.onnx",
+        "models/whisper-base.bin",
+        "models/tokenizer.json",
+        "bible_data/bible.db",
+        "bible_data/embeddings.npy"
+      ]
+    }
+}

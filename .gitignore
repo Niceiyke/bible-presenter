@@ -16,7 +16,8 @@ release/
 # Electron
 dist/
 
-# Large AI Models (if downloaded locally)
+# Large AI Models
+src/core-engine/models/
 *.bin
 *.pt
 *.onnx
@@ -29,3 +30,4 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+desktop/src/core-engine/models/

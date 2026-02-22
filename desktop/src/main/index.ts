@@ -100,3 +100,27 @@ ipcMain.on('audio-chunk', (event, buffer: ArrayBuffer) => {
 ipcMain.on('search-verse', (event, reference) => {
   pythonSidecar?.stdin?.write(JSON.stringify({ action: 'search', reference }) + '\n');
 });
+
+ipcMain.on('update-verse', (event, verse) => {
+  outputWindow?.webContents.send('verse-updated', verse);
+});
+
+app.whenReady().then(() => {
+  createOperatorWindow();
+  createOutputWindow();
+  startPythonSidecar();
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createOperatorWindow();
+      createOutputWindow();
+    }
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    app.quit();
+  }
+  pythonSidecar?.kill();
+});
