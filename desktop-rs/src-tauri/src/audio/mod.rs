@@ -1,9 +1,10 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use tokio::sync::mpsc;
+use std::sync::Arc;
 use rubato::{Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters, WindowFunction};
 
 pub struct AudioEngine {
-    stream: Option<cpal::Stream>,
+    stream: Option<Arc<cpal::Stream>>,
     selected_device_name: Option<String>,
     active_tx: Option<mpsc::Sender<Vec<f32>>>,
     vad_threshold: f32,
@@ -29,7 +30,6 @@ impl AudioEngine {
         let mut list = Vec::new();
         for device in devices {
             if let Ok(name) = device.name() {
-                // Using name as ID for simplicity
                 list.push((name.clone(), name));
             }
         }
@@ -39,7 +39,6 @@ impl AudioEngine {
     pub fn select_device(&mut self, device_name: &str) -> anyhow::Result<()> {
         self.selected_device_name = Some(device_name.to_string());
         
-        // If we are currently capturing, restart with the new device
         if let Some(tx) = self.active_tx.clone() {
             self.stop();
             self.start_capturing(tx)?;
@@ -64,8 +63,6 @@ impl AudioEngine {
         let sample_rate = config.sample_rate().0 as f64;
         let target_rate = 16000.0;
 
-        println!("Audio: Hardware is {}Hz. Resampling to 16kHz via Sinc Interpolation.", sample_rate);
-
         let vad = self.vad_threshold;
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => self.build_stream::<f32>(&device, &config.into(), sample_rate, target_rate, vad, tx)?,
@@ -75,7 +72,7 @@ impl AudioEngine {
         };
 
         stream.play()?;
-        self.stream = Some(stream);
+        self.stream = Some(Arc::new(stream));
         Ok(())
     }
 
@@ -135,3 +132,4 @@ impl AudioEngine {
         self.stream = None; 
     }
 }
+
