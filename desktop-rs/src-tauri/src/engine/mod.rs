@@ -1,5 +1,5 @@
 use whisper_rs::{WhisperContext, WhisperContextParameters, FullParams, SamplingStrategy};
-use ort::{session::Session, session::builder::SessionBuilder};
+use ort::session::Session;
 use ndarray::{Array2, Axis};
 use tokenizers::Tokenizer;
 
@@ -59,9 +59,9 @@ impl TranscriptionEngine {
         let token_type_ids_array = Array2::from_shape_vec((1, seq_len), token_type_ids)?;
 
         let inputs = ort::inputs![
-            "input_ids" => input_ids_array.view(),
-            "attention_mask" => attention_mask_array.view(),
-            "token_type_ids" => token_type_ids_array.view(),
+            "input_ids" => input_ids_array,
+            "attention_mask" => attention_mask_array,
+            "token_type_ids" => token_type_ids_array,
         ];
         
         let outputs = self.embedding_session.run(inputs)?;
