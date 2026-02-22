@@ -3,8 +3,16 @@ use tokio::sync::mpsc;
 use std::sync::Arc;
 use rubato::{Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters, WindowFunction};
 
+/// A thread-safe wrapper for cpal::Stream.
+/// 
+/// SAFETY: cpal::Stream on Windows is !Send/!Sync because it contains raw pointers (WASAPI handles).
+/// However, we manage access via Mutex<AudioEngine> in AppState, ensuring synchronized access.
+struct StreamHandle(cpal::Stream);
+unsafe impl Send for StreamHandle {}
+unsafe impl Sync for StreamHandle {}
+
 pub struct AudioEngine {
-    stream: Option<Arc<cpal::Stream>>,
+    stream: Option<Arc<StreamHandle>>,
     selected_device_name: Option<String>,
     active_tx: Option<mpsc::Sender<Vec<f32>>>,
     vad_threshold: f32,
@@ -72,7 +80,7 @@ impl AudioEngine {
         };
 
         stream.play()?;
-        self.stream = Some(Arc::new(stream));
+        self.stream = Some(Arc::new(StreamHandle(stream)));
         Ok(())
     }
 
@@ -132,4 +140,5 @@ impl AudioEngine {
         self.stream = None; 
     }
 }
+
 
