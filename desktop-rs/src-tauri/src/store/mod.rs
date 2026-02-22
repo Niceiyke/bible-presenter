@@ -31,20 +31,22 @@ impl BibleStore {
         conn.execute("PRAGMA journal_mode=WAL", [])?;
         
         // Pre-load verses for manual search/fallback
-        let mut stmt = conn.prepare("SELECT id, book, chapter, verse, text FROM verses ORDER BY id")?;
-        let verse_iter = stmt.query_map([], |row| {
-            Ok(Verse {
-                id: row.get(0)?,
-                book: row.get(1)?,
-                chapter: row.get(2)?,
-                verse: row.get(3)?,
-                text: row.get(4)?,
-            })
-        })?;
-
         let mut verse_cache = Vec::new();
-        for verse in verse_iter {
-            verse_cache.push(verse?);
+        {
+            let mut stmt = conn.prepare("SELECT id, book, chapter, verse, text FROM verses ORDER BY id")?;
+            let verse_iter = stmt.query_map([], |row| {
+                Ok(Verse {
+                    id: row.get(0)?,
+                    book: row.get(1)?,
+                    chapter: row.get(2)?,
+                    verse: row.get(3)?,
+                    text: row.get(4)?,
+                })
+            })?;
+
+            for verse in verse_iter {
+                verse_cache.push(verse?);
+            }
         }
 
         let embeddings = if let Some(path) = embeddings_path {

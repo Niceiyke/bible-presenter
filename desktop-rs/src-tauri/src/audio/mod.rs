@@ -81,13 +81,14 @@ impl AudioEngine {
 
     fn build_stream<T>(&self, device: &cpal::Device, config: &cpal::StreamConfig, source_rate: f64, target_rate: f64, vad_threshold: f32, tx: mpsc::Sender<Vec<f32>>) 
     -> anyhow::Result<cpal::Stream> 
-    where T: cpal::Sample + Into<f32> + 'static {
+    where T: cpal::Sample + Into<f32> + 'static + cpal::SizedSample {
         let channels = config.channels as usize;
         let params = SincInterpolationParameters {
             sinc_len: 256,
             f_cutoff: 0.95,
             interpolation: SincInterpolationType::Linear,
             window: WindowFunction::BlackmanHarris2,
+            oversampling_factor: 256,
         };
         
         let mut resampler = SincFixedIn::<f32>::new(
