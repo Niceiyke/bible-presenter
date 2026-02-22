@@ -4,5 +4,5 @@ target/
 src-tauri/target/
 src-tauri/models/*.bin
 src-tauri/models/*.onnx
-src-tauri/bible_data/*.db
-src-tauri/bible_data/*.npy
+!src-tauri/bible_data/*.db
+!src-tauri/bible_data/*.npy
