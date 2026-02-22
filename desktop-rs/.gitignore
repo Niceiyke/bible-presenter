@@ -2,6 +2,8 @@ node_modules/
 dist/
 target/
 src-tauri/target/
-src-tauri/resources/models/
+src-tauri/resources/models/*.bin
+src-tauri/resources/models/*.onnx
+!src-tauri/resources/models/tokenizer.json
 !src-tauri/resources/bible_data/*.db
 !src-tauri/resources/bible_data/*.npy
