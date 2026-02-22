@@ -71,6 +71,10 @@ jobs:
         run: |
           cd desktop-rs
           npm run tauri build
+        env:
+          RUSTFLAGS: "-C target-feature=-crt-static"
+          MSVC_RUNTIME_LIBRARY: "MultiThreadedDLL"
+          VCPKG_DEFAULT_TRIPLET: "x64-windows"
 
       - name: upload artifact
         uses: actions/upload-artifact@v4
