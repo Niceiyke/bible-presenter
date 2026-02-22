@@ -21,14 +21,14 @@ struct AppState {
 }
 
 #[tauri::command]
-async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
     let engine = state.engine.as_ref().ok_or("AI Models not loaded. Please ensure models are present in the resources directory.")?.clone();
     
     let (tx, mut rx) = tokio::sync::mpsc::channel(50);
     let mut audio = state.audio.lock();
     let store = state.store.clone();
 
-    audio.start_capturing(tx).map_err(|e| e.to_string())?;
+    audio.start_capturing(tx).map_err(|e: anyhow::Error| e.to_string())?;
 
     tokio::spawn(async move {
         let mut buffer = Vec::new();
@@ -44,7 +44,7 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
                 let s_clone = store.clone();
                 
                 // HYBRID DETECTION: Reference Regex + Semantic AI
-                let result = tokio::task::spawn_blocking(move || {
+                let result: Option<(String, Option<store::Verse>)> = tokio::task::spawn_blocking(move || {
                     let text = e_clone.transcribe(&b_clone).ok()?;
                     
                     // Generate embedding for semantic search
@@ -82,76 +82,76 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
 async fn toggle_output_window(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("output") {
         if window.is_visible().unwrap_or(false) {
-            window.hide().map_err(|e| e.to_string())?;
+            window.hide().map_err(|e: tauri::Error| e.to_string())?;
         } else {
             // Attempt to find a secondary monitor
-            let monitors = window.available_monitors().map_err(|e| e.to_string())?;
+            let monitors = window.available_monitors().map_err(|e: tauri::Error| e.to_string())?;
             if monitors.len() > 1 {
                 // Find the first monitor that isn't the primary one
-                if let Some(primary) = window.primary_monitor().map_err(|e| e.to_string())? {
+                if let Some(primary) = window.primary_monitor().map_err(|e: tauri::Error| e.to_string())? {
                     for monitor in monitors {
                         if monitor.name() != primary.name() {
                             let pos = monitor.position();
                             window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
                                 x: pos.x,
                                 y: pos.y,
-                            })).map_err(|e| e.to_string())?;
-                            window.set_fullscreen(true).map_err(|e| e.to_string())?;
+                            })).map_err(|e: tauri::Error| e.to_string())?;
+                            window.set_fullscreen(true).map_err(|e: tauri::Error| e.to_string())?;
                             break;
                         }
                     }
                 }
             }
             
-            window.show().map_err(|e| e.to_string())?;
-            window.set_focus().map_err(|e| e.to_string())?;
+            window.show().map_err(|e: tauri::Error| e.to_string())?;
+            window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
         }
     }
     Ok(())
 }
 
 #[tauri::command]
-async fn get_audio_devices(state: State<'_, AppState>) -> Result<Vec<(String, String)>, String> {
+async fn get_audio_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<(String, String)>, String> {
     let audio = state.audio.lock();
-    audio.list_devices().map_err(|e| e.to_string())
+    audio.list_devices().map_err(|e: anyhow::Error| e.to_string())
 }
 
 #[tauri::command]
-async fn set_audio_device(state: State<'_, AppState>, device_name: String) -> Result<(), String> {
+async fn set_audio_device(state: State<'_, Arc<AppState>>, device_name: String) -> Result<(), String> {
     let mut audio = state.audio.lock();
-    audio.select_device(&device_name).map_err(|e| e.to_string())
+    audio.select_device(&device_name).map_err(|e: anyhow::Error| e.to_string())
 }
 
 #[tauri::command]
-async fn set_vad_threshold(state: State<'_, AppState>, threshold: f32) -> Result<(), String> {
+async fn set_vad_threshold(state: State<'_, Arc<AppState>>, threshold: f32) -> Result<(), String> {
     let mut audio = state.audio.lock();
     audio.set_vad_threshold(threshold);
     Ok(())
 }
 
 #[tauri::command]
-async fn search_manual(state: State<'_, AppState>, query: String) -> Result<Vec<store::Verse>, String> {
-    state.store.search_manual(&query).map_err(|e| e.to_string())
+async fn search_manual(state: State<'_, Arc<AppState>>, query: String) -> Result<Vec<store::Verse>, String> {
+    state.store.search_manual(&query).map_err(|e: anyhow::Error| e.to_string())
 }
 
 #[tauri::command]
-async fn get_books(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    state.store.get_books().map_err(|e| e.to_string())
+async fn get_books(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, String> {
+    state.store.get_books().map_err(|e: anyhow::Error| e.to_string())
 }
 
 #[tauri::command]
-async fn get_chapters(state: State<'_, AppState>, book: String) -> Result<Vec<i32>, String> {
-    state.store.get_chapters(&book).map_err(|e| e.to_string())
+async fn get_chapters(state: State<'_, Arc<AppState>>, book: String) -> Result<Vec<i32>, String> {
+    state.store.get_chapters(&book).map_err(|e: anyhow::Error| e.to_string())
 }
 
 #[tauri::command]
-async fn get_verses_count(state: State<'_, AppState>, book: String, chapter: i32) -> Result<Vec<i32>, String> {
-    state.store.get_verses_count(&book, chapter).map_err(|e| e.to_string())
+async fn get_verses_count(state: State<'_, Arc<AppState>>, book: String, chapter: i32) -> Result<Vec<i32>, String> {
+    state.store.get_verses_count(&book, chapter).map_err(|e: anyhow::Error| e.to_string())
 }
 
 #[tauri::command]
-async fn get_verse(state: State<'_, AppState>, book: String, chapter: i32, verse: i32) -> Result<Option<store::Verse>, String> {
-    state.store.get_verse(&book, chapter, verse).map_err(|e| e.to_string())
+async fn get_verse(state: State<'_, Arc<AppState>>, book: String, chapter: i32, verse: i32) -> Result<Option<store::Verse>, String> {
+    state.store.get_verse(&book, chapter, verse).map_err(|e: anyhow::Error| e.to_string())
 }
 
 #[tauri::command]
@@ -202,7 +202,7 @@ fn main() {
 
             let audio = Arc::new(Mutex::new(audio::AudioEngine::new()));
 
-            app.manage(AppState { audio, engine, store });
+            app.manage(Arc::new(AppState { audio, engine, store }));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
