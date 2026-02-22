@@ -59,7 +59,7 @@ impl TranscriptionEngine {
             "input_ids" => Tensor::from_array(([1usize, seq_len], input_ids))?,
             "attention_mask" => Tensor::from_array(([1usize, seq_len], attention_mask))?,
             "token_type_ids" => Tensor::from_array(([1usize, seq_len], token_type_ids))?,
-        ];
+        ]?;
 
         let outputs = self.embedding_session.run(inputs)?;
         let (shape, data) = outputs["last_hidden_state"].try_extract_tensor::<f32>()?;
