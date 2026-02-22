@@ -3,10 +3,11 @@ rustflags = ["-C", "target-feature=-crt-static"]
 
 [env]
 RUSTFLAGS = "-C target-feature=-crt-static"
-
 # Force native dependencies compiled via cc-rs to use the dynamic CRT
 VCPKG_DEFAULT_TRIPLET = "x64-windows"
 MSVC_RUNTIME_LIBRARY = "MultiThreadedDLL"
+CFLAGS = "/MD"
+CXXFLAGS = "/MD"
 
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=-crt-static"]
