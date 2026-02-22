@@ -31,9 +31,9 @@ jobs:
       - name: download models
         shell: bash
         run: |
-          mkdir -p desktop-rs/src-tauri/models
-          curl -L "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx" -o "desktop-rs/src-tauri/models/all-minilm-l6-v2.onnx"
-          curl -L "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" -o "desktop-rs/src-tauri/models/whisper-base.bin"
+          mkdir -p desktop-rs/src-tauri/resources/models
+          curl -L "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx" -o "desktop-rs/src-tauri/resources/models/all-minilm-l6-v2.onnx"
+          curl -L "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" -o "desktop-rs/src-tauri/resources/models/whisper-base.bin"
           find . -name "bible.db"
           find . -name "whisper-base.bin"
 
