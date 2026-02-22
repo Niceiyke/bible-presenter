@@ -20,7 +20,7 @@ cpal = "0.15.3"
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 rubato = "0.14"      # High-quality resampling
 tokenizers = "0.19"
-ort = { version = "2.0.0-rc.11", features = ["ndarray"] }
+ort = "2.0.0-rc.11"
 ndarray = "0.15"     # Tensor manipulation
 ndarray-npy = "0.8"  # Load .npy files
 anyhow = "1.0"        

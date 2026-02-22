@@ -1,7 +1,6 @@
 use whisper_rs::{WhisperContext, WhisperContextParameters, FullParams, SamplingStrategy};
 use ort::session::Session;
-use ort::Tensor;
-use ndarray::{Array2, Axis};
+use ort::value::Tensor;
 use tokenizers::Tokenizer;
 
 
@@ -32,7 +31,7 @@ impl TranscriptionEngine {
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         params.set_n_threads(num_cpus::get() as i32);
         params.set_language(Some("en"));
-        
+
         let mut state = self.whisper.create_state()?;
         state.full(params, audio_data)?;
 
@@ -49,41 +48,44 @@ impl TranscriptionEngine {
     pub fn embed(&self, text: &str) -> anyhow::Result<Vec<f32>> {
         let encoding = self.tokenizer.encode(text, true)
             .map_err(|e| anyhow::anyhow!("Tokenization error: {}", e))?;
-        
-        let input_ids = encoding.get_ids().iter().map(|&id| id as i64).collect::<Vec<_>>();
-        let attention_mask = encoding.get_attention_mask().iter().map(|&m| m as i64).collect::<Vec<_>>();
-        let token_type_ids = encoding.get_type_ids().iter().map(|&i| i as i64).collect::<Vec<_>>();
-        
+
+        let input_ids: Vec<i64> = encoding.get_ids().iter().map(|&id| id as i64).collect();
+        let attention_mask: Vec<i64> = encoding.get_attention_mask().iter().map(|&m| m as i64).collect();
+        let token_type_ids: Vec<i64> = encoding.get_type_ids().iter().map(|&i| i as i64).collect();
+
         let seq_len = input_ids.len();
-        let input_ids_array = Array2::from_shape_vec((1, seq_len), input_ids)?;
-        let attention_mask_array = Array2::from_shape_vec((1, seq_len), attention_mask)?;
-        let token_type_ids_array = Array2::from_shape_vec((1, seq_len), token_type_ids)?;
 
         let inputs = ort::inputs![
-            "input_ids" => Tensor::from_array(input_ids_array)?,
-            "attention_mask" => Tensor::from_array(attention_mask_array)?,
-            "token_type_ids" => Tensor::from_array(token_type_ids_array)?,
-        ]?;
+            "input_ids" => Tensor::from_array(([1usize, seq_len], input_ids))?,
+            "attention_mask" => Tensor::from_array(([1usize, seq_len], attention_mask))?,
+            "token_type_ids" => Tensor::from_array(([1usize, seq_len], token_type_ids))?,
+        ];
 
         let outputs = self.embedding_session.run(inputs)?;
-        let token_embeddings = outputs["last_hidden_state"].try_extract_array::<f32>()?;
-        
-        // Mean pooling over the sequence dimension (dim 1)
-        // token_embeddings is (batch, seq, dim)
-        let mean_embedding = token_embeddings
-            .mean_axis(Axis(1))
-            .ok_or_else(|| anyhow::anyhow!("Failed to compute mean pooling"))?;
-        
-        // Remove batch dimension (dim 0)
-        let mean_embedding = mean_embedding.index_axis(Axis(0), 0);
+        let (shape, data) = outputs["last_hidden_state"].try_extract_tensor::<f32>()?;
 
-        // L2 Normalization for Cosine Similarity
-        let mut embedding = mean_embedding.to_owned();
-        let norm = embedding.mapv(|x| x * x).sum().sqrt();
-        if norm > 0.0 {
-            embedding /= norm;
+        // shape is [batch=1, seq_len, hidden_dim]
+        let dim = shape[2] as usize;
+
+        // Mean pooling over the sequence dimension
+        let mut mean = vec![0.0f32; dim];
+        for s in 0..seq_len {
+            for d in 0..dim {
+                mean[d] += data[s * dim + d];
+            }
+        }
+        for d in 0..dim {
+            mean[d] /= seq_len as f32;
         }
 
-        Ok(embedding.into_raw_vec())
+        // L2 Normalization for Cosine Similarity
+        let norm: f32 = mean.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > 0.0 {
+            for x in &mut mean {
+                *x /= norm;
+            }
+        }
+
+        Ok(mean)
     }
 }
