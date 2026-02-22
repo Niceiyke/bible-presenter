@@ -30,7 +30,7 @@ num_cpus = "=1.16.0"
 
 [lib]
 name = "bible_presenter_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [[bin]]
 name = "bible-presenter"
