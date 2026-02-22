@@ -31,14 +31,34 @@ jobs:
       - name: download models
         shell: bash
         run: |
+          set -e
           mkdir -p desktop-rs/src-tauri/models
           mkdir -p desktop-rs/src-tauri/bible_data
+          
+          echo "Downloading AI models..."
           curl -L "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx" -o "desktop-rs/src-tauri/models/all-minilm-l6-v2.onnx"
           curl -L "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" -o "desktop-rs/src-tauri/models/whisper-base.bin"
-          cp backend/bible_data/bible.db desktop-rs/src-tauri/bible_data/bible.db
-          cat desktop-rs/src-tauri/tauri.conf.json
-          find . -name "bible.db"
-          find . -name "whisper-base.bin"
+          
+          echo "Syncing Bible Database..."
+          if [ -f "backend/bible_data/bible.db" ]; then
+            cp -f "backend/bible_data/bible.db" "desktop-rs/src-tauri/bible_data/bible.db"
+          else
+            echo "Error: backend/bible_data/bible.db not found!"
+            exit 1
+          fi
+
+          echo "Verifying files..."
+          ls -R desktop-rs/src-tauri/models/
+          ls -R desktop-rs/src-tauri/bible_data/
+          
+          if [ ! -f "desktop-rs/src-tauri/bible_data/bible.db" ]; then
+            echo "CRITICAL: bible.db missing!"
+            exit 1
+          fi
+          if [ ! -f "desktop-rs/src-tauri/bible_data/embeddings.npy" ]; then
+            echo "CRITICAL: embeddings.npy missing!"
+            exit 1
+          fi
 
       - name: build tauri app
         run: |
