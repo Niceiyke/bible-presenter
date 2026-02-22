@@ -1,4 +1,5 @@
-// Prevents additional console window on Windows in release
+// Bible Presenter RS Main Entry Point
+// Triggering fresh CI build with reorganized resources
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use tauri::{AppHandle, Manager, State, Emitter};
