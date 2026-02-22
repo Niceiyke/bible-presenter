@@ -2,11 +2,12 @@ use whisper_rs::{WhisperContext, WhisperContextParameters, FullParams, SamplingS
 use ort::session::Session;
 use ort::value::Tensor;
 use tokenizers::Tokenizer;
+use parking_lot::Mutex;
 
 
 pub struct TranscriptionEngine {
     whisper: WhisperContext,
-    embedding_session: Session,
+    embedding_session: Mutex<Session>,
     tokenizer: Tokenizer,
 }
 
@@ -24,7 +25,7 @@ impl TranscriptionEngine {
         let tokenizer = Tokenizer::from_file(tokenizer_path)
             .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
 
-        Ok(Self { whisper, embedding_session, tokenizer })
+        Ok(Self { whisper, embedding_session: Mutex::new(embedding_session), tokenizer })
     }
 
     pub fn transcribe(&self, audio_data: &[f32]) -> anyhow::Result<String> {
@@ -59,9 +60,9 @@ impl TranscriptionEngine {
             "input_ids" => Tensor::from_array(([1usize, seq_len], input_ids))?,
             "attention_mask" => Tensor::from_array(([1usize, seq_len], attention_mask))?,
             "token_type_ids" => Tensor::from_array(([1usize, seq_len], token_type_ids))?,
-        ]?;
+        ];
 
-        let outputs = self.embedding_session.run(inputs)?;
+        let outputs = self.embedding_session.lock().run(inputs)?;
         let (shape, data) = outputs["last_hidden_state"].try_extract_tensor::<f32>()?;
 
         // shape is [batch=1, seq_len, hidden_dim]
