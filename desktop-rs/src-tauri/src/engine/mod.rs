@@ -62,7 +62,8 @@ impl TranscriptionEngine {
             "token_type_ids" => Tensor::from_array(([1usize, seq_len], token_type_ids))?,
         ];
 
-        let outputs = self.embedding_session.lock().run(inputs)?;
+        let mut session = self.embedding_session.lock();
+        let outputs = session.run(inputs)?;
         let (shape, data) = outputs["last_hidden_state"].try_extract_tensor::<f32>()?;
 
         // shape is [batch=1, seq_len, hidden_dim]
