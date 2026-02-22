@@ -75,6 +75,9 @@ jobs:
           RUSTFLAGS: "-C target-feature=-crt-static"
           MSVC_RUNTIME_LIBRARY: "MultiThreadedDLL"
           VCPKG_DEFAULT_TRIPLET: "x64-windows"
+          CFLAGS: "/MD"
+          CXXFLAGS: "/MD"
+          CMAKE_MSVC_RUNTIME_LIBRARY: "MultiThreadedDLL"
 
       - name: upload artifact
         uses: actions/upload-artifact@v4
