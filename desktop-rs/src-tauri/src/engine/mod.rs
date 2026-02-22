@@ -59,10 +59,10 @@ impl TranscriptionEngine {
         let token_type_ids_array = Array2::from_shape_vec((1, seq_len), token_type_ids)?;
 
         let inputs = ort::inputs![
-            "input_ids" => input_ids_array,
-            "attention_mask" => attention_mask_array,
-            "token_type_ids" => token_type_ids_array,
-        ];
+            "input_ids" => ort::value::Value::from_array(input_ids_array)?,
+            "attention_mask" => ort::value::Value::from_array(attention_mask_array)?,
+            "token_type_ids" => ort::value::Value::from_array(token_type_ids_array)?,
+        ]?;
         
         let outputs = self.embedding_session.run(inputs)?;
         let token_embeddings = outputs["last_hidden_state"].try_extract_tensor::<f32>()?;
@@ -70,7 +70,6 @@ impl TranscriptionEngine {
         // Mean pooling over the sequence dimension (dim 1)
         // token_embeddings is likely (batch, seq, dim)
         let mean_embedding = token_embeddings
-            .into_dimensionality::<ndarray::Ix3>()?
             .mean_axis(Axis(1))
             .ok_or_else(|| anyhow::anyhow!("Failed to compute mean pooling"))?;
         
