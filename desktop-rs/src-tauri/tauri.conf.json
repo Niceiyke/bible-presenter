@@ -52,13 +52,11 @@
     "windows": {
       "nsis": {
         "languages": [
-          "English"
-        ],
-        "includeMSVCRT": true
+          "en-US"
+        ]
       },
       "wix": {
-        "language": "en-US",
-        "redist_path": ""
+        "language": "en-US"
       }
     }
   }
