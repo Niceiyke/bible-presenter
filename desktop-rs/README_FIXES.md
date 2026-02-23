@@ -16,6 +16,23 @@ This directory contains the fixed Rust version of the Bible Presenter.
 4.  **Database Compatibility**:
     - Fixed `store/mod.rs` to query the `verses` table instead of `bible`.
 
+## Troubleshooting
+
+### Missing DLLs (MSVCP140.dll, VCRUNTIME140.dll)
+If you encounter errors saying these DLLs were not found when running the Windows version:
+1.  **Issue**: The app is dynamically linked and needs the C++ runtime.
+2.  **Fix**: Install the **Microsoft Visual C++ Redistributable for Visual Studio 2015, 2017, 2019, and 2022**.
+    - Download: [vc_redist.x64.exe](https://aka.ms/vs/17/release/vc_redist.x64.exe)
+
+### App Exits/Crashes at Startup
+If the application exits unexpectedly after opening:
+1.  **Check Logs**: Look for `app.log` in your local app data directory:
+    - `C:\Users\<YourUsername>\AppData\Local\com.biblepresenter.rs\logs\app.log`
+2.  **Common Causes**:
+    - Missing models in `src-tauri/models/`.
+    - Database file `bible.db` is locked or corrupted.
+    - No audio input devices found.
+
 ## Setup Instructions
 
 ### 1. AI Models
