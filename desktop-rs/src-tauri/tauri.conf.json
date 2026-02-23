@@ -52,7 +52,7 @@
     "windows": {
       "nsis": {
         "languages": [
-          "en-US"
+          "English"
         ]
       },
       "wix": {
