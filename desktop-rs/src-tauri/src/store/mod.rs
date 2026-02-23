@@ -28,7 +28,11 @@ pub struct BibleStore {
 impl BibleStore {
     pub fn new(db_path: &str, embeddings_path: Option<&str>) -> anyhow::Result<Self> {
         let conn = Connection::open(db_path)?;
-        conn.execute("PRAGMA journal_mode=WAL", [])?;
+        
+        // Attempt WAL mode but don't fail if it doesn't work (e.g. read-only fs)
+        if let Err(e) = conn.execute("PRAGMA journal_mode=WAL", []) {
+            eprintln!("Warning: Could not set WAL mode: {}", e);
+        }
         
         // Pre-load verses for manual search/fallback
         let mut verse_cache = Vec::new();
@@ -48,6 +52,7 @@ impl BibleStore {
                 verse_cache.push(verse?);
             }
         }
+        println!("BibleStore: Cached {} verses", verse_cache.len());
 
         let embeddings = if let Some(path) = embeddings_path {
             match File::open(path) {

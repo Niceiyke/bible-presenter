@@ -7,6 +7,8 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use serde::Serialize;
 use bible_presenter_lib::{audio, engine, store};
+use std::fs::OpenOptions;
+use std::io::Write;
 
 #[derive(Clone, Serialize)]
 struct TranscriptionUpdate {
@@ -20,7 +22,25 @@ struct AppState {
     store: Arc<store::BibleStore>,
 }
 
+fn log_msg(app: &tauri::App, message: &str) {
+    if let Ok(path) = app.path().app_log_dir() {
+        if !path.exists() {
+            let _ = std::fs::create_dir_all(&path);
+        }
+        let log_file = path.join("app.log");
+        if let Ok(mut file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_file)
+        {
+            let _ = writeln!(file, "{}", message);
+        }
+    }
+    println!("{}", message);
+}
+
 #[tauri::command]
+// ...
 async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
     let engine = state.engine.as_ref().ok_or("AI Models not loaded. Please ensure models are present in the resources directory.")?.clone();
     let audio = state.audio.clone();
@@ -172,8 +192,14 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let resolver = app.path();
-            let resource_path = resolver.resource_dir().expect("Failed to get resource dir");
-            println!("Resource Dir: {:?}", resource_path);
+            let resource_path = match resolver.resource_dir() {
+                Ok(p) => p,
+                Err(e) => {
+                    log_msg(app, &format!("CRITICAL: Failed to get resource dir: {}", e));
+                    return Err(e.into());
+                }
+            };
+            log_msg(app, &format!("Resource Dir: {:?}", resource_path));
             
             let whisper_path = resource_path.join("models/whisper-base.bin");
             let embedding_model_path = resource_path.join("models/all-minilm-l6-v2.onnx");
@@ -181,9 +207,9 @@ fn main() {
             let db_path = resource_path.join("bible_data/bible.db");
             let embeddings_path = resource_path.join("bible_data/embeddings.npy");
 
-            println!("Looking for DB at: {:?}", db_path);
+            log_msg(app, &format!("Looking for DB at: {:?}", db_path));
             if !db_path.exists() {
-                eprintln!("CRITICAL: Bible Database missing at {:?}", db_path);
+                log_msg(app, &format!("CRITICAL: Bible Database missing at {:?}", db_path));
             }
 
             // Load Engine (Non-fatal if missing, just warn)
@@ -192,21 +218,37 @@ fn main() {
                 embedding_model_path.to_str().unwrap_or(""),
                 tokenizer_path.to_str().unwrap_or("")
             ) {
-                Ok(e) => Some(Arc::new(e)),
+                Ok(e) => {
+                    log_msg(app, "AI Engine loaded successfully.");
+                    Some(Arc::new(e))
+                },
                 Err(e) => {
-                    eprintln!("Warning: AI Engine failed to load: {}", e);
+                    log_msg(app, &format!("Warning: AI Engine failed to load: {}", e));
                     None
                 }
             };
 
-            let store = Arc::new(store::BibleStore::new(
+            let store_res = store::BibleStore::new(
                 db_path.to_str().expect("Invalid DB path"),
                 embeddings_path.to_str()
-            ).expect("Failed to connect to Bible Database"));
+            );
+
+            let store = match store_res {
+                Ok(s) => {
+                    log_msg(app, "Bible Store loaded successfully.");
+                    Arc::new(s)
+                },
+                Err(e) => {
+                    log_msg(app, &format!("CRITICAL: Failed to connect to Bible Database: {}", e));
+                    return Err(format!("Database error: {}", e).into());
+                }
+            };
 
             let audio = Arc::new(Mutex::new(audio::AudioEngine::new()));
+            log_msg(app, "Audio Engine initialized.");
 
             app.manage(Arc::new(AppState { audio, engine, store }));
+            log_msg(app, "App state managed.");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

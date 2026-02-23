@@ -48,6 +48,18 @@
       "models/whisper-base.bin",
       "bible_data/bible.db",
       "bible_data/embeddings.npy"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "languages": [
+          "English"
+        ],
+        "includeMSVCRT": true
+      },
+      "wix": {
+        "language": "en-US",
+        "redist_path": ""
+      }
+    }
   }
 }
