@@ -281,6 +281,30 @@ impl BibleStore {
         }
     }
 
+    /// Returns the verse that immediately follows `book chapter:verse`.
+    /// Tries the next verse in the same chapter first; if the chapter ends,
+    /// tries the first verse of the next chapter. Returns None at book end.
+    pub fn get_next_verse(&self, book: &str, chapter: i32, verse: i32) -> anyhow::Result<Option<Verse>> {
+        // 1. Try next verse in the same chapter
+        if let Some(v) = self.get_verse(book, chapter, verse + 1)? {
+            return Ok(Some(v));
+        }
+        // 2. Find the first verse number in the next chapter
+        let first_verse_in_next_chapter: Option<i32> = {
+            let conn = self.conn.lock();
+            let mut stmt = conn.prepare_cached(
+                "SELECT MIN(verse) FROM verses WHERE book LIKE ?1 AND chapter = ?2"
+            )?;
+            stmt.query_row(params![book, chapter + 1], |row| row.get(0))
+                .ok()
+                .flatten()
+        }; // conn lock released here before calling get_verse
+        if let Some(fv) = first_verse_in_next_chapter {
+            return self.get_verse(book, chapter + 1, fv);
+        }
+        Ok(None)
+    }
+
     pub fn search_manual(&self, query: &str) -> anyhow::Result<Vec<Verse>> {
         let query_lower = query.to_lowercase();
 

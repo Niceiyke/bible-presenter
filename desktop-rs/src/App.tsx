@@ -28,7 +28,6 @@ export type DisplayItem =
   | { type: "Verse"; data: Verse }
   | { type: "Media"; data: MediaItem };
 
-/** A schedule entry with a stable ID so React can use it as a key. */
 export interface ScheduleEntry {
   id: string;
   item: DisplayItem;
@@ -39,6 +38,48 @@ export interface Schedule {
   name: string;
   items: ScheduleEntry[];
 }
+
+export interface PresentationSettings {
+  theme: string;
+  reference_position: "top" | "bottom";
+}
+
+// ─── Themes ───────────────────────────────────────────────────────────────────
+// Defined as plain objects (not Tailwind classes) to avoid content purging.
+
+export interface ThemeColors {
+  background: string;
+  verseText: string;
+  referenceText: string;
+  waitingText: string;
+}
+
+export const THEMES: Record<string, { label: string; colors: ThemeColors }> = {
+  dark: {
+    label: "Classic Dark",
+    colors: { background: "#000000", verseText: "#ffffff", referenceText: "#f59e0b", waitingText: "#3f3f46" },
+  },
+  light: {
+    label: "Light",
+    colors: { background: "#f8fafc", verseText: "#0f172a", referenceText: "#b45309", waitingText: "#94a3b8" },
+  },
+  navy: {
+    label: "Navy",
+    colors: { background: "#0a1628", verseText: "#e2e8f0", referenceText: "#60a5fa", waitingText: "#334155" },
+  },
+  maroon: {
+    label: "Maroon",
+    colors: { background: "#1a0505", verseText: "#fef2f2", referenceText: "#f87171", waitingText: "#7f1d1d" },
+  },
+  forest: {
+    label: "Forest",
+    colors: { background: "#051a0a", verseText: "#f0fdf4", referenceText: "#4ade80", waitingText: "#14532d" },
+  },
+  slate: {
+    label: "Slate",
+    colors: { background: "#1e2a3a", verseText: "#cbd5e1", referenceText: "#94a3b8", waitingText: "#334155" },
+  },
+};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -57,10 +98,18 @@ function displayItemLabel(item: DisplayItem): string {
 
 function OutputWindow() {
   const [liveItem, setLiveItem] = useState<DisplayItem | null>(null);
+  const [settings, setSettings] = useState<PresentationSettings>({
+    theme: "dark",
+    reference_position: "bottom",
+  });
 
   useEffect(() => {
     invoke("get_current_item")
       .then((v: any) => { if (v) setLiveItem(v); })
+      .catch(() => {});
+
+    invoke("get_settings")
+      .then((s: any) => { if (s) setSettings(s); })
       .catch(() => {});
 
     const unlisten = listen("transcription-update", (event: any) => {
@@ -69,21 +118,45 @@ function OutputWindow() {
       }
     });
 
-    return () => { unlisten.then((f) => f()); };
+    const unlistenSettings = listen("settings-changed", (event: any) => {
+      setSettings(event.payload as PresentationSettings);
+    });
+
+    return () => {
+      unlisten.then((f) => f());
+      unlistenSettings.then((f) => f());
+    };
   }, []);
 
+  const { colors } = THEMES[settings.theme] ?? THEMES.dark;
+  const isTop = settings.reference_position === "top";
+
+  const ReferenceTag = liveItem?.type === "Verse" ? (
+    <p
+      className="text-4xl uppercase tracking-widest font-bold shrink-0"
+      style={{ color: colors.referenceText }}
+    >
+      {liveItem.data.book} {liveItem.data.chapter}:{liveItem.data.verse}
+    </p>
+  ) : null;
+
   return (
-    <div className="h-screen w-screen bg-black flex items-center justify-center text-white overflow-hidden">
+    <div
+      className="h-screen w-screen flex items-center justify-center overflow-hidden"
+      style={{ backgroundColor: colors.background, color: colors.verseText }}
+    >
       {liveItem ? (
         <div className="w-full h-full flex flex-col items-center justify-center p-12 animate-in fade-in duration-700">
           {liveItem.type === "Verse" ? (
-            <div className="text-center max-w-5xl">
-              <h1 className="text-7xl font-serif mb-8 leading-tight drop-shadow-2xl">
+            <div className="text-center max-w-5xl flex flex-col items-center gap-8">
+              {isTop && ReferenceTag}
+              <h1
+                className="text-7xl font-serif leading-tight drop-shadow-2xl"
+                style={{ color: colors.verseText }}
+              >
                 {liveItem.data.text}
               </h1>
-              <p className="text-4xl text-amber-500 uppercase tracking-widest font-bold">
-                {liveItem.data.book} {liveItem.data.chapter}:{liveItem.data.verse}
-              </p>
+              {!isTop && ReferenceTag}
             </div>
           ) : (
             <div className="w-full h-full flex items-center justify-center">
@@ -106,7 +179,10 @@ function OutputWindow() {
           )}
         </div>
       ) : (
-        <div className="text-zinc-800 font-serif text-2xl italic select-none">
+        <div
+          className="font-serif text-2xl italic select-none"
+          style={{ color: colors.waitingText }}
+        >
           Waiting for projection...
         </div>
       )}
@@ -202,14 +278,20 @@ export default function App() {
   // Presentation state
   const [liveItem, setLiveItem] = useState<DisplayItem | null>(null);
   const [stagedItem, setStagedItem] = useState<DisplayItem | null>(null);
-  // Auto-detected from transcription — never directly overwrites live output
   const [suggestedItem, setSuggestedItem] = useState<DisplayItem | null>(null);
+  const [nextVerse, setNextVerse] = useState<Verse | null>(null);
+
+  // Settings
+  const [settings, setSettings] = useState<PresentationSettings>({
+    theme: "dark",
+    reference_position: "bottom",
+  });
 
   // UI
-  const [activeTab, setActiveTab] = useState<"bible" | "media" | "schedule">("bible");
+  const [activeTab, setActiveTab] = useState<"bible" | "media" | "schedule" | "settings">("bible");
   const [toast, setToast] = useState<string | null>(null);
 
-  // Schedule — uses ScheduleEntry with stable IDs
+  // Schedule
   const [scheduleEntries, setScheduleEntries] = useState<ScheduleEntry[]>([]);
   const scheduleRef = useRef<ScheduleEntry[]>([]);
   const [activeScheduleIdx, setActiveScheduleIdx] = useState<number | null>(null);
@@ -238,7 +320,6 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Verse[]>([]);
 
-  // Keep ref in sync for event handlers that close over stale state
   scheduleRef.current = scheduleEntries;
 
   // ── Loaders ─────────────────────────────────────────────────────────────────
@@ -266,10 +347,9 @@ export default function App() {
   const loadSchedule = useCallback(async () => {
     try {
       const result: Schedule = await invoke("load_schedule");
-      // Assign stable IDs if loading from backend (which already has them via ScheduleEntry)
       const entries: ScheduleEntry[] = result.items.map((e: any) => ({
         id: e.id || stableId(),
-        item: e.item ?? e, // handle both ScheduleEntry shape and raw DisplayItem
+        item: e.item ?? e,
       }));
       setScheduleEntries(entries);
     } catch (err) {
@@ -282,7 +362,7 @@ export default function App() {
   useEffect(() => {
     const windowLabel = getCurrentWindow().label;
     setLabel(windowLabel);
-    if (windowLabel === "output") return; // output window rendered separately
+    if (windowLabel === "output") return;
 
     loadAudioDevices();
     loadMedia();
@@ -299,15 +379,17 @@ export default function App() {
       .then((v: any) => { if (v) setLiveItem(v); })
       .catch(() => {});
 
+    invoke("get_settings")
+      .then((s: any) => { if (s) setSettings(s); })
+      .catch(() => {});
+
     const unlisten = listen("transcription-update", (event: any) => {
       const { text, detected_item, source } = event.payload;
       setTranscript(text);
       if (detected_item) {
         if (source === "manual") {
-          // Operator explicitly pushed an item live
           setLiveItem(detected_item);
         } else {
-          // Auto-transcription suggestion — show as hint, not override
           setSuggestedItem(detected_item);
         }
       }
@@ -329,13 +411,31 @@ export default function App() {
       setSessionState("idle");
     });
 
+    const unlistenSettings = listen("settings-changed", (event: any) => {
+      setSettings(event.payload as PresentationSettings);
+    });
+
     return () => {
       unlisten.then((f) => f());
       unlistenStaged.then((f) => f());
       unlistenStatus.then((f) => f());
       unlistenAudioErr.then((f) => f());
+      unlistenSettings.then((f) => f());
     };
   }, []);
+
+  // ── Fetch next verse whenever liveItem changes to a Verse ─────────────────
+
+  useEffect(() => {
+    if (liveItem?.type === "Verse") {
+      const v = liveItem.data;
+      invoke("get_next_verse", { book: v.book, chapter: v.chapter, verse: v.verse })
+        .then((result: any) => setNextVerse(result ?? null))
+        .catch(() => setNextVerse(null));
+    } else {
+      setNextVerse(null);
+    }
+  }, [liveItem]);
 
   // ── Bible picker cascades ────────────────────────────────────────────────────
 
@@ -368,13 +468,10 @@ export default function App() {
 
   const goLive = async () => {
     await invoke("go_live");
-    // Backend emits transcription-update with source:"manual" → setLiveItem above
   };
 
-  /** Stage and immediately send live — single-click workflow. */
   const sendLive = async (item: DisplayItem) => {
     await stageItem(item);
-    // Slight delay so backend state is set before go_live reads it
     await new Promise((r) => setTimeout(r, 50));
     await goLive();
   };
@@ -384,6 +481,13 @@ export default function App() {
       stageItem(suggestedItem);
       setSuggestedItem(null);
     }
+  };
+
+  // ── Settings ─────────────────────────────────────────────────────────────────
+
+  const updateSettings = async (next: PresentationSettings) => {
+    setSettings(next);
+    await invoke("save_settings", { settings: next });
   };
 
   // ── Manual picker ────────────────────────────────────────────────────────────
@@ -396,11 +500,8 @@ export default function App() {
         chapter: selectedChapter,
         verse: selectedVerse,
       });
-      if (verse) {
-        await stageItem({ type: "Verse", data: verse });
-      } else {
-        setAudioError(`Verse not found: ${selectedBook} ${selectedChapter}:${selectedVerse}`);
-      }
+      if (verse) await stageItem({ type: "Verse", data: verse });
+      else setAudioError(`Verse not found: ${selectedBook} ${selectedChapter}:${selectedVerse}`);
     } catch (err: any) {
       setAudioError(String(err));
     }
@@ -445,9 +546,8 @@ export default function App() {
           { name: "Videos", extensions: ["mp4", "webm", "mov", "mkv", "avi"] },
         ],
       });
-      if (!selected) return; // user cancelled
-      const path = typeof selected === "string" ? selected : selected;
-      await invoke("add_media", { path });
+      if (!selected) return;
+      await invoke("add_media", { path: selected });
       await loadMedia();
       setToast("Media added to library");
     } catch (err: any) {
@@ -480,7 +580,7 @@ export default function App() {
     const next = [...scheduleRef.current, entry];
     setScheduleEntries(next);
     await persistSchedule(next);
-    setToast(`Added to schedule: ${displayItemLabel(item)}`);
+    setToast(`Added: ${displayItemLabel(item)}`);
   };
 
   const removeFromSchedule = async (id: string) => {
@@ -545,21 +645,16 @@ export default function App() {
         </h1>
 
         <div className="flex items-center gap-3">
-          {/* VAD Sensitivity */}
           <div className="flex flex-col items-end">
             <span className="text-[10px] text-slate-500 uppercase font-bold mb-1">Sensitivity</span>
             <input
-              type="range"
-              min="0.0001"
-              max="0.05"
-              step="0.0005"
+              type="range" min="0.0001" max="0.05" step="0.0005"
               value={vadThreshold}
               onChange={(e) => updateVad(e.target.value)}
               className="w-28 accent-amber-500"
             />
           </div>
 
-          {/* Microphone selector */}
           <div className="flex items-center gap-1">
             {deviceError ? (
               <span className="text-red-400 text-xs max-w-[140px] truncate" title={deviceError}>
@@ -612,37 +707,26 @@ export default function App() {
                 : "bg-amber-500 hover:bg-amber-600 text-black"
             }`}
           >
-            {sessionState === "loading"
-              ? "LOADING..."
-              : sessionState === "running"
-              ? "STOP"
-              : "START LIVE"}
+            {sessionState === "loading" ? "LOADING..." : sessionState === "running" ? "STOP" : "START LIVE"}
           </button>
         </div>
       </header>
 
-      {/* Audio error banner */}
       {audioError && (
         <div className="bg-red-950 border-b border-red-800 text-red-300 text-xs px-6 py-2 flex items-center gap-2 shrink-0">
           <span className="font-bold text-red-400 uppercase tracking-widest">Error</span>
           <span className="flex-1">{audioError}</span>
-          <button
-            onClick={() => setAudioError(null)}
-            className="text-red-500 hover:text-red-200 font-bold transition-all"
-          >
-            ✕
-          </button>
+          <button onClick={() => setAudioError(null)} className="text-red-500 hover:text-red-200 font-bold">✕</button>
         </div>
       )}
 
-      {/* Body */}
       <div className="flex-1 flex overflow-hidden">
 
         {/* ── Left Sidebar ── */}
         <aside className="w-80 bg-slate-900/30 border-r border-slate-800 flex flex-col overflow-hidden shrink-0">
           {/* Tab nav */}
           <div className="flex border-b border-slate-800 bg-slate-900/50 shrink-0">
-            {(["bible", "media", "schedule"] as const).map((tab) => (
+            {(["bible", "media", "schedule", "settings"] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -652,7 +736,7 @@ export default function App() {
                     : "text-slate-500 hover:text-slate-300 hover:bg-slate-800/50"
                 }`}
               >
-                {tab}
+                {tab === "settings" ? "⚙" : tab}
                 {tab === "schedule" && scheduleEntries.length > 0 && (
                   <span className="ml-1 text-[8px] bg-amber-500 text-black rounded-full px-1 font-black">
                     {scheduleEntries.length}
@@ -678,9 +762,7 @@ export default function App() {
                       className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
                     >
                       <option value="">Select Book</option>
-                      {books.map((b) => (
-                        <option key={b} value={b}>{b}</option>
-                      ))}
+                      {books.map((b) => <option key={b} value={b}>{b}</option>)}
                     </select>
 
                     <div className="grid grid-cols-2 gap-2">
@@ -689,27 +771,21 @@ export default function App() {
                         onChange={(e) => setSelectedChapter(parseInt(e.target.value))}
                         className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
                       >
-                        {chapters.map((c) => (
-                          <option key={c} value={c}>Chap {c}</option>
-                        ))}
+                        {chapters.map((c) => <option key={c} value={c}>Chap {c}</option>)}
                       </select>
                       <select
                         value={selectedVerse}
                         onChange={(e) => setSelectedVerse(parseInt(e.target.value))}
                         className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
                       >
-                        {verses.map((v) => (
-                          <option key={v} value={v}>Verse {v}</option>
-                        ))}
+                        {verses.map((v) => <option key={v} value={v}>Verse {v}</option>)}
                       </select>
                     </div>
 
-                    {/* Action row */}
                     <div className="grid grid-cols-3 gap-1.5">
                       <button
                         onClick={handleDisplaySelection}
                         disabled={!selectedBook}
-                        title="Stage for preview"
                         className="bg-slate-700 hover:bg-slate-600 text-white font-bold py-2 rounded-lg transition-all text-xs disabled:opacity-30"
                       >
                         STAGE
@@ -717,7 +793,6 @@ export default function App() {
                       <button
                         onClick={handleSendLivePicker}
                         disabled={!selectedBook}
-                        title="Send directly to output screen"
                         className="bg-amber-500 hover:bg-amber-400 text-black font-bold py-2 rounded-lg transition-all text-xs disabled:opacity-30"
                       >
                         DISPLAY
@@ -726,14 +801,11 @@ export default function App() {
                         onClick={async () => {
                           if (!selectedBook) return;
                           const v: any = await invoke("get_verse", {
-                            book: selectedBook,
-                            chapter: selectedChapter,
-                            verse: selectedVerse,
+                            book: selectedBook, chapter: selectedChapter, verse: selectedVerse,
                           });
                           if (v) addToSchedule({ type: "Verse", data: v });
                         }}
                         disabled={!selectedBook}
-                        title="Add to schedule queue"
                         className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 border border-amber-500/30 font-bold py-2 rounded-lg transition-all text-xs disabled:opacity-30"
                       >
                         + QUEUE
@@ -744,7 +816,6 @@ export default function App() {
 
                 <hr className="border-slate-800" />
 
-                {/* Keyword Search */}
                 <div className="flex flex-col min-h-0">
                   <h2 className="text-xs font-bold text-slate-500 uppercase mb-3 tracking-widest">
                     Keyword Search
@@ -757,10 +828,7 @@ export default function App() {
                       onChange={(e) => setSearchQuery(e.target.value)}
                       className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-amber-500"
                     />
-                    <button
-                      type="submit"
-                      className="bg-amber-500 hover:bg-amber-600 text-black font-bold px-3 py-2 rounded-lg text-sm transition-all"
-                    >
+                    <button type="submit" className="bg-amber-500 hover:bg-amber-600 text-black font-bold px-3 py-2 rounded-lg text-sm transition-all">
                       Go
                     </button>
                   </form>
@@ -770,34 +838,13 @@ export default function App() {
                       <p className="text-slate-600 text-xs italic text-center pt-4">No results found</p>
                     )}
                     {searchResults.map((v, i) => (
-                      <div
-                        key={i}
-                        className="p-3 rounded-lg bg-slate-800/50 border border-transparent hover:border-slate-700 transition-all group"
-                      >
-                        <p className="text-amber-500 text-xs font-bold mb-1 uppercase">
-                          {v.book} {v.chapter}:{v.verse}
-                        </p>
+                      <div key={i} className="p-3 rounded-lg bg-slate-800/50 border border-transparent hover:border-slate-700 transition-all group">
+                        <p className="text-amber-500 text-xs font-bold mb-1 uppercase">{v.book} {v.chapter}:{v.verse}</p>
                         <p className="text-slate-300 text-xs mb-2 line-clamp-2">{v.text}</p>
                         <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-all">
-                          <button
-                            onClick={() => stageItem({ type: "Verse", data: v })}
-                            className="flex-1 bg-slate-600 hover:bg-slate-500 text-white text-[10px] font-bold py-1 rounded transition-all"
-                          >
-                            STAGE
-                          </button>
-                          <button
-                            onClick={() => sendLive({ type: "Verse", data: v })}
-                            className="flex-1 bg-amber-500 hover:bg-amber-400 text-black text-[10px] font-bold py-1 rounded transition-all"
-                          >
-                            DISPLAY
-                          </button>
-                          <button
-                            onClick={() => addToSchedule({ type: "Verse", data: v })}
-                            className="px-2 bg-slate-700 hover:bg-slate-600 text-amber-500 text-[10px] font-bold py-1 rounded transition-all"
-                            title="Add to schedule"
-                          >
-                            +
-                          </button>
+                          <button onClick={() => stageItem({ type: "Verse", data: v })} className="flex-1 bg-slate-600 hover:bg-slate-500 text-white text-[10px] font-bold py-1 rounded transition-all">STAGE</button>
+                          <button onClick={() => sendLive({ type: "Verse", data: v })} className="flex-1 bg-amber-500 hover:bg-amber-400 text-black text-[10px] font-bold py-1 rounded transition-all">DISPLAY</button>
+                          <button onClick={() => addToSchedule({ type: "Verse", data: v })} className="px-2 bg-slate-700 hover:bg-slate-600 text-amber-500 text-[10px] font-bold py-1 rounded transition-all" title="Add to schedule">+</button>
                         </div>
                       </div>
                     ))}
@@ -810,72 +857,29 @@ export default function App() {
             {activeTab === "media" && (
               <div className="flex flex-col gap-4">
                 <div className="flex justify-between items-center">
-                  <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">
-                    Media Library
-                  </h2>
-                  <button
-                    onClick={handleFileUpload}
-                    className="text-[10px] bg-amber-500 hover:bg-amber-600 text-black font-bold px-3 py-1.5 rounded transition-all"
-                  >
+                  <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Media Library</h2>
+                  <button onClick={handleFileUpload} className="text-[10px] bg-amber-500 hover:bg-amber-600 text-black font-bold px-3 py-1.5 rounded transition-all">
                     + UPLOAD
                   </button>
                 </div>
 
                 {media.length === 0 ? (
-                  <p className="text-slate-700 text-xs italic text-center pt-8">
-                    No media files. Click + UPLOAD to add images or videos.
-                  </p>
+                  <p className="text-slate-700 text-xs italic text-center pt-8">No media files. Click + UPLOAD to add images or videos.</p>
                 ) : (
                   <div className="grid grid-cols-2 gap-2">
                     {media.map((item) => (
-                      <div
-                        key={item.id}
-                        className="group relative aspect-video bg-slate-800 rounded-lg overflow-hidden border border-slate-700 hover:border-amber-500/50 transition-all"
-                      >
+                      <div key={item.id} className="group relative aspect-video bg-slate-800 rounded-lg overflow-hidden border border-slate-700 hover:border-amber-500/50 transition-all">
                         {item.media_type === "Image" ? (
-                          <img
-                            src={convertFileSrc(item.path)}
-                            className="w-full h-full object-cover"
-                            alt={item.name}
-                          />
+                          <img src={convertFileSrc(item.path)} className="w-full h-full object-cover" alt={item.name} />
                         ) : (
-                          <video
-                            src={convertFileSrc(item.path)}
-                            className="w-full h-full object-cover"
-                            muted
-                            preload="metadata"
-                          />
+                          <video src={convertFileSrc(item.path)} className="w-full h-full object-cover" muted preload="metadata" />
                         )}
-
-                        {/* Hover overlay */}
                         <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-all flex flex-col items-center justify-center gap-1.5 p-2">
-                          <button
-                            onClick={() => stageItem({ type: "Media", data: item })}
-                            className="w-full bg-slate-600 hover:bg-slate-500 text-white text-[10px] font-bold py-1 rounded"
-                          >
-                            STAGE
-                          </button>
-                          <button
-                            onClick={() => sendLive({ type: "Media", data: item })}
-                            className="w-full bg-white hover:bg-slate-200 text-black text-[10px] font-bold py-1 rounded"
-                          >
-                            DISPLAY
-                          </button>
-                          <button
-                            onClick={() => addToSchedule({ type: "Media", data: item })}
-                            className="w-full bg-amber-500 hover:bg-amber-400 text-black text-[10px] font-bold py-1 rounded"
-                          >
-                            + QUEUE
-                          </button>
-                          <button
-                            onClick={() => handleDeleteMedia(item.id)}
-                            className="w-full bg-red-900/60 hover:bg-red-900 text-red-300 text-[10px] font-bold py-1 rounded"
-                          >
-                            DELETE
-                          </button>
+                          <button onClick={() => stageItem({ type: "Media", data: item })} className="w-full bg-slate-600 hover:bg-slate-500 text-white text-[10px] font-bold py-1 rounded">STAGE</button>
+                          <button onClick={() => sendLive({ type: "Media", data: item })} className="w-full bg-white hover:bg-slate-200 text-black text-[10px] font-bold py-1 rounded">DISPLAY</button>
+                          <button onClick={() => addToSchedule({ type: "Media", data: item })} className="w-full bg-amber-500 hover:bg-amber-400 text-black text-[10px] font-bold py-1 rounded">+ QUEUE</button>
+                          <button onClick={() => handleDeleteMedia(item.id)} className="w-full bg-red-900/60 hover:bg-red-900 text-red-300 text-[10px] font-bold py-1 rounded">DELETE</button>
                         </div>
-
-                        {/* Name bar */}
                         <div className="absolute bottom-0 left-0 right-0 px-1 py-0.5 bg-black/50 backdrop-blur-sm">
                           <p className="text-[8px] text-white truncate text-center">{item.name}</p>
                         </div>
@@ -890,26 +894,19 @@ export default function App() {
             {activeTab === "schedule" && (
               <div className="flex flex-col gap-3">
                 <div className="flex justify-between items-center">
-                  <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">
-                    Live Schedule
-                  </h2>
+                  <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Live Schedule</h2>
                   {scheduleEntries.length > 0 && (
                     <div className="flex gap-1">
                       <button
                         onClick={handlePrevScheduleItem}
                         disabled={activeScheduleIdx === 0 || scheduleEntries.length === 0}
-                        title="Previous item"
                         className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded border border-slate-700 disabled:opacity-30 transition-all"
                       >
                         ← Prev
                       </button>
                       <button
                         onClick={handleNextScheduleItem}
-                        disabled={
-                          scheduleEntries.length === 0 ||
-                          activeScheduleIdx === scheduleEntries.length - 1
-                        }
-                        title="Next item"
+                        disabled={scheduleEntries.length === 0 || activeScheduleIdx === scheduleEntries.length - 1}
                         className="px-2 py-1 bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold rounded disabled:opacity-30 transition-all"
                       >
                         Next →
@@ -919,9 +916,7 @@ export default function App() {
                 </div>
 
                 {scheduleEntries.length === 0 ? (
-                  <p className="text-slate-700 text-xs italic text-center pt-8">
-                    Schedule is empty. Add verses or media with + QUEUE.
-                  </p>
+                  <p className="text-slate-700 text-xs italic text-center pt-8">Schedule is empty. Add verses or media with + QUEUE.</p>
                 ) : (
                   <div className="flex flex-col gap-1.5">
                     {scheduleEntries.map((entry, idx) => {
@@ -935,48 +930,22 @@ export default function App() {
                               : "bg-slate-800/40 border-slate-700/40 hover:bg-slate-800 hover:border-slate-700"
                           }`}
                         >
-                          <div
-                            className={`w-5 h-5 flex items-center justify-center rounded text-[9px] font-black shrink-0 ${
-                              isActive
-                                ? "bg-amber-500 text-black"
-                                : "bg-slate-700 text-slate-400"
-                            }`}
-                          >
+                          <div className={`w-5 h-5 flex items-center justify-center rounded text-[9px] font-black shrink-0 ${isActive ? "bg-amber-500 text-black" : "bg-slate-700 text-slate-400"}`}>
                             {idx + 1}
                           </div>
-
                           <div className="flex-1 min-w-0">
                             {entry.item.type === "Verse" ? (
                               <>
-                                <p className="text-amber-500 text-[10px] font-bold uppercase truncate">
-                                  {entry.item.data.book} {entry.item.data.chapter}:{entry.item.data.verse}
-                                </p>
+                                <p className="text-amber-500 text-[10px] font-bold uppercase truncate">{entry.item.data.book} {entry.item.data.chapter}:{entry.item.data.verse}</p>
                                 <p className="text-slate-400 text-[10px] truncate">{entry.item.data.text}</p>
                               </>
                             ) : (
-                              <>
-                                <p className="text-blue-400 text-[10px] font-bold uppercase truncate">
-                                  {entry.item.data.media_type}: {entry.item.data.name}
-                                </p>
-                              </>
+                              <p className="text-blue-400 text-[10px] font-bold uppercase truncate">{entry.item.data.media_type}: {entry.item.data.name}</p>
                             )}
                           </div>
-
                           <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all shrink-0">
-                            <button
-                              onClick={() => handleScheduleItemSend(entry, idx)}
-                              title="Send live"
-                              className="p-1 bg-amber-500 hover:bg-amber-400 text-black rounded text-[10px] font-bold"
-                            >
-                              ▶
-                            </button>
-                            <button
-                              onClick={() => removeFromSchedule(entry.id)}
-                              title="Remove from schedule"
-                              className="p-1 bg-red-900/50 text-red-400 rounded hover:bg-red-900 hover:text-white"
-                            >
-                              ✕
-                            </button>
+                            <button onClick={() => handleScheduleItemSend(entry, idx)} title="Send live" className="p-1 bg-amber-500 hover:bg-amber-400 text-black rounded text-[10px] font-bold">▶</button>
+                            <button onClick={() => removeFromSchedule(entry.id)} title="Remove" className="p-1 bg-red-900/50 text-red-400 rounded hover:bg-red-900 hover:text-white">✕</button>
                           </div>
                         </div>
                       );
@@ -985,35 +954,110 @@ export default function App() {
                 )}
               </div>
             )}
+
+            {/* ── Settings Tab ── */}
+            {activeTab === "settings" && (
+              <div className="flex flex-col gap-6">
+                <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Output Settings</h2>
+
+                {/* Theme selector */}
+                <div>
+                  <p className="text-xs text-slate-400 font-bold uppercase mb-3">Theme</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {Object.entries(THEMES).map(([key, { label, colors }]) => (
+                      <button
+                        key={key}
+                        onClick={() => updateSettings({ ...settings, theme: key })}
+                        className={`flex items-center gap-2 p-2.5 rounded-lg border text-xs font-bold text-left transition-all ${
+                          settings.theme === key
+                            ? "border-amber-500 bg-amber-500/10 text-amber-400"
+                            : "border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600 hover:bg-slate-800"
+                        }`}
+                      >
+                        {/* Colour swatch */}
+                        <span
+                          className="w-5 h-5 rounded-sm shrink-0 border border-white/10"
+                          style={{ backgroundColor: colors.background }}
+                        />
+                        <span className="truncate">{label}</span>
+                        {settings.theme === key && (
+                          <span className="ml-auto text-amber-500">✓</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Reference position */}
+                <div>
+                  <p className="text-xs text-slate-400 font-bold uppercase mb-3">Scripture Reference</p>
+                  <div className="flex gap-2">
+                    {(["top", "bottom"] as const).map((pos) => (
+                      <button
+                        key={pos}
+                        onClick={() => updateSettings({ ...settings, reference_position: pos })}
+                        className={`flex-1 py-3 rounded-lg border text-xs font-bold transition-all ${
+                          settings.reference_position === pos
+                            ? "border-amber-500 bg-amber-500/10 text-amber-400"
+                            : "border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600 hover:bg-slate-800"
+                        }`}
+                      >
+                        {pos === "top" ? "▲  Top" : "▼  Bottom"}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-slate-600 italic mt-2">
+                    Position of Book Chapter:Verse on the output screen.
+                  </p>
+                </div>
+
+                {/* Live preview of theme */}
+                <div>
+                  <p className="text-xs text-slate-400 font-bold uppercase mb-3">Preview</p>
+                  <div
+                    className="rounded-xl p-5 flex flex-col items-center text-center gap-3 border border-slate-800"
+                    style={{ backgroundColor: THEMES[settings.theme]?.colors.background ?? "#000" }}
+                  >
+                    {settings.reference_position === "top" && (
+                      <p className="text-sm font-bold uppercase tracking-widest" style={{ color: THEMES[settings.theme]?.colors.referenceText }}>
+                        John 3:16
+                      </p>
+                    )}
+                    <p className="text-base font-serif leading-snug" style={{ color: THEMES[settings.theme]?.colors.verseText }}>
+                      For God so loved the world that he gave his one and only Son...
+                    </p>
+                    {settings.reference_position === "bottom" && (
+                      <p className="text-sm font-bold uppercase tracking-widest" style={{ color: THEMES[settings.theme]?.colors.referenceText }}>
+                        John 3:16
+                      </p>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-slate-600 italic mt-2">
+                    Changes apply instantly to the output window.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         </aside>
 
         {/* ── Main Content ── */}
         <main className="flex-1 grid grid-rows-[1fr_2fr] gap-px bg-slate-800 overflow-hidden">
 
-          {/* Live Transcription + Suggested Verse */}
+          {/* Transcription + Suggested */}
           <section className="bg-slate-950 p-5 flex flex-col overflow-hidden gap-3">
-            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest shrink-0">
-              Live Transcription
-            </h2>
+            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest shrink-0">Live Transcription</h2>
             <div className="flex-1 overflow-y-auto text-xl font-light leading-snug text-slate-400 min-h-0">
-              {transcript || (
-                <span className="text-slate-800 italic">Listening for audio feed...</span>
-              )}
+              {transcript || <span className="text-slate-800 italic">Listening for audio feed...</span>}
             </div>
 
-            {/* Auto-detected suggestion */}
             {suggestedItem && (
               <div className="shrink-0 flex items-center gap-3 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5">
                 <div className="flex-1 min-w-0">
-                  <p className="text-[10px] text-slate-500 uppercase font-bold mb-0.5">
-                    Auto-detected
-                  </p>
+                  <p className="text-[10px] text-slate-500 uppercase font-bold mb-0.5">Auto-detected</p>
                   {suggestedItem.type === "Verse" ? (
                     <p className="text-slate-300 text-sm truncate">
-                      <span className="text-amber-500 font-bold">
-                        {suggestedItem.data.book} {suggestedItem.data.chapter}:{suggestedItem.data.verse}
-                      </span>
+                      <span className="text-amber-500 font-bold">{suggestedItem.data.book} {suggestedItem.data.chapter}:{suggestedItem.data.verse}</span>
                       {" — "}
                       <span className="text-slate-400">{suggestedItem.data.text}</span>
                     </p>
@@ -1022,25 +1066,9 @@ export default function App() {
                   )}
                 </div>
                 <div className="flex gap-1.5 shrink-0">
-                  <button
-                    onClick={stageSuggested}
-                    className="text-[10px] font-bold px-2 py-1 bg-slate-700 hover:bg-slate-600 text-white rounded transition-all"
-                  >
-                    STAGE
-                  </button>
-                  <button
-                    onClick={() => { if (suggestedItem) sendLive(suggestedItem); setSuggestedItem(null); }}
-                    className="text-[10px] font-bold px-2 py-1 bg-amber-500 hover:bg-amber-400 text-black rounded transition-all"
-                  >
-                    DISPLAY
-                  </button>
-                  <button
-                    onClick={() => setSuggestedItem(null)}
-                    className="text-[10px] text-slate-500 hover:text-slate-300 px-1 transition-all"
-                    title="Dismiss"
-                  >
-                    ✕
-                  </button>
+                  <button onClick={stageSuggested} className="text-[10px] font-bold px-2 py-1 bg-slate-700 hover:bg-slate-600 text-white rounded transition-all">STAGE</button>
+                  <button onClick={() => { if (suggestedItem) sendLive(suggestedItem); setSuggestedItem(null); }} className="text-[10px] font-bold px-2 py-1 bg-amber-500 hover:bg-amber-400 text-black rounded transition-all">DISPLAY</button>
+                  <button onClick={() => setSuggestedItem(null)} className="text-[10px] text-slate-500 hover:text-slate-300 px-1 transition-all">✕</button>
                 </div>
               </div>
             )}
@@ -1049,22 +1077,18 @@ export default function App() {
           {/* Dual Preview Area */}
           <section className="bg-slate-900 grid grid-cols-2 gap-px overflow-hidden relative">
 
-            {/* Stage Preview (Next) */}
+            {/* Stage Preview */}
             <div className="bg-slate-950 p-5 flex flex-col overflow-hidden">
               <PreviewCard
                 item={stagedItem}
                 label="Stage Preview"
                 accent="text-amber-500/50"
-                badge={
-                  <span className="text-[10px] bg-amber-500/10 text-amber-500 px-2 py-0.5 rounded border border-amber-500/20">
-                    NEXT
-                  </span>
-                }
-                empty="Stage is empty — select a verse or media above"
+                badge={<span className="text-[10px] bg-amber-500/10 text-amber-500 px-2 py-0.5 rounded border border-amber-500/20">NEXT</span>}
+                empty="Stage is empty"
               />
             </div>
 
-            {/* GO LIVE button centred between the two panels */}
+            {/* GO LIVE button */}
             <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-20">
               <button
                 onClick={goLive}
@@ -1073,14 +1097,12 @@ export default function App() {
               >
                 <span className="text-xl font-black">GO</span>
                 <span className="text-[10px] font-bold">LIVE</span>
-                {stagedItem && (
-                  <div className="absolute inset-0 rounded-full animate-ping bg-amber-500 opacity-20 pointer-events-none" />
-                )}
+                {stagedItem && <div className="absolute inset-0 rounded-full animate-ping bg-amber-500 opacity-20 pointer-events-none" />}
               </button>
             </div>
 
-            {/* Live Output (Current) */}
-            <div className="bg-slate-950 p-5 flex flex-col overflow-hidden">
+            {/* Live Output + Next Verse strip */}
+            <div className="bg-slate-950 p-5 flex flex-col overflow-hidden gap-2">
               <PreviewCard
                 item={liveItem}
                 label="Live Output"
@@ -1088,19 +1110,35 @@ export default function App() {
                 badge={
                   <div className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                    <span className="text-[10px] bg-red-500/10 text-red-500 px-2 py-0.5 rounded border border-red-500/20 uppercase font-bold">
-                      On Air
-                    </span>
+                    <span className="text-[10px] bg-red-500/10 text-red-500 px-2 py-0.5 rounded border border-red-500/20 uppercase font-bold">On Air</span>
                   </div>
                 }
                 empty="Output is empty"
               />
+
+              {/* Next verse quick-send — only shown when a verse is live */}
+              {nextVerse && (
+                <div className="shrink-0 flex items-center gap-2 bg-slate-900 border border-slate-700/60 rounded-xl px-3 py-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[9px] text-slate-600 uppercase font-bold mb-0.5">Up next</p>
+                    <p className="text-xs truncate">
+                      <span className="text-amber-500/80 font-bold">{nextVerse.book} {nextVerse.chapter}:{nextVerse.verse}</span>
+                      <span className="text-slate-500 ml-1">{nextVerse.text}</span>
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => sendLive({ type: "Verse", data: nextVerse })}
+                    className="shrink-0 text-[9px] font-bold px-2 py-1 bg-amber-500/20 hover:bg-amber-500/40 text-amber-400 border border-amber-500/30 rounded transition-all whitespace-nowrap"
+                  >
+                    NEXT ▶
+                  </button>
+                </div>
+              )}
             </div>
           </section>
         </main>
       </div>
 
-      {/* Toast notification */}
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
     </div>
   );

@@ -34,6 +34,24 @@ pub struct ScheduleEntry {
     pub item: DisplayItem,
 }
 
+/// User-facing presentation settings persisted to settings.json.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PresentationSettings {
+    /// Output theme name: "dark" | "light" | "navy" | "maroon" | "forest" | "slate"
+    pub theme: String,
+    /// Where the scripture reference (Book Ch:V) is shown: "top" | "bottom"
+    pub reference_position: String,
+}
+
+impl Default for PresentationSettings {
+    fn default() -> Self {
+        Self {
+            theme: "dark".to_string(),
+            reference_position: "bottom".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Schedule {
     pub id: String,
@@ -229,6 +247,23 @@ impl MediaScheduleStore {
             }
         }
         Ok(()) // Not found is not an error (already deleted)
+    }
+
+    pub fn load_settings(&self) -> Result<PresentationSettings> {
+        let path = self.app_data_dir.join("settings.json");
+        if path.exists() {
+            let json = fs::read_to_string(path)?;
+            Ok(serde_json::from_str(&json).unwrap_or_default())
+        } else {
+            Ok(PresentationSettings::default())
+        }
+    }
+
+    pub fn save_settings(&self, settings: &PresentationSettings) -> Result<()> {
+        let path = self.app_data_dir.join("settings.json");
+        let json = serde_json::to_string_pretty(settings)?;
+        fs::write(path, json)?;
+        Ok(())
     }
 
     pub fn save_schedule(&self, schedule: Schedule) -> Result<()> {
