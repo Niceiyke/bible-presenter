@@ -57,6 +57,10 @@ export interface CustomSlide {
   id: string;
   backgroundColor: string;
   backgroundImage?: string;
+  /** Whether the header/title zone is displayed (default true). */
+  headerEnabled: boolean;
+  /** Height of the header zone as a percentage (10–60, default 35). */
+  headerHeightPct: number;
   header: SlideZone;
   body: SlideZone;
 }
@@ -74,6 +78,8 @@ export interface CustomSlideDisplayData {
   slide_count: number;
   background_color: string;
   background_image?: string;
+  header_enabled?: boolean;
+  header_height_pct?: number;
   header: { text: string; font_size: number; font_family: string; color: string; bold: boolean; italic: boolean; align: string };
   body:   { text: string; font_size: number; font_family: string; color: string; bold: boolean; italic: boolean; align: string };
 }
@@ -84,11 +90,17 @@ export const FONTS = [
   "Impact", "Arial Black", "Courier New",
 ];
 
+export interface CameraFeedData {
+  device_id: string;
+  label: string;
+}
+
 export type DisplayItem =
   | { type: "Verse"; data: Verse }
   | { type: "Media"; data: MediaItem }
   | { type: "PresentationSlide"; data: PresentationSlideData }
-  | { type: "CustomSlide"; data: CustomSlideDisplayData };
+  | { type: "CustomSlide"; data: CustomSlideDisplayData }
+  | { type: "CameraFeed"; data: CameraFeedData };
 
 export interface ScheduleEntry {
   id: string;
@@ -111,6 +123,12 @@ export interface PresentationSettings {
   theme: string;
   reference_position: "top" | "bottom";
   background: BackgroundSetting;
+  /** Override background specifically for Bible verse display. */
+  bible_background?: BackgroundSetting;
+  /** Override background specifically for PPTX/presentation slides. */
+  presentation_background?: BackgroundSetting;
+  /** Override background specifically for media (image/video). */
+  media_background?: BackgroundSetting;
   logo_path?: string;
   is_blanked: boolean;
   font_size: number;
@@ -169,6 +187,9 @@ function displayItemLabel(item: DisplayItem): string {
   if (item.type === "CustomSlide") {
     return `${item.data.presentation_name} – Slide ${item.data.slide_index + 1}`;
   }
+  if (item.type === "CameraFeed") {
+    return `Camera: ${item.data.label || item.data.device_id}`;
+  }
   return item.data.name;
 }
 
@@ -177,6 +198,8 @@ function newDefaultSlide(): CustomSlide {
     id: stableId(),
     backgroundColor: "#0a1628",
     backgroundImage: undefined,
+    headerEnabled: true,
+    headerHeightPct: 35,
     header: { text: "Title", fontSize: 56, fontFamily: "Georgia", color: "#ffffff", bold: true, italic: false, align: "center" },
     body:   { text: "Body text here", fontSize: 34, fontFamily: "Arial", color: "#e2e8f0", bold: false, italic: false, align: "center" },
   };
@@ -224,6 +247,31 @@ function computePreviewBackground(
     }
   }
   return { backgroundColor: themeColor };
+}
+
+/** Returns the effective background for the output window based on item type. */
+function getEffectiveBackground(
+  settings: PresentationSettings,
+  item: DisplayItem | null,
+  colors: ThemeColors
+): React.CSSProperties {
+  const pick = (bg: BackgroundSetting | undefined) => {
+    if (!bg || bg.type === "None") return null;
+    return computeOutputBackground({ ...settings, background: bg }, colors);
+  };
+  if (item?.type === "Verse") {
+    const s = pick(settings.bible_background);
+    if (s) return s;
+  }
+  if (item?.type === "PresentationSlide") {
+    const s = pick(settings.presentation_background);
+    if (s) return s;
+  }
+  if (item?.type === "Media") {
+    const s = pick(settings.media_background);
+    if (s) return s;
+  }
+  return computeOutputBackground(settings, colors);
 }
 
 // ─── Slide Renderer ───────────────────────────────────────────────────────────
@@ -296,6 +344,14 @@ function CustomSlideRenderer({
   const bgColor = "backgroundColor" in slide ? (slide as CustomSlide).backgroundColor : (slide as CustomSlideDisplayData).background_color;
   const bgImage = "backgroundImage" in slide ? (slide as CustomSlide).backgroundImage : (slide as CustomSlideDisplayData).background_image;
 
+  // Support both camelCase (editor) and snake_case (display data), with defaults for old slides
+  const headerEnabled = "headerEnabled" in slide
+    ? (slide as CustomSlide).headerEnabled !== false
+    : (slide as CustomSlideDisplayData).header_enabled !== false;
+  const headerHeightPct = ("headerHeightPct" in slide
+    ? (slide as CustomSlide).headerHeightPct
+    : (slide as CustomSlideDisplayData).header_height_pct) ?? 35;
+
   const bgStyle: React.CSSProperties = bgImage
     ? { backgroundImage: `url(${convertFileSrc(bgImage)})`, backgroundSize: "cover", backgroundPosition: "center" }
     : { backgroundColor: bgColor };
@@ -313,15 +369,25 @@ function CustomSlideRenderer({
     margin: 0,
   });
 
+  if (!headerEnabled) {
+    return (
+      <div className="w-full h-full relative overflow-hidden flex flex-col" style={bgStyle}>
+        <div className="flex items-center justify-center flex-1" style={{ padding: `${14 * scale}px ${24 * scale}px` }}>
+          <p style={zoneStyle(body)}>{body.text}</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="w-full h-full relative overflow-hidden flex flex-col" style={bgStyle}>
-      {/* Header zone — top 35% */}
-      <div className="flex items-center justify-center" style={{ flex: "0 0 35%", padding: `${14 * scale}px ${24 * scale}px` }}>
+      {/* Header zone — configurable height */}
+      <div className="flex items-center justify-center" style={{ flex: `0 0 ${headerHeightPct}%`, padding: `${14 * scale}px ${24 * scale}px` }}>
         <p style={zoneStyle(header)}>{header.text}</p>
       </div>
       {/* Divider line */}
       <div style={{ height: `${Math.max(1, scale)}px`, backgroundColor: "rgba(255,255,255,0.15)", margin: `0 ${24 * scale}px` }} />
-      {/* Body zone — remaining 65% */}
+      {/* Body zone — remaining space */}
       <div className="flex items-center justify-center flex-1" style={{ padding: `${14 * scale}px ${24 * scale}px` }}>
         <p style={zoneStyle(body)}>{body.text}</p>
       </div>
@@ -402,13 +468,16 @@ function ZoneEditor({
 function SlideEditor({
   initialPres,
   onClose,
+  mediaImages = [],
 }: {
   initialPres: CustomPresentation;
   onClose: (saved: boolean) => void;
+  mediaImages?: MediaItem[];
 }) {
   const [pres, setPres] = React.useState<CustomPresentation>(initialPres);
   const [currentSlideIdx, setCurrentSlideIdx] = React.useState(0);
   const [saving, setSaving] = React.useState(false);
+  const [showBgImagePicker, setShowBgImagePicker] = React.useState(false);
 
   const slide = pres.slides[currentSlideIdx] ?? pres.slides[0];
 
@@ -446,15 +515,19 @@ function SlideEditor({
   };
 
   const handlePickBgImage = async () => {
-    try {
-      const selected = await openDialog({
-        multiple: false,
-        filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"] }],
-      });
-      if (!selected) return;
-      updateSlide({ ...slide, backgroundImage: selected as string });
-    } catch (err) {
-      console.error("Failed to pick background image", err);
+    if (mediaImages.length > 0) {
+      setShowBgImagePicker(true);
+    } else {
+      try {
+        const selected = await openDialog({
+          multiple: false,
+          filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"] }],
+        });
+        if (!selected) return;
+        updateSlide({ ...slide, backgroundImage: selected as string });
+      } catch (err) {
+        console.error("Failed to pick background image", err);
+      }
     }
   };
 
@@ -553,11 +626,39 @@ function SlideEditor({
           {/* Formatting panel */}
           <div className="border-t border-slate-800 bg-slate-900/50 overflow-y-auto" style={{ maxHeight: "45%" }}>
             <div className="p-4 flex flex-col gap-3">
-              <ZoneEditor
-                label="Header"
-                zone={slide.header}
-                onChange={(z) => updateSlide({ ...slide, header: z })}
-              />
+              {/* Header section with enable toggle */}
+              <div className="flex flex-col gap-2 p-3 rounded-lg bg-slate-900/60 border border-slate-700/50">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Header / Title</p>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[9px] text-slate-500">Show</span>
+                    <button
+                      onClick={() => updateSlide({ ...slide, headerEnabled: !(slide.headerEnabled ?? true) })}
+                      className={`relative w-9 h-5 rounded-full transition-all ${(slide.headerEnabled ?? true) ? "bg-amber-500" : "bg-slate-700"}`}
+                    >
+                      <span className={`absolute top-0.5 bottom-0.5 w-4 rounded-full bg-white transition-all shadow ${(slide.headerEnabled ?? true) ? "right-0.5" : "left-0.5"}`} />
+                    </button>
+                  </div>
+                </div>
+                {(slide.headerEnabled ?? true) && (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] text-slate-500 shrink-0">Height: {slide.headerHeightPct ?? 35}%</span>
+                      <input
+                        type="range" min={10} max={60} step={5}
+                        value={slide.headerHeightPct ?? 35}
+                        onChange={(e) => updateSlide({ ...slide, headerHeightPct: parseInt(e.target.value) })}
+                        className="flex-1 accent-amber-500"
+                      />
+                    </div>
+                    <ZoneEditor
+                      label="Header text"
+                      zone={slide.header}
+                      onChange={(z) => updateSlide({ ...slide, header: z })}
+                    />
+                  </>
+                )}
+              </div>
               <ZoneEditor
                 label="Body"
                 zone={slide.body}
@@ -603,8 +704,336 @@ function SlideEditor({
           </div>
         </div>
       </div>
+      {showBgImagePicker && (
+        <MediaPickerModal
+          images={mediaImages}
+          onSelect={(path) => updateSlide({ ...slide, backgroundImage: path })}
+          onClose={() => setShowBgImagePicker(false)}
+          onUpload={async () => {
+            try {
+              const selected = await openDialog({
+                multiple: false,
+                filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"] }],
+              });
+              if (!selected) return;
+              await invoke("add_media", { path: selected });
+            } catch (err) {
+              console.error("Upload failed", err);
+            }
+          }}
+        />
+      )}
     </div>
   );
+}
+
+// ─── Quick Bible Picker ───────────────────────────────────────────────────────
+// Keyboard-driven book+chapter+verse entry. Type book → autocomplete → Space/Tab
+// to confirm, then type "chapter verse" (or "chapter:verse"), Enter to stage,
+// Enter×2 within 800 ms to go live.
+
+function QuickBiblePicker({
+  books,
+  onStage,
+  onLive,
+}: {
+  books: string[];
+  onStage: (item: DisplayItem) => Promise<void>;
+  onLive: (item: DisplayItem) => Promise<void>;
+}) {
+  const [bookQuery, setBookQuery] = React.useState("");
+  const [lockedBook, setLockedBook] = React.useState<string | null>(null);
+  const [cvText, setCvText] = React.useState("");
+  const [suggestions, setSuggestions] = React.useState<string[]>([]);
+  const [activeSuggIdx, setActiveSuggIdx] = React.useState(0);
+  const lastEnterRef = React.useRef<number>(0);
+  const bookInputRef = React.useRef<HTMLInputElement>(null);
+  const cvInputRef = React.useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    if (!bookQuery.trim()) { setSuggestions([]); return; }
+    const q = bookQuery.toLowerCase();
+    setSuggestions(books.filter((b) => b.toLowerCase().includes(q)).slice(0, 7));
+    setActiveSuggIdx(0);
+  }, [bookQuery, books]);
+
+  const confirmBook = (book: string) => {
+    setLockedBook(book);
+    setBookQuery("");
+    setSuggestions([]);
+    setTimeout(() => cvInputRef.current?.focus(), 40);
+  };
+
+  const clearBook = () => {
+    setLockedBook(null);
+    setCvText("");
+    setSuggestions([]);
+    setTimeout(() => bookInputRef.current?.focus(), 40);
+  };
+
+  const handleBookKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setActiveSuggIdx((i) => Math.min(i + 1, suggestions.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActiveSuggIdx((i) => Math.max(i - 1, 0)); }
+    else if ((e.key === " " || e.key === "Tab" || e.key === "Enter") && suggestions.length > 0) {
+      e.preventDefault();
+      confirmBook(suggestions[activeSuggIdx]);
+    } else if (e.key === "Escape") { setSuggestions([]); setBookQuery(""); }
+  };
+
+  const handleCvKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") { clearBook(); return; }
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    if (!lockedBook) return;
+    const parts = cvText.trim().split(/[\s:.]+/);
+    const chapter = parseInt(parts[0] || "1");
+    const verse = parseInt(parts[1] || "1");
+    if (isNaN(chapter) || isNaN(verse)) return;
+    const now = Date.now();
+    const isDouble = now - lastEnterRef.current < 800;
+    lastEnterRef.current = now;
+    try {
+      const v: any = await invoke("get_verse", { book: lockedBook, chapter, verse });
+      if (!v) return;
+      const item: DisplayItem = { type: "Verse", data: v };
+      if (isDouble) {
+        await onLive(item);
+      } else {
+        await onStage(item);
+      }
+    } catch (err) {
+      console.error("QuickBiblePicker:", err);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="relative">
+        <div className={`flex items-center gap-1.5 bg-slate-800 border rounded-lg px-2 py-1.5 focus-within:ring-1 focus-within:ring-amber-500 transition-all ${suggestions.length > 0 ? "border-amber-500/50" : "border-slate-700"}`}>
+          {lockedBook ? (
+            <>
+              <span className="flex items-center gap-1 bg-amber-500/20 text-amber-400 text-xs font-bold px-2 py-0.5 rounded shrink-0">
+                {lockedBook}
+                <button onClick={clearBook} tabIndex={-1} className="ml-1 text-amber-600 hover:text-amber-300 leading-none text-sm">×</button>
+              </span>
+              <input
+                ref={cvInputRef}
+                value={cvText}
+                onChange={(e) => setCvText(e.target.value)}
+                onKeyDown={handleCvKeyDown}
+                placeholder="3 16  or  3:16"
+                className="flex-1 bg-transparent text-slate-200 text-sm focus:outline-none min-w-0"
+              />
+            </>
+          ) : (
+            <input
+              ref={bookInputRef}
+              value={bookQuery}
+              onChange={(e) => setBookQuery(e.target.value)}
+              onKeyDown={handleBookKeyDown}
+              placeholder="Type a book name..."
+              className="flex-1 bg-transparent text-slate-200 text-sm focus:outline-none"
+            />
+          )}
+        </div>
+        {suggestions.length > 0 && !lockedBook && (
+          <div className="absolute top-full left-0 right-0 mt-0.5 bg-slate-800 border border-slate-600 rounded-lg shadow-2xl z-30 overflow-hidden">
+            {suggestions.map((book, i) => (
+              <button
+                key={book}
+                onMouseDown={(e) => { e.preventDefault(); confirmBook(book); }}
+                className={`w-full text-left px-3 py-2 text-xs transition-all ${i === activeSuggIdx ? "bg-amber-500/20 text-amber-400 font-bold" : "text-slate-300 hover:bg-slate-700"}`}
+              >
+                {book}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <p className="text-[9px] text-slate-600 leading-tight">
+        {lockedBook
+          ? "Type chapter+verse (e.g. 3 16) · Enter = stage · Enter×2 = live · Esc = clear"
+          : "↑↓ arrows · Space/Tab/Enter = select book"}
+      </p>
+    </div>
+  );
+}
+
+// ─── Media Picker Modal ───────────────────────────────────────────────────────
+// Modal for picking an image from the centralized media library.
+
+function MediaPickerModal({
+  images,
+  onSelect,
+  onClose,
+  onUpload,
+}: {
+  images: MediaItem[];
+  onSelect: (path: string) => void;
+  onClose: () => void;
+  onUpload: () => Promise<void>;
+}) {
+  const [uploading, setUploading] = React.useState(false);
+
+  const handleUpload = async () => {
+    setUploading(true);
+    try { await onUpload(); } finally { setUploading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-8" style={{ backgroundColor: "rgba(0,0,0,0.75)" }}>
+      <div className="bg-slate-900 rounded-xl border border-slate-700 flex flex-col w-full max-w-2xl" style={{ maxHeight: "80vh" }}>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 shrink-0">
+          <span className="text-sm font-bold text-slate-200">Media Library — Pick Image</span>
+          <div className="flex gap-2">
+            <button
+              onClick={handleUpload}
+              disabled={uploading}
+              className="text-[10px] bg-amber-500 hover:bg-amber-400 text-black font-bold px-3 py-1.5 rounded transition-all disabled:opacity-50"
+            >
+              {uploading ? "Uploading..." : "+ Upload New"}
+            </button>
+            <button onClick={onClose} className="text-slate-400 hover:text-white text-lg leading-none px-1">×</button>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4">
+          {images.length === 0 ? (
+            <p className="text-slate-600 text-xs italic text-center py-12">
+              No images in library yet. Click "+ Upload New" to add images.
+            </p>
+          ) : (
+            <div className="grid grid-cols-3 gap-2">
+              {images.map((img) => (
+                <button
+                  key={img.id}
+                  onClick={() => { onSelect(img.path); onClose(); }}
+                  className="aspect-video rounded-lg overflow-hidden border border-slate-700 hover:border-amber-500 transition-all group relative"
+                >
+                  <img src={convertFileSrc(img.path)} className="w-full h-full object-cover" alt={img.name} />
+                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center">
+                    <span className="text-white text-[10px] font-bold">SELECT</span>
+                  </div>
+                  <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
+                    <p className="text-[8px] text-white truncate">{img.name}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Background Editor ────────────────────────────────────────────────────────
+// Reusable component for choosing None / Color / Image backgrounds.
+// Image mode uses the centralized media library via MediaPickerModal.
+
+function BackgroundEditor({
+  label,
+  value,
+  onChange,
+  mediaImages = [],
+  onUploadMedia = async () => {},
+}: {
+  label: string;
+  value: BackgroundSetting | undefined;
+  onChange: (bg: BackgroundSetting) => void;
+  mediaImages?: MediaItem[];
+  onUploadMedia?: () => Promise<void>;
+}) {
+  const [showPicker, setShowPicker] = React.useState(false);
+  const current: BackgroundSetting = value ?? { type: "None" };
+
+  return (
+    <>
+      <div>
+        {label && <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1.5">{label}</p>}
+        <div className="flex gap-1.5 mb-1.5">
+          {(["None", "Color", "Image"] as const).map((mode) => (
+            <button
+              key={mode}
+              onClick={() => {
+                if (mode === "None") onChange({ type: "None" });
+                else if (mode === "Color") onChange({ type: "Color", value: current.type === "Color" ? (current as any).value : "#000000" });
+                else onChange({ type: "Image", value: current.type === "Image" ? (current as any).value : "" });
+              }}
+              className={`flex-1 py-1 rounded text-[9px] font-bold border transition-all ${
+                current.type === mode ? "border-amber-500 bg-amber-500/10 text-amber-400" : "border-slate-700 bg-slate-800/50 text-slate-500 hover:border-slate-600"
+              }`}
+            >
+              {mode === "None" ? "Inherit" : mode}
+            </button>
+          ))}
+        </div>
+        {current.type === "Color" && (
+          <div className="flex items-center gap-2">
+            <input
+              type="color"
+              value={(current as { type: "Color"; value: string }).value}
+              onChange={(e) => onChange({ type: "Color", value: e.target.value })}
+              className="w-8 h-8 rounded cursor-pointer border border-slate-700 bg-transparent"
+            />
+            <span className="text-[9px] font-mono text-slate-500">{(current as { type: "Color"; value: string }).value}</span>
+          </div>
+        )}
+        {current.type === "Image" && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowPicker(true)}
+              className="flex-1 py-1 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-slate-300 transition-all"
+            >
+              {(current as { type: "Image"; value: string }).value ? "Change from Library..." : "Pick from Library..."}
+            </button>
+            {(current as { type: "Image"; value: string }).value && (
+              <button
+                onClick={() => onChange({ type: "Image", value: "" })}
+                className="text-red-500/70 hover:text-red-400 text-[10px] font-bold shrink-0"
+                title="Clear image"
+              >✕</button>
+            )}
+          </div>
+        )}
+        {current.type === "Image" && (current as { type: "Image"; value: string }).value && (
+          <p className="text-[8px] text-slate-600 truncate mt-1">
+            {(current as { type: "Image"; value: string }).value.split(/[/\\]/).pop()}
+          </p>
+        )}
+      </div>
+      {showPicker && (
+        <MediaPickerModal
+          images={mediaImages}
+          onSelect={(path) => { onChange({ type: "Image", value: path }); }}
+          onClose={() => setShowPicker(false)}
+          onUpload={onUploadMedia}
+        />
+      )}
+    </>
+  );
+}
+
+// ─── Camera Feed Renderer ─────────────────────────────────────────────────────
+// Used in the output window to show a live camera stream.
+
+function CameraFeedRenderer({ deviceId }: { deviceId: string }) {
+  const videoRef = React.useRef<HTMLVideoElement>(null);
+
+  React.useEffect(() => {
+    let stream: MediaStream | null = null;
+    navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } })
+      .then((s) => {
+        stream = s;
+        if (videoRef.current) videoRef.current.srcObject = s;
+      })
+      .catch((err) => console.error("CameraFeedRenderer: camera access failed", err));
+    return () => {
+      stream?.getTracks().forEach((t) => t.stop());
+      if (videoRef.current) videoRef.current.srcObject = null;
+    };
+  }, [deviceId]);
+
+  return <video ref={videoRef} className="w-full h-full object-cover" autoPlay muted playsInline />;
 }
 
 // ─── Slide Thumbnail ──────────────────────────────────────────────────────────
@@ -735,7 +1164,7 @@ function OutputWindow() {
 
   const { colors } = THEMES[settings.theme] ?? THEMES.dark;
   const isTop = settings.reference_position === "top";
-  const bgStyle = computeOutputBackground(settings, colors);
+  const bgStyle = getEffectiveBackground(settings, liveItem, colors);
 
   const ReferenceTag = liveItem?.type === "Verse" ? (
     <p
@@ -748,7 +1177,7 @@ function OutputWindow() {
 
   return (
     <div
-      className="h-screen w-screen flex items-center justify-center overflow-hidden relative"
+      className="h-screen w-screen overflow-hidden relative"
       style={{ ...bgStyle, color: colors.verseText }}
     >
       {settings.logo_path && (
@@ -760,23 +1189,22 @@ function OutputWindow() {
       )}
 
       {liveItem ? (
-        <div className="w-full h-full flex flex-col items-center justify-center p-12 animate-in fade-in duration-700">
+        <>
           {liveItem.type === "Verse" ? (
-            <div className="text-center max-w-5xl flex flex-col items-center gap-8">
-              {isTop && ReferenceTag}
-              <h1
-                className="font-serif leading-tight drop-shadow-2xl"
-                style={{
-                  color: colors.verseText,
-                  fontSize: `${settings.font_size}pt`,
-                }}
-              >
-                {liveItem.data.text}
-              </h1>
-              {!isTop && ReferenceTag}
+            <div className="absolute inset-0 flex flex-col items-center justify-center p-16 text-center animate-in fade-in duration-700">
+              <div className="max-w-5xl flex flex-col items-center gap-8">
+                {isTop && ReferenceTag}
+                <h1
+                  className="font-serif leading-tight drop-shadow-2xl"
+                  style={{ color: colors.verseText, fontSize: `${settings.font_size}pt` }}
+                >
+                  {liveItem.data.text}
+                </h1>
+                {!isTop && ReferenceTag}
+              </div>
             </div>
           ) : liveItem.type === "PresentationSlide" ? (
-            <div className="w-full h-full">
+            <div className="absolute inset-0 animate-in fade-in duration-500">
               {currentSlide ? (
                 <SlideRenderer slide={currentSlide} />
               ) : (
@@ -788,11 +1216,15 @@ function OutputWindow() {
               )}
             </div>
           ) : liveItem.type === "CustomSlide" ? (
-            <div className="w-full h-full">
+            <div className="absolute inset-0 animate-in fade-in duration-500">
               <CustomSlideRenderer slide={liveItem.data} />
             </div>
-          ) : (
-            <div className="w-full h-full flex items-center justify-center">
+          ) : liveItem.type === "CameraFeed" ? (
+            <div className="absolute inset-0 animate-in fade-in duration-500">
+              <CameraFeedRenderer deviceId={liveItem.data.device_id} />
+            </div>
+          ) : liveItem.type === "Media" ? (
+            <div className="absolute inset-0 flex items-center justify-center animate-in fade-in duration-700">
               {liveItem.data.media_type === "Image" ? (
                 <img
                   src={convertFileSrc(liveItem.data.path)}
@@ -809,14 +1241,13 @@ function OutputWindow() {
                 />
               )}
             </div>
-          )}
-        </div>
+          ) : null}
+        </>
       ) : (
-        <div
-          className="font-serif text-2xl italic select-none"
-          style={{ color: colors.waitingText }}
-        >
-          Waiting for projection...
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span className="font-serif text-2xl italic select-none" style={{ color: colors.waitingText }}>
+            Waiting for projection...
+          </span>
         </div>
       )}
     </div>
@@ -869,6 +1300,15 @@ function PreviewCard({
               <div className="w-full" style={{ aspectRatio: "16/9" }}>
                 <CustomSlideRenderer slide={item.data} scale={0.25} />
               </div>
+            ) : item.type === "CameraFeed" ? (
+              <>
+                <div className="w-full rounded overflow-hidden border border-slate-700" style={{ aspectRatio: "16/9", maxHeight: "8rem" }}>
+                  <CameraFeedRenderer deviceId={item.data.device_id} />
+                </div>
+                <p className="text-teal-400 text-xs font-bold uppercase truncate max-w-full">
+                  {item.data.label || item.data.device_id.slice(0, 16)}
+                </p>
+              </>
             ) : (
               <>
                 {item.data.media_type === "Image" ? (
@@ -954,6 +1394,10 @@ export default function App() {
 
   // Media
   const [media, setMedia] = useState<MediaItem[]>([]);
+  const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
+  const [mediaFilter, setMediaFilter] = useState<"image" | "video" | "camera">("image");
+  const [showLogoPicker, setShowLogoPicker] = useState(false);
+  const [showGlobalBgPicker, setShowGlobalBgPicker] = useState(false);
 
   // Presentations
   const [presentations, setPresentations] = useState<PresentationFile[]>([]);
@@ -1046,6 +1490,9 @@ export default function App() {
 
     loadAudioDevices();
     loadMedia();
+    navigator.mediaDevices?.enumerateDevices()
+      .then((devs) => setCameras(devs.filter((d) => d.kind === "videoinput")))
+      .catch(() => {});
     loadPresentations();
     loadStudioList();
     loadSchedule();
@@ -1398,9 +1845,9 @@ export default function App() {
     setExpandedStudioPresId(id);
   };
 
-  const stageCustomSlide = async (presItem: { id: string; name: string; slide_count: number }, slides: CustomSlide[], slideIdx: number) => {
+  const buildCustomSlideItem = (presItem: { id: string; name: string; slide_count: number }, slides: CustomSlide[], slideIdx: number): DisplayItem => {
     const slide = slides[slideIdx];
-    const item: DisplayItem = {
+    return {
       type: "CustomSlide",
       data: {
         presentation_id: presItem.id,
@@ -1409,29 +1856,20 @@ export default function App() {
         slide_count: slides.length,
         background_color: slide.backgroundColor,
         background_image: slide.backgroundImage,
+        header_enabled: slide.headerEnabled ?? true,
+        header_height_pct: slide.headerHeightPct ?? 35,
         header: { text: slide.header.text, font_size: slide.header.fontSize, font_family: slide.header.fontFamily, color: slide.header.color, bold: slide.header.bold, italic: slide.header.italic, align: slide.header.align },
         body:   { text: slide.body.text,   font_size: slide.body.fontSize,   font_family: slide.body.fontFamily,   color: slide.body.color,   bold: slide.body.bold,   italic: slide.body.italic,   align: slide.body.align },
       },
     };
-    await stageItem(item);
+  };
+
+  const stageCustomSlide = async (presItem: { id: string; name: string; slide_count: number }, slides: CustomSlide[], slideIdx: number) => {
+    await stageItem(buildCustomSlideItem(presItem, slides, slideIdx));
   };
 
   const sendCustomSlide = async (presItem: { id: string; name: string; slide_count: number }, slides: CustomSlide[], slideIdx: number) => {
-    const slide = slides[slideIdx];
-    const item: DisplayItem = {
-      type: "CustomSlide",
-      data: {
-        presentation_id: presItem.id,
-        presentation_name: presItem.name,
-        slide_index: slideIdx,
-        slide_count: slides.length,
-        background_color: slide.backgroundColor,
-        background_image: slide.backgroundImage,
-        header: { text: slide.header.text, font_size: slide.header.fontSize, font_family: slide.header.fontFamily, color: slide.header.color, bold: slide.header.bold, italic: slide.header.italic, align: slide.header.align },
-        body:   { text: slide.body.text,   font_size: slide.body.fontSize,   font_family: slide.body.fontFamily,   color: slide.body.color,   bold: slide.body.bold,   italic: slide.body.italic,   align: slide.body.align },
-      },
-    };
-    await sendLive(item);
+    await sendLive(buildCustomSlideItem(presItem, slides, slideIdx));
   };
 
   // ── Background image picker ──────────────────────────────────────────────────
@@ -1539,6 +1977,7 @@ export default function App() {
     return (
       <SlideEditor
         initialPres={editorPres}
+        mediaImages={media.filter((m) => m.media_type === "Image")}
         onClose={async (saved) => {
           setEditorPresId(null);
           setEditorPres(null);
@@ -1691,6 +2130,20 @@ export default function App() {
             {/* ── Bible Tab ── */}
             {activeTab === "bible" && (
               <>
+                {/* Quick keyboard entry */}
+                <div>
+                  <h2 className="text-xs font-bold text-slate-500 uppercase mb-2 tracking-widest">
+                    Quick Entry
+                  </h2>
+                  <QuickBiblePicker
+                    books={books}
+                    onStage={stageItem}
+                    onLive={sendLive}
+                  />
+                </div>
+
+                <hr className="border-slate-800" />
+
                 <div>
                   <h2 className="text-xs font-bold text-slate-500 uppercase mb-3 tracking-widest">
                     Manual Selection
@@ -1795,37 +2248,137 @@ export default function App() {
 
             {/* ── Media Tab ── */}
             {activeTab === "media" && (
-              <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-3">
+                {/* Header + upload */}
                 <div className="flex justify-between items-center">
                   <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Media Library</h2>
-                  <button onClick={handleFileUpload} className="text-[10px] bg-amber-500 hover:bg-amber-600 text-black font-bold px-3 py-1.5 rounded transition-all">
-                    + UPLOAD
-                  </button>
+                  {mediaFilter !== "camera" && (
+                    <button onClick={handleFileUpload} className="text-[10px] bg-amber-500 hover:bg-amber-600 text-black font-bold px-3 py-1.5 rounded transition-all">
+                      + UPLOAD
+                    </button>
+                  )}
                 </div>
 
-                {media.length === 0 ? (
-                  <p className="text-slate-700 text-xs italic text-center pt-8">No media files. Click + UPLOAD to add images or videos.</p>
-                ) : (
-                  <div className="grid grid-cols-2 gap-2">
-                    {media.map((item) => (
-                      <div key={item.id} className="group relative aspect-video bg-slate-800 rounded-lg overflow-hidden border border-slate-700 hover:border-amber-500/50 transition-all">
-                        {item.media_type === "Image" ? (
-                          <img src={convertFileSrc(item.path)} className="w-full h-full object-cover" alt={item.name} />
-                        ) : (
-                          <video src={convertFileSrc(item.path)} className="w-full h-full object-cover" muted preload="metadata" />
-                        )}
-                        <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-all flex flex-col items-center justify-center gap-1.5 p-2">
-                          <button onClick={() => stageItem({ type: "Media", data: item })} className="w-full bg-slate-600 hover:bg-slate-500 text-white text-[10px] font-bold py-1 rounded">STAGE</button>
-                          <button onClick={() => sendLive({ type: "Media", data: item })} className="w-full bg-white hover:bg-slate-200 text-black text-[10px] font-bold py-1 rounded">DISPLAY</button>
-                          <button onClick={() => addToSchedule({ type: "Media", data: item })} className="w-full bg-amber-500 hover:bg-amber-400 text-black text-[10px] font-bold py-1 rounded">+ QUEUE</button>
-                          <button onClick={() => handleDeleteMedia(item.id)} className="w-full bg-red-900/60 hover:bg-red-900 text-red-300 text-[10px] font-bold py-1 rounded">DELETE</button>
+                {/* Filter tabs */}
+                <div className="flex gap-0.5 bg-slate-900/60 rounded-lg p-0.5 border border-slate-800">
+                  {(["image", "video", "camera"] as const).map((f) => (
+                    <button
+                      key={f}
+                      onClick={() => setMediaFilter(f)}
+                      className={`flex-1 py-1.5 rounded text-[9px] font-bold uppercase tracking-wide transition-all ${
+                        mediaFilter === f
+                          ? "bg-amber-500 text-black shadow"
+                          : "text-slate-500 hover:text-slate-300"
+                      }`}
+                    >
+                      {f === "image"
+                        ? `Images (${media.filter((m) => m.media_type === "Image").length})`
+                        : f === "video"
+                        ? `Videos (${media.filter((m) => m.media_type === "Video").length})`
+                        : `Cameras (${cameras.length})`}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Images grid */}
+                {mediaFilter === "image" && (
+                  media.filter((m) => m.media_type === "Image").length === 0 ? (
+                    <p className="text-slate-700 text-xs italic text-center pt-8">No images. Click + UPLOAD to add.</p>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2">
+                      {media.filter((m) => m.media_type === "Image").map((item) => (
+                        <div key={item.id} className="flex flex-col bg-slate-800/50 rounded-lg overflow-hidden border border-slate-700 hover:border-slate-600 transition-all">
+                          <div className="aspect-video overflow-hidden bg-slate-900 shrink-0">
+                            <img src={convertFileSrc(item.path)} className="w-full h-full object-cover" alt={item.name} />
+                          </div>
+                          <div className="px-1.5 py-1.5">
+                            <p className="text-[8px] text-slate-400 truncate mb-1.5">{item.name}</p>
+                            <div className="grid grid-cols-4 gap-0.5">
+                              <button onClick={() => stageItem({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-white text-[8px] font-bold py-1 rounded transition-all" title="Stage">STG</button>
+                              <button onClick={() => sendLive({ type: "Media", data: item })} className="bg-amber-500 hover:bg-amber-400 text-black text-[8px] font-bold py-1 rounded transition-all" title="Display Live">LIVE</button>
+                              <button onClick={() => addToSchedule({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-amber-400 text-[8px] font-bold py-1 rounded transition-all" title="Add to Queue">+Q</button>
+                              <button onClick={() => handleDeleteMedia(item.id)} className="bg-red-900/50 hover:bg-red-800 text-red-300 text-[8px] font-bold py-1 rounded transition-all" title="Delete">DEL</button>
+                            </div>
+                          </div>
                         </div>
-                        <div className="absolute bottom-0 left-0 right-0 px-1 py-0.5 bg-black/50 backdrop-blur-sm">
-                          <p className="text-[8px] text-white truncate text-center">{item.name}</p>
+                      ))}
+                    </div>
+                  )
+                )}
+
+                {/* Videos grid */}
+                {mediaFilter === "video" && (
+                  media.filter((m) => m.media_type === "Video").length === 0 ? (
+                    <p className="text-slate-700 text-xs italic text-center pt-8">No videos. Click + UPLOAD to add.</p>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2">
+                      {media.filter((m) => m.media_type === "Video").map((item) => (
+                        <div key={item.id} className="flex flex-col bg-slate-800/50 rounded-lg overflow-hidden border border-slate-700 hover:border-slate-600 transition-all">
+                          <div className="aspect-video overflow-hidden bg-slate-900 relative shrink-0">
+                            <video src={convertFileSrc(item.path)} className="w-full h-full object-cover" muted preload="metadata" />
+                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                              <span className="text-white/50 text-xl">▶</span>
+                            </div>
+                          </div>
+                          <div className="px-1.5 py-1.5">
+                            <p className="text-[8px] text-slate-400 truncate mb-1.5">{item.name}</p>
+                            <div className="grid grid-cols-4 gap-0.5">
+                              <button onClick={() => stageItem({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-white text-[8px] font-bold py-1 rounded transition-all" title="Stage">STG</button>
+                              <button onClick={() => sendLive({ type: "Media", data: item })} className="bg-amber-500 hover:bg-amber-400 text-black text-[8px] font-bold py-1 rounded transition-all" title="Display Live">LIVE</button>
+                              <button onClick={() => addToSchedule({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-amber-400 text-[8px] font-bold py-1 rounded transition-all" title="Add to Queue">+Q</button>
+                              <button onClick={() => handleDeleteMedia(item.id)} className="bg-red-900/50 hover:bg-red-800 text-red-300 text-[8px] font-bold py-1 rounded transition-all" title="Delete">DEL</button>
+                            </div>
+                          </div>
                         </div>
+                      ))}
+                    </div>
+                  )
+                )}
+
+                {/* Camera feed tab */}
+                {mediaFilter === "camera" && (
+                  <>
+                    <button
+                      onClick={() =>
+                        navigator.mediaDevices?.enumerateDevices()
+                          .then((devs) => setCameras(devs.filter((d) => d.kind === "videoinput")))
+                          .catch(() => {})
+                      }
+                      className="text-[9px] bg-slate-700 hover:bg-slate-600 text-slate-300 font-bold px-3 py-1.5 rounded transition-all self-start border border-slate-600"
+                    >
+                      ↺ Refresh Cameras
+                    </button>
+                    {cameras.length === 0 ? (
+                      <p className="text-slate-700 text-xs italic text-center pt-8">No cameras found. Allow camera access and click Refresh.</p>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-2">
+                        {cameras.map((cam) => (
+                          <div key={cam.deviceId} className="flex flex-col bg-slate-800/50 rounded-lg overflow-hidden border border-slate-700 hover:border-slate-600 transition-all">
+                            <div className="aspect-video overflow-hidden bg-slate-900 shrink-0">
+                              <CameraFeedRenderer deviceId={cam.deviceId} />
+                            </div>
+                            <div className="px-1.5 py-1.5">
+                              <p className="text-[8px] text-slate-400 truncate mb-1.5">{cam.label || `Camera ${cam.deviceId.slice(0, 8)}`}</p>
+                              <div className="grid grid-cols-3 gap-0.5">
+                                <button
+                                  onClick={() => stageItem({ type: "CameraFeed", data: { device_id: cam.deviceId, label: cam.label } })}
+                                  className="bg-slate-700 hover:bg-slate-600 text-white text-[8px] font-bold py-1 rounded transition-all"
+                                >STAGE</button>
+                                <button
+                                  onClick={() => sendLive({ type: "CameraFeed", data: { device_id: cam.deviceId, label: cam.label } })}
+                                  className="bg-amber-500 hover:bg-amber-400 text-black text-[8px] font-bold py-1 rounded transition-all"
+                                >LIVE</button>
+                                <button
+                                  onClick={() => addToSchedule({ type: "CameraFeed", data: { device_id: cam.deviceId, label: cam.label } })}
+                                  className="bg-slate-700 hover:bg-slate-600 text-amber-400 text-[8px] font-bold py-1 rounded transition-all"
+                                >+Q</button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
+                    )}
+                  </>
                 )}
               </div>
             )}
@@ -2057,6 +2610,8 @@ export default function App() {
                               <p className="text-purple-400 text-[10px] font-bold uppercase truncate">
                                 STUDIO: {entry.item.data.presentation_name} — Slide {entry.item.data.slide_index + 1}
                               </p>
+                            ) : entry.item.type === "CameraFeed" ? (
+                              <p className="text-teal-400 text-[10px] font-bold uppercase truncate">CAM: {entry.item.data.label || entry.item.data.device_id.slice(0, 12)}</p>
                             ) : (
                               <p className="text-blue-400 text-[10px] font-bold uppercase truncate">{entry.item.data.media_type}: {entry.item.data.name}</p>
                             )}
@@ -2139,7 +2694,13 @@ export default function App() {
                   <p className="text-xs text-slate-400 font-bold uppercase mb-3">Corner Logo</p>
                   <div className="flex flex-col gap-2">
                     <button
-                      onClick={handlePickLogo}
+                      onClick={() => {
+                        if (media.filter((m) => m.media_type === "Image").length > 0) {
+                          setShowLogoPicker(true);
+                        } else {
+                          handlePickLogo();
+                        }
+                      }}
                       className="w-full py-2 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-all"
                     >
                       {settings.logo_path ? "Change Logo..." : "Choose Logo..."}
@@ -2159,6 +2720,14 @@ export default function App() {
                     )}
                   </div>
                 </div>
+                {showLogoPicker && (
+                  <MediaPickerModal
+                    images={media.filter((m) => m.media_type === "Image")}
+                    onSelect={(path) => updateSettings({ ...settings, logo_path: path })}
+                    onClose={() => setShowLogoPicker(false)}
+                    onUpload={handleFileUpload}
+                  />
+                )}
 
                 {/* Reference position */}
                 <div>
@@ -2235,10 +2804,16 @@ export default function App() {
                   {settings.background.type === "Image" && (
                     <div className="flex flex-col gap-2">
                       <button
-                        onClick={handlePickBackgroundImage}
+                        onClick={() => {
+                          if (media.filter((m) => m.media_type === "Image").length > 0) {
+                            setShowGlobalBgPicker(true);
+                          } else {
+                            handlePickBackgroundImage();
+                          }
+                        }}
                         className="w-full py-2 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-all"
                       >
-                        Choose Image...
+                        {(settings.background as { type: "Image"; value: string }).value ? "Change from Library..." : "Choose from Library..."}
                       </button>
                       {(settings.background as { type: "Image"; value: string }).value && (
                         <p className="text-[9px] text-slate-500 truncate">
@@ -2247,6 +2822,45 @@ export default function App() {
                       )}
                     </div>
                   )}
+                  {showGlobalBgPicker && (
+                    <MediaPickerModal
+                      images={media.filter((m) => m.media_type === "Image")}
+                      onSelect={(path) => updateSettings({ ...settings, background: { type: "Image", value: path } })}
+                      onClose={() => setShowGlobalBgPicker(false)}
+                      onUpload={handleFileUpload}
+                    />
+                  )}
+                </div>
+
+                {/* Per-content-type backgrounds */}
+                <div>
+                  <p className="text-xs text-slate-400 font-bold uppercase mb-1">Content Backgrounds</p>
+                  <p className="text-[9px] text-slate-600 italic mb-3">Override the global background for each content type. "Inherit" uses the setting above.</p>
+                  <div className="flex flex-col gap-3 p-3 rounded-lg bg-slate-900/60 border border-slate-700/50">
+                    <BackgroundEditor
+                      label="Bible Verses"
+                      value={settings.bible_background}
+                      onChange={(bg) => updateSettings({ ...settings, bible_background: bg })}
+                      mediaImages={media.filter((m) => m.media_type === "Image")}
+                      onUploadMedia={handleFileUpload}
+                    />
+                    <div className="border-t border-slate-800" />
+                    <BackgroundEditor
+                      label="Presentations (PPTX)"
+                      value={settings.presentation_background}
+                      onChange={(bg) => updateSettings({ ...settings, presentation_background: bg })}
+                      mediaImages={media.filter((m) => m.media_type === "Image")}
+                      onUploadMedia={handleFileUpload}
+                    />
+                    <div className="border-t border-slate-800" />
+                    <BackgroundEditor
+                      label="Media (Image / Video)"
+                      value={settings.media_background}
+                      onChange={(bg) => updateSettings({ ...settings, media_background: bg })}
+                      mediaImages={media.filter((m) => m.media_type === "Image")}
+                      onUploadMedia={handleFileUpload}
+                    />
+                  </div>
                 </div>
 
                 {/* Live preview */}
