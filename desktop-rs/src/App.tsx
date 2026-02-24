@@ -32,7 +32,12 @@ export default function App() {
         if (devs.length > 0) setSelectedDevice(devs[0][0]);
       });
 
-      invoke("get_books").then((b: any) => setBooks(b));
+      invoke("get_books")
+        .then((b: any) => {
+          setBooks(b);
+          if (b.length > 0) setSelectedBook(b[0]); // auto-populate chapters/verses
+        })
+        .catch((err: any) => setAudioError(`Failed to load books: ${err}`));
     }
 
     const unlisten = listen("transcription-update", (event: any) => {
@@ -65,19 +70,23 @@ export default function App() {
 
   useEffect(() => {
     if (selectedBook) {
-      invoke("get_chapters", { book: selectedBook }).then((c: any) => {
-        setChapters(c);
-        setSelectedChapter(c[0] || 0);
-      });
+      invoke("get_chapters", { book: selectedBook })
+        .then((c: any) => {
+          setChapters(c);
+          if (c.length > 0) setSelectedChapter(c[0]);
+        })
+        .catch((err: any) => setAudioError(`Failed to load chapters: ${err}`));
     }
   }, [selectedBook]);
 
   useEffect(() => {
-    if (selectedBook && selectedChapter) {
-      invoke("get_verses_count", { book: selectedBook, chapter: selectedChapter }).then((v: any) => {
-        setVerses(v);
-        setSelectedVerse(v[0] || 0);
-      });
+    if (selectedBook && selectedChapter > 0) {
+      invoke("get_verses_count", { book: selectedBook, chapter: selectedChapter })
+        .then((v: any) => {
+          setVerses(v);
+          if (v.length > 0) setSelectedVerse(v[0]);
+        })
+        .catch((err: any) => setAudioError(`Failed to load verses: ${err}`));
     }
   }, [selectedBook, selectedChapter]);
 
@@ -284,15 +293,23 @@ export default function App() {
             </form>
             
             <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
+                {searchResults.length === 0 && searchQuery && (
+                  <p className="text-slate-600 text-xs italic text-center pt-4">No results found</p>
+                )}
                 {searchResults.map((v, i) => (
-                <button 
+                <div
                     key={i}
-                    onClick={() => selectManualVerse(v)}
-                    className="w-full text-left p-3 rounded-lg bg-slate-800/50 hover:bg-slate-800 border border-transparent hover:border-slate-700 transition-all group"
+                    className="p-3 rounded-lg bg-slate-800/50 border border-transparent hover:border-slate-700 transition-all"
                 >
                     <p className="text-amber-500 text-xs font-bold mb-1 uppercase">{v.book} {v.chapter}:{v.verse}</p>
-                    <p className="text-slate-300 text-xs line-clamp-2 group-hover:text-white">{v.text}</p>
-                </button>
+                    <p className="text-slate-300 text-xs mb-2 line-clamp-2">{v.text}</p>
+                    <button
+                        onClick={() => selectManualVerse(v)}
+                        className="w-full bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold py-1 rounded transition-all"
+                    >
+                        DISPLAY
+                    </button>
+                </div>
                 ))}
             </div>
           </div>
