@@ -84,8 +84,24 @@ pub struct CustomSlideData {
     pub background_color: String,
     /// Absolute path to a background image, or None.
     pub background_image: Option<String>,
+    /// Whether the header/title zone is shown (default true).
+    #[serde(default = "default_header_enabled")]
+    pub header_enabled: bool,
+    /// Header zone height as a percentage of the slide (10–60, default 35).
+    #[serde(default = "default_header_height_pct")]
+    pub header_height_pct: f64,
     pub header: CustomSlideZone,
     pub body: CustomSlideZone,
+}
+
+fn default_header_enabled() -> bool { true }
+fn default_header_height_pct() -> f64 { 35.0 }
+
+/// A live camera feed from a local video device.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CameraFeedData {
+    pub device_id: String,
+    pub label: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -99,6 +115,7 @@ pub enum DisplayItem {
     Media(MediaItem),
     PresentationSlide(PresentationSlideData),
     CustomSlide(CustomSlideData),
+    CameraFeed(CameraFeedData),
 }
 
 /// A schedule entry with a stable ID so the frontend can use it as a React key.
@@ -137,11 +154,18 @@ pub struct PresentationSettings {
     pub theme: String,
     /// Where the scripture reference (Book Ch:V) is shown: "top" | "bottom"
     pub reference_position: String,
-    /// Output window background override. Defaults to None (use theme color).
-    /// `#[serde(default)]` ensures old settings.json without this field
-    /// deserializes cleanly to BackgroundSetting::None.
+    /// Global output window background override. Defaults to None (use theme color).
     #[serde(default)]
     pub background: BackgroundSetting,
+    /// Per-content background override for Bible verse slides.
+    #[serde(default)]
+    pub bible_background: BackgroundSetting,
+    /// Per-content background override for PowerPoint/PPTX slides.
+    #[serde(default)]
+    pub presentation_background: BackgroundSetting,
+    /// Per-content background override for media (image/video) items.
+    #[serde(default)]
+    pub media_background: BackgroundSetting,
     /// Path to a logo image to display on the output window.
     pub logo_path: Option<String>,
     /// Whether the output screen is currently blanked (black).
@@ -162,6 +186,9 @@ impl Default for PresentationSettings {
             theme: "dark".to_string(),
             reference_position: "bottom".to_string(),
             background: BackgroundSetting::default(),
+            bible_background: BackgroundSetting::default(),
+            presentation_background: BackgroundSetting::default(),
+            media_background: BackgroundSetting::default(),
             logo_path: None,
             is_blanked: false,
             font_size: default_font_size(),
