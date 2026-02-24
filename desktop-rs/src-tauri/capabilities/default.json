@@ -7,6 +7,12 @@
     "core:default",
     "dialog:allow-open",
     "shell:allow-open",
-    "fs:allow-all"
+    "fs:default",
+    "fs:allow-read-file",
+    "fs:allow-write-file",
+    "fs:allow-read-dir",
+    "fs:allow-create-dir",
+    "fs:allow-remove",
+    "fs:allow-exists"
   ]
 }
