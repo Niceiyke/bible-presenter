@@ -2,8 +2,14 @@ node_modules/
 dist/
 target/
 src-tauri/target/
+
+# Large model files — must be provided separately (not stored in git)
 src-tauri/models/*.bin
 src-tauri/models/*.onnx
+
+# Large data files — must be provided separately (not stored in git)
+src-tauri/bible_data/*.db
+src-tauri/bible_data/*.npy
+
+# tokenizer.json is small (~2MB) and is committed
 !src-tauri/models/tokenizer.json
-!src-tauri/bible_data/*.db
-!src-tauri/bible_data/*.npy
