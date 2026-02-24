@@ -208,10 +208,7 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
                     tokio::task::spawn_blocking(move || {
                         let text = e_clone.transcribe(&b_clone).ok()?;
                         let embedding = e_clone.embed(&text).ok();
-                        let mut verse = s_clone.detect_verse_hybrid(&text, embedding);
-                        if verse.is_none() {
-                            verse = s_clone.search_semantic_text(&text);
-                        }
+                        let verse = s_clone.detect_verse_hybrid(&text, embedding);
                         Some((text, verse.map(store::DisplayItem::Verse)))
                     })
                     .await
@@ -379,29 +376,48 @@ async fn set_vad_threshold(state: State<'_, Arc<AppState>>, threshold: f32) -> R
 }
 
 #[tauri::command]
+async fn get_bible_versions(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, String> {
+    Ok(state.store.get_available_versions())
+}
+
+#[tauri::command]
+async fn set_bible_version(
+    state: State<'_, Arc<AppState>>,
+    version: String,
+) -> Result<(), String> {
+    state.store.set_active_version(&version);
+    Ok(())
+}
+
+#[tauri::command]
 async fn search_manual(
     state: State<'_, Arc<AppState>>,
     query: String,
+    version: String,
 ) -> Result<Vec<store::Verse>, String> {
     state
         .store
-        .search_manual(&query)
+        .search_manual(&query, &version)
         .map_err(|e: anyhow::Error| e.to_string())
 }
 
 #[tauri::command]
-async fn get_books(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, String> {
+async fn get_books(state: State<'_, Arc<AppState>>, version: String) -> Result<Vec<String>, String> {
     state
         .store
-        .get_books()
+        .get_books(&version)
         .map_err(|e: anyhow::Error| e.to_string())
 }
 
 #[tauri::command]
-async fn get_chapters(state: State<'_, Arc<AppState>>, book: String) -> Result<Vec<i32>, String> {
+async fn get_chapters(
+    state: State<'_, Arc<AppState>>,
+    book: String,
+    version: String,
+) -> Result<Vec<i32>, String> {
     state
         .store
-        .get_chapters(&book)
+        .get_chapters(&book, &version)
         .map_err(|e: anyhow::Error| e.to_string())
 }
 
@@ -410,10 +426,11 @@ async fn get_verses_count(
     state: State<'_, Arc<AppState>>,
     book: String,
     chapter: i32,
+    version: String,
 ) -> Result<Vec<i32>, String> {
     state
         .store
-        .get_verses_count(&book, chapter)
+        .get_verses_count(&book, chapter, &version)
         .map_err(|e: anyhow::Error| e.to_string())
 }
 
@@ -423,10 +440,11 @@ async fn get_verse(
     book: String,
     chapter: i32,
     verse: i32,
+    version: String,
 ) -> Result<Option<store::Verse>, String> {
     state
         .store
-        .get_verse(&book, chapter, verse)
+        .get_verse(&book, chapter, verse, &version)
         .map_err(|e: anyhow::Error| e.to_string())
 }
 
@@ -539,10 +557,11 @@ async fn get_next_verse(
     book: String,
     chapter: i32,
     verse: i32,
+    version: String,
 ) -> Result<Option<store::Verse>, String> {
     state
         .store
-        .get_next_verse(&book, chapter, verse)
+        .get_next_verse(&book, chapter, verse, &version)
         .map_err(|e| e.to_string())
 }
 
@@ -643,8 +662,8 @@ fn main() {
                 }
             }
 
-            let db_path = resource_path.join("bible_data/bible.db");
-            let embeddings_path = resource_path.join("bible_data/embeddings.npy");
+            let db_path = resource_path.join("bible_data/super_bible.db");
+            let embeddings_path = resource_path.join("bible_data/all_versions_embeddings.npy");
 
             log_msg(app, &format!("Looking for DB at: {:?}", db_path));
             if !db_path.exists() {
@@ -712,6 +731,8 @@ fn main() {
             get_audio_devices,
             set_audio_device,
             set_vad_threshold,
+            get_bible_versions,
+            set_bible_version,
             search_manual,
             get_current_item,
             get_books,
