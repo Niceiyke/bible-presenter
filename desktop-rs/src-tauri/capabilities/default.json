@@ -7,7 +7,6 @@
     "core:default",
     "dialog:allow-open",
     "shell:allow-open",
-    "fs:default",
-    "path:default"
+    "fs:allow-all"
   ]
 }
