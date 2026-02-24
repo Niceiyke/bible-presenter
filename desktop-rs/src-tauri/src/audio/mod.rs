@@ -1,10 +1,12 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use tokio::sync::mpsc;
+use rubato::{
+    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+};
 use std::sync::Arc;
-use rubato::{Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters, WindowFunction};
+use tokio::sync::mpsc;
 
 /// A thread-safe wrapper for cpal::Stream.
-/// 
+///
 /// SAFETY: cpal::Stream on Windows is !Send/!Sync because it contains raw pointers (WASAPI handles).
 /// However, we manage access via Mutex<AudioEngine> in AppState, ensuring synchronized access.
 struct StreamHandle(cpal::Stream);
@@ -15,15 +17,17 @@ pub struct AudioEngine {
     stream: Option<Arc<StreamHandle>>,
     selected_device_name: Option<String>,
     active_tx: Option<mpsc::Sender<Vec<f32>>>,
+    active_error_tx: Option<mpsc::Sender<String>>,
     vad_threshold: f32,
 }
 
 impl AudioEngine {
     pub fn new() -> Self {
-        Self { 
+        Self {
             stream: None,
             selected_device_name: None,
             active_tx: None,
+            active_error_tx: None,
             vad_threshold: 0.005,
         }
     }
@@ -46,25 +50,33 @@ impl AudioEngine {
 
     pub fn select_device(&mut self, device_name: &str) -> anyhow::Result<()> {
         self.selected_device_name = Some(device_name.to_string());
-        
-        if let Some(tx) = self.active_tx.clone() {
+
+        // Only restart if a session is already running (both channels present)
+        if let (Some(tx), Some(error_tx)) = (self.active_tx.clone(), self.active_error_tx.clone()) {
             self.stop();
-            self.start_capturing(tx)?;
+            self.start_capturing(tx, error_tx)?;
         }
         Ok(())
     }
 
-    pub fn start_capturing(&mut self, tx: mpsc::Sender<Vec<f32>>) -> anyhow::Result<()> {
+    pub fn start_capturing(
+        &mut self,
+        tx: mpsc::Sender<Vec<f32>>,
+        error_tx: mpsc::Sender<String>,
+    ) -> anyhow::Result<()> {
         self.active_tx = Some(tx.clone());
+        self.active_error_tx = Some(error_tx.clone());
+
         let host = cpal::default_host();
-        
+
         let device = if let Some(ref name) = self.selected_device_name {
             let mut devices = host.input_devices()?;
-            devices.find(|d| d.name().map(|n| n == *name).unwrap_or(false))
-                .ok_or_else(|| anyhow::anyhow!("Selected device not found"))?
+            devices
+                .find(|d| d.name().map(|n| n == *name).unwrap_or(false))
+                .ok_or_else(|| anyhow::anyhow!("Selected device '{}' not found", name))?
         } else {
             host.default_input_device()
-                .ok_or_else(|| anyhow::anyhow!("No input device"))?
+                .ok_or_else(|| anyhow::anyhow!("No input device available"))?
         };
 
         let config = device.default_input_config()?;
@@ -73,9 +85,33 @@ impl AudioEngine {
 
         let vad = self.vad_threshold;
         let stream = match config.sample_format() {
-            cpal::SampleFormat::F32 => self.build_stream::<f32>(&device, &config.into(), sample_rate, target_rate, vad, tx)?,
-            cpal::SampleFormat::I16 => self.build_stream::<i16>(&device, &config.into(), sample_rate, target_rate, vad, tx)?,
-            cpal::SampleFormat::U16 => self.build_stream::<u16>(&device, &config.into(), sample_rate, target_rate, vad, tx)?,
+            cpal::SampleFormat::F32 => self.build_stream::<f32>(
+                &device,
+                &config.into(),
+                sample_rate,
+                target_rate,
+                vad,
+                tx,
+                error_tx,
+            )?,
+            cpal::SampleFormat::I16 => self.build_stream::<i16>(
+                &device,
+                &config.into(),
+                sample_rate,
+                target_rate,
+                vad,
+                tx,
+                error_tx,
+            )?,
+            cpal::SampleFormat::U16 => self.build_stream::<u16>(
+                &device,
+                &config.into(),
+                sample_rate,
+                target_rate,
+                vad,
+                tx,
+                error_tx,
+            )?,
             _ => return Err(anyhow::anyhow!("Unsupported sample format")),
         };
 
@@ -84,9 +120,19 @@ impl AudioEngine {
         Ok(())
     }
 
-    fn build_stream<T>(&self, device: &cpal::Device, config: &cpal::StreamConfig, source_rate: f64, target_rate: f64, vad_threshold: f32, tx: mpsc::Sender<Vec<f32>>) 
-    -> anyhow::Result<cpal::Stream> 
-    where T: cpal::Sample + Into<f32> + 'static + cpal::SizedSample {
+    fn build_stream<T>(
+        &self,
+        device: &cpal::Device,
+        config: &cpal::StreamConfig,
+        source_rate: f64,
+        target_rate: f64,
+        vad_threshold: f32,
+        tx: mpsc::Sender<Vec<f32>>,
+        error_tx: mpsc::Sender<String>,
+    ) -> anyhow::Result<cpal::Stream>
+    where
+        T: cpal::Sample + Into<f32> + 'static + cpal::SizedSample,
+    {
         let channels = config.channels as usize;
         let params = SincInterpolationParameters {
             sinc_len: 256,
@@ -95,50 +141,60 @@ impl AudioEngine {
             window: WindowFunction::BlackmanHarris2,
             oversampling_factor: 256,
         };
-        
-        let mut resampler = SincFixedIn::<f32>::new(
-            target_rate / source_rate,
-            2.0,
-            params,
-            1024,
-            channels,
-        )?;
+
+        let mut resampler =
+            SincFixedIn::<f32>::new(target_rate / source_rate, 2.0, params, 1024, channels)?;
 
         let mut input_buffer = vec![Vec::with_capacity(2048); channels];
 
-        device.build_input_stream(
-            config,
-            move |data: &[T], _| {
-                for frame in data.chunks(channels) {
-                    for (c, sample) in frame.iter().enumerate() {
-                        input_buffer[c].push((*sample).into());
-                    }
-                }
-
-                if input_buffer[0].len() >= 1024 {
-                    if let Ok(output) = resampler.process(&input_buffer, None) {
-                        let mut mono = vec![0.0; output[0].len()];
-                        for chan in output {
-                            for (i, s) in chan.iter().enumerate() { mono[i] += s; }
-                        }
-                        for s in &mut mono { *s /= channels as f32; }
-
-                        let energy = mono.iter().map(|s| s * s).sum::<f32>() / mono.len() as f32;
-                        if energy > vad_threshold {
-                            let _ = tx.try_send(mono);
+        device
+            .build_input_stream(
+                config,
+                move |data: &[T], _| {
+                    for frame in data.chunks(channels) {
+                        for (c, sample) in frame.iter().enumerate() {
+                            input_buffer[c].push((*sample).into());
                         }
                     }
-                    for chan in &mut input_buffer { chan.clear(); }
-                }
-            },
-            |err| eprintln!("Audio error: {}", err),
-            None
-        ).map_err(Into::into)
+
+                    if input_buffer[0].len() >= 1024 {
+                        if let Ok(output) = resampler.process(&input_buffer, None) {
+                            let mut mono = vec![0.0; output[0].len()];
+                            for chan in output {
+                                for (i, s) in chan.iter().enumerate() {
+                                    mono[i] += s;
+                                }
+                            }
+                            for s in &mut mono {
+                                *s /= channels as f32;
+                            }
+
+                            let energy =
+                                mono.iter().map(|s| s * s).sum::<f32>() / mono.len() as f32;
+                            if energy > vad_threshold {
+                                let _ = tx.try_send(mono);
+                            }
+                        }
+                        for chan in &mut input_buffer {
+                            chan.clear();
+                        }
+                    }
+                },
+                // C4: Forward audio device errors through the channel to the UI
+                move |err| {
+                    let _ = error_tx.try_send(format!("Audio device error: {}", err));
+                },
+                None,
+            )
+            .map_err(Into::into)
     }
 
-    pub fn stop(&mut self) { 
-        self.stream = None; 
+    pub fn stop(&mut self) {
+        // Drop the stream first (stops CPAL callbacks)
+        self.stream = None;
+        // Drop both channel senders — this closes the channels, causing
+        // the receiving loops in start_session to exit cleanly via recv() -> None
+        self.active_tx = None;
+        self.active_error_tx = None;
     }
 }
-
-

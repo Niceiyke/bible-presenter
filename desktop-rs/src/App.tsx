@@ -12,6 +12,8 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [vadThreshold, setVadThreshold] = useState(0.005);
+  const [sessionState, setSessionState] = useState<"idle" | "loading" | "running">("idle");
+  const [audioError, setAudioError] = useState<string | null>(null);
 
   // Manual Selection State
   const [books, setBooks] = useState<string[]>([]);
@@ -40,8 +42,24 @@ export default function App() {
       }
     });
 
+    // C3/C5: Track session lifecycle for the START/STOP button
+    const unlistenStatus = listen("session-status", (event: any) => {
+      const { status } = event.payload as { status: string; message: string };
+      if (status === "running") setSessionState("running");
+      else if (status === "loading") setSessionState("loading");
+      else setSessionState("idle");
+    });
+
+    // C4: Show audio device errors visibly instead of silently dropping them
+    const unlistenAudioErr = listen("audio-error", (event: any) => {
+      setAudioError(String(event.payload));
+      setSessionState("idle");
+    });
+
     return () => {
       unlisten.then((f) => f());
+      unlistenStatus.then((f) => f());
+      unlistenAudioErr.then((f) => f());
     };
   }, []);
 
@@ -80,18 +98,31 @@ export default function App() {
     }
   };
 
-  const selectManualVerse = (verse: any) => {
-    invoke("select_verse", { verse });
+  const selectManualVerse = async (verse: any) => {
+    setActiveVerse(verse);
+    invoke("select_verse", { verse }).catch((err: any) =>
+      setAudioError(String(err))
+    );
   };
 
   const handleDisplaySelection = async () => {
-    if (selectedBook && selectedChapter && selectedVerse) {
-      const verse: any = await invoke("get_verse", { 
-        book: selectedBook, 
-        chapter: selectedChapter, 
-        verse: selectedVerse 
+    if (!selectedBook) return;
+    try {
+      const verse: any = await invoke("get_verse", {
+        book: selectedBook,
+        chapter: selectedChapter,
+        verse: selectedVerse,
       });
-      if (verse) invoke("select_verse", { verse });
+      if (verse) {
+        setActiveVerse(verse);
+        invoke("select_verse", { verse }).catch((err: any) =>
+          setAudioError(String(err))
+        );
+      } else {
+        setAudioError(`Verse not found: ${selectedBook} ${selectedChapter}:${selectedVerse}`);
+      }
+    } catch (err: any) {
+      setAudioError(String(err));
     }
   };
 
@@ -151,14 +182,42 @@ export default function App() {
             TOGGLE OUTPUT
           </button>
 
-          <button 
-            onClick={() => invoke("start_session")}
-            className="bg-amber-500 hover:bg-amber-600 text-black font-bold py-2 px-6 rounded-full transition-all"
+          <button
+            onClick={() => {
+              if (sessionState === "running") {
+                invoke("stop_session");
+              } else {
+                setAudioError(null);
+                invoke("start_session").catch((err: any) => {
+                  setAudioError(String(err));
+                  setSessionState("idle");
+                });
+              }
+            }}
+            disabled={sessionState === "loading"}
+            className={`font-bold py-2 px-6 rounded-full transition-all disabled:opacity-50 ${
+              sessionState === "running"
+                ? "bg-red-500 hover:bg-red-600 text-white"
+                : "bg-amber-500 hover:bg-amber-600 text-black"
+            }`}
           >
-            START LIVE
+            {sessionState === "loading" ? "LOADING..." : sessionState === "running" ? "STOP" : "START LIVE"}
           </button>
         </div>
       </header>
+
+      {audioError && (
+        <div className="bg-red-950 border-b border-red-800 text-red-300 text-xs px-6 py-2 flex items-center gap-2 shrink-0">
+          <span className="font-bold text-red-400 uppercase tracking-widest">Audio Error</span>
+          <span className="flex-1">{audioError}</span>
+          <button
+            onClick={() => setAudioError(null)}
+            className="text-red-500 hover:text-red-200 font-bold transition-all"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       <div className="flex-1 flex overflow-hidden">
         {/* Left Sidebar: Selection & Search */}
