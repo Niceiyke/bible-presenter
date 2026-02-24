@@ -2,12 +2,11 @@
 rustflags = ["-C", "target-feature=-crt-static"]
 
 [env]
-RUSTFLAGS = "-C target-feature=-crt-static"
-# Force native dependencies compiled via cc-rs to use the dynamic CRT
-VCPKG_DEFAULT_TRIPLET = "x64-windows"
+# Force native Rust dependencies to use the dynamic CRT on Windows.
+# CFLAGS/CXXFLAGS are intentionally NOT set here so Linux builds of
+# C system libraries (openssl-sys, etc.) are not broken by MSVC-only flags.
 MSVC_RUNTIME_LIBRARY = "MultiThreadedDLL"
-CFLAGS = "/MD"
-CXXFLAGS = "/MD"
+VCPKG_DEFAULT_TRIPLET = "x64-windows"
 
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=-crt-static"]
