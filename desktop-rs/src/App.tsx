@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
@@ -41,10 +41,54 @@ export interface PresentationSlideData {
   slide_count: number;
 }
 
+// ─── Custom Studio types ──────────────────────────────────────────────────────
+
+export interface SlideZone {
+  text: string;
+  fontSize: number;
+  fontFamily: string;
+  color: string;
+  bold: boolean;
+  italic: boolean;
+  align: "left" | "center" | "right";
+}
+
+export interface CustomSlide {
+  id: string;
+  backgroundColor: string;
+  backgroundImage?: string;
+  header: SlideZone;
+  body: SlideZone;
+}
+
+export interface CustomPresentation {
+  id: string;
+  name: string;
+  slides: CustomSlide[];
+}
+
+export interface CustomSlideDisplayData {
+  presentation_id: string;
+  presentation_name: string;
+  slide_index: number;
+  slide_count: number;
+  background_color: string;
+  background_image?: string;
+  header: { text: string; font_size: number; font_family: string; color: string; bold: boolean; italic: boolean; align: string };
+  body:   { text: string; font_size: number; font_family: string; color: string; bold: boolean; italic: boolean; align: string };
+}
+
+export const FONTS = [
+  "Arial", "Verdana", "Helvetica", "Trebuchet MS",
+  "Georgia", "Times New Roman", "Palatino",
+  "Impact", "Arial Black", "Courier New",
+];
+
 export type DisplayItem =
   | { type: "Verse"; data: Verse }
   | { type: "Media"; data: MediaItem }
-  | { type: "PresentationSlide"; data: PresentationSlideData };
+  | { type: "PresentationSlide"; data: PresentationSlideData }
+  | { type: "CustomSlide"; data: CustomSlideDisplayData };
 
 export interface ScheduleEntry {
   id: string;
@@ -119,7 +163,20 @@ function displayItemLabel(item: DisplayItem): string {
   if (item.type === "PresentationSlide") {
     return `${item.data.presentation_name} – Slide ${item.data.slide_index + 1}`;
   }
+  if (item.type === "CustomSlide") {
+    return `${item.data.presentation_name} – Slide ${item.data.slide_index + 1}`;
+  }
   return item.data.name;
+}
+
+function newDefaultSlide(): CustomSlide {
+  return {
+    id: stableId(),
+    backgroundColor: "#0a1628",
+    backgroundImage: undefined,
+    header: { text: "Title", fontSize: 56, fontFamily: "Georgia", color: "#ffffff", bold: true, italic: false, align: "center" },
+    body:   { text: "Body text here", fontSize: 34, fontFamily: "Arial", color: "#e2e8f0", bold: false, italic: false, align: "center" },
+  };
 }
 
 /** Computes the background style for the output window, respecting background override. */
@@ -203,6 +260,333 @@ function SlideRenderer({ slide }: { slide: ParsedSlide }) {
           </p>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ─── Custom Slide Renderer ───────────────────────────────────────────────────
+// Shared by output window, editor canvas preview, Studio thumbnails, and PreviewCard.
+// Accepts either a `CustomSlide` (camelCase) or `CustomSlideDisplayData` (snake_case).
+
+function CustomSlideRenderer({
+  slide,
+  scale = 1,
+}: {
+  slide: CustomSlide | CustomSlideDisplayData;
+  scale?: number;
+}) {
+  const header = (slide as any).header;
+  const body   = (slide as any).body;
+  const bgColor = "backgroundColor" in slide ? (slide as CustomSlide).backgroundColor : (slide as CustomSlideDisplayData).background_color;
+  const bgImage = "backgroundImage" in slide ? (slide as CustomSlide).backgroundImage : (slide as CustomSlideDisplayData).background_image;
+
+  const bgStyle: React.CSSProperties = bgImage
+    ? { backgroundImage: `url(${convertFileSrc(bgImage)})`, backgroundSize: "cover", backgroundPosition: "center" }
+    : { backgroundColor: bgColor };
+
+  const zoneStyle = (z: any): React.CSSProperties => ({
+    fontFamily: z.fontFamily ?? z.font_family ?? "Arial",
+    fontSize: `${(z.fontSize ?? z.font_size ?? 32) * scale}pt`,
+    color: z.color ?? "#ffffff",
+    fontWeight: z.bold ? "bold" : "normal",
+    fontStyle: z.italic ? "italic" : "normal",
+    textAlign: (z.align ?? "center") as React.CSSProperties["textAlign"],
+    textShadow: "0 2px 8px rgba(0,0,0,0.6)",
+    whiteSpace: "pre-wrap",
+    lineHeight: 1.3,
+    margin: 0,
+  });
+
+  return (
+    <div className="w-full h-full relative overflow-hidden flex flex-col" style={bgStyle}>
+      {/* Header zone — top 35% */}
+      <div className="flex items-center justify-center" style={{ flex: "0 0 35%", padding: `${14 * scale}px ${24 * scale}px` }}>
+        <p style={zoneStyle(header)}>{header.text}</p>
+      </div>
+      {/* Divider line */}
+      <div style={{ height: `${Math.max(1, scale)}px`, backgroundColor: "rgba(255,255,255,0.15)", margin: `0 ${24 * scale}px` }} />
+      {/* Body zone — remaining 65% */}
+      <div className="flex items-center justify-center flex-1" style={{ padding: `${14 * scale}px ${24 * scale}px` }}>
+        <p style={zoneStyle(body)}>{body.text}</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Zone Editor ─────────────────────────────────────────────────────────────
+// Editing controls for a single SlideZone (header or body).
+
+function ZoneEditor({
+  label,
+  zone,
+  onChange,
+}: {
+  label: string;
+  zone: SlideZone;
+  onChange: (z: SlideZone) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2 p-3 rounded-lg bg-slate-900/60 border border-slate-700/50">
+      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{label}</p>
+      <textarea
+        value={zone.text}
+        onChange={(e) => onChange({ ...zone, text: e.target.value })}
+        rows={3}
+        className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200 resize-none focus:outline-none focus:ring-1 focus:ring-amber-500"
+      />
+      <div className="flex gap-1.5 items-center flex-wrap">
+        <select
+          value={zone.fontFamily}
+          onChange={(e) => onChange({ ...zone, fontFamily: e.target.value })}
+          className="flex-1 min-w-0 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none"
+        >
+          {FONTS.map((f) => <option key={f} value={f}>{f}</option>)}
+        </select>
+        <input
+          type="number"
+          min={8}
+          max={200}
+          value={zone.fontSize}
+          onChange={(e) => onChange({ ...zone, fontSize: Number(e.target.value) })}
+          className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none"
+        />
+        <button
+          onClick={() => onChange({ ...zone, bold: !zone.bold })}
+          className={`px-2 py-1 rounded text-xs font-black border transition-all ${zone.bold ? "bg-amber-500 border-amber-500 text-black" : "bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500"}`}
+        >B</button>
+        <button
+          onClick={() => onChange({ ...zone, italic: !zone.italic })}
+          className={`px-2 py-1 rounded text-xs italic border transition-all ${zone.italic ? "bg-amber-500 border-amber-500 text-black" : "bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500"}`}
+        >I</button>
+        <input
+          type="color"
+          value={zone.color}
+          onChange={(e) => onChange({ ...zone, color: e.target.value })}
+          className="w-7 h-7 rounded cursor-pointer border border-slate-700 bg-transparent"
+          title="Text color"
+        />
+      </div>
+      <div className="flex gap-1">
+        {(["left", "center", "right"] as const).map((a) => (
+          <button
+            key={a}
+            onClick={() => onChange({ ...zone, align: a })}
+            className={`flex-1 py-1 rounded text-xs border transition-all ${zone.align === a ? "bg-amber-500/20 border-amber-500 text-amber-400" : "bg-slate-800 border-slate-700 text-slate-500 hover:border-slate-600"}`}
+          >
+            {a === "left" ? "◀" : a === "center" ? "▪" : "▶"}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Slide Editor Modal ───────────────────────────────────────────────────────
+
+function SlideEditor({
+  initialPres,
+  onClose,
+}: {
+  initialPres: CustomPresentation;
+  onClose: (saved: boolean) => void;
+}) {
+  const [pres, setPres] = React.useState<CustomPresentation>(initialPres);
+  const [currentSlideIdx, setCurrentSlideIdx] = React.useState(0);
+  const [saving, setSaving] = React.useState(false);
+
+  const slide = pres.slides[currentSlideIdx] ?? pres.slides[0];
+
+  const updateSlide = (updated: CustomSlide) => {
+    setPres((p) => ({
+      ...p,
+      slides: p.slides.map((s, i) => (i === currentSlideIdx ? updated : s)),
+    }));
+  };
+
+  const addSlide = () => {
+    const newSlide = newDefaultSlide();
+    const newSlides = [...pres.slides, newSlide];
+    setPres((p) => ({ ...p, slides: newSlides }));
+    setCurrentSlideIdx(newSlides.length - 1);
+  };
+
+  const deleteSlide = (idx: number) => {
+    if (pres.slides.length <= 1) return;
+    const newSlides = pres.slides.filter((_, i) => i !== idx);
+    setPres((p) => ({ ...p, slides: newSlides }));
+    setCurrentSlideIdx(Math.min(idx, newSlides.length - 1));
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await invoke("save_studio_presentation", { presentation: pres });
+      onClose(true);
+    } catch (err) {
+      console.error("Failed to save presentation", err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handlePickBgImage = async () => {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"] }],
+      });
+      if (!selected) return;
+      updateSlide({ ...slide, backgroundImage: selected as string });
+    } catch (err) {
+      console.error("Failed to pick background image", err);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col overflow-hidden">
+      {/* Toolbar */}
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800 bg-slate-900/80 shrink-0">
+        <button onClick={() => onClose(false)} className="text-slate-400 hover:text-white text-sm font-bold px-2 py-1 rounded transition-all">
+          ← Back
+        </button>
+        <input
+          type="text"
+          value={pres.name}
+          onChange={(e) => setPres((p) => ({ ...p, name: e.target.value }))}
+          className="flex-1 bg-slate-800 border border-slate-700 rounded px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500 max-w-xs"
+          placeholder="Presentation name"
+        />
+        <div className="flex items-center gap-2 ml-auto">
+          <span className="text-xs text-slate-500">
+            Slide {currentSlideIdx + 1} / {pres.slides.length}
+          </span>
+          <button
+            onClick={() => setCurrentSlideIdx(Math.max(0, currentSlideIdx - 1))}
+            disabled={currentSlideIdx === 0}
+            className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded border border-slate-700 disabled:opacity-30 transition-all"
+          >◀</button>
+          <button
+            onClick={() => setCurrentSlideIdx(Math.min(pres.slides.length - 1, currentSlideIdx + 1))}
+            disabled={currentSlideIdx >= pres.slides.length - 1}
+            className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded border border-slate-700 disabled:opacity-30 transition-all"
+          >▶</button>
+          <button
+            onClick={addSlide}
+            className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold rounded border border-slate-600 transition-all"
+          >
+            + Slide
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="px-4 py-1.5 bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold rounded transition-all disabled:opacity-50"
+          >
+            {saving ? "Saving..." : "Save & Close"}
+          </button>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Left: Slide strip */}
+        <div className="w-36 border-r border-slate-800 bg-slate-900/30 flex flex-col overflow-hidden shrink-0">
+          <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-2">
+            {pres.slides.map((s, i) => (
+              <div
+                key={s.id}
+                onClick={() => setCurrentSlideIdx(i)}
+                className={`relative group aspect-video rounded overflow-hidden border cursor-pointer transition-all ${
+                  i === currentSlideIdx ? "border-amber-500" : "border-slate-700 hover:border-slate-500"
+                }`}
+              >
+                <CustomSlideRenderer slide={s} scale={0.07} />
+                <div className="absolute bottom-0 left-0 right-0 text-center text-[7px] text-white/60 bg-black/40 py-0.5">
+                  {i + 1}
+                </div>
+                {pres.slides.length > 1 && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); deleteSlide(i); }}
+                    className="absolute top-0.5 right-0.5 w-4 h-4 bg-red-800/80 hover:bg-red-600 text-white text-[8px] rounded opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center"
+                  >✕</button>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="p-2 border-t border-slate-800 shrink-0">
+            <button
+              onClick={addSlide}
+              className="w-full py-2 text-[10px] font-bold text-slate-400 hover:text-white border border-dashed border-slate-700 hover:border-slate-500 rounded transition-all"
+            >
+              + Add Slide
+            </button>
+          </div>
+        </div>
+
+        {/* Center: Canvas preview + Formatting panel */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* 16:9 canvas preview */}
+          <div className="flex-1 flex items-center justify-center bg-slate-950 p-6 overflow-hidden">
+            <div
+              className="rounded-lg overflow-hidden shadow-2xl border border-slate-700"
+              style={{ aspectRatio: "16/9", maxHeight: "100%", maxWidth: "100%", width: "min(100%, calc(100vh * 16/9 * 0.7))" }}
+            >
+              <CustomSlideRenderer slide={slide} scale={1} />
+            </div>
+          </div>
+
+          {/* Formatting panel */}
+          <div className="border-t border-slate-800 bg-slate-900/50 overflow-y-auto" style={{ maxHeight: "45%" }}>
+            <div className="p-4 flex flex-col gap-3">
+              <ZoneEditor
+                label="Header"
+                zone={slide.header}
+                onChange={(z) => updateSlide({ ...slide, header: z })}
+              />
+              <ZoneEditor
+                label="Body"
+                zone={slide.body}
+                onChange={(z) => updateSlide({ ...slide, body: z })}
+              />
+              {/* Background */}
+              <div className="flex flex-col gap-2 p-3 rounded-lg bg-slate-900/60 border border-slate-700/50">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Background</p>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={slide.backgroundColor}
+                      onChange={(e) => updateSlide({ ...slide, backgroundColor: e.target.value, backgroundImage: undefined })}
+                      className="w-8 h-8 rounded cursor-pointer border border-slate-700 bg-transparent"
+                      title="Background color"
+                    />
+                    <span className="text-xs text-slate-500 font-mono">{slide.backgroundColor}</span>
+                  </div>
+                  <span className="text-slate-600 text-xs">or</span>
+                  <button
+                    onClick={handlePickBgImage}
+                    className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-bold rounded border border-slate-600 transition-all"
+                  >
+                    Choose Image...
+                  </button>
+                  {slide.backgroundImage && (
+                    <>
+                      <span className="text-[9px] text-slate-500 truncate max-w-[100px]" title={slide.backgroundImage}>
+                        {slide.backgroundImage.split(/[/\\]/).pop()}
+                      </span>
+                      <button
+                        onClick={() => updateSlide({ ...slide, backgroundImage: undefined })}
+                        className="text-red-500/70 hover:text-red-400 text-[10px] font-bold"
+                      >
+                        Clear
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -370,6 +754,10 @@ function OutputWindow() {
                 </div>
               )}
             </div>
+          ) : liveItem.type === "CustomSlide" ? (
+            <div className="w-full h-full">
+              <CustomSlideRenderer slide={liveItem.data} />
+            </div>
           ) : (
             <div className="w-full h-full flex items-center justify-center">
               {liveItem.data.media_type === "Image" ? (
@@ -444,6 +832,10 @@ function PreviewCard({
                   {item.data.presentation_name}
                 </p>
               </>
+            ) : item.type === "CustomSlide" ? (
+              <div className="w-full" style={{ aspectRatio: "16/9" }}>
+                <CustomSlideRenderer slide={item.data} scale={0.25} />
+              </div>
             ) : (
               <>
                 {item.data.media_type === "Image" ? (
@@ -509,8 +901,15 @@ export default function App() {
     background: { type: "None" },
   });
 
+  // Studio
+  const [studioList, setStudioList] = useState<{ id: string; name: string; slide_count: number }[]>([]);
+  const [editorPresId, setEditorPresId] = useState<string | null>(null);
+  const [editorPres, setEditorPres] = useState<CustomPresentation | null>(null);
+  const [expandedStudioPresId, setExpandedStudioPresId] = useState<string | null>(null);
+  const [studioSlides, setStudioSlides] = useState<Record<string, CustomSlide[]>>({});
+
   // UI
-  const [activeTab, setActiveTab] = useState<"bible" | "media" | "presentations" | "schedule" | "settings">("bible");
+  const [activeTab, setActiveTab] = useState<"bible" | "media" | "presentations" | "studio" | "schedule" | "settings">("bible");
   const [toast, setToast] = useState<string | null>(null);
 
   // Schedule
@@ -581,6 +980,15 @@ export default function App() {
     }
   }, []);
 
+  const loadStudioList = useCallback(async () => {
+    try {
+      const result = await invoke("list_studio_presentations");
+      setStudioList(result as { id: string; name: string; slide_count: number }[]);
+    } catch (err) {
+      console.error("Failed to load studio presentations:", err);
+    }
+  }, []);
+
   const loadSchedule = useCallback(async () => {
     try {
       const result: Schedule = await invoke("load_schedule");
@@ -604,6 +1012,7 @@ export default function App() {
     loadAudioDevices();
     loadMedia();
     loadPresentations();
+    loadStudioList();
     loadSchedule();
 
     invoke("get_books")
@@ -897,6 +1306,99 @@ export default function App() {
     await sendLive(item);
   };
 
+  // ── Studio ──────────────────────────────────────────────────────────────────
+
+  const handleNewStudioPresentation = async () => {
+    const pres: CustomPresentation = {
+      id: stableId(),
+      name: "Untitled Presentation",
+      slides: [newDefaultSlide()],
+    };
+    try {
+      await invoke("save_studio_presentation", { presentation: pres });
+      await loadStudioList();
+      setEditorPres(pres);
+      setEditorPresId(pres.id);
+    } catch (err: any) {
+      setAudioError(`Failed to create presentation: ${err}`);
+    }
+  };
+
+  const handleOpenStudioEditor = async (id: string) => {
+    try {
+      const data: any = await invoke("load_studio_presentation", { id });
+      setEditorPres(data as CustomPresentation);
+      setEditorPresId(id);
+    } catch (err: any) {
+      setAudioError(`Failed to load presentation: ${err}`);
+    }
+  };
+
+  const handleDeleteStudioPresentation = async (id: string) => {
+    try {
+      await invoke("delete_studio_presentation", { id });
+      setStudioList((prev) => prev.filter((p) => p.id !== id));
+      setStudioSlides((prev) => { const n = { ...prev }; delete n[id]; return n; });
+      if (expandedStudioPresId === id) setExpandedStudioPresId(null);
+    } catch (err: any) {
+      setAudioError(`Delete failed: ${err}`);
+    }
+  };
+
+  const handlePresentStudio = async (id: string) => {
+    if (expandedStudioPresId === id) {
+      setExpandedStudioPresId(null);
+      return;
+    }
+    if (!studioSlides[id]) {
+      try {
+        const data: any = await invoke("load_studio_presentation", { id });
+        const pres = data as CustomPresentation;
+        setStudioSlides((prev) => ({ ...prev, [id]: pres.slides }));
+      } catch (err: any) {
+        setAudioError(`Failed to load slides: ${err}`);
+        return;
+      }
+    }
+    setExpandedStudioPresId(id);
+  };
+
+  const stageCustomSlide = async (presItem: { id: string; name: string; slide_count: number }, slides: CustomSlide[], slideIdx: number) => {
+    const slide = slides[slideIdx];
+    const item: DisplayItem = {
+      type: "CustomSlide",
+      data: {
+        presentation_id: presItem.id,
+        presentation_name: presItem.name,
+        slide_index: slideIdx,
+        slide_count: slides.length,
+        background_color: slide.backgroundColor,
+        background_image: slide.backgroundImage,
+        header: { text: slide.header.text, font_size: slide.header.fontSize, font_family: slide.header.fontFamily, color: slide.header.color, bold: slide.header.bold, italic: slide.header.italic, align: slide.header.align },
+        body:   { text: slide.body.text,   font_size: slide.body.fontSize,   font_family: slide.body.fontFamily,   color: slide.body.color,   bold: slide.body.bold,   italic: slide.body.italic,   align: slide.body.align },
+      },
+    };
+    await stageItem(item);
+  };
+
+  const sendCustomSlide = async (presItem: { id: string; name: string; slide_count: number }, slides: CustomSlide[], slideIdx: number) => {
+    const slide = slides[slideIdx];
+    const item: DisplayItem = {
+      type: "CustomSlide",
+      data: {
+        presentation_id: presItem.id,
+        presentation_name: presItem.name,
+        slide_index: slideIdx,
+        slide_count: slides.length,
+        background_color: slide.backgroundColor,
+        background_image: slide.backgroundImage,
+        header: { text: slide.header.text, font_size: slide.header.fontSize, font_family: slide.header.fontFamily, color: slide.header.color, bold: slide.header.bold, italic: slide.header.italic, align: slide.header.align },
+        body:   { text: slide.body.text,   font_size: slide.body.fontSize,   font_family: slide.body.fontFamily,   color: slide.body.color,   bold: slide.body.bold,   italic: slide.body.italic,   align: slide.body.align },
+      },
+    };
+    await sendLive(item);
+  };
+
   // ── Background image picker ──────────────────────────────────────────────────
 
   const handlePickBackgroundImage = async () => {
@@ -981,6 +1483,25 @@ export default function App() {
   // ── Output window short-circuit ──────────────────────────────────────────────
 
   if (label === "output") return <OutputWindow />;
+
+  // ── Studio editor modal ──────────────────────────────────────────────────────
+
+  if (editorPresId !== null && editorPres !== null) {
+    return (
+      <SlideEditor
+        initialPres={editorPres}
+        onClose={async (saved) => {
+          setEditorPresId(null);
+          setEditorPres(null);
+          if (saved) {
+            await loadStudioList();
+            // Invalidate cached slides for this presentation
+            setStudioSlides((prev) => { const n = { ...prev }; delete n[editorPresId]; return n; });
+          }
+        }}
+      />
+    );
+  }
 
   // ── Operator UI ──────────────────────────────────────────────────────────────
 
@@ -1075,7 +1596,7 @@ export default function App() {
         <aside className="w-80 bg-slate-900/30 border-r border-slate-800 flex flex-col overflow-hidden shrink-0">
           {/* Tab nav */}
           <div className="flex border-b border-slate-800 bg-slate-900/50 shrink-0 overflow-x-auto">
-            {(["bible", "media", "presentations", "schedule", "settings"] as const).map((tab) => (
+            {(["bible", "media", "presentations", "studio", "schedule", "settings"] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -1085,7 +1606,7 @@ export default function App() {
                     : "text-slate-500 hover:text-slate-300 hover:bg-slate-800/50"
                 }`}
               >
-                {tab === "settings" ? "⚙" : tab === "presentations" ? "PPTX" : tab}
+                {tab === "settings" ? "⚙" : tab === "presentations" ? "PPTX" : tab === "studio" ? "Studio" : tab}
                 {tab === "schedule" && scheduleEntries.length > 0 && (
                   <span className="ml-1 text-[8px] bg-amber-500 text-black rounded-full px-1 font-black">
                     {scheduleEntries.length}
@@ -1094,6 +1615,11 @@ export default function App() {
                 {tab === "presentations" && presentations.length > 0 && (
                   <span className="ml-1 text-[8px] bg-orange-500 text-black rounded-full px-1 font-black">
                     {presentations.length}
+                  </span>
+                )}
+                {tab === "studio" && studioList.length > 0 && (
+                  <span className="ml-1 text-[8px] bg-purple-500 text-white rounded-full px-1 font-black">
+                    {studioList.length}
                   </span>
                 )}
               </button>
@@ -1326,6 +1852,94 @@ export default function App() {
               </div>
             )}
 
+            {/* ── Studio Tab ── */}
+            {activeTab === "studio" && (
+              <div className="flex flex-col gap-4">
+                <div className="flex justify-between items-center">
+                  <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Studio</h2>
+                  <button
+                    onClick={handleNewStudioPresentation}
+                    className="text-[10px] bg-purple-600 hover:bg-purple-500 text-white font-bold px-3 py-1.5 rounded transition-all"
+                  >
+                    + NEW
+                  </button>
+                </div>
+
+                {studioList.length === 0 ? (
+                  <p className="text-slate-700 text-xs italic text-center pt-8">
+                    No presentations. Click + NEW to create one.
+                  </p>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {studioList.map((item) => (
+                      <div key={item.id} className="flex flex-col gap-1 p-2.5 rounded-lg border border-slate-700/50 bg-slate-800/40">
+                        <div className="flex items-center gap-2">
+                          <span className="text-purple-400 font-black text-[9px] bg-purple-400/10 px-1.5 py-0.5 rounded shrink-0">STUDIO</span>
+                          <span className="flex-1 text-xs text-slate-300 truncate">{item.name}</span>
+                          <span className="text-slate-600 text-[9px] shrink-0">{item.slide_count} slides</span>
+                        </div>
+                        <div className="flex gap-1">
+                          <button
+                            onClick={() => handleOpenStudioEditor(item.id)}
+                            className="flex-1 py-1 bg-slate-700 hover:bg-slate-600 text-white text-[10px] font-bold rounded transition-all"
+                          >
+                            EDIT
+                          </button>
+                          <button
+                            onClick={() => handlePresentStudio(item.id)}
+                            className={`flex-1 py-1 text-[10px] font-bold rounded transition-all ${
+                              expandedStudioPresId === item.id
+                                ? "bg-purple-600 text-white"
+                                : "bg-purple-600/30 hover:bg-purple-600/50 text-purple-300"
+                            }`}
+                          >
+                            {expandedStudioPresId === item.id ? "HIDE" : "PRESENT"}
+                          </button>
+                          <button
+                            onClick={() => handleDeleteStudioPresentation(item.id)}
+                            className="px-2 py-1 bg-red-900/40 hover:bg-red-900 text-red-400 text-[10px] font-bold rounded transition-all"
+                          >
+                            ✕
+                          </button>
+                        </div>
+
+                        {/* Slide thumbnails when expanded */}
+                        {expandedStudioPresId === item.id && studioSlides[item.id] && (
+                          <div className="grid grid-cols-2 gap-1.5 mt-1">
+                            {studioSlides[item.id].map((slide, idx) => (
+                              <div
+                                key={slide.id}
+                                className="group relative aspect-video rounded overflow-hidden border border-slate-700 hover:border-purple-500/50 transition-all cursor-pointer"
+                              >
+                                <CustomSlideRenderer slide={slide} scale={0.07} />
+                                <div className="absolute bottom-0 left-0 px-1 py-0.5 bg-black/50">
+                                  <span className="text-[7px] text-white/70">{idx + 1}</span>
+                                </div>
+                                <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-all flex flex-col items-center justify-center gap-1 p-1">
+                                  <button
+                                    onClick={() => stageCustomSlide(item, studioSlides[item.id], idx)}
+                                    className="w-full bg-slate-600 hover:bg-slate-500 text-white text-[9px] font-bold py-1 rounded"
+                                  >
+                                    STAGE
+                                  </button>
+                                  <button
+                                    onClick={() => sendCustomSlide(item, studioSlides[item.id], idx)}
+                                    className="w-full bg-purple-600 hover:bg-purple-500 text-white text-[9px] font-bold py-1 rounded"
+                                  >
+                                    DISPLAY
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* ── Schedule Tab ── */}
             {activeTab === "schedule" && (
               <div className="flex flex-col gap-3">
@@ -1378,6 +1992,10 @@ export default function App() {
                             ) : entry.item.type === "PresentationSlide" ? (
                               <p className="text-orange-400 text-[10px] font-bold uppercase truncate">
                                 PPTX: {entry.item.data.presentation_name} — Slide {entry.item.data.slide_index + 1}
+                              </p>
+                            ) : entry.item.type === "CustomSlide" ? (
+                              <p className="text-purple-400 text-[10px] font-bold uppercase truncate">
+                                STUDIO: {entry.item.data.presentation_name} — Slide {entry.item.data.slide_index + 1}
                               </p>
                             ) : (
                               <p className="text-blue-400 text-[10px] font-bold uppercase truncate">{entry.item.data.media_type}: {entry.item.data.name}</p>

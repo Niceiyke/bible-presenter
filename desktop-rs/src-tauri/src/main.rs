@@ -333,6 +333,9 @@ async fn toggle_output_window(app: AppHandle, state: State<'_, Arc<AppState>>) -
                             store::DisplayItem::PresentationSlide(p) => {
                                 format!("{} – slide {}", p.presentation_name, p.slide_index + 1)
                             }
+                            store::DisplayItem::CustomSlide(c) => {
+                                format!("{} – slide {}", c.presentation_name, c.slide_index + 1)
+                            }
                         },
                         detected_item: Some(item),
                         source: "manual".to_string(),
@@ -458,6 +461,9 @@ async fn go_live(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), 
                     store::DisplayItem::PresentationSlide(ref p) => {
                         format!("{} – slide {}", p.presentation_name, p.slide_index + 1)
                     }
+                    store::DisplayItem::CustomSlide(ref c) => {
+                        format!("{} – slide {}", c.presentation_name, c.slide_index + 1)
+                    }
                 },
                 detected_item: Some(item),
                 source: "manual".to_string(),
@@ -553,6 +559,37 @@ async fn save_settings(
     // Broadcast to both windows so the output screen updates live
     let _ = app.emit("settings-changed", settings);
     Ok(())
+}
+
+#[tauri::command]
+async fn list_studio_presentations(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<serde_json::Value>, String> {
+    state.media_schedule.list_studio_presentations().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn save_studio_presentation(
+    state: State<'_, Arc<AppState>>,
+    presentation: serde_json::Value,
+) -> Result<(), String> {
+    state.media_schedule.save_studio_presentation(&presentation).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn load_studio_presentation(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    state.media_schedule.load_studio_presentation(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_studio_presentation(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<(), String> {
+    state.media_schedule.delete_studio_presentation(&id).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -686,7 +723,11 @@ fn main() {
             stage_item,
             go_live,
             get_settings,
-            save_settings
+            save_settings,
+            list_studio_presentations,
+            save_studio_presentation,
+            load_studio_presentation,
+            delete_studio_presentation
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
