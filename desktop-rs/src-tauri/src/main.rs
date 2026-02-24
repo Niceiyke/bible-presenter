@@ -330,6 +330,9 @@ async fn toggle_output_window(app: AppHandle, state: State<'_, Arc<AppState>>) -
                                 format!("{} {}:{}", v.book, v.chapter, v.verse)
                             }
                             store::DisplayItem::Media(m) => m.name.clone(),
+                            store::DisplayItem::PresentationSlide(p) => {
+                                format!("{} – slide {}", p.presentation_name, p.slide_index + 1)
+                            }
                         },
                         detected_item: Some(item),
                         source: "manual".to_string(),
@@ -452,6 +455,9 @@ async fn go_live(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), 
                 text: match item {
                     store::DisplayItem::Verse(ref v) => format!("{} {}:{}", v.book, v.chapter, v.verse),
                     store::DisplayItem::Media(ref m) => m.name.clone(),
+                    store::DisplayItem::PresentationSlide(ref p) => {
+                        format!("{} – slide {}", p.presentation_name, p.slide_index + 1)
+                    }
                 },
                 detected_item: Some(item),
                 source: "manual".to_string(),
@@ -459,6 +465,29 @@ async fn go_live(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), 
         );
     }
     Ok(())
+}
+
+#[tauri::command]
+async fn list_presentations(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<store::PresentationFile>, String> {
+    state.media_schedule.list_presentations().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn add_presentation(
+    state: State<'_, Arc<AppState>>,
+    path: String,
+) -> Result<store::PresentationFile, String> {
+    state.media_schedule.add_presentation(PathBuf::from(path)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_presentation(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<(), String> {
+    state.media_schedule.delete_presentation(id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -646,6 +675,9 @@ fn main() {
             get_verses_count,
             get_verse,
             get_next_verse,
+            list_presentations,
+            add_presentation,
+            delete_presentation,
             list_media,
             add_media,
             delete_media,

@@ -5,6 +5,10 @@ use anyhow::Result;
 use uuid::Uuid;
 use crate::store::Verse;
 
+// ---------------------------------------------------------------------------
+// Media types
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum MediaItemType {
     Image,
@@ -20,11 +24,45 @@ pub struct MediaItem {
     pub thumbnail_path: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Presentation types
+// ---------------------------------------------------------------------------
+
+/// A .pptx file stored in the presentations directory.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PresentationFile {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    /// Slide count as determined by the frontend after parsing; 0 = not yet known.
+    pub slide_count: u32,
+}
+
+/// Payload sent with a DisplayItem when a specific slide goes live.
+/// Carries everything the output window needs to render the slide without
+/// an extra Tauri round-trip.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PresentationSlideData {
+    pub presentation_id: String,
+    pub presentation_name: String,
+    /// Absolute path to the .pptx file so the output window can load it directly.
+    pub presentation_path: String,
+    /// Zero-based slide index.
+    pub slide_index: u32,
+    /// Total slides in the presentation (for prev/next UX).
+    pub slide_count: u32,
+}
+
+// ---------------------------------------------------------------------------
+// Display item — what gets projected on the output window
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", content = "data")]
 pub enum DisplayItem {
     Verse(Verse),
     Media(MediaItem),
+    PresentationSlide(PresentationSlideData),
 }
 
 /// A schedule entry with a stable ID so the frontend can use it as a React key.
@@ -34,6 +72,28 @@ pub struct ScheduleEntry {
     pub item: DisplayItem,
 }
 
+// ---------------------------------------------------------------------------
+// Presentation settings
+// ---------------------------------------------------------------------------
+
+/// How the output-window background is rendered — independently of the theme.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type", content = "value")]
+pub enum BackgroundSetting {
+    /// Use the active theme's background color (default).
+    None,
+    /// A solid CSS hex color string, e.g. "#1a1a2e".
+    Color(String),
+    /// Absolute path to a local image file.
+    Image(String),
+}
+
+impl Default for BackgroundSetting {
+    fn default() -> Self {
+        BackgroundSetting::None
+    }
+}
+
 /// User-facing presentation settings persisted to settings.json.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PresentationSettings {
@@ -41,6 +101,11 @@ pub struct PresentationSettings {
     pub theme: String,
     /// Where the scripture reference (Book Ch:V) is shown: "top" | "bottom"
     pub reference_position: String,
+    /// Output window background override. Defaults to None (use theme color).
+    /// `#[serde(default)]` ensures old settings.json without this field
+    /// deserializes cleanly to BackgroundSetting::None.
+    #[serde(default)]
+    pub background: BackgroundSetting,
 }
 
 impl Default for PresentationSettings {
@@ -48,9 +113,14 @@ impl Default for PresentationSettings {
         Self {
             theme: "dark".to_string(),
             reference_position: "bottom".to_string(),
+            background: BackgroundSetting::default(),
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Schedule
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Schedule {
@@ -59,9 +129,14 @@ pub struct Schedule {
     pub items: Vec<ScheduleEntry>,
 }
 
+// ---------------------------------------------------------------------------
+// Store
+// ---------------------------------------------------------------------------
+
 pub struct MediaScheduleStore {
     app_data_dir: PathBuf,
     media_dir: PathBuf,
+    presentations_dir: PathBuf,
 }
 
 fn classify_extension(ext: &str) -> Option<MediaItemType> {
@@ -78,15 +153,24 @@ impl MediaScheduleStore {
         if !media_dir.exists() {
             fs::create_dir_all(&media_dir)?;
         }
+        let presentations_dir = app_data_dir.join("presentations");
+        if !presentations_dir.exists() {
+            fs::create_dir_all(&presentations_dir)?;
+        }
         Ok(Self {
             app_data_dir,
             media_dir,
+            presentations_dir,
         })
     }
 
     pub fn get_media_dir(&self) -> PathBuf {
         self.media_dir.clone()
     }
+
+    // -----------------------------------------------------------------------
+    // Media
+    // -----------------------------------------------------------------------
 
     pub fn list_media(&self) -> Result<Vec<MediaItem>> {
         let mut items = Vec::new();
@@ -106,7 +190,7 @@ impl MediaScheduleStore {
                 continue;
             }
 
-            // Skip ID-sidecar files (*.id files we write alongside media)
+            // Skip ID-sidecar files
             if name.ends_with(".mediaid") {
                 continue;
             }
@@ -122,7 +206,6 @@ impl MediaScheduleStore {
                 None => continue,
             };
 
-            // Read stable ID from sidecar file, or create one
             let id = self.get_or_create_id(&path);
 
             items.push(MediaItem {
@@ -134,7 +217,6 @@ impl MediaScheduleStore {
             });
         }
 
-        // Stable, deterministic order: sort by filename
         items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         Ok(items)
     }
@@ -175,7 +257,6 @@ impl MediaScheduleStore {
         let media_type = classify_extension(ext.as_str())
             .ok_or_else(|| anyhow::anyhow!("Unsupported media type: .{}", ext))?;
 
-        // Resolve a unique destination path (append _2, _3, ... on collision)
         let dest_path = self.unique_dest_path(&original_name);
         let dest_name = dest_path
             .file_name()
@@ -197,7 +278,6 @@ impl MediaScheduleStore {
     }
 
     /// Returns a path in `media_dir` that does not yet exist.
-    /// If `name` is taken, returns `stem_2.ext`, `stem_3.ext`, etc.
     fn unique_dest_path(&self, name: &str) -> PathBuf {
         let base = self.media_dir.join(name);
         if !base.exists() {
@@ -223,7 +303,6 @@ impl MediaScheduleStore {
     }
 
     pub fn delete_media(&self, id: String) -> Result<()> {
-        // Find the media file that owns this ID via its sidecar
         let entries = fs::read_dir(&self.media_dir)?;
         for entry in entries {
             let entry = entry?;
@@ -246,8 +325,163 @@ impl MediaScheduleStore {
                 return Ok(());
             }
         }
-        Ok(()) // Not found is not an error (already deleted)
+        Ok(())
     }
+
+    // -----------------------------------------------------------------------
+    // Presentations
+    // -----------------------------------------------------------------------
+
+    pub fn list_presentations(&self) -> Result<Vec<PresentationFile>> {
+        let mut items = Vec::new();
+        let entries = fs::read_dir(&self.presentations_dir)?;
+
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            if name.ends_with(".presid") {
+                continue;
+            }
+
+            let ext = path
+                .extension()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_lowercase();
+
+            if ext != "pptx" {
+                continue;
+            }
+
+            let id = self.get_or_create_pres_id(&path);
+
+            items.push(PresentationFile {
+                id,
+                name,
+                path: path.to_string_lossy().to_string(),
+                slide_count: 0, // populated by the frontend after ZIP parsing
+            });
+        }
+
+        items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        Ok(items)
+    }
+
+    pub fn add_presentation(&self, source_path: PathBuf) -> Result<PresentationFile> {
+        let original_name = source_path
+            .file_name()
+            .ok_or_else(|| anyhow::anyhow!("Invalid source path"))?
+            .to_string_lossy()
+            .to_string();
+
+        let ext = source_path
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase();
+
+        if ext != "pptx" {
+            return Err(anyhow::anyhow!("Only .pptx files are supported"));
+        }
+
+        let dest_path = self.unique_pres_dest_path(&original_name);
+        let dest_name = dest_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+
+        fs::copy(&source_path, &dest_path)?;
+
+        let id = self.get_or_create_pres_id(&dest_path);
+
+        Ok(PresentationFile {
+            id,
+            name: dest_name,
+            path: dest_path.to_string_lossy().to_string(),
+            slide_count: 0,
+        })
+    }
+
+    pub fn delete_presentation(&self, id: String) -> Result<()> {
+        let entries = fs::read_dir(&self.presentations_dir)?;
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) == Some("presid") {
+                continue;
+            }
+            if self.get_or_create_pres_id(&path) == id {
+                let sidecar = path.with_extension(
+                    format!(
+                        "{}.presid",
+                        path.extension().unwrap_or_default().to_string_lossy()
+                    )
+                );
+                fs::remove_file(&path)?;
+                let _ = fs::remove_file(sidecar);
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    fn get_or_create_pres_id(&self, pres_path: &PathBuf) -> String {
+        let sidecar = pres_path.with_extension(
+            format!(
+                "{}.presid",
+                pres_path.extension().unwrap_or_default().to_string_lossy()
+            )
+        );
+        if let Ok(id) = fs::read_to_string(&sidecar) {
+            let id = id.trim().to_string();
+            if !id.is_empty() {
+                return id;
+            }
+        }
+        let id = Uuid::new_v4().to_string();
+        let _ = fs::write(&sidecar, &id);
+        id
+    }
+
+    fn unique_pres_dest_path(&self, name: &str) -> PathBuf {
+        let base = self.presentations_dir.join(name);
+        if !base.exists() {
+            return base;
+        }
+        let stem = base
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let ext = base
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy()))
+            .unwrap_or_default();
+        let mut counter = 2u32;
+        loop {
+            let candidate = self.presentations_dir.join(format!("{}_{}{}", stem, counter, ext));
+            if !candidate.exists() {
+                return candidate;
+            }
+            counter += 1;
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Settings
+    // -----------------------------------------------------------------------
 
     pub fn load_settings(&self) -> Result<PresentationSettings> {
         let path = self.app_data_dir.join("settings.json");
@@ -265,6 +499,10 @@ impl MediaScheduleStore {
         fs::write(path, json)?;
         Ok(())
     }
+
+    // -----------------------------------------------------------------------
+    // Schedule
+    // -----------------------------------------------------------------------
 
     pub fn save_schedule(&self, schedule: Schedule) -> Result<()> {
         let path = self.app_data_dir.join("schedule.json");
