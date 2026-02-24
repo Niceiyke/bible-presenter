@@ -279,26 +279,49 @@ impl BibleStore {
     }
 
     pub fn search_manual(&self, query: &str) -> anyhow::Result<Vec<Verse>> {
-        let conn = self.conn.lock();
-        let mut stmt = conn.prepare_cached(
-            "SELECT id, book, chapter, verse, text FROM verses WHERE text LIKE ?1 LIMIT 20"
-        )?;
+        let query_lower = query.to_lowercase();
 
-        let rows = stmt.query_map(params![format!("%{}%", query)], |row| {
-            Ok(Verse {
-                id: row.get(0)?,
-                book: row.get(1)?,
-                chapter: row.get(2)?,
-                verse: row.get(3)?,
-                text: row.get(4)?,
-            })
-        })?;
+        // Common stop words that appear in nearly every verse — skip them
+        let stop: &[&str] = &[
+            "the", "and", "for", "that", "with", "this", "are", "was", "were",
+            "they", "them", "from", "have", "has", "not", "but", "his", "her",
+            "our", "your", "its", "who", "all", "one", "you", "him", "she",
+            "what", "will", "said", "when", "also", "into", "unto", "shall",
+            "thee", "thou", "thy",
+        ];
 
-        let mut results = Vec::new();
-        for verse in rows {
-            results.push(verse?);
+        let query_words: Vec<&str> = query_lower
+            .split_whitespace()
+            .filter(|w| w.len() >= 2 && !stop.contains(w))
+            .collect();
+
+        if query_words.is_empty() {
+            // Nothing meaningful to search — return empty
+            return Ok(Vec::new());
         }
-        Ok(results)
+
+        // Score every verse by how many query words appear as substrings.
+        // Substring matching means "love" matches "loved", "loves", "lovely".
+        let mut scored: Vec<(usize, &Verse)> = self
+            .verse_cache
+            .iter()
+            .filter_map(|verse| {
+                let verse_lower = verse.text.to_lowercase();
+                let score: usize = query_words
+                    .iter()
+                    .filter(|&&w| verse_lower.contains(w))
+                    .count();
+                if score > 0 {
+                    Some((score, verse))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Best matches first; cap at 10 results
+        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        Ok(scored.into_iter().take(10).map(|(_, v)| v.clone()).collect())
     }
 
     pub fn get_books(&self) -> anyhow::Result<Vec<String>> {
