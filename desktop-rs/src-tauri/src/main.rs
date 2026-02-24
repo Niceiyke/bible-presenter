@@ -54,6 +54,8 @@ struct AppState {
     /// Current display items (what is staged and what is live).
     live_item: Arc<Mutex<Option<store::DisplayItem>>>,
     staged_item: Arc<Mutex<Option<store::DisplayItem>>>,
+    /// Persisted presentation settings (theme, reference position, etc.)
+    settings: Arc<Mutex<store::PresentationSettings>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +313,10 @@ async fn toggle_output_window(app: AppHandle, state: State<'_, Arc<AppState>>) -
                 .set_focus()
                 .map_err(|e: tauri::Error| e.to_string())?;
 
+            // Sync settings so the output window uses the current theme/position.
+            let current_settings = state.settings.lock().clone();
+            let _ = app.emit("settings-changed", current_settings);
+
             // Sync the current live item to the output window immediately on show,
             // so it doesn't display "Waiting for projection..." if something was
             // already live before the window was opened.
@@ -486,6 +492,40 @@ async fn load_schedule(state: State<'_, Arc<AppState>>) -> Result<store::Schedul
     state.media_schedule.load_schedule().map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn get_next_verse(
+    state: State<'_, Arc<AppState>>,
+    book: String,
+    chapter: i32,
+    verse: i32,
+) -> Result<Option<store::Verse>, String> {
+    state
+        .store
+        .get_next_verse(&book, chapter, verse)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_settings(state: State<'_, Arc<AppState>>) -> Result<store::PresentationSettings, String> {
+    Ok(state.settings.lock().clone())
+}
+
+#[tauri::command]
+async fn save_settings(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    settings: store::PresentationSettings,
+) -> Result<(), String> {
+    state
+        .media_schedule
+        .save_settings(&settings)
+        .map_err(|e| e.to_string())?;
+    *state.settings.lock() = settings.clone();
+    // Broadcast to both windows so the output screen updates live
+    let _ = app.emit("settings-changed", settings);
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -568,6 +608,10 @@ fn main() {
             let media_schedule = Arc::new(store::MediaScheduleStore::new(app_data_dir).map_err(|e| e.to_string())?);
             log_msg(app, "Media Schedule Store initialized.");
 
+            let initial_settings = media_schedule
+                .load_settings()
+                .unwrap_or_else(|_| store::PresentationSettings::default());
+
             log_msg(
                 app,
                 "AI models will be loaded on the first START LIVE click (lazy load).",
@@ -582,6 +626,7 @@ fn main() {
                 is_running: Arc::new(Mutex::new(false)),
                 live_item: Arc::new(Mutex::new(None)),
                 staged_item: Arc::new(Mutex::new(None)),
+                settings: Arc::new(Mutex::new(initial_settings)),
             }));
 
             log_msg(app, "App state managed. Ready.");
@@ -600,13 +645,16 @@ fn main() {
             get_chapters,
             get_verses_count,
             get_verse,
+            get_next_verse,
             list_media,
             add_media,
             delete_media,
             save_schedule,
             load_schedule,
             stage_item,
-            go_live
+            go_live,
+            get_settings,
+            save_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
