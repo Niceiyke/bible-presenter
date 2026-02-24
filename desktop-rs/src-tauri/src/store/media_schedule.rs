@@ -54,6 +54,41 @@ pub struct PresentationSlideData {
 }
 
 // ---------------------------------------------------------------------------
+// Custom studio slide types
+// ---------------------------------------------------------------------------
+
+/// A single text zone (header or body) in a custom studio slide.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CustomSlideZone {
+    pub text: String,
+    pub font_size: f64,
+    pub font_family: String,
+    /// CSS hex color string, e.g. "#ffffff".
+    pub color: String,
+    pub bold: bool,
+    pub italic: bool,
+    /// "left" | "center" | "right"
+    pub align: String,
+}
+
+/// Payload sent when a custom studio slide goes live.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CustomSlideData {
+    pub presentation_id: String,
+    pub presentation_name: String,
+    /// Zero-based slide index.
+    pub slide_index: u32,
+    /// Total slides in the presentation.
+    pub slide_count: u32,
+    /// CSS hex background color, e.g. "#0a1628".
+    pub background_color: String,
+    /// Absolute path to a background image, or None.
+    pub background_image: Option<String>,
+    pub header: CustomSlideZone,
+    pub body: CustomSlideZone,
+}
+
+// ---------------------------------------------------------------------------
 // Display item — what gets projected on the output window
 // ---------------------------------------------------------------------------
 
@@ -63,6 +98,7 @@ pub enum DisplayItem {
     Verse(Verse),
     Media(MediaItem),
     PresentationSlide(PresentationSlideData),
+    CustomSlide(CustomSlideData),
 }
 
 /// A schedule entry with a stable ID so the frontend can use it as a React key.
@@ -137,6 +173,7 @@ pub struct MediaScheduleStore {
     app_data_dir: PathBuf,
     media_dir: PathBuf,
     presentations_dir: PathBuf,
+    studio_dir: PathBuf,
 }
 
 fn classify_extension(ext: &str) -> Option<MediaItemType> {
@@ -157,10 +194,15 @@ impl MediaScheduleStore {
         if !presentations_dir.exists() {
             fs::create_dir_all(&presentations_dir)?;
         }
+        let studio_dir = app_data_dir.join("studio");
+        if !studio_dir.exists() {
+            fs::create_dir_all(&studio_dir)?;
+        }
         Ok(Self {
             app_data_dir,
             media_dir,
             presentations_dir,
+            studio_dir,
         })
     }
 
@@ -523,5 +565,83 @@ impl MediaScheduleStore {
                 items: Vec::new(),
             })
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Studio presentations
+    // -----------------------------------------------------------------------
+
+    /// Returns a list of `{ id, name, slide_count }` objects for the Studio tab.
+    pub fn list_studio_presentations(&self) -> Result<Vec<serde_json::Value>> {
+        let mut items = Vec::new();
+        let entries = fs::read_dir(&self.studio_dir)?;
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let ext = path
+                .extension()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_lowercase();
+            if ext != "json" {
+                continue;
+            }
+            if let Ok(json) = fs::read_to_string(&path) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json) {
+                    let id = val.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let name = val.get("name").and_then(|v| v.as_str()).unwrap_or("Untitled").to_string();
+                    let slide_count = val
+                        .get("slides")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.len())
+                        .unwrap_or(0);
+                    if !id.is_empty() {
+                        items.push(serde_json::json!({
+                            "id": id,
+                            "name": name,
+                            "slide_count": slide_count,
+                        }));
+                    }
+                }
+            }
+        }
+        items.sort_by(|a, b| {
+            let na = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let nb = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            na.to_lowercase().cmp(&nb.to_lowercase())
+        });
+        Ok(items)
+    }
+
+    /// Writes the full presentation JSON to `studio/{id}.json`.
+    pub fn save_studio_presentation(&self, data: &serde_json::Value) -> Result<()> {
+        let id = data
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Presentation JSON missing 'id' field"))?;
+        let path = self.studio_dir.join(format!("{}.json", id));
+        let json = serde_json::to_string_pretty(data)?;
+        fs::write(path, json)?;
+        Ok(())
+    }
+
+    /// Reads and returns the full presentation JSON for the given id.
+    pub fn load_studio_presentation(&self, id: &str) -> Result<serde_json::Value> {
+        let path = self.studio_dir.join(format!("{}.json", id));
+        let json = fs::read_to_string(&path)
+            .map_err(|_| anyhow::anyhow!("Studio presentation '{}' not found", id))?;
+        Ok(serde_json::from_str(&json)?)
+    }
+
+    /// Deletes `studio/{id}.json`.
+    pub fn delete_studio_presentation(&self, id: &str) -> Result<()> {
+        let path = self.studio_dir.join(format!("{}.json", id));
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        Ok(())
     }
 }
