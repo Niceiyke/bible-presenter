@@ -208,14 +208,20 @@ export default function App() {
           {/* Keyword Search */}
           <div className="flex-1 flex flex-col min-h-0">
             <h2 className="text-xs font-bold text-slate-500 uppercase mb-4 tracking-widest">Keyword Search</h2>
-            <form onSubmit={handleSearch} className="mb-4">
-              <input 
+            <form onSubmit={handleSearch} className="mb-4 flex gap-2">
+              <input
                 type="text"
                 placeholder="Search scripture..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
               />
+              <button
+                type="submit"
+                className="bg-amber-500 hover:bg-amber-600 text-black font-bold px-3 py-2 rounded-lg text-sm transition-all"
+              >
+                Go
+              </button>
             </form>
             
             <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
