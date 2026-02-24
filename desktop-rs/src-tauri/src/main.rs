@@ -336,6 +336,9 @@ async fn toggle_output_window(app: AppHandle, state: State<'_, Arc<AppState>>) -
                             store::DisplayItem::CustomSlide(c) => {
                                 format!("{} – slide {}", c.presentation_name, c.slide_index + 1)
                             }
+                            store::DisplayItem::CameraFeed(cam) => {
+                                if cam.label.is_empty() { cam.device_id.clone() } else { cam.label.clone() }
+                            }
                         },
                         detected_item: Some(item),
                         source: "manual".to_string(),
@@ -463,6 +466,9 @@ async fn go_live(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), 
                     }
                     store::DisplayItem::CustomSlide(ref c) => {
                         format!("{} – slide {}", c.presentation_name, c.slide_index + 1)
+                    }
+                    store::DisplayItem::CameraFeed(ref cam) => {
+                        if cam.label.is_empty() { cam.device_id.clone() } else { cam.label.clone() }
                     }
                 },
                 detected_item: Some(item),
