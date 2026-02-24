@@ -50,8 +50,9 @@
       "models/tokenizer.json",
       "models/all-minilm-l6-v2.onnx",
       "models/whisper-base.bin",
-      "bible_data/bible.db",
-      "bible_data/embeddings.npy"
+      "bible_data/super_bible.db",
+      "bible_data/all_versions_embeddings.npy",
+      "bible_data/verse_index.json"
     ],
     "windows": {
       "nsis": {

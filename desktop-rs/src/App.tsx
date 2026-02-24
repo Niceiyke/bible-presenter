@@ -11,11 +11,11 @@ import type { ParsedSlide } from "./pptxParser";
 export type MediaItemType = "Image" | "Video";
 
 export interface Verse {
-  id: number;
   book: string;
   chapter: number;
   verse: number;
   text: string;
+  version: string;
 }
 
 export interface MediaItem {
@@ -734,10 +734,12 @@ function SlideEditor({
 
 function QuickBiblePicker({
   books,
+  version,
   onStage,
   onLive,
 }: {
   books: string[];
+  version: string;
   onStage: (item: DisplayItem) => Promise<void>;
   onLive: (item: DisplayItem) => Promise<void>;
 }) {
@@ -793,7 +795,7 @@ function QuickBiblePicker({
     const isDouble = now - lastEnterRef.current < 800;
     lastEnterRef.current = now;
     try {
-      const v: any = await invoke("get_verse", { book: lockedBook, chapter, verse });
+      const v: any = await invoke("get_verse", { book: lockedBook, chapter, verse, version });
       if (!v) return;
       const item: DisplayItem = { type: "Verse", data: v };
       if (isDouble) {
@@ -1414,6 +1416,10 @@ export default function App() {
   const [audioError, setAudioError] = useState<string | null>(null);
   const [deviceError, setDeviceError] = useState<string | null>(null);
 
+  // Bible version
+  const [availableVersions, setAvailableVersions] = useState<string[]>(["KJV"]);
+  const [bibleVersion, setBibleVersion] = useState("KJV");
+
   // Manual bible picker
   const [books, setBooks] = useState<string[]>([]);
   const [chapters, setChapters] = useState<number[]>([]);
@@ -1497,12 +1503,14 @@ export default function App() {
     loadStudioList();
     loadSchedule();
 
-    invoke("get_books")
-      .then((b: any) => {
-        setBooks(b);
-        if (b.length > 0) setSelectedBook(b[0]);
+    invoke("get_bible_versions")
+      .then((versions: any) => {
+        if (versions && versions.length > 0) {
+          setAvailableVersions(versions);
+          setBibleVersion(versions[0]);
+        }
       })
-      .catch((err: any) => setAudioError(`Failed to load books: ${err}`));
+      .catch(() => {});
 
     invoke("get_current_item")
       .then((v: any) => { if (v) setLiveItem(v); })
@@ -1558,7 +1566,7 @@ export default function App() {
   useEffect(() => {
     if (liveItem?.type === "Verse") {
       const v = liveItem.data;
-      invoke("get_next_verse", { book: v.book, chapter: v.chapter, verse: v.verse })
+      invoke("get_next_verse", { book: v.book, chapter: v.chapter, verse: v.verse, version: v.version || bibleVersion })
         .then((result: any) => setNextVerse(result ?? null))
         .catch(() => setNextVerse(null));
     } else {
@@ -1601,25 +1609,36 @@ export default function App() {
 
   // ── Bible picker cascades ────────────────────────────────────────────────────
 
+  // When version changes: notify Rust, reload books list
+  useEffect(() => {
+    invoke("set_bible_version", { version: bibleVersion }).catch(() => {});
+    invoke("get_books", { version: bibleVersion })
+      .then((b: any) => {
+        setBooks(b);
+        if (b.length > 0) setSelectedBook(b[0]);
+      })
+      .catch((err: any) => setAudioError(`Failed to load books: ${err}`));
+  }, [bibleVersion]);
+
   useEffect(() => {
     if (!selectedBook) return;
-    invoke("get_chapters", { book: selectedBook })
+    invoke("get_chapters", { book: selectedBook, version: bibleVersion })
       .then((c: any) => {
         setChapters(c);
         if (c.length > 0) setSelectedChapter(c[0]);
       })
       .catch((err: any) => setAudioError(`Failed to load chapters: ${err}`));
-  }, [selectedBook]);
+  }, [selectedBook, bibleVersion]);
 
   useEffect(() => {
     if (!selectedBook || !selectedChapter) return;
-    invoke("get_verses_count", { book: selectedBook, chapter: selectedChapter })
+    invoke("get_verses_count", { book: selectedBook, chapter: selectedChapter, version: bibleVersion })
       .then((v: any) => {
         setVerses(v);
         if (v.length > 0) setSelectedVerse(v[0]);
       })
       .catch((err: any) => setAudioError(`Failed to load verses: ${err}`));
-  }, [selectedBook, selectedChapter]);
+  }, [selectedBook, selectedChapter, bibleVersion]);
 
   // ── Presentation actions ─────────────────────────────────────────────────────
 
@@ -1661,6 +1680,7 @@ export default function App() {
         book: selectedBook,
         chapter: selectedChapter,
         verse: selectedVerse,
+        version: bibleVersion,
       });
       if (verse) await stageItem({ type: "Verse", data: verse });
       else setAudioError(`Verse not found: ${selectedBook} ${selectedChapter}:${selectedVerse}`);
@@ -1676,6 +1696,7 @@ export default function App() {
         book: selectedBook,
         chapter: selectedChapter,
         verse: selectedVerse,
+        version: bibleVersion,
       });
       if (verse) await sendLive({ type: "Verse", data: verse });
       else setAudioError(`Verse not found: ${selectedBook} ${selectedChapter}:${selectedVerse}`);
@@ -1690,7 +1711,7 @@ export default function App() {
     e.preventDefault();
     if (!searchQuery.trim()) return;
     try {
-      const results: any = await invoke("search_manual", { query: searchQuery });
+      const results: any = await invoke("search_manual", { query: searchQuery, version: bibleVersion });
       setSearchResults(results);
     } catch (err) {
       console.error("Search failed:", err);
@@ -2130,6 +2151,25 @@ export default function App() {
             {/* ── Bible Tab ── */}
             {activeTab === "bible" && (
               <>
+                {/* Version selector */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {availableVersions.map((v) => (
+                    <button
+                      key={v}
+                      onClick={() => setBibleVersion(v)}
+                      className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${
+                        bibleVersion === v
+                          ? "bg-amber-500 text-black"
+                          : "bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-700"
+                      }`}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
+
+                <hr className="border-slate-800" />
+
                 {/* Quick keyboard entry */}
                 <div>
                   <h2 className="text-xs font-bold text-slate-500 uppercase mb-2 tracking-widest">
@@ -2137,6 +2177,7 @@ export default function App() {
                   </h2>
                   <QuickBiblePicker
                     books={books}
+                    version={bibleVersion}
                     onStage={stageItem}
                     onLive={sendLive}
                   />
@@ -2194,7 +2235,7 @@ export default function App() {
                         onClick={async () => {
                           if (!selectedBook) return;
                           const v: any = await invoke("get_verse", {
-                            book: selectedBook, chapter: selectedChapter, verse: selectedVerse,
+                            book: selectedBook, chapter: selectedChapter, verse: selectedVerse, version: bibleVersion,
                           });
                           if (v) addToSchedule({ type: "Verse", data: v });
                         }}
@@ -2232,7 +2273,7 @@ export default function App() {
                     )}
                     {searchResults.map((v, i) => (
                       <div key={i} className="p-3 rounded-lg bg-slate-800/50 border border-transparent hover:border-slate-700 transition-all group">
-                        <p className="text-amber-500 text-xs font-bold mb-1 uppercase">{v.book} {v.chapter}:{v.verse}</p>
+                        <p className="text-amber-500 text-xs font-bold mb-1 uppercase">{v.book} {v.chapter}:{v.verse} <span className="text-slate-500 font-normal normal-case">{v.version}</span></p>
                         <p className="text-slate-300 text-xs mb-2 line-clamp-2">{v.text}</p>
                         <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-all">
                           <button onClick={() => stageItem({ type: "Verse", data: v })} className="flex-1 bg-slate-600 hover:bg-slate-500 text-white text-[10px] font-bold py-1 rounded transition-all">STAGE</button>

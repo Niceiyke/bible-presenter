@@ -28,44 +28,64 @@ jobs:
           cd desktop-rs
           npm run build
 
-      - name: download models
+      - name: download models and bible data
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
           mkdir -p desktop-rs/src-tauri/models
           mkdir -p desktop-rs/src-tauri/bible_data
-          
-          echo "Downloading AI models..."
-          curl -L "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx" -o "desktop-rs/src-tauri/models/all-minilm-l6-v2.onnx"
-          curl -L "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" -o "desktop-rs/src-tauri/models/whisper-base.bin"
-          
-          echo "Syncing Bible Database..."
-          if [ -f "backend/bible_data/bible.db" ]; then
-            cp -f "backend/bible_data/bible.db" "desktop-rs/src-tauri/bible_data/bible.db"
+
+          # ── AI models (public HuggingFace) ────────────────────────────────
+          echo "Downloading ONNX embedding model..."
+          curl -L "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx" \
+            -o "desktop-rs/src-tauri/models/all-minilm-l6-v2.onnx"
+
+          echo "Downloading Whisper base model..."
+          curl -L "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" \
+            -o "desktop-rs/src-tauri/models/whisper-base.bin"
+
+          # ── Bible database (public repo) ────────────────────────────────
+          echo "Downloading super_bible.db (~59 MB)..."
+          curl -L "https://raw.githubusercontent.com/alshival/super_bible/main/SUPER_BIBLE/super_bible.db" \
+            -o "desktop-rs/src-tauri/bible_data/super_bible.db"
+
+          # ── Stacked embeddings (from this repo's GitHub Release) ────────
+          # Upload all_versions_embeddings.npy to a release tagged v1.0-models first.
+          echo "Downloading all_versions_embeddings.npy from release v1.0-models..."
+          gh release download v1.0-models \
+            --pattern "all_versions_embeddings.npy" \
+            --dir "desktop-rs/src-tauri/bible_data" \
+            --repo "${{ github.repository }}" \
+            --clobber
+
+          # ── verse_index.json (committed in repo) ────────────────────────
+          if [ -f "desktop-rs/src-tauri/bible_data/verse_index.json" ]; then
+            echo "verse_index.json found in repo."
           else
-            echo "Error: backend/bible_data/bible.db not found!"
+            echo "CRITICAL: verse_index.json missing! Commit it to the repo first."
             exit 1
           fi
 
-          if [ -f "desktop/src/core-engine/bible_data/embeddings.npy" ]; then
-             cp -f "desktop/src/core-engine/bible_data/embeddings.npy" "desktop-rs/src-tauri/bible_data/embeddings.npy"
-          else
-             echo "Error: desktop/src/core-engine/bible_data/embeddings.npy not found!"
-             exit 1
-          fi
-
+          # ── Verify all required files ───────────────────────────────────
           echo "Verifying files..."
-          ls -R desktop-rs/src-tauri/models/
-          ls -R desktop-rs/src-tauri/bible_data/
-          
-          if [ ! -f "desktop-rs/src-tauri/bible_data/bible.db" ]; then
-            echo "CRITICAL: bible.db missing!"
-            exit 1
-          fi
-          if [ ! -f "desktop-rs/src-tauri/bible_data/embeddings.npy" ]; then
-            echo "CRITICAL: embeddings.npy missing!"
-            exit 1
-          fi
+          ls -lh desktop-rs/src-tauri/models/
+          ls -lh desktop-rs/src-tauri/bible_data/
+
+          for f in \
+            "desktop-rs/src-tauri/models/all-minilm-l6-v2.onnx" \
+            "desktop-rs/src-tauri/models/whisper-base.bin" \
+            "desktop-rs/src-tauri/models/tokenizer.json" \
+            "desktop-rs/src-tauri/bible_data/super_bible.db" \
+            "desktop-rs/src-tauri/bible_data/all_versions_embeddings.npy" \
+            "desktop-rs/src-tauri/bible_data/verse_index.json"; do
+            if [ ! -f "$f" ]; then
+              echo "CRITICAL: $f missing!"
+              exit 1
+            fi
+            echo "OK: $f ($(du -h "$f" | cut -f1))"
+          done
 
       - name: build tauri app
         run: |
@@ -83,4 +103,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Bible-Presenter-Windows
-          path: desktop-rs/src-tauri/target/release/bundle/msi/*.msi
+          path: |
+            desktop-rs/src-tauri/target/release/bundle/msi/*.msi
+            desktop-rs/src-tauri/target/release/bundle/nsis/*.exe
