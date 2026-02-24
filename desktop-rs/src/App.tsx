@@ -14,6 +14,7 @@ export default function App() {
   const [vadThreshold, setVadThreshold] = useState(0.005);
   const [sessionState, setSessionState] = useState<"idle" | "loading" | "running">("idle");
   const [audioError, setAudioError] = useState<string | null>(null);
+  const [deviceError, setDeviceError] = useState<string | null>(null);
 
   // Manual Selection State
   const [books, setBooks] = useState<string[]>([]);
@@ -23,14 +24,22 @@ export default function App() {
   const [selectedChapter, setSelectedChapter] = useState(0);
   const [selectedVerse, setSelectedVerse] = useState(0);
 
+  const loadAudioDevices = () => {
+    setDeviceError(null);
+    invoke("get_audio_devices")
+      .then((devs: any) => {
+        setDevices(devs);
+        if (devs.length > 0) setSelectedDevice((prev) => prev || devs[0][0]);
+        else setDeviceError("No input devices found");
+      })
+      .catch((err: any) => setDeviceError(String(err)));
+  };
+
   useEffect(() => {
     setLabel(getCurrentWindow().label);
 
     if (getCurrentWindow().label !== "output") {
-      invoke("get_audio_devices").then((devs: any) => {
-        setDevices(devs);
-        if (devs.length > 0) setSelectedDevice(devs[0][0]);
-      });
+      loadAudioDevices();
 
       invoke("get_books")
         .then((b: any) => {
@@ -174,15 +183,33 @@ export default function App() {
             />
           </div>
 
-          <select 
-            value={selectedDevice} 
-            onChange={handleDeviceChange}
-            className="bg-slate-800 text-white border border-slate-700 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
-          >
-            {devices.map(([name, id]) => (
-              <option key={id} value={name}>{name}</option>
-            ))}
-          </select>
+          <div className="flex items-center gap-1">
+            {deviceError ? (
+              <span className="text-red-400 text-xs max-w-[140px] truncate" title={deviceError}>
+                No mic found
+              </span>
+            ) : (
+              <select
+                value={selectedDevice}
+                onChange={handleDeviceChange}
+                className="bg-slate-800 text-white border border-slate-700 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+              >
+                {devices.length === 0 && (
+                  <option value="">Loading devices...</option>
+                )}
+                {devices.map(([name, id]) => (
+                  <option key={id} value={name}>{name}</option>
+                ))}
+              </select>
+            )}
+            <button
+              onClick={loadAudioDevices}
+              title="Refresh microphone list"
+              className="bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded px-2 py-2 text-xs text-slate-400 hover:text-white transition-all"
+            >
+              ↺
+            </button>
+          </div>
 
           <button 
             onClick={() => invoke("toggle_output_window")}
