@@ -142,6 +142,18 @@ pub struct PresentationSettings {
     /// deserializes cleanly to BackgroundSetting::None.
     #[serde(default)]
     pub background: BackgroundSetting,
+    /// Path to a logo image to display on the output window.
+    pub logo_path: Option<String>,
+    /// Whether the output screen is currently blanked (black).
+    #[serde(default)]
+    pub is_blanked: bool,
+    /// Base font size for scripture text (in pt or similar units used by frontend).
+    #[serde(default = "default_font_size")]
+    pub font_size: f64,
+}
+
+fn default_font_size() -> f64 {
+    72.0
 }
 
 impl Default for PresentationSettings {
@@ -150,6 +162,9 @@ impl Default for PresentationSettings {
             theme: "dark".to_string(),
             reference_position: "bottom".to_string(),
             background: BackgroundSetting::default(),
+            logo_path: None,
+            is_blanked: false,
+            font_size: default_font_size(),
         }
     }
 }
