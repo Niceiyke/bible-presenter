@@ -3,6 +3,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { loadPptxZip, parseSingleSlide, getSlideCount } from "./pptxParser";
+import type { ParsedSlide } from "./pptxParser";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -24,9 +26,25 @@ export interface MediaItem {
   thumbnail_path?: string;
 }
 
+export interface PresentationFile {
+  id: string;
+  name: string;
+  path: string;
+  slide_count: number;
+}
+
+export interface PresentationSlideData {
+  presentation_id: string;
+  presentation_name: string;
+  presentation_path: string;
+  slide_index: number;
+  slide_count: number;
+}
+
 export type DisplayItem =
   | { type: "Verse"; data: Verse }
-  | { type: "Media"; data: MediaItem };
+  | { type: "Media"; data: MediaItem }
+  | { type: "PresentationSlide"; data: PresentationSlideData };
 
 export interface ScheduleEntry {
   id: string;
@@ -39,9 +57,16 @@ export interface Schedule {
   items: ScheduleEntry[];
 }
 
+// Background is a serde-tagged enum: { type: "None" } | { type: "Color"; value: string } | { type: "Image"; value: string }
+export type BackgroundSetting =
+  | { type: "None" }
+  | { type: "Color"; value: string }
+  | { type: "Image"; value: string };
+
 export interface PresentationSettings {
   theme: string;
   reference_position: "top" | "bottom";
+  background: BackgroundSetting;
 }
 
 // ─── Themes ───────────────────────────────────────────────────────────────────
@@ -91,7 +116,155 @@ function displayItemLabel(item: DisplayItem): string {
   if (item.type === "Verse") {
     return `${item.data.book} ${item.data.chapter}:${item.data.verse}`;
   }
+  if (item.type === "PresentationSlide") {
+    return `${item.data.presentation_name} – Slide ${item.data.slide_index + 1}`;
+  }
   return item.data.name;
+}
+
+/** Computes the background style for the output window, respecting background override. */
+function computeOutputBackground(
+  settings: PresentationSettings,
+  colors: ThemeColors
+): React.CSSProperties {
+  if (settings.background.type === "Color") {
+    return { backgroundColor: settings.background.value };
+  }
+  if (settings.background.type === "Image") {
+    const imgPath = settings.background.value;
+    if (imgPath) {
+      return {
+        backgroundImage: `url(${convertFileSrc(imgPath)})`,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundRepeat: "no-repeat",
+      };
+    }
+  }
+  return { backgroundColor: colors.background };
+}
+
+/** Computes background style for the settings preview panel. */
+function computePreviewBackground(
+  settings: PresentationSettings,
+  themeColor: string
+): React.CSSProperties {
+  if (settings.background.type === "Color") {
+    return { backgroundColor: settings.background.value };
+  }
+  if (settings.background.type === "Image") {
+    const imgPath = settings.background.value;
+    if (imgPath) {
+      return {
+        backgroundImage: `url(${convertFileSrc(imgPath)})`,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundRepeat: "no-repeat",
+      };
+    }
+  }
+  return { backgroundColor: themeColor };
+}
+
+// ─── Slide Renderer ───────────────────────────────────────────────────────────
+// Renders a ParsedSlide as a full-size div with background, images and text boxes.
+
+function SlideRenderer({ slide }: { slide: ParsedSlide }) {
+  const bgStyle: React.CSSProperties = slide.backgroundColor
+    ? { backgroundColor: slide.backgroundColor }
+    : { backgroundColor: "#1a1a2e" };
+
+  return (
+    <div className="w-full h-full relative overflow-hidden" style={bgStyle}>
+      {slide.images.map((img, i) => (
+        <img
+          key={i}
+          src={img.dataUrl}
+          className="absolute inset-0 w-full h-full object-cover"
+          alt=""
+          style={{ zIndex: i }}
+        />
+      ))}
+      {slide.textBoxes.map((tb, i) => (
+        <div
+          key={i}
+          className="absolute inset-0 flex items-center justify-center p-16"
+          style={{ zIndex: slide.images.length + i }}
+        >
+          <p
+            className="text-center leading-tight drop-shadow-2xl whitespace-pre-wrap"
+            style={{
+              color: tb.color ?? "#ffffff",
+              fontSize: tb.fontSize ? `${tb.fontSize}pt` : "3rem",
+              fontWeight: tb.bold ? "bold" : "normal",
+            }}
+          >
+            {tb.text}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Slide Thumbnail ──────────────────────────────────────────────────────────
+
+function SlideThumbnail({
+  slide,
+  index,
+  onStage,
+  onLive,
+}: {
+  slide: ParsedSlide;
+  index: number;
+  onStage: () => void;
+  onLive: () => void;
+}) {
+  const bgStyle: React.CSSProperties = slide.backgroundColor
+    ? { backgroundColor: slide.backgroundColor }
+    : { backgroundColor: "#1a1a2e" };
+
+  return (
+    <div
+      className="group relative aspect-video rounded overflow-hidden border border-slate-700 hover:border-amber-500/50 transition-all cursor-pointer"
+      style={bgStyle}
+    >
+      {slide.images[0] && (
+        <img src={slide.images[0].dataUrl} className="absolute inset-0 w-full h-full object-cover" alt="" />
+      )}
+      {slide.textBoxes[0] && (
+        <div className="absolute inset-0 flex items-center justify-center p-1">
+          <p
+            className="text-center font-bold leading-tight"
+            style={{
+              fontSize: "8px",
+              color: slide.textBoxes[0].color ?? "#ffffff",
+              textShadow: "0 1px 3px rgba(0,0,0,0.8)",
+            }}
+          >
+            {slide.textBoxes[0].text.slice(0, 60)}
+          </p>
+        </div>
+      )}
+      <div className="absolute bottom-0 left-0 px-1 py-0.5 bg-black/50">
+        <span className="text-[7px] text-white/70">{index + 1}</span>
+      </div>
+      <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-all flex flex-col items-center justify-center gap-1 p-1">
+        <button
+          onClick={onStage}
+          className="w-full bg-slate-600 hover:bg-slate-500 text-white text-[9px] font-bold py-1 rounded"
+        >
+          STAGE
+        </button>
+        <button
+          onClick={onLive}
+          className="w-full bg-amber-500 hover:bg-amber-400 text-black text-[9px] font-bold py-1 rounded"
+        >
+          DISPLAY
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // ─── Output Window ────────────────────────────────────────────────────────────
@@ -101,7 +274,10 @@ function OutputWindow() {
   const [settings, setSettings] = useState<PresentationSettings>({
     theme: "dark",
     reference_position: "bottom",
+    background: { type: "None" },
   });
+  const [currentSlide, setCurrentSlide] = useState<ParsedSlide | null>(null);
+  const outputZipsRef = useRef<Record<string, any>>({});
 
   useEffect(() => {
     invoke("get_current_item")
@@ -128,8 +304,32 @@ function OutputWindow() {
     };
   }, []);
 
+  // Parse PPTX slide when a PresentationSlide item goes live
+  useEffect(() => {
+    if (liveItem?.type !== "PresentationSlide") {
+      setCurrentSlide(null);
+      return;
+    }
+    const { presentation_id, presentation_path, slide_index } = liveItem.data;
+    (async () => {
+      try {
+        let zip = outputZipsRef.current[presentation_id];
+        if (!zip) {
+          zip = await loadPptxZip(presentation_path);
+          outputZipsRef.current[presentation_id] = zip;
+        }
+        const slide = await parseSingleSlide(zip, slide_index);
+        setCurrentSlide(slide);
+      } catch (err) {
+        console.error("OutputWindow: failed to render slide", err);
+        setCurrentSlide(null);
+      }
+    })();
+  }, [liveItem]);
+
   const { colors } = THEMES[settings.theme] ?? THEMES.dark;
   const isTop = settings.reference_position === "top";
+  const bgStyle = computeOutputBackground(settings, colors);
 
   const ReferenceTag = liveItem?.type === "Verse" ? (
     <p
@@ -143,7 +343,7 @@ function OutputWindow() {
   return (
     <div
       className="h-screen w-screen flex items-center justify-center overflow-hidden"
-      style={{ backgroundColor: colors.background, color: colors.verseText }}
+      style={{ ...bgStyle, color: colors.verseText }}
     >
       {liveItem ? (
         <div className="w-full h-full flex flex-col items-center justify-center p-12 animate-in fade-in duration-700">
@@ -157,6 +357,18 @@ function OutputWindow() {
                 {liveItem.data.text}
               </h1>
               {!isTop && ReferenceTag}
+            </div>
+          ) : liveItem.type === "PresentationSlide" ? (
+            <div className="w-full h-full">
+              {currentSlide ? (
+                <SlideRenderer slide={currentSlide} />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center">
+                  <span className="font-serif text-2xl italic" style={{ color: colors.waitingText }}>
+                    Loading slide...
+                  </span>
+                </div>
+              )}
             </div>
           ) : (
             <div className="w-full h-full flex items-center justify-center">
@@ -223,6 +435,15 @@ function PreviewCard({
                   {item.data.book} {item.data.chapter}:{item.data.verse}
                 </p>
               </>
+            ) : item.type === "PresentationSlide" ? (
+              <>
+                <div className="text-orange-400 text-xs font-black uppercase bg-orange-400/10 px-2 py-0.5 rounded">
+                  SLIDE {item.data.slide_index + 1} / {item.data.slide_count || "?"}
+                </div>
+                <p className="text-slate-400 text-xs font-bold truncate max-w-full">
+                  {item.data.presentation_name}
+                </p>
+              </>
             ) : (
               <>
                 {item.data.media_type === "Image" ? (
@@ -285,10 +506,11 @@ export default function App() {
   const [settings, setSettings] = useState<PresentationSettings>({
     theme: "dark",
     reference_position: "bottom",
+    background: { type: "None" },
   });
 
   // UI
-  const [activeTab, setActiveTab] = useState<"bible" | "media" | "schedule" | "settings">("bible");
+  const [activeTab, setActiveTab] = useState<"bible" | "media" | "presentations" | "schedule" | "settings">("bible");
   const [toast, setToast] = useState<string | null>(null);
 
   // Schedule
@@ -298,6 +520,12 @@ export default function App() {
 
   // Media
   const [media, setMedia] = useState<MediaItem[]>([]);
+
+  // Presentations
+  const [presentations, setPresentations] = useState<PresentationFile[]>([]);
+  const [selectedPresId, setSelectedPresId] = useState<string | null>(null);
+  const [loadedSlides, setLoadedSlides] = useState<Record<string, ParsedSlide[]>>({});
+  const presZipsRef = useRef<Record<string, any>>({});
 
   // Session / audio
   const [transcript, setTranscript] = useState("");
@@ -344,6 +572,15 @@ export default function App() {
     }
   }, []);
 
+  const loadPresentations = useCallback(async () => {
+    try {
+      const result: PresentationFile[] = await invoke("list_presentations");
+      setPresentations(result);
+    } catch (err) {
+      console.error("Failed to load presentations:", err);
+    }
+  }, []);
+
   const loadSchedule = useCallback(async () => {
     try {
       const result: Schedule = await invoke("load_schedule");
@@ -366,6 +603,7 @@ export default function App() {
 
     loadAudioDevices();
     loadMedia();
+    loadPresentations();
     loadSchedule();
 
     invoke("get_books")
@@ -424,7 +662,7 @@ export default function App() {
     };
   }, []);
 
-  // ── Fetch next verse whenever liveItem changes to a Verse ─────────────────
+  // ── Fetch next verse when liveItem changes to a Verse ─────────────────────
 
   useEffect(() => {
     if (liveItem?.type === "Verse") {
@@ -436,6 +674,39 @@ export default function App() {
       setNextVerse(null);
     }
   }, [liveItem]);
+
+  // ── Parse PPTX when a presentation is selected ───────────────────────────
+
+  useEffect(() => {
+    if (!selectedPresId) return;
+    if (loadedSlides[selectedPresId]) return; // already cached
+
+    const pres = presentations.find((p) => p.id === selectedPresId);
+    if (!pres) return;
+
+    (async () => {
+      try {
+        let zip = presZipsRef.current[selectedPresId];
+        if (!zip) {
+          zip = await loadPptxZip(pres.path);
+          presZipsRef.current[selectedPresId] = zip;
+        }
+        const count = await getSlideCount(zip);
+        const slides: ParsedSlide[] = [];
+        for (let i = 0; i < count; i++) {
+          slides.push(await parseSingleSlide(zip, i));
+        }
+        setLoadedSlides((prev) => ({ ...prev, [selectedPresId]: slides }));
+        // Update slide count on the presentation record
+        setPresentations((prev) =>
+          prev.map((p) => (p.id === selectedPresId ? { ...p, slide_count: count } : p))
+        );
+      } catch (err) {
+        console.error("Failed to parse PPTX:", err);
+        setAudioError(`Failed to parse presentation: ${err}`);
+      }
+    })();
+  }, [selectedPresId, presentations]);
 
   // ── Bible picker cascades ────────────────────────────────────────────────────
 
@@ -561,6 +832,84 @@ export default function App() {
       setMedia((prev) => prev.filter((m) => m.id !== id));
     } catch (err: any) {
       setAudioError(`Delete failed: ${err}`);
+    }
+  };
+
+  // ── Presentations ────────────────────────────────────────────────────────────
+
+  const handleImportPresentation = async () => {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        filters: [{ name: "PowerPoint", extensions: ["pptx"] }],
+      });
+      if (!selected) return;
+      const pres: PresentationFile = await invoke("add_presentation", { path: selected });
+      setPresentations((prev) => [...prev, pres]);
+      setSelectedPresId(pres.id);
+      setToast(`Imported: ${pres.name}`);
+    } catch (err: any) {
+      setAudioError(`Import failed: ${err}`);
+    }
+  };
+
+  const handleDeletePresentation = async (id: string) => {
+    try {
+      await invoke("delete_presentation", { id });
+      setPresentations((prev) => prev.filter((p) => p.id !== id));
+      setLoadedSlides((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      delete presZipsRef.current[id];
+      if (selectedPresId === id) setSelectedPresId(null);
+    } catch (err: any) {
+      setAudioError(`Delete failed: ${err}`);
+    }
+  };
+
+  const stagePresentationSlide = async (pres: PresentationFile, slideIndex: number) => {
+    const item: DisplayItem = {
+      type: "PresentationSlide",
+      data: {
+        presentation_id: pres.id,
+        presentation_name: pres.name,
+        presentation_path: pres.path,
+        slide_index: slideIndex,
+        slide_count: pres.slide_count,
+      },
+    };
+    await stageItem(item);
+  };
+
+  const sendPresentationSlide = async (pres: PresentationFile, slideIndex: number) => {
+    const item: DisplayItem = {
+      type: "PresentationSlide",
+      data: {
+        presentation_id: pres.id,
+        presentation_name: pres.name,
+        presentation_path: pres.path,
+        slide_index: slideIndex,
+        slide_count: pres.slide_count,
+      },
+    };
+    await sendLive(item);
+  };
+
+  // ── Background image picker ──────────────────────────────────────────────────
+
+  const handlePickBackgroundImage = async () => {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"] }],
+      });
+      if (!selected) return;
+      await updateSettings({ ...settings, background: { type: "Image", value: selected } });
+      setToast("Background image set");
+    } catch (err: any) {
+      setAudioError(`Failed to set background image: ${err}`);
     }
   };
 
@@ -725,21 +1074,26 @@ export default function App() {
         {/* ── Left Sidebar ── */}
         <aside className="w-80 bg-slate-900/30 border-r border-slate-800 flex flex-col overflow-hidden shrink-0">
           {/* Tab nav */}
-          <div className="flex border-b border-slate-800 bg-slate-900/50 shrink-0">
-            {(["bible", "media", "schedule", "settings"] as const).map((tab) => (
+          <div className="flex border-b border-slate-800 bg-slate-900/50 shrink-0 overflow-x-auto">
+            {(["bible", "media", "presentations", "schedule", "settings"] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
-                className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-widest transition-all relative ${
+                className={`flex-1 py-3 text-[9px] font-bold uppercase tracking-widest transition-all relative whitespace-nowrap px-1 ${
                   activeTab === tab
                     ? "bg-slate-800 text-amber-500 border-b-2 border-amber-500"
                     : "text-slate-500 hover:text-slate-300 hover:bg-slate-800/50"
                 }`}
               >
-                {tab === "settings" ? "⚙" : tab}
+                {tab === "settings" ? "⚙" : tab === "presentations" ? "PPTX" : tab}
                 {tab === "schedule" && scheduleEntries.length > 0 && (
                   <span className="ml-1 text-[8px] bg-amber-500 text-black rounded-full px-1 font-black">
                     {scheduleEntries.length}
+                  </span>
+                )}
+                {tab === "presentations" && presentations.length > 0 && (
+                  <span className="ml-1 text-[8px] bg-orange-500 text-black rounded-full px-1 font-black">
+                    {presentations.length}
                   </span>
                 )}
               </button>
@@ -890,6 +1244,88 @@ export default function App() {
               </div>
             )}
 
+            {/* ── Presentations Tab ── */}
+            {activeTab === "presentations" && (
+              <div className="flex flex-col gap-4">
+                <div className="flex justify-between items-center">
+                  <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Presentations</h2>
+                  <button onClick={handleImportPresentation} className="text-[10px] bg-amber-500 hover:bg-amber-600 text-black font-bold px-3 py-1.5 rounded transition-all">
+                    + IMPORT
+                  </button>
+                </div>
+
+                {presentations.length === 0 ? (
+                  <p className="text-slate-700 text-xs italic text-center pt-8">
+                    No presentations. Click + IMPORT to add a .pptx file.
+                  </p>
+                ) : (
+                  <>
+                    {/* Presentation file list */}
+                    <div className="flex flex-col gap-1">
+                      {presentations.map((pres) => (
+                        <button
+                          key={pres.id}
+                          onClick={() => setSelectedPresId(pres.id)}
+                          className={`flex items-center gap-2 p-2 rounded-lg border text-left text-xs transition-all ${
+                            selectedPresId === pres.id
+                              ? "border-amber-500/50 bg-amber-500/10 text-amber-400"
+                              : "border-slate-700/50 bg-slate-800/40 text-slate-300 hover:bg-slate-800 hover:border-slate-600"
+                          }`}
+                        >
+                          <span className="text-orange-400 font-black text-[9px] bg-orange-400/10 px-1.5 py-0.5 rounded shrink-0">
+                            PPTX
+                          </span>
+                          <span className="flex-1 truncate text-left">{pres.name}</span>
+                          {pres.slide_count > 0 && (
+                            <span className="text-slate-500 text-[9px] shrink-0">
+                              {pres.slide_count} slides
+                            </span>
+                          )}
+                          <span
+                            role="button"
+                            onClick={(e) => { e.stopPropagation(); handleDeletePresentation(pres.id); }}
+                            className="shrink-0 text-red-500/50 hover:text-red-400 text-xs px-1 cursor-pointer"
+                            title="Delete"
+                          >
+                            ✕
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Slide grid for the selected presentation */}
+                    {selectedPresId && (
+                      <div>
+                        <p className="text-[9px] text-slate-600 uppercase font-bold mb-2 tracking-widest">
+                          Slides
+                        </p>
+                        {!loadedSlides[selectedPresId] ? (
+                          <p className="text-slate-600 text-xs italic text-center py-4">
+                            Parsing slides...
+                          </p>
+                        ) : (
+                          <div className="grid grid-cols-2 gap-2">
+                            {loadedSlides[selectedPresId].map((slide, idx) => {
+                              const pres = presentations.find((p) => p.id === selectedPresId)!;
+                              return (
+                                <SlideThumbnail
+                                  key={idx}
+                                  slide={slide}
+                                  index={idx}
+                                  onStage={() => stagePresentationSlide(pres, idx)}
+                                  onLive={() => sendPresentationSlide(pres, idx)}
+                                />
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
             {/* ── Schedule Tab ── */}
             {activeTab === "schedule" && (
               <div className="flex flex-col gap-3">
@@ -939,6 +1375,10 @@ export default function App() {
                                 <p className="text-amber-500 text-[10px] font-bold uppercase truncate">{entry.item.data.book} {entry.item.data.chapter}:{entry.item.data.verse}</p>
                                 <p className="text-slate-400 text-[10px] truncate">{entry.item.data.text}</p>
                               </>
+                            ) : entry.item.type === "PresentationSlide" ? (
+                              <p className="text-orange-400 text-[10px] font-bold uppercase truncate">
+                                PPTX: {entry.item.data.presentation_name} — Slide {entry.item.data.slide_index + 1}
+                              </p>
                             ) : (
                               <p className="text-blue-400 text-[10px] font-bold uppercase truncate">{entry.item.data.media_type}: {entry.item.data.name}</p>
                             )}
@@ -974,7 +1414,6 @@ export default function App() {
                             : "border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600 hover:bg-slate-800"
                         }`}
                       >
-                        {/* Colour swatch */}
                         <span
                           className="w-5 h-5 rounded-sm shrink-0 border border-white/10"
                           style={{ backgroundColor: colors.background }}
@@ -1011,12 +1450,78 @@ export default function App() {
                   </p>
                 </div>
 
-                {/* Live preview of theme */}
+                {/* Output Background */}
+                <div>
+                  <p className="text-xs text-slate-400 font-bold uppercase mb-3">Output Background</p>
+
+                  {/* Mode buttons */}
+                  <div className="flex gap-2 mb-3">
+                    {(["None", "Color", "Image"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        onClick={() => {
+                          let bg: BackgroundSetting;
+                          if (mode === "None") {
+                            bg = { type: "None" };
+                          } else if (mode === "Color") {
+                            bg = { type: "Color", value: settings.background.type === "Color" ? (settings.background as any).value : "#1a1a2e" };
+                          } else {
+                            bg = { type: "Image", value: settings.background.type === "Image" ? (settings.background as any).value : "" };
+                          }
+                          updateSettings({ ...settings, background: bg });
+                        }}
+                        className={`flex-1 py-2 rounded-lg border text-xs font-bold transition-all ${
+                          settings.background.type === mode
+                            ? "border-amber-500 bg-amber-500/10 text-amber-400"
+                            : "border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600 hover:bg-slate-800"
+                        }`}
+                      >
+                        {mode === "None" ? "Theme" : mode}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Color picker */}
+                  {settings.background.type === "Color" && (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={(settings.background as { type: "Color"; value: string }).value}
+                        onChange={(e) =>
+                          updateSettings({ ...settings, background: { type: "Color", value: e.target.value } })
+                        }
+                        className="w-10 h-10 rounded cursor-pointer border border-slate-700 bg-transparent"
+                      />
+                      <span className="text-xs text-slate-400 font-mono">
+                        {(settings.background as { type: "Color"; value: string }).value}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Image picker */}
+                  {settings.background.type === "Image" && (
+                    <div className="flex flex-col gap-2">
+                      <button
+                        onClick={handlePickBackgroundImage}
+                        className="w-full py-2 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-all"
+                      >
+                        Choose Image...
+                      </button>
+                      {(settings.background as { type: "Image"; value: string }).value && (
+                        <p className="text-[9px] text-slate-500 truncate">
+                          {(settings.background as { type: "Image"; value: string }).value.split(/[/\\]/).pop()}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Live preview */}
                 <div>
                   <p className="text-xs text-slate-400 font-bold uppercase mb-3">Preview</p>
                   <div
                     className="rounded-xl p-5 flex flex-col items-center text-center gap-3 border border-slate-800"
-                    style={{ backgroundColor: THEMES[settings.theme]?.colors.background ?? "#000" }}
+                    style={computePreviewBackground(settings, THEMES[settings.theme]?.colors.background ?? "#000")}
                   >
                     {settings.reference_position === "top" && (
                       <p className="text-sm font-bold uppercase tracking-widest" style={{ color: THEMES[settings.theme]?.colors.referenceText }}>
@@ -1062,7 +1567,7 @@ export default function App() {
                       <span className="text-slate-400">{suggestedItem.data.text}</span>
                     </p>
                   ) : (
-                    <p className="text-slate-300 text-sm truncate">{suggestedItem.data.name}</p>
+                    <p className="text-slate-300 text-sm truncate">{displayItemLabel(suggestedItem)}</p>
                   )}
                 </div>
                 <div className="flex gap-1.5 shrink-0">
