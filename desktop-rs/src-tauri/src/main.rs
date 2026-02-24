@@ -4,7 +4,7 @@
 use bible_presenter_lib::{audio, engine, store};
 use parking_lot::Mutex;
 use serde::Serialize;
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,7 +17,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 #[derive(Clone, Serialize)]
 struct TranscriptionUpdate {
     text: String,
-    detected_verse: Option<store::Verse>,
+    detected_item: Option<store::DisplayItem>,
+    /// "auto" = from live transcription pipeline; "manual" = operator-triggered via go_live
+    source: String,
 }
 
 /// Emitted on every session lifecycle change so the frontend can update its UI.
@@ -45,12 +47,13 @@ struct AppState {
     /// Wrapped in Mutex so start_session can populate it after the fact.
     engine: Arc<Mutex<Option<Arc<engine::TranscriptionEngine>>>>,
     store: Arc<store::BibleStore>,
+    media_schedule: Arc<store::MediaScheduleStore>,
     model_paths: ModelPaths,
     /// C3: Prevents duplicate sessions if START LIVE is clicked twice.
     is_running: Arc<Mutex<bool>>,
-    /// Last verse selected (manual or auto-detected). The output window
-    /// reads this on mount so it doesn't miss events emitted while hidden.
-    current_verse: Arc<Mutex<Option<store::Verse>>>,
+    /// Current display items (what is staged and what is live).
+    live_item: Arc<Mutex<Option<store::DisplayItem>>>,
+    staged_item: Arc<Mutex<Option<store::DisplayItem>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +95,7 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
     let audio = state.audio.clone();
     let store = state.store.clone();
     let is_running = state.is_running.clone();
-    let current_verse_arc = state.current_verse.clone();
+    let live_item_arc = state.live_item.clone();
     let whisper_path = state.model_paths.whisper.to_str().unwrap_or("").to_string();
     let embedding_path = state
         .model_paths
@@ -182,7 +185,7 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
     // ── Main processing loop ───────────────────────────────────────────────
     let app_task = app.clone();
     let is_running_t = is_running.clone();
-    let current_verse_t = current_verse_arc.clone();
+    let live_item_t = live_item_arc.clone();
 
     tokio::spawn(async move {
         let mut buffer = Vec::new();
@@ -199,7 +202,7 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
                 let e_clone = engine.clone();
                 let s_clone = store.clone();
 
-                let result: Option<(String, Option<store::Verse>)> =
+                let result: Option<(String, Option<store::DisplayItem>)> =
                     tokio::task::spawn_blocking(move || {
                         let text = e_clone.transcribe(&b_clone).ok()?;
                         let embedding = e_clone.embed(&text).ok();
@@ -207,22 +210,20 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
                         if verse.is_none() {
                             verse = s_clone.search_semantic_text(&text);
                         }
-                        Some((text, verse))
+                        Some((text, verse.map(store::DisplayItem::Verse)))
                     })
                     .await
                     .ok()
                     .flatten();
 
-                if let Some((text, verse)) = result {
+                if let Some((text, item)) = result {
                     if !text.trim().is_empty() {
-                        if let Some(ref v) = verse {
-                            *current_verse_t.lock() = Some(v.clone());
-                        }
                         let _ = app_task.emit(
                             "transcription-update",
                             TranscriptionUpdate {
                                 text,
-                                detected_verse: verse,
+                                detected_item: item,
+                                source: "auto".to_string(),
                             },
                         );
                     }
@@ -275,7 +276,7 @@ async fn stop_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result
 }
 
 #[tauri::command]
-async fn toggle_output_window(app: AppHandle) -> Result<(), String> {
+async fn toggle_output_window(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("output") {
         if window.is_visible().unwrap_or(false) {
             window.hide().map_err(|e: tauri::Error| e.to_string())?;
@@ -309,6 +310,26 @@ async fn toggle_output_window(app: AppHandle) -> Result<(), String> {
             window
                 .set_focus()
                 .map_err(|e: tauri::Error| e.to_string())?;
+
+            // Sync the current live item to the output window immediately on show,
+            // so it doesn't display "Waiting for projection..." if something was
+            // already live before the window was opened.
+            let live = state.live_item.lock().clone();
+            if let Some(item) = live {
+                let _ = app.emit(
+                    "transcription-update",
+                    TranscriptionUpdate {
+                        text: match &item {
+                            store::DisplayItem::Verse(v) => {
+                                format!("{} {}:{}", v.book, v.chapter, v.verse)
+                            }
+                            store::DisplayItem::Media(m) => m.name.clone(),
+                        },
+                        detected_item: Some(item),
+                        source: "manual".to_string(),
+                    },
+                );
+            }
         }
     }
     Ok(())
@@ -394,31 +415,75 @@ async fn get_verse(
         .map_err(|e: anyhow::Error| e.to_string())
 }
 
+/// Called by the output window on mount to retrieve the last live item,
+/// ensuring it shows current content even if it missed earlier events.
 #[tauri::command]
-async fn select_verse(
+async fn get_current_item(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Option<store::DisplayItem>, String> {
+    Ok(state.live_item.lock().clone())
+}
+
+#[tauri::command]
+async fn stage_item(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
-    verse: store::Verse,
+    item: store::DisplayItem,
 ) -> Result<(), String> {
-    // Persist so the output window can fetch it when it loads/shows.
-    *state.current_verse.lock() = Some(verse.clone());
-    let _ = app.emit(
-        "transcription-update",
-        TranscriptionUpdate {
-            text: format!("{} {}:{}", verse.book, verse.chapter, verse.verse),
-            detected_verse: Some(verse),
-        },
-    );
+    *state.staged_item.lock() = Some(item.clone());
+    let _ = app.emit("item-staged", item);
     Ok(())
 }
 
-/// Called by the output window on mount to retrieve the last selected verse,
-/// ensuring it shows current scripture even if it missed earlier events.
 #[tauri::command]
-async fn get_current_verse(
+async fn go_live(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    let staged = state.staged_item.lock().clone();
+    if let Some(item) = staged {
+        *state.live_item.lock() = Some(item.clone());
+        let _ = app.emit(
+            "transcription-update",
+            TranscriptionUpdate {
+                text: match item {
+                    store::DisplayItem::Verse(ref v) => format!("{} {}:{}", v.book, v.chapter, v.verse),
+                    store::DisplayItem::Media(ref m) => m.name.clone(),
+                },
+                detected_item: Some(item),
+                source: "manual".to_string(),
+            },
+        );
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn list_media(state: State<'_, Arc<AppState>>) -> Result<Vec<store::MediaItem>, String> {
+    state.media_schedule.list_media().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn add_media(
     state: State<'_, Arc<AppState>>,
-) -> Result<Option<store::Verse>, String> {
-    Ok(state.current_verse.lock().clone())
+    path: String,
+) -> Result<store::MediaItem, String> {
+    state.media_schedule.add_media(PathBuf::from(path)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_media(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
+    state.media_schedule.delete_media(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn save_schedule(
+    state: State<'_, Arc<AppState>>,
+    schedule: store::Schedule,
+) -> Result<(), String> {
+    state.media_schedule.save_schedule(schedule).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn load_schedule(state: State<'_, Arc<AppState>>) -> Result<store::Schedule, String> {
+    state.media_schedule.load_schedule().map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -428,6 +493,7 @@ async fn get_current_verse(
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let resolver = app.path();
             let resource_path = match resolver.resource_dir() {
@@ -494,6 +560,14 @@ fn main() {
 
             let audio = Arc::new(Mutex::new(audio::AudioEngine::new()));
             log_msg(app, "Audio Engine initialized.");
+
+            let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+            if !app_data_dir.exists() {
+                fs::create_dir_all(&app_data_dir).map_err(|e| e.to_string())?;
+            }
+            let media_schedule = Arc::new(store::MediaScheduleStore::new(app_data_dir).map_err(|e| e.to_string())?);
+            log_msg(app, "Media Schedule Store initialized.");
+
             log_msg(
                 app,
                 "AI models will be loaded on the first START LIVE click (lazy load).",
@@ -503,9 +577,11 @@ fn main() {
                 audio,
                 engine: Arc::new(Mutex::new(None)), // loaded lazily in start_session
                 store,
+                media_schedule,
                 model_paths,
                 is_running: Arc::new(Mutex::new(false)),
-                current_verse: Arc::new(Mutex::new(None)),
+                live_item: Arc::new(Mutex::new(None)),
+                staged_item: Arc::new(Mutex::new(None)),
             }));
 
             log_msg(app, "App state managed. Ready.");
@@ -519,12 +595,18 @@ fn main() {
             set_audio_device,
             set_vad_threshold,
             search_manual,
-            select_verse,
-            get_current_verse,
+            get_current_item,
             get_books,
             get_chapters,
             get_verses_count,
-            get_verse
+            get_verse,
+            list_media,
+            add_media,
+            delete_media,
+            save_schedule,
+            load_schedule,
+            stage_item,
+            go_live
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

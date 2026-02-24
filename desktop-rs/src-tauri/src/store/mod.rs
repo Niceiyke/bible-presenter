@@ -8,6 +8,9 @@ use ndarray::Array2;
 use ndarray_npy::ReadNpyExt;
 use std::fs::File;
 
+pub mod media_schedule;
+pub use media_schedule::*;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Verse {
     pub id: i32,
