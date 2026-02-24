@@ -36,9 +36,10 @@ export default function App() {
   };
 
   useEffect(() => {
-    setLabel(getCurrentWindow().label);
+    const windowLabel = getCurrentWindow().label;
+    setLabel(windowLabel);
 
-    if (getCurrentWindow().label !== "output") {
+    if (windowLabel !== "output") {
       loadAudioDevices();
 
       invoke("get_books")
@@ -47,6 +48,12 @@ export default function App() {
           if (b.length > 0) setSelectedBook(b[0]); // auto-populate chapters/verses
         })
         .catch((err: any) => setAudioError(`Failed to load books: ${err}`));
+    } else {
+      // Output window: fetch the last selected verse in case it was set
+      // before this window loaded or while it was hidden.
+      invoke("get_current_verse")
+        .then((v: any) => { if (v) setActiveVerse(v); })
+        .catch(() => {});
     }
 
     const unlisten = listen("transcription-update", (event: any) => {

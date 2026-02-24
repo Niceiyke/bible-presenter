@@ -48,6 +48,9 @@ struct AppState {
     model_paths: ModelPaths,
     /// C3: Prevents duplicate sessions if START LIVE is clicked twice.
     is_running: Arc<Mutex<bool>>,
+    /// Last verse selected (manual or auto-detected). The output window
+    /// reads this on mount so it doesn't miss events emitted while hidden.
+    current_verse: Arc<Mutex<Option<store::Verse>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +92,7 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
     let audio = state.audio.clone();
     let store = state.store.clone();
     let is_running = state.is_running.clone();
+    let current_verse_arc = state.current_verse.clone();
     let whisper_path = state.model_paths.whisper.to_str().unwrap_or("").to_string();
     let embedding_path = state
         .model_paths
@@ -178,6 +182,7 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
     // ── Main processing loop ───────────────────────────────────────────────
     let app_task = app.clone();
     let is_running_t = is_running.clone();
+    let current_verse_t = current_verse_arc.clone();
 
     tokio::spawn(async move {
         let mut buffer = Vec::new();
@@ -210,6 +215,9 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
 
                 if let Some((text, verse)) = result {
                     if !text.trim().is_empty() {
+                        if let Some(ref v) = verse {
+                            *current_verse_t.lock() = Some(v.clone());
+                        }
                         let _ = app_task.emit(
                             "transcription-update",
                             TranscriptionUpdate {
@@ -387,7 +395,13 @@ async fn get_verse(
 }
 
 #[tauri::command]
-async fn select_verse(app: AppHandle, verse: store::Verse) -> Result<(), String> {
+async fn select_verse(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    verse: store::Verse,
+) -> Result<(), String> {
+    // Persist so the output window can fetch it when it loads/shows.
+    *state.current_verse.lock() = Some(verse.clone());
     let _ = app.emit(
         "transcription-update",
         TranscriptionUpdate {
@@ -396,6 +410,15 @@ async fn select_verse(app: AppHandle, verse: store::Verse) -> Result<(), String>
         },
     );
     Ok(())
+}
+
+/// Called by the output window on mount to retrieve the last selected verse,
+/// ensuring it shows current scripture even if it missed earlier events.
+#[tauri::command]
+async fn get_current_verse(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Option<store::Verse>, String> {
+    Ok(state.current_verse.lock().clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -482,6 +505,7 @@ fn main() {
                 store,
                 model_paths,
                 is_running: Arc::new(Mutex::new(false)),
+                current_verse: Arc::new(Mutex::new(None)),
             }));
 
             log_msg(app, "App state managed. Ready.");
@@ -496,6 +520,7 @@ fn main() {
             set_vad_threshold,
             search_manual,
             select_verse,
+            get_current_verse,
             get_books,
             get_chapters,
             get_verses_count,

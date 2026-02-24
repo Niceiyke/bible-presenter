@@ -53,7 +53,8 @@
       "nsis": {
         "languages": [
           "English"
-        ]
+        ],
+        "installMode": "currentUser"
       },
       "wix": {
         "language": "en-US"
