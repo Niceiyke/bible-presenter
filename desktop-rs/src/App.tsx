@@ -111,6 +111,9 @@ export interface PresentationSettings {
   theme: string;
   reference_position: "top" | "bottom";
   background: BackgroundSetting;
+  logo_path?: string;
+  is_blanked: boolean;
+  font_size: number;
 }
 
 // ─── Themes ───────────────────────────────────────────────────────────────────
@@ -226,27 +229,40 @@ function computePreviewBackground(
 // ─── Slide Renderer ───────────────────────────────────────────────────────────
 // Renders a ParsedSlide as a full-size div with background, images and text boxes.
 
-function SlideRenderer({ slide }: { slide: ParsedSlide }) {
+function SlideRenderer({ slide }: { slide: any }) {
   const bgStyle: React.CSSProperties = slide.backgroundColor
     ? { backgroundColor: slide.backgroundColor }
     : { backgroundColor: "#1a1a2e" };
 
   return (
     <div className="w-full h-full relative overflow-hidden" style={bgStyle}>
-      {slide.images.map((img, i) => (
+      {slide.images.map((img: any, i: number) => (
         <img
           key={i}
           src={img.dataUrl}
-          className="absolute inset-0 w-full h-full object-cover"
+          className="absolute"
           alt=""
-          style={{ zIndex: i }}
+          style={{
+            zIndex: i,
+            left: `${img.rect.x}%`,
+            top: `${img.rect.y}%`,
+            width: `${img.rect.width}%`,
+            height: `${img.rect.height}%`,
+            objectFit: "contain",
+          }}
         />
       ))}
-      {slide.textBoxes.map((tb, i) => (
+      {slide.textBoxes.map((tb: any, i: number) => (
         <div
           key={i}
-          className="absolute inset-0 flex items-center justify-center p-16"
-          style={{ zIndex: slide.images.length + i }}
+          className="absolute flex items-center justify-center"
+          style={{
+            zIndex: slide.images.length + i,
+            left: `${tb.rect.x}%`,
+            top: `${tb.rect.y}%`,
+            width: `${tb.rect.width}%`,
+            height: `${tb.rect.height}%`,
+          }}
         >
           <p
             className="text-center leading-tight drop-shadow-2xl whitespace-pre-wrap"
@@ -659,6 +675,8 @@ function OutputWindow() {
     theme: "dark",
     reference_position: "bottom",
     background: { type: "None" },
+    is_blanked: false,
+    font_size: 72,
   });
   const [currentSlide, setCurrentSlide] = useState<ParsedSlide | null>(null);
   const outputZipsRef = useRef<Record<string, any>>({});
@@ -711,6 +729,10 @@ function OutputWindow() {
     })();
   }, [liveItem]);
 
+  if (settings.is_blanked) {
+    return <div className="h-screen w-screen bg-black" />;
+  }
+
   const { colors } = THEMES[settings.theme] ?? THEMES.dark;
   const isTop = settings.reference_position === "top";
   const bgStyle = computeOutputBackground(settings, colors);
@@ -726,17 +748,28 @@ function OutputWindow() {
 
   return (
     <div
-      className="h-screen w-screen flex items-center justify-center overflow-hidden"
+      className="h-screen w-screen flex items-center justify-center overflow-hidden relative"
       style={{ ...bgStyle, color: colors.verseText }}
     >
+      {settings.logo_path && (
+        <img
+          src={convertFileSrc(settings.logo_path)}
+          className="absolute bottom-8 right-8 w-24 h-24 object-contain opacity-50 z-50"
+          alt="Logo"
+        />
+      )}
+
       {liveItem ? (
         <div className="w-full h-full flex flex-col items-center justify-center p-12 animate-in fade-in duration-700">
           {liveItem.type === "Verse" ? (
             <div className="text-center max-w-5xl flex flex-col items-center gap-8">
               {isTop && ReferenceTag}
               <h1
-                className="text-7xl font-serif leading-tight drop-shadow-2xl"
-                style={{ color: colors.verseText }}
+                className="font-serif leading-tight drop-shadow-2xl"
+                style={{
+                  color: colors.verseText,
+                  fontSize: `${settings.font_size}pt`,
+                }}
               >
                 {liveItem.data.text}
               </h1>
@@ -899,6 +932,8 @@ export default function App() {
     theme: "dark",
     reference_position: "bottom",
     background: { type: "None" },
+    is_blanked: false,
+    font_size: 72,
   });
 
   // Studio
@@ -1408,10 +1443,24 @@ export default function App() {
         filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"] }],
       });
       if (!selected) return;
-      await updateSettings({ ...settings, background: { type: "Image", value: selected } });
+      await updateSettings({ ...settings, background: { type: "Image", value: selected as string } });
       setToast("Background image set");
     } catch (err: any) {
       setAudioError(`Failed to set background image: ${err}`);
+    }
+  };
+
+  const handlePickLogo = async () => {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"] }],
+      });
+      if (!selected) return;
+      await updateSettings({ ...settings, logo_path: selected as string });
+      setToast("Logo set");
+    } catch (err: any) {
+      setAudioError(`Failed to set logo: ${err}`);
     }
   };
 
@@ -1550,6 +1599,17 @@ export default function App() {
               ↺
             </button>
           </div>
+
+          <button
+            onClick={() => updateSettings({ ...settings, is_blanked: !settings.is_blanked })}
+            className={`font-bold py-2 px-4 rounded border transition-all text-sm ${
+              settings.is_blanked
+                ? "bg-red-500 border-red-500 text-white"
+                : "bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500 hover:text-white"
+            }`}
+          >
+            {settings.is_blanked ? "UNBLANK" : "BLANK"}
+          </button>
 
           <button
             onClick={() => invoke("toggle_output_window")}
@@ -2016,7 +2076,36 @@ export default function App() {
             {/* ── Settings Tab ── */}
             {activeTab === "settings" && (
               <div className="flex flex-col gap-6">
-                <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Output Settings</h2>
+                <div className="flex justify-between items-center">
+                  <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Output Settings</h2>
+                  <button
+                    onClick={() => updateSettings({ ...settings, is_blanked: !settings.is_blanked })}
+                    className={`px-4 py-2 rounded-lg text-xs font-black transition-all border ${
+                      settings.is_blanked
+                        ? "bg-red-500 border-red-500 text-white"
+                        : "bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500"
+                    }`}
+                  >
+                    {settings.is_blanked ? "SCREEN BLANKED" : "BLANK SCREEN"}
+                  </button>
+                </div>
+
+                {/* Font Size */}
+                <div>
+                  <div className="flex justify-between items-center mb-3">
+                    <p className="text-xs text-slate-400 font-bold uppercase">Verse Font Size</p>
+                    <span className="text-xs font-mono text-amber-500">{settings.font_size}pt</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="24"
+                    max="144"
+                    step="2"
+                    value={settings.font_size}
+                    onChange={(e) => updateSettings({ ...settings, font_size: parseInt(e.target.value) })}
+                    className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                  />
+                </div>
 
                 {/* Theme selector */}
                 <div>
@@ -2042,6 +2131,32 @@ export default function App() {
                         )}
                       </button>
                     ))}
+                  </div>
+                </div>
+
+                {/* Logo Setting */}
+                <div>
+                  <p className="text-xs text-slate-400 font-bold uppercase mb-3">Corner Logo</p>
+                  <div className="flex flex-col gap-2">
+                    <button
+                      onClick={handlePickLogo}
+                      className="w-full py-2 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-all"
+                    >
+                      {settings.logo_path ? "Change Logo..." : "Choose Logo..."}
+                    </button>
+                    {settings.logo_path && (
+                      <div className="flex items-center justify-between bg-slate-900/50 p-2 rounded border border-slate-800">
+                        <span className="text-[9px] text-slate-500 truncate max-w-[180px]">
+                          {settings.logo_path.split(/[/\\]/).pop()}
+                        </span>
+                        <button
+                          onClick={() => updateSettings({ ...settings, logo_path: undefined })}
+                          className="text-red-500/70 hover:text-red-400 text-[10px] font-bold"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
 
