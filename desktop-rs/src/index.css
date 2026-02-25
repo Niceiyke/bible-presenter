@@ -1,1 +1,10 @@
 @import "tailwindcss";
+
+@keyframes lt-scroll-rtl {
+  0%   { transform: translateX(100vw); }
+  100% { transform: translateX(-100%); }
+}
+@keyframes lt-scroll-ltr {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100vw); }
+}

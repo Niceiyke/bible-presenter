@@ -89,7 +89,7 @@ impl AudioEngine {
         let target_rate = 16000.0;
 
         let vad = self.vad_threshold;
-        let stream = match config.sample_format() {
+        let build_result = match config.sample_format() {
             cpal::SampleFormat::F32 => self.build_stream::<f32>(
                 &device,
                 &config.into(),
@@ -99,7 +99,7 @@ impl AudioEngine {
                 tx,
                 error_tx,
                 level_tx,
-            )?,
+            ),
             cpal::SampleFormat::I16 => self.build_stream::<i16>(
                 &device,
                 &config.into(),
@@ -109,7 +109,7 @@ impl AudioEngine {
                 tx,
                 error_tx,
                 level_tx,
-            )?,
+            ),
             cpal::SampleFormat::U16 => self.build_stream::<u16>(
                 &device,
                 &config.into(),
@@ -119,9 +119,21 @@ impl AudioEngine {
                 tx,
                 error_tx,
                 level_tx,
-            )?,
+            ),
             _ => return Err(anyhow::anyhow!("Unsupported sample format")),
         };
+        let stream = build_result.map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("0x80070005") || msg.to_lowercase().contains("access denied") || msg.to_lowercase().contains("access is denied") {
+                anyhow::anyhow!(
+                    "Microphone access denied (0x80070005). \
+                    Please enable microphone access in Windows Settings → \
+                    Privacy & Security → Microphone, then restart the app."
+                )
+            } else {
+                e
+            }
+        })?;
 
         stream.play()?;
         self.stream = Some(Arc::new(StreamHandle(stream)));
