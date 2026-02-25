@@ -14,7 +14,6 @@
     "fs:allow-mkdir",
     "fs:allow-remove",
     "fs:allow-exists",
-    "updater:default",
-    "process:allow-relaunch"
+    "updater:default"
   ]
 }
