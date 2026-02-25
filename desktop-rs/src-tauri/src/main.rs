@@ -401,6 +401,36 @@ async fn search_manual(
         .map_err(|e: anyhow::Error| e.to_string())
 }
 
+/// Semantic search across all versions using ONNX embedding; falls back to keyword search.
+#[tauri::command]
+async fn search_semantic_query(
+    state: State<'_, Arc<AppState>>,
+    query: String,
+) -> Result<Vec<store::Verse>, String> {
+    if let Some(engine) = &state.engine {
+        match engine.embed(&query) {
+            Ok(embedding) => {
+                let results = state.store.search_top_n_semantic(&embedding, 10);
+                if !results.is_empty() {
+                    return Ok(results);
+                }
+            }
+            Err(e) => {
+                eprintln!("Embedding error, falling back to keyword search: {}", e);
+            }
+        }
+    }
+    state.store.search_manual_all_versions(&query).map_err(|e| e.to_string())
+}
+
+/// Read a file from disk and return its contents as a base64 string.
+#[tauri::command]
+async fn read_file_base64(path: String) -> Result<String, String> {
+    use base64::Engine as _;
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
 #[tauri::command]
 async fn get_books(state: State<'_, Arc<AppState>>, version: String) -> Result<Vec<String>, String> {
     state
@@ -736,6 +766,8 @@ fn main() {
             get_bible_versions,
             set_bible_version,
             search_manual,
+            search_semantic_query,
+            read_file_base64,
             get_current_item,
             get_books,
             get_chapters,

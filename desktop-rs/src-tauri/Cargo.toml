@@ -30,7 +30,8 @@ ndarray-npy = "0.8"  # Load .npy files
 anyhow = "1.0"        
 parking_lot = "0.12" 
 regex = "1.10"       
-num_cpus = "=1.16.0"    
+num_cpus = "=1.16.0"
+base64 = "0.22"
 
 [lib]
 name = "bible_presenter_lib"

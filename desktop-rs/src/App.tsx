@@ -1439,6 +1439,18 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Verse[]>([]);
 
+  // Collapsible Bible tab sections
+  const [bibleOpen, setBibleOpen] = useState({ quickEntry: true, manualSelection: true, keywordSearch: true });
+
+  // Adjustable main panel heights (top transcription panel as % of main area)
+  const [topPanelPct, setTopPanelPct] = useState(33);
+  // Adjustable stage/live split (stage panel as % of bottom area)
+  const [stagePct, setStagePct] = useState(50);
+  const mainPanelRef = useRef<HTMLDivElement>(null);
+  const bottomPanelRef = useRef<HTMLDivElement>(null);
+  const vertDragRef = useRef<{ active: boolean; startY: number; startPct: number }>({ active: false, startY: 0, startPct: 33 });
+  const horizDragRef = useRef<{ active: boolean; startX: number; startPct: number }>({ active: false, startX: 0, startPct: 50 });
+
   scheduleRef.current = scheduleEntries;
 
   // ── Loaders ─────────────────────────────────────────────────────────────────
@@ -1623,13 +1635,14 @@ export default function App() {
 
   // ── Bible picker cascades ────────────────────────────────────────────────────
 
-  // When version changes: notify Rust, reload books list
+  // When version changes: notify Rust, reload books list, preserve selection if possible
   useEffect(() => {
     invoke("set_bible_version", { version: bibleVersion }).catch(() => {});
     invoke("get_books", { version: bibleVersion })
       .then((b: any) => {
         setBooks(b);
-        if (b.length > 0) setSelectedBook(b[0]);
+        // Keep existing selected book if it exists in the new version; else default to first
+        setSelectedBook((prev) => (b.includes(prev) ? prev : (b.length > 0 ? b[0] : "")));
       })
       .catch((err: any) => setAudioError(`Failed to load books: ${err}`));
   }, [bibleVersion]);
@@ -1639,7 +1652,8 @@ export default function App() {
     invoke("get_chapters", { book: selectedBook, version: bibleVersion })
       .then((c: any) => {
         setChapters(c);
-        if (c.length > 0) setSelectedChapter(c[0]);
+        // Keep existing selected chapter if it exists; else default to first
+        setSelectedChapter((prev) => (c.includes(prev) ? prev : (c.length > 0 ? c[0] : 0)));
       })
       .catch((err: any) => setAudioError(`Failed to load chapters: ${err}`));
   }, [selectedBook, bibleVersion]);
@@ -1649,7 +1663,8 @@ export default function App() {
     invoke("get_verses_count", { book: selectedBook, chapter: selectedChapter, version: bibleVersion })
       .then((v: any) => {
         setVerses(v);
-        if (v.length > 0) setSelectedVerse(v[0]);
+        // Keep existing selected verse if it exists; else default to first
+        setSelectedVerse((prev) => (v.includes(prev) ? prev : (v.length > 0 ? v[0] : 0)));
       })
       .catch((err: any) => setAudioError(`Failed to load verses: ${err}`));
   }, [selectedBook, selectedChapter, bibleVersion]);
@@ -1725,7 +1740,8 @@ export default function App() {
     e.preventDefault();
     if (!searchQuery.trim()) return;
     try {
-      const results: any = await invoke("search_manual", { query: searchQuery, version: bibleVersion });
+      // Semantic search across all versions (falls back to keyword if engine unavailable)
+      const results: any = await invoke("search_semantic_query", { query: searchQuery });
       setSearchResults(results);
     } catch (err) {
       console.error("Search failed:", err);
@@ -1988,6 +2004,35 @@ export default function App() {
     await sendLive(entries[prevIdx].item);
   };
 
+  // ── Panel resize handlers ────────────────────────────────────────────────────
+
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (vertDragRef.current.active && mainPanelRef.current) {
+        const h = mainPanelRef.current.clientHeight;
+        const delta = e.clientY - vertDragRef.current.startY;
+        const newPct = Math.max(15, Math.min(70, vertDragRef.current.startPct + (delta / h) * 100));
+        setTopPanelPct(newPct);
+      }
+      if (horizDragRef.current.active && bottomPanelRef.current) {
+        const w = bottomPanelRef.current.clientWidth;
+        const delta = e.clientX - horizDragRef.current.startX;
+        const newPct = Math.max(25, Math.min(75, horizDragRef.current.startPct + (delta / w) * 100));
+        setStagePct(newPct);
+      }
+    };
+    const onMouseUp = () => {
+      vertDragRef.current.active = false;
+      horizDragRef.current.active = false;
+    };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, []);
+
   // ── Audio controls ───────────────────────────────────────────────────────────
 
   const handleDeviceChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -2213,119 +2258,141 @@ export default function App() {
 
                 <hr className="border-slate-800" />
 
-                {/* Quick keyboard entry */}
+                {/* Quick keyboard entry — collapsible */}
                 <div>
-                  <h2 className="text-xs font-bold text-slate-500 uppercase mb-2 tracking-widest">
-                    Quick Entry
-                  </h2>
-                  <QuickBiblePicker
-                    books={books}
-                    version={bibleVersion}
-                    onStage={stageItem}
-                    onLive={sendLive}
-                  />
-                </div>
-
-                <hr className="border-slate-800" />
-
-                <div>
-                  <h2 className="text-xs font-bold text-slate-500 uppercase mb-3 tracking-widest">
-                    Manual Selection
-                  </h2>
-                  <div className="flex flex-col gap-2">
-                    <select
-                      value={selectedBook}
-                      onChange={(e) => setSelectedBook(e.target.value)}
-                      className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                    >
-                      <option value="">Select Book</option>
-                      {books.map((b) => <option key={b} value={b}>{b}</option>)}
-                    </select>
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <select
-                        value={selectedChapter}
-                        onChange={(e) => setSelectedChapter(parseInt(e.target.value))}
-                        className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                      >
-                        {chapters.map((c) => <option key={c} value={c}>Chap {c}</option>)}
-                      </select>
-                      <select
-                        value={selectedVerse}
-                        onChange={(e) => setSelectedVerse(parseInt(e.target.value))}
-                        className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                      >
-                        {verses.map((v) => <option key={v} value={v}>Verse {v}</option>)}
-                      </select>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-1.5">
-                      <button
-                        onClick={handleDisplaySelection}
-                        disabled={!selectedBook}
-                        className="bg-slate-700 hover:bg-slate-600 text-white font-bold py-2 rounded-lg transition-all text-xs disabled:opacity-30"
-                      >
-                        STAGE
-                      </button>
-                      <button
-                        onClick={handleSendLivePicker}
-                        disabled={!selectedBook}
-                        className="bg-amber-500 hover:bg-amber-400 text-black font-bold py-2 rounded-lg transition-all text-xs disabled:opacity-30"
-                      >
-                        DISPLAY
-                      </button>
-                      <button
-                        onClick={async () => {
-                          if (!selectedBook) return;
-                          const v: any = await invoke("get_verse", {
-                            book: selectedBook, chapter: selectedChapter, verse: selectedVerse, version: bibleVersion,
-                          });
-                          if (v) addToSchedule({ type: "Verse", data: v });
-                        }}
-                        disabled={!selectedBook}
-                        className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 border border-amber-500/30 font-bold py-2 rounded-lg transition-all text-xs disabled:opacity-30"
-                      >
-                        + QUEUE
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <hr className="border-slate-800" />
-
-                <div className="flex flex-col min-h-0">
-                  <h2 className="text-xs font-bold text-slate-500 uppercase mb-3 tracking-widest">
-                    Keyword Search
-                  </h2>
-                  <form onSubmit={handleSearch} className="mb-3 flex gap-2">
-                    <input
-                      type="text"
-                      placeholder="Search scripture..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  <button
+                    onClick={() => setBibleOpen((p) => ({ ...p, quickEntry: !p.quickEntry }))}
+                    className="w-full flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-widest mb-2 hover:text-slate-300 transition-colors"
+                  >
+                    <span>Quick Entry</span>
+                    <span className="text-slate-600">{bibleOpen.quickEntry ? "▲" : "▼"}</span>
+                  </button>
+                  {bibleOpen.quickEntry && (
+                    <QuickBiblePicker
+                      books={books}
+                      version={bibleVersion}
+                      onStage={stageItem}
+                      onLive={sendLive}
                     />
-                    <button type="submit" className="bg-amber-500 hover:bg-amber-600 text-black font-bold px-3 py-2 rounded-lg text-sm transition-all">
-                      Go
-                    </button>
-                  </form>
+                  )}
+                </div>
 
-                  <div className="space-y-2 overflow-y-auto">
-                    {searchResults.length === 0 && searchQuery && (
-                      <p className="text-slate-600 text-xs italic text-center pt-4">No results found</p>
-                    )}
-                    {searchResults.map((v, i) => (
-                      <div key={i} className="p-3 rounded-lg bg-slate-800/50 border border-transparent hover:border-slate-700 transition-all group">
-                        <p className="text-amber-500 text-xs font-bold mb-1 uppercase">{v.book} {v.chapter}:{v.verse} <span className="text-slate-500 font-normal normal-case">{v.version}</span></p>
-                        <p className="text-slate-300 text-xs mb-2 line-clamp-2">{v.text}</p>
-                        <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-all">
-                          <button onClick={() => stageItem({ type: "Verse", data: v })} className="flex-1 bg-slate-600 hover:bg-slate-500 text-white text-[10px] font-bold py-1 rounded transition-all">STAGE</button>
-                          <button onClick={() => sendLive({ type: "Verse", data: v })} className="flex-1 bg-amber-500 hover:bg-amber-400 text-black text-[10px] font-bold py-1 rounded transition-all">DISPLAY</button>
-                          <button onClick={() => addToSchedule({ type: "Verse", data: v })} className="px-2 bg-slate-700 hover:bg-slate-600 text-amber-500 text-[10px] font-bold py-1 rounded transition-all" title="Add to schedule">+</button>
-                        </div>
+                <hr className="border-slate-800" />
+
+                {/* Manual selection — collapsible */}
+                <div>
+                  <button
+                    onClick={() => setBibleOpen((p) => ({ ...p, manualSelection: !p.manualSelection }))}
+                    className="w-full flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 hover:text-slate-300 transition-colors"
+                  >
+                    <span>Manual Selection</span>
+                    <span className="text-slate-600">{bibleOpen.manualSelection ? "▲" : "▼"}</span>
+                  </button>
+                  {bibleOpen.manualSelection && (
+                    <div className="flex flex-col gap-2">
+                      <select
+                        value={selectedBook}
+                        onChange={(e) => setSelectedBook(e.target.value)}
+                        className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                      >
+                        <option value="">Select Book</option>
+                        {books.map((b) => <option key={b} value={b}>{b}</option>)}
+                      </select>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <select
+                          value={selectedChapter}
+                          onChange={(e) => setSelectedChapter(parseInt(e.target.value))}
+                          className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                        >
+                          {chapters.map((c) => <option key={c} value={c}>Chap {c}</option>)}
+                        </select>
+                        <select
+                          value={selectedVerse}
+                          onChange={(e) => setSelectedVerse(parseInt(e.target.value))}
+                          className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                        >
+                          {verses.map((v) => <option key={v} value={v}>Verse {v}</option>)}
+                        </select>
                       </div>
-                    ))}
-                  </div>
+
+                      <div className="grid grid-cols-3 gap-1.5">
+                        <button
+                          onClick={handleDisplaySelection}
+                          disabled={!selectedBook}
+                          className="bg-slate-700 hover:bg-slate-600 text-white font-bold py-2 rounded-lg transition-all text-xs disabled:opacity-30"
+                        >
+                          STAGE
+                        </button>
+                        <button
+                          onClick={handleSendLivePicker}
+                          disabled={!selectedBook}
+                          className="bg-amber-500 hover:bg-amber-400 text-black font-bold py-2 rounded-lg transition-all text-xs disabled:opacity-30"
+                        >
+                          DISPLAY
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (!selectedBook) return;
+                            const v: any = await invoke("get_verse", {
+                              book: selectedBook, chapter: selectedChapter, verse: selectedVerse, version: bibleVersion,
+                            });
+                            if (v) addToSchedule({ type: "Verse", data: v });
+                          }}
+                          disabled={!selectedBook}
+                          className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 border border-amber-500/30 font-bold py-2 rounded-lg transition-all text-xs disabled:opacity-30"
+                        >
+                          + QUEUE
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <hr className="border-slate-800" />
+
+                {/* Keyword / semantic search — collapsible */}
+                <div className="flex flex-col min-h-0">
+                  <button
+                    onClick={() => setBibleOpen((p) => ({ ...p, keywordSearch: !p.keywordSearch }))}
+                    className="w-full flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 hover:text-slate-300 transition-colors"
+                  >
+                    <span>Semantic Search</span>
+                    <span className="text-slate-600">{bibleOpen.keywordSearch ? "▲" : "▼"}</span>
+                  </button>
+                  {bibleOpen.keywordSearch && (
+                    <>
+                      <form onSubmit={handleSearch} className="mb-3 flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="Search all versions..."
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-amber-500"
+                        />
+                        <button type="submit" className="bg-amber-500 hover:bg-amber-600 text-black font-bold px-3 py-2 rounded-lg text-sm transition-all">
+                          Go
+                        </button>
+                      </form>
+
+                      <div className="space-y-2 overflow-y-auto">
+                        {searchResults.length === 0 && searchQuery && (
+                          <p className="text-slate-600 text-xs italic text-center pt-4">No results found</p>
+                        )}
+                        {searchResults.map((v, i) => (
+                          <div key={i} className="p-3 rounded-lg bg-slate-800/50 border border-transparent hover:border-slate-700 transition-all group">
+                            <p className="text-amber-500 text-xs font-bold mb-1 uppercase">{v.book} {v.chapter}:{v.verse} <span className="text-slate-500 font-normal normal-case">{v.version}</span></p>
+                            <p className="text-slate-300 text-xs mb-2 line-clamp-2">{v.text}</p>
+                            <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-all">
+                              <button onClick={() => stageItem({ type: "Verse", data: v })} className="flex-1 bg-slate-600 hover:bg-slate-500 text-white text-[10px] font-bold py-1 rounded transition-all">STAGE</button>
+                              <button onClick={() => sendLive({ type: "Verse", data: v })} className="flex-1 bg-amber-500 hover:bg-amber-400 text-black text-[10px] font-bold py-1 rounded transition-all">DISPLAY</button>
+                              <button onClick={() => addToSchedule({ type: "Verse", data: v })} className="px-2 bg-slate-700 hover:bg-slate-600 text-amber-500 text-[10px] font-bold py-1 rounded transition-all" title="Add to schedule">+</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
               </>
             )}
@@ -2978,10 +3045,13 @@ export default function App() {
         </aside>
 
         {/* ── Main Content ── */}
-        <main className="flex-1 grid grid-rows-[1fr_2fr] gap-px bg-slate-800 overflow-hidden">
+        <main ref={mainPanelRef} className="flex-1 flex flex-col overflow-hidden">
 
           {/* Transcription + Suggested */}
-          <section className="bg-slate-950 p-5 flex flex-col overflow-hidden gap-3">
+          <section
+            className="bg-slate-950 p-5 flex flex-col overflow-hidden gap-3 shrink-0"
+            style={{ height: `${topPanelPct}%` }}
+          >
             <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest shrink-0">Live Transcription</h2>
             <div className="flex-1 overflow-y-auto text-xl font-light leading-snug text-slate-400 min-h-0">
               {transcript || <span className="text-slate-800 italic">Listening for audio feed...</span>}
@@ -3010,11 +3080,22 @@ export default function App() {
             )}
           </section>
 
+          {/* Vertical drag handle */}
+          <div
+            className="h-1.5 bg-slate-800 hover:bg-amber-500/40 cursor-row-resize transition-colors shrink-0 flex items-center justify-center group"
+            onMouseDown={(e) => {
+              vertDragRef.current = { active: true, startY: e.clientY, startPct: topPanelPct };
+              e.preventDefault();
+            }}
+          >
+            <div className="w-8 h-0.5 bg-slate-600 group-hover:bg-amber-500/60 rounded-full transition-colors" />
+          </div>
+
           {/* Dual Preview Area */}
-          <section className="bg-slate-900 grid grid-cols-2 gap-px overflow-hidden relative">
+          <section ref={bottomPanelRef} className="flex-1 flex overflow-hidden relative">
 
             {/* Stage Preview */}
-            <div className="bg-slate-950 p-5 flex flex-col overflow-hidden">
+            <div className="bg-slate-950 p-5 flex flex-col overflow-hidden shrink-0" style={{ width: `${stagePct}%` }}>
               <PreviewCard
                 item={stagedItem}
                 label="Stage Preview"
@@ -3024,21 +3105,31 @@ export default function App() {
               />
             </div>
 
-            {/* GO LIVE button */}
-            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-20">
-              <button
-                onClick={goLive}
-                disabled={!stagedItem}
-                className="group relative w-20 h-20 bg-amber-500 hover:bg-amber-400 text-black rounded-full shadow-[0_0_30px_rgba(245,158,11,0.25)] flex flex-col items-center justify-center transition-all active:scale-95 disabled:grayscale disabled:opacity-40"
-              >
-                <span className="text-xl font-black">GO</span>
-                <span className="text-[10px] font-bold">LIVE</span>
-                {stagedItem && <div className="absolute inset-0 rounded-full animate-ping bg-amber-500 opacity-20 pointer-events-none" />}
-              </button>
+            {/* Horizontal drag handle (with GO LIVE button above it) */}
+            <div
+              className="w-1.5 bg-slate-800 hover:bg-amber-500/40 cursor-col-resize transition-colors shrink-0 flex items-center justify-center group relative"
+              onMouseDown={(e) => {
+                horizDragRef.current = { active: true, startX: e.clientX, startPct: stagePct };
+                e.preventDefault();
+              }}
+            >
+              {/* GO LIVE button centered on this handle */}
+              <div className="absolute z-20" style={{ top: "50%", transform: "translateY(-50%)" }}>
+                <button
+                  onClick={goLive}
+                  disabled={!stagedItem}
+                  className="group/live relative w-16 h-16 bg-amber-500 hover:bg-amber-400 text-black rounded-full shadow-[0_0_30px_rgba(245,158,11,0.25)] flex flex-col items-center justify-center transition-all active:scale-95 disabled:grayscale disabled:opacity-40"
+                >
+                  <span className="text-base font-black leading-none">GO</span>
+                  <span className="text-[9px] font-bold">LIVE</span>
+                  {stagedItem && <div className="absolute inset-0 rounded-full animate-ping bg-amber-500 opacity-20 pointer-events-none" />}
+                </button>
+              </div>
+              <div className="h-8 w-0.5 bg-slate-600 group-hover:bg-amber-500/60 rounded-full transition-colors" />
             </div>
 
             {/* Live Output + Next Verse strip */}
-            <div className="bg-slate-950 p-5 flex flex-col overflow-hidden gap-2">
+            <div className="flex-1 bg-slate-950 p-5 flex flex-col overflow-hidden gap-2">
               <PreviewCard
                 item={liveItem}
                 label="Live Output"
