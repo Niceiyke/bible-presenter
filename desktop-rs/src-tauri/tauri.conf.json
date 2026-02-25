@@ -67,8 +67,7 @@
         "languages": [
           "English"
         ],
-        "installMode": "currentUser",
-        "displayInstallModeOption": false
+        "installMode": "currentUser"
       },
       "wix": {
         "language": "en-US"
