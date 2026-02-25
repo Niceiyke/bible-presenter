@@ -345,6 +345,83 @@ impl BibleStore {
         Ok(None)
     }
 
+    /// Semantic search across ALL stacked versions, returns top-N unique (book,chapter,verse) results.
+    pub fn search_top_n_semantic(&self, embedding: &[f32], top_n: usize) -> Vec<Verse> {
+        let embeddings = match self.embeddings.as_ref() {
+            Some(e) => e,
+            None => return Vec::new(),
+        };
+        let query = ndarray::ArrayView1::from(embedding);
+        let similarities = embeddings.dot(&query);
+
+        let mut scores: Vec<(f32, usize)> = similarities
+            .iter()
+            .enumerate()
+            .map(|(i, &s)| (s, i))
+            .collect();
+        scores.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut seen = std::collections::HashSet::new();
+        let mut results = Vec::new();
+        for (score, idx) in scores {
+            if score < 0.35 || results.len() >= top_n {
+                break;
+            }
+            if let Some(verse) = self.verse_cache.get(idx) {
+                let key = (verse.book.clone(), verse.chapter, verse.verse);
+                if seen.insert(key) {
+                    results.push(verse.clone());
+                }
+            }
+        }
+        results
+    }
+
+    /// Full-text keyword search across ALL versions, deduplicated by (book,chapter,verse).
+    pub fn search_manual_all_versions(&self, query: &str) -> anyhow::Result<Vec<Verse>> {
+        let query_lower = query.to_lowercase();
+        let stop: &[&str] = &[
+            "the", "and", "for", "that", "with", "this", "are", "was", "were",
+            "they", "them", "from", "have", "has", "not", "but", "his", "her",
+            "our", "your", "its", "who", "all", "one", "you", "him", "she",
+            "what", "will", "said", "when", "also", "into", "unto", "shall",
+            "thee", "thou", "thy",
+        ];
+        let query_words: Vec<&str> = query_lower
+            .split_whitespace()
+            .filter(|w| w.len() >= 2 && !stop.contains(w))
+            .collect();
+
+        if query_words.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut scored: Vec<(usize, &Verse)> = self.verse_cache
+            .iter()
+            .filter_map(|verse| {
+                let verse_lower = verse.text.to_lowercase();
+                let score: usize = query_words
+                    .iter()
+                    .filter(|&&w| verse_lower.contains(w))
+                    .count();
+                if score > 0 { Some((score, verse)) } else { None }
+            })
+            .collect();
+
+        scored.sort_by(|a, b| b.0.cmp(&a.0));
+
+        let mut seen = std::collections::HashSet::new();
+        let mut results = Vec::new();
+        for (_, verse) in scored {
+            let key = (verse.book.clone(), verse.chapter, verse.verse);
+            if seen.insert(key) {
+                results.push(verse.clone());
+                if results.len() >= 10 { break; }
+            }
+        }
+        Ok(results)
+    }
+
     /// Full-text keyword search within the active version only.
     pub fn search_manual(&self, query: &str, version: &str) -> anyhow::Result<Vec<Verse>> {
         let query_lower = query.to_lowercase();

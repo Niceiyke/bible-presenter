@@ -9,7 +9,7 @@
  */
 
 import JSZip from "jszip";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 
 // ---------------------------------------------------------------------------
 // XML namespace constants
@@ -63,15 +63,29 @@ export interface ParsedPresentation {
 
 /**
  * Loads the zip object for a PPTX file from an absolute OS path.
- * Cache the returned zip to avoid re-downloading for subsequent slide parses.
+ * Reads the file via Tauri backend (base64) to avoid asset-protocol fetch issues.
+ * Cache the returned zip to avoid re-reading for subsequent slide parses.
  */
 export async function loadPptxZip(pptxPath: string): Promise<JSZip> {
-  const url = convertFileSrc(pptxPath);
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch PPTX (${response.status}): ${pptxPath}`);
+  let arrayBuffer: ArrayBuffer;
+  try {
+    // Primary: read file bytes via Tauri command (most reliable across platforms)
+    const base64: string = await invoke("read_file_base64", { path: pptxPath });
+    const binaryStr = atob(base64);
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+    arrayBuffer = bytes.buffer;
+  } catch {
+    // Fallback: try asset protocol URL
+    const url = convertFileSrc(pptxPath);
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to load PPTX (${response.status}): ${pptxPath}`);
+    }
+    arrayBuffer = await response.arrayBuffer();
   }
-  const arrayBuffer = await response.arrayBuffer();
   return JSZip.loadAsync(arrayBuffer);
 }
 
