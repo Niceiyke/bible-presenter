@@ -152,6 +152,10 @@ export interface LowerThirdTemplate {
   labelVisible: boolean; labelColor: string; labelSize: number; labelUppercase: boolean;
   // Animation
   animation: "fade" | "slide-up" | "slide-left" | "none";
+  // FreeText scroll
+  scrollEnabled: boolean;
+  scrollDirection: "ltr" | "rtl";
+  scrollSpeed: number;
 }
 
 const DEFAULT_LT_TEMPLATE: LowerThirdTemplate = {
@@ -166,6 +170,7 @@ const DEFAULT_LT_TEMPLATE: LowerThirdTemplate = {
   secondaryBold: false, secondaryItalic: false, secondaryUppercase: false,
   labelVisible: true, labelColor: "#f59e0b", labelSize: 13, labelUppercase: true,
   animation: "slide-up",
+  scrollEnabled: false, scrollDirection: "ltr", scrollSpeed: 5,
 };
 
 export interface Schedule {
@@ -1315,9 +1320,22 @@ function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData; templa
           </>
         )}
         {data.kind === "FreeText" && (
-          <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
-            {data.data.text}
-          </p>
+          t.scrollEnabled ? (
+            <div style={{ overflow: "hidden", whiteSpace: "nowrap" }}>
+              <span style={{
+                ...buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase),
+                display: "inline-block",
+                animation: `lt-scroll-${t.scrollDirection} ${(11 - t.scrollSpeed) * 4}s linear infinite`,
+                willChange: "transform",
+              }}>
+                {data.data.text}
+              </span>
+            </div>
+          ) : (
+            <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
+              {data.data.text}
+            </p>
+          )
         )}
       </div>
     </div>
@@ -2568,10 +2586,25 @@ export default function App() {
                 invoke("stop_session");
               } else {
                 setAudioError(null);
-                invoke("start_session").catch((err: any) => {
-                  setAudioError(String(err));
-                  setSessionState("idle");
-                });
+                // getUserMedia triggers the Windows OS microphone permission dialog.
+                // WASAPI (used by CPAL) bypasses the dialog and just fails with
+                // 0x80070005 without this step.
+                navigator.mediaDevices.getUserMedia({ audio: true })
+                  .then((stream) => {
+                    // Permission granted — stop the probe stream; Rust WASAPI opens its own.
+                    stream.getTracks().forEach((t) => t.stop());
+                    invoke("start_session").catch((err: any) => {
+                      setAudioError(String(err));
+                      setSessionState("idle");
+                    });
+                  })
+                  .catch((err: any) => {
+                    const msg = err.name === "NotAllowedError"
+                      ? "Microphone access denied. Allow microphone access in Windows Settings → Privacy & Security → Microphone, then try again."
+                      : `Microphone error: ${err.message}`;
+                    setAudioError(msg);
+                    setSessionState("idle");
+                  });
               }
             }}
             disabled={sessionState === "loading"}
@@ -3712,6 +3745,13 @@ export default function App() {
                             ))}
                           </select>
                           <button
+                            onClick={() => {
+                              const newTpl = { ...ltTemplate, id: stableId(), name: "New Template" };
+                              setLtTemplate(newTpl);
+                            }}
+                            className="px-2 py-1 bg-slate-600 hover:bg-slate-500 text-white text-[10px] font-bold rounded"
+                          >+ New</button>
+                          <button
                             onClick={async () => {
                               const updated = ltSavedTemplates.some((t) => t.id === ltTemplate.id)
                                 ? ltSavedTemplates.map((t) => t.id === ltTemplate.id ? ltTemplate : t)
@@ -4051,12 +4091,52 @@ export default function App() {
 
                 {/* ── Free text mode ── */}
                 {ltMode === "freetext" && (
-                  <textarea
-                    className="w-full bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700 placeholder-slate-500 resize-none h-24"
-                    placeholder="Type your message..."
-                    value={ltFreeText}
-                    onChange={(e) => setLtFreeText(e.target.value)}
-                  />
+                  <div className="flex flex-col gap-2">
+                    <textarea
+                      className="w-full bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700 placeholder-slate-500 resize-none h-24"
+                      placeholder="Type your message..."
+                      value={ltFreeText}
+                      onChange={(e) => setLtFreeText(e.target.value)}
+                    />
+                    {/* Scroll controls */}
+                    <div className="flex gap-1.5 items-center">
+                      <span className="text-[10px] text-slate-400 uppercase font-bold mr-1">Scroll:</span>
+                      {([
+                        { label: "Static", enabled: false, dir: null },
+                        { label: "→→ Scroll", enabled: true, dir: "ltr" as const },
+                        { label: "←← Scroll", enabled: true, dir: "rtl" as const },
+                      ] as const).map((opt) => {
+                        const active = !ltTemplate.scrollEnabled && !opt.enabled
+                          ? true
+                          : opt.enabled && ltTemplate.scrollEnabled && ltTemplate.scrollDirection === opt.dir;
+                        return (
+                          <button
+                            key={opt.label}
+                            onClick={() => setLtTemplate((p) => ({
+                              ...p,
+                              scrollEnabled: opt.enabled,
+                              ...(opt.dir ? { scrollDirection: opt.dir } : {}),
+                            }))}
+                            className={`px-2 py-1 text-[10px] font-bold rounded transition-all ${active ? "bg-amber-600 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}
+                          >
+                            {opt.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {ltTemplate.scrollEnabled && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-slate-400 uppercase font-bold whitespace-nowrap">Speed:</span>
+                        <input
+                          type="range" min={1} max={10} step={1}
+                          value={ltTemplate.scrollSpeed}
+                          onChange={(e) => setLtTemplate((p) => ({ ...p, scrollSpeed: Number(e.target.value) }))}
+                          className="flex-1 accent-amber-500"
+                        />
+                        <span className="text-[10px] text-slate-400 w-4 text-right">{ltTemplate.scrollSpeed}</span>
+                      </div>
+                    )}
+                  </div>
                 )}
 
                 {/* ── Lyrics mode ── */}
