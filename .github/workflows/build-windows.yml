@@ -7,6 +7,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -22,11 +24,6 @@ jobs:
         run: |
           cd desktop-rs
           npm install
-
-      - name: build frontend
-        run: |
-          cd desktop-rs
-          npm run build
 
       - name: download models and bible data
         shell: bash
@@ -120,22 +117,22 @@ jobs:
 
           print('PASSED: ' + str(arr.shape[0]) + ' verse vectors x 384 dims, dtype=float32')
 
-      - name: build tauri app
-        run: |
-          cd desktop-rs
-          npm run tauri build
+      - name: build and publish release
+        uses: tauri-apps/tauri-action@v0
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           RUSTFLAGS: "-C target-feature=-crt-static"
           MSVC_RUNTIME_LIBRARY: "MultiThreadedDLL"
           VCPKG_DEFAULT_TRIPLET: "x64-windows"
           CFLAGS: "/MD"
           CXXFLAGS: "/MD"
           CMAKE_MSVC_RUNTIME_LIBRARY: "MultiThreadedDLL"
-
-      - name: upload artifact
-        uses: actions/upload-artifact@v4
         with:
-          name: Bible-Presenter-Windows
-          path: |
-            desktop-rs/src-tauri/target/release/bundle/msi/*.msi
-            desktop-rs/src-tauri/target/release/bundle/nsis/*.exe
+          projectPath: desktop-rs
+          tagName: v__VERSION__
+          releaseName: "Bible Presenter v__VERSION__"
+          releaseBody: "See the assets below to download this version."
+          releaseDraft: false
+          prerelease: false

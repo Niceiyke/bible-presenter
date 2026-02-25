@@ -13,6 +13,8 @@
     "fs:allow-read-dir",
     "fs:allow-mkdir",
     "fs:allow-remove",
-    "fs:allow-exists"
+    "fs:allow-exists",
+    "updater:default",
+    "process:allow-relaunch"
   ]
 }
