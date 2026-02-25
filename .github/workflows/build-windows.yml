@@ -82,6 +82,40 @@ jobs:
             echo "OK: $f ($(du -h "$f" | cut -f1))"
           done
 
+      - name: validate embeddings file
+        shell: bash
+        run: |
+          pip install -q numpy
+          python -c "
+import numpy as np, sys
+path = 'desktop-rs/src-tauri/bible_data/all_versions_embeddings.npy'
+
+# 1. Magic bytes — a Google Drive error page would fail here
+with open(path, 'rb') as f:
+    magic = f.read(6)
+if magic != b'\x93NUMPY':
+    print('CRITICAL: Not a valid .npy file. Magic bytes: ' + repr(magic))
+    print('This usually means Google Drive returned an HTML error page.')
+    sys.exit(1)
+print('Magic bytes OK: ' + repr(magic))
+
+# 2. Shape and dtype
+arr = np.load(path)
+print('Shape : ' + str(arr.shape))
+print('Dtype : ' + str(arr.dtype))
+
+if arr.ndim != 2:
+    print('CRITICAL: Expected 2-D array, got ' + str(arr.ndim) + '-D'); sys.exit(1)
+if arr.shape[1] != 384:
+    print('CRITICAL: Expected 384 embedding dims, got ' + str(arr.shape[1])); sys.exit(1)
+if arr.dtype != np.float32:
+    print('CRITICAL: Expected float32 dtype, got ' + str(arr.dtype)); sys.exit(1)
+if arr.shape[0] < 1000:
+    print('CRITICAL: Only ' + str(arr.shape[0]) + ' rows — download likely truncated'); sys.exit(1)
+
+print('PASSED: ' + str(arr.shape[0]) + ' verse vectors x 384 dims, dtype=float32')
+"
+
       - name: build tauri app
         run: |
           cd desktop-rs
