@@ -18,6 +18,7 @@ pub struct AudioEngine {
     selected_device_name: Option<String>,
     active_tx: Option<mpsc::Sender<Vec<f32>>>,
     active_error_tx: Option<mpsc::Sender<String>>,
+    active_level_tx: Option<mpsc::Sender<f32>>,
     vad_threshold: f32,
 }
 
@@ -28,7 +29,8 @@ impl AudioEngine {
             selected_device_name: None,
             active_tx: None,
             active_error_tx: None,
-            vad_threshold: 0.005,
+            active_level_tx: None,
+            vad_threshold: 0.002,
         }
     }
 
@@ -53,8 +55,9 @@ impl AudioEngine {
 
         // Only restart if a session is already running (both channels present)
         if let (Some(tx), Some(error_tx)) = (self.active_tx.clone(), self.active_error_tx.clone()) {
+            let level_tx = self.active_level_tx.clone();
             self.stop();
-            self.start_capturing(tx, error_tx)?;
+            self.start_capturing(tx, error_tx, level_tx)?;
         }
         Ok(())
     }
@@ -63,9 +66,11 @@ impl AudioEngine {
         &mut self,
         tx: mpsc::Sender<Vec<f32>>,
         error_tx: mpsc::Sender<String>,
+        level_tx: Option<mpsc::Sender<f32>>,
     ) -> anyhow::Result<()> {
         self.active_tx = Some(tx.clone());
         self.active_error_tx = Some(error_tx.clone());
+        self.active_level_tx = level_tx.clone();
 
         let host = cpal::default_host();
 
@@ -93,6 +98,7 @@ impl AudioEngine {
                 vad,
                 tx,
                 error_tx,
+                level_tx,
             )?,
             cpal::SampleFormat::I16 => self.build_stream::<i16>(
                 &device,
@@ -102,6 +108,7 @@ impl AudioEngine {
                 vad,
                 tx,
                 error_tx,
+                level_tx,
             )?,
             cpal::SampleFormat::U16 => self.build_stream::<u16>(
                 &device,
@@ -111,6 +118,7 @@ impl AudioEngine {
                 vad,
                 tx,
                 error_tx,
+                level_tx,
             )?,
             _ => return Err(anyhow::anyhow!("Unsupported sample format")),
         };
@@ -129,6 +137,7 @@ impl AudioEngine {
         vad_threshold: f32,
         tx: mpsc::Sender<Vec<f32>>,
         error_tx: mpsc::Sender<String>,
+        level_tx: Option<mpsc::Sender<f32>>,
     ) -> anyhow::Result<cpal::Stream>
     where
         T: cpal::Sample + Into<f32> + 'static + cpal::SizedSample,
@@ -171,6 +180,10 @@ impl AudioEngine {
 
                             let energy =
                                 mono.iter().map(|s| s * s).sum::<f32>() / mono.len() as f32;
+                            // Always emit energy for VU meter (before VAD gate)
+                            if let Some(ref ltx) = level_tx {
+                                let _ = ltx.try_send(energy);
+                            }
                             if energy > vad_threshold {
                                 let _ = tx.try_send(mono);
                             }
@@ -192,9 +205,10 @@ impl AudioEngine {
     pub fn stop(&mut self) {
         // Drop the stream first (stops CPAL callbacks)
         self.stream = None;
-        // Drop both channel senders — this closes the channels, causing
+        // Drop all channel senders — this closes the channels, causing
         // the receiving loops in start_session to exit cleanly via recv() -> None
         self.active_tx = None;
         self.active_error_tx = None;
+        self.active_level_tx = None;
     }
 }

@@ -131,8 +131,9 @@ export type LowerThirdData =
 export interface LowerThirdTemplate {
   id: string; name: string;
   // Background
-  bgType: "solid" | "gradient" | "transparent";
+  bgType: "solid" | "gradient" | "transparent" | "image";
   bgColor: string; bgOpacity: number; bgGradientEnd: string; bgBlur: boolean;
+  bgImagePath?: string;
   // Accent bar
   accentEnabled: boolean; accentColor: string;
   accentSide: "left" | "right" | "top" | "bottom"; accentWidth: number;
@@ -173,11 +174,12 @@ export interface Schedule {
   items: ScheduleEntry[];
 }
 
-// Background is a serde-tagged enum: { type: "None" } | { type: "Color"; value: string } | { type: "Image"; value: string }
+// Background is a serde-tagged enum: { type: "None" } | { type: "Color"; value: string } | { type: "Image"; value: string } | { type: "Camera"; value: string }
 export type BackgroundSetting =
   | { type: "None" }
   | { type: "Color"; value: string }
-  | { type: "Image"; value: string };
+  | { type: "Image"; value: string }
+  | { type: "Camera"; value: string };
 
 export interface PresentationSettings {
   theme: string;
@@ -284,7 +286,26 @@ function computeOutputBackground(
       };
     }
   }
+  // Camera backgrounds are rendered as a separate video layer — no CSS needed here
+  if (settings.background.type === "Camera") {
+    return {};
+  }
   return { backgroundColor: colors.background };
+}
+
+/** Returns the deviceId if the effective background for the current item is a camera, else null. */
+function getCameraBackgroundDeviceId(
+  settings: PresentationSettings,
+  item: DisplayItem | null
+): string | null {
+  let bg: BackgroundSetting | undefined;
+  if (item?.type === "Verse") bg = settings.bible_background;
+  else if (item?.type === "Media") bg = settings.media_background;
+  else if (item?.type === "PresentationSlide" || item?.type === "CustomSlide")
+    bg = settings.presentation_background;
+  const effective = (bg && bg.type !== "None") ? bg : settings.background;
+  if (effective?.type === "Camera") return effective.value;
+  return null;
 }
 
 /** Computes background style for the settings preview panel. */
@@ -998,12 +1019,14 @@ function BackgroundEditor({
   onChange,
   mediaImages = [],
   onUploadMedia = async () => {},
+  cameras = [],
 }: {
   label: string;
   value: BackgroundSetting | undefined;
   onChange: (bg: BackgroundSetting) => void;
   mediaImages?: MediaItem[];
   onUploadMedia?: () => Promise<void>;
+  cameras?: MediaDeviceInfo[];
 }) {
   const [showPicker, setShowPicker] = React.useState(false);
   const current: BackgroundSetting = value ?? { type: "None" };
@@ -1013,13 +1036,14 @@ function BackgroundEditor({
       <div>
         {label && <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1.5">{label}</p>}
         <div className="flex gap-1.5 mb-1.5">
-          {(["None", "Color", "Image"] as const).map((mode) => (
+          {(["None", "Color", "Image", "Camera"] as const).map((mode) => (
             <button
               key={mode}
               onClick={() => {
                 if (mode === "None") onChange({ type: "None" });
                 else if (mode === "Color") onChange({ type: "Color", value: current.type === "Color" ? (current as any).value : "#000000" });
-                else onChange({ type: "Image", value: current.type === "Image" ? (current as any).value : "" });
+                else if (mode === "Image") onChange({ type: "Image", value: current.type === "Image" ? (current as any).value : "" });
+                else onChange({ type: "Camera", value: cameras[0]?.deviceId ?? "" });
               }}
               className={`flex-1 py-1 rounded text-[9px] font-bold border transition-all ${
                 current.type === mode ? "border-amber-500 bg-amber-500/10 text-amber-400" : "border-slate-700 bg-slate-800/50 text-slate-500 hover:border-slate-600"
@@ -1061,6 +1085,23 @@ function BackgroundEditor({
           <p className="text-[8px] text-slate-600 truncate mt-1">
             {(current as { type: "Image"; value: string }).value.split(/[/\\]/).pop()}
           </p>
+        )}
+        {current.type === "Camera" && (
+          cameras.length === 0 ? (
+            <p className="text-[9px] text-slate-600 italic mt-1">No cameras detected. Visit the Cameras tab to grant access.</p>
+          ) : (
+            <select
+              value={(current as { type: "Camera"; value: string }).value}
+              onChange={(e) => onChange({ type: "Camera", value: e.target.value })}
+              className="w-full mt-1 bg-slate-800 text-white border border-slate-700 rounded px-2 py-1 text-[9px] focus:outline-none focus:ring-1 focus:ring-amber-500"
+            >
+              {cameras.map((cam) => (
+                <option key={cam.deviceId} value={cam.deviceId}>
+                  {cam.label || `Camera ${cam.deviceId.slice(0, 8)}`}
+                </option>
+              ))}
+            </select>
+          )
         )}
       </div>
       {showPicker && (
@@ -1193,6 +1234,11 @@ function buildLtContainerStyle(t: LowerThirdTemplate): React.CSSProperties {
     style.background = hexToRgba(t.bgColor, t.bgOpacity);
   } else if (t.bgType === "gradient") {
     style.background = `linear-gradient(135deg, ${hexToRgba(t.bgColor, t.bgOpacity)} 0%, ${hexToRgba(t.bgGradientEnd, t.bgOpacity)} 100%)`;
+  } else if (t.bgType === "image" && t.bgImagePath) {
+    style.backgroundImage = `url("${convertFileSrc(t.bgImagePath)}")`;
+    style.backgroundSize = "cover";
+    style.backgroundPosition = "center";
+    style.backgroundRepeat = "no-repeat";
   } else {
     style.background = "transparent";
   }
@@ -1357,6 +1403,7 @@ function OutputWindow() {
   const { colors } = THEMES[settings.theme] ?? THEMES.dark;
   const isTop = settings.reference_position === "top";
   const bgStyle = getEffectiveBackground(settings, liveItem, colors);
+  const cameraBgId = getCameraBackgroundDeviceId(settings, liveItem);
 
   const ReferenceTag = liveItem?.type === "Verse" ? (
     <p
@@ -1364,14 +1411,22 @@ function OutputWindow() {
       style={{ color: colors.referenceText }}
     >
       {liveItem.data.book} {liveItem.data.chapter}:{liveItem.data.verse}
+      {liveItem.data.version && (
+        <span className="text-2xl font-normal opacity-60 ml-2">({liveItem.data.version})</span>
+      )}
     </p>
   ) : null;
 
   return (
     <div
       className="h-screen w-screen overflow-hidden relative"
-      style={{ ...bgStyle, color: colors.verseText }}
+      style={cameraBgId ? { color: colors.verseText } : { ...bgStyle, color: colors.verseText }}
     >
+      {cameraBgId && (
+        <div className="absolute inset-0 z-0">
+          <CameraFeedRenderer deviceId={cameraBgId} />
+        </div>
+      )}
       {settings.logo_path && (
         <img
           src={convertFileSrc(settings.logo_path)}
@@ -1383,7 +1438,7 @@ function OutputWindow() {
       {liveItem ? (
         <>
           {liveItem.type === "Verse" ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center p-16 text-center animate-in fade-in duration-700">
+            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center p-16 text-center animate-in fade-in duration-700">
               <div className="w-full flex flex-col items-center gap-8">
                 {isTop && ReferenceTag}
                 <h1
@@ -1396,7 +1451,7 @@ function OutputWindow() {
               </div>
             </div>
           ) : liveItem.type === "PresentationSlide" ? (
-            <div className="absolute inset-0 animate-in fade-in duration-500">
+            <div className="absolute inset-0 z-10 animate-in fade-in duration-500">
               {currentSlide ? (
                 <SlideRenderer slide={currentSlide} />
               ) : (
@@ -1408,15 +1463,15 @@ function OutputWindow() {
               )}
             </div>
           ) : liveItem.type === "CustomSlide" ? (
-            <div className="absolute inset-0 animate-in fade-in duration-500">
+            <div className="absolute inset-0 z-10 animate-in fade-in duration-500">
               <CustomSlideRenderer slide={liveItem.data} />
             </div>
           ) : liveItem.type === "CameraFeed" ? (
-            <div className="absolute inset-0 animate-in fade-in duration-500">
+            <div className="absolute inset-0 z-10 animate-in fade-in duration-500">
               <CameraFeedRenderer deviceId={liveItem.data.device_id} />
             </div>
           ) : liveItem.type === "Media" ? (
-            <div className="absolute inset-0 flex items-center justify-center animate-in fade-in duration-700">
+            <div className="absolute inset-0 z-10 flex items-center justify-center animate-in fade-in duration-700">
               {liveItem.data.media_type === "Image" ? (
                 <img
                   src={convertFileSrc(liveItem.data.path)}
@@ -1598,6 +1653,7 @@ export default function App() {
   const [ltTemplate, setLtTemplate] = useState<LowerThirdTemplate>(DEFAULT_LT_TEMPLATE);
   const [ltSavedTemplates, setLtSavedTemplates] = useState<LowerThirdTemplate[]>([DEFAULT_LT_TEMPLATE]);
   const [ltDesignOpen, setLtDesignOpen] = useState(false);
+  const [showLtImgPicker, setShowLtImgPicker] = useState(false);
   // Nameplate mode
   const [ltName, setLtName] = useState("");
   const [ltTitle, setLtTitle] = useState("");
@@ -1634,10 +1690,13 @@ export default function App() {
   const [transcript, setTranscript] = useState("");
   const [devices, setDevices] = useState<[string, string][]>([]);
   const [selectedDevice, setSelectedDevice] = useState("");
-  const [vadThreshold, setVadThreshold] = useState(0.005);
+  const [vadThreshold, setVadThreshold] = useState(() =>
+    parseFloat(localStorage.getItem("pref_vadThreshold") ?? "0.002")
+  );
   const [sessionState, setSessionState] = useState<"idle" | "loading" | "running">("idle");
   const [audioError, setAudioError] = useState<string | null>(null);
   const [deviceError, setDeviceError] = useState<string | null>(null);
+  const [micLevel, setMicLevel] = useState(0);
 
   // Bible version
   const [availableVersions, setAvailableVersions] = useState<string[]>(["KJV"]);
@@ -1659,9 +1718,13 @@ export default function App() {
   const [bibleOpen, setBibleOpen] = useState({ quickEntry: true, manualSelection: true, keywordSearch: true });
 
   // Adjustable main panel heights (top transcription panel as % of main area)
-  const [topPanelPct, setTopPanelPct] = useState(33);
+  const [topPanelPct, setTopPanelPct] = useState(() =>
+    parseInt(localStorage.getItem("pref_topPanelPct") ?? "33", 10)
+  );
   // Adjustable stage/live split (stage panel as % of bottom area)
-  const [stagePct, setStagePct] = useState(50);
+  const [stagePct, setStagePct] = useState(() =>
+    parseInt(localStorage.getItem("pref_stagePct") ?? "50", 10)
+  );
   const mainPanelRef = useRef<HTMLDivElement>(null);
   const bottomPanelRef = useRef<HTMLDivElement>(null);
   const vertDragRef = useRef<{ active: boolean; startY: number; startPct: number }>({ active: false, startY: 0, startPct: 33 });
@@ -1676,8 +1739,13 @@ export default function App() {
     invoke("get_audio_devices")
       .then((devs: any) => {
         setDevices(devs);
-        if (devs.length > 0) setSelectedDevice((prev) => prev || devs[0][0]);
-        else setDeviceError("No input devices found");
+        if (devs.length > 0) {
+          const saved = localStorage.getItem("pref_selectedDevice");
+          const match = saved ? devs.find(([name]: [string, string]) => name === saved) : null;
+          setSelectedDevice(match ? match[0] : devs[0][0]);
+        } else {
+          setDeviceError("No input devices found");
+        }
       })
       .catch((err: any) => setDeviceError(String(err)));
   };
@@ -1736,7 +1804,9 @@ export default function App() {
       const result = await invoke<LowerThirdTemplate[]>("load_lt_templates");
       if (Array.isArray(result) && result.length > 0) {
         setLtSavedTemplates(result);
-        setLtTemplate(result[0]);
+        const savedId = localStorage.getItem("activeLtTemplateId");
+        const active = savedId ? result.find((t) => t.id === savedId) : null;
+        setLtTemplate(active ?? result[0]);
       }
     } catch (err) {
       console.error("Failed to load lt templates:", err);
@@ -1843,7 +1913,9 @@ export default function App() {
       .then((versions: any) => {
         if (versions && versions.length > 0) {
           setAvailableVersions(versions);
-          setBibleVersion(versions[0]);
+          const saved = localStorage.getItem("pref_bibleVersion");
+          const valid = saved && versions.includes(saved) ? saved : versions[0];
+          setBibleVersion(valid);
         }
       })
       .catch(() => {});
@@ -1888,12 +1960,25 @@ export default function App() {
       setSettings(event.payload as PresentationSettings);
     });
 
+    const unlistenLevel = listen("audio-level", (event: any) => {
+      const energy = event.payload as number;
+      // Convert RMS energy to 0–1 display range (loud speech ~0.05–0.1 energy)
+      setMicLevel(Math.min(1, Math.sqrt(energy) / 0.35));
+    });
+
+    // Exponential decay so the bar smoothly returns to zero when mic is quiet
+    const decayInterval = setInterval(() => {
+      setMicLevel((prev) => (prev > 0.01 ? prev * 0.85 : 0));
+    }, 50);
+
     return () => {
       unlisten.then((f) => f());
       unlistenStaged.then((f) => f());
       unlistenStatus.then((f) => f());
       unlistenAudioErr.then((f) => f());
       unlistenSettings.then((f) => f());
+      unlistenLevel.then((f) => f());
+      clearInterval(decayInterval);
     };
   }, []);
 
@@ -2343,17 +2428,27 @@ export default function App() {
     };
   }, []);
 
+  // Persist panel sizes to localStorage when they change
+  useEffect(() => {
+    localStorage.setItem("pref_topPanelPct", String(Math.round(topPanelPct)));
+  }, [topPanelPct]);
+  useEffect(() => {
+    localStorage.setItem("pref_stagePct", String(Math.round(stagePct)));
+  }, [stagePct]);
+
   // ── Audio controls ───────────────────────────────────────────────────────────
 
   const handleDeviceChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const device = e.target.value;
     setSelectedDevice(device);
+    localStorage.setItem("pref_selectedDevice", device);
     invoke("set_audio_device", { deviceName: device });
   };
 
   const updateVad = (val: string) => {
     const threshold = parseFloat(val);
     setVadThreshold(threshold);
+    localStorage.setItem("pref_vadThreshold", val);
     invoke("set_vad_threshold", { threshold });
   };
 
@@ -2447,6 +2542,26 @@ export default function App() {
             TOGGLE OUTPUT
           </button>
 
+          {/* VU Meter — only visible when a session is running */}
+          {sessionState === "running" && (
+            <div className="flex items-center gap-2 min-w-[110px]">
+              <span className="text-[9px] text-slate-500 font-bold uppercase shrink-0">MIC</span>
+              <div className="relative flex-1 h-2 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${micLevel * 100}%`,
+                    transition: "width 75ms linear",
+                    backgroundColor:
+                      micLevel > 0.8 ? "#ef4444"
+                      : micLevel > 0.5 ? "#f59e0b"
+                      : "#22c55e",
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
           <button
             onClick={() => {
               if (sessionState === "running") {
@@ -2525,7 +2640,7 @@ export default function App() {
                   {availableVersions.map((v) => (
                     <button
                       key={v}
-                      onClick={() => setBibleVersion(v)}
+                      onClick={() => { setBibleVersion(v); localStorage.setItem("pref_bibleVersion", v); }}
                       className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${
                         bibleVersion === v
                           ? "bg-amber-500 text-black"
@@ -2696,7 +2811,23 @@ export default function App() {
                   {(["image", "video", "camera"] as const).map((f) => (
                     <button
                       key={f}
-                      onClick={() => setMediaFilter(f)}
+                      onClick={() => {
+                        setMediaFilter(f);
+                        if (f === "camera") {
+                          // Request permission first so labels are populated
+                          navigator.mediaDevices?.getUserMedia({ video: true })
+                            .then((stream) => {
+                              stream.getTracks().forEach((t) => t.stop());
+                              return navigator.mediaDevices.enumerateDevices();
+                            })
+                            .then((devs) => setCameras(devs.filter((d) => d.kind === "videoinput")))
+                            .catch(() => {
+                              navigator.mediaDevices?.enumerateDevices()
+                                .then((devs) => setCameras(devs.filter((d) => d.kind === "videoinput")))
+                                .catch(() => {});
+                            });
+                        }
+                      }}
                       className={`flex-1 py-1.5 rounded text-[9px] font-bold uppercase tracking-wide transition-all ${
                         mediaFilter === f
                           ? "bg-amber-500 text-black shadow"
@@ -3275,6 +3406,7 @@ export default function App() {
                       onChange={(bg) => updateSettings({ ...settings, bible_background: bg })}
                       mediaImages={media.filter((m) => m.media_type === "Image")}
                       onUploadMedia={handleFileUpload}
+                      cameras={cameras}
                     />
                     <div className="border-t border-slate-800" />
                     <BackgroundEditor
@@ -3283,6 +3415,7 @@ export default function App() {
                       onChange={(bg) => updateSettings({ ...settings, presentation_background: bg })}
                       mediaImages={media.filter((m) => m.media_type === "Image")}
                       onUploadMedia={handleFileUpload}
+                      cameras={cameras}
                     />
                     <div className="border-t border-slate-800" />
                     <BackgroundEditor
@@ -3291,6 +3424,7 @@ export default function App() {
                       onChange={(bg) => updateSettings({ ...settings, media_background: bg })}
                       mediaImages={media.filter((m) => m.media_type === "Image")}
                       onUploadMedia={handleFileUpload}
+                      cameras={cameras}
                     />
                   </div>
                 </div>
@@ -3567,7 +3701,10 @@ export default function App() {
                             value={ltTemplate.id}
                             onChange={(e) => {
                               const found = ltSavedTemplates.find((t) => t.id === e.target.value);
-                              if (found) setLtTemplate(found);
+                              if (found) {
+                                setLtTemplate(found);
+                                localStorage.setItem("activeLtTemplateId", found.id);
+                              }
                             }}
                           >
                             {ltSavedTemplates.map((t) => (
@@ -3580,6 +3717,7 @@ export default function App() {
                                 ? ltSavedTemplates.map((t) => t.id === ltTemplate.id ? ltTemplate : t)
                                 : [...ltSavedTemplates, { ...ltTemplate, id: stableId() }];
                               setLtSavedTemplates(updated);
+                              localStorage.setItem("activeLtTemplateId", ltTemplate.id);
                               await invoke("save_lt_templates", { templates: updated });
                             }}
                             className="px-2 py-1 bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold rounded"
@@ -3603,14 +3741,43 @@ export default function App() {
                       <div className="flex flex-col gap-2">
                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Background</p>
                         <div className="flex gap-1">
-                          {(["solid", "gradient", "transparent"] as const).map((bt) => (
+                          {(["solid", "gradient", "image", "transparent"] as const).map((bt) => (
                             <button key={bt} onClick={() => setLtTemplate((t) => ({ ...t, bgType: bt }))}
                               className={`flex-1 py-1 text-[10px] font-bold rounded ${ltTemplate.bgType === bt ? "bg-slate-600 text-white" : "bg-slate-800 text-slate-400"}`}>
-                              {bt === "solid" ? "Solid" : bt === "gradient" ? "Grad" : "None"}
+                              {bt === "solid" ? "Solid" : bt === "gradient" ? "Grad" : bt === "image" ? "Image" : "None"}
                             </button>
                           ))}
                         </div>
-                        {ltTemplate.bgType !== "transparent" && (
+                        {ltTemplate.bgType === "image" && (
+                          <div className="flex flex-col gap-1.5">
+                            <button
+                              onClick={() => {
+                                if (media.filter((m) => m.media_type === "Image").length > 0) {
+                                  setShowLtImgPicker(true);
+                                } else {
+                                  setToast("No images in media library. Upload images in the Media tab first.");
+                                }
+                              }}
+                              className="w-full py-1.5 text-[10px] font-bold rounded bg-slate-700 hover:bg-slate-600 text-slate-300 border border-slate-600"
+                            >
+                              {ltTemplate.bgImagePath ? "Change Image" : "Pick Image from Library"}
+                            </button>
+                            {ltTemplate.bgImagePath && (
+                              <div className="relative rounded overflow-hidden border border-slate-700" style={{ aspectRatio: "16/9" }}>
+                                <img
+                                  src={convertFileSrc(ltTemplate.bgImagePath)}
+                                  className="w-full h-full object-cover"
+                                  alt="Background preview"
+                                />
+                                <button
+                                  onClick={() => setLtTemplate((t) => ({ ...t, bgImagePath: undefined }))}
+                                  className="absolute top-1 right-1 bg-black/70 text-white text-[10px] rounded px-1 hover:bg-red-700"
+                                >✕</button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {(ltTemplate.bgType === "solid" || ltTemplate.bgType === "gradient") && (
                           <div className="flex flex-col gap-1.5">
                             <div className="flex items-center gap-2">
                               <label className="text-[10px] text-slate-400 w-12">Color</label>
@@ -3999,6 +4166,24 @@ export default function App() {
                   </button>
                 </div>
               </div>
+            )}
+
+            {/* LT background image picker modal */}
+            {showLtImgPicker && (
+              <MediaPickerModal
+                images={media.filter((m) => m.media_type === "Image")}
+                onSelect={(path) => {
+                  setLtTemplate((t) => ({ ...t, bgType: "image", bgImagePath: path }));
+                }}
+                onClose={() => setShowLtImgPicker(false)}
+                onUpload={async () => {
+                  const selected = await openDialog({ multiple: false, filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp"] }] });
+                  if (selected) {
+                    await invoke("add_media", { path: selected });
+                    await loadMedia();
+                  }
+                }}
+              />
             )}
           </div>
         </aside>
