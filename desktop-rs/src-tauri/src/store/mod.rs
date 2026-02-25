@@ -79,7 +79,7 @@ impl BibleStore {
 
             let mut stmt = conn.prepare(
                 "SELECT title, chapter, verse, text FROM super_bible \
-                 WHERE version = ?1 AND language = 'EN' \
+                 WHERE version = ?1 AND language = 'EN' AND text IS NOT NULL AND text != '' \
                  ORDER BY book, chapter, verse"
             )?;
             let rows = stmt.query_map(params![version], |row| {
@@ -309,13 +309,18 @@ impl BibleStore {
         )?;
         let mut rows = stmt.query(params![book, chapter, verse, version])?;
         if let Some(row) = rows.next()? {
-            Ok(Some(Verse {
-                book: row.get(0)?,
-                chapter: row.get(1)?,
-                verse: row.get(2)?,
-                text: row.get(3)?,
-                version: version.to_string(),
-            }))
+            let text: Option<String> = row.get(3)?;
+            if let Some(t) = text {
+                Ok(Some(Verse {
+                    book: row.get(0)?,
+                    chapter: row.get(1)?,
+                    verse: row.get(2)?,
+                    text: t,
+                    version: version.to_string(),
+                }))
+            } else {
+                Ok(None) // skip verses with NULL text
+            }
         } else {
             Ok(None)
         }
