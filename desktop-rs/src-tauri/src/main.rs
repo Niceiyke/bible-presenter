@@ -660,14 +660,44 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let resolver = app.path();
-            let resource_path = match resolver.resource_dir() {
-                Ok(p) => p,
-                Err(e) => {
-                    log_msg(app, &format!("CRITICAL: Failed to get resource dir: {}", e));
-                    return Err(e.into());
+
+            // Resolve resource directory with a fallback to the executable's own directory.
+            // On corporate Windows systems the standard resource_dir() path may be
+            // inaccessible (e.g. redirected Roaming profile, AppLocker policy), so we
+            // probe several candidates in order.
+            let resource_path: PathBuf = {
+                let mut candidates: Vec<PathBuf> = Vec::new();
+
+                // 1. Tauri's canonical resource directory
+                if let Ok(p) = resolver.resource_dir() {
+                    candidates.push(p);
+                }
+                // 2. Directory of the running executable (covers portable / custom-extracted installs)
+                if let Ok(exe) = std::env::current_exe() {
+                    if let Some(dir) = exe.parent() {
+                        candidates.push(dir.to_path_buf());
+                    }
+                }
+                // 3. Current working directory (last resort)
+                if let Ok(cwd) = std::env::current_dir() {
+                    candidates.push(cwd);
+                }
+
+                let chosen = candidates.iter().find(|p| p.join("bible_data/super_bible.db").exists())
+                    .or_else(|| candidates.first())
+                    .cloned();
+
+                match chosen {
+                    Some(p) => {
+                        log_msg(app, &format!("Resource Dir: {:?}", p));
+                        p
+                    }
+                    None => {
+                        log_msg(app, "CRITICAL: Could not locate resource directory");
+                        return Err("Could not locate resource directory".into());
+                    }
                 }
             };
-            log_msg(app, &format!("Resource Dir: {:?}", resource_path));
 
             // C5: Resolve model paths but do NOT load them — deferred to start_session
             let model_paths = ModelPaths {
@@ -705,10 +735,11 @@ fn main() {
                 );
             }
 
-            let store = match store::BibleStore::new(
-                db_path.to_str().expect("Invalid DB path"),
-                embeddings_path.to_str(),
-            ) {
+            let db_path_str = db_path.to_str()
+                .ok_or_else(|| format!("Bible DB path contains non-UTF-8 characters: {:?}", db_path))?;
+            let embeddings_path_str = embeddings_path.to_str();
+
+            let store = match store::BibleStore::new(db_path_str, embeddings_path_str) {
                 Ok(s) => {
                     log_msg(app, "Bible Store loaded successfully.");
                     Arc::new(s)
@@ -725,9 +756,16 @@ fn main() {
             let audio = Arc::new(Mutex::new(audio::AudioEngine::new()));
             log_msg(app, "Audio Engine initialized.");
 
-            let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+            // Use app_local_data_dir (C:\Users\{user}\AppData\Local\...) rather than
+            // app_data_dir (Roaming), which on corporate systems is often redirected to a
+            // network share that may be inaccessible or slow.
+            let app_data_dir = app.path()
+                .app_local_data_dir()
+                .or_else(|_| app.path().app_data_dir())
+                .map_err(|e| e.to_string())?;
+            log_msg(app, &format!("User data dir: {:?}", app_data_dir));
             if !app_data_dir.exists() {
-                fs::create_dir_all(&app_data_dir).map_err(|e| e.to_string())?;
+                fs::create_dir_all(&app_data_dir).map_err(|e| format!("Cannot create data dir {:?}: {}", app_data_dir, e))?;
             }
             let media_schedule = Arc::new(store::MediaScheduleStore::new(app_data_dir).map_err(|e| e.to_string())?);
             log_msg(app, "Media Schedule Store initialized.");
