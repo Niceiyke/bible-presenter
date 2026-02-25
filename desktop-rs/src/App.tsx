@@ -3,8 +3,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { check } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
 import { loadPptxZip, parseSingleSlide, getSlideCount } from "./pptxParser";
 import type { ParsedSlide } from "./pptxParser";
 
@@ -1391,10 +1389,6 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<"bible" | "media" | "presentations" | "studio" | "schedule" | "settings">("bible");
   const [toast, setToast] = useState<string | null>(null);
 
-  // Auto-updater
-  const [updateInfo, setUpdateInfo] = useState<{ version: string; update: any } | null>(null);
-  const [updateDismissed, setUpdateDismissed] = useState(false);
-  const [updateInstalling, setUpdateInstalling] = useState(false);
 
   // Schedule
   const [scheduleEntries, setScheduleEntries] = useState<ScheduleEntry[]>([]);
@@ -1512,13 +1506,6 @@ export default function App() {
     const windowLabel = getCurrentWindow().label;
     setLabel(windowLabel);
     if (windowLabel === "output") return;
-
-    // Check for updates silently in the background
-    check().then((update) => {
-      if (update?.available) {
-        setUpdateInfo({ version: update.version, update });
-      }
-    }).catch(() => {});
 
     loadAudioDevices();
     loadMedia();
@@ -2075,35 +2062,6 @@ export default function App() {
 
   return (
     <div className="h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden">
-      {/* Update banner */}
-      {updateInfo && !updateDismissed && (
-        <div style={{ background: "#1e40af", color: "#fff", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 20px", fontSize: "13px", flexShrink: 0 }}>
-          <span>Update v{updateInfo.version} available</span>
-          <div style={{ display: "flex", gap: "8px" }}>
-            <button
-              disabled={updateInstalling}
-              onClick={async () => {
-                setUpdateInstalling(true);
-                try {
-                  await updateInfo.update.downloadAndInstall();
-                  await relaunch();
-                } catch {
-                  setUpdateInstalling(false);
-                }
-              }}
-              style={{ background: "#fff", color: "#1e40af", border: "none", borderRadius: "4px", padding: "3px 12px", cursor: "pointer", fontWeight: 600 }}
-            >
-              {updateInstalling ? "Installing…" : "Install & Restart"}
-            </button>
-            <button
-              onClick={() => setUpdateDismissed(true)}
-              style={{ background: "transparent", color: "#93c5fd", border: "1px solid #3b82f6", borderRadius: "4px", padding: "3px 10px", cursor: "pointer" }}
-            >
-              Dismiss
-            </button>
-          </div>
-        </div>
-      )}
       {/* Header */}
       <header className="flex justify-between items-center px-6 py-4 border-b border-slate-800 bg-slate-900/50 shrink-0">
         <h1 className="text-xl font-bold tracking-tight text-white">
