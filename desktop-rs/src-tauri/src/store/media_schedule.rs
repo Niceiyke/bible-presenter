@@ -197,6 +197,55 @@ impl Default for PresentationSettings {
 }
 
 // ---------------------------------------------------------------------------
+// Songs
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LyricSection {
+    pub label: String,
+    pub lines: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Song {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub author: Option<String>,
+    pub sections: Vec<LyricSection>,
+}
+
+// ---------------------------------------------------------------------------
+// Lower third
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LowerThirdNameplate {
+    pub name: String,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LowerThirdLyrics {
+    pub line1: String,
+    pub line2: Option<String>,
+    pub section_label: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LowerThirdFreeText {
+    pub text: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "kind", content = "data")]
+pub enum LowerThirdData {
+    Nameplate(LowerThirdNameplate),
+    Lyrics(LowerThirdLyrics),
+    FreeText(LowerThirdFreeText),
+}
+
+// ---------------------------------------------------------------------------
 // Schedule
 // ---------------------------------------------------------------------------
 
@@ -216,6 +265,7 @@ pub struct MediaScheduleStore {
     media_dir: PathBuf,
     presentations_dir: PathBuf,
     studio_dir: PathBuf,
+    songs_dir: PathBuf,
 }
 
 fn classify_extension(ext: &str) -> Option<MediaItemType> {
@@ -240,11 +290,16 @@ impl MediaScheduleStore {
         if !studio_dir.exists() {
             fs::create_dir_all(&studio_dir)?;
         }
+        let songs_dir = app_data_dir.join("songs");
+        if !songs_dir.exists() {
+            fs::create_dir_all(&songs_dir)?;
+        }
         Ok(Self {
             app_data_dir,
             media_dir,
             presentations_dir,
             studio_dir,
+            songs_dir,
         })
     }
 
@@ -685,5 +740,67 @@ impl MediaScheduleStore {
             fs::remove_file(path)?;
         }
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Songs
+    // -----------------------------------------------------------------------
+
+    pub fn list_songs(&self) -> Result<Vec<Song>> {
+        let mut songs = Vec::new();
+        let entries = fs::read_dir(&self.songs_dir)?;
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() { continue; }
+            let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+            if ext != "json" { continue; }
+            if let Ok(json) = fs::read_to_string(&path) {
+                if let Ok(song) = serde_json::from_str::<Song>(&json) {
+                    songs.push(song);
+                }
+            }
+        }
+        songs.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+        Ok(songs)
+    }
+
+    pub fn save_song(&self, mut song: Song) -> Result<Song> {
+        if song.id.is_empty() {
+            song.id = Uuid::new_v4().to_string();
+        }
+        let path = self.songs_dir.join(format!("{}.json", song.id));
+        let json = serde_json::to_string_pretty(&song)?;
+        fs::write(path, json)?;
+        Ok(song)
+    }
+
+    pub fn delete_song(&self, id: &str) -> Result<()> {
+        let path = self.songs_dir.join(format!("{}.json", id));
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Lower third templates
+    // -----------------------------------------------------------------------
+
+    pub fn save_lt_templates(&self, templates: &serde_json::Value) -> Result<()> {
+        let path = self.app_data_dir.join("lt_templates.json");
+        let json = serde_json::to_string_pretty(templates)?;
+        fs::write(path, json)?;
+        Ok(())
+    }
+
+    pub fn load_lt_templates(&self) -> Result<serde_json::Value> {
+        let path = self.app_data_dir.join("lt_templates.json");
+        if path.exists() {
+            let json = fs::read_to_string(path)?;
+            Ok(serde_json::from_str(&json).unwrap_or(serde_json::json!([])))
+        } else {
+            Ok(serde_json::json!([]))
+        }
     }
 }
