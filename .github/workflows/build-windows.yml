@@ -30,8 +30,6 @@ jobs:
 
       - name: download models and bible data
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
           mkdir -p desktop-rs/src-tauri/models
@@ -51,14 +49,11 @@ jobs:
           curl -L "https://raw.githubusercontent.com/alshival/super_bible/main/SUPER_BIBLE/super_bible.db" \
             -o "desktop-rs/src-tauri/bible_data/super_bible.db"
 
-          # ── Stacked embeddings (from this repo's GitHub Release) ────────
-          # Upload all_versions_embeddings.npy to a release tagged v1.0-models first.
-          echo "Downloading all_versions_embeddings.npy from release v1.0-models..."
-          gh release download v1.0-models \
-            --pattern "all_versions_embeddings.npy" \
-            --dir "desktop-rs/src-tauri/bible_data" \
-            --repo "${{ github.repository }}" \
-            --clobber
+          # ── Stacked embeddings (Google Drive) ──────────────────────────
+          echo "Downloading all_versions_embeddings.npy from Google Drive..."
+          pip install -q gdown
+          gdown "https://drive.google.com/uc?id=18rQG5jnZQoM2v1l2EV71VWyTp38lEe5f" \
+            -O "desktop-rs/src-tauri/bible_data/all_versions_embeddings.npy"
 
           # ── verse_index.json (committed in repo) ────────────────────────
           if [ -f "desktop-rs/src-tauri/bible_data/verse_index.json" ]; then
