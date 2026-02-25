@@ -161,10 +161,11 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
     // ── C4: Error channel — audio device errors flow to the UI ────────────
     let (error_tx, mut error_rx) = tokio::sync::mpsc::channel::<String>(10);
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<f32>>(50);
+    let (level_tx, mut level_rx) = tokio::sync::mpsc::channel::<f32>(50);
 
     {
         let mut audio_guard = audio.lock();
-        if let Err(e) = audio_guard.start_capturing(tx, error_tx) {
+        if let Err(e) = audio_guard.start_capturing(tx, error_tx, Some(level_tx)) {
             *is_running.lock() = false;
             return Err(e.to_string());
         }
@@ -175,6 +176,14 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
     tokio::spawn(async move {
         while let Some(msg) = error_rx.recv().await {
             let _ = app_err.emit("audio-error", msg);
+        }
+    });
+
+    // Forward mic energy levels to the frontend for the VU meter
+    let app_level = app.clone();
+    tokio::spawn(async move {
+        while let Some(level) = level_rx.recv().await {
+            let _ = app_level.emit("audio-level", level);
         }
     });
 
@@ -193,8 +202,8 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
 
     tokio::spawn(async move {
         let mut buffer = Vec::new();
-        let window_size = 32000; // 2 s at 16 kHz
-        let overlap = 8000; // 500 ms overlap
+        let window_size = 16000; // 1 s at 16 kHz
+        let overlap = 4000;  // 250 ms overlap
 
         // Loop exits naturally when both senders are dropped (via stop_session
         // calling audio.stop() which clears active_tx and active_error_tx)
@@ -218,7 +227,14 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
                     .flatten();
 
                 if let Some((text, item)) = result {
-                    if !text.trim().is_empty() {
+                    let lower = text.trim().to_lowercase();
+                    const GARBAGE: &[&str] = &[
+                        "[blank_audio]", "[silence]", "[music]",
+                        "[inaudible]", "(silence)", "[ silence ]",
+                    ];
+                    let is_garbage = lower.is_empty()
+                        || GARBAGE.iter().any(|g| lower.contains(g));
+                    if !is_garbage {
                         let _ = app_task.emit(
                             "transcription-update",
                             TranscriptionUpdate {

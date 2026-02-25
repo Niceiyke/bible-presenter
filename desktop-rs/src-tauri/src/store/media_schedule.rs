@@ -139,6 +139,8 @@ pub enum BackgroundSetting {
     Color(String),
     /// Absolute path to a local image file.
     Image(String),
+    /// A live camera feed by deviceId string.
+    Camera(String),
 }
 
 impl Default for BackgroundSetting {
