@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from "react";
+import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
@@ -106,6 +106,66 @@ export interface ScheduleEntry {
   id: string;
   item: DisplayItem;
 }
+
+// ─── Song types ───────────────────────────────────────────────────────────────
+
+export interface LyricSection {
+  label: string;
+  lines: string[];
+}
+
+export interface Song {
+  id: string;
+  title: string;
+  author?: string;
+  sections: LyricSection[];
+}
+
+// ─── Lower third types ────────────────────────────────────────────────────────
+
+export type LowerThirdData =
+  | { kind: "Nameplate"; data: { name: string; title?: string } }
+  | { kind: "Lyrics";    data: { line1: string; line2?: string; section_label?: string } }
+  | { kind: "FreeText";  data: { text: string } };
+
+export interface LowerThirdTemplate {
+  id: string; name: string;
+  // Background
+  bgType: "solid" | "gradient" | "transparent";
+  bgColor: string; bgOpacity: number; bgGradientEnd: string; bgBlur: boolean;
+  // Accent bar
+  accentEnabled: boolean; accentColor: string;
+  accentSide: "left" | "right" | "top" | "bottom"; accentWidth: number;
+  // Position
+  hAlign: "left" | "center" | "right"; vAlign: "top" | "middle" | "bottom";
+  offsetX: number; offsetY: number;
+  // Size
+  widthPct: number; paddingX: number; paddingY: number; borderRadius: number;
+  // Primary text (name / line1 / free text)
+  primaryFont: string; primarySize: number; primaryColor: string;
+  primaryBold: boolean; primaryItalic: boolean; primaryUppercase: boolean;
+  // Secondary text (title / line2)
+  secondaryFont: string; secondarySize: number; secondaryColor: string;
+  secondaryBold: boolean; secondaryItalic: boolean; secondaryUppercase: boolean;
+  // Section label
+  labelVisible: boolean; labelColor: string; labelSize: number; labelUppercase: boolean;
+  // Animation
+  animation: "fade" | "slide-up" | "slide-left" | "none";
+}
+
+const DEFAULT_LT_TEMPLATE: LowerThirdTemplate = {
+  id: "default", name: "Default",
+  bgType: "solid", bgColor: "#000000", bgOpacity: 85, bgGradientEnd: "#141428", bgBlur: false,
+  accentEnabled: true, accentColor: "#f59e0b", accentSide: "left", accentWidth: 4,
+  hAlign: "left", vAlign: "bottom", offsetX: 48, offsetY: 40,
+  widthPct: 60, paddingX: 24, paddingY: 16, borderRadius: 12,
+  primaryFont: "Georgia", primarySize: 36, primaryColor: "#ffffff",
+  primaryBold: true, primaryItalic: false, primaryUppercase: false,
+  secondaryFont: "Arial", secondarySize: 22, secondaryColor: "#f59e0b",
+  secondaryBold: false, secondaryItalic: false, secondaryUppercase: false,
+  labelVisible: true, labelColor: "#f59e0b", labelSize: 13, labelUppercase: true,
+  animation: "slide-up",
+};
 
 export interface Schedule {
   id: string;
@@ -1098,10 +1158,131 @@ function SlideThumbnail({
   );
 }
 
+// ─── Lower Third helpers ──────────────────────────────────────────────────────
+
+function hexToRgba(hex: string, opacity: number): string {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${(opacity / 100).toFixed(2)})`;
+}
+
+function buildLtPositionStyle(t: LowerThirdTemplate): React.CSSProperties {
+  const style: React.CSSProperties = { position: "absolute", zIndex: 50, width: `${t.widthPct}%` };
+  let tx = "";
+  let ty = "";
+  if (t.hAlign === "left") { style.left = t.offsetX; }
+  else if (t.hAlign === "right") { style.right = t.offsetX; }
+  else { style.left = "50%"; tx = "-50%"; }
+  if (t.vAlign === "top") { style.top = t.offsetY; }
+  else if (t.vAlign === "bottom") { style.bottom = t.offsetY; }
+  else { style.top = "50%"; ty = "-50%"; }
+  if (tx || ty) style.transform = `translate(${tx || "0"}, ${ty || "0"})`;
+  return style;
+}
+
+function buildLtContainerStyle(t: LowerThirdTemplate): React.CSSProperties {
+  const style: React.CSSProperties = {
+    paddingLeft: t.paddingX, paddingRight: t.paddingX,
+    paddingTop: t.paddingY, paddingBottom: t.paddingY,
+    borderRadius: t.borderRadius, overflow: "hidden",
+    backdropFilter: t.bgBlur ? "blur(8px)" : undefined,
+  };
+  if (t.bgType === "solid") {
+    style.background = hexToRgba(t.bgColor, t.bgOpacity);
+  } else if (t.bgType === "gradient") {
+    style.background = `linear-gradient(135deg, ${hexToRgba(t.bgColor, t.bgOpacity)} 0%, ${hexToRgba(t.bgGradientEnd, t.bgOpacity)} 100%)`;
+  } else {
+    style.background = "transparent";
+  }
+  if (t.accentEnabled) {
+    const border = `${t.accentWidth}px solid ${t.accentColor}`;
+    if (t.accentSide === "left") style.borderLeft = border;
+    else if (t.accentSide === "right") style.borderRight = border;
+    else if (t.accentSide === "top") style.borderTop = border;
+    else style.borderBottom = border;
+  }
+  return style;
+}
+
+function buildLtTextStyle(
+  font: string, size: number, color: string,
+  bold: boolean, italic: boolean, uppercase: boolean
+): React.CSSProperties {
+  return {
+    fontFamily: font, fontSize: size, color,
+    fontWeight: bold ? "bold" : "normal",
+    fontStyle: italic ? "italic" : "normal",
+    textTransform: uppercase ? "uppercase" : undefined,
+    lineHeight: 1.25, margin: 0,
+  };
+}
+
+function buildLtLabelStyle(t: LowerThirdTemplate): React.CSSProperties {
+  return {
+    ...buildLtTextStyle(t.secondaryFont, t.labelSize, t.labelColor, true, false, t.labelUppercase),
+    letterSpacing: "0.1em", marginBottom: 4,
+  };
+}
+
+function ltAnimClass(t: LowerThirdTemplate): string {
+  switch (t.animation) {
+    case "fade": return "animate-in fade-in duration-500";
+    case "slide-up": return "animate-in slide-in-from-bottom-4 fade-in duration-500";
+    case "slide-left": return "animate-in slide-in-from-right-4 fade-in duration-500";
+    default: return "";
+  }
+}
+
+// ─── Lower Third Overlay ──────────────────────────────────────────────────────
+
+function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData; template: LowerThirdTemplate }) {
+  return (
+    <div style={buildLtPositionStyle(t)} className={ltAnimClass(t)}>
+      <div style={buildLtContainerStyle(t)}>
+        {data.kind === "Nameplate" && (
+          <>
+            <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
+              {data.data.name}
+            </p>
+            {data.data.title && (
+              <p style={{ ...buildLtTextStyle(t.secondaryFont, t.secondarySize, t.secondaryColor, t.secondaryBold, t.secondaryItalic, t.secondaryUppercase), marginTop: 4 }}>
+                {data.data.title}
+              </p>
+            )}
+          </>
+        )}
+        {data.kind === "Lyrics" && (
+          <>
+            {data.data.section_label && t.labelVisible && (
+              <p style={buildLtLabelStyle(t)}>{data.data.section_label}</p>
+            )}
+            <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
+              {data.data.line1}
+            </p>
+            {data.data.line2 && (
+              <p style={{ ...buildLtTextStyle(t.secondaryFont, t.secondarySize, t.secondaryColor, t.secondaryBold, t.secondaryItalic, t.secondaryUppercase), marginTop: 4 }}>
+                {data.data.line2}
+              </p>
+            )}
+          </>
+        )}
+        {data.kind === "FreeText" && (
+          <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
+            {data.data.text}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Output Window ────────────────────────────────────────────────────────────
 
 function OutputWindow() {
   const [liveItem, setLiveItem] = useState<DisplayItem | null>(null);
+  const [lowerThird, setLowerThird] = useState<{ data: LowerThirdData; template: LowerThirdTemplate } | null>(null);
   const [settings, setSettings] = useState<PresentationSettings>({
     theme: "dark",
     reference_position: "bottom",
@@ -1131,9 +1312,18 @@ function OutputWindow() {
       setSettings(event.payload as PresentationSettings);
     });
 
+    const unlistenLt = listen("lower-third-update", (event: any) => {
+      if (event.payload) {
+        setLowerThird({ data: event.payload.data as LowerThirdData, template: event.payload.template as LowerThirdTemplate });
+      } else {
+        setLowerThird(null);
+      }
+    });
+
     return () => {
       unlisten.then((f) => f());
       unlistenSettings.then((f) => f());
+      unlistenLt.then((f) => f());
     };
   }, []);
 
@@ -1194,7 +1384,7 @@ function OutputWindow() {
         <>
           {liveItem.type === "Verse" ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center p-16 text-center animate-in fade-in duration-700">
-              <div className="max-w-5xl flex flex-col items-center gap-8">
+              <div className="w-full flex flex-col items-center gap-8">
                 {isTop && ReferenceTag}
                 <h1
                   className="font-serif leading-tight drop-shadow-2xl"
@@ -1251,6 +1441,11 @@ function OutputWindow() {
             Waiting for projection...
           </span>
         </div>
+      )}
+
+      {/* Lower Third Overlay — always on top, independent of liveItem */}
+      {lowerThird && (
+        <LowerThirdOverlay data={lowerThird.data} template={lowerThird.template} />
       )}
     </div>
   );
@@ -1386,8 +1581,35 @@ export default function App() {
   const [studioSlides, setStudioSlides] = useState<Record<string, CustomSlide[]>>({});
 
   // UI
-  const [activeTab, setActiveTab] = useState<"bible" | "media" | "presentations" | "studio" | "schedule" | "settings">("bible");
+  const [activeTab, setActiveTab] = useState<"bible" | "media" | "presentations" | "studio" | "schedule" | "lower-third" | "songs" | "settings">("bible");
   const [toast, setToast] = useState<string | null>(null);
+
+  // Songs library
+  const [songs, setSongs] = useState<Song[]>([]);
+  const [songSearch, setSongSearch] = useState("");
+  const [editingSong, setEditingSong] = useState<Song | null>(null);
+  const [songImportText, setSongImportText] = useState("");
+  const [showSongImport, setShowSongImport] = useState(false);
+
+  // Lower third
+  type LtMode = "nameplate" | "lyrics" | "freetext";
+  const [ltMode, setLtMode] = useState<LtMode>("nameplate");
+  const [ltVisible, setLtVisible] = useState(false);
+  const [ltTemplate, setLtTemplate] = useState<LowerThirdTemplate>(DEFAULT_LT_TEMPLATE);
+  const [ltSavedTemplates, setLtSavedTemplates] = useState<LowerThirdTemplate[]>([DEFAULT_LT_TEMPLATE]);
+  const [ltDesignOpen, setLtDesignOpen] = useState(false);
+  // Nameplate mode
+  const [ltName, setLtName] = useState("");
+  const [ltTitle, setLtTitle] = useState("");
+  // Free text mode
+  const [ltFreeText, setLtFreeText] = useState("");
+  // Lyrics mode
+  const [ltSongId, setLtSongId] = useState<string | null>(null);
+  const [ltLineIndex, setLtLineIndex] = useState(0);
+  const [ltLinesPerDisplay, setLtLinesPerDisplay] = useState<1 | 2>(2);
+  const [ltAutoAdvance, setLtAutoAdvance] = useState(false);
+  const [ltAutoSeconds, setLtAutoSeconds] = useState(4);
+  const ltAutoRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
 
   // Schedule
@@ -1500,6 +1722,105 @@ export default function App() {
     }
   }, []);
 
+  const loadSongs = useCallback(async () => {
+    try {
+      const result = await invoke<Song[]>("list_songs");
+      setSongs(result);
+    } catch (err) {
+      console.error("Failed to load songs:", err);
+    }
+  }, []);
+
+  const loadLtTemplates = useCallback(async () => {
+    try {
+      const result = await invoke<LowerThirdTemplate[]>("load_lt_templates");
+      if (Array.isArray(result) && result.length > 0) {
+        setLtSavedTemplates(result);
+        setLtTemplate(result[0]);
+      }
+    } catch (err) {
+      console.error("Failed to load lt templates:", err);
+    }
+  }, []);
+
+  // ── Lower Third helpers ──────────────────────────────────────────────────────
+
+  /** Flattened list of all lines across all sections for the loaded song. */
+  const ltFlatLines = useMemo((): { text: string; sectionLabel: string }[] => {
+    const song = songs.find((s) => s.id === ltSongId);
+    if (!song) return [];
+    const flat: { text: string; sectionLabel: string }[] = [];
+    for (const section of song.sections) {
+      for (const line of section.lines) {
+        flat.push({ text: line, sectionLabel: section.label });
+      }
+    }
+    return flat;
+  }, [songs, ltSongId]);
+
+  const ltSendCurrent = useCallback(async (index: number) => {
+    if (ltFlatLines.length === 0) return;
+    const clampedIndex = Math.max(0, Math.min(index, ltFlatLines.length - 1));
+    const line1 = ltFlatLines[clampedIndex];
+    const line2 = ltLinesPerDisplay === 2 ? ltFlatLines[clampedIndex + 1] : undefined;
+    const payload: LowerThirdData = {
+      kind: "Lyrics",
+      data: {
+        line1: line1.text,
+        line2: line2?.text,
+        section_label: line1.sectionLabel,
+      },
+    };
+    await invoke("show_lower_third", { data: payload, template: ltTemplate });
+  }, [ltFlatLines, ltLinesPerDisplay, ltTemplate]);
+
+  const ltAdvance = useCallback(async (dir: 1 | -1) => {
+    if (ltFlatLines.length === 0) return;
+    const step = ltLinesPerDisplay;
+    const next = Math.max(0, Math.min(ltLineIndex + dir * step, ltFlatLines.length - 1));
+    setLtLineIndex(next);
+    if (ltVisible) await ltSendCurrent(next);
+  }, [ltFlatLines, ltLinesPerDisplay, ltLineIndex, ltVisible, ltSendCurrent]);
+
+  // Keyboard shortcuts for lyrics control (Space/→ = next, ← = prev, H = show/hide)
+  useEffect(() => {
+    if (activeTab !== "lower-third" || ltMode !== "lyrics") return;
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === " " || e.key === "ArrowRight") { e.preventDefault(); ltAdvance(1); }
+      if (e.key === "ArrowLeft") { e.preventDefault(); ltAdvance(-1); }
+      if (e.key === "h" || e.key === "H") {
+        if (ltVisible) invoke("hide_lower_third").then(() => setLtVisible(false));
+        else {
+          if (!ltSongId || ltFlatLines.length === 0) return;
+          const line1 = ltFlatLines[ltLineIndex];
+          const line2 = ltLinesPerDisplay === 2 ? ltFlatLines[ltLineIndex + 1] : undefined;
+          const payload: LowerThirdData = { kind: "Lyrics", data: { line1: line1.text, line2: line2?.text, section_label: line1.sectionLabel } };
+          invoke("show_lower_third", { data: payload, template: ltTemplate }).then(() => setLtVisible(true));
+        }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [activeTab, ltMode, ltAdvance, ltVisible, ltSongId, ltFlatLines, ltLineIndex, ltLinesPerDisplay, ltTemplate]);
+
+  // Auto-advance interval
+  useEffect(() => {
+    if (ltAutoRef.current) clearInterval(ltAutoRef.current);
+    if (ltAutoAdvance && ltVisible && ltMode === "lyrics") {
+      ltAutoRef.current = setInterval(() => {
+        setLtLineIndex((prev) => {
+          const step = ltLinesPerDisplay;
+          const next = Math.min(prev + step, ltFlatLines.length - 1);
+          ltSendCurrent(next);
+          return next;
+        });
+      }, ltAutoSeconds * 1000);
+    }
+    return () => { if (ltAutoRef.current) clearInterval(ltAutoRef.current); };
+  }, [ltAutoAdvance, ltVisible, ltMode, ltAutoSeconds, ltLinesPerDisplay, ltFlatLines, ltSendCurrent]);
+
   // ── Initialisation ──────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -1515,6 +1836,8 @@ export default function App() {
     loadPresentations();
     loadStudioList();
     loadSchedule();
+    loadSongs();
+    loadLtTemplates();
 
     invoke("get_bible_versions")
       .then((versions: any) => {
@@ -2162,7 +2485,7 @@ export default function App() {
         <aside className="w-80 bg-slate-900/30 border-r border-slate-800 flex flex-col overflow-hidden shrink-0">
           {/* Tab nav */}
           <div className="flex border-b border-slate-800 bg-slate-900/50 shrink-0 overflow-x-auto">
-            {(["bible", "media", "presentations", "studio", "schedule", "settings"] as const).map((tab) => (
+            {(["bible", "media", "presentations", "studio", "schedule", "lower-third", "songs", "settings"] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -2172,7 +2495,7 @@ export default function App() {
                     : "text-slate-500 hover:text-slate-300 hover:bg-slate-800/50"
                 }`}
               >
-                {tab === "settings" ? "⚙" : tab === "presentations" ? "PPTX" : tab === "studio" ? "Studio" : tab}
+                {tab === "settings" ? "⚙" : tab === "presentations" ? "PPTX" : tab === "studio" ? "Studio" : tab === "lower-third" ? "L3" : tab === "songs" ? "Songs" : tab}
                 {tab === "schedule" && scheduleEntries.length > 0 && (
                   <span className="ml-1 text-[8px] bg-amber-500 text-black rounded-full px-1 font-black">
                     {scheduleEntries.length}
@@ -2996,6 +3319,684 @@ export default function App() {
                   <p className="text-[10px] text-slate-600 italic mt-2">
                     Changes apply instantly to the output window.
                   </p>
+                </div>
+              </div>
+            )}
+
+            {/* ── Songs Tab ── */}
+            {activeTab === "songs" && (
+              <div className="flex flex-col gap-4">
+                {/* Header */}
+                <div className="flex justify-between items-center">
+                  <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Songs Library</h2>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setShowSongImport((v) => !v)}
+                      className="text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded"
+                    >Import</button>
+                    <button
+                      onClick={() => setEditingSong({ id: "", title: "", author: "", sections: [{ label: "Verse 1", lines: [""] }] })}
+                      className="text-[10px] font-bold uppercase bg-amber-600 hover:bg-amber-500 text-white px-2 py-1 rounded"
+                    >+ New</button>
+                  </div>
+                </div>
+
+                {/* Import text area */}
+                {showSongImport && (
+                  <div className="flex flex-col gap-2 bg-slate-900 border border-slate-700 rounded-xl p-3">
+                    <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">Paste lyrics — use [Section] headers</p>
+                    <textarea
+                      className="w-full h-32 bg-slate-950 text-slate-200 text-xs rounded-lg p-2 border border-slate-700 resize-none font-mono"
+                      placeholder={"[Verse 1]\nAmazing grace how sweet the sound\nThat saved a wretch like me\n\n[Chorus]\nMy chains are gone"}
+                      value={songImportText}
+                      onChange={(e) => setSongImportText(e.target.value)}
+                    />
+                    <div className="flex gap-2">
+                      <input
+                        className="flex-1 bg-slate-800 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700"
+                        placeholder="Song title"
+                        id="import-song-title"
+                      />
+                      <button
+                        className="text-[10px] font-bold uppercase bg-amber-600 hover:bg-amber-500 text-white px-3 py-1 rounded"
+                        onClick={async () => {
+                          const titleEl = document.getElementById("import-song-title") as HTMLInputElement;
+                          const title = titleEl?.value.trim() || "Untitled";
+                          const sections: LyricSection[] = [];
+                          let current: LyricSection | null = null;
+                          for (const raw of songImportText.split("\n")) {
+                            const line = raw.trim();
+                            const m = line.match(/^\[(.+)\]$/);
+                            if (m) {
+                              if (current) sections.push(current);
+                              current = { label: m[1], lines: [] };
+                            } else if (line && current) {
+                              current.lines.push(line);
+                            }
+                          }
+                          if (current && current.lines.length > 0) sections.push(current);
+                          if (sections.length === 0) return;
+                          const saved = await invoke<Song>("save_song", { song: { id: "", title, author: "", sections } });
+                          setSongs((prev) => [...prev, saved].sort((a, b) => a.title.localeCompare(b.title)));
+                          setSongImportText("");
+                          setShowSongImport(false);
+                        }}
+                      >Save</button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Search */}
+                <input
+                  className="w-full bg-slate-800 text-slate-200 text-xs rounded-lg px-3 py-2 border border-slate-700 placeholder-slate-500"
+                  placeholder="Search songs..."
+                  value={songSearch}
+                  onChange={(e) => setSongSearch(e.target.value)}
+                />
+
+                {/* Song list */}
+                <div className="flex flex-col gap-2">
+                  {songs.filter((s) => s.title.toLowerCase().includes(songSearch.toLowerCase())).map((song) => (
+                    <div key={song.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-col gap-1">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <p className="text-sm font-bold text-slate-200">{song.title}</p>
+                          {song.author && <p className="text-[10px] text-slate-500">{song.author}</p>}
+                          <p className="text-[10px] text-slate-600 mt-0.5">{song.sections.length} section{song.sections.length !== 1 ? "s" : ""} · {song.sections.reduce((a, s) => a + s.lines.length, 0)} lines</p>
+                        </div>
+                        <div className="flex gap-1">
+                          <button
+                            onClick={() => { setLtSongId(song.id); setLtLineIndex(0); setActiveTab("lower-third"); setLtMode("lyrics"); }}
+                            className="text-[9px] font-black uppercase bg-green-700 hover:bg-green-600 text-white px-2 py-1 rounded"
+                          >Use</button>
+                          <button
+                            onClick={() => setEditingSong(JSON.parse(JSON.stringify(song)))}
+                            className="text-[9px] font-black uppercase bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-1 rounded"
+                          >Edit</button>
+                          <button
+                            onClick={async () => {
+                              await invoke("delete_song", { id: song.id });
+                              setSongs((prev) => prev.filter((s) => s.id !== song.id));
+                            }}
+                            className="text-[9px] font-black uppercase bg-red-900/50 hover:bg-red-800 text-red-400 px-2 py-1 rounded"
+                          >Del</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {songs.length === 0 && (
+                    <p className="text-slate-600 text-xs italic text-center py-4">No songs yet. Create one or import lyrics.</p>
+                  )}
+                </div>
+
+                {/* Song Editor Modal */}
+                {editingSong && (
+                  <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+                    <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+                      <div className="flex justify-between items-center p-4 border-b border-slate-800">
+                        <h3 className="text-sm font-bold text-slate-200">{editingSong.id ? "Edit Song" : "New Song"}</h3>
+                        <button onClick={() => setEditingSong(null)} className="text-slate-500 hover:text-white text-lg font-bold">✕</button>
+                      </div>
+                      <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+                        <div className="flex gap-2">
+                          <input
+                            className="flex-1 bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700"
+                            placeholder="Song title"
+                            value={editingSong.title}
+                            onChange={(e) => setEditingSong({ ...editingSong, title: e.target.value })}
+                          />
+                          <input
+                            className="flex-1 bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700"
+                            placeholder="Author (optional)"
+                            value={editingSong.author || ""}
+                            onChange={(e) => setEditingSong({ ...editingSong, author: e.target.value })}
+                          />
+                        </div>
+                        {editingSong.sections.map((section, si) => (
+                          <div key={si} className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 flex flex-col gap-2">
+                            <div className="flex gap-2 items-center">
+                              <input
+                                className="flex-1 bg-slate-800 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600 font-bold"
+                                value={section.label}
+                                onChange={(e) => {
+                                  const s = [...editingSong.sections];
+                                  s[si] = { ...s[si], label: e.target.value };
+                                  setEditingSong({ ...editingSong, sections: s });
+                                }}
+                              />
+                              <button
+                                onClick={() => {
+                                  const s = editingSong.sections.filter((_, i) => i !== si);
+                                  setEditingSong({ ...editingSong, sections: s });
+                                }}
+                                className="text-red-500 hover:text-red-300 text-xs font-bold px-1"
+                              >✕</button>
+                            </div>
+                            {section.lines.map((line, li) => (
+                              <div key={li} className="flex gap-1">
+                                <input
+                                  className="flex-1 bg-slate-900 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700"
+                                  value={line}
+                                  placeholder={`Line ${li + 1}`}
+                                  onChange={(e) => {
+                                    const s = [...editingSong.sections];
+                                    const lines = [...s[si].lines];
+                                    lines[li] = e.target.value;
+                                    s[si] = { ...s[si], lines };
+                                    setEditingSong({ ...editingSong, sections: s });
+                                  }}
+                                />
+                                <button
+                                  onClick={() => {
+                                    const s = [...editingSong.sections];
+                                    s[si] = { ...s[si], lines: s[si].lines.filter((_, i) => i !== li) };
+                                    setEditingSong({ ...editingSong, sections: s });
+                                  }}
+                                  className="text-slate-600 hover:text-red-400 text-xs px-1"
+                                >✕</button>
+                              </div>
+                            ))}
+                            <button
+                              onClick={() => {
+                                const s = [...editingSong.sections];
+                                s[si] = { ...s[si], lines: [...s[si].lines, ""] };
+                                setEditingSong({ ...editingSong, sections: s });
+                              }}
+                              className="text-[10px] text-slate-500 hover:text-amber-400 font-bold uppercase self-start"
+                            >+ Add Line</button>
+                          </div>
+                        ))}
+                        <button
+                          onClick={() => setEditingSong({ ...editingSong, sections: [...editingSong.sections, { label: `Section ${editingSong.sections.length + 1}`, lines: [""] }] })}
+                          className="text-[10px] font-bold uppercase text-slate-500 hover:text-amber-400 border border-slate-700 hover:border-amber-500 rounded-lg py-2"
+                        >+ Add Section</button>
+                      </div>
+                      <div className="p-4 border-t border-slate-800 flex justify-end gap-2">
+                        <button onClick={() => setEditingSong(null)} className="text-xs font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg">Cancel</button>
+                        <button
+                          onClick={async () => {
+                            const saved = await invoke<Song>("save_song", { song: editingSong });
+                            setSongs((prev) => {
+                              const idx = prev.findIndex((s) => s.id === saved.id);
+                              if (idx >= 0) { const n = [...prev]; n[idx] = saved; return n; }
+                              return [...prev, saved].sort((a, b) => a.title.localeCompare(b.title));
+                            });
+                            setEditingSong(null);
+                          }}
+                          className="text-xs font-bold uppercase bg-amber-600 hover:bg-amber-500 text-white px-4 py-2 rounded-lg"
+                        >Save Song</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Lower Third Tab ── */}
+            {activeTab === "lower-third" && (
+              <div className="flex flex-col gap-4">
+                <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Lower Third</h2>
+
+                {/* ── Design Panel ── */}
+                <div className="border border-slate-700 rounded-xl overflow-hidden">
+                  <button
+                    onClick={() => setLtDesignOpen((v) => !v)}
+                    className="w-full flex items-center justify-between px-3 py-2 bg-slate-800 hover:bg-slate-750 text-xs font-bold text-slate-300 uppercase tracking-widest"
+                  >
+                    <span>Design</span>
+                    <span className="text-slate-500">{ltDesignOpen ? "▲" : "▼"}</span>
+                  </button>
+
+                  {ltDesignOpen && (
+                    <div className="p-3 flex flex-col gap-4">
+
+                      {/* Template selector */}
+                      <div className="flex flex-col gap-2">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Template</p>
+                        <div className="flex gap-1.5">
+                          <input
+                            className="flex-1 bg-slate-900 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700"
+                            placeholder="Template name"
+                            value={ltTemplate.name}
+                            onChange={(e) => setLtTemplate((t) => ({ ...t, name: e.target.value }))}
+                          />
+                        </div>
+                        <div className="flex gap-1.5">
+                          <select
+                            className="flex-1 bg-slate-900 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700"
+                            value={ltTemplate.id}
+                            onChange={(e) => {
+                              const found = ltSavedTemplates.find((t) => t.id === e.target.value);
+                              if (found) setLtTemplate(found);
+                            }}
+                          >
+                            {ltSavedTemplates.map((t) => (
+                              <option key={t.id} value={t.id}>{t.name}</option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={async () => {
+                              const updated = ltSavedTemplates.some((t) => t.id === ltTemplate.id)
+                                ? ltSavedTemplates.map((t) => t.id === ltTemplate.id ? ltTemplate : t)
+                                : [...ltSavedTemplates, { ...ltTemplate, id: stableId() }];
+                              setLtSavedTemplates(updated);
+                              await invoke("save_lt_templates", { templates: updated });
+                            }}
+                            className="px-2 py-1 bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold rounded"
+                          >Save</button>
+                          <button
+                            onClick={async () => {
+                              if (ltSavedTemplates.length <= 1) return;
+                              const updated = ltSavedTemplates.filter((t) => t.id !== ltTemplate.id);
+                              setLtSavedTemplates(updated);
+                              setLtTemplate(updated[0]);
+                              await invoke("save_lt_templates", { templates: updated });
+                            }}
+                            className="px-2 py-1 bg-red-800 hover:bg-red-700 text-white text-[10px] font-bold rounded"
+                          >Del</button>
+                        </div>
+                      </div>
+
+                      <div className="border-t border-slate-700" />
+
+                      {/* Background */}
+                      <div className="flex flex-col gap-2">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Background</p>
+                        <div className="flex gap-1">
+                          {(["solid", "gradient", "transparent"] as const).map((bt) => (
+                            <button key={bt} onClick={() => setLtTemplate((t) => ({ ...t, bgType: bt }))}
+                              className={`flex-1 py-1 text-[10px] font-bold rounded ${ltTemplate.bgType === bt ? "bg-slate-600 text-white" : "bg-slate-800 text-slate-400"}`}>
+                              {bt === "solid" ? "Solid" : bt === "gradient" ? "Grad" : "None"}
+                            </button>
+                          ))}
+                        </div>
+                        {ltTemplate.bgType !== "transparent" && (
+                          <div className="flex flex-col gap-1.5">
+                            <div className="flex items-center gap-2">
+                              <label className="text-[10px] text-slate-400 w-12">Color</label>
+                              <input type="color" value={ltTemplate.bgColor}
+                                onChange={(e) => setLtTemplate((t) => ({ ...t, bgColor: e.target.value }))}
+                                className="w-8 h-6 rounded cursor-pointer border-0 bg-transparent" />
+                              <label className="text-[10px] text-slate-400">Opacity</label>
+                              <input type="range" min={0} max={100} value={ltTemplate.bgOpacity}
+                                onChange={(e) => setLtTemplate((t) => ({ ...t, bgOpacity: Number(e.target.value) }))}
+                                className="flex-1" />
+                              <span className="text-[10px] text-slate-400 w-8 text-right">{ltTemplate.bgOpacity}%</span>
+                            </div>
+                            {ltTemplate.bgType === "gradient" && (
+                              <div className="flex items-center gap-2">
+                                <label className="text-[10px] text-slate-400 w-12">End</label>
+                                <input type="color" value={ltTemplate.bgGradientEnd}
+                                  onChange={(e) => setLtTemplate((t) => ({ ...t, bgGradientEnd: e.target.value }))}
+                                  className="w-8 h-6 rounded cursor-pointer border-0 bg-transparent" />
+                              </div>
+                            )}
+                            <div className="flex items-center gap-2">
+                              <label className="text-[10px] text-slate-400">Blur</label>
+                              <input type="checkbox" checked={ltTemplate.bgBlur}
+                                onChange={(e) => setLtTemplate((t) => ({ ...t, bgBlur: e.target.checked }))} />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="border-t border-slate-700" />
+
+                      {/* Accent Bar */}
+                      <div className="flex flex-col gap-2">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Accent Bar</p>
+                        <div className="flex items-center gap-2">
+                          <input type="checkbox" checked={ltTemplate.accentEnabled}
+                            onChange={(e) => setLtTemplate((t) => ({ ...t, accentEnabled: e.target.checked }))} />
+                          <label className="text-[10px] text-slate-400">Enabled</label>
+                        </div>
+                        {ltTemplate.accentEnabled && (
+                          <>
+                            <div className="flex items-center gap-2">
+                              <label className="text-[10px] text-slate-400 w-12">Color</label>
+                              <input type="color" value={ltTemplate.accentColor}
+                                onChange={(e) => setLtTemplate((t) => ({ ...t, accentColor: e.target.value }))}
+                                className="w-8 h-6 rounded cursor-pointer border-0 bg-transparent" />
+                              <label className="text-[10px] text-slate-400">Side</label>
+                              <div className="flex gap-1">
+                                {(["left", "right", "top", "bottom"] as const).map((s) => (
+                                  <button key={s} onClick={() => setLtTemplate((t) => ({ ...t, accentSide: s }))}
+                                    className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${ltTemplate.accentSide === s ? "bg-amber-600 text-white" : "bg-slate-700 text-slate-400"}`}>
+                                    {s[0].toUpperCase()}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <label className="text-[10px] text-slate-400 w-12">Width</label>
+                              <input type="range" min={1} max={20} value={ltTemplate.accentWidth}
+                                onChange={(e) => setLtTemplate((t) => ({ ...t, accentWidth: Number(e.target.value) }))}
+                                className="flex-1" />
+                              <span className="text-[10px] text-slate-400 w-6 text-right">{ltTemplate.accentWidth}</span>
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      <div className="border-t border-slate-700" />
+
+                      {/* Position & Size */}
+                      <div className="flex flex-col gap-2">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Position & Size</p>
+                        {/* 3×3 alignment grid */}
+                        <div className="grid grid-cols-3 gap-1">
+                          {(["top","middle","bottom"] as const).map((v) =>
+                            (["left","center","right"] as const).map((h) => (
+                              <button key={`${v}-${h}`}
+                                onClick={() => setLtTemplate((t) => ({ ...t, vAlign: v, hAlign: h }))}
+                                className={`py-1.5 text-[9px] rounded border transition-all ${ltTemplate.vAlign === v && ltTemplate.hAlign === h ? "border-amber-500 bg-amber-900/40 text-amber-300" : "border-slate-700 bg-slate-900 text-slate-500 hover:border-slate-500"}`}>
+                                {v[0].toUpperCase()}{h[0].toUpperCase()}
+                              </button>
+                            ))
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <label className="text-[10px] text-slate-400 w-14">Offset X</label>
+                          <input type="range" min={0} max={200} value={ltTemplate.offsetX}
+                            onChange={(e) => setLtTemplate((t) => ({ ...t, offsetX: Number(e.target.value) }))}
+                            className="flex-1" />
+                          <span className="text-[10px] text-slate-400 w-8 text-right">{ltTemplate.offsetX}px</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <label className="text-[10px] text-slate-400 w-14">Offset Y</label>
+                          <input type="range" min={0} max={200} value={ltTemplate.offsetY}
+                            onChange={(e) => setLtTemplate((t) => ({ ...t, offsetY: Number(e.target.value) }))}
+                            className="flex-1" />
+                          <span className="text-[10px] text-slate-400 w-8 text-right">{ltTemplate.offsetY}px</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <label className="text-[10px] text-slate-400 w-14">Width %</label>
+                          <input type="range" min={10} max={100} value={ltTemplate.widthPct}
+                            onChange={(e) => setLtTemplate((t) => ({ ...t, widthPct: Number(e.target.value) }))}
+                            className="flex-1" />
+                          <span className="text-[10px] text-slate-400 w-8 text-right">{ltTemplate.widthPct}%</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <label className="text-[10px] text-slate-400 w-14">Pad X</label>
+                          <input type="range" min={0} max={80} value={ltTemplate.paddingX}
+                            onChange={(e) => setLtTemplate((t) => ({ ...t, paddingX: Number(e.target.value) }))}
+                            className="flex-1" />
+                          <span className="text-[10px] text-slate-400 w-8 text-right">{ltTemplate.paddingX}px</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <label className="text-[10px] text-slate-400 w-14">Pad Y</label>
+                          <input type="range" min={0} max={80} value={ltTemplate.paddingY}
+                            onChange={(e) => setLtTemplate((t) => ({ ...t, paddingY: Number(e.target.value) }))}
+                            className="flex-1" />
+                          <span className="text-[10px] text-slate-400 w-8 text-right">{ltTemplate.paddingY}px</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <label className="text-[10px] text-slate-400 w-14">Radius</label>
+                          <input type="range" min={0} max={40} value={ltTemplate.borderRadius}
+                            onChange={(e) => setLtTemplate((t) => ({ ...t, borderRadius: Number(e.target.value) }))}
+                            className="flex-1" />
+                          <span className="text-[10px] text-slate-400 w-8 text-right">{ltTemplate.borderRadius}px</span>
+                        </div>
+                      </div>
+
+                      <div className="border-t border-slate-700" />
+
+                      {/* Typography */}
+                      <div className="flex flex-col gap-3">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Typography</p>
+                        {/* Primary */}
+                        <div className="flex flex-col gap-1">
+                          <p className="text-[9px] text-slate-600 uppercase tracking-widest">Primary (name / line 1 / text)</p>
+                          <div className="flex gap-1.5 flex-wrap items-center">
+                            <select value={ltTemplate.primaryFont}
+                              onChange={(e) => setLtTemplate((t) => ({ ...t, primaryFont: e.target.value }))}
+                              className="bg-slate-900 text-slate-200 text-[10px] rounded px-1 py-0.5 border border-slate-700 flex-1 min-w-0">
+                              {FONTS.map((f) => <option key={f} value={f}>{f}</option>)}
+                            </select>
+                            <input type="number" min={8} max={120} value={ltTemplate.primarySize}
+                              onChange={(e) => setLtTemplate((t) => ({ ...t, primarySize: Number(e.target.value) }))}
+                              className="w-12 bg-slate-900 text-slate-200 text-[10px] rounded px-1 py-0.5 border border-slate-700 text-center" />
+                            <input type="color" value={ltTemplate.primaryColor}
+                              onChange={(e) => setLtTemplate((t) => ({ ...t, primaryColor: e.target.value }))}
+                              className="w-7 h-6 rounded cursor-pointer border-0 bg-transparent" />
+                            <button onClick={() => setLtTemplate((t) => ({ ...t, primaryBold: !t.primaryBold }))}
+                              className={`px-1.5 py-0.5 text-[10px] font-black rounded ${ltTemplate.primaryBold ? "bg-slate-500 text-white" : "bg-slate-800 text-slate-500"}`}>B</button>
+                            <button onClick={() => setLtTemplate((t) => ({ ...t, primaryItalic: !t.primaryItalic }))}
+                              className={`px-1.5 py-0.5 text-[10px] italic rounded ${ltTemplate.primaryItalic ? "bg-slate-500 text-white" : "bg-slate-800 text-slate-500"}`}>I</button>
+                            <button onClick={() => setLtTemplate((t) => ({ ...t, primaryUppercase: !t.primaryUppercase }))}
+                              className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${ltTemplate.primaryUppercase ? "bg-slate-500 text-white" : "bg-slate-800 text-slate-500"}`}>AA</button>
+                          </div>
+                        </div>
+                        {/* Secondary */}
+                        <div className="flex flex-col gap-1">
+                          <p className="text-[9px] text-slate-600 uppercase tracking-widest">Secondary (title / line 2)</p>
+                          <div className="flex gap-1.5 flex-wrap items-center">
+                            <select value={ltTemplate.secondaryFont}
+                              onChange={(e) => setLtTemplate((t) => ({ ...t, secondaryFont: e.target.value }))}
+                              className="bg-slate-900 text-slate-200 text-[10px] rounded px-1 py-0.5 border border-slate-700 flex-1 min-w-0">
+                              {FONTS.map((f) => <option key={f} value={f}>{f}</option>)}
+                            </select>
+                            <input type="number" min={8} max={120} value={ltTemplate.secondarySize}
+                              onChange={(e) => setLtTemplate((t) => ({ ...t, secondarySize: Number(e.target.value) }))}
+                              className="w-12 bg-slate-900 text-slate-200 text-[10px] rounded px-1 py-0.5 border border-slate-700 text-center" />
+                            <input type="color" value={ltTemplate.secondaryColor}
+                              onChange={(e) => setLtTemplate((t) => ({ ...t, secondaryColor: e.target.value }))}
+                              className="w-7 h-6 rounded cursor-pointer border-0 bg-transparent" />
+                            <button onClick={() => setLtTemplate((t) => ({ ...t, secondaryBold: !t.secondaryBold }))}
+                              className={`px-1.5 py-0.5 text-[10px] font-black rounded ${ltTemplate.secondaryBold ? "bg-slate-500 text-white" : "bg-slate-800 text-slate-500"}`}>B</button>
+                            <button onClick={() => setLtTemplate((t) => ({ ...t, secondaryItalic: !t.secondaryItalic }))}
+                              className={`px-1.5 py-0.5 text-[10px] italic rounded ${ltTemplate.secondaryItalic ? "bg-slate-500 text-white" : "bg-slate-800 text-slate-500"}`}>I</button>
+                            <button onClick={() => setLtTemplate((t) => ({ ...t, secondaryUppercase: !t.secondaryUppercase }))}
+                              className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${ltTemplate.secondaryUppercase ? "bg-slate-500 text-white" : "bg-slate-800 text-slate-500"}`}>AA</button>
+                          </div>
+                        </div>
+                        {/* Label */}
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-2">
+                            <p className="text-[9px] text-slate-600 uppercase tracking-widest flex-1">Section Label</p>
+                            <input type="checkbox" checked={ltTemplate.labelVisible}
+                              onChange={(e) => setLtTemplate((t) => ({ ...t, labelVisible: e.target.checked }))} />
+                          </div>
+                          {ltTemplate.labelVisible && (
+                            <div className="flex gap-1.5 flex-wrap items-center">
+                              <input type="number" min={8} max={60} value={ltTemplate.labelSize}
+                                onChange={(e) => setLtTemplate((t) => ({ ...t, labelSize: Number(e.target.value) }))}
+                                className="w-12 bg-slate-900 text-slate-200 text-[10px] rounded px-1 py-0.5 border border-slate-700 text-center" />
+                              <input type="color" value={ltTemplate.labelColor}
+                                onChange={(e) => setLtTemplate((t) => ({ ...t, labelColor: e.target.value }))}
+                                className="w-7 h-6 rounded cursor-pointer border-0 bg-transparent" />
+                              <button onClick={() => setLtTemplate((t) => ({ ...t, labelUppercase: !t.labelUppercase }))}
+                                className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${ltTemplate.labelUppercase ? "bg-slate-500 text-white" : "bg-slate-800 text-slate-500"}`}>AA</button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="border-t border-slate-700" />
+
+                      {/* Animation */}
+                      <div className="flex flex-col gap-2">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Animation</p>
+                        <div className="flex gap-1">
+                          {(["fade","slide-up","slide-left","none"] as const).map((a) => (
+                            <button key={a} onClick={() => setLtTemplate((t) => ({ ...t, animation: a }))}
+                              className={`flex-1 py-1 text-[9px] font-bold rounded ${ltTemplate.animation === a ? "bg-amber-700 text-white" : "bg-slate-800 text-slate-400"}`}>
+                              {a === "slide-up" ? "↑" : a === "slide-left" ? "←" : a === "fade" ? "Fade" : "None"}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="border-t border-slate-700" />
+
+                      {/* Preview */}
+                      <div className="flex flex-col gap-2">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Preview</p>
+                        <div className="relative bg-black rounded overflow-hidden" style={{ width: 240, height: 135 }}>
+                          <div style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
+                            <div style={{ width: 1920, height: 1080, position: "absolute", top: 0, left: 0, transformOrigin: "top left", transform: `scale(${240 / 1920})` }}>
+                              <LowerThirdOverlay
+                                template={ltTemplate}
+                                data={
+                                  ltMode === "nameplate"
+                                    ? { kind: "Nameplate", data: { name: ltName || "Name Here", title: ltTitle || "Title / Role" } }
+                                    : ltMode === "freetext"
+                                    ? { kind: "FreeText", data: { text: ltFreeText || "Lower third text" } }
+                                    : { kind: "Lyrics", data: { line1: ltFlatLines[ltLineIndex]?.text || "Song Line 1", line2: ltLinesPerDisplay === 2 ? (ltFlatLines[ltLineIndex + 1]?.text || "Song Line 2") : undefined, section_label: ltFlatLines[ltLineIndex]?.sectionLabel || "Verse 1" } }
+                                }
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                    </div>
+                  )}
+                </div>
+
+                {/* Mode selector */}
+                <div className="flex rounded-lg overflow-hidden border border-slate-700">
+                  {(["nameplate", "lyrics", "freetext"] as const).map((m) => (
+                    <button key={m} onClick={() => setLtMode(m)}
+                      className={`flex-1 py-1.5 text-[10px] font-bold uppercase tracking-widest transition-all ${ltMode === m ? "bg-slate-700 text-amber-400" : "text-slate-500 hover:text-slate-300"}`}>
+                      {m === "freetext" ? "Free Text" : m === "nameplate" ? "Nameplate" : "Lyrics"}
+                    </button>
+                  ))}
+                </div>
+
+                {/* ── Nameplate mode ── */}
+                {ltMode === "nameplate" && (
+                  <div className="flex flex-col gap-3">
+                    <input
+                      className="w-full bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700 placeholder-slate-500"
+                      placeholder="Name"
+                      value={ltName}
+                      onChange={(e) => setLtName(e.target.value)}
+                    />
+                    <input
+                      className="w-full bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700 placeholder-slate-500"
+                      placeholder="Title / Role (optional)"
+                      value={ltTitle}
+                      onChange={(e) => setLtTitle(e.target.value)}
+                    />
+                  </div>
+                )}
+
+                {/* ── Free text mode ── */}
+                {ltMode === "freetext" && (
+                  <textarea
+                    className="w-full bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700 placeholder-slate-500 resize-none h-24"
+                    placeholder="Type your message..."
+                    value={ltFreeText}
+                    onChange={(e) => setLtFreeText(e.target.value)}
+                  />
+                )}
+
+                {/* ── Lyrics mode ── */}
+                {ltMode === "lyrics" && (
+                  <div className="flex flex-col gap-3">
+                    {/* Song picker */}
+                    <div className="flex gap-2 items-center">
+                      <select
+                        className="flex-1 bg-slate-800 text-slate-200 text-xs rounded-lg px-2 py-2 border border-slate-700"
+                        value={ltSongId || ""}
+                        onChange={(e) => { setLtSongId(e.target.value || null); setLtLineIndex(0); }}
+                      >
+                        <option value="">— Select a song —</option>
+                        {songs.map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
+                      </select>
+                    </div>
+
+                    {/* Options */}
+                    <div className="flex gap-3 items-center flex-wrap">
+                      <div className="flex items-center gap-1">
+                        <span className="text-[10px] text-slate-400 uppercase font-bold">Lines:</span>
+                        {([1, 2] as const).map((n) => (
+                          <button key={n} onClick={() => setLtLinesPerDisplay(n)}
+                            className={`text-[10px] font-bold w-6 h-6 rounded ${ltLinesPerDisplay === n ? "bg-amber-600 text-white" : "bg-slate-700 text-slate-400"}`}>
+                            {n}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => setLtAutoAdvance((v) => !v)}
+                          className={`text-[10px] font-bold uppercase px-2 py-1 rounded ${ltAutoAdvance ? "bg-amber-600 text-white" : "bg-slate-700 text-slate-400"}`}>
+                          Auto {ltAutoAdvance ? "ON" : "OFF"}
+                        </button>
+                        {ltAutoAdvance && (
+                          <div className="flex items-center gap-1">
+                            <input type="number" min={1} max={30}
+                              className="w-12 bg-slate-800 text-slate-200 text-xs rounded px-1 py-1 border border-slate-700 text-center"
+                              value={ltAutoSeconds}
+                              onChange={(e) => setLtAutoSeconds(Number(e.target.value))}
+                            />
+                            <span className="text-[10px] text-slate-500">sec</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Line navigator */}
+                    {ltSongId && ltFlatLines.length > 0 && (
+                      <div className="flex flex-col gap-2 bg-slate-900 border border-slate-800 rounded-xl p-3">
+                        <p className="text-[9px] text-slate-600 uppercase font-bold tracking-widest">Now Live</p>
+                        <div className="bg-slate-800 rounded-lg px-3 py-2">
+                          <p className="text-[9px] text-amber-500 font-bold uppercase mb-0.5">{ltFlatLines[ltLineIndex]?.sectionLabel}</p>
+                          <p className="text-sm text-slate-200 font-semibold">{ltFlatLines[ltLineIndex]?.text}</p>
+                          {ltLinesPerDisplay === 2 && ltFlatLines[ltLineIndex + 1] && (
+                            <p className="text-sm text-slate-300">{ltFlatLines[ltLineIndex + 1].text}</p>
+                          )}
+                        </div>
+                        {ltFlatLines[ltLineIndex + ltLinesPerDisplay] && (
+                          <div className="px-3 py-1.5">
+                            <p className="text-[9px] text-slate-600 uppercase font-bold tracking-widest mb-0.5">Up Next</p>
+                            <p className="text-xs text-slate-500 italic">{ltFlatLines[ltLineIndex + ltLinesPerDisplay]?.text}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ── Show / Hide + Nav controls ── */}
+                <div className="flex flex-col gap-2 mt-2">
+                  {ltMode === "lyrics" && (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => ltAdvance(-1)}
+                        className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-lg"
+                      >◀ PREV</button>
+                      <button
+                        onClick={() => ltAdvance(1)}
+                        className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-lg"
+                      >NEXT ▶</button>
+                    </div>
+                  )}
+                  <button
+                    onClick={async () => {
+                      if (ltVisible) {
+                        await invoke("hide_lower_third");
+                        setLtVisible(false);
+                      } else {
+                        let payload: LowerThirdData;
+                        if (ltMode === "nameplate") {
+                          payload = { kind: "Nameplate", data: { name: ltName, title: ltTitle || undefined } };
+                        } else if (ltMode === "freetext") {
+                          payload = { kind: "FreeText", data: { text: ltFreeText } };
+                        } else {
+                          if (!ltSongId || ltFlatLines.length === 0) return;
+                          const line1 = ltFlatLines[ltLineIndex];
+                          const line2 = ltLinesPerDisplay === 2 ? ltFlatLines[ltLineIndex + 1] : undefined;
+                          payload = { kind: "Lyrics", data: { line1: line1.text, line2: line2?.text, section_label: line1.sectionLabel } };
+                        }
+                        await invoke("show_lower_third", { data: payload, template: ltTemplate });
+                        setLtVisible(true);
+                      }
+                    }}
+                    className={`w-full py-3 text-sm font-black uppercase rounded-xl transition-all ${ltVisible ? "bg-red-700 hover:bg-red-600 text-white" : "bg-green-700 hover:bg-green-600 text-white"}`}
+                  >
+                    {ltVisible ? "HIDE Lower Third" : "SHOW Lower Third"}
+                  </button>
                 </div>
               </div>
             )}

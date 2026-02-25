@@ -56,6 +56,8 @@ struct AppState {
     staged_item: Arc<Mutex<Option<store::DisplayItem>>>,
     /// Persisted presentation settings (theme, reference position, etc.)
     settings: Arc<Mutex<store::PresentationSettings>>,
+    /// Active lower third overlay as a combined {data, template} JSON value (None = hidden).
+    lower_third: Arc<Mutex<Option<serde_json::Value>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -650,6 +652,70 @@ async fn delete_studio_presentation(
 }
 
 // ---------------------------------------------------------------------------
+// Songs
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn list_songs(state: State<'_, Arc<AppState>>) -> Result<Vec<store::Song>, String> {
+    state.media_schedule.list_songs().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn save_song(state: State<'_, Arc<AppState>>, song: store::Song) -> Result<store::Song, String> {
+    state.media_schedule.save_song(song).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_song(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
+    state.media_schedule.delete_song(&id).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Lower third
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn show_lower_third(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    data: store::LowerThirdData,
+    template: serde_json::Value,
+) -> Result<(), String> {
+    let payload = serde_json::json!({ "data": data, "template": template });
+    *state.lower_third.lock() = Some(payload.clone());
+    let _ = app.emit("lower-third-update", Some(payload));
+    Ok(())
+}
+
+#[tauri::command]
+async fn hide_lower_third(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    *state.lower_third.lock() = None;
+    let _ = app.emit("lower-third-update", Option::<serde_json::Value>::None);
+    Ok(())
+}
+
+#[tauri::command]
+async fn save_lt_templates(
+    state: State<'_, Arc<AppState>>,
+    templates: Vec<serde_json::Value>,
+) -> Result<(), String> {
+    state
+        .media_schedule
+        .save_lt_templates(&serde_json::Value::Array(templates))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn load_lt_templates(
+    state: State<'_, Arc<AppState>>,
+) -> Result<serde_json::Value, String> {
+    state
+        .media_schedule
+        .load_lt_templates()
+        .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -789,6 +855,7 @@ fn main() {
                 live_item: Arc::new(Mutex::new(None)),
                 staged_item: Arc::new(Mutex::new(None)),
                 settings: Arc::new(Mutex::new(initial_settings)),
+                lower_third: Arc::new(Mutex::new(None)),
             }));
 
             log_msg(app, "App state managed. Ready.");
@@ -827,7 +894,14 @@ fn main() {
             list_studio_presentations,
             save_studio_presentation,
             load_studio_presentation,
-            delete_studio_presentation
+            delete_studio_presentation,
+            list_songs,
+            save_song,
+            delete_song,
+            show_lower_third,
+            hide_lower_third,
+            save_lt_templates,
+            load_lt_templates
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
