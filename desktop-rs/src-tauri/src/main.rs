@@ -407,7 +407,9 @@ async fn search_semantic_query(
     state: State<'_, Arc<AppState>>,
     query: String,
 ) -> Result<Vec<store::Verse>, String> {
-    if let Some(engine) = &state.engine {
+    // Clone the inner Arc while holding the lock briefly, then release before embed().
+    let engine_opt: Option<Arc<engine::TranscriptionEngine>> = state.engine.lock().clone();
+    if let Some(engine) = engine_opt {
         match engine.embed(&query) {
             Ok(embedding) => {
                 let results = state.store.search_top_n_semantic(&embedding, 10);
