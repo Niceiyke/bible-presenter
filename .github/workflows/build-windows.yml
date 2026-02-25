@@ -5,7 +5,29 @@ on:
   workflow_dispatch:
 
 jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_exists: ${{ steps.tag_check.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: check if version tag already exists
+        id: tag_check
+        run: |
+          VERSION=$(node -p "require('./desktop-rs/src-tauri/tauri.conf.json').version")
+          echo "Version: $VERSION"
+          if git ls-remote --tags origin | grep -q "refs/tags/v$VERSION$"; then
+            echo "Tag v$VERSION already exists — skipping build"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Tag v$VERSION is new — build will run"
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
   build:
+    needs: check-version
+    if: needs.check-version.outputs.tag_exists == 'false'
     runs-on: windows-latest
     permissions:
       contents: write
