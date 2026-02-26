@@ -211,7 +211,7 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
     // ── Main processing loop ───────────────────────────────────────────────
     let app_task = app.clone();
     let is_running_t = is_running.clone();
-    let live_item_t = live_item_arc.clone();
+    let _live_item_t = live_item_arc.clone();
     let broadcast_tx_task = broadcast_tx.clone();
     let transcription_window_task = transcription_window.clone();
 
@@ -963,7 +963,7 @@ fn main() {
             if !app_data_dir.exists() {
                 fs::create_dir_all(&app_data_dir).map_err(|e| format!("Cannot create data dir {:?}: {}", app_data_dir, e))?;
             }
-            let media_schedule = Arc::new(store::MediaScheduleStore::new(app_data_dir).map_err(|e| e.to_string())?);
+            let media_schedule = Arc::new(store::MediaScheduleStore::new(app_data_dir.clone()).map_err(|e| e.to_string())?);
             log_msg(app, "Media Schedule Store initialized.");
 
             let initial_settings = media_schedule

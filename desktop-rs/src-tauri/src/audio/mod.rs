@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 ///
 /// SAFETY: cpal::Stream on Windows is !Send/!Sync because it contains raw pointers (WASAPI handles).
 /// However, we manage access via Mutex<AudioEngine> in AppState, ensuring synchronized access.
+#[allow(dead_code)] // field kept alive intentionally — dropping cpal::Stream stops audio
 struct StreamHandle(cpal::Stream);
 unsafe impl Send for StreamHandle {}
 unsafe impl Sync for StreamHandle {}
