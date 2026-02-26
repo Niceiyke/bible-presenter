@@ -1,8 +1,33 @@
-/// LAN remote-control server.
+/// LAN remote-control + WebRTC signaling server.
 ///
 /// Starts an axum HTTP + WebSocket server on `0.0.0.0:port`.
-/// `GET /`  → self-contained HTML remote-control panel
-/// `WS  /ws` → bidirectional JSON protocol (see protocol docs in plan)
+/// `GET /`       → self-contained HTML remote-control panel
+/// `GET /camera` → mobile PWA for sending WebRTC camera feeds
+/// `WS  /ws`     → bidirectional JSON protocol
+///
+/// WebSocket protocol overview
+/// ───────────────────────────
+/// 1. First message must be {"cmd":"auth","pin":"XXXX"}
+///    Extended fields for WebRTC clients:
+///      - "client_type": "window:main" | "window:output" | "mobile" (default: "remote")
+///      - "device_id":   mobile UUID (required when client_type="mobile")
+///      - "device_name": human-readable mobile name
+///
+/// 2. Server replies {"type":"auth_ok"} or {"type":"auth_fail"}.
+///
+/// 3. Signaling messages carry a "target" field and are relayed directly:
+///    - Mobile → Operator: {"cmd":"camera_offer","target":"operator","device_id":"...","sdp":"..."}
+///    - Mobile → Output:   {"cmd":"camera_offer","target":"output","device_id":"...","sdp":"..."}
+///    - Window → Mobile:   {"cmd":"camera_answer","target":"mobile:uuid","device_id":"...","sdp":"..."}
+///    - Any side:          {"cmd":"camera_ice","target":"...","device_id":"...","candidate":{...}}
+///
+/// 4. Lifecycle commands (no target field; server resolves from device_id):
+///    - {"cmd":"camera_connect_program",   "device_id":"uuid"} → routes {"event":"connect_program"}   to mobile
+///    - {"cmd":"camera_disconnect_program","device_id":"uuid"} → routes {"event":"disconnect_program"} to mobile
+///
+/// 5. Mobile connect/disconnect are broadcast to all clients:
+///    - {"type":"camera_source_connected",   "device_id":"...","device_name":"..."}
+///    - {"type":"camera_source_disconnected","device_id":"..."}
 use std::sync::Arc;
 
 use axum::{
@@ -22,15 +47,18 @@ use tower_http::cors::CorsLayer;
 use bible_presenter_lib::store;
 use crate::AppState;
 
-// The remote panel HTML is embedded at compile time.
+// ─── Embedded HTML assets ─────────────────────────────────────────────────────
+
 const REMOTE_HTML: &str = include_str!("remote.html");
+const CAMERA_HTML: &str = include_str!("camera.html");
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 pub async fn start(state: Arc<AppState>, port: u16) {
     let app = Router::new()
-        .route("/", get(serve_html))
-        .route("/ws", get(ws_handler))
+        .route("/",      get(serve_remote_html))
+        .route("/camera", get(serve_camera_html))
+        .route("/ws",    get(ws_handler))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -48,10 +76,14 @@ pub async fn start(state: Arc<AppState>, port: u16) {
     }
 }
 
-// ─── HTTP handler ─────────────────────────────────────────────────────────────
+// ─── HTTP handlers ─────────────────────────────────────────────────────────────
 
-async fn serve_html() -> impl IntoResponse {
+async fn serve_remote_html() -> impl IntoResponse {
     Html(REMOTE_HTML)
+}
+
+async fn serve_camera_html() -> impl IntoResponse {
+    Html(CAMERA_HTML)
 }
 
 // ─── WebSocket upgrade ────────────────────────────────────────────────────────
@@ -63,12 +95,23 @@ async fn ws_handler(
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
+// ─── WebSocket session ────────────────────────────────────────────────────────
+
+/// Client identity resolved during auth handshake.
+struct ClientInfo {
+    /// Registry key: "window:main", "window:output", "mobile:{uuid}", "remote:{uuid}"
+    key: String,
+    /// Raw device_id (non-empty for mobile clients only)
+    device_id: String,
+    /// Human-readable name (mobile clients only)
+    device_name: String,
+    is_mobile: bool,
+}
+
 async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
-    // ── Auth handshake ────────────────────────────────────────────────────────
-    // First message must be {"cmd":"auth","pin":"XXXX"}.
-    // We use socket.recv() / socket.send() directly before splitting.
+    // ── 1. Auth handshake (extended to capture client identity) ───────────────
     let pin = state.remote_pin.lock().clone();
-    let auth_result = tokio::time::timeout(
+    let auth_result: Result<Option<ClientInfo>, _> = tokio::time::timeout(
         tokio::time::Duration::from_secs(30),
         async {
             while let Some(Ok(msg)) = socket.recv().await {
@@ -76,75 +119,183 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     if let Ok(v) = serde_json::from_str::<Value>(&text) {
                         if v.get("cmd").and_then(|c| c.as_str()) == Some("auth") {
                             let provided = v.get("pin").and_then(|p| p.as_str()).unwrap_or("");
-                            return provided == pin.as_str();
+                            if provided != pin.as_str() {
+                                return Some(None); // wrong PIN — signal auth fail
+                            }
+
+                            let client_type = v.get("client_type")
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("remote");
+                            let device_id = v.get("device_id")
+                                .and_then(|d| d.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let device_name = v.get("device_name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or(&device_id)
+                                .to_string();
+                            let is_mobile = client_type == "mobile";
+
+                            let key = match client_type {
+                                "window:main"   => "window:main".to_string(),
+                                "window:output" => "window:output".to_string(),
+                                "mobile" if !device_id.is_empty() => {
+                                    format!("mobile:{}", device_id)
+                                }
+                                _ => format!("remote:{}", uuid::Uuid::new_v4()),
+                            };
+
+                            return Some(Some(ClientInfo { key, device_id, device_name, is_mobile }));
                         }
                         // Ignore non-auth messages silently
                     }
                 }
             }
-            false // Connection closed without auth
+            None // Connection closed before auth
         },
     )
     .await;
 
-    match auth_result {
-        Ok(true) => {
-            let _ = socket
-                .send(Message::Text(
-                    json!({"type": "auth_ok"}).to_string(),
-                ))
-                .await;
+    let info = match auth_result {
+        Ok(Some(Some(info))) => {
+            let _ = socket.send(Message::Text(json!({"type":"auth_ok"}).to_string())).await;
+            info
         }
-        Ok(false) => {
-            let _ = socket
-                .send(Message::Text(
-                    json!({"type": "auth_fail"}).to_string(),
-                ))
-                .await;
+        Ok(Some(None)) => {
+            let _ = socket.send(Message::Text(json!({"type":"auth_fail"}).to_string())).await;
             return;
         }
-        Err(_) => {
-            // Auth timeout — close silently
+        _ => {
+            // Auth timeout or closed connection — close silently
             return;
         }
+    };
+
+    let client_key = info.key.clone();
+    let device_id  = info.device_id.clone();
+    let device_name = info.device_name.clone();
+    let is_mobile  = info.is_mobile;
+
+    // ── 2. Register direct signaling channel ──────────────────────────────────
+    let (direct_tx, mut direct_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    state.signaling_clients.lock().insert(client_key.clone(), direct_tx);
+
+    // ── 3. Broadcast mobile connect event ─────────────────────────────────────
+    if is_mobile && !device_id.is_empty() {
+        let msg = json!({
+            "type": "camera_source_connected",
+            "device_id": device_id,
+            "device_name": device_name,
+        })
+        .to_string();
+        let _ = state.broadcast_tx.send(msg);
     }
 
-    // ── Subscribe to broadcast AFTER auth so we don't build up lag ───────────
+    // ── 4. Subscribe to broadcast channel ─────────────────────────────────────
     let mut bcast_rx = state.broadcast_tx.subscribe();
 
-    // ── Split into sender + receiver for concurrent I/O ───────────────────────
+    // ── 5. Split socket for concurrent I/O ────────────────────────────────────
     let (mut sender, mut receiver) = socket.split();
 
-    // Write loop: broadcast channel → WS client
+    // Write loop: forward both broadcast messages AND direct targeted messages.
     let write_task = tokio::spawn(async move {
         loop {
-            match bcast_rx.recv().await {
-                Ok(msg) => {
-                    if sender.send(Message::Text(msg)).await.is_err() {
-                        break;
+            tokio::select! {
+                result = bcast_rx.recv() => {
+                    match result {
+                        Ok(msg) => {
+                            if sender.send(Message::Text(msg)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => break,
                     }
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => {
-                    // Missed some messages — not fatal, keep going
-                    continue;
-                }
-                Err(broadcast::error::RecvError::Closed) => {
-                    break;
+                msg_opt = direct_rx.recv() => {
+                    match msg_opt {
+                        Some(msg) => {
+                            if sender.send(Message::Text(msg)).await.is_err() {
+                                break;
+                            }
+                        }
+                        None => break, // sender dropped
+                    }
                 }
             }
         }
     });
 
-    // Read loop: WS client → command dispatch
+    // ── 6. Read loop ──────────────────────────────────────────────────────────
     while let Some(Ok(msg)) = receiver.next().await {
         if let Message::Text(text) = msg {
             if let Ok(v) = serde_json::from_str::<Value>(&text) {
-                handle_command(&state, v).await;
+                route_or_handle(&state, v, &text).await;
             }
         }
     }
 
+    // ── 7. Cleanup ────────────────────────────────────────────────────────────
     write_task.abort();
+    state.signaling_clients.lock().remove(&client_key);
+
+    if is_mobile && !device_id.is_empty() {
+        let msg = json!({
+            "type": "camera_source_disconnected",
+            "device_id": device_id,
+        })
+        .to_string();
+        let _ = state.broadcast_tx.send(msg);
+    }
+}
+
+// ─── Message routing ──────────────────────────────────────────────────────────
+
+/// Routes a WebSocket message either to a specific client (signaling relay) or
+/// to the general command handler (remote panel commands, state queries, etc.).
+async fn route_or_handle(state: &Arc<AppState>, v: Value, raw: &str) {
+    // If the message carries an explicit `target`, relay it directly.
+    if let Some(target_raw) = v.get("target").and_then(|t| t.as_str()) {
+        let target_key = normalize_target(target_raw);
+        let clients = state.signaling_clients.lock();
+        if let Some(ch) = clients.get(&target_key) {
+            let _ = ch.send(raw.to_string());
+        }
+        return;
+    }
+
+    let cmd = v.get("cmd").and_then(|c| c.as_str()).unwrap_or("");
+
+    // Lifecycle commands: implicit routing to mobile by device_id.
+    if cmd == "camera_connect_program" || cmd == "camera_disconnect_program" {
+        let dev_id = str_field(&v, "device_id");
+        if !dev_id.is_empty() {
+            let target_key = format!("mobile:{}", dev_id);
+            let event_name = if cmd == "camera_connect_program" {
+                "connect_program"
+            } else {
+                "disconnect_program"
+            };
+            let event_msg = json!({ "event": event_name }).to_string();
+            let clients = state.signaling_clients.lock();
+            if let Some(ch) = clients.get(&target_key) {
+                let _ = ch.send(event_msg);
+            }
+        }
+        return;
+    }
+
+    // General remote-panel command dispatch.
+    handle_command(state, v).await;
+}
+
+/// Normalises shorthand target names to canonical client keys.
+fn normalize_target(target: &str) -> String {
+    match target {
+        "operator" => "window:main".to_string(),
+        "output"   => "window:output".to_string(),
+        other      => other.to_string(),
+    }
 }
 
 // ─── Command dispatch ─────────────────────────────────────────────────────────
@@ -238,7 +389,6 @@ async fn handle_command(state: &Arc<AppState>, v: Value) {
                         *state.live_item.lock() = Some(item.clone());
                         *state.staged_item.lock() = Some(item.clone());
 
-                        // Emit to Tauri windows via app_handle
                         if let Some(handle) = state.app_handle.get() {
                             use tauri::Emitter;
                             let text = display_item_text(&item);
@@ -252,7 +402,6 @@ async fn handle_command(state: &Arc<AppState>, v: Value) {
                             );
                         }
 
-                        // Broadcast state update to all WS clients
                         let lt = state.lower_third.lock().clone();
                         let msg = json!({ "type": "state", "live_item": item, "lt": lt });
                         broadcast_str(state, msg.to_string());
@@ -306,7 +455,7 @@ async fn handle_command(state: &Arc<AppState>, v: Value) {
         }
 
         _ => {
-            send_error(state, &format!("Unknown command: {}", cmd));
+            // Silently ignore unknown commands (e.g. unsupported client-side commands)
         }
     }
 }
@@ -340,11 +489,16 @@ fn display_item_text(item: &store::DisplayItem) -> String {
             format!("{} – slide {}", c.presentation_name, c.slide_index + 1)
         }
         store::DisplayItem::CameraFeed(cam) => {
-            if cam.label.is_empty() {
-                cam.device_id.clone()
-            } else {
+            if !cam.device_name.is_empty() {
+                cam.device_name.clone()
+            } else if !cam.label.is_empty() {
                 cam.label.clone()
+            } else {
+                cam.device_id.clone()
             }
+        }
+        store::DisplayItem::Scene(s) => {
+            s.get("name").and_then(|v| v.as_str()).unwrap_or("Scene").to_string()
         }
     }
 }
