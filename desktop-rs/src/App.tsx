@@ -1719,6 +1719,7 @@ export default function App() {
   // Remote control
   const [remoteUrl, setRemoteUrl] = useState("");
   const [remotePin, setRemotePin] = useState("");
+  const [tailscaleUrl, setTailscaleUrl] = useState<string | null>(null);
 
   // Bible version
   const [availableVersions, setAvailableVersions] = useState<string[]>(["KJV"]);
@@ -1933,7 +1934,11 @@ export default function App() {
 
     invoke("get_remote_info")
       .then((info: any) => {
-        if (info) { setRemoteUrl(info.url); setRemotePin(info.pin); }
+        if (info) {
+          setRemoteUrl(info.url);
+          setRemotePin(info.pin);
+          setTailscaleUrl(info.tailscale_url ?? null);
+        }
       })
       .catch(() => {});
 
@@ -3501,12 +3506,11 @@ export default function App() {
                 {/* Remote Control */}
                 <div className="border-t border-slate-800 pt-5">
                   <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4">Remote Control</h2>
-                  <p className="text-[11px] text-slate-400 mb-4">
-                    Share this URL and PIN with tablet or laptop operators on the same WiFi network.
-                  </p>
-                  <div className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-4">
+
+                    {/* LAN URL */}
                     <div>
-                      <p className="text-[10px] text-slate-500 uppercase font-bold mb-1.5">URL</p>
+                      <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">LAN URL <span className="normal-case text-slate-600 font-normal">(same WiFi)</span></p>
                       <div className="flex items-center gap-2">
                         <code className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-amber-400 font-mono truncate">
                           {remoteUrl || "http://localhost:7420"}
@@ -3514,12 +3518,38 @@ export default function App() {
                         <button
                           onClick={() => { navigator.clipboard.writeText(remoteUrl || "http://localhost:7420"); }}
                           className="px-3 py-2 text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition-colors"
-                          title="Copy URL"
                         >Copy</button>
                       </div>
                     </div>
+
+                    {/* Tailscale URL */}
                     <div>
-                      <p className="text-[10px] text-slate-500 uppercase font-bold mb-1.5">PIN</p>
+                      <div className="flex items-center gap-2 mb-1">
+                        <p className="text-[10px] text-slate-500 uppercase font-bold">Tailscale URL <span className="normal-case text-slate-600 font-normal">(internet)</span></p>
+                        {tailscaleUrl && (
+                          <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-green-900/50 text-green-400 border border-green-800">Connected</span>
+                        )}
+                      </div>
+                      {tailscaleUrl ? (
+                        <div className="flex items-center gap-2">
+                          <code className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-green-400 font-mono truncate">
+                            {tailscaleUrl}
+                          </code>
+                          <button
+                            onClick={() => { navigator.clipboard.writeText(tailscaleUrl); }}
+                            className="px-3 py-2 text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition-colors"
+                          >Copy</button>
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-slate-500 italic">
+                          Tailscale not detected — install Tailscale on this machine and all operator devices to enable remote access over the internet.
+                        </p>
+                      )}
+                    </div>
+
+                    {/* PIN */}
+                    <div>
+                      <p className="text-[10px] text-slate-500 uppercase font-bold mb-1.5">PIN <span className="normal-case text-slate-600 font-normal">(required on first connect)</span></p>
                       <div className="flex items-center gap-3">
                         <div className="flex gap-2">
                           {(remotePin || "----").split("").map((digit, i) => (
@@ -3534,10 +3564,10 @@ export default function App() {
                         <button
                           onClick={() => { navigator.clipboard.writeText(remotePin); }}
                           className="px-3 py-2 text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition-colors"
-                          title="Copy PIN"
                         >Copy</button>
                       </div>
                     </div>
+
                   </div>
                 </div>
               </div>
