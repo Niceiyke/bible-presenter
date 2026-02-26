@@ -1,13 +1,15 @@
 // Bible Presenter RS Main Entry Point
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod remote;
+
 use bible_presenter_lib::{audio, engine, store};
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 // ---------------------------------------------------------------------------
@@ -41,23 +43,29 @@ struct ModelPaths {
     tokenizer: PathBuf,
 }
 
-struct AppState {
+pub struct AppState {
     audio: Arc<Mutex<audio::AudioEngine>>,
     /// C5: Engine is None until the user first clicks START LIVE.
     /// Wrapped in Mutex so start_session can populate it after the fact.
     engine: Arc<Mutex<Option<Arc<engine::TranscriptionEngine>>>>,
-    store: Arc<store::BibleStore>,
-    media_schedule: Arc<store::MediaScheduleStore>,
+    pub store: Arc<store::BibleStore>,
+    pub media_schedule: Arc<store::MediaScheduleStore>,
     model_paths: ModelPaths,
     /// C3: Prevents duplicate sessions if START LIVE is clicked twice.
     is_running: Arc<Mutex<bool>>,
     /// Current display items (what is staged and what is live).
-    live_item: Arc<Mutex<Option<store::DisplayItem>>>,
-    staged_item: Arc<Mutex<Option<store::DisplayItem>>>,
+    pub live_item: Arc<Mutex<Option<store::DisplayItem>>>,
+    pub staged_item: Arc<Mutex<Option<store::DisplayItem>>>,
     /// Persisted presentation settings (theme, reference position, etc.)
     settings: Arc<Mutex<store::PresentationSettings>>,
     /// Active lower third overlay as a combined {data, template} JSON value (None = hidden).
-    lower_third: Arc<Mutex<Option<serde_json::Value>>>,
+    pub lower_third: Arc<Mutex<Option<serde_json::Value>>>,
+    /// Broadcast channel: every WS client subscribes to receive state updates.
+    pub broadcast_tx: tokio::sync::broadcast::Sender<String>,
+    /// Tauri AppHandle stored after setup so the remote module can emit events.
+    pub app_handle: OnceLock<tauri::AppHandle>,
+    /// 4-digit PIN displayed in Settings tab; required for WS auth.
+    pub remote_pin: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +108,7 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
     let store = state.store.clone();
     let is_running = state.is_running.clone();
     let live_item_arc = state.live_item.clone();
+    let broadcast_tx = state.broadcast_tx.clone();
     let whisper_path = state.model_paths.whisper.to_str().unwrap_or("").to_string();
     let embedding_path = state
         .model_paths
@@ -199,6 +208,7 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
     let app_task = app.clone();
     let is_running_t = is_running.clone();
     let live_item_t = live_item_arc.clone();
+    let broadcast_tx_task = broadcast_tx.clone();
 
     tokio::spawn(async move {
         let mut buffer = Vec::new();
@@ -238,10 +248,20 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
                         let _ = app_task.emit(
                             "transcription-update",
                             TranscriptionUpdate {
-                                text,
-                                detected_item: item,
+                                text: text.clone(),
+                                detected_item: item.clone(),
                                 source: "auto".to_string(),
                             },
+                        );
+                        // Broadcast transcription to WS remote clients
+                        let _ = broadcast_tx_task.send(
+                            serde_json::json!({
+                                "type": "transcription",
+                                "text": text,
+                                "detected_item": item,
+                                "source": "auto"
+                            })
+                            .to_string(),
                         );
                     }
                 }
@@ -539,9 +559,13 @@ async fn go_live(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), 
                         if cam.label.is_empty() { cam.device_id.clone() } else { cam.label.clone() }
                     }
                 },
-                detected_item: Some(item),
+                detected_item: Some(item.clone()),
                 source: "manual".to_string(),
             },
+        );
+        // Broadcast to WS remote clients
+        let _ = state.broadcast_tx.send(
+            serde_json::json!({ "type": "state", "live_item": item }).to_string()
         );
     }
     Ok(())
@@ -699,7 +723,11 @@ async fn show_lower_third(
 ) -> Result<(), String> {
     let payload = serde_json::json!({ "data": data, "template": template });
     *state.lower_third.lock() = Some(payload.clone());
-    let _ = app.emit("lower-third-update", Some(payload));
+    let _ = app.emit("lower-third-update", Some(payload.clone()));
+    // Broadcast to WS remote clients
+    let _ = state.broadcast_tx.send(
+        serde_json::json!({ "type": "lt_update", "payload": payload }).to_string()
+    );
     Ok(())
 }
 
@@ -707,6 +735,10 @@ async fn show_lower_third(
 async fn hide_lower_third(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
     *state.lower_third.lock() = None;
     let _ = app.emit("lower-third-update", Option::<serde_json::Value>::None);
+    // Broadcast to WS remote clients
+    let _ = state.broadcast_tx.send(
+        serde_json::json!({ "type": "lt_update", "payload": null }).to_string()
+    );
     Ok(())
 }
 
@@ -729,6 +761,27 @@ async fn load_lt_templates(
         .media_schedule
         .load_lt_templates()
         .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Remote control info
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+struct RemoteInfo {
+    url: String,
+    pin: String,
+}
+
+#[tauri::command]
+async fn get_remote_info(state: State<'_, Arc<AppState>>) -> Result<RemoteInfo, String> {
+    let ip = local_ip_address::local_ip()
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|_| "localhost".to_string());
+    Ok(RemoteInfo {
+        url: format!("http://{}:7420", ip),
+        pin: state.remote_pin.clone(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -861,7 +914,11 @@ fn main() {
                 "AI models will be loaded on the first START LIVE click (lazy load).",
             );
 
-            app.manage(Arc::new(AppState {
+            let (broadcast_tx, _) = tokio::sync::broadcast::channel::<String>(128);
+            let remote_pin = format!("{:04}", rand::random::<u16>() % 10000);
+            log_msg(app, &format!("Remote PIN: {}", remote_pin));
+
+            let state = Arc::new(AppState {
                 audio,
                 engine: Arc::new(Mutex::new(None)), // loaded lazily in start_session
                 store,
@@ -872,7 +929,21 @@ fn main() {
                 staged_item: Arc::new(Mutex::new(None)),
                 settings: Arc::new(Mutex::new(initial_settings)),
                 lower_third: Arc::new(Mutex::new(None)),
-            }));
+                broadcast_tx,
+                app_handle: OnceLock::new(),
+                remote_pin,
+            });
+
+            // Store app_handle so remote module can emit events to Tauri windows
+            state.app_handle.set(app.handle().clone()).ok();
+
+            // Start the LAN remote server in the background
+            let remote_state = state.clone();
+            tokio::spawn(async move {
+                remote::start(remote_state, 7420).await;
+            });
+
+            app.manage(state);
 
             log_msg(app, "App state managed. Ready.");
             Ok(())
@@ -917,7 +988,8 @@ fn main() {
             show_lower_third,
             hide_lower_third,
             save_lt_templates,
-            load_lt_templates
+            load_lt_templates,
+            get_remote_info
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

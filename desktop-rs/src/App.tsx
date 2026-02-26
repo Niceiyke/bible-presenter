@@ -1716,6 +1716,10 @@ export default function App() {
   const [deviceError, setDeviceError] = useState<string | null>(null);
   const [micLevel, setMicLevel] = useState(0);
 
+  // Remote control
+  const [remoteUrl, setRemoteUrl] = useState("");
+  const [remotePin, setRemotePin] = useState("");
+
   // Bible version
   const [availableVersions, setAvailableVersions] = useState<string[]>(["KJV"]);
   const [bibleVersion, setBibleVersion] = useState("KJV");
@@ -1926,6 +1930,12 @@ export default function App() {
     loadSchedule();
     loadSongs();
     loadLtTemplates();
+
+    invoke("get_remote_info")
+      .then((info: any) => {
+        if (info) { setRemoteUrl(info.url); setRemotePin(info.pin); }
+      })
+      .catch(() => {});
 
     invoke("get_bible_versions")
       .then((versions: any) => {
@@ -3486,6 +3496,49 @@ export default function App() {
                   <p className="text-[10px] text-slate-600 italic mt-2">
                     Changes apply instantly to the output window.
                   </p>
+                </div>
+
+                {/* Remote Control */}
+                <div className="border-t border-slate-800 pt-5">
+                  <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4">Remote Control</h2>
+                  <p className="text-[11px] text-slate-400 mb-4">
+                    Share this URL and PIN with tablet or laptop operators on the same WiFi network.
+                  </p>
+                  <div className="flex flex-col gap-3">
+                    <div>
+                      <p className="text-[10px] text-slate-500 uppercase font-bold mb-1.5">URL</p>
+                      <div className="flex items-center gap-2">
+                        <code className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-amber-400 font-mono truncate">
+                          {remoteUrl || "http://localhost:7420"}
+                        </code>
+                        <button
+                          onClick={() => { navigator.clipboard.writeText(remoteUrl || "http://localhost:7420"); }}
+                          className="px-3 py-2 text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition-colors"
+                          title="Copy URL"
+                        >Copy</button>
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-slate-500 uppercase font-bold mb-1.5">PIN</p>
+                      <div className="flex items-center gap-3">
+                        <div className="flex gap-2">
+                          {(remotePin || "----").split("").map((digit, i) => (
+                            <span
+                              key={i}
+                              className="w-10 h-12 flex items-center justify-center bg-slate-900 border border-slate-700 rounded-lg text-2xl font-black text-white font-mono"
+                            >
+                              {digit}
+                            </span>
+                          ))}
+                        </div>
+                        <button
+                          onClick={() => { navigator.clipboard.writeText(remotePin); }}
+                          className="px-3 py-2 text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition-colors"
+                          title="Copy PIN"
+                        >Copy</button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}

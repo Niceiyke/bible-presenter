@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Bible Presenter Remote</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --bg:#0f1117;--panel:#1a1d27;--border:#2a2d3a;--text:#e2e8f0;--muted:#64748b;
+    --amber:#f59e0b;--amber-dim:#78350f;--green:#22c55e;--red:#ef4444;--blue:#3b82f6;
+    --radius:10px;--font:'Segoe UI',system-ui,sans-serif;
+  }
+  body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  h1{font-size:.7rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  /* Screens */
+  #pin-screen,#main-screen{flex:1;display:flex;flex-direction:column}
+  #main-screen{display:none}
+  /* PIN screen */
+  #pin-screen{align-items:center;justify-content:center;gap:24px;padding:24px}
+  .pin-logo{font-size:2rem}
+  .pin-title{font-size:1.3rem;font-weight:700;color:var(--text)}
+  .pin-sub{font-size:.8rem;color:var(--muted);text-align:center}
+  .pin-row{display:flex;gap:10px;margin-top:4px}
+  .pin-row input{
+    width:52px;height:64px;text-align:center;font-size:1.8rem;font-weight:700;
+    border:2px solid var(--border);border-radius:var(--radius);
+    background:var(--panel);color:var(--text);outline:none;
+  }
+  .pin-row input:focus{border-color:var(--amber)}
+  .btn-primary{
+    padding:14px 40px;background:var(--amber);color:#000;font-weight:700;font-size:.95rem;
+    border:none;border-radius:var(--radius);cursor:pointer;width:100%;max-width:240px;
+  }
+  .btn-primary:hover{filter:brightness(1.1)}
+  .pin-err{color:var(--red);font-size:.8rem;min-height:1.2em;text-align:center}
+  /* Tabs */
+  .tab-bar{display:flex;border-bottom:1px solid var(--border);background:var(--panel)}
+  .tab-bar button{
+    flex:1;padding:14px 6px;background:none;border:none;color:var(--muted);
+    font-size:.65rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;
+    border-bottom:2px solid transparent;transition:.15s;
+  }
+  .tab-bar button.active{color:var(--amber);border-color:var(--amber)}
+  /* Tab panels */
+  .tab-panel{display:none;flex:1;overflow-y:auto;padding:14px;flex-direction:column;gap:12px}
+  .tab-panel.active{display:flex}
+  /* Cards */
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px;display:flex;flex-direction:column;gap:10px}
+  .card-label{font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  /* Pills */
+  .pills{display:flex;flex-wrap:wrap;gap:6px}
+  .pill{
+    padding:5px 12px;border:1px solid var(--border);border-radius:20px;
+    background:none;color:var(--muted);font-size:.75rem;font-weight:600;cursor:pointer;transition:.15s;
+  }
+  .pill.active{border-color:var(--amber);color:var(--amber);background:rgba(245,158,11,.1)}
+  .pill:hover:not(.active){border-color:#4a4d5a;color:var(--text)}
+  /* Select */
+  select{
+    width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--border);
+    border-radius:8px;color:var(--text);font-size:.85rem;outline:none;cursor:pointer;
+  }
+  select:focus{border-color:var(--amber)}
+  /* Input */
+  input[type=text],input[type=search],textarea{
+    width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--border);
+    border-radius:8px;color:var(--text);font-size:.85rem;outline:none;font-family:inherit;
+  }
+  input[type=text]:focus,input[type=search]:focus,textarea:focus{border-color:var(--amber)}
+  textarea{resize:vertical;min-height:70px}
+  /* Verse preview */
+  .verse-preview{
+    background:var(--bg);border:1px solid var(--border);border-radius:8px;
+    padding:14px;font-size:.9rem;line-height:1.6;color:var(--text);min-height:60px;
+  }
+  .verse-ref{font-size:.7rem;font-weight:700;color:var(--amber);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
+  /* Buttons */
+  .btn{
+    padding:10px 16px;border:1px solid var(--border);border-radius:8px;
+    background:var(--panel);color:var(--text);font-size:.8rem;font-weight:600;cursor:pointer;transition:.15s;
+  }
+  .btn:hover{border-color:#4a4d5a;background:#22253a}
+  .btn-live{background:var(--amber);color:#000;border-color:var(--amber)}
+  .btn-live:hover{filter:brightness(1.1)}
+  .btn-live:disabled{background:#4a3d1a;color:#7a6030;border-color:#4a3d1a;cursor:not-allowed}
+  .btn-danger{border-color:var(--red);color:var(--red)}
+  .btn-danger:hover{background:rgba(239,68,68,.1)}
+  .btn-row{display:flex;gap:8px}
+  .btn-row .btn{flex:1;text-align:center}
+  /* Search results */
+  .result-list{display:flex;flex-direction:column;gap:4px;max-height:240px;overflow-y:auto}
+  .result-item{
+    padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;
+    cursor:pointer;transition:.1s;
+  }
+  .result-item:hover,.result-item.selected{border-color:var(--amber);background:rgba(245,158,11,.07)}
+  .result-ref{font-size:.65rem;font-weight:700;color:var(--amber);margin-bottom:3px;text-transform:uppercase}
+  .result-text{font-size:.8rem;color:var(--text);line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  /* Song lines */
+  .line-display{
+    font-size:1.2rem;font-weight:700;line-height:1.5;padding:16px;
+    background:var(--bg);border:1px solid var(--border);border-radius:8px;text-align:center;min-height:80px;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .line-display .section-label{font-size:.65rem;color:var(--amber);font-weight:700;letter-spacing:.08em;display:block;margin-bottom:6px;text-transform:uppercase}
+  /* Toggle */
+  .toggle-row{display:flex;gap:6px;align-items:center}
+  .toggle-label{font-size:.75rem;color:var(--muted)}
+  /* Status bar */
+  #status-bar{
+    padding:8px 14px;background:var(--panel);border-top:1px solid var(--border);
+    display:flex;align-items:center;gap:8px;font-size:.7rem;color:var(--muted);flex-shrink:0;
+  }
+  .status-dot{width:8px;height:8px;border-radius:50%;background:var(--red);transition:.3s}
+  .status-dot.ok{background:var(--green)}
+  /* Transcription strip */
+  #live-strip{
+    padding:8px 14px;background:rgba(245,158,11,.07);border-top:1px solid rgba(245,158,11,.2);
+    font-size:.75rem;color:var(--amber);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    flex-shrink:0;display:none;
+  }
+  .lt-status-badge{
+    padding:3px 9px;border-radius:20px;font-size:.65rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+    background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red);
+  }
+  .lt-status-badge.showing{background:rgba(34,197,94,.15);color:var(--green);border-color:var(--green)}
+  /* Spinner */
+  .spinner{width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--amber);border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  /* Util */
+  .row{display:flex;gap:8px;align-items:center}
+  .grow{flex:1}
+  .text-muted{color:var(--muted);font-size:.75rem}
+  .text-amber{color:var(--amber)}
+  .mt2{margin-top:4px}
+  /* Range */
+  input[type=range]{width:100%;accent-color:var(--amber)}
+  /* LT mode pills */
+  .mode-pills{display:flex;gap:6px}
+  .mode-pill{flex:1;padding:8px;text-align:center;border:1px solid var(--border);border-radius:8px;background:none;color:var(--muted);font-size:.75rem;font-weight:700;cursor:pointer;transition:.15s}
+  .mode-pill.active{border-color:var(--amber);color:var(--amber);background:rgba(245,158,11,.1)}
+  /* Song list */
+  .song-item{padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:.1s;font-size:.85rem}
+  .song-item:hover,.song-item.selected{border-color:var(--amber);background:rgba(245,158,11,.07)}
+  .song-author{font-size:.7rem;color:var(--muted);margin-top:2px}
+</style>
+</head>
+<body>
+
+<!-- PIN Screen -->
+<div id="pin-screen">
+  <div class="pin-logo">⛪</div>
+  <div class="pin-title">Bible Presenter Remote</div>
+  <div class="pin-sub">Enter the PIN shown in the main app's Settings tab</div>
+  <div class="pin-row">
+    <input class="pin-digit" type="text" inputmode="numeric" maxlength="1" autocomplete="off">
+    <input class="pin-digit" type="text" inputmode="numeric" maxlength="1" autocomplete="off">
+    <input class="pin-digit" type="text" inputmode="numeric" maxlength="1" autocomplete="off">
+    <input class="pin-digit" type="text" inputmode="numeric" maxlength="1" autocomplete="off">
+  </div>
+  <div class="pin-err" id="pin-err"></div>
+  <button class="btn-primary" id="pin-submit">Connect</button>
+</div>
+
+<!-- Main Screen -->
+<div id="main-screen">
+  <div id="live-strip" id="live-strip">🎙 <span id="live-text"></span></div>
+
+  <div class="tab-bar">
+    <button class="active" data-tab="bible">Bible</button>
+    <button data-tab="lyrics">Lyrics</button>
+    <button data-tab="lt">Lower Third</button>
+  </div>
+
+  <!-- Bible Tab -->
+  <div class="tab-panel active" id="tab-bible">
+    <!-- Version -->
+    <div class="card">
+      <div class="card-label">Version</div>
+      <div class="pills" id="version-pills"></div>
+    </div>
+
+    <!-- Navigator -->
+    <div class="card">
+      <div class="card-label">Navigate</div>
+      <div class="row">
+        <select id="book-select" class="grow"><option>Loading…</option></select>
+      </div>
+      <div class="row">
+        <select id="chapter-select" class="grow"><option>Ch</option></select>
+        <select id="verse-select" class="grow"><option>Vs</option></select>
+      </div>
+      <div id="nav-preview" class="verse-preview" style="display:none">
+        <div class="verse-ref" id="nav-ref"></div>
+        <div id="nav-text"></div>
+      </div>
+      <button class="btn btn-live" id="nav-go-live" disabled>Go Live</button>
+    </div>
+
+    <!-- Search -->
+    <div class="card">
+      <div class="card-label">Search</div>
+      <div class="row">
+        <input type="search" id="search-input" class="grow" placeholder="Keywords or reference…">
+        <button class="btn" id="search-btn">Search</button>
+      </div>
+      <div class="result-list" id="search-results" style="display:none"></div>
+      <div id="search-preview" class="verse-preview" style="display:none">
+        <div class="verse-ref" id="search-ref"></div>
+        <div id="search-text"></div>
+      </div>
+      <button class="btn btn-live" id="search-go-live" disabled>Go Live</button>
+    </div>
+  </div>
+
+  <!-- Lyrics Tab -->
+  <div class="tab-panel" id="tab-lyrics">
+    <div class="card">
+      <div class="card-label">Song</div>
+      <input type="search" id="song-search" placeholder="Search songs…">
+      <div class="result-list" id="song-list" style="max-height:180px"></div>
+    </div>
+
+    <div class="card" id="lyric-controls" style="display:none">
+      <div class="card-label" id="lyric-song-title"></div>
+      <div class="toggle-row">
+        <span class="toggle-label">Lines shown:</span>
+        <button class="pill active" id="lines-1-btn" onclick="setLinesMode(1)">1 Line</button>
+        <button class="pill" id="lines-2-btn" onclick="setLinesMode(2)">2 Lines</button>
+      </div>
+      <div class="line-display" id="lyric-display">
+        <span class="text-muted">Select a song above</span>
+      </div>
+      <div class="btn-row">
+        <button class="btn" id="lyric-prev">◀ Prev</button>
+        <button class="btn" id="lyric-next">Next ▶</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-live" id="lyric-show">Show</button>
+        <button class="btn btn-danger" id="lyric-hide">Hide</button>
+      </div>
+      <div class="row">
+        <span class="toggle-label">LT status:</span>
+        <span class="lt-status-badge" id="lt-badge">Hidden</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lower Third Tab -->
+  <div class="tab-panel" id="tab-lt">
+    <div class="card">
+      <div class="card-label">Mode</div>
+      <div class="mode-pills">
+        <button class="mode-pill active" onclick="setLtMode('nameplate')">Nameplate</button>
+        <button class="mode-pill" onclick="setLtMode('freetext')">Free Text</button>
+      </div>
+    </div>
+
+    <!-- Nameplate -->
+    <div class="card" id="lt-nameplate">
+      <div class="card-label">Nameplate</div>
+      <input type="text" id="np-name" placeholder="Name (required)">
+      <input type="text" id="np-title" placeholder="Title / Role (optional)">
+      <div class="btn-row">
+        <button class="btn btn-live" id="np-show">Show</button>
+        <button class="btn btn-danger" id="np-hide">Hide</button>
+      </div>
+    </div>
+
+    <!-- Free Text -->
+    <div class="card" id="lt-freetext" style="display:none">
+      <div class="card-label">Free Text</div>
+      <textarea id="ft-text" placeholder="Text to display…"></textarea>
+      <div>
+        <div class="card-label mt2">Scroll mode</div>
+        <div class="pills mt2">
+          <button class="pill active" onclick="setScrollMode('Static')">Static</button>
+          <button class="pill" onclick="setScrollMode('ScrollLeft')">→→ Left</button>
+          <button class="pill" onclick="setScrollMode('ScrollRight')">←← Right</button>
+        </div>
+      </div>
+      <div id="ft-speed-row" style="display:none">
+        <div class="card-label">Speed: <span id="ft-speed-val">50</span></div>
+        <input type="range" id="ft-speed" min="10" max="200" value="50">
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-live" id="ft-show">Show</button>
+        <button class="btn btn-danger" id="ft-hide">Hide</button>
+      </div>
+    </div>
+
+    <!-- LT Status -->
+    <div class="card">
+      <div class="row">
+        <span class="toggle-label">Lower Third:</span>
+        <span class="lt-status-badge" id="lt-badge2">Hidden</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Status Bar -->
+<div id="status-bar">
+  <div class="status-dot" id="conn-dot"></div>
+  <span id="conn-label">Connecting…</span>
+</div>
+
+<script>
+// ─── State ────────────────────────────────────────────────────────────────────
+let ws = null;
+let authed = false;
+let currentVersion = '';
+let versions = [];
+let books = [];
+let chapters = [];
+let verses = [];
+let selectedBook = '';
+let selectedChapter = 0;
+let selectedVerse = 0;
+let navVerseData = null;
+
+let searchResults = [];
+let selectedSearchIdx = -1;
+
+let songs = [];
+let selectedSong = null;
+let flatLines = [];   // [{sectionLabel, text}]
+let ltLineIdx = 0;
+let linesMode = 1;
+let ltShowing = false;
+
+let ltMode = 'nameplate';
+let scrollMode = 'Static';
+
+const defaultTemplate = {
+  bgType: 'gradient',
+  bgColor: '#000000',
+  bgOpacity: 0.85,
+  bgGradient: 'linear-gradient(to top, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0) 100%)',
+  bgBlur: 0,
+  accentSide: 'left',
+  accentColor: '#f59e0b',
+  accentWidth: 4,
+  hAlign: 'left',
+  vAlign: 'bottom',
+  offsetX: 5,
+  offsetY: 5,
+  widthPct: 60,
+  paddingX: 32,
+  paddingY: 20,
+  borderRadius: 8,
+  primaryFont: 'Georgia',
+  primarySize: 36,
+  primaryColor: '#ffffff',
+  primaryWeight: '700',
+  secondaryFont: 'Arial',
+  secondarySize: 22,
+  secondaryColor: '#e2e8f0',
+  secondaryWeight: '400',
+  labelFont: 'Arial',
+  labelSize: 14,
+  labelColor: '#f59e0b',
+  labelWeight: '700',
+  animIn: 'fade',
+  animOut: 'fade',
+};
+
+// ─── WebSocket ────────────────────────────────────────────────────────────────
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+  ws.onopen = () => {
+    setConnStatus(false);
+    // If we already have a PIN cached in sessionStorage, auto-auth
+    const saved = sessionStorage.getItem('bp_pin');
+    if (saved) sendAuth(saved);
+  };
+
+  ws.onmessage = (evt) => {
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { return; }
+    handleMsg(msg);
+  };
+
+  ws.onclose = () => {
+    authed = false;
+    setConnStatus(false, 'Disconnected — reconnecting…');
+    setTimeout(connect, 2000);
+  };
+
+  ws.onerror = () => { ws.close(); };
+}
+
+function send(obj) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+}
+
+function sendAuth(pin) {
+  send({ cmd: 'auth', pin });
+}
+
+// ─── Message handling ─────────────────────────────────────────────────────────
+function handleMsg(msg) {
+  switch (msg.type) {
+    case 'auth_ok':
+      authed = true;
+      sessionStorage.setItem('bp_pin', document.querySelector('#pin-screen') ?
+        getPinValue() : sessionStorage.getItem('bp_pin'));
+      showMainScreen();
+      setConnStatus(true);
+      send({ cmd: 'get_state' });
+      send({ cmd: 'get_versions' });
+      send({ cmd: 'get_songs' });
+      break;
+
+    case 'auth_fail':
+      sessionStorage.removeItem('bp_pin');
+      document.getElementById('pin-err').textContent = 'Wrong PIN. Try again.';
+      clearPin();
+      break;
+
+    case 'state':
+      if (msg.lt) updateLtBadges(true);
+      else updateLtBadges(false);
+      break;
+
+    case 'transcription':
+      showLiveStrip(msg.text);
+      break;
+
+    case 'lt_update':
+      ltShowing = !!msg.payload;
+      updateLtBadges(ltShowing);
+      break;
+
+    case 'versions':
+      versions = msg.versions || [];
+      if (!currentVersion && versions.length) currentVersion = versions[0];
+      renderVersionPills();
+      loadBooks();
+      break;
+
+    case 'books':
+      books = msg.books || [];
+      renderBookSelect();
+      break;
+
+    case 'chapters':
+      chapters = msg.chapters || [];
+      renderChapterSelect();
+      break;
+
+    case 'verses':
+      verses = msg.verses || [];
+      renderVerseSelect();
+      break;
+
+    case 'verse_text':
+      if (msg.verse) showNavPreview(msg.verse);
+      break;
+
+    case 'search_results':
+      searchResults = msg.results || [];
+      selectedSearchIdx = -1;
+      renderSearchResults();
+      break;
+
+    case 'songs':
+      songs = msg.songs || [];
+      renderSongList();
+      break;
+
+    case 'error':
+      console.warn('Server error:', msg.message);
+      break;
+  }
+}
+
+// ─── UI helpers ───────────────────────────────────────────────────────────────
+function setConnStatus(ok, label) {
+  document.getElementById('conn-dot').className = 'status-dot' + (ok ? ' ok' : '');
+  document.getElementById('conn-label').textContent = label ||
+    (ok ? 'Connected to Bible Presenter' : 'Connecting…');
+}
+
+function showMainScreen() {
+  document.getElementById('pin-screen').style.display = 'none';
+  document.getElementById('main-screen').style.display = 'flex';
+  document.getElementById('main-screen').style.flexDirection = 'column';
+}
+
+function showLiveStrip(text) {
+  if (!text) return;
+  const strip = document.getElementById('live-strip');
+  strip.style.display = 'block';
+  document.getElementById('live-text').textContent = text;
+}
+
+function updateLtBadges(showing) {
+  ltShowing = showing;
+  const cls = showing ? 'lt-status-badge showing' : 'lt-status-badge';
+  const txt = showing ? 'Showing' : 'Hidden';
+  const b1 = document.getElementById('lt-badge');
+  const b2 = document.getElementById('lt-badge2');
+  if (b1) { b1.className = cls; b1.textContent = txt; }
+  if (b2) { b2.className = cls; b2.textContent = txt; }
+}
+
+// ─── PIN screen ───────────────────────────────────────────────────────────────
+const pinDigits = document.querySelectorAll('.pin-digit');
+pinDigits.forEach((inp, i) => {
+  inp.addEventListener('input', () => {
+    inp.value = inp.value.replace(/\D/g, '');
+    if (inp.value && i < 3) pinDigits[i + 1].focus();
+    if (i === 3 && inp.value) submitPin();
+  });
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Backspace' && !inp.value && i > 0) pinDigits[i - 1].focus();
+    if (e.key === 'Enter') submitPin();
+  });
+  inp.addEventListener('paste', (e) => {
+    const text = (e.clipboardData || window.clipboardData).getData('text').replace(/\D/g, '');
+    if (text.length >= 4) {
+      [...text.slice(0,4)].forEach((ch, j) => { pinDigits[j].value = ch; });
+      pinDigits[3].focus();
+      e.preventDefault();
+      submitPin();
+    }
+  });
+});
+
+function getPinValue() {
+  return [...pinDigits].map(i => i.value).join('');
+}
+
+function clearPin() {
+  pinDigits.forEach(i => { i.value = ''; });
+  pinDigits[0].focus();
+}
+
+function submitPin() {
+  const pin = getPinValue();
+  if (pin.length < 4) { document.getElementById('pin-err').textContent = 'Enter all 4 digits.'; return; }
+  document.getElementById('pin-err').textContent = '';
+  sessionStorage.setItem('bp_pin', pin);
+  sendAuth(pin);
+}
+
+document.getElementById('pin-submit').addEventListener('click', submitPin);
+
+// ─── Tabs ─────────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab-bar button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-bar button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+// ─── Version pills ────────────────────────────────────────────────────────────
+function renderVersionPills() {
+  const c = document.getElementById('version-pills');
+  c.innerHTML = '';
+  versions.forEach(v => {
+    const btn = document.createElement('button');
+    btn.className = 'pill' + (v === currentVersion ? ' active' : '');
+    btn.textContent = v;
+    btn.onclick = () => {
+      currentVersion = v;
+      renderVersionPills();
+      loadBooks();
+    };
+    c.appendChild(btn);
+  });
+}
+
+// ─── Bible navigation ─────────────────────────────────────────────────────────
+function loadBooks() {
+  send({ cmd: 'get_books', version: currentVersion });
+}
+
+function renderBookSelect() {
+  const sel = document.getElementById('book-select');
+  sel.innerHTML = '<option value="">Select book…</option>';
+  books.forEach(b => {
+    const o = document.createElement('option');
+    o.value = b; o.textContent = b;
+    if (b === selectedBook) o.selected = true;
+    sel.appendChild(o);
+  });
+  if (!selectedBook && books.length) {
+    selectedBook = books[0];
+    sel.value = selectedBook;
+  }
+  loadChapters();
+}
+
+document.getElementById('book-select').addEventListener('change', function() {
+  selectedBook = this.value;
+  selectedChapter = 0; selectedVerse = 0;
+  hideNavPreview();
+  loadChapters();
+});
+
+function loadChapters() {
+  if (!selectedBook) return;
+  send({ cmd: 'get_chapters', book: selectedBook, version: currentVersion });
+}
+
+function renderChapterSelect() {
+  const sel = document.getElementById('chapter-select');
+  sel.innerHTML = '<option value="">Ch</option>';
+  chapters.forEach(n => {
+    const o = document.createElement('option');
+    o.value = n; o.textContent = n;
+    if (n === selectedChapter) o.selected = true;
+    sel.appendChild(o);
+  });
+  if (!selectedChapter && chapters.length) {
+    selectedChapter = chapters[0];
+    sel.value = selectedChapter;
+  }
+  loadVerses();
+}
+
+document.getElementById('chapter-select').addEventListener('change', function() {
+  selectedChapter = parseInt(this.value) || 0;
+  selectedVerse = 0;
+  hideNavPreview();
+  loadVerses();
+});
+
+function loadVerses() {
+  if (!selectedBook || !selectedChapter) return;
+  send({ cmd: 'get_verses', book: selectedBook, chapter: selectedChapter, version: currentVersion });
+}
+
+function renderVerseSelect() {
+  const sel = document.getElementById('verse-select');
+  sel.innerHTML = '<option value="">Vs</option>';
+  verses.forEach(n => {
+    const o = document.createElement('option');
+    o.value = n; o.textContent = n;
+    if (n === selectedVerse) o.selected = true;
+    sel.appendChild(o);
+  });
+  if (!selectedVerse && verses.length) {
+    selectedVerse = verses[0];
+    sel.value = selectedVerse;
+  }
+  loadVerseText();
+}
+
+document.getElementById('verse-select').addEventListener('change', function() {
+  selectedVerse = parseInt(this.value) || 0;
+  loadVerseText();
+});
+
+function loadVerseText() {
+  if (!selectedBook || !selectedChapter || !selectedVerse) return;
+  send({ cmd: 'get_verse', book: selectedBook, chapter: selectedChapter, verse: selectedVerse, version: currentVersion });
+}
+
+function showNavPreview(v) {
+  navVerseData = v;
+  document.getElementById('nav-preview').style.display = 'block';
+  document.getElementById('nav-ref').textContent = `${v.book} ${v.chapter}:${v.verse} (${v.version})`;
+  document.getElementById('nav-text').textContent = v.text;
+  document.getElementById('nav-go-live').disabled = false;
+}
+
+function hideNavPreview() {
+  navVerseData = null;
+  document.getElementById('nav-preview').style.display = 'none';
+  document.getElementById('nav-go-live').disabled = true;
+}
+
+document.getElementById('nav-go-live').addEventListener('click', () => {
+  if (!navVerseData) return;
+  send({ cmd: 'go_live', item: { type: 'Verse', data: navVerseData } });
+});
+
+// ─── Search ───────────────────────────────────────────────────────────────────
+document.getElementById('search-btn').addEventListener('click', doSearch);
+document.getElementById('search-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doSearch();
+});
+
+function doSearch() {
+  const q = document.getElementById('search-input').value.trim();
+  if (!q) return;
+  document.getElementById('search-results').style.display = 'none';
+  document.getElementById('search-results').innerHTML = '<div class="text-muted" style="padding:8px"><div class="spinner"></div></div>';
+  document.getElementById('search-results').style.display = 'flex';
+  send({ cmd: 'search', query: q });
+}
+
+function renderSearchResults() {
+  const c = document.getElementById('search-results');
+  c.innerHTML = '';
+  if (!searchResults.length) {
+    c.innerHTML = '<div class="text-muted" style="padding:8px">No results</div>';
+    c.style.display = 'flex';
+    return;
+  }
+  searchResults.forEach((v, i) => {
+    const el = document.createElement('div');
+    el.className = 'result-item';
+    el.innerHTML = `<div class="result-ref">${v.book} ${v.chapter}:${v.verse} (${v.version})</div><div class="result-text">${v.text}</div>`;
+    el.onclick = () => selectSearchResult(i);
+    c.appendChild(el);
+  });
+  c.style.display = 'flex';
+}
+
+function selectSearchResult(i) {
+  selectedSearchIdx = i;
+  document.querySelectorAll('#search-results .result-item').forEach((el, j) => {
+    el.classList.toggle('selected', j === i);
+  });
+  const v = searchResults[i];
+  document.getElementById('search-preview').style.display = 'block';
+  document.getElementById('search-ref').textContent = `${v.book} ${v.chapter}:${v.verse} (${v.version})`;
+  document.getElementById('search-text').textContent = v.text;
+  document.getElementById('search-go-live').disabled = false;
+}
+
+document.getElementById('search-go-live').addEventListener('click', () => {
+  if (selectedSearchIdx < 0) return;
+  const v = searchResults[selectedSearchIdx];
+  send({ cmd: 'go_live', item: { type: 'Verse', data: v } });
+});
+
+// ─── Songs ────────────────────────────────────────────────────────────────────
+document.getElementById('song-search').addEventListener('input', function() {
+  renderSongList(this.value);
+});
+
+function renderSongList(filter) {
+  const c = document.getElementById('song-list');
+  c.innerHTML = '';
+  const q = (filter || '').toLowerCase();
+  const filtered = songs.filter(s => s.title.toLowerCase().includes(q) || (s.author || '').toLowerCase().includes(q));
+  if (!filtered.length) {
+    c.innerHTML = '<div class="text-muted" style="padding:8px">No songs</div>';
+    return;
+  }
+  filtered.forEach(s => {
+    const el = document.createElement('div');
+    el.className = 'song-item' + (selectedSong && selectedSong.id === s.id ? ' selected' : '');
+    el.innerHTML = `<div>${s.title}</div>${s.author ? `<div class="song-author">${s.author}</div>` : ''}`;
+    el.onclick = () => selectSong(s);
+    c.appendChild(el);
+  });
+}
+
+function selectSong(s) {
+  selectedSong = s;
+  ltLineIdx = 0;
+  flatLines = [];
+  (s.sections || []).forEach(sec => {
+    (sec.lines || []).forEach((line, li) => {
+      flatLines.push({ sectionLabel: li === 0 ? sec.label : '', text: line });
+    });
+  });
+  document.getElementById('lyric-song-title').textContent = s.title;
+  document.getElementById('lyric-controls').style.display = 'flex';
+  renderSongList(document.getElementById('song-search').value);
+  renderLyricDisplay();
+}
+
+function renderLyricDisplay() {
+  const el = document.getElementById('lyric-display');
+  if (!flatLines.length) { el.innerHTML = '<span class="text-muted">No lines</span>'; return; }
+  const idx = Math.min(ltLineIdx, flatLines.length - 1);
+  const line1 = flatLines[idx];
+  const line2 = linesMode === 2 && flatLines[idx + 1] ? flatLines[idx + 1] : null;
+  let html = '';
+  if (line1.sectionLabel) html += `<span class="section-label">${line1.sectionLabel}</span>`;
+  html += `<span>${line1.text}</span>`;
+  if (line2) html += `<br><span style="opacity:.75">${line2.text}</span>`;
+  el.innerHTML = html;
+}
+
+function setLinesMode(n) {
+  linesMode = n;
+  document.getElementById('lines-1-btn').classList.toggle('active', n === 1);
+  document.getElementById('lines-2-btn').classList.toggle('active', n === 2);
+  renderLyricDisplay();
+}
+
+document.getElementById('lyric-prev').addEventListener('click', () => {
+  if (ltLineIdx > 0) { ltLineIdx--; renderLyricDisplay(); }
+});
+
+document.getElementById('lyric-next').addEventListener('click', () => {
+  if (ltLineIdx < flatLines.length - 1) { ltLineIdx++; renderLyricDisplay(); }
+});
+
+document.getElementById('lyric-show').addEventListener('click', () => {
+  if (!selectedSong || !flatLines.length) return;
+  const idx = Math.min(ltLineIdx, flatLines.length - 1);
+  const l = flatLines[idx];
+  const l2 = linesMode === 2 && flatLines[idx + 1] ? flatLines[idx + 1] : null;
+  const data = {
+    kind: 'Lyrics',
+    line1: l.text,
+    line2: l2 ? l2.text : null,
+    section_label: l.sectionLabel || null,
+  };
+  send({ cmd: 'show_lt', data, template: defaultTemplate });
+});
+
+document.getElementById('lyric-hide').addEventListener('click', () => {
+  send({ cmd: 'hide_lt' });
+});
+
+// ─── Lower Third tab ─────────────────────────────────────────────────────────
+function setLtMode(mode) {
+  ltMode = mode;
+  document.querySelectorAll('.mode-pill').forEach((p, i) => {
+    p.classList.toggle('active', (i === 0 && mode === 'nameplate') || (i === 1 && mode === 'freetext'));
+  });
+  document.getElementById('lt-nameplate').style.display = mode === 'nameplate' ? 'flex' : 'none';
+  document.getElementById('lt-freetext').style.display  = mode === 'freetext'  ? 'flex' : 'none';
+}
+
+function setScrollMode(mode) {
+  scrollMode = mode;
+  document.querySelectorAll('#lt-freetext .pill').forEach((p, i) => {
+    const modes = ['Static','ScrollLeft','ScrollRight'];
+    p.classList.toggle('active', modes[i] === mode);
+  });
+  document.getElementById('ft-speed-row').style.display = mode === 'Static' ? 'none' : 'block';
+}
+
+document.getElementById('ft-speed').addEventListener('input', function() {
+  document.getElementById('ft-speed-val').textContent = this.value;
+});
+
+document.getElementById('np-show').addEventListener('click', () => {
+  const name = document.getElementById('np-name').value.trim();
+  if (!name) { document.getElementById('np-name').focus(); return; }
+  const title = document.getElementById('np-title').value.trim();
+  const data = { kind: 'Nameplate', name, title: title || null };
+  send({ cmd: 'show_lt', data, template: defaultTemplate });
+});
+
+document.getElementById('np-hide').addEventListener('click', () => {
+  send({ cmd: 'hide_lt' });
+});
+
+document.getElementById('ft-show').addEventListener('click', () => {
+  const text = document.getElementById('ft-text').value.trim();
+  if (!text) { document.getElementById('ft-text').focus(); return; }
+  const speed = parseInt(document.getElementById('ft-speed').value);
+  const data = { kind: 'FreeText', text, scroll_mode: scrollMode, speed };
+  send({ cmd: 'show_lt', data, template: defaultTemplate });
+});
+
+document.getElementById('ft-hide').addEventListener('click', () => {
+  send({ cmd: 'hide_lt' });
+});
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+connect();
+// Auto-focus first pin digit
+document.querySelector('.pin-digit').focus();
+</script>
+</body>
+</html>
