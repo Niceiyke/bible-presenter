@@ -1830,7 +1830,8 @@ export default function App() {
   const [sidebarWidth, setSidebarWidth] = useState(320);
   const [isTranscriptionCollapsed, setIsTranscriptionCollapsed] = useState(false);
   const [isSchedulePersistent, setIsSchedulePersistent] = useState(true);
-  const [ltDeckOpen, setLtDeckOpen] = useState(false);
+  const [bottomDeckOpen, setBottomDeckOpen] = useState(false);
+  const [bottomDeckMode, setBottomDeckMode] = useState<"live-lt" | "studio-slides" | "studio-lt">("live-lt");
   const [isBlackout, setIsBlackout] = useState(false);
 
   // Settings
@@ -2420,7 +2421,7 @@ export default function App() {
           }
           break;
         case "t":
-          if (e.ctrlKey) { e.preventDefault(); setLtDeckOpen(!ltDeckOpen); }
+          if (e.ctrlKey) { e.preventDefault(); setBottomDeckOpen(!bottomDeckOpen); }
           break;
         case "s":
           if (e.ctrlKey) { e.preventDefault(); setActiveTab("settings"); }
@@ -2431,7 +2432,7 @@ export default function App() {
         case "F2": setActiveTab("songs"); break;
         case "F3": setActiveTab("media"); break;
         case "F4": setActiveTab("presentations"); break;
-        case "F5": setActiveTab("studio"); break;
+        case "F5": { setBottomDeckOpen(true); setBottomDeckMode("studio-slides"); break; }
 
         // Bible / Verse Navigation
         case "n":
@@ -2523,7 +2524,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [stagedItem, goLive, liveItem, studioSlides, nextVerse, ltVisible, ltMode, ltName, ltTitle, ltFreeText, ltSongId, ltFlatLines, ltLineIndex, ltLinesPerDisplay, ltTemplate, ltAdvance, settings, setIsBlackout, stageItem, sendLive]);
+  }, [stagedItem, goLive, liveItem, studioSlides, nextVerse, ltVisible, ltMode, ltName, ltTitle, ltFreeText, ltSongId, ltFlatLines, ltLineIndex, ltLinesPerDisplay, ltTemplate, ltAdvance, settings, setIsBlackout, stageItem, sendLive, bottomDeckOpen, bottomDeckMode]);
 
   // ── Search ──────────────────────────────────────────────────────────────────
 
@@ -3129,9 +3130,16 @@ export default function App() {
             ).map(({ id, icon, label }) => (
               <button
                 key={id}
-                onClick={() => setActiveTab(id)}
+                onClick={() => {
+                  if (id === "studio") {
+                    setBottomDeckOpen(true);
+                    setBottomDeckMode("studio-slides");
+                  } else {
+                    setActiveTab(id);
+                  }
+                }}
                 className={`flex-1 py-2.5 flex flex-col items-center gap-0.5 transition-all relative whitespace-nowrap px-1 ${
-                  activeTab === id
+                  (activeTab === id && id !== "studio") || (id === "studio" && bottomDeckOpen && (bottomDeckMode === "studio-slides" || bottomDeckMode === "studio-lt"))
                     ? "bg-slate-800 text-amber-500 border-b-2 border-amber-500"
                     : "text-slate-500 hover:text-slate-300 hover:bg-slate-800/50"
                 }`}
@@ -3603,92 +3611,7 @@ export default function App() {
             )}
 
             {/* ── Studio Tab ── */}
-            {activeTab === "studio" && (
-              <div className="flex flex-col gap-4">
-                <div className="flex justify-between items-center">
-                  <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Studio</h2>
-                  <button
-                    onClick={handleNewStudioPresentation}
-                    className="text-[10px] bg-purple-600 hover:bg-purple-500 text-white font-bold px-3 py-1.5 rounded transition-all"
-                  >
-                    + NEW
-                  </button>
-                </div>
-
-                {studioList.length === 0 ? (
-                  <p className="text-slate-700 text-xs italic text-center pt-8">
-                    No presentations. Click + NEW to create one.
-                  </p>
-                ) : (
-                  <div className="flex flex-col gap-2">
-                    {studioList.map((item) => (
-                      <div key={item.id} className="flex flex-col gap-1 p-2.5 rounded-lg border border-slate-700/50 bg-slate-800/40">
-                        <div className="flex items-center gap-2">
-                          <span className="text-purple-400 font-black text-[9px] bg-purple-400/10 px-1.5 py-0.5 rounded shrink-0">STUDIO</span>
-                          <span className="flex-1 text-xs text-slate-300 truncate">{item.name}</span>
-                          <span className="text-slate-600 text-[9px] shrink-0">{item.slide_count} slides</span>
-                        </div>
-                        <div className="flex gap-1">
-                          <button
-                            onClick={() => handleOpenStudioEditor(item.id)}
-                            className="flex-1 py-1 bg-slate-700 hover:bg-slate-600 text-white text-[10px] font-bold rounded transition-all"
-                          >
-                            EDIT
-                          </button>
-                          <button
-                            onClick={() => handlePresentStudio(item.id)}
-                            className={`flex-1 py-1 text-[10px] font-bold rounded transition-all ${
-                              expandedStudioPresId === item.id
-                                ? "bg-purple-600 text-white"
-                                : "bg-purple-600/30 hover:bg-purple-600/50 text-purple-300"
-                            }`}
-                          >
-                            {expandedStudioPresId === item.id ? "HIDE" : "PRESENT"}
-                          </button>
-                          <button
-                            onClick={() => handleDeleteStudioPresentation(item.id)}
-                            className="px-2 py-1 bg-red-900/40 hover:bg-red-900 text-red-400 text-[10px] font-bold rounded transition-all"
-                          >
-                            ✕
-                          </button>
-                        </div>
-
-                        {/* Slide thumbnails when expanded */}
-                        {expandedStudioPresId === item.id && studioSlides[item.id] && (
-                          <div className="grid grid-cols-2 gap-1.5 mt-1">
-                            {studioSlides[item.id].map((slide, idx) => (
-                              <div
-                                key={slide.id}
-                                className="group relative aspect-video rounded overflow-hidden border border-slate-700 hover:border-purple-500/50 transition-all cursor-pointer"
-                              >
-                                <CustomSlideRenderer slide={slide} scale={0.07} />
-                                <div className="absolute bottom-0 left-0 px-1 py-0.5 bg-black/50">
-                                  <span className="text-[7px] text-white/70">{idx + 1}</span>
-                                </div>
-                                <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-all flex flex-col items-center justify-center gap-1 p-1">
-                                  <button
-                                    onClick={() => stageCustomSlide(item, studioSlides[item.id], idx)}
-                                    className="w-full bg-slate-600 hover:bg-slate-500 text-white text-[9px] font-bold py-1 rounded"
-                                  >
-                                    STAGE
-                                  </button>
-                                  <button
-                                    onClick={() => sendCustomSlide(item, studioSlides[item.id], idx)}
-                                    className="w-full bg-purple-600 hover:bg-purple-500 text-white text-[9px] font-bold py-1 rounded"
-                                  >
-                                    DISPLAY
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+            {/* Studio Tab moved to Bottom Deck */}
 
             {/* ── Schedule Tab ── */}
             {activeTab === "schedule" && (
@@ -4215,7 +4138,7 @@ export default function App() {
                         </div>
                         <div className="flex gap-1">
                           <button
-                            onClick={() => { setLtSongId(song.id); setLtLineIndex(0); setActiveTab("lower-third"); setLtMode("lyrics"); }}
+                            onClick={() => { setLtSongId(song.id); setLtLineIndex(0); setBottomDeckOpen(true); setBottomDeckMode("live-lt"); setLtMode("lyrics"); }}
                             className="text-[9px] font-black uppercase bg-green-700 hover:bg-green-600 text-white px-2 py-1 rounded"
                           >Use</button>
                           <button
@@ -4990,9 +4913,12 @@ export default function App() {
               </button>
               <div className="h-4 w-px bg-slate-800 mx-2" />
               <button 
-                 onClick={() => setLtDeckOpen(!ltDeckOpen)}
+                 onClick={() => {
+                    if (bottomDeckOpen && bottomDeckMode === "live-lt") setBottomDeckOpen(false);
+                    else { setBottomDeckOpen(true); setBottomDeckMode("live-lt"); }
+                 }}
                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${
-                    ltDeckOpen ? "bg-amber-500 text-black shadow-[0_0_15px_rgba(245,158,11,0.4)]" : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                    bottomDeckOpen && bottomDeckMode === "live-lt" ? "bg-amber-500 text-black shadow-[0_0_15px_rgba(245,158,11,0.4)]" : "bg-slate-800 text-slate-400 hover:bg-slate-700"
                  }`}
               >
                 <Type size={12} /> LOWER THIRD
@@ -5177,133 +5103,448 @@ export default function App() {
             </div>
           </section>
 
-          {/* ── 4. Lower Third Deck (Bottom Dock) ── */}
-          {ltDeckOpen && (
-            <section className="h-72 bg-slate-900 border-t border-slate-800 flex flex-col shrink-0 z-30 shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
+          {/* ── 4. Unified Bottom Studio Deck ── */}
+          {bottomDeckOpen && (
+            <section className="h-[450px] bg-slate-900 border-t border-slate-800 flex flex-col shrink-0 z-30 shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
               <div className="flex items-center justify-between px-4 py-2 bg-slate-800/50 border-b border-slate-800">
-                <div className="flex items-center gap-4">
-                  <h2 className="text-[10px] font-black uppercase tracking-widest text-amber-500">Lower Third Controller</h2>
+                <div className="flex items-center gap-6">
                   <div className="flex rounded-lg overflow-hidden border border-slate-700 bg-black/20">
-                    {(["nameplate", "lyrics", "freetext"] as const).map((m) => (
-                      <button key={m} onClick={() => setLtMode(m)}
-                        className={`px-4 py-1.5 text-[9px] font-black uppercase tracking-widest transition-all ${ltMode === m ? "bg-amber-500 text-black" : "text-slate-500 hover:text-slate-300"}`}>
-                        {m}
-                      </button>
-                    ))}
+                    <button 
+                      onClick={() => setBottomDeckMode("live-lt")}
+                      className={`px-4 py-1.5 text-[9px] font-black uppercase tracking-widest transition-all ${bottomDeckMode === "live-lt" ? "bg-amber-500 text-black" : "text-slate-500 hover:text-slate-300"}`}
+                    >
+                      LIVE LT
+                    </button>
+                    <button 
+                      onClick={() => setBottomDeckMode("studio-slides")}
+                      className={`px-4 py-1.5 text-[9px] font-black uppercase tracking-widest transition-all ${bottomDeckMode === "studio-slides" ? "bg-purple-600 text-white" : "text-slate-500 hover:text-slate-300"}`}
+                    >
+                      STUDIO SLIDES
+                    </button>
+                    <button 
+                      onClick={() => setBottomDeckMode("studio-lt")}
+                      className={`px-4 py-1.5 text-[9px] font-black uppercase tracking-widest transition-all ${bottomDeckMode === "studio-lt" ? "bg-amber-600 text-white" : "text-slate-500 hover:text-slate-300"}`}
+                    >
+                      LT DESIGNER
+                    </button>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button 
-                    onClick={async () => {
-                      if (ltVisible) {
-                        await invoke("hide_lower_third");
-                        setLtVisible(false);
-                      } else {
-                        let payload: LowerThirdData;
-                        if (ltMode === "nameplate") payload = { kind: "Nameplate", data: { name: ltName, title: ltTitle || undefined } };
-                        else if (ltMode === "freetext") payload = { kind: "FreeText", data: { text: ltFreeText } };
-                        else {
-                          if (!ltSongId || ltFlatLines.length === 0) return;
-                          const line1 = ltFlatLines[ltLineIndex];
-                          const line2 = ltLinesPerDisplay === 2 ? ltFlatLines[ltLineIndex + 1] : undefined;
-                          payload = { kind: "Lyrics", data: { line1: line1.text, line2: line2?.text, section_label: line1.sectionLabel } };
+                  {bottomDeckMode === "live-lt" && (
+                    <button 
+                      onClick={async () => {
+                        if (ltVisible) {
+                          await invoke("hide_lower_third");
+                          setLtVisible(false);
+                        } else {
+                          let payload: LowerThirdData;
+                          if (ltMode === "nameplate") payload = { kind: "Nameplate", data: { name: ltName, title: ltTitle || undefined } };
+                          else if (ltMode === "freetext") payload = { kind: "FreeText", data: { text: ltFreeText } };
+                          else {
+                            if (!ltSongId || ltFlatLines.length === 0) return;
+                            const line1 = ltFlatLines[ltLineIndex];
+                            const line2 = ltLinesPerDisplay === 2 ? ltFlatLines[ltLineIndex + 1] : undefined;
+                            payload = { kind: "Lyrics", data: { line1: line1.text, line2: line2?.text, section_label: line1.sectionLabel } };
+                          }
+                          await invoke("show_lower_third", { data: payload, template: ltTemplate });
+                          setLtVisible(true);
                         }
-                        await invoke("show_lower_third", { data: payload, template: ltTemplate });
-                        setLtVisible(true);
-                      }
-                    }}
-                    className={`px-6 py-1.5 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${ltVisible ? "bg-red-600 text-white" : "bg-green-600 text-white"}`}
-                  >
-                    {ltVisible ? "STOP OVERLAY" : "START OVERLAY"}
-                  </button>
-                  <button onClick={() => setLtDeckOpen(false)} className="text-slate-500 hover:text-white p-1">
+                      }}
+                      className={`px-6 py-1.5 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${ltVisible ? "bg-red-600 text-white" : "bg-green-600 text-white"}`}
+                    >
+                      {ltVisible ? "STOP OVERLAY" : "START OVERLAY"}
+                    </button>
+                  )}
+                  <button onClick={() => setBottomDeckOpen(false)} className="text-slate-500 hover:text-white p-1">
                     <X size={16} />
                   </button>
                 </div>
               </div>
 
               <div className="flex-1 flex overflow-hidden">
-                {/* Left: Settings */}
-                <div className="w-80 border-r border-slate-800 p-4 overflow-y-auto space-y-4 bg-slate-900/50">
-                   <div className="space-y-3">
-                      <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Global Styles</p>
-                      <div className="grid grid-cols-2 gap-2">
-                         <div className="flex flex-col gap-1">
-                            <span className="text-[8px] text-slate-600 uppercase font-bold">Variant</span>
-                            <select value={ltTemplate.variant} onChange={(e) => setLtTemplate(t => ({...t, variant: e.target.value as any}))} className="bg-slate-950 text-slate-300 text-[10px] p-1.5 rounded border border-slate-800">
-                               <option value="classic">Classic</option>
-                               <option value="modern">Modern</option>
-                               <option value="banner">Banner</option>
-                            </select>
+                
+                {/* ── Mode: LIVE LOWER THIRD ── */}
+                {bottomDeckMode === "live-lt" && (
+                  <>
+                    <div className="w-64 border-r border-slate-800 p-4 bg-slate-900/50 flex flex-col gap-4">
+                       <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Operation Mode</p>
+                       <div className="flex flex-col gap-1">
+                          {(["nameplate", "lyrics", "freetext"] as const).map((m) => (
+                            <button key={m} onClick={() => setLtMode(m)}
+                              className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-all ${ltMode === m ? "bg-amber-500/10 text-amber-500 border border-amber-500/30" : "text-slate-400 hover:bg-slate-800"}`}>
+                              {m.toUpperCase()}
+                            </button>
+                          ))}
+                       </div>
+                    </div>
+                    <div className="flex-1 p-4 overflow-y-auto">
+                       {ltMode === "nameplate" && (
+                         <div className="grid grid-cols-2 gap-4">
+                            <div className="flex flex-col gap-1.5">
+                               <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Primary Name</label>
+                               <input value={ltName} onChange={(e) => setLtName(e.target.value)} className="bg-slate-950 text-slate-200 text-sm p-3 rounded-xl border border-slate-800" placeholder="e.g. Pastor John Doe" />
+                            </div>
+                            <div className="flex flex-col gap-1.5">
+                               <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Title / Subtitle</label>
+                               <input value={ltTitle} onChange={(e) => setLtTitle(e.target.value)} className="bg-slate-950 text-slate-200 text-sm p-3 rounded-xl border border-slate-800" placeholder="e.g. Senior Pastor" />
+                            </div>
                          </div>
-                         <div className="flex flex-col gap-1">
-                            <span className="text-[8px] text-slate-600 uppercase font-bold">Anim</span>
-                            <select value={ltTemplate.animation} onChange={(e) => setLtTemplate(t => ({...t, animation: e.target.value as any}))} className="bg-slate-950 text-slate-300 text-[10px] p-1.5 rounded border border-slate-800">
-                               <option value="slide-up">Slide Up</option>
-                               <option value="slide-left">Slide Left</option>
-                               <option value="fade">Fade</option>
-                               <option value="none">None</option>
-                            </select>
-                         </div>
-                      </div>
-                      <div className="flex flex-col gap-1">
-                         <span className="text-[8px] text-slate-600 uppercase font-bold">Primary Font</span>
-                         <div className="flex gap-1">
-                            <select value={ltTemplate.primaryFont} onChange={(e) => setLtTemplate(t => ({...t, primaryFont: e.target.value}))} className="flex-1 bg-slate-950 text-slate-300 text-[10px] p-1.5 rounded border border-slate-800">
-                               {FONTS.map(f => <option key={f} value={f}>{f}</option>)}
-                            </select>
-                            <input type="color" value={ltTemplate.primaryColor} onChange={(e) => setLtTemplate(t => ({...t, primaryColor: e.target.value}))} className="w-8 h-8 rounded bg-transparent border-0 p-0" />
-                         </div>
-                      </div>
-                   </div>
-                </div>
+                       )}
+                       {ltMode === "freetext" && (
+                          <div className="flex flex-col gap-4">
+                             <div className="flex flex-col gap-1.5">
+                                <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Broadcast Message</label>
+                                <textarea value={ltFreeText} onChange={(e) => setLtFreeText(e.target.value)} className="bg-slate-950 text-slate-200 text-sm p-3 rounded-xl border border-slate-800 h-32 resize-none" placeholder="Type message to scroll..." />
+                             </div>
+                             <div className="grid grid-cols-2 gap-6">
+                                <div className="flex flex-col gap-2">
+                                   <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Scroll Direction</label>
+                                   <div className="flex rounded-lg overflow-hidden border border-slate-800">
+                                      {([
+                                        { label: "None", enabled: false, dir: "ltr" as const },
+                                        { label: "LTR →", enabled: true, dir: "ltr" as const },
+                                        { label: "← RTL", enabled: true, dir: "rtl" as const },
+                                      ] as const).map((opt) => (
+                                        <button 
+                                          key={opt.label}
+                                          onClick={() => setLtTemplate(p => ({ ...p, scrollEnabled: opt.enabled, scrollDirection: opt.dir }))}
+                                          className={`flex-1 py-1.5 text-[9px] font-bold transition-all ${ltTemplate.scrollEnabled === opt.enabled && (opt.enabled ? ltTemplate.scrollDirection === opt.dir : true) ? "bg-slate-700 text-white" : "bg-slate-950 text-slate-500"}`}
+                                        >
+                                          {opt.label}
+                                        </button>
+                                      ))}
+                                   </div>
+                                </div>
+                                {ltTemplate.scrollEnabled && (
+                                   <div className="flex flex-col gap-2">
+                                      <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Scroll Speed ({ltTemplate.scrollSpeed})</label>
+                                      <input type="range" min={1} max={10} value={ltTemplate.scrollSpeed} onChange={(e) => setLtTemplate(p => ({ ...p, scrollSpeed: parseInt(e.target.value) }))} className="w-full accent-amber-500" />
+                                   </div>
+                                )}
+                             </div>
+                          </div>
+                       )}
+                       {ltMode === "lyrics" && (
+                          <div className="flex flex-col gap-3">
+                             <div className="flex items-center justify-between gap-4">
+                                <select value={ltSongId || ""} onChange={(e) => { setLtSongId(e.target.value || null); setLtLineIndex(0); }} className="flex-1 bg-slate-950 text-slate-200 text-xs p-2 rounded border border-slate-800">
+                                   <option value="">— Choose Song —</option>
+                                   {songs.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
+                                </select>
+                                <div className="flex items-center gap-3 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800 shrink-0">
+                                   <div className="flex items-center gap-1.5">
+                                      <span className="text-[8px] text-slate-500 font-black uppercase">Lines</span>
+                                      {[1, 2].map(n => (
+                                        <button key={n} onClick={() => setLtLinesPerDisplay(n as any)} className={`w-6 h-6 rounded text-[10px] font-bold ${ltLinesPerDisplay === n ? "bg-amber-500 text-black" : "bg-slate-800 text-slate-500"}`}>{n}</button>
+                                      ))}
+                                   </div>
+                                   <div className="w-px h-4 bg-slate-800" />
+                                   <div className="flex items-center gap-2">
+                                      <button onClick={() => setLtAutoAdvance(!ltAutoAdvance)} className={`px-2 py-1 rounded text-[8px] font-black uppercase ${ltAutoAdvance ? "bg-green-600 text-white" : "bg-slate-800 text-slate-500"}`}>Auto</button>
+                                      {ltAutoAdvance && (
+                                        <input type="number" value={ltAutoSeconds} onChange={(e) => setLtAutoSeconds(parseInt(e.target.value))} className="w-10 bg-slate-950 text-slate-200 text-[10px] p-1 rounded border border-slate-800 text-center" />
+                                      )}
+                                   </div>
+                                </div>
+                             </div>
+                             {ltSongId && (
+                               <div className="grid grid-cols-3 gap-2 overflow-y-auto max-h-64 pr-2">
+                                 {ltFlatLines.map((line, idx) => (
+                                   <button 
+                                     key={idx}
+                                     onClick={() => { setLtLineIndex(idx); if (ltVisible) ltSendCurrent(idx); }}
+                                     className={`p-3 rounded-xl border text-left transition-all ${ltLineIndex === idx ? "bg-amber-500 border-amber-400 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-600"}`}
+                                   >
+                                     <p className="text-[8px] font-black uppercase mb-1 opacity-60">{line.sectionLabel}</p>
+                                     <p className="text-xs font-bold leading-tight line-clamp-2">{line.text}</p>
+                                   </button>
+                                 ))}
+                               </div>
+                             )}
+                          </div>
+                       )}
+                    </div>
+                  </>
+                )}
 
-                {/* Center: Content Controls */}
-                <div className="flex-1 p-4 overflow-y-auto space-y-4">
-                   {ltMode === "nameplate" && (
-                     <div className="grid grid-cols-2 gap-4">
-                        <div className="flex flex-col gap-1.5">
-                           <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Primary Name</label>
-                           <input value={ltName} onChange={(e) => setLtName(e.target.value)} className="bg-slate-950 text-slate-200 text-sm p-3 rounded-xl border border-slate-800" placeholder="e.g. Pastor John Doe" />
-                        </div>
-                        <div className="flex flex-col gap-1.5">
-                           <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Title / Subtitle</label>
-                           <input value={ltTitle} onChange={(e) => setLtTitle(e.target.value)} className="bg-slate-950 text-slate-200 text-sm p-3 rounded-xl border border-slate-800" placeholder="e.g. Senior Pastor" />
-                        </div>
-                     </div>
-                   )}
-                   {ltMode === "freetext" && (
-                      <div className="flex flex-col gap-2">
-                         <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Broadcast Message</label>
-                         <textarea value={ltFreeText} onChange={(e) => setLtFreeText(e.target.value)} className="bg-slate-950 text-slate-200 text-sm p-3 rounded-xl border border-slate-800 h-24 resize-none" placeholder="Type message to scroll..." />
-                      </div>
-                   )}
-                   {ltMode === "lyrics" && (
-                      <div className="flex flex-col gap-3">
-                         <select value={ltSongId || ""} onChange={(e) => { setLtSongId(e.target.value || null); setLtLineIndex(0); }} className="bg-slate-950 text-slate-200 text-xs p-2 rounded border border-slate-800">
-                            <option value="">— Choose Song —</option>
-                            {songs.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
-                         </select>
-                         {ltSongId && (
-                           <div className="flex gap-2 overflow-x-auto pb-2">
-                             {ltFlatLines.map((line, idx) => (
-                               <button 
-                                 key={idx}
-                                 onClick={() => { setLtLineIndex(idx); if (ltVisible) invoke("show_lower_third", { data: { kind: "Lyrics", data: { line1: line.text, line2: ltLinesPerDisplay === 2 ? ltFlatLines[idx + 1]?.text : undefined, section_label: line.sectionLabel } }, template: ltTemplate }); }}
-                                 className={`shrink-0 p-3 rounded-xl border text-left min-w-[180px] transition-all ${ltLineIndex === idx ? "bg-amber-500 border-amber-400 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-600"}`}
-                               >
-                                 <p className="text-[8px] font-black uppercase mb-1 opacity-60">{line.sectionLabel}</p>
-                                 <p className="text-xs font-bold leading-tight line-clamp-2">{line.text}</p>
-                               </button>
-                             ))}
-                           </div>
-                         )}
-                      </div>
-                   )}
-                </div>
+                {/* ── Mode: STUDIO SLIDES ── */}
+                {bottomDeckMode === "studio-slides" && (
+                  <>
+                    <div className="w-64 border-r border-slate-800 p-4 bg-slate-900/50 flex flex-col gap-4 overflow-y-auto">
+                       <div className="flex justify-between items-center">
+                          <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Presentations</p>
+                          <button onClick={handleNewStudioPresentation} className="p-1 bg-purple-600 rounded text-white"><Plus size={12} /></button>
+                       </div>
+                       <div className="flex flex-col gap-1.5">
+                          {studioList.map(item => (
+                            <div key={item.id} className={`group p-2.5 rounded-lg border transition-all cursor-pointer ${expandedStudioPresId === item.id ? "bg-purple-600/10 border-purple-600/40" : "bg-slate-950 border-slate-800 hover:border-slate-700"}`} onClick={() => handlePresentStudio(item.id)}>
+                               <div className="flex items-center justify-between gap-2">
+                                  <p className="text-[11px] font-bold text-slate-200 truncate">{item.name}</p>
+                                  <div className="flex gap-1 opacity-0 group-hover:opacity-100">
+                                     <button onClick={(e) => { e.stopPropagation(); handleOpenStudioEditor(item.id); }} className="p-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded"><Settings size={10} /></button>
+                                     <button onClick={(e) => { e.stopPropagation(); handleDeleteStudioPresentation(item.id); }} className="p-1 bg-red-900/40 hover:bg-red-600 text-red-200 rounded"><X size={10} /></button>
+                                  </div>
+                               </div>
+                               <p className="text-[8px] text-slate-600 font-bold mt-0.5">{item.slide_count} SLIDES</p>
+                            </div>
+                          ))}
+                       </div>
+                    </div>
+                    <div className="flex-1 p-4 overflow-y-auto">
+                       {expandedStudioPresId && studioSlides[expandedStudioPresId] ? (
+                         <div className="grid grid-cols-4 gap-3">
+                            {studioSlides[expandedStudioPresId].map((slide, idx) => (
+                              <div key={slide.id} className="group relative aspect-video rounded-xl overflow-hidden border border-slate-800 hover:border-purple-500 transition-all shadow-lg">
+                                 <CustomSlideRenderer slide={slide} scale={0.12} />
+                                 <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-2 transition-all">
+                                    <button onClick={() => stageCustomSlide(studioList.find(p=>p.id===expandedStudioPresId)!, studioSlides[expandedStudioPresId], idx)} className="bg-slate-700 text-white text-[9px] font-bold px-2 py-1 rounded">STAGE</button>
+                                    <button onClick={() => sendCustomSlide(studioList.find(p=>p.id===expandedStudioPresId)!, studioSlides[expandedStudioPresId], idx)} className="bg-purple-600 text-white text-[9px] font-bold px-2 py-1 rounded">LIVE</button>
+                                 </div>
+                                 <div className="absolute top-2 left-2 bg-black/40 px-1.5 py-0.5 rounded text-[8px] text-white/70 font-black">{idx + 1}</div>
+                              </div>
+                            ))}
+                         </div>
+                       ) : (
+                         <div className="h-full flex flex-col items-center justify-center text-slate-700 italic">
+                            <Layers size={48} className="mb-4 opacity-20" />
+                            <p className="text-sm">Select a presentation to manage slides</p>
+                         </div>
+                       )}
+                    </div>
+                  </>
+                )}
 
-                {/* Right: Live Preview */}
-                <div className="w-96 border-l border-slate-800 p-4 bg-black/40">
+                {/* ── Mode: STUDIO LOWER THIRD (LT DESIGNER) ── */}
+                {bottomDeckMode === "studio-lt" && (
+                  <>
+                    <div className="w-80 border-r border-slate-800 p-4 overflow-y-auto space-y-4 bg-slate-900/50">
+                       <div className="space-y-3">
+                          <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Template Management</p>
+                          <div className="flex gap-1.5">
+                            <select
+                              className="flex-1 bg-slate-950 text-slate-200 text-[10px] rounded p-1.5 border border-slate-800"
+                              value={ltTemplate.id}
+                              onChange={(e) => {
+                                const found = ltSavedTemplates.find((t) => t.id === e.target.value);
+                                if (found) { setLtTemplate(found); localStorage.setItem("activeLtTemplateId", found.id); }
+                              }}
+                            >
+                              {ltSavedTemplates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                            </select>
+                            <button onClick={() => setLtTemplate({...ltTemplate, id: stableId(), name: "New Template"})} className="p-1.5 bg-slate-800 rounded text-white"><Plus size={14} /></button>
+                            <button onClick={async () => {
+                                const updated = ltSavedTemplates.some((t) => t.id === ltTemplate.id) ? ltSavedTemplates.map((t) => t.id === ltTemplate.id ? ltTemplate : t) : [...ltSavedTemplates, { ...ltTemplate, id: stableId() }];
+                                setLtSavedTemplates(updated); localStorage.setItem("activeLtTemplateId", ltTemplate.id); await invoke("save_lt_templates", { templates: updated }); setToast("Template saved");
+                            }} className="px-3 bg-amber-600 rounded text-white text-[9px] font-bold">SAVE</button>
+                            <button onClick={async () => {
+                                if (ltSavedTemplates.length <= 1) return;
+                                const updated = ltSavedTemplates.filter((t) => t.id !== ltTemplate.id);
+                                setLtSavedTemplates(updated); setLtTemplate(updated[0]); await invoke("save_lt_templates", { templates: updated }); setToast("Template deleted");
+                            }} className="p-1.5 bg-red-900/40 hover:bg-red-600 rounded text-red-400 hover:text-white transition-all"><X size={14} /></button>
+                          </div>
+                          
+                          <div className="border-t border-slate-800 my-4" />
+                          
+                          <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Global Styles</p>
+                          <div className="grid grid-cols-2 gap-2">
+                             <div className="flex flex-col gap-1">
+                                <span className="text-[8px] text-slate-600 uppercase font-bold">Variant</span>
+                                <select value={ltTemplate.variant} onChange={(e) => setLtTemplate(t => ({...t, variant: e.target.value as any}))} className="bg-slate-950 text-slate-300 text-[10px] p-1.5 rounded border border-slate-800">
+                                   <option value="classic">Classic</option>
+                                   <option value="modern">Modern</option>
+                                   <option value="banner">Banner</option>
+                                </select>
+                             </div>
+                             <div className="flex flex-col gap-1">
+                                <span className="text-[8px] text-slate-600 uppercase font-bold">Anim</span>
+                                <select value={ltTemplate.animation} onChange={(e) => setLtTemplate(t => ({...t, animation: e.target.value as any}))} className="bg-slate-950 text-slate-300 text-[10px] p-1.5 rounded border border-slate-800">
+                                   <option value="slide-up">Slide Up</option>
+                                   <option value="slide-left">Slide Left</option>
+                                   <option value="fade">Fade</option>
+                                   <option value="none">None</option>
+                                </select>
+                             </div>
+                          </div>
+                          
+                          <div className="flex flex-col gap-1">
+                             <span className="text-[8px] text-slate-600 uppercase font-bold">Background</span>
+                             <div className="grid grid-cols-4 gap-1">
+                                {(["solid", "gradient", "image", "transparent"] as const).map(bt => (
+                                  <button key={bt} onClick={() => setLtTemplate(t => ({...t, bgType: bt}))} className={`text-[8px] font-bold py-1 rounded border transition-all ${ltTemplate.bgType === bt ? "bg-slate-700 border-slate-500 text-white" : "bg-slate-950 border-slate-800 text-slate-600 hover:text-slate-400"}`}>
+                                    {bt.toUpperCase()}
+                                  </button>
+                                ))}
+                             </div>
+                             {ltTemplate.bgType === "solid" && (
+                                <div className="flex items-center gap-2 mt-2">
+                                   <span className="text-[8px] text-slate-600 uppercase font-bold w-12">Color</span>
+                                   <input type="color" value={ltTemplate.bgColor} onChange={(e) => setLtTemplate(t => ({...t, bgColor: e.target.value}))} className="flex-1 h-6 bg-transparent border-0 p-0 cursor-pointer" />
+                                </div>
+                             )}
+                             {ltTemplate.bgType === "gradient" && (
+                                <div className="space-y-2 mt-2">
+                                   <div className="flex items-center gap-2">
+                                      <span className="text-[8px] text-slate-600 uppercase font-bold w-12">Start</span>
+                                      <input type="color" value={ltTemplate.bgColor} onChange={(e) => setLtTemplate(t => ({...t, bgColor: e.target.value}))} className="flex-1 h-6 bg-transparent border-0 p-0 cursor-pointer" />
+                                   </div>
+                                   <div className="flex items-center gap-2">
+                                      <span className="text-[8px] text-slate-600 uppercase font-bold w-12">End</span>
+                                      <input type="color" value={ltTemplate.bgGradientEnd} onChange={(e) => setLtTemplate(t => ({...t, bgGradientEnd: e.target.value}))} className="flex-1 h-6 bg-transparent border-0 p-0 cursor-pointer" />
+                                   </div>
+                                </div>
+                             )}
+                             {ltTemplate.bgType === "image" && (
+                                <div className="mt-2">
+                                   <button onClick={() => setShowLtImgPicker(true)} className="w-full py-1.5 px-2 bg-slate-950 border border-slate-800 rounded text-[9px] text-slate-400 hover:text-slate-200 truncate">
+                                      {ltTemplate.bgImagePath ? ltTemplate.bgImagePath.split(/[/\\]/).pop() : "CHOOSE IMAGE..."}
+                                   </button>
+                                </div>
+                             )}
+                             <div className="flex items-center gap-2 mt-2">
+                                <span className="text-[8px] text-slate-600 uppercase font-bold w-12">Opacity</span>
+                                <input type="range" min={0} max={100} value={ltTemplate.bgOpacity} onChange={(e) => setLtTemplate(t => ({...t, bgOpacity: parseInt(e.target.value)}))} className="flex-1 accent-amber-500" />
+                             </div>
+                             <div className="flex items-center justify-between mt-1">
+                                <span className="text-[8px] text-slate-600 uppercase font-bold">Blur Background</span>
+                                <input type="checkbox" checked={ltTemplate.bgBlur} onChange={(e) => setLtTemplate(t => ({...t, bgBlur: e.target.checked}))} />
+                             </div>
+                          </div>
+
+                          <div className="border-t border-slate-800 my-4" />
+
+                          <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Accent Bar</p>
+                          <div className="space-y-3">
+                             <div className="flex items-center justify-between">
+                                <span className="text-[8px] text-slate-600 uppercase font-bold">Enabled</span>
+                                <input type="checkbox" checked={ltTemplate.accentEnabled} onChange={(e) => setLtTemplate(t => ({...t, accentEnabled: e.target.checked}))} />
+                             </div>
+                             {ltTemplate.accentEnabled && (
+                               <>
+                                 <div className="flex items-center gap-2">
+                                    <span className="text-[8px] text-slate-600 uppercase font-bold w-12">Color</span>
+                                    <input type="color" value={ltTemplate.accentColor} onChange={(e) => setLtTemplate(t => ({...t, accentColor: e.target.value}))} className="flex-1 h-6 bg-transparent border-0 p-0 cursor-pointer" />
+                                 </div>
+                                 <div className="flex flex-col gap-1">
+                                    <span className="text-[8px] text-slate-600 uppercase font-bold">Side</span>
+                                    <div className="grid grid-cols-4 gap-1">
+                                       {(["left", "right", "top", "bottom"] as const).map(s => (
+                                         <button key={s} onClick={() => setLtTemplate(t => ({...t, accentSide: s}))} className={`text-[7px] font-bold py-1 rounded border transition-all ${ltTemplate.accentSide === s ? "bg-amber-600 border-amber-500 text-white" : "bg-slate-950 border-slate-800 text-slate-600"}`}>
+                                           {s.toUpperCase()}
+                                         </button>
+                                       ))}
+                                    </div>
+                                 </div>
+                                 <div className="flex items-center gap-2">
+                                    <span className="text-[8px] text-slate-600 uppercase font-bold w-12">Width px</span>
+                                    <input type="range" min={1} max={20} value={ltTemplate.accentWidth} onChange={(e) => setLtTemplate(t => ({...t, accentWidth: parseInt(e.target.value)}))} className="flex-1 accent-amber-500" />
+                                 </div>
+                               </>
+                             )}
+                          </div>
+                       </div>
+                    </div>
+                    <div className="flex-1 p-4 overflow-y-auto">
+                       <div className="grid grid-cols-2 gap-8">
+                          <div className="space-y-6">
+                             <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Typography & Colors</p>
+                             <div className="space-y-4">
+                                <div className="space-y-2">
+                                   <span className="text-[8px] text-slate-600 uppercase font-bold">Primary (Name / Line 1)</span>
+                                   <div className="flex gap-2 items-center">
+                                      <select value={ltTemplate.primaryFont} onChange={(e) => setLtTemplate(t => ({...t, primaryFont: e.target.value}))} className="flex-1 bg-slate-950 text-slate-300 text-[10px] p-1.5 rounded border border-slate-800">
+                                         {FONTS.map(f => <option key={f} value={f}>{f}</option>)}
+                                      </select>
+                                      <input type="number" value={ltTemplate.primarySize} onChange={(e) => setLtTemplate(t => ({...t, primarySize: parseInt(e.target.value)}))} className="w-12 bg-slate-950 text-slate-300 text-[10px] p-1.5 rounded border border-slate-800" />
+                                      <input type="color" value={ltTemplate.primaryColor} onChange={(e) => setLtTemplate(t => ({...t, primaryColor: e.target.value}))} className="w-8 h-8 rounded bg-transparent border-0 p-0 cursor-pointer" />
+                                   </div>
+                                   <div className="flex gap-1 mt-1">
+                                      <button onClick={() => setLtTemplate(t => ({...t, primaryBold: !t.primaryBold}))} className={`flex-1 py-1 text-[9px] font-black rounded border transition-all ${ltTemplate.primaryBold ? "bg-slate-700 text-white" : "bg-slate-950 text-slate-600"}`}>B</button>
+                                      <button onClick={() => setLtTemplate(t => ({...t, primaryItalic: !t.primaryItalic}))} className={`flex-1 py-1 text-[9px] italic rounded border transition-all ${ltTemplate.primaryItalic ? "bg-slate-700 text-white" : "bg-slate-950 text-slate-600"}`}>I</button>
+                                      <button onClick={() => setLtTemplate(t => ({...t, primaryUppercase: !t.primaryUppercase}))} className={`flex-1 py-1 text-[9px] font-bold rounded border transition-all ${ltTemplate.primaryUppercase ? "bg-slate-700 text-white" : "bg-slate-950 text-slate-600"}`}>AA</button>
+                                   </div>
+                                </div>
+                                <div className="space-y-2">
+                                   <span className="text-[8px] text-slate-600 uppercase font-bold">Secondary (Title / Line 2)</span>
+                                   <div className="flex gap-2 items-center">
+                                      <select value={ltTemplate.secondaryFont} onChange={(e) => setLtTemplate(t => ({...t, secondaryFont: e.target.value}))} className="flex-1 bg-slate-950 text-slate-300 text-[10px] p-1.5 rounded border border-slate-800">
+                                         {FONTS.map(f => <option key={f} value={f}>{f}</option>)}
+                                      </select>
+                                      <input type="number" value={ltTemplate.secondarySize} onChange={(e) => setLtTemplate(t => ({...t, secondarySize: parseInt(e.target.value)}))} className="w-12 bg-slate-950 text-slate-300 text-[10px] p-1.5 rounded border border-slate-800" />
+                                      <input type="color" value={ltTemplate.secondaryColor} onChange={(e) => setLtTemplate(t => ({...t, secondaryColor: e.target.value}))} className="w-8 h-8 rounded bg-transparent border-0 p-0 cursor-pointer" />
+                                   </div>
+                                   <div className="flex gap-1 mt-1">
+                                      <button onClick={() => setLtTemplate(t => ({...t, secondaryBold: !t.secondaryBold}))} className={`flex-1 py-1 text-[9px] font-black rounded border transition-all ${ltTemplate.secondaryBold ? "bg-slate-700 text-white" : "bg-slate-950 text-slate-600"}`}>B</button>
+                                      <button onClick={() => setLtTemplate(t => ({...t, secondaryItalic: !t.secondaryItalic}))} className={`flex-1 py-1 text-[9px] italic rounded border transition-all ${ltTemplate.secondaryItalic ? "bg-slate-700 text-white" : "bg-slate-950 text-slate-600"}`}>I</button>
+                                      <button onClick={() => setLtTemplate(t => ({...t, secondaryUppercase: !t.secondaryUppercase}))} className={`flex-1 py-1 text-[9px] font-bold rounded border transition-all ${ltTemplate.secondaryUppercase ? "bg-slate-700 text-white" : "bg-slate-950 text-slate-600"}`}>AA</button>
+                                   </div>
+                                </div>
+                                <div className="space-y-2 pt-2 border-t border-slate-800">
+                                   <div className="flex items-center justify-between">
+                                      <span className="text-[8px] text-slate-600 uppercase font-bold">Section Label</span>
+                                      <input type="checkbox" checked={ltTemplate.labelVisible} onChange={(e) => setLtTemplate(t => ({...t, labelVisible: e.target.checked}))} />
+                                   </div>
+                                   {ltTemplate.labelVisible && (
+                                      <div className="flex gap-2 items-center">
+                                         <input type="number" value={ltTemplate.labelSize} onChange={(e) => setLtTemplate(t => ({...t, labelSize: parseInt(e.target.value)}))} className="w-12 bg-slate-950 text-slate-300 text-[10px] p-1.5 rounded border border-slate-800" />
+                                         <input type="color" value={ltTemplate.labelColor} onChange={(e) => setLtTemplate(t => ({...t, labelColor: e.target.value}))} className="w-8 h-8 rounded bg-transparent border-0 p-0 cursor-pointer" />
+                                         <button onClick={() => setLtTemplate(t => ({...t, labelUppercase: !t.labelUppercase}))} className={`flex-1 py-1 text-[9px] font-bold rounded border transition-all ${ltTemplate.labelUppercase ? "bg-slate-700 text-white" : "bg-slate-950 text-slate-600"}`}>AA</button>
+                                      </div>
+                                   )}
+                                </div>
+                             </div>
+                          </div>
+                          <div className="space-y-6">
+                             <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Layout & Positioning</p>
+                             <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+                                <div className="flex flex-col gap-1.5">
+                                   <span className="text-[8px] text-slate-600 uppercase font-bold">H Alignment</span>
+                                   <div className="flex rounded border border-slate-800 overflow-hidden">
+                                      {(["left", "center", "right"] as const).map(h => (
+                                        <button key={h} onClick={() => setLtTemplate(t => ({...t, hAlign: h}))} className={`flex-1 py-1 text-[8px] font-bold ${ltTemplate.hAlign === h ? "bg-slate-700 text-white" : "bg-slate-950 text-slate-600"}`}>{h.toUpperCase()}</button>
+                                      ))}
+                                   </div>
+                                </div>
+                                <div className="flex flex-col gap-1.5">
+                                   <span className="text-[8px] text-slate-600 uppercase font-bold">V Alignment</span>
+                                   <div className="flex rounded border border-slate-800 overflow-hidden">
+                                      {(["top", "middle", "bottom"] as const).map(v => (
+                                        <button key={v} onClick={() => setLtTemplate(t => ({...t, vAlign: v}))} className={`flex-1 py-1 text-[8px] font-bold ${ltTemplate.vAlign === v ? "bg-slate-700 text-white" : "bg-slate-950 text-slate-600"}`}>{v.toUpperCase()}</button>
+                                      ))}
+                                   </div>
+                                </div>
+                                <div className="flex flex-col gap-1.5">
+                                   <span className="text-[8px] text-slate-600 uppercase font-bold">Width %</span>
+                                   <input type="range" min={10} max={100} value={ltTemplate.widthPct} onChange={(e) => setLtTemplate(t => ({...t, widthPct: parseInt(e.target.value)}))} className="w-full accent-amber-500" />
+                                </div>
+                                <div className="flex flex-col gap-1.5">
+                                   <span className="text-[8px] text-slate-600 uppercase font-bold">Radius px</span>
+                                   <input type="range" min={0} max={50} value={ltTemplate.borderRadius} onChange={(e) => setLtTemplate(t => ({...t, borderRadius: parseInt(e.target.value)}))} className="w-full accent-amber-500" />
+                                </div>
+                                <div className="flex flex-col gap-1.5">
+                                   <span className="text-[8px] text-slate-600 uppercase font-bold">Offset X px</span>
+                                   <input type="number" value={ltTemplate.offsetX} onChange={(e) => setLtTemplate(t => ({...t, offsetX: parseInt(e.target.value)}))} className="bg-slate-950 text-slate-300 text-[10px] p-1.5 rounded border border-slate-800" />
+                                </div>
+                                <div className="flex flex-col gap-1.5">
+                                   <span className="text-[8px] text-slate-600 uppercase font-bold">Offset Y px</span>
+                                   <input type="number" value={ltTemplate.offsetY} onChange={(e) => setLtTemplate(t => ({...t, offsetY: parseInt(e.target.value)}))} className="bg-slate-950 text-slate-300 text-[10px] p-1.5 rounded border border-slate-800" />
+                                </div>
+                                <div className="flex flex-col gap-1.5">
+                                   <span className="text-[8px] text-slate-600 uppercase font-bold">Padding X px</span>
+                                   <input type="range" min={0} max={100} value={ltTemplate.paddingX} onChange={(e) => setLtTemplate(t => ({...t, paddingX: parseInt(e.target.value)}))} className="w-full accent-amber-500" />
+                                </div>
+                                <div className="flex flex-col gap-1.5">
+                                   <span className="text-[8px] text-slate-600 uppercase font-bold">Padding Y px</span>
+                                   <input type="range" min={0} max={100} value={ltTemplate.paddingY} onChange={(e) => setLtTemplate(t => ({...t, paddingY: parseInt(e.target.value)}))} className="w-full accent-amber-500" />
+                                </div>
+                             </div>
+                          </div>
+                       </div>
+                    </div>
+                  </>
+                )}
+
+                {/* ── Composition Preview (Always Right) ── */}
+                <div className="w-96 border-l border-slate-800 p-4 bg-black/40 shrink-0">
                    <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-3">Composition Preview</p>
                    <div className="relative aspect-video bg-black rounded-lg overflow-hidden ring-1 ring-slate-800">
                       <div className="absolute inset-0 flex items-center justify-center opacity-20">
@@ -5321,6 +5562,10 @@ export default function App() {
                             />
                          </div>
                       </div>
+                   </div>
+                   <div className="mt-4 p-3 rounded-lg bg-slate-800/30 border border-slate-700/50">
+                      <p className="text-[8px] text-slate-500 uppercase font-black mb-1">Shortcut Tip</p>
+                      <p className="text-[10px] text-slate-400">Use <span className="text-amber-500 font-bold">Ctrl + Space</span> to toggle the overlay on the main output screen.</p>
                    </div>
                 </div>
               </div>
