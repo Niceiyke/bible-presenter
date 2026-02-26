@@ -111,7 +111,7 @@ struct ClientInfo {
 async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     // ── 1. Auth handshake (extended to capture client identity) ───────────────
     let pin = state.remote_pin.lock().clone();
-    let auth_result: Result<Option<ClientInfo>, _> = tokio::time::timeout(
+    let auth_result: Result<Option<Option<ClientInfo>>, _> = tokio::time::timeout(
         tokio::time::Duration::from_secs(30),
         async {
             while let Some(Ok(msg)) = socket.recv().await {

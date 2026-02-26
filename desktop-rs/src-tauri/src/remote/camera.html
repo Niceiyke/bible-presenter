@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Bible Presenter Camera</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --bg:#0f1117;--panel:#1a1d27;--border:#2a2d3a;--text:#e2e8f0;--muted:#64748b;
+    --amber:#f59e0b;--green:#22c55e;--red:#ef4444;--blue:#3b82f6;
+    --radius:10px;--font:'Segoe UI',system-ui,sans-serif;
+  }
+  body{
+    font-family:var(--font);background:var(--bg);color:var(--text);
+    min-height:100dvh;display:flex;flex-direction:column;overflow:hidden;
+  }
+
+  /* ── Screens ───────────────────────────────────────────────────────── */
+  #pin-screen,#cam-screen{flex:1;display:flex;flex-direction:column}
+  #cam-screen{display:none}
+
+  /* ── PIN Screen ─────────────────────────────────────────────────────── */
+  #pin-screen{align-items:center;justify-content:center;gap:20px;padding:24px}
+  .logo{font-size:2.5rem;margin-bottom:4px}
+  .title{font-size:1.25rem;font-weight:700}
+  .subtitle{font-size:.8rem;color:var(--muted);text-align:center;max-width:280px}
+  .pin-row{display:flex;gap:8px;margin-top:8px}
+  .pin-row input{
+    width:54px;height:66px;text-align:center;font-size:1.9rem;font-weight:700;
+    border:2px solid var(--border);border-radius:var(--radius);
+    background:var(--panel);color:var(--text);outline:none;caret-color:var(--amber);
+  }
+  .pin-row input:focus{border-color:var(--amber)}
+  .btn{
+    padding:14px 24px;border:none;border-radius:var(--radius);cursor:pointer;
+    font-weight:700;font-size:.95rem;width:100%;max-width:280px;transition:.15s;
+  }
+  .btn-primary{background:var(--amber);color:#000}
+  .btn-primary:hover{filter:brightness(1.1)}
+  .btn-primary:disabled{opacity:.45;cursor:default;filter:none}
+  .err-msg{color:var(--red);font-size:.8rem;min-height:1.1em;text-align:center}
+
+  /* ── Camera Screen ──────────────────────────────────────────────────── */
+  #cam-screen{flex-direction:column;gap:0}
+  .cam-header{
+    background:var(--panel);border-bottom:1px solid var(--border);
+    padding:10px 14px;display:flex;align-items:center;justify-content:space-between;
+    flex-shrink:0;
+  }
+  .cam-header h1{font-size:.7rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  .status-pill{
+    display:flex;align-items:center;gap:6px;font-size:.7rem;font-weight:700;
+    padding:4px 10px;border-radius:20px;border:1px solid var(--border);
+  }
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--muted)}
+  .dot.connecting{background:var(--amber);animation:blink 1s infinite}
+  .dot.live{background:var(--green)}
+  .dot.program{background:var(--red);animation:blink .6s infinite}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
+  /* Preview video */
+  .preview-wrap{
+    flex:1;background:#000;overflow:hidden;position:relative;
+    display:flex;align-items:center;justify-content:center;min-height:0;
+  }
+  #preview-video{width:100%;height:100%;object-fit:cover}
+  .no-cam{color:var(--muted);font-size:.85rem;text-align:center;padding:16px}
+
+  /* Program badge */
+  .prog-badge{
+    position:absolute;top:10px;left:10px;background:var(--red);color:#fff;
+    font-size:.65rem;font-weight:700;padding:3px 8px;border-radius:4px;
+    letter-spacing:.06em;display:none;
+  }
+  .prog-badge.visible{display:block}
+
+  /* Controls */
+  .controls{
+    flex-shrink:0;background:var(--panel);border-top:1px solid var(--border);
+    padding:12px 14px;display:flex;flex-direction:column;gap:10px;
+  }
+  .row{display:flex;gap:8px;align-items:center}
+  .ctrl-label{font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+  input[type=text],select{
+    flex:1;padding:9px 12px;background:var(--bg);border:1px solid var(--border);
+    border-radius:8px;color:var(--text);font-size:.85rem;outline:none;
+  }
+  input[type=text]:focus,select:focus{border-color:var(--amber)}
+  .icon-btn{
+    padding:9px 12px;background:var(--bg);border:1px solid var(--border);
+    border-radius:8px;color:var(--muted);font-size:1rem;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;transition:.15s;
+  }
+  .icon-btn:hover{border-color:var(--amber);color:var(--amber)}
+  .icon-btn.active{border-color:var(--red);color:var(--red)}
+  .info-row{font-size:.7rem;color:var(--muted);display:flex;gap:12px;flex-wrap:wrap}
+  .info-row span b{color:var(--text)}
+</style>
+</head>
+<body>
+
+<!-- ── PIN Screen ────────────────────────────────────────────────────────── -->
+<div id="pin-screen">
+  <div class="logo">📷</div>
+  <div class="title">Camera Sender</div>
+  <p class="subtitle">Enter the 4-digit PIN shown in Bible Presenter to connect this device as a live camera source.</p>
+  <div class="pin-row">
+    <input type="number" maxlength="1" id="p0" inputmode="numeric" min="0" max="9">
+    <input type="number" maxlength="1" id="p1" inputmode="numeric" min="0" max="9">
+    <input type="number" maxlength="1" id="p2" inputmode="numeric" min="0" max="9">
+    <input type="number" maxlength="1" id="p3" inputmode="numeric" min="0" max="9">
+  </div>
+  <p class="err-msg" id="pin-err"></p>
+  <button class="btn btn-primary" id="pin-btn" onclick="doAuth()">Connect</button>
+</div>
+
+<!-- ── Camera Screen ─────────────────────────────────────────────────────── -->
+<div id="cam-screen">
+  <div class="cam-header">
+    <h1>Camera Sender</h1>
+    <div class="status-pill" id="status-pill">
+      <div class="dot" id="status-dot"></div>
+      <span id="status-text">Connecting…</span>
+    </div>
+  </div>
+
+  <div class="preview-wrap" id="preview-wrap">
+    <video id="preview-video" autoplay muted playsinline></video>
+    <div id="no-cam" class="no-cam" style="display:none">No camera access.<br>Please allow camera permission and reload.</div>
+    <div class="prog-badge" id="prog-badge">● ON AIR</div>
+  </div>
+
+  <div class="controls">
+    <!-- Device name -->
+    <div>
+      <div class="ctrl-label">Device Name</div>
+      <div class="row">
+        <input type="text" id="name-input" placeholder="e.g. Balcony Cam" maxlength="40">
+        <button class="icon-btn" onclick="saveName()" title="Save name">✓</button>
+      </div>
+    </div>
+
+    <!-- Camera selector -->
+    <div>
+      <div class="ctrl-label">Camera</div>
+      <div class="row">
+        <select id="cam-select" onchange="switchCamera()"></select>
+        <button class="icon-btn" id="mute-btn" onclick="toggleMute()" title="Toggle video">🎥</button>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="info-row">
+      <span>Preview: <b id="stat-preview">–</b></span>
+      <span>Program: <b id="stat-program">–</b></span>
+      <span>Resolution: <b id="stat-res">–</b></span>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+const WS_URL = `ws://${location.host}/ws`;
+const STUN   = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let ws          = null;
+let deviceId    = localStorage.getItem('cam_device_id') || crypto.randomUUID();
+let deviceName  = localStorage.getItem('cam_device_name') || '';
+let localStream = null;   // getUserMedia stream (full resolution)
+let previewPc   = null;   // RTCPeerConnection to operator (always open)
+let programPc   = null;   // RTCPeerConnection to output (on demand)
+let videoMuted  = false;
+let previewStatus = 'disconnected';
+let programActive = false;
+
+localStorage.setItem('cam_device_id', deviceId);
+
+// ── PIN screen ────────────────────────────────────────────────────────────────
+const pinInputs = [0,1,2,3].map(i => document.getElementById(`p${i}`));
+
+pinInputs.forEach((inp, idx) => {
+  inp.addEventListener('input', () => {
+    const val = inp.value.slice(-1);
+    inp.value = val;
+    if (val && idx < 3) pinInputs[idx + 1].focus();
+  });
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Backspace' && !inp.value && idx > 0) {
+      pinInputs[idx - 1].focus();
+    }
+    if (e.key === 'Enter') doAuth();
+  });
+});
+
+function getPin() {
+  return pinInputs.map(i => i.value).join('');
+}
+
+async function doAuth() {
+  const pin = getPin();
+  if (pin.length < 4) {
+    document.getElementById('pin-err').textContent = 'Enter all 4 digits.';
+    return;
+  }
+  document.getElementById('pin-btn').disabled = true;
+  document.getElementById('pin-err').textContent = '';
+  connectWs(pin);
+}
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+function connectWs(pin) {
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({
+      cmd: 'auth',
+      pin,
+      client_type: 'mobile',
+      device_id: deviceId,
+      device_name: deviceName || deviceId.slice(0, 8),
+    }));
+  };
+
+  ws.onmessage = async (e) => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+
+    if (msg.type === 'auth_ok') {
+      showCameraScreen();
+      await startCamera();
+      return;
+    }
+    if (msg.type === 'auth_fail') {
+      document.getElementById('pin-err').textContent = 'Wrong PIN. Try again.';
+      document.getElementById('pin-btn').disabled = false;
+      ws.close();
+      return;
+    }
+
+    // Lifecycle events from server
+    if (msg.event === 'connect_program') {
+      await openProgramPc();
+      return;
+    }
+    if (msg.event === 'disconnect_program') {
+      closeProgramPc();
+      return;
+    }
+
+    // WebRTC signaling: answer for preview PC
+    if (msg.cmd === 'camera_answer' && msg.device_id === deviceId) {
+      const pc = selectPc(msg);
+      if (pc && msg.sdp) {
+        await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+      }
+      return;
+    }
+
+    // ICE candidates
+    if (msg.cmd === 'camera_ice' && msg.device_id === deviceId && msg.candidate) {
+      const pc = selectPc(msg);
+      if (pc) {
+        try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
+      }
+      return;
+    }
+  };
+
+  ws.onerror = () => {
+    document.getElementById('pin-err').textContent = 'Connection failed. Check the URL and try again.';
+    document.getElementById('pin-btn').disabled = false;
+  };
+
+  ws.onclose = () => {
+    if (programActive) { closeProgramPc(); }
+    setStatus('disconnected');
+    // Reconnect after 3 s
+    setTimeout(() => {
+      if (ws.readyState === WebSocket.CLOSED) {
+        const pin = getPin();
+        if (pin.length === 4) connectWs(pin);
+      }
+    }, 3000);
+  };
+}
+
+// Select the right PC based on which window sent the answer
+function selectPc(msg) {
+  // Heuristic: if programPc is pending (has sent an offer but no answer yet), match it first.
+  // The offer sent to "output" target gets answered by "window:output".
+  // We tag PCs with their target.
+  if (programPc && programPc._target && msg._from === 'output') return programPc;
+  if (previewPc) return previewPc;
+  return null;
+}
+
+// ── Camera ───────────────────────────────────────────────────────────────────
+async function startCamera() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoDevices = devices.filter(d => d.kind === 'videoinput');
+    populateCameraSelect(videoDevices);
+
+    const selectedId = localStorage.getItem('cam_selected_device');
+    const constraints = {
+      video: selectedId
+        ? { deviceId: { ideal: selectedId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+        : { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false,
+    };
+
+    localStream = await navigator.mediaDevices.getUserMedia(constraints);
+    document.getElementById('preview-video').srcObject = localStream;
+    document.getElementById('no-cam').style.display = 'none';
+
+    updateResolutionStat();
+    await openPreviewPc();
+  } catch (err) {
+    console.error('Camera error:', err);
+    document.getElementById('no-cam').style.display = 'flex';
+  }
+}
+
+function populateCameraSelect(devices) {
+  const sel = document.getElementById('cam-select');
+  sel.innerHTML = '';
+  const saved = localStorage.getItem('cam_selected_device');
+  devices.forEach((d, i) => {
+    const opt = document.createElement('option');
+    opt.value = d.deviceId;
+    opt.textContent = d.label || `Camera ${i + 1}`;
+    if (d.deviceId === saved) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+async function switchCamera() {
+  const deviceId_ = document.getElementById('cam-select').value;
+  localStorage.setItem('cam_selected_device', deviceId_);
+
+  // Stop old tracks
+  if (localStream) localStream.getTracks().forEach(t => t.stop());
+
+  localStream = await navigator.mediaDevices.getUserMedia({
+    video: { deviceId: { exact: deviceId_ }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+    audio: false,
+  });
+  document.getElementById('preview-video').srcObject = localStream;
+
+  // Replace track in preview PC
+  if (previewPc) replaceTrack(previewPc, localStream.getVideoTracks()[0]);
+  if (programPc) replaceTrack(programPc, localStream.getVideoTracks()[0]);
+
+  updateResolutionStat();
+}
+
+function replaceTrack(pc, newTrack) {
+  const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+  if (sender) sender.replaceTrack(newTrack).catch(console.error);
+}
+
+function toggleMute() {
+  videoMuted = !videoMuted;
+  if (localStream) localStream.getVideoTracks().forEach(t => { t.enabled = !videoMuted; });
+  const btn = document.getElementById('mute-btn');
+  btn.textContent = videoMuted ? '🚫' : '🎥';
+  btn.classList.toggle('active', videoMuted);
+}
+
+function updateResolutionStat() {
+  if (!localStream) return;
+  const track = localStream.getVideoTracks()[0];
+  if (!track) return;
+  const settings = track.getSettings();
+  document.getElementById('stat-res').textContent =
+    settings.width && settings.height ? `${settings.width}×${settings.height}` : '–';
+}
+
+// ── WebRTC – Preview PC ───────────────────────────────────────────────────────
+async function openPreviewPc() {
+  if (previewPc) { previewPc.close(); }
+
+  previewPc = new RTCPeerConnection(STUN);
+  previewPc._target = 'operator';
+
+  // Add local video track
+  const track = localStream.getVideoTracks()[0];
+  const sender = previewPc.addTrack(track, localStream);
+
+  // Low-quality encoding for preview thumbnail
+  previewPc.onnegotiationneeded = null; // handled manually below
+
+  previewPc.onicecandidate = (e) => {
+    if (e.candidate) sendMsg({ cmd: 'camera_ice', device_id: deviceId, target: 'operator', candidate: e.candidate });
+  };
+
+  previewPc.oniceconnectionstatechange = () => {
+    const s = previewPc.iceConnectionState;
+    previewStatus = s === 'connected' || s === 'completed' ? 'connected' : s;
+    updateStatus();
+    document.getElementById('stat-preview').textContent = s;
+  };
+
+  // Create offer
+  const offer = await previewPc.createOffer({ offerToReceiveVideo: false });
+  await previewPc.setLocalDescription(offer);
+
+  sendMsg({ cmd: 'camera_offer', device_id: deviceId, device_name: deviceName || deviceId.slice(0, 8), target: 'operator', sdp: offer.sdp });
+
+  // Apply low-bitrate encoding after offer
+  try {
+    const params = sender.getParameters();
+    if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+    params.encodings[0].maxBitrate = 400_000;
+    params.encodings[0].scaleResolutionDownBy = 4;
+    params.encodings[0].maxFramerate = 12;
+    await sender.setParameters(params);
+  } catch (e) {
+    // setParameters before negotiation complete — ignore, will apply after
+  }
+
+  setStatus('connecting');
+}
+
+// ── WebRTC – Program PC ───────────────────────────────────────────────────────
+async function openProgramPc() {
+  if (programPc) { programPc.close(); }
+
+  programPc = new RTCPeerConnection(STUN);
+  programPc._target = 'output';
+  programActive = true;
+
+  const track = localStream.getVideoTracks()[0];
+  const sender = programPc.addTrack(track, localStream);
+
+  programPc.onicecandidate = (e) => {
+    if (e.candidate) sendMsg({ cmd: 'camera_ice', device_id: deviceId, target: 'output', candidate: e.candidate });
+  };
+
+  programPc.oniceconnectionstatechange = () => {
+    const s = programPc.iceConnectionState;
+    const live = s === 'connected' || s === 'completed';
+    document.getElementById('prog-badge').classList.toggle('visible', live);
+    document.getElementById('stat-program').textContent = s;
+    updateStatus();
+  };
+
+  const offer = await programPc.createOffer({ offerToReceiveVideo: false });
+  await programPc.setLocalDescription(offer);
+
+  sendMsg({ cmd: 'camera_offer', device_id: deviceId, device_name: deviceName || deviceId.slice(0, 8), target: 'output', sdp: offer.sdp });
+
+  // Full-quality encoding for program
+  try {
+    const params = sender.getParameters();
+    if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+    params.encodings[0].maxBitrate = 4_000_000;
+    delete params.encodings[0].scaleResolutionDownBy;
+    delete params.encodings[0].maxFramerate;
+    await sender.setParameters(params);
+  } catch {}
+}
+
+function closeProgramPc() {
+  if (programPc) { programPc.close(); programPc = null; }
+  programActive = false;
+  document.getElementById('prog-badge').classList.remove('visible');
+  document.getElementById('stat-program').textContent = '–';
+  updateStatus();
+}
+
+// ── WebRTC answer routing ─────────────────────────────────────────────────────
+// The server routes camera_answer messages to us tagged with originating window.
+// We override the WS message handler to correctly direct answers to the right PC.
+// The caller's target determines which PC created the offer:
+//   - Operator answered our preview offer → previewPc
+//   - Output answered our program offer  → programPc
+// We detect this by checking the original offer targets stored on each PC.
+// The answer message has target="mobile:{deviceId}" but we need to know the source.
+// We resolve by checking which PC is in "have-local-offer" state.
+(function patchSelectPc() {
+  // Monkey-patch selectPc to use signalingState
+  window.selectPc = function(msg) {
+    // If programPc is waiting for answer, prefer it for answers from output direction.
+    // We don't have sender info reliably, so use signalingState:
+    if (programPc && programPc.signalingState === 'have-local-offer') return programPc;
+    if (previewPc && previewPc.signalingState === 'have-local-offer') return previewPc;
+    if (previewPc) return previewPc;
+    return null;
+  };
+})();
+
+// ── UI helpers ────────────────────────────────────────────────────────────────
+function showCameraScreen() {
+  document.getElementById('pin-screen').style.display = 'none';
+  document.getElementById('cam-screen').style.display = 'flex';
+
+  // Populate name input from saved value
+  const nameInput = document.getElementById('name-input');
+  nameInput.value = deviceName;
+  setStatus('connecting');
+}
+
+function saveName() {
+  const val = document.getElementById('name-input').value.trim();
+  if (!val) return;
+  deviceName = val;
+  localStorage.setItem('cam_device_name', val);
+  // Reconnect preview to update device_name in operator
+  if (previewPc) {
+    openPreviewPc().catch(console.error);
+  }
+}
+
+function setStatus(s) {
+  const dot  = document.getElementById('status-dot');
+  const text = document.getElementById('status-text');
+  dot.className = 'dot ' + s;
+  const map = { connecting: 'Connecting…', connected: 'Preview Live', disconnected: 'Offline', program: 'ON AIR' };
+  text.textContent = map[s] || s;
+}
+
+function updateStatus() {
+  if (programActive && (programPc?.iceConnectionState === 'connected' || programPc?.iceConnectionState === 'completed')) {
+    setStatus('program');
+  } else if (previewStatus === 'connected') {
+    setStatus('connected');
+  } else if (previewStatus === 'connecting' || previewStatus === 'checking') {
+    setStatus('connecting');
+  } else {
+    setStatus('disconnected');
+  }
+}
+
+function sendMsg(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+  }
+}
+
+// ── PIN digit auto-advance ────────────────────────────────────────────────────
+// (handled above in pinInputs.forEach — nothing extra needed here)
+</script>
+</body>
+</html>
