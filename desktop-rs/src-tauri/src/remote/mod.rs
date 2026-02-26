@@ -67,7 +67,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     // ── Auth handshake ────────────────────────────────────────────────────────
     // First message must be {"cmd":"auth","pin":"XXXX"}.
     // We use socket.recv() / socket.send() directly before splitting.
-    let pin = state.remote_pin.clone();
+    let pin = state.remote_pin.lock().clone();
     let auth_result = tokio::time::timeout(
         tokio::time::Duration::from_secs(30),
         async {
