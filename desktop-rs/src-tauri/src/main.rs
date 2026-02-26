@@ -771,16 +771,44 @@ async fn load_lt_templates(
 struct RemoteInfo {
     url: String,
     pin: String,
+    /// Some("http://100.x.x.x:7420") when Tailscale is running; None otherwise.
+    tailscale_url: Option<String>,
+}
+
+/// Try `tailscale ip -4` to get the Tailscale IPv4 address.
+/// Returns None if Tailscale is not installed or not connected.
+fn get_tailscale_ip() -> Option<String> {
+    let output = std::process::Command::new("tailscale")
+        .args(["ip", "-4"])
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        // Tailscale uses the 100.64.0.0/10 CGNAT range
+        if !ip.is_empty() && ip.starts_with("100.") {
+            return Some(ip);
+        }
+    }
+    None
 }
 
 #[tauri::command]
 async fn get_remote_info(state: State<'_, Arc<AppState>>) -> Result<RemoteInfo, String> {
-    let ip = local_ip_address::local_ip()
+    let lan_ip = local_ip_address::local_ip()
         .map(|ip| ip.to_string())
         .unwrap_or_else(|_| "localhost".to_string());
+
+    // Run tailscale CLI in a blocking thread so we don't stall the async runtime
+    let tailscale_url = tokio::task::spawn_blocking(get_tailscale_ip)
+        .await
+        .ok()
+        .flatten()
+        .map(|ip| format!("http://{}:7420", ip));
+
     Ok(RemoteInfo {
-        url: format!("http://{}:7420", ip),
+        url: format!("http://{}:7420", lan_ip),
         pin: state.remote_pin.clone(),
+        tailscale_url,
     })
 }
 
