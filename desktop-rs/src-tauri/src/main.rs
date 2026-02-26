@@ -124,6 +124,7 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
     let live_item_arc = state.live_item.clone();
     let broadcast_tx = state.broadcast_tx.clone();
     let transcription_window = state.transcription_window.clone();
+    let transcription_paused_task = state.transcription_paused.clone();
     let whisper_path = state.model_paths.whisper.to_str().unwrap_or("").to_string();
     let embedding_path = state
         .model_paths
@@ -225,7 +226,6 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
     let _live_item_t = live_item_arc.clone();
     let broadcast_tx_task = broadcast_tx.clone();
     let transcription_window_task = transcription_window.clone();
-    let transcription_paused_task = state.transcription_paused.clone();
 
     tokio::spawn(async move {
         let mut buffer = Vec::new();
@@ -405,6 +405,9 @@ async fn toggle_output_window(app: AppHandle, state: State<'_, Arc<AppState>>) -
                             }
                             store::DisplayItem::CameraFeed(cam) => {
                                 if cam.label.is_empty() { cam.device_id.clone() } else { cam.label.clone() }
+                            }
+                            store::DisplayItem::Scene(s) => {
+                                s.get("name").and_then(|v| v.as_str()).unwrap_or("Scene").to_string()
                             }
                         },
                         detected_item: Some(item),
