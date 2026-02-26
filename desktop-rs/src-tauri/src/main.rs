@@ -6,9 +6,11 @@ mod remote;
 use bible_presenter_lib::{audio, engine, store};
 use parking_lot::Mutex;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -71,6 +73,13 @@ pub struct AppState {
     /// Audio window fed to Whisper per inference call, in samples at 16 kHz.
     /// 8000 = 0.5 s (most responsive, highest CPU); 48000 = 3 s (lowest CPU, most latency).
     transcription_window: Arc<Mutex<usize>>,
+    /// Per-client WebRTC signaling channels.
+    /// Key: client identifier ("window:main", "window:output", "mobile:{device_id}").
+    /// Value: unbounded sender for direct point-to-point message delivery.
+    pub signaling_clients: Arc<Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>>,
+    /// When true, the transcription pipeline drains its buffer without calling Whisper.
+    /// Set by the operator when LAN cameras are active to free CPU for video decode.
+    pub transcription_paused: Arc<AtomicBool>,
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +225,7 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
     let _live_item_t = live_item_arc.clone();
     let broadcast_tx_task = broadcast_tx.clone();
     let transcription_window_task = transcription_window.clone();
+    let transcription_paused_task = state.transcription_paused.clone();
 
     tokio::spawn(async move {
         let mut buffer = Vec::new();
@@ -229,6 +239,16 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
             // Read the current window size on every iteration so the slider
             // takes effect within one audio cycle without restarting the session.
             let window_size = *transcription_window_task.lock();
+            let paused = transcription_paused_task.load(Ordering::Relaxed);
+
+            // When paused, drain the buffer to avoid memory buildup without running Whisper.
+            if paused {
+                if buffer.len() > window_size {
+                    let keep = buffer.len().min(8000); // retain 500 ms for context on resume
+                    buffer.drain(0..buffer.len() - keep);
+                }
+                continue;
+            }
 
             if buffer.len() >= window_size {
                 let b_clone = buffer.clone();
@@ -886,6 +906,15 @@ async fn set_transcription_window(
 }
 
 #[tauri::command]
+async fn set_transcription_paused(
+    state: State<'_, Arc<AppState>>,
+    paused: bool,
+) -> Result<(), String> {
+    state.transcription_paused.store(paused, Ordering::Relaxed);
+    Ok(())
+}
+
+#[tauri::command]
 async fn regenerate_remote_pin(state: State<'_, Arc<AppState>>) -> Result<String, String> {
     let new_pin = format!("{:04}", rand::random::<u16>() % 10000);
     *state.remote_pin.lock() = new_pin.clone();
@@ -1060,6 +1089,8 @@ fn main() {
                 app_handle: OnceLock::new(),
                 remote_pin: Mutex::new(remote_pin),
                 transcription_window: Arc::new(Mutex::new(16000)), // 1 s default
+                signaling_clients: Arc::new(Mutex::new(HashMap::new())),
+                transcription_paused: Arc::new(AtomicBool::new(false)),
             });
 
             // Store app_handle so remote module can emit events to Tauri windows
@@ -1123,7 +1154,8 @@ fn main() {
             load_lt_templates,
             get_remote_info,
             regenerate_remote_pin,
-            set_transcription_window
+            set_transcription_window,
+            set_transcription_paused
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

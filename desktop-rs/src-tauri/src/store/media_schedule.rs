@@ -97,11 +97,17 @@ pub struct CustomSlideData {
 fn default_header_enabled() -> bool { true }
 fn default_header_height_pct() -> f64 { 35.0 }
 
-/// A live camera feed from a local video device.
+/// A live camera feed — either a local getUserMedia device or a LAN WebRTC mobile stream.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CameraFeedData {
     pub device_id: String,
     pub label: String,
+    /// true = LAN WebRTC stream from a mobile device; false = local getUserMedia camera
+    #[serde(default)]
+    pub lan: bool,
+    /// Human-readable name for LAN sources (empty for local cameras)
+    #[serde(default)]
+    pub device_name: String,
 }
 
 // ---------------------------------------------------------------------------

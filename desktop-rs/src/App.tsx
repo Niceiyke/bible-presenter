@@ -99,6 +99,20 @@ export const FONTS = [
 export interface CameraFeedData {
   device_id: string;
   label: string;
+  /** true = LAN WebRTC stream from a mobile device over the signaling server */
+  lan?: boolean;
+  /** Human-readable name for LAN sources */
+  device_name?: string;
+}
+
+/** A connected LAN mobile camera source (live WebRTC preview). */
+interface CameraSource {
+  device_id: string;
+  device_name: string;
+  previewStream: MediaStream | null;
+  previewPc: RTCPeerConnection | null;
+  status: 'connecting' | 'connected' | 'disconnected';
+  connectedAt: number;
 }
 
 export interface SceneSlot {
@@ -532,6 +546,17 @@ function SmallItemPreview({ item }: { item: DisplayItem }) {
         <video src={convertFileSrc(item.data.path)} className="w-full h-full object-cover" muted />
       );
     case "CameraFeed":
+      // LAN sources: device_id is a mobile UUID, not a browser deviceId — don't call getUserMedia
+      if (item.data.lan) {
+        return (
+          <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900/60 gap-1">
+            <span className="text-2xl">📷</span>
+            <p className="text-[8px] font-bold text-teal-400 uppercase text-center px-1 truncate max-w-full">
+              {item.data.device_name || item.data.label || "LAN Cam"}
+            </p>
+          </div>
+        );
+      }
       return <CameraFeedRenderer deviceId={item.data.device_id} />;
     case "CustomSlide":
       return <CustomSlideRenderer slide={item.data} scale={0.1} />;
@@ -1543,6 +1568,89 @@ function OutputWindow() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [cameraMuted, setCameraMuted] = useState(false);
 
+  // ── LAN camera program stream (WebRTC) ───────────────────────────────────────
+  const programVideoRef = useRef<HTMLVideoElement>(null);
+  const programPcRef    = useRef<RTCPeerConnection | null>(null);
+  const programDeviceId = useRef<string | null>(null);
+  const outputWsRef     = useRef<WebSocket | null>(null);
+  const OUTPUT_STUN: RTCConfiguration = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+  function sendOutputWs(obj: object) {
+    if (outputWsRef.current?.readyState === WebSocket.OPEN) {
+      outputWsRef.current.send(JSON.stringify(obj));
+    }
+  }
+
+  function closeProgramPc() {
+    if (programPcRef.current) { programPcRef.current.close(); programPcRef.current = null; }
+    if (programVideoRef.current) programVideoRef.current.srcObject = null;
+    if (programDeviceId.current) {
+      sendOutputWs({ cmd: "camera_disconnect_program", device_id: programDeviceId.current });
+    }
+    programDeviceId.current = null;
+  }
+
+  async function handleProgramOffer(msg: { device_id: string; sdp: string }) {
+    const { device_id, sdp } = msg;
+    const pc = new RTCPeerConnection(OUTPUT_STUN);
+    programPcRef.current = pc;
+
+    pc.ontrack = (ev: RTCTrackEvent) => {
+      const stream = ev.streams[0] ?? new MediaStream([ev.track]);
+      if (programVideoRef.current) programVideoRef.current.srcObject = stream;
+    };
+
+    pc.onicecandidate = (ev: RTCPeerConnectionIceEvent) => {
+      if (ev.candidate) {
+        sendOutputWs({ cmd: "camera_ice", device_id, target: `mobile:${device_id}`, candidate: ev.candidate });
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
+        // Auto-cut to black on dropout
+        if (programVideoRef.current) programVideoRef.current.srcObject = null;
+      }
+    };
+
+    await pc.setRemoteDescription({ type: "offer", sdp });
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    sendOutputWs({ cmd: "camera_answer", device_id, target: `mobile:${device_id}`, sdp: answer.sdp });
+  }
+
+  function connectOutputWs(pin: string) {
+    const ws = new WebSocket("ws://localhost:7420/ws");
+    outputWsRef.current = ws;
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ cmd: "auth", pin, client_type: "window:output" }));
+    };
+
+    ws.onmessage = async (e: MessageEvent) => {
+      let msg: any;
+      try { msg = JSON.parse(e.data); } catch { return; }
+      if (msg.type === "auth_ok") return;
+
+      // Program offer from mobile
+      if (msg.cmd === "camera_offer" && (msg.target === "output" || msg.target === "window:output")) {
+        await handleProgramOffer(msg);
+        return;
+      }
+      // ICE for program PC
+      if (msg.cmd === "camera_ice" && (msg.target === "output" || msg.target === "window:output")) {
+        if (programPcRef.current && msg.candidate) {
+          try { await programPcRef.current.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
+        }
+        return;
+      }
+    };
+
+    ws.onclose = () => {
+      setTimeout(() => { if (outputWsRef.current?.readyState === WebSocket.CLOSED) connectOutputWs(pin); }, 5000);
+    };
+  }
+
   useEffect(() => {
     invoke("get_current_item")
       .then((v: any) => { if (v) setLiveItem(v); })
@@ -1550,6 +1658,11 @@ function OutputWindow() {
 
     invoke("get_settings")
       .then((s: any) => { if (s) setSettings(s); })
+      .catch(() => {});
+
+    // Connect output window WS for program camera stream signaling
+    invoke("get_remote_info")
+      .then((info: any) => { if (info?.pin) connectOutputWs(info.pin); })
       .catch(() => {});
 
     const unlisten = listen("transcription-update", (event: any) => {
@@ -1627,6 +1740,29 @@ function OutputWindow() {
     })();
   }, [liveItem]);
 
+  // ── Manage LAN program camera PC lifecycle when liveItem changes ──────────────
+  useEffect(() => {
+    const isLanCamera = liveItem?.type === "CameraFeed" && liveItem.data.lan;
+
+    if (isLanCamera) {
+      const newDeviceId = liveItem!.data.device_id;
+      if (programDeviceId.current === newDeviceId) return; // already connected to this device
+
+      // Disconnect old program feed first
+      if (programDeviceId.current) {
+        if (programPcRef.current) { programPcRef.current.close(); programPcRef.current = null; }
+        sendOutputWs({ cmd: "camera_disconnect_program", device_id: programDeviceId.current });
+      }
+
+      // Request program stream from new device
+      programDeviceId.current = newDeviceId;
+      sendOutputWs({ cmd: "camera_connect_program", device_id: newDeviceId });
+    } else if (programDeviceId.current) {
+      // Switched away from LAN camera — disconnect
+      closeProgramPc();
+    }
+  }, [liveItem]);
+
   if (settings.is_blanked) {
     return <div className="h-screen w-screen bg-black" />;
   }
@@ -1648,11 +1784,31 @@ function OutputWindow() {
     </p>
   ) : null;
 
+  const isLanCameraLive = liveItem?.type === "CameraFeed" && !!liveItem.data.lan;
+
   return (
     <div
       className="h-screen w-screen overflow-hidden relative"
-      style={cameraBgId ? { color: colors.verseText } : { ...bgStyle, color: colors.verseText }}
+      style={
+        cameraBgId || isLanCameraLive
+          ? { color: colors.verseText }           // transparent — let video at z-0 show through
+          : { ...bgStyle, color: colors.verseText }
+      }
     >
+      {/* Layer 0 — LAN WebRTC program stream (always mounted, never removed from DOM) */}
+      <video
+        ref={programVideoRef}
+        className="absolute inset-0 w-full h-full object-cover"
+        style={{ zIndex: 0, visibility: (isLanCameraLive && !cameraMuted) ? "visible" : "hidden" }}
+        autoPlay
+        playsInline
+      />
+
+      {/* Dark scrim at z-9 — improves text legibility over video without hiding it */}
+      {isLanCameraLive && (
+        <div className="absolute inset-0 bg-black/25 pointer-events-none" style={{ zIndex: 9 }} />
+      )}
+
       {cameraBgId && (
         <div className="absolute inset-0 z-0">
           <CameraFeedRenderer deviceId={cameraBgId} />
@@ -1711,9 +1867,15 @@ function OutputWindow() {
                 <CustomSlideRenderer slide={liveItem.data} />
               </div>
             ) : liveItem.type === "CameraFeed" ? (
-              <div className="absolute inset-0" style={{ visibility: cameraMuted ? "hidden" : "visible" }}>
-                <CameraFeedRenderer deviceId={liveItem.data.device_id} />
-              </div>
+              liveItem.data.lan ? (
+                // LAN stream rendered by persistent programVideoRef at z-0 — nothing needed here
+                <div className="absolute inset-0" />
+              ) : (
+                // Local getUserMedia camera
+                <div className="absolute inset-0" style={{ visibility: cameraMuted ? "hidden" : "visible" }}>
+                  <CameraFeedRenderer deviceId={liveItem.data.device_id} />
+                </div>
+              )
             ) : liveItem.type === "Media" ? (
               <div className="absolute inset-0 flex items-center justify-center">
                 {liveItem.data.media_type === "Image" ? (
@@ -1832,9 +1994,20 @@ function PreviewCard({
               </div>
             ) : item.type === "CameraFeed" ? (
               <div className="w-full h-full rounded overflow-hidden relative">
-                <CameraFeedRenderer deviceId={item.data.device_id} />
+                {item.data.lan ? (
+                  // LAN source — device_id is a mobile UUID, getUserMedia would fail
+                  <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900/60 gap-2">
+                    <span className="text-3xl">📷</span>
+                    <p className="text-teal-400 text-[10px] font-bold uppercase text-center px-2">
+                      {item.data.device_name || item.data.label || "LAN Camera"}
+                    </p>
+                    <span className="text-[8px] text-green-400 font-bold bg-green-500/10 px-2 py-0.5 rounded">● LAN</span>
+                  </div>
+                ) : (
+                  <CameraFeedRenderer deviceId={item.data.device_id} />
+                )}
                 <p className="text-teal-400 text-[10px] font-bold uppercase truncate max-w-full absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/60 px-2 py-0.5 rounded backdrop-blur-sm">
-                  {item.data.label || item.data.device_id.slice(0, 16)}
+                  {item.data.device_name || item.data.label || item.data.device_id.slice(0, 16)}
                 </p>
               </div>
             ) : item.type === "Scene" ? (
@@ -2034,6 +2207,17 @@ export default function App() {
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
   const [mediaFilter, setMediaFilter] = useState<"image" | "video" | "camera">("image");
+
+  // LAN camera mixer
+  const [cameraSources, setCameraSources] = useState<Map<string, CameraSource>>(new Map());
+  const [pauseWhisper, setPauseWhisper] = useState(() => localStorage.getItem("pref_pauseWhisper") === "true");
+  const operatorWsRef = useRef<WebSocket | null>(null);
+  // Per-source preview RTCPeerConnections (keyed by device_id)
+  const previewPcMapRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  // Per-source preview <video> elements (keyed by device_id)
+  const previewVideoMapRef = useRef<Map<string, HTMLVideoElement>>(new Map());
+  // Per-source IntersectionObservers for decode pause/resume
+  const previewObserverMapRef = useRef<Map<string, IntersectionObserver>>(new Map());
   const [showLogoPicker, setShowLogoPicker] = useState(false);
   const [showGlobalBgPicker, setShowGlobalBgPicker] = useState(false);
 
@@ -2097,6 +2281,143 @@ export default function App() {
   const horizDragRef = useRef<{ active: boolean; startX: number; startPct: number }>({ active: false, startX: 0, startPct: 50 });
 
   scheduleRef.current = scheduleEntries;
+
+  // ── Whisper pause sync: when cameraSources has feeds and pauseWhisper is on, pause Whisper ──
+  useEffect(() => {
+    const shouldPause = pauseWhisper && cameraSources.size > 0;
+    localStorage.setItem("pref_pauseWhisper", String(pauseWhisper));
+    invoke("set_transcription_paused", { paused: shouldPause }).catch(() => {});
+  }, [pauseWhisper, cameraSources.size]);
+
+  // ── LAN Camera Mixer — Operator WebSocket + WebRTC ───────────────────────────
+
+  const STUN_CONFIG: RTCConfiguration = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+  function connectOperatorWs(pin: string) {
+    const ws = new WebSocket(`ws://localhost:7420/ws`);
+    operatorWsRef.current = ws;
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ cmd: "auth", pin, client_type: "window:main" }));
+    };
+
+    ws.onmessage = async (e: MessageEvent) => {
+      let msg: any;
+      try { msg = JSON.parse(e.data); } catch { return; }
+
+      // Auth ack
+      if (msg.type === "auth_ok") return;
+
+      // Mobile connected — add to camera sources
+      if (msg.type === "camera_source_connected") {
+        const { device_id, device_name } = msg;
+        setCameraSources(prev => {
+          const next = new Map(prev);
+          next.set(device_id, { device_id, device_name, previewStream: null, previewPc: null, status: "connecting", connectedAt: Date.now() });
+          return next;
+        });
+        return;
+      }
+
+      // Mobile disconnected — clean up
+      if (msg.type === "camera_source_disconnected") {
+        const { device_id } = msg;
+        const pc = previewPcMapRef.current.get(device_id);
+        if (pc) { pc.close(); previewPcMapRef.current.delete(device_id); }
+        const videoEl = previewVideoMapRef.current.get(device_id);
+        if (videoEl) { videoEl.srcObject = null; previewVideoMapRef.current.delete(device_id); }
+        const obs = previewObserverMapRef.current.get(device_id);
+        if (obs) { obs.disconnect(); previewObserverMapRef.current.delete(device_id); }
+        setCameraSources(prev => {
+          const next = new Map(prev);
+          next.delete(device_id);
+          return next;
+        });
+        return;
+      }
+
+      // WebRTC offer from mobile → operator (preview stream)
+      if (msg.cmd === "camera_offer" && (msg.target === "operator" || msg.target === "window:main")) {
+        await handlePreviewOffer(msg);
+        return;
+      }
+
+      // ICE candidate for preview PC
+      if (msg.cmd === "camera_ice" && (msg.target === "operator" || msg.target === "window:main")) {
+        const pc = previewPcMapRef.current.get(msg.device_id);
+        if (pc && msg.candidate) {
+          try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
+        }
+        return;
+      }
+    };
+
+    ws.onclose = () => {
+      // Reconnect after 5 s if we have a PIN
+      setTimeout(() => { if (operatorWsRef.current?.readyState === WebSocket.CLOSED) connectOperatorWs(pin); }, 5000);
+    };
+  }
+
+  async function handlePreviewOffer(msg: { device_id: string; device_name?: string; sdp: string }) {
+    const { device_id, device_name = "", sdp } = msg;
+
+    // Close stale PC for this device if any
+    const oldPc = previewPcMapRef.current.get(device_id);
+    if (oldPc) { oldPc.close(); }
+
+    const pc = new RTCPeerConnection(STUN_CONFIG);
+    previewPcMapRef.current.set(device_id, pc);
+
+    // Receive track → set srcObject on corresponding preview video element
+    pc.ontrack = (ev: RTCTrackEvent) => {
+      const stream = ev.streams[0] ?? new MediaStream([ev.track]);
+      setCameraSources(prev => {
+        const next = new Map(prev);
+        const src = next.get(device_id);
+        if (src) next.set(device_id, { ...src, previewStream: stream, previewPc: pc, status: "connected" });
+        return next;
+      });
+      const videoEl = previewVideoMapRef.current.get(device_id);
+      if (videoEl) videoEl.srcObject = stream;
+    };
+
+    // ICE → send to mobile
+    pc.onicecandidate = (ev: RTCPeerConnectionIceEvent) => {
+      if (ev.candidate) {
+        operatorWsRef.current?.send(JSON.stringify({
+          cmd: "camera_ice",
+          device_id,
+          target: `mobile:${device_id}`,
+          candidate: ev.candidate,
+        }));
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      const s = pc.iceConnectionState;
+      setCameraSources(prev => {
+        const next = new Map(prev);
+        const src = next.get(device_id);
+        if (!src) return prev;
+        const status = (s === "connected" || s === "completed") ? "connected"
+          : (s === "failed" || s === "disconnected" || s === "closed") ? "disconnected"
+          : "connecting";
+        next.set(device_id, { ...src, status });
+        return next;
+      });
+    };
+
+    await pc.setRemoteDescription({ type: "offer", sdp });
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    operatorWsRef.current?.send(JSON.stringify({
+      cmd: "camera_answer",
+      device_id,
+      target: `mobile:${device_id}`,
+      sdp: answer.sdp,
+    }));
+  }
 
   // ── Loaders ─────────────────────────────────────────────────────────────────
 
@@ -2304,6 +2625,9 @@ export default function App() {
           setRemoteUrl(info.url);
           setRemotePin(info.pin);
           setTailscaleUrl(info.tailscale_url ?? null);
+
+          // ── Operator WebSocket + WebRTC signaling ──────────────────────────
+          connectOperatorWs(info.pin);
         }
       })
       .catch(() => {});
@@ -3666,46 +3990,162 @@ export default function App() {
                 {/* Camera feed tab */}
                 {mediaFilter === "camera" && (
                   <>
-                    <button
-                      onClick={() =>
-                        navigator.mediaDevices?.enumerateDevices()
-                          .then((devs) => setCameras(devs.filter((d) => d.kind === "videoinput")))
-                          .catch(() => {})
-                      }
-                      className="text-[9px] bg-slate-700 hover:bg-slate-600 text-slate-300 font-bold px-3 py-1.5 rounded transition-all self-start border border-slate-600"
-                    >
-                      ↺ Refresh Cameras
-                    </button>
-                    {cameras.length === 0 ? (
-                      <p className="text-slate-700 text-xs italic text-center pt-8">No cameras found. Allow camera access and click Refresh.</p>
-                    ) : (
-                      <div className="grid grid-cols-2 gap-2">
-                        {cameras.map((cam) => (
-                          <div key={cam.deviceId} className="flex flex-col bg-slate-800/50 rounded-lg overflow-hidden border border-slate-700 hover:border-slate-600 transition-all">
-                            <div className="aspect-video overflow-hidden bg-slate-900 shrink-0">
-                              <CameraFeedRenderer deviceId={cam.deviceId} />
-                            </div>
-                            <div className="px-1.5 py-1.5">
-                              <p className="text-[8px] text-slate-400 truncate mb-1.5">{cam.label || `Camera ${cam.deviceId.slice(0, 8)}`}</p>
-                              <div className="grid grid-cols-3 gap-0.5">
-                                <button
-                                  onClick={() => stageItem({ type: "CameraFeed", data: { device_id: cam.deviceId, label: cam.label } })}
-                                  className="bg-slate-700 hover:bg-slate-600 text-white text-[8px] font-bold py-1 rounded transition-all"
-                                >STAGE</button>
-                                <button
-                                  onClick={() => sendLive({ type: "CameraFeed", data: { device_id: cam.deviceId, label: cam.label } })}
-                                  className="bg-amber-500 hover:bg-amber-400 text-black text-[8px] font-bold py-1 rounded transition-all"
-                                >LIVE</button>
-                                <button
-                                  onClick={() => addToSchedule({ type: "CameraFeed", data: { device_id: cam.deviceId, label: cam.label } })}
-                                  className="bg-slate-700 hover:bg-slate-600 text-amber-400 text-[8px] font-bold py-1 rounded transition-all"
-                                >+Q</button>
+                    {/* ── LAN Camera Input Bank (WebRTC mobile sources) ── */}
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <h3 className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">LAN Camera Inputs</h3>
+                        <div className="flex items-center gap-2">
+                          {cameraSources.size > 0 && (
+                            <span className="text-[8px] text-green-400 font-bold">{cameraSources.size} connected</span>
+                          )}
+                          {/* Whisper pause toggle — visible when sources connected */}
+                          {cameraSources.size > 0 && (
+                            <button
+                              onClick={() => setPauseWhisper(p => !p)}
+                              title={pauseWhisper ? "Resume Whisper auto-transcription" : "Pause Whisper to free CPU for video decode"}
+                              className={`flex items-center gap-1 text-[8px] font-bold px-2 py-1 rounded border transition-all ${
+                                pauseWhisper
+                                  ? "bg-amber-500/20 border-amber-500/50 text-amber-400"
+                                  : "bg-slate-700/50 border-slate-600 text-slate-400 hover:text-slate-300"
+                              }`}
+                            >
+                              {pauseWhisper ? "⏸ Whisper" : "🎙 Whisper"}
+                            </button>
+                          )}
+                          <a
+                            href={`${remoteUrl || "http://localhost:7420"}/camera`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[8px] bg-blue-600 hover:bg-blue-500 text-white font-bold px-2 py-1 rounded transition-all"
+                            title="Open camera sender URL"
+                          >
+                            + ADD
+                          </a>
+                        </div>
+                      </div>
+                      {cameraSources.size === 0 ? (
+                        <div className="text-center py-6 text-slate-600 text-xs">
+                          <p className="mb-2">No LAN cameras connected.</p>
+                          <p className="text-[9px]">Share <span className="text-amber-400 font-mono">{remoteUrl || "http://…"}/camera</span> with a phone and enter the PIN <span className="text-amber-400 font-mono">{remotePin || "––––"}</span>.</p>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-2">
+                          {Array.from(cameraSources.values()).map((src) => (
+                            <div key={src.device_id} className="flex flex-col bg-slate-800/50 rounded-lg overflow-hidden border border-slate-700 hover:border-slate-600 transition-all">
+                              <div className="aspect-video overflow-hidden bg-slate-900 shrink-0 relative">
+                                <video
+                                  ref={(el) => {
+                                    const oldObs = previewObserverMapRef.current.get(src.device_id);
+                                    if (el) {
+                                      previewVideoMapRef.current.set(src.device_id, el);
+                                      // Restore stream if already established
+                                      if (src.previewStream && !el.srcObject) el.srcObject = src.previewStream;
+                                      // IntersectionObserver: pause video decode when thumbnail scrolls out of view
+                                      if (oldObs) oldObs.disconnect();
+                                      const obs = new IntersectionObserver(
+                                        (entries) => entries.forEach((entry) => {
+                                          const v = previewVideoMapRef.current.get(src.device_id);
+                                          if (v) {
+                                            if (entry.isIntersecting) v.play().catch(() => {});
+                                            else v.pause();
+                                          }
+                                        }),
+                                        { threshold: 0.1 }
+                                      );
+                                      obs.observe(el);
+                                      previewObserverMapRef.current.set(src.device_id, obs);
+                                    } else {
+                                      if (oldObs) { oldObs.disconnect(); previewObserverMapRef.current.delete(src.device_id); }
+                                      previewVideoMapRef.current.delete(src.device_id);
+                                    }
+                                  }}
+                                  className="w-full h-full object-cover"
+                                  autoPlay
+                                  muted
+                                  playsInline
+                                />
+                                {src.status !== "connected" && (
+                                  <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+                                    <span className="text-[8px] text-slate-400 animate-pulse">
+                                      {src.status === "connecting" ? "Connecting…" : "Offline"}
+                                    </span>
+                                  </div>
+                                )}
+                                <div className={`absolute top-1 right-1 text-[7px] font-bold px-1.5 py-0.5 rounded ${src.status === "connected" ? "bg-green-500/90 text-white" : "bg-slate-700/90 text-slate-400"}`}>
+                                  {src.status === "connected" ? "● LIVE" : "◌"}
+                                </div>
+                              </div>
+                              <div className="px-1.5 py-1.5">
+                                <p className="text-[8px] text-slate-300 truncate mb-1.5 font-medium">
+                                  {src.device_name || `Camera ${src.device_id.slice(0, 8)}`}
+                                </p>
+                                <div className="grid grid-cols-3 gap-0.5">
+                                  <button
+                                    onClick={() => stageItem({ type: "CameraFeed", data: { device_id: src.device_id, label: src.device_name || src.device_id, lan: true, device_name: src.device_name } })}
+                                    className="bg-slate-700 hover:bg-slate-600 text-white text-[8px] font-bold py-1 rounded transition-all"
+                                  >STAGE</button>
+                                  <button
+                                    onClick={() => sendLive({ type: "CameraFeed", data: { device_id: src.device_id, label: src.device_name || src.device_id, lan: true, device_name: src.device_name } })}
+                                    className="bg-amber-500 hover:bg-amber-400 text-black text-[8px] font-bold py-1 rounded transition-all"
+                                  >LIVE</button>
+                                  <button
+                                    onClick={() => addToSchedule({ type: "CameraFeed", data: { device_id: src.device_id, label: src.device_name || src.device_id, lan: true, device_name: src.device_name } })}
+                                    className="bg-slate-700 hover:bg-slate-600 text-amber-400 text-[8px] font-bold py-1 rounded transition-all"
+                                  >+Q</button>
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        ))}
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* ── Local Camera Inputs (getUserMedia) ── */}
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <h3 className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Local Cameras</h3>
+                        <button
+                          onClick={() =>
+                            navigator.mediaDevices?.enumerateDevices()
+                              .then((devs) => setCameras(devs.filter((d) => d.kind === "videoinput")))
+                              .catch(() => {})
+                          }
+                          className="text-[9px] bg-slate-700 hover:bg-slate-600 text-slate-300 font-bold px-2 py-1 rounded transition-all border border-slate-600"
+                        >
+                          ↺ Refresh
+                        </button>
                       </div>
-                    )}
+                      {cameras.length === 0 ? (
+                        <p className="text-slate-700 text-xs italic text-center pt-4">No cameras found. Allow camera access and click Refresh.</p>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-2">
+                          {cameras.map((cam) => (
+                            <div key={cam.deviceId} className="flex flex-col bg-slate-800/50 rounded-lg overflow-hidden border border-slate-700 hover:border-slate-600 transition-all">
+                              <div className="aspect-video overflow-hidden bg-slate-900 shrink-0">
+                                <CameraFeedRenderer deviceId={cam.deviceId} />
+                              </div>
+                              <div className="px-1.5 py-1.5">
+                                <p className="text-[8px] text-slate-400 truncate mb-1.5">{cam.label || `Camera ${cam.deviceId.slice(0, 8)}`}</p>
+                                <div className="grid grid-cols-3 gap-0.5">
+                                  <button
+                                    onClick={() => stageItem({ type: "CameraFeed", data: { device_id: cam.deviceId, label: cam.label } })}
+                                    className="bg-slate-700 hover:bg-slate-600 text-white text-[8px] font-bold py-1 rounded transition-all"
+                                  >STAGE</button>
+                                  <button
+                                    onClick={() => sendLive({ type: "CameraFeed", data: { device_id: cam.deviceId, label: cam.label } })}
+                                    className="bg-amber-500 hover:bg-amber-400 text-black text-[8px] font-bold py-1 rounded transition-all"
+                                  >LIVE</button>
+                                  <button
+                                    onClick={() => addToSchedule({ type: "CameraFeed", data: { device_id: cam.deviceId, label: cam.label } })}
+                                    className="bg-slate-700 hover:bg-slate-600 text-amber-400 text-[8px] font-bold py-1 rounded transition-all"
+                                  >+Q</button>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </>
                 )}
               </div>
@@ -4203,6 +4643,21 @@ export default function App() {
                           Tailscale not detected — install Tailscale on this machine and all operator devices to enable remote access over the internet.
                         </p>
                       )}
+                    </div>
+
+                    {/* Camera Sender */}
+                    <div>
+                      <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">Camera Sender <span className="normal-case text-slate-600 font-normal">(mobile phone as camera)</span></p>
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <code className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-sky-400 font-mono truncate">
+                          {remoteUrl ? `${remoteUrl}/camera` : "http://localhost:7420/camera"}
+                        </code>
+                        <button
+                          onClick={() => { navigator.clipboard.writeText(remoteUrl ? `${remoteUrl}/camera` : "http://localhost:7420/camera"); }}
+                          className="px-3 py-2 text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition-colors"
+                        >Copy</button>
+                      </div>
+                      <p className="text-[10px] text-slate-600">Open this URL on a phone (same WiFi), enter the PIN below, and it appears in the LAN Camera tab as an input.</p>
                     </div>
 
                     {/* PIN */}
