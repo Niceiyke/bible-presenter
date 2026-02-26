@@ -158,6 +158,8 @@ export interface LowerThirdTemplate {
   labelVisible: boolean; labelColor: string; labelSize: number; labelUppercase: boolean;
   // Animation
   animation: "fade" | "slide-up" | "slide-left" | "none";
+  // Design variant
+  variant: "classic" | "modern" | "banner";
   // FreeText scroll
   scrollEnabled: boolean;
   scrollDirection: "ltr" | "rtl";
@@ -176,6 +178,7 @@ const DEFAULT_LT_TEMPLATE: LowerThirdTemplate = {
   secondaryBold: false, secondaryItalic: false, secondaryUppercase: false,
   labelVisible: true, labelColor: "#f59e0b", labelSize: 13, labelUppercase: true,
   animation: "slide-up",
+  variant: "classic",
   scrollEnabled: false, scrollDirection: "ltr", scrollSpeed: 5,
 };
 
@@ -1284,31 +1287,85 @@ function buildLtLabelStyle(t: LowerThirdTemplate): React.CSSProperties {
 }
 
 function ltAnimClass(t: LowerThirdTemplate): string {
-  switch (t.animation) {
-    case "fade": return "animate-in fade-in duration-500";
-    case "slide-up": return "animate-in slide-in-from-bottom-4 fade-in duration-500";
-    case "slide-left": return "animate-in slide-in-from-right-4 fade-in duration-500";
-    default: return "";
-  }
+  // We now use Framer Motion for entry animations, so this just returns empty
+  return "";
 }
 
 // ─── Lower Third Overlay ──────────────────────────────────────────────────────
 
 function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData; template: LowerThirdTemplate }) {
+  const containerStyle = buildLtContainerStyle(t);
+
+  const getVariants = () => {
+    switch (t.animation) {
+      case "fade":
+        return { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 } };
+      case "slide-up":
+        return { initial: { opacity: 0, y: 30 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: 30 } };
+      case "slide-left":
+        return { initial: { opacity: 0, x: 50 }, animate: { opacity: 1, x: 0 }, exit: { opacity: 0, x: 50 } };
+      default:
+        return { initial: { opacity: 1 }, animate: { opacity: 1 }, exit: { opacity: 1 } };
+    }
+  };
+
+  const variants = getVariants();
+
   return (
-    <div style={buildLtPositionStyle(t)} className={ltAnimClass(t)}>
-      <div style={buildLtContainerStyle(t)}>
+    <motion.div
+      style={buildLtPositionStyle(t)}
+      initial={variants.initial}
+      animate={variants.animate}
+      exit={variants.exit}
+      transition={{ duration: 0.5, ease: "easeOut" }}
+    >
+      <div style={containerStyle}>
         {data.kind === "Nameplate" && (
-          <>
-            <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
-              {data.data.name}
-            </p>
-            {data.data.title && (
-              <p style={{ ...buildLtTextStyle(t.secondaryFont, t.secondarySize, t.secondaryColor, t.secondaryBold, t.secondaryItalic, t.secondaryUppercase), marginTop: 4 }}>
-                {data.data.title}
-              </p>
+          <div className="w-full">
+            {t.variant === "modern" ? (
+              <div className="flex flex-col items-center text-center">
+                <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
+                  {data.data.name}
+                </p>
+                {data.data.title && (
+                  <>
+                    <div className="w-1/4 h-px my-2 opacity-30" style={{ backgroundColor: t.secondaryColor }} />
+                    <p style={buildLtTextStyle(t.secondaryFont, t.secondarySize, t.secondaryColor, t.secondaryBold, t.secondaryItalic, t.secondaryUppercase)}>
+                      {data.data.title}
+                    </p>
+                  </>
+                )}
+              </div>
+            ) : t.variant === "banner" ? (
+              <div className="flex items-center gap-4">
+                <div className="shrink-0 py-1 px-4 rounded" style={{ background: t.accentColor, color: t.bgColor }}>
+                   <p className="font-black text-xl uppercase tracking-tighter">LIVE</p>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
+                    {data.data.name}
+                  </p>
+                  {data.data.title && (
+                    <p style={buildLtTextStyle(t.secondaryFont, t.secondarySize, t.secondaryColor, t.secondaryBold, t.secondaryItalic, t.secondaryUppercase)}>
+                      {data.data.title}
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              /* Classic */
+              <>
+                <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
+                  {data.data.name}
+                </p>
+                {data.data.title && (
+                  <p style={{ ...buildLtTextStyle(t.secondaryFont, t.secondarySize, t.secondaryColor, t.secondaryBold, t.secondaryItalic, t.secondaryUppercase), marginTop: 4 }}>
+                    {data.data.title}
+                  </p>
+                )}
+              </>
             )}
-          </>
+          </div>
         )}
         {data.kind === "Lyrics" && (
           <>
@@ -1331,6 +1388,8 @@ function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData; templa
               <span style={{
                 ...buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase),
                 display: "inline-block",
+                paddingLeft: t.scrollDirection === "ltr" ? "0" : "100%",
+                paddingRight: t.scrollDirection === "rtl" ? "0" : "100%",
                 animation: `lt-scroll-${t.scrollDirection} ${(11 - t.scrollSpeed) * 4}s linear infinite`,
                 willChange: "transform",
               }}>
@@ -1344,7 +1403,7 @@ function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData; templa
           )
         )}
       </div>
-    </div>
+    </motion.div>
   );
 }
 
@@ -1362,6 +1421,8 @@ function OutputWindow() {
   });
   const [currentSlide, setCurrentSlide] = useState<ParsedSlide | null>(null);
   const outputZipsRef = useRef<Record<string, any>>({});
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [cameraMuted, setCameraMuted] = useState(false);
 
   useEffect(() => {
     invoke("get_current_item")
@@ -1375,6 +1436,9 @@ function OutputWindow() {
     const unlisten = listen("transcription-update", (event: any) => {
       if (event.payload.detected_item) {
         setLiveItem(event.payload.detected_item);
+        setCameraMuted(false); // Reset mute on item change
+      } else {
+        setLiveItem(null);
       }
     });
 
@@ -1390,10 +1454,34 @@ function OutputWindow() {
       }
     });
 
+    const unlistenMedia = listen("media-control", (event: any) => {
+      const { action } = event.payload as { action: string };
+      console.log("OutputWindow: received media-control", action);
+
+      if (action === "video-play-pause") {
+        if (videoRef.current) {
+          if (videoRef.current.paused) videoRef.current.play();
+          else videoRef.current.pause();
+        }
+      } else if (action === "video-restart") {
+        if (videoRef.current) {
+          videoRef.current.currentTime = 0;
+          videoRef.current.play();
+        }
+      } else if (action === "video-mute-toggle") {
+        if (videoRef.current) {
+          videoRef.current.muted = !videoRef.current.muted;
+        }
+      } else if (action === "camera-mute-toggle") {
+        setCameraMuted((m) => !m);
+      }
+    });
+
     return () => {
       unlisten.then((f) => f());
       unlistenSettings.then((f) => f());
       unlistenLt.then((f) => f());
+      unlistenMedia.then((f) => f());
     };
   }, []);
 
@@ -1504,7 +1592,7 @@ function OutputWindow() {
                 <CustomSlideRenderer slide={liveItem.data} />
               </div>
             ) : liveItem.type === "CameraFeed" ? (
-              <div className="absolute inset-0">
+              <div className="absolute inset-0" style={{ visibility: cameraMuted ? "hidden" : "visible" }}>
                 <CameraFeedRenderer deviceId={liveItem.data.device_id} />
               </div>
             ) : liveItem.type === "Media" ? (
@@ -1517,11 +1605,11 @@ function OutputWindow() {
                   />
                 ) : (
                   <video
+                    ref={videoRef}
                     src={convertFileSrc(liveItem.data.path)}
                     className="max-w-full max-h-full object-contain"
                     autoPlay
                     loop
-                    muted
                   />
                 )}
               </div>
@@ -1577,13 +1665,24 @@ function PreviewCard({
   badge: React.ReactNode;
   empty: string;
 }) {
+  const isVideo = item?.type === "Media" && item.data.media_type === "Video";
+  const isCamera = item?.type === "CameraFeed";
+  const showControls = isVideo || isCamera;
+
+  const sendMediaControl = (action: string, value?: any) => {
+    // We emit a global event that the OutputWindow (and other listeners) can catch
+    const payload = { action, value };
+    console.log("Emitting media-control:", payload);
+    app.emit("media-control", payload);
+  };
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="flex justify-between items-center mb-3 shrink-0">
         <h2 className={`text-xs font-bold uppercase tracking-widest ${accent}`}>{label}</h2>
         {badge}
       </div>
-      <div className="flex-1 flex flex-col items-center justify-center bg-black/40 rounded-2xl border border-slate-800 p-6 text-center min-h-0">
+      <div className="flex-1 flex flex-col items-center justify-center bg-black/40 rounded-2xl border border-slate-800 p-6 text-center min-h-0 relative group">
         {item ? (
           <div className="animate-in fade-in zoom-in-95 duration-300 w-full h-full flex flex-col items-center justify-center gap-3">
             {item.type === "Verse" ? (
@@ -1638,6 +1737,46 @@ function PreviewCard({
                 </p>
               </>
             )}
+
+            {/* Floating Media Controls for Live Output (only if it matches) */}
+            {label === "Live Output" && showControls && (
+              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-slate-900/90 backdrop-blur-md border border-slate-700 p-1.5 rounded-full shadow-2xl transition-all">
+                {isVideo && (
+                  <>
+                    <button
+                      onClick={() => sendMediaControl("video-play-pause")}
+                      className="w-8 h-8 flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full transition-colors"
+                      title="Play / Pause"
+                    >
+                      <RefreshCw size={14} />
+                    </button>
+                    <button
+                      onClick={() => sendMediaControl("video-restart")}
+                      className="w-8 h-8 flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full transition-colors"
+                      title="Restart"
+                    >
+                      <Clock size={14} />
+                    </button>
+                    <button
+                      onClick={() => sendMediaControl("video-mute-toggle")}
+                      className="w-8 h-8 flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full transition-colors"
+                      title="Mute / Unmute"
+                    >
+                      <MicOff size={14} />
+                    </button>
+                  </>
+                )}
+                {isCamera && (
+                   <button
+                   onClick={() => sendMediaControl("camera-mute-toggle")}
+                   className="w-8 h-8 flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full transition-colors"
+                   title="Hide / Show Camera"
+                 >
+                   <EyeOff size={14} />
+                 </button>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <p className="text-slate-800 font-serif italic text-sm">{empty}</p>
@@ -1646,6 +1785,7 @@ function PreviewCard({
     </div>
   );
 }
+
 
 // ─── Toast ────────────────────────────────────────────────────────────────────
 
@@ -1685,6 +1825,146 @@ export default function App() {
   // History of recently projected items (most recent first, max 10)
   const [verseHistory, setVerseHistory] = useState<DisplayItem[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
+  
+  // Layout states
+  const [sidebarWidth, setSidebarWidth] = useState(320);
+  const [isTranscriptionCollapsed, setIsTranscriptionCollapsed] = useState(false);
+  const [isSchedulePersistent, setIsSchedulePersistent] = useState(true);
+  const [ltDeckOpen, setLtDeckOpen] = useState(false);
+  const [isBlackout, setIsBlackout] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger shortcuts if user is typing in an input/textarea
+      if (
+        document.activeElement?.tagName === "INPUT" ||
+        document.activeElement?.tagName === "TEXTAREA"
+      ) {
+        // Special case: ESC always clears live output
+        if (e.key === "Escape") invoke("clear_live");
+        return;
+      }
+
+      switch (e.key) {
+        // General Controls
+        case "Escape":
+          invoke("clear_live");
+          break;
+        case "Enter":
+          if (stagedItem) goLive();
+          break;
+        case "o":
+          if (e.ctrlKey) invoke("toggle_output_window");
+          break;
+        case "b":
+          if (e.ctrlKey) {
+             e.preventDefault();
+             const newBlank = !settings.is_blanked;
+             const newSettings = { ...settings, is_blanked: newBlank };
+             invoke("save_settings", { settings: newSettings });
+             setSettings(newSettings);
+             setIsBlackout(newBlank);
+          }
+          break;
+        case "t":
+          if (e.ctrlKey) { e.preventDefault(); setLtDeckOpen(!ltDeckOpen); }
+          break;
+        case "s":
+          if (e.ctrlKey) { e.preventDefault(); setActiveTab("settings"); }
+          break;
+
+        // Tab Switching
+        case "F1": setActiveTab("bible"); break;
+        case "F2": setActiveTab("songs"); break;
+        case "F3": setActiveTab("media"); break;
+        case "F4": setActiveTab("presentations"); break;
+        case "F5": setActiveTab("studio"); break;
+
+        // Bible / Verse Navigation
+        case "n":
+          if (nextVerse) {
+            const item: DisplayItem = { type: "Verse", data: nextVerse };
+            if (e.ctrlKey) sendLive(item);
+            else stageItem(item);
+          }
+          break;
+
+        // Presentations / Media
+        case "ArrowRight":
+          if (liveItem?.type === "PresentationSlide") {
+            const { slide_index, slide_count } = liveItem.data;
+            if (slide_index < (slide_count || 0) - 1) {
+              const next: DisplayItem = { ...liveItem, data: { ...liveItem.data, slide_index: slide_index + 1 } };
+              sendLive(next);
+            }
+          } else if (liveItem?.type === "CustomSlide") {
+             // Find presentation and move to next slide
+             const pres = studioPresentations.find(p => p.id === liveItem.data.presentation_id);
+             if (pres && liveItem.data.slide_index < pres.slides.length - 1) {
+                const nextData = { ...liveItem.data, slide_index: liveItem.data.slide_index + 1 };
+                // Update with slide data from the array
+                const slide = pres.slides[nextData.slide_index];
+                nextData.header = { ...slide.header, text: slide.header.text, font_size: slide.header.fontSize, font_family: slide.header.fontFamily };
+                nextData.body = { ...slide.body, text: slide.body.text, font_size: slide.body.fontSize, font_family: slide.body.fontFamily };
+                sendLive({ type: "CustomSlide", data: nextData as any });
+             }
+          }
+          break;
+        case "ArrowLeft":
+          if (liveItem?.type === "PresentationSlide") {
+            const { slide_index } = liveItem.data;
+            if (slide_index > 0) {
+              const prev: DisplayItem = { ...liveItem, data: { ...liveItem.data, slide_index: slide_index - 1 } };
+              sendLive(prev);
+            }
+          } else if (liveItem?.type === "CustomSlide") {
+             const pres = studioPresentations.find(p => p.id === liveItem.data.presentation_id);
+             if (pres && liveItem.data.slide_index > 0) {
+                const nextData = { ...liveItem.data, slide_index: liveItem.data.slide_index - 1 };
+                const slide = pres.slides[nextData.slide_index];
+                nextData.header = { ...slide.header, text: slide.header.text, font_size: slide.header.fontSize, font_family: slide.header.fontFamily };
+                nextData.body = { ...slide.body, text: slide.body.text, font_size: slide.body.fontSize, font_family: slide.body.fontFamily };
+                sendLive({ type: "CustomSlide", data: nextData as any });
+             }
+          }
+          break;
+
+        // Lower Thirds
+        case " ":
+          if (e.ctrlKey) {
+            e.preventDefault();
+            if (ltVisible) invoke("hide_lower_third").then(() => setLtVisible(false));
+            else {
+               // Logic from show button
+               let payload: LowerThirdData;
+               if (ltMode === "nameplate") payload = { kind: "Nameplate", data: { name: ltName, title: ltTitle || undefined } };
+               else if (ltMode === "freetext") payload = { kind: "FreeText", data: { text: ltFreeText } };
+               else {
+                 if (!ltSongId || ltFlatLines.length === 0) return;
+                 const line1 = ltFlatLines[ltLineIndex];
+                 const line2 = ltLinesPerDisplay === 2 ? ltFlatLines[ltLineIndex + 1] : undefined;
+                 payload = { kind: "Lyrics", data: { line1: line1.text, line2: line2?.text, section_label: line1.sectionLabel } };
+               }
+               invoke("show_lower_third", { data: payload, template: ltTemplate }).then(() => setLtVisible(true));
+            }
+          }
+          break;
+        case "PageDown":
+          if (ltMode === "lyrics" && ltVisible) ltAdvance(1);
+          break;
+        case "PageUp":
+          if (ltMode === "lyrics" && ltVisible) ltAdvance(-1);
+          break;
+
+        // Media Controls (Output)
+        case "k": app.emit("media-control", { action: "video-play-pause" }); break;
+        case "r": app.emit("media-control", { action: "video-restart" }); break;
+        case "m": app.emit("media-control", { action: "video-mute-toggle" }); break;
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [stagedItem, goLive, liveItem, studioPresentations, nextVerse, ltVisible, ltMode, ltName, ltTitle, ltFreeText, ltSongId, ltFlatLines, ltLineIndex, ltLinesPerDisplay, ltTemplate, ltAdvance]);
 
   // Settings
   const [settings, setSettings] = useState<PresentationSettings>({
@@ -2724,8 +3004,97 @@ export default function App() {
 
       <div className="flex-1 flex overflow-hidden">
 
-        {/* ── Left Sidebar ── */}
-        <aside className="w-80 bg-slate-900/30 border-r border-slate-800 flex flex-col overflow-hidden shrink-0">
+        {/* ── 1. Persistent Service Schedule (Leftmost) ── */}
+        <aside className="w-64 bg-slate-950 border-r border-slate-900 flex flex-col overflow-hidden shrink-0">
+          <div className="p-3 border-b border-slate-900 bg-slate-900/20 flex items-center justify-between shrink-0">
+            <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-1.5">
+              <CalendarDays size={12} className="text-amber-500" /> Service Schedule
+            </h2>
+            <button 
+              onClick={() => setActiveTab("schedule")}
+              className="text-[9px] font-bold bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded transition-colors"
+            >
+              EDIT
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-2 space-y-1">
+            {scheduleEntries.length === 0 ? (
+              <div className="h-32 flex flex-col items-center justify-center text-center p-4">
+                <CalendarDays size={24} className="text-slate-800 mb-2" />
+                <p className="text-[10px] text-slate-600 font-medium leading-tight italic">Schedule is empty. Add items from Bible, Media or Songs tabs.</p>
+              </div>
+            ) : (
+              scheduleEntries.map((entry, idx) => (
+                <div 
+                  key={entry.id}
+                  className={`group relative flex flex-col p-2 rounded-lg border transition-all cursor-pointer ${
+                    stagedItem && displayItemLabel(stagedItem) === displayItemLabel(entry.item)
+                      ? "bg-amber-500/10 border-amber-500/30 ring-1 ring-amber-500/20"
+                      : "bg-slate-900/40 border-slate-800/50 hover:bg-slate-800/60 hover:border-slate-700"
+                  }`}
+                  onClick={() => stageItem(entry.item)}
+                >
+                  <div className="flex items-start justify-between gap-2 mb-1">
+                    <span className="text-[9px] font-black text-slate-600 bg-black/40 px-1.5 py-0.5 rounded tabular-nums">
+                      {String(idx + 1).padStart(2, "0")}
+                    </span>
+                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); sendLive(entry.item); }}
+                        className="bg-amber-600 hover:bg-amber-500 text-black p-1 rounded shadow-lg"
+                        title="Quick Live"
+                      >
+                        <Zap size={10} fill="currentColor" />
+                      </button>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); moveScheduleEntry(idx, -1); }}
+                        className="bg-slate-700 hover:bg-slate-600 text-slate-200 p-1 rounded"
+                      >
+                        <ChevronUp size={10} />
+                      </button>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); deleteScheduleEntry(entry.id); }}
+                        className="bg-red-900/40 hover:bg-red-600 text-red-200 p-1 rounded"
+                      >
+                        <X size={10} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="p-1.5 rounded bg-slate-800 text-slate-400 group-hover:text-amber-500 transition-colors">
+                      {entry.item.type === "Verse" ? <BookOpen size={12} /> : 
+                       entry.item.type === "Media" ? <Image size={12} /> :
+                       entry.item.type === "PresentationSlide" ? <Presentation size={12} /> :
+                       entry.item.type === "CustomSlide" ? <Layers size={12} /> : <Mic size={12} />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                       <p className="text-[11px] font-bold text-slate-200 truncate">{displayItemLabel(entry.item)}</p>
+                       <p className="text-[9px] text-slate-500 uppercase tracking-tighter font-black">{entry.item.type}</p>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="p-3 bg-slate-900/40 border-t border-slate-900">
+             <button 
+               onClick={async () => {
+                 const s: Schedule = { id: uuidv4(), name: `Service ${new Date().toLocaleDateString()}`, items: scheduleEntries };
+                 await invoke("save_schedule", { schedule: s });
+                 setToast("Schedule saved to disk");
+               }}
+               className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all border border-slate-700"
+             >
+               SAVE SETLIST
+             </button>
+          </div>
+        </aside>
+
+        {/* ── 2. Resizable Sidebar (Content Tabs) ── */}
+        <aside 
+          className="bg-slate-900/30 border-r border-slate-800 flex flex-col overflow-hidden shrink-0"
+          style={{ width: sidebarWidth }}
+        >
           {/* Tab nav */}
           <div className="flex border-b border-slate-800 bg-slate-900/50 shrink-0 overflow-x-auto">
             {(
@@ -2734,8 +3103,6 @@ export default function App() {
                 { id: "media",         icon: <Image size={13} />,         label: "Media" },
                 { id: "presentations", icon: <Presentation size={13} />,  label: "PPTX" },
                 { id: "studio",        icon: <Layers size={13} />,        label: "Studio" },
-                { id: "schedule",      icon: <CalendarDays size={13} />,  label: "Sched" },
-                { id: "lower-third",   icon: <Type size={13} />,          label: "L3" },
                 { id: "songs",         icon: <Music size={13} />,         label: "Songs" },
                 { id: "settings",      icon: <Settings size={13} />,      label: "Prefs" },
               ] as const
@@ -2751,26 +3118,12 @@ export default function App() {
               >
                 {icon}
                 <span className="text-[8px] font-bold uppercase tracking-wider">{label}</span>
-                {id === "schedule" && scheduleEntries.length > 0 && (
-                  <span className="absolute top-1 right-1 text-[7px] bg-amber-500 text-black rounded-full w-3.5 h-3.5 flex items-center justify-center font-black">
-                    {scheduleEntries.length}
-                  </span>
-                )}
-                {id === "presentations" && presentations.length > 0 && (
-                  <span className="absolute top-1 right-1 text-[7px] bg-orange-500 text-black rounded-full w-3.5 h-3.5 flex items-center justify-center font-black">
-                    {presentations.length}
-                  </span>
-                )}
-                {id === "studio" && studioList.length > 0 && (
-                  <span className="absolute top-1 right-1 text-[7px] bg-purple-500 text-white rounded-full w-3.5 h-3.5 flex items-center justify-center font-black">
-                    {studioList.length}
-                  </span>
-                )}
               </button>
             ))}
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-5">
+            {/* Tab contents (omitted for brevity in replacement, but logically here) */}
 
             {/* ── Bible Tab ── */}
             {activeTab === "bible" && (
@@ -4290,6 +4643,21 @@ export default function App() {
 
                       <div className="border-t border-slate-700" />
 
+                      {/* Design Variant */}
+                      <div className="flex flex-col gap-2">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Design Variant</p>
+                        <div className="flex gap-1">
+                          {(["classic", "modern", "banner"] as const).map((v) => (
+                            <button key={v} onClick={() => setLtTemplate((t) => ({ ...t, variant: v }))}
+                              className={`flex-1 py-1 text-[9px] font-bold rounded uppercase ${ltTemplate.variant === v ? "bg-amber-700 text-white" : "bg-slate-800 text-slate-400"}`}>
+                              {v}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="border-t border-slate-700" />
+
                       {/* Animation */}
                       <div className="flex flex-col gap-2">
                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Animation</p>
@@ -4537,79 +4905,173 @@ export default function App() {
           </div>
         </aside>
 
-        {/* ── Main Content ── */}
-        <main ref={mainPanelRef} className="flex-1 flex flex-col overflow-hidden">
+        {/* ── 3. Sidebar Resize Handle ── */}
+        <div 
+          className="w-1 bg-slate-800 hover:bg-amber-500/40 cursor-col-resize transition-colors shrink-0 flex items-center justify-center group"
+          onMouseDown={(e) => {
+            const startX = e.clientX;
+            const startWidth = sidebarWidth;
+            const handleMouseMove = (em: MouseEvent) => {
+              const newWidth = Math.max(200, Math.min(600, startWidth + (em.clientX - startX)));
+              setSidebarWidth(newWidth);
+            };
+            const handleMouseUp = () => {
+              document.removeEventListener("mousemove", handleMouseMove);
+              document.removeEventListener("mouseup", handleMouseUp);
+            };
+            document.addEventListener("mousemove", handleMouseMove);
+            document.addEventListener("mouseup", handleMouseUp);
+            e.preventDefault();
+          }}
+        >
+          <div className="h-8 w-px bg-slate-700 group-hover:bg-amber-500/60 transition-colors" />
+        </div>
 
-          {/* Transcription + Suggested */}
-          <section
-            className="bg-slate-950 p-5 flex flex-col overflow-hidden gap-3 shrink-0"
-            style={{ height: `${topPanelPct}%` }}
-          >
-            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest shrink-0">Live Transcription</h2>
-            <div className="flex-1 overflow-y-auto text-xl font-light leading-snug text-slate-400 min-h-0">
-              {transcript || <span className="text-slate-800 italic">Listening for audio feed...</span>}
+        {/* ── Main Content ── */}
+        <main ref={mainPanelRef} className="flex-1 flex flex-col overflow-hidden relative">
+
+          {/* Quick Action Bar (Top) */}
+          <div className="h-12 bg-slate-900 border-b border-slate-800 px-4 flex items-center justify-between shrink-0 z-20">
+            <div className="flex items-center gap-2">
+              <button 
+                onClick={async () => {
+                   const newBlank = !settings.is_blanked;
+                   const newSettings = { ...settings, is_blanked: newBlank };
+                   await invoke("save_settings", { settings: newSettings });
+                   setSettings(newSettings);
+                   setIsBlackout(newBlank);
+                }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${
+                  settings.is_blanked ? "bg-red-600 text-white shadow-[0_0_15px_rgba(220,38,38,0.4)]" : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                }`}
+              >
+                <EyeOff size={12} /> {settings.is_blanked ? "LIVE OFF" : "BLACKOUT"}
+              </button>
+              <button 
+                onClick={async () => {
+                   // Toggle logo visibility by saving settings
+                   const newSettings = { ...settings, logo_path: settings.logo_path ? "" : "resources/logo.png" }; // Placeholder logic
+                   // await invoke("save_settings", { settings: newSettings });
+                   // setSettings(newSettings);
+                   setToast("Logo toggle toggled");
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest bg-slate-800 text-slate-400 hover:bg-slate-700 transition-all"
+              >
+                <Monitor size={12} /> LOGO
+              </button>
             </div>
 
-            <AnimatePresence>
-              {suggestedItem && (
-                <motion.div
-                  key={displayItemLabel(suggestedItem)}
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 6 }}
-                  transition={{ duration: 0.2 }}
-                  className="shrink-0 flex items-center gap-3 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <p className="text-[10px] text-slate-500 uppercase font-bold">Auto-detected</p>
-                      {/* Confidence badge */}
-                      <span
-                        className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                          suggestedConfidence >= 1.0
-                            ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
-                            : suggestedConfidence >= 0.7
-                            ? "bg-green-500/20 text-green-400 border border-green-500/30"
-                            : suggestedConfidence >= 0.55
-                            ? "bg-yellow-500/20 text-yellow-400 border border-yellow-500/30"
-                            : "bg-orange-500/20 text-orange-400 border border-orange-500/30"
-                        }`}
-                      >
-                        {suggestedConfidence >= 1.0 ? "REF" : `${Math.round(suggestedConfidence * 100)}%`}
-                      </span>
-                    </div>
-                    {suggestedItem.type === "Verse" ? (
-                      <p className="text-slate-300 text-sm truncate">
-                        <span className="text-amber-500 font-bold">{suggestedItem.data.book} {suggestedItem.data.chapter}:{suggestedItem.data.verse}</span>
-                        {" — "}
-                        <span className="text-slate-400">{suggestedItem.data.text}</span>
-                      </p>
-                    ) : (
-                      <p className="text-slate-300 text-sm truncate">{displayItemLabel(suggestedItem)}</p>
-                    )}
-                  </div>
-                  <div className="flex gap-1.5 shrink-0">
-                    <button onClick={stageSuggested} className="text-[10px] font-bold px-2 py-1 bg-slate-700 hover:bg-slate-600 text-white rounded transition-all">STAGE</button>
-                    <button onClick={() => { if (suggestedItem) sendLive(suggestedItem); setSuggestedItem(null); }} className="text-[10px] font-bold px-2 py-1 bg-amber-500 hover:bg-amber-400 text-black rounded transition-all">DISPLAY</button>
-                    <button onClick={() => setSuggestedItem(null)} className="text-slate-500 hover:text-slate-300 px-1 transition-all">
-                      <X size={13} />
-                    </button>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </section>
+            <div className="flex items-center gap-2">
+              <button 
+                onClick={() => setIsTranscriptionCollapsed(!isTranscriptionCollapsed)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest bg-slate-800 text-slate-400 hover:bg-slate-700 transition-all"
+              >
+                <Mic size={12} /> {isTranscriptionCollapsed ? "SHOW MIC" : "HIDE MIC"}
+              </button>
+              <div className="h-4 w-px bg-slate-800 mx-2" />
+              <button 
+                 onClick={() => setLtDeckOpen(!ltDeckOpen)}
+                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${
+                    ltDeckOpen ? "bg-amber-500 text-black shadow-[0_0_15px_rgba(245,158,11,0.4)]" : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                 }`}
+              >
+                <Type size={12} /> LOWER THIRD
+              </button>
+            </div>
 
-          {/* Vertical drag handle */}
-          <div
-            className="h-1.5 bg-slate-800 hover:bg-amber-500/40 cursor-row-resize transition-colors shrink-0 flex items-center justify-center group"
-            onMouseDown={(e) => {
-              vertDragRef.current = { active: true, startY: e.clientY, startPct: topPanelPct };
-              e.preventDefault();
-            }}
-          >
-            <div className="w-8 h-0.5 bg-slate-600 group-hover:bg-amber-500/60 rounded-full transition-colors" />
+            <div className="flex items-center gap-3">
+               <button 
+                  onClick={() => invoke("clear_live")}
+                  className="px-4 py-1.5 bg-red-900/40 hover:bg-red-600 text-red-200 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all border border-red-900/50"
+               >
+                 CLEAR
+               </button>
+               <button 
+                  onClick={goLive}
+                  disabled={!stagedItem}
+                  className="px-6 py-1.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-30 text-black text-[10px] font-black uppercase tracking-widest rounded-lg transition-all shadow-lg"
+               >
+                 GO LIVE
+               </button>
+            </div>
           </div>
+
+          {/* Transcription + Suggested (Collapsible) */}
+          {!isTranscriptionCollapsed && (
+            <section
+              className="bg-slate-950 p-5 flex flex-col overflow-hidden gap-3 shrink-0 border-b border-slate-900"
+              style={{ height: `${topPanelPct}%` }}
+            >
+              <h2 className="text-[10px] font-black text-slate-600 uppercase tracking-widest shrink-0 flex items-center justify-between">
+                <span>Live Transcription</span>
+                <span className="text-[8px] opacity-50">AI HYBRID MODE</span>
+              </h2>
+              <div className="flex-1 overflow-y-auto text-xl font-light leading-snug text-slate-400 min-h-0">
+                {transcript || <span className="text-slate-800 italic">Listening for audio feed...</span>}
+              </div>
+
+              <AnimatePresence>
+                {suggestedItem && (
+                  <motion.div
+                    key={displayItemLabel(suggestedItem)}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 6 }}
+                    transition={{ duration: 0.2 }}
+                    className="shrink-0 flex items-center gap-3 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <p className="text-[10px] text-slate-500 uppercase font-bold">Auto-detected</p>
+                        <span
+                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                            suggestedConfidence >= 1.0
+                              ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                              : suggestedConfidence >= 0.7
+                              ? "bg-green-500/20 text-green-400 border border-green-500/30"
+                              : suggestedConfidence >= 0.55
+                              ? "bg-yellow-500/20 text-yellow-400 border border-yellow-500/30"
+                              : "bg-orange-500/20 text-orange-400 border border-orange-500/30"
+                          }`}
+                        >
+                          {suggestedConfidence >= 1.0 ? "REF" : `${Math.round(suggestedConfidence * 100)}%`}
+                        </span>
+                      </div>
+                      {suggestedItem.type === "Verse" ? (
+                        <p className="text-slate-300 text-sm truncate">
+                          <span className="text-amber-500 font-bold">{suggestedItem.data.book} {suggestedItem.data.chapter}:{suggestedItem.data.verse}</span>
+                          {" — "}
+                          <span className="text-slate-400">{suggestedItem.data.text}</span>
+                        </p>
+                      ) : (
+                        <p className="text-slate-300 text-sm truncate">{displayItemLabel(suggestedItem)}</p>
+                      )}
+                    </div>
+                    <div className="flex gap-1.5 shrink-0">
+                      <button onClick={stageSuggested} className="text-[10px] font-bold px-2 py-1 bg-slate-700 hover:bg-slate-600 text-white rounded transition-all">STAGE</button>
+                      <button onClick={() => { if (suggestedItem) sendLive(suggestedItem); setSuggestedItem(null); }} className="text-[10px] font-bold px-2 py-1 bg-amber-500 hover:bg-amber-400 text-black rounded transition-all">DISPLAY</button>
+                      <button onClick={() => setSuggestedItem(null)} className="text-slate-500 hover:text-slate-300 px-1 transition-all">
+                        <X size={13} />
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </section>
+          )}
+
+          {/* Vertical drag handle (only if transcription not collapsed) */}
+          {!isTranscriptionCollapsed && (
+            <div
+              className="h-1 bg-slate-900 hover:bg-amber-500/40 cursor-row-resize transition-colors shrink-0 flex items-center justify-center group"
+              onMouseDown={(e) => {
+                vertDragRef.current = { active: true, startY: e.clientY, startPct: topPanelPct };
+                e.preventDefault();
+              }}
+            >
+              <div className="w-8 h-px bg-slate-800 group-hover:bg-amber-500/60 rounded-full transition-colors" />
+            </div>
+          )}
 
           {/* Dual Preview Area */}
           <section ref={bottomPanelRef} className="flex-1 flex overflow-hidden relative">
@@ -4625,7 +5087,7 @@ export default function App() {
               />
             </div>
 
-            {/* Horizontal drag handle (with GO LIVE button above it) */}
+            {/* Horizontal drag handle (with GO LIVE and CLEAR buttons) */}
             <div
               className="w-1.5 bg-slate-800 hover:bg-amber-500/40 cursor-col-resize transition-colors shrink-0 flex items-center justify-center group relative"
               onMouseDown={(e) => {
@@ -4633,8 +5095,8 @@ export default function App() {
                 e.preventDefault();
               }}
             >
-              {/* GO LIVE button centered on this handle */}
-              <div className="absolute z-20" style={{ top: "50%", transform: "translateY(-50%)" }}>
+              {/* Stacked control buttons centered on this handle */}
+              <div className="absolute z-20 flex flex-col gap-4 items-center" style={{ top: "50%", transform: "translateY(-50%)" }}>
                 <button
                   onClick={goLive}
                   disabled={!stagedItem}
@@ -4643,6 +5105,17 @@ export default function App() {
                   <span className="text-base font-black leading-none">GO</span>
                   <span className="text-[9px] font-bold">LIVE</span>
                   {stagedItem && <div className="absolute inset-0 rounded-full animate-ping bg-amber-500 opacity-20 pointer-events-none" />}
+                </button>
+
+                <button
+                  onClick={async () => {
+                    await invoke("clear_live");
+                  }}
+                  className="group/clear relative w-12 h-12 bg-red-600 hover:bg-red-500 text-white rounded-full shadow-[0_0_20px_rgba(220,38,38,0.25)] flex flex-col items-center justify-center transition-all active:scale-90"
+                  title="Clear Output (ESC)"
+                >
+                  <X size={18} />
+                  <span className="text-[7px] font-bold">CLEAR</span>
                 </button>
               </div>
               <div className="h-8 w-0.5 bg-slate-600 group-hover:bg-amber-500/60 rounded-full transition-colors" />
@@ -4683,6 +5156,156 @@ export default function App() {
               )}
             </div>
           </section>
+
+          {/* ── 4. Lower Third Deck (Bottom Dock) ── */}
+          {ltDeckOpen && (
+            <section className="h-72 bg-slate-900 border-t border-slate-800 flex flex-col shrink-0 z-30 shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
+              <div className="flex items-center justify-between px-4 py-2 bg-slate-800/50 border-b border-slate-800">
+                <div className="flex items-center gap-4">
+                  <h2 className="text-[10px] font-black uppercase tracking-widest text-amber-500">Lower Third Controller</h2>
+                  <div className="flex rounded-lg overflow-hidden border border-slate-700 bg-black/20">
+                    {(["nameplate", "lyrics", "freetext"] as const).map((m) => (
+                      <button key={m} onClick={() => setLtMode(m)}
+                        className={`px-4 py-1.5 text-[9px] font-black uppercase tracking-widest transition-all ${ltMode === m ? "bg-amber-500 text-black" : "text-slate-500 hover:text-slate-300"}`}>
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={async () => {
+                      if (ltVisible) {
+                        await invoke("hide_lower_third");
+                        setLtVisible(false);
+                      } else {
+                        let payload: LowerThirdData;
+                        if (ltMode === "nameplate") payload = { kind: "Nameplate", data: { name: ltName, title: ltTitle || undefined } };
+                        else if (ltMode === "freetext") payload = { kind: "FreeText", data: { text: ltFreeText } };
+                        else {
+                          if (!ltSongId || ltFlatLines.length === 0) return;
+                          const line1 = ltFlatLines[ltLineIndex];
+                          const line2 = ltLinesPerDisplay === 2 ? ltFlatLines[ltLineIndex + 1] : undefined;
+                          payload = { kind: "Lyrics", data: { line1: line1.text, line2: line2?.text, section_label: line1.sectionLabel } };
+                        }
+                        await invoke("show_lower_third", { data: payload, template: ltTemplate });
+                        setLtVisible(true);
+                      }
+                    }}
+                    className={`px-6 py-1.5 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${ltVisible ? "bg-red-600 text-white" : "bg-green-600 text-white"}`}
+                  >
+                    {ltVisible ? "STOP OVERLAY" : "START OVERLAY"}
+                  </button>
+                  <button onClick={() => setLtDeckOpen(false)} className="text-slate-500 hover:text-white p-1">
+                    <X size={16} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 flex overflow-hidden">
+                {/* Left: Settings */}
+                <div className="w-80 border-r border-slate-800 p-4 overflow-y-auto space-y-4 bg-slate-900/50">
+                   <div className="space-y-3">
+                      <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Global Styles</p>
+                      <div className="grid grid-cols-2 gap-2">
+                         <div className="flex flex-col gap-1">
+                            <span className="text-[8px] text-slate-600 uppercase font-bold">Variant</span>
+                            <select value={ltTemplate.variant} onChange={(e) => setLtTemplate(t => ({...t, variant: e.target.value as any}))} className="bg-slate-950 text-slate-300 text-[10px] p-1.5 rounded border border-slate-800">
+                               <option value="classic">Classic</option>
+                               <option value="modern">Modern</option>
+                               <option value="banner">Banner</option>
+                            </select>
+                         </div>
+                         <div className="flex flex-col gap-1">
+                            <span className="text-[8px] text-slate-600 uppercase font-bold">Anim</span>
+                            <select value={ltTemplate.animation} onChange={(e) => setLtTemplate(t => ({...t, animation: e.target.value as any}))} className="bg-slate-950 text-slate-300 text-[10px] p-1.5 rounded border border-slate-800">
+                               <option value="slide-up">Slide Up</option>
+                               <option value="slide-left">Slide Left</option>
+                               <option value="fade">Fade</option>
+                               <option value="none">None</option>
+                            </select>
+                         </div>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                         <span className="text-[8px] text-slate-600 uppercase font-bold">Primary Font</span>
+                         <div className="flex gap-1">
+                            <select value={ltTemplate.primaryFont} onChange={(e) => setLtTemplate(t => ({...t, primaryFont: e.target.value}))} className="flex-1 bg-slate-950 text-slate-300 text-[10px] p-1.5 rounded border border-slate-800">
+                               {FONTS.map(f => <option key={f} value={f}>{f}</option>)}
+                            </select>
+                            <input type="color" value={ltTemplate.primaryColor} onChange={(e) => setLtTemplate(t => ({...t, primaryColor: e.target.value}))} className="w-8 h-8 rounded bg-transparent border-0 p-0" />
+                         </div>
+                      </div>
+                   </div>
+                </div>
+
+                {/* Center: Content Controls */}
+                <div className="flex-1 p-4 overflow-y-auto space-y-4">
+                   {ltMode === "nameplate" && (
+                     <div className="grid grid-cols-2 gap-4">
+                        <div className="flex flex-col gap-1.5">
+                           <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Primary Name</label>
+                           <input value={ltName} onChange={(e) => setLtName(e.target.value)} className="bg-slate-950 text-slate-200 text-sm p-3 rounded-xl border border-slate-800" placeholder="e.g. Pastor John Doe" />
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                           <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Title / Subtitle</label>
+                           <input value={ltTitle} onChange={(e) => setLtTitle(e.target.value)} className="bg-slate-950 text-slate-200 text-sm p-3 rounded-xl border border-slate-800" placeholder="e.g. Senior Pastor" />
+                        </div>
+                     </div>
+                   )}
+                   {ltMode === "freetext" && (
+                      <div className="flex flex-col gap-2">
+                         <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Broadcast Message</label>
+                         <textarea value={ltFreeText} onChange={(e) => setLtFreeText(e.target.value)} className="bg-slate-950 text-slate-200 text-sm p-3 rounded-xl border border-slate-800 h-24 resize-none" placeholder="Type message to scroll..." />
+                      </div>
+                   )}
+                   {ltMode === "lyrics" && (
+                      <div className="flex flex-col gap-3">
+                         <select value={ltSongId || ""} onChange={(e) => { setLtSongId(e.target.value || null); setLtLineIndex(0); }} className="bg-slate-950 text-slate-200 text-xs p-2 rounded border border-slate-800">
+                            <option value="">— Choose Song —</option>
+                            {songs.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
+                         </select>
+                         {ltSongId && (
+                           <div className="flex gap-2 overflow-x-auto pb-2">
+                             {ltFlatLines.map((line, idx) => (
+                               <button 
+                                 key={idx}
+                                 onClick={() => { setLtLineIndex(idx); if (ltVisible) invoke("show_lower_third", { data: { kind: "Lyrics", data: { line1: line.text, line2: ltLinesPerDisplay === 2 ? ltFlatLines[idx + 1]?.text : undefined, section_label: line.sectionLabel } }, template: ltTemplate }); }}
+                                 className={`shrink-0 p-3 rounded-xl border text-left min-w-[180px] transition-all ${ltLineIndex === idx ? "bg-amber-500 border-amber-400 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-600"}`}
+                               >
+                                 <p className="text-[8px] font-black uppercase mb-1 opacity-60">{line.sectionLabel}</p>
+                                 <p className="text-xs font-bold leading-tight line-clamp-2">{line.text}</p>
+                               </button>
+                             ))}
+                           </div>
+                         )}
+                      </div>
+                   )}
+                </div>
+
+                {/* Right: Live Preview */}
+                <div className="w-96 border-l border-slate-800 p-4 bg-black/40">
+                   <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-3">Composition Preview</p>
+                   <div className="relative aspect-video bg-black rounded-lg overflow-hidden ring-1 ring-slate-800">
+                      <div className="absolute inset-0 flex items-center justify-center opacity-20">
+                         <Monitor size={48} className="text-slate-800" />
+                      </div>
+                      <div style={{ position: "absolute", inset: 0, transform: "scale(0.19)", transformOrigin: "top left" }}>
+                         <div style={{ width: 1920, height: 1080 }}>
+                            <LowerThirdOverlay 
+                               template={ltTemplate}
+                               data={
+                                 ltMode === "nameplate" ? { kind: "Nameplate", data: { name: ltName || "Full Name", title: ltTitle || "Title Info" } } :
+                                 ltMode === "freetext" ? { kind: "FreeText", data: { text: ltFreeText || "Your message here..." } } :
+                                 { kind: "Lyrics", data: { line1: ltFlatLines[ltLineIndex]?.text || "Lyric Line 1", line2: ltLinesPerDisplay === 2 ? ltFlatLines[ltLineIndex + 1]?.text : undefined, section_label: ltFlatLines[ltLineIndex]?.sectionLabel || "Verse 1" } }
+                               }
+                            />
+                         </div>
+                      </div>
+                   </div>
+                </div>
+              </div>
+            </section>
+          )}
         </main>
       </div>
 

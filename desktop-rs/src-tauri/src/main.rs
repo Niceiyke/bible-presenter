@@ -586,6 +586,25 @@ async fn go_live(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), 
 }
 
 #[tauri::command]
+async fn clear_live(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    *state.live_item.lock() = None;
+    let _ = app.emit(
+        "transcription-update",
+        TranscriptionUpdate {
+            text: "".to_string(),
+            detected_item: None,
+            confidence: 1.0,
+            source: "manual".to_string(),
+        },
+    );
+    // Broadcast to WS remote clients
+    let _ = state.broadcast_tx.send(
+        serde_json::json!({ "type": "state", "live_item": null }).to_string()
+    );
+    Ok(())
+}
+
+#[tauri::command]
 async fn list_presentations(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<store::PresentationFile>, String> {
@@ -1055,6 +1074,7 @@ fn main() {
             load_schedule,
             stage_item,
             go_live,
+            clear_live,
             get_settings,
             save_settings,
             list_studio_presentations,
