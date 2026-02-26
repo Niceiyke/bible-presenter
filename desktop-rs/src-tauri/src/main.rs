@@ -66,6 +66,9 @@ pub struct AppState {
     pub app_handle: OnceLock<tauri::AppHandle>,
     /// 4-digit PIN displayed in Settings tab; required for WS auth. Mutable so it can be regenerated.
     pub remote_pin: Mutex<String>,
+    /// Audio window fed to Whisper per inference call, in samples at 16 kHz.
+    /// 8000 = 0.5 s (most responsive, highest CPU); 48000 = 3 s (lowest CPU, most latency).
+    transcription_window: Arc<Mutex<usize>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -109,6 +112,7 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
     let is_running = state.is_running.clone();
     let live_item_arc = state.live_item.clone();
     let broadcast_tx = state.broadcast_tx.clone();
+    let transcription_window = state.transcription_window.clone();
     let whisper_path = state.model_paths.whisper.to_str().unwrap_or("").to_string();
     let embedding_path = state
         .model_paths
@@ -209,16 +213,20 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
     let is_running_t = is_running.clone();
     let live_item_t = live_item_arc.clone();
     let broadcast_tx_task = broadcast_tx.clone();
+    let transcription_window_task = transcription_window.clone();
 
     tokio::spawn(async move {
         let mut buffer = Vec::new();
-        let window_size = 16000; // 1 s at 16 kHz
-        let overlap = 4000;  // 250 ms overlap
+        const OVERLAP: usize = 4000; // 250 ms — fixed context for Whisper continuity
 
         // Loop exits naturally when both senders are dropped (via stop_session
         // calling audio.stop() which clears active_tx and active_error_tx)
         while let Some(mut chunk) = rx.recv().await {
             buffer.append(&mut chunk);
+
+            // Read the current window size on every iteration so the slider
+            // takes effect within one audio cycle without restarting the session.
+            let window_size = *transcription_window_task.lock();
 
             if buffer.len() >= window_size {
                 let b_clone = buffer.clone();
@@ -266,7 +274,7 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
                     }
                 }
 
-                let remaining = buffer.len() - overlap;
+                let remaining = buffer.len().saturating_sub(OVERLAP);
                 buffer = buffer[remaining..].to_vec();
             }
         }
@@ -813,6 +821,16 @@ async fn get_remote_info(state: State<'_, Arc<AppState>>) -> Result<RemoteInfo, 
 }
 
 #[tauri::command]
+async fn set_transcription_window(
+    state: State<'_, Arc<AppState>>,
+    samples: usize,
+) -> Result<(), String> {
+    // Clamp to 0.5 s – 3 s at 16 kHz
+    *state.transcription_window.lock() = samples.clamp(8_000, 48_000);
+    Ok(())
+}
+
+#[tauri::command]
 async fn regenerate_remote_pin(state: State<'_, Arc<AppState>>) -> Result<String, String> {
     let new_pin = format!("{:04}", rand::random::<u16>() % 10000);
     *state.remote_pin.lock() = new_pin.clone();
@@ -986,6 +1004,7 @@ fn main() {
                 broadcast_tx,
                 app_handle: OnceLock::new(),
                 remote_pin: Mutex::new(remote_pin),
+                transcription_window: Arc::new(Mutex::new(16000)), // 1 s default
             });
 
             // Store app_handle so remote module can emit events to Tauri windows
@@ -1044,7 +1063,8 @@ fn main() {
             save_lt_templates,
             load_lt_templates,
             get_remote_info,
-            regenerate_remote_pin
+            regenerate_remote_pin,
+            set_transcription_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
