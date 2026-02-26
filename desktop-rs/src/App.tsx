@@ -5,6 +5,12 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { loadPptxZip, parseSingleSlide, getSlideCount } from "./pptxParser";
 import type { ParsedSlide } from "./pptxParser";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  BookOpen, Image, Presentation, Layers, CalendarDays, Type, Music, Settings,
+  RefreshCw, X, ChevronUp, ChevronDown, ChevronRight, ChevronLeft,
+  Eye, EyeOff, Monitor, Mic, MicOff, Upload, Plus, Clock, Zap,
+} from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1453,73 +1459,105 @@ function OutputWindow() {
         />
       )}
 
-      {liveItem ? (
-        <>
-          {liveItem.type === "Verse" ? (
-            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center p-16 text-center animate-in fade-in duration-700">
-              <div className="w-full flex flex-col items-center gap-8">
-                {isTop && ReferenceTag}
-                <h1
-                  className="font-serif leading-tight drop-shadow-2xl"
-                  style={{ color: colors.verseText, fontSize: `${settings.font_size}pt` }}
+      <AnimatePresence mode="wait">
+        {liveItem ? (
+          <motion.div
+            key={displayItemLabel(liveItem)}
+            className="absolute inset-0 z-10"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.5 }}
+          >
+            {liveItem.type === "Verse" ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center p-16 text-center">
+                <motion.div
+                  className="w-full flex flex-col items-center gap-8"
+                  initial={{ y: 20, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  transition={{ duration: 0.6, delay: 0.1 }}
                 >
-                  {liveItem.data.text}
-                </h1>
-                {!isTop && ReferenceTag}
+                  {isTop && ReferenceTag}
+                  <h1
+                    className="font-serif leading-tight drop-shadow-2xl"
+                    style={{ color: colors.verseText, fontSize: `${settings.font_size}pt` }}
+                  >
+                    {liveItem.data.text}
+                  </h1>
+                  {!isTop && ReferenceTag}
+                </motion.div>
               </div>
-            </div>
-          ) : liveItem.type === "PresentationSlide" ? (
-            <div className="absolute inset-0 z-10 animate-in fade-in duration-500">
-              {currentSlide ? (
-                <SlideRenderer slide={currentSlide} />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center">
-                  <span className="font-serif text-2xl italic" style={{ color: colors.waitingText }}>
-                    Loading slide...
-                  </span>
-                </div>
-              )}
-            </div>
-          ) : liveItem.type === "CustomSlide" ? (
-            <div className="absolute inset-0 z-10 animate-in fade-in duration-500">
-              <CustomSlideRenderer slide={liveItem.data} />
-            </div>
-          ) : liveItem.type === "CameraFeed" ? (
-            <div className="absolute inset-0 z-10 animate-in fade-in duration-500">
-              <CameraFeedRenderer deviceId={liveItem.data.device_id} />
-            </div>
-          ) : liveItem.type === "Media" ? (
-            <div className="absolute inset-0 z-10 flex items-center justify-center animate-in fade-in duration-700">
-              {liveItem.data.media_type === "Image" ? (
-                <img
-                  src={convertFileSrc(liveItem.data.path)}
-                  className="max-w-full max-h-full object-contain"
-                  alt={liveItem.data.name}
-                />
-              ) : (
-                <video
-                  src={convertFileSrc(liveItem.data.path)}
-                  className="max-w-full max-h-full object-contain"
-                  autoPlay
-                  loop
-                  muted
-                />
-              )}
-            </div>
-          ) : null}
-        </>
-      ) : (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <span className="font-serif text-2xl italic select-none" style={{ color: colors.waitingText }}>
-            Waiting for projection...
-          </span>
-        </div>
-      )}
+            ) : liveItem.type === "PresentationSlide" ? (
+              <div className="absolute inset-0">
+                {currentSlide ? (
+                  <SlideRenderer slide={currentSlide} />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center">
+                    <span className="font-serif text-2xl italic" style={{ color: colors.waitingText }}>
+                      Loading slide...
+                    </span>
+                  </div>
+                )}
+              </div>
+            ) : liveItem.type === "CustomSlide" ? (
+              <div className="absolute inset-0">
+                <CustomSlideRenderer slide={liveItem.data} />
+              </div>
+            ) : liveItem.type === "CameraFeed" ? (
+              <div className="absolute inset-0">
+                <CameraFeedRenderer deviceId={liveItem.data.device_id} />
+              </div>
+            ) : liveItem.type === "Media" ? (
+              <div className="absolute inset-0 flex items-center justify-center">
+                {liveItem.data.media_type === "Image" ? (
+                  <img
+                    src={convertFileSrc(liveItem.data.path)}
+                    className="max-w-full max-h-full object-contain"
+                    alt={liveItem.data.name}
+                  />
+                ) : (
+                  <video
+                    src={convertFileSrc(liveItem.data.path)}
+                    className="max-w-full max-h-full object-contain"
+                    autoPlay
+                    loop
+                    muted
+                  />
+                )}
+              </div>
+            ) : null}
+          </motion.div>
+        ) : (
+          <motion.div
+            key="waiting"
+            className="absolute inset-0 flex items-center justify-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.4 }}
+          >
+            <span className="font-serif text-2xl italic select-none" style={{ color: colors.waitingText }}>
+              Waiting for projection...
+            </span>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Lower Third Overlay — always on top, independent of liveItem */}
-      {lowerThird && (
-        <LowerThirdOverlay data={lowerThird.data} template={lowerThird.template} />
-      )}
+      <AnimatePresence>
+        {lowerThird && (
+          <motion.div
+            key="lower-third"
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 16 }}
+            transition={{ duration: 0.35 }}
+            className="absolute inset-0 pointer-events-none z-50"
+          >
+            <LowerThirdOverlay data={lowerThird.data} template={lowerThird.template} />
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -1618,11 +1656,18 @@ function Toast({ message, onDone }: { message: string; onDone: () => void }) {
   }, [onDone]);
 
   return (
-    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
+    <motion.div
+      className="fixed bottom-6 left-1/2 z-50"
+      style={{ translateX: "-50%" }}
+      initial={{ opacity: 0, y: 8, scale: 0.95 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 8, scale: 0.95 }}
+      transition={{ duration: 0.18 }}
+    >
       <div className="bg-slate-700 text-white text-xs font-bold px-4 py-2 rounded-full shadow-xl border border-slate-600">
         {message}
       </div>
-    </div>
+    </motion.div>
   );
 }
 
@@ -1635,7 +1680,11 @@ export default function App() {
   const [liveItem, setLiveItem] = useState<DisplayItem | null>(null);
   const [stagedItem, setStagedItem] = useState<DisplayItem | null>(null);
   const [suggestedItem, setSuggestedItem] = useState<DisplayItem | null>(null);
+  const [suggestedConfidence, setSuggestedConfidence] = useState<number>(0);
   const [nextVerse, setNextVerse] = useState<Verse | null>(null);
+  // History of recently projected items (most recent first, max 10)
+  const [verseHistory, setVerseHistory] = useState<DisplayItem[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   // Settings
   const [settings, setSettings] = useState<PresentationSettings>({
@@ -1969,13 +2018,14 @@ export default function App() {
       .catch(() => {});
 
     const unlisten = listen("transcription-update", (event: any) => {
-      const { text, detected_item, source } = event.payload;
+      const { text, detected_item, confidence, source } = event.payload;
       setTranscript(text);
       if (detected_item) {
         if (source === "manual") {
           setLiveItem(detected_item);
         } else {
           setSuggestedItem(detected_item);
+          setSuggestedConfidence(confidence ?? 0);
         }
       }
     });
@@ -2119,6 +2169,12 @@ export default function App() {
     await stageItem(item);
     await new Promise((r) => setTimeout(r, 50));
     await goLive();
+    // Track history (max 10, deduped by label)
+    setVerseHistory((prev) => {
+      const label = displayItemLabel(item);
+      const filtered = prev.filter((h) => displayItemLabel(h) !== label);
+      return [item, ...filtered].slice(0, 10);
+    });
   };
 
   const stageSuggested = () => {
@@ -2566,26 +2622,28 @@ export default function App() {
               title="Refresh microphone list"
               className="bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded px-2 py-2 text-xs text-slate-400 hover:text-white transition-all"
             >
-              ↺
+              <RefreshCw size={13} />
             </button>
           </div>
 
           <button
             onClick={() => updateSettings({ ...settings, is_blanked: !settings.is_blanked })}
-            className={`font-bold py-2 px-4 rounded border transition-all text-sm ${
+            className={`font-bold py-2 px-3 rounded border transition-all text-sm flex items-center gap-1.5 ${
               settings.is_blanked
                 ? "bg-red-500 border-red-500 text-white"
                 : "bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500 hover:text-white"
             }`}
           >
+            {settings.is_blanked ? <Eye size={14} /> : <EyeOff size={14} />}
             {settings.is_blanked ? "UNBLANK" : "BLANK"}
           </button>
 
           <button
             onClick={() => invoke("toggle_output_window")}
-            className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2 px-4 rounded border border-slate-700 transition-all text-sm"
+            className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2 px-3 rounded border border-slate-700 transition-all text-sm flex items-center gap-1.5"
           >
-            TOGGLE OUTPUT
+            <Monitor size={14} />
+            OUTPUT
           </button>
 
           {/* VU Meter — only visible when a session is running */}
@@ -2636,12 +2694,19 @@ export default function App() {
               }
             }}
             disabled={sessionState === "loading"}
-            className={`font-bold py-2 px-6 rounded-full transition-all disabled:opacity-50 ${
+            className={`font-bold py-2 px-5 rounded-full transition-all disabled:opacity-50 flex items-center gap-2 ${
               sessionState === "running"
                 ? "bg-red-500 hover:bg-red-600 text-white"
                 : "bg-amber-500 hover:bg-amber-600 text-black"
             }`}
           >
+            {sessionState === "loading" ? (
+              <RefreshCw size={14} className="animate-spin" />
+            ) : sessionState === "running" ? (
+              <MicOff size={14} />
+            ) : (
+              <Mic size={14} />
+            )}
             {sessionState === "loading" ? "LOADING..." : sessionState === "running" ? "STOP" : "START LIVE"}
           </button>
         </div>
@@ -2651,7 +2716,9 @@ export default function App() {
         <div className="bg-red-950 border-b border-red-800 text-red-300 text-xs px-6 py-2 flex items-center gap-2 shrink-0">
           <span className="font-bold text-red-400 uppercase tracking-widest">Error</span>
           <span className="flex-1">{audioError}</span>
-          <button onClick={() => setAudioError(null)} className="text-red-500 hover:text-red-200 font-bold">✕</button>
+          <button onClick={() => setAudioError(null)} className="text-red-500 hover:text-red-200">
+            <X size={14} />
+          </button>
         </div>
       )}
 
@@ -2661,29 +2728,41 @@ export default function App() {
         <aside className="w-80 bg-slate-900/30 border-r border-slate-800 flex flex-col overflow-hidden shrink-0">
           {/* Tab nav */}
           <div className="flex border-b border-slate-800 bg-slate-900/50 shrink-0 overflow-x-auto">
-            {(["bible", "media", "presentations", "studio", "schedule", "lower-third", "songs", "settings"] as const).map((tab) => (
+            {(
+              [
+                { id: "bible",         icon: <BookOpen size={13} />,      label: "Bible" },
+                { id: "media",         icon: <Image size={13} />,         label: "Media" },
+                { id: "presentations", icon: <Presentation size={13} />,  label: "PPTX" },
+                { id: "studio",        icon: <Layers size={13} />,        label: "Studio" },
+                { id: "schedule",      icon: <CalendarDays size={13} />,  label: "Sched" },
+                { id: "lower-third",   icon: <Type size={13} />,          label: "L3" },
+                { id: "songs",         icon: <Music size={13} />,         label: "Songs" },
+                { id: "settings",      icon: <Settings size={13} />,      label: "Prefs" },
+              ] as const
+            ).map(({ id, icon, label }) => (
               <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                className={`flex-1 py-3 text-[9px] font-bold uppercase tracking-widest transition-all relative whitespace-nowrap px-1 ${
-                  activeTab === tab
+                key={id}
+                onClick={() => setActiveTab(id)}
+                className={`flex-1 py-2.5 flex flex-col items-center gap-0.5 transition-all relative whitespace-nowrap px-1 ${
+                  activeTab === id
                     ? "bg-slate-800 text-amber-500 border-b-2 border-amber-500"
                     : "text-slate-500 hover:text-slate-300 hover:bg-slate-800/50"
                 }`}
               >
-                {tab === "settings" ? "⚙" : tab === "presentations" ? "PPTX" : tab === "studio" ? "Studio" : tab === "lower-third" ? "L3" : tab === "songs" ? "Songs" : tab}
-                {tab === "schedule" && scheduleEntries.length > 0 && (
-                  <span className="ml-1 text-[8px] bg-amber-500 text-black rounded-full px-1 font-black">
+                {icon}
+                <span className="text-[8px] font-bold uppercase tracking-wider">{label}</span>
+                {id === "schedule" && scheduleEntries.length > 0 && (
+                  <span className="absolute top-1 right-1 text-[7px] bg-amber-500 text-black rounded-full w-3.5 h-3.5 flex items-center justify-center font-black">
                     {scheduleEntries.length}
                   </span>
                 )}
-                {tab === "presentations" && presentations.length > 0 && (
-                  <span className="ml-1 text-[8px] bg-orange-500 text-black rounded-full px-1 font-black">
+                {id === "presentations" && presentations.length > 0 && (
+                  <span className="absolute top-1 right-1 text-[7px] bg-orange-500 text-black rounded-full w-3.5 h-3.5 flex items-center justify-center font-black">
                     {presentations.length}
                   </span>
                 )}
-                {tab === "studio" && studioList.length > 0 && (
-                  <span className="ml-1 text-[8px] bg-purple-500 text-white rounded-full px-1 font-black">
+                {id === "studio" && studioList.length > 0 && (
+                  <span className="absolute top-1 right-1 text-[7px] bg-purple-500 text-white rounded-full w-3.5 h-3.5 flex items-center justify-center font-black">
                     {studioList.length}
                   </span>
                 )}
@@ -2721,8 +2800,8 @@ export default function App() {
                     onClick={() => setBibleOpen((p) => ({ ...p, quickEntry: !p.quickEntry }))}
                     className="w-full flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-widest mb-2 hover:text-slate-300 transition-colors"
                   >
-                    <span>Quick Entry</span>
-                    <span className="text-slate-600">{bibleOpen.quickEntry ? "▲" : "▼"}</span>
+                    <span className="flex items-center gap-1.5"><Zap size={11} />Quick Entry</span>
+                    {bibleOpen.quickEntry ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                   </button>
                   {bibleOpen.quickEntry && (
                     <QuickBiblePicker
@@ -2742,8 +2821,8 @@ export default function App() {
                     onClick={() => setBibleOpen((p) => ({ ...p, manualSelection: !p.manualSelection }))}
                     className="w-full flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 hover:text-slate-300 transition-colors"
                   >
-                    <span>Manual Selection</span>
-                    <span className="text-slate-600">{bibleOpen.manualSelection ? "▲" : "▼"}</span>
+                    <span className="flex items-center gap-1.5"><BookOpen size={11} />Manual Selection</span>
+                    {bibleOpen.manualSelection ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                   </button>
                   {bibleOpen.manualSelection && (
                     <div className="flex flex-col gap-2">
@@ -2808,14 +2887,75 @@ export default function App() {
 
                 <hr className="border-slate-800" />
 
+                {/* ── Verse History — collapsible ── */}
+                {verseHistory.length > 0 && (
+                  <>
+                    <hr className="border-slate-800" />
+                    <div>
+                      <button
+                        onClick={() => setHistoryOpen((p) => !p)}
+                        className="w-full flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-widest mb-2 hover:text-slate-300 transition-colors"
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <Clock size={11} />Recent ({verseHistory.length})
+                        </span>
+                        {historyOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                      </button>
+                      <AnimatePresence>
+                        {historyOpen && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: "auto", opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.2 }}
+                            className="overflow-hidden space-y-1"
+                          >
+                            {verseHistory.map((item, i) => (
+                              <div
+                                key={i}
+                                className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-slate-800/40 border border-slate-800 group hover:border-slate-700 transition-all"
+                              >
+                                <div className="flex-1 min-w-0">
+                                  {item.type === "Verse" ? (
+                                    <p className="text-xs truncate">
+                                      <span className="text-amber-500/80 font-bold">{item.data.book} {item.data.chapter}:{item.data.verse}</span>
+                                      <span className="text-slate-600 ml-1 text-[10px]">{item.data.version}</span>
+                                    </p>
+                                  ) : (
+                                    <p className="text-xs text-slate-400 truncate">{displayItemLabel(item)}</p>
+                                  )}
+                                </div>
+                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all shrink-0">
+                                  <button
+                                    onClick={() => stageItem(item)}
+                                    className="text-[9px] font-bold px-1.5 py-0.5 bg-slate-700 hover:bg-slate-600 text-white rounded transition-all"
+                                  >
+                                    STAGE
+                                  </button>
+                                  <button
+                                    onClick={() => sendLive(item)}
+                                    className="text-[9px] font-bold px-1.5 py-0.5 bg-amber-500 hover:bg-amber-400 text-black rounded transition-all"
+                                  >
+                                    GO
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  </>
+                )}
+
                 {/* Keyword / semantic search — collapsible */}
                 <div className="flex flex-col min-h-0">
                   <button
                     onClick={() => setBibleOpen((p) => ({ ...p, keywordSearch: !p.keywordSearch }))}
                     className="w-full flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 hover:text-slate-300 transition-colors"
                   >
-                    <span>Semantic Search</span>
-                    <span className="text-slate-600">{bibleOpen.keywordSearch ? "▲" : "▼"}</span>
+                    <span className="flex items-center gap-1.5"><Zap size={11} />Semantic Search</span>
+                    {bibleOpen.keywordSearch ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                   </button>
                   {bibleOpen.keywordSearch && (
                     <>
@@ -2843,7 +2983,7 @@ export default function App() {
                             <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-all">
                               <button onClick={() => stageItem({ type: "Verse", data: v })} className="flex-1 bg-slate-600 hover:bg-slate-500 text-white text-[10px] font-bold py-1 rounded transition-all">STAGE</button>
                               <button onClick={() => sendLive({ type: "Verse", data: v })} className="flex-1 bg-amber-500 hover:bg-amber-400 text-black text-[10px] font-bold py-1 rounded transition-all">DISPLAY</button>
-                              <button onClick={() => addToSchedule({ type: "Verse", data: v })} className="px-2 bg-slate-700 hover:bg-slate-600 text-amber-500 text-[10px] font-bold py-1 rounded transition-all" title="Add to schedule">+</button>
+                              <button onClick={() => addToSchedule({ type: "Verse", data: v })} className="px-2 bg-slate-700 hover:bg-slate-600 text-amber-500 text-[10px] font-bold py-1 rounded transition-all flex items-center" title="Add to schedule"><Plus size={11} /></button>
                             </div>
                           </div>
                         ))}
@@ -2861,8 +3001,8 @@ export default function App() {
                 <div className="flex justify-between items-center">
                   <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Media Library</h2>
                   {mediaFilter !== "camera" && (
-                    <button onClick={handleFileUpload} className="text-[10px] bg-amber-500 hover:bg-amber-600 text-black font-bold px-3 py-1.5 rounded transition-all">
-                      + UPLOAD
+                    <button onClick={handleFileUpload} className="text-[10px] bg-amber-500 hover:bg-amber-600 text-black font-bold px-3 py-1.5 rounded transition-all flex items-center gap-1.5">
+                      <Upload size={11} /> UPLOAD
                     </button>
                   )}
                 </div>
@@ -4410,27 +4550,54 @@ export default function App() {
               {transcript || <span className="text-slate-800 italic">Listening for audio feed...</span>}
             </div>
 
-            {suggestedItem && (
-              <div className="shrink-0 flex items-center gap-3 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5">
-                <div className="flex-1 min-w-0">
-                  <p className="text-[10px] text-slate-500 uppercase font-bold mb-0.5">Auto-detected</p>
-                  {suggestedItem.type === "Verse" ? (
-                    <p className="text-slate-300 text-sm truncate">
-                      <span className="text-amber-500 font-bold">{suggestedItem.data.book} {suggestedItem.data.chapter}:{suggestedItem.data.verse}</span>
-                      {" — "}
-                      <span className="text-slate-400">{suggestedItem.data.text}</span>
-                    </p>
-                  ) : (
-                    <p className="text-slate-300 text-sm truncate">{displayItemLabel(suggestedItem)}</p>
-                  )}
-                </div>
-                <div className="flex gap-1.5 shrink-0">
-                  <button onClick={stageSuggested} className="text-[10px] font-bold px-2 py-1 bg-slate-700 hover:bg-slate-600 text-white rounded transition-all">STAGE</button>
-                  <button onClick={() => { if (suggestedItem) sendLive(suggestedItem); setSuggestedItem(null); }} className="text-[10px] font-bold px-2 py-1 bg-amber-500 hover:bg-amber-400 text-black rounded transition-all">DISPLAY</button>
-                  <button onClick={() => setSuggestedItem(null)} className="text-[10px] text-slate-500 hover:text-slate-300 px-1 transition-all">✕</button>
-                </div>
-              </div>
-            )}
+            <AnimatePresence>
+              {suggestedItem && (
+                <motion.div
+                  key={displayItemLabel(suggestedItem)}
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 6 }}
+                  transition={{ duration: 0.2 }}
+                  className="shrink-0 flex items-center gap-3 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <p className="text-[10px] text-slate-500 uppercase font-bold">Auto-detected</p>
+                      {/* Confidence badge */}
+                      <span
+                        className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                          suggestedConfidence >= 1.0
+                            ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                            : suggestedConfidence >= 0.7
+                            ? "bg-green-500/20 text-green-400 border border-green-500/30"
+                            : suggestedConfidence >= 0.55
+                            ? "bg-yellow-500/20 text-yellow-400 border border-yellow-500/30"
+                            : "bg-orange-500/20 text-orange-400 border border-orange-500/30"
+                        }`}
+                      >
+                        {suggestedConfidence >= 1.0 ? "REF" : `${Math.round(suggestedConfidence * 100)}%`}
+                      </span>
+                    </div>
+                    {suggestedItem.type === "Verse" ? (
+                      <p className="text-slate-300 text-sm truncate">
+                        <span className="text-amber-500 font-bold">{suggestedItem.data.book} {suggestedItem.data.chapter}:{suggestedItem.data.verse}</span>
+                        {" — "}
+                        <span className="text-slate-400">{suggestedItem.data.text}</span>
+                      </p>
+                    ) : (
+                      <p className="text-slate-300 text-sm truncate">{displayItemLabel(suggestedItem)}</p>
+                    )}
+                  </div>
+                  <div className="flex gap-1.5 shrink-0">
+                    <button onClick={stageSuggested} className="text-[10px] font-bold px-2 py-1 bg-slate-700 hover:bg-slate-600 text-white rounded transition-all">STAGE</button>
+                    <button onClick={() => { if (suggestedItem) sendLive(suggestedItem); setSuggestedItem(null); }} className="text-[10px] font-bold px-2 py-1 bg-amber-500 hover:bg-amber-400 text-black rounded transition-all">DISPLAY</button>
+                    <button onClick={() => setSuggestedItem(null)} className="text-slate-500 hover:text-slate-300 px-1 transition-all">
+                      <X size={13} />
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </section>
 
           {/* Vertical drag handle */}
@@ -4508,9 +4675,9 @@ export default function App() {
                   </div>
                   <button
                     onClick={() => sendLive({ type: "Verse", data: nextVerse })}
-                    className="shrink-0 text-[9px] font-bold px-2 py-1 bg-amber-500/20 hover:bg-amber-500/40 text-amber-400 border border-amber-500/30 rounded transition-all whitespace-nowrap"
+                    className="shrink-0 text-[9px] font-bold px-2 py-1 bg-amber-500/20 hover:bg-amber-500/40 text-amber-400 border border-amber-500/30 rounded transition-all whitespace-nowrap flex items-center gap-1"
                   >
-                    NEXT ▶
+                    NEXT <ChevronRight size={11} />
                   </button>
                 </div>
               )}
@@ -4519,7 +4686,9 @@ export default function App() {
         </main>
       </div>
 
-      {toast && <Toast message={toast} onDone={() => setToast(null)} />}
+      <AnimatePresence>
+        {toast && <Toast key={toast} message={toast} onDone={() => setToast(null)} />}
+      </AnimatePresence>
     </div>
   );
 }

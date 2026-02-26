@@ -20,6 +20,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 struct TranscriptionUpdate {
     text: String,
     detected_item: Option<store::DisplayItem>,
+    /// Cosine similarity score 0.0–1.0. 1.0 = explicit reference match.
+    confidence: f32,
     /// "auto" = from live transcription pipeline; "manual" = operator-triggered via go_live
     source: String,
 }
@@ -233,18 +235,18 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
                 let e_clone = engine.clone();
                 let s_clone = store.clone();
 
-                let result: Option<(String, Option<store::DisplayItem>)> =
+                let result: Option<(String, Option<store::DisplayItem>, f32)> =
                     tokio::task::spawn_blocking(move || {
                         let text = e_clone.transcribe(&b_clone).ok()?;
                         let embedding = e_clone.embed(&text).ok();
-                        let verse = s_clone.detect_verse_hybrid(&text, embedding);
-                        Some((text, verse.map(store::DisplayItem::Verse)))
+                        let (verse, confidence) = s_clone.detect_verse_hybrid(&text, embedding);
+                        Some((text, verse.map(store::DisplayItem::Verse), confidence))
                     })
                     .await
                     .ok()
                     .flatten();
 
-                if let Some((text, item)) = result {
+                if let Some((text, item, confidence)) = result {
                     let lower = text.trim().to_lowercase();
                     const GARBAGE: &[&str] = &[
                         "[blank_audio]", "[silence]", "[music]",
@@ -258,6 +260,7 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
                             TranscriptionUpdate {
                                 text: text.clone(),
                                 detected_item: item.clone(),
+                                confidence,
                                 source: "auto".to_string(),
                             },
                         );
@@ -267,6 +270,7 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
                                 "type": "transcription",
                                 "text": text,
                                 "detected_item": item,
+                                "confidence": confidence,
                                 "source": "auto"
                             })
                             .to_string(),
@@ -384,6 +388,7 @@ async fn toggle_output_window(app: AppHandle, state: State<'_, Arc<AppState>>) -
                             }
                         },
                         detected_item: Some(item),
+                        confidence: 1.0,
                         source: "manual".to_string(),
                     },
                 );
@@ -568,6 +573,7 @@ async fn go_live(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), 
                     }
                 },
                 detected_item: Some(item.clone()),
+                confidence: 1.0,
                 source: "manual".to_string(),
             },
         );
@@ -1012,7 +1018,7 @@ fn main() {
 
             // Start the LAN remote server in the background
             let remote_state = state.clone();
-            tokio::spawn(async move {
+            tauri::async_runtime::spawn(async move {
                 remote::start(remote_state, 7420).await;
             });
 
