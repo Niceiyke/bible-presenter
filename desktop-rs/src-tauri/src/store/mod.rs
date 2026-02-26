@@ -242,16 +242,19 @@ impl BibleStore {
         self.book_map.get(&clean).cloned().unwrap_or(raw.to_string())
     }
 
-    pub fn detect_verse_hybrid(&self, text: &str, embedding: Option<Vec<f32>>) -> Option<Verse> {
+    /// Returns `(Option<Verse>, confidence)` where confidence is 0.0–1.0.
+    /// Regex matches get 1.0; semantic matches get the cosine similarity score.
+    pub fn detect_verse_hybrid(&self, text: &str, embedding: Option<Vec<f32>>) -> (Option<Verse>, f32) {
         // 1. Explicit reference regex (e.g. "John 3:16")
         if let Some(verse) = self.detect_verse_by_ref(text) {
-            return Some(verse);
+            return (Some(verse), 1.0);
         }
         // 2. Semantic search across ALL versions
         if let Some(emb) = embedding {
-            return self.search_semantic_stacked(&emb);
+            let (verse, score) = self.search_semantic_stacked(&emb);
+            return (verse, score);
         }
-        None
+        (None, 0.0)
     }
 
     pub fn detect_verse_by_ref(&self, text: &str) -> Option<Verse> {
@@ -270,9 +273,11 @@ impl BibleStore {
     }
 
     /// Searches the full stacked embeddings matrix across all embedded versions.
-    /// Returns the best matching verse looked up in the active display version.
-    fn search_semantic_stacked(&self, embedding: &[f32]) -> Option<Verse> {
-        let embeddings = self.embeddings.as_ref()?;
+    /// Returns `(Option<Verse>, score)` — the best match and its cosine similarity score.
+    fn search_semantic_stacked(&self, embedding: &[f32]) -> (Option<Verse>, f32) {
+        let Some(embeddings) = self.embeddings.as_ref() else {
+            return (None, 0.0);
+        };
         let query = ndarray::ArrayView1::from(embedding);
         let similarities = embeddings.dot(&query);
 
@@ -286,19 +291,22 @@ impl BibleStore {
         }
 
         if max_score < 0.45 {
-            return None;
+            return (None, max_score);
         }
 
         // Identify the verse coordinates from the best-matching cache entry
-        let matched = self.verse_cache.get(best_idx)?;
+        let Some(matched) = self.verse_cache.get(best_idx) else {
+            return (None, 0.0);
+        };
         let active_version = self.get_active_version();
 
         // Look up the same (book, chapter, verse) in the active display version
-        self.get_verse(&matched.book, matched.chapter, matched.verse, &active_version)
+        let verse = self.get_verse(&matched.book, matched.chapter, matched.verse, &active_version)
             .ok()
             .flatten()
             // Fallback: return matched verse as-is if active version doesn't have it
-            .or_else(|| Some(matched.clone()))
+            .or_else(|| Some(matched.clone()));
+        (verse, max_score)
     }
 
     pub fn get_verse(&self, book: &str, chapter: i32, verse: i32, version: &str) -> anyhow::Result<Option<Verse>> {
