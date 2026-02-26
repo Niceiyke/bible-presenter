@@ -1711,6 +1711,10 @@ export default function App() {
   const [vadThreshold, setVadThreshold] = useState(() =>
     parseFloat(localStorage.getItem("pref_vadThreshold") ?? "0.002")
   );
+  // Transcription window in seconds (0.5–3.0). Larger = lower CPU, more latency.
+  const [transcriptionWindowSec, setTranscriptionWindowSec] = useState(() =>
+    parseFloat(localStorage.getItem("pref_transcriptionWindowSec") ?? "1.0")
+  );
   const [sessionState, setSessionState] = useState<"idle" | "loading" | "running">("idle");
   const [audioError, setAudioError] = useState<string | null>(null);
   const [deviceError, setDeviceError] = useState<string | null>(null);
@@ -1931,6 +1935,9 @@ export default function App() {
     loadSchedule();
     loadSongs();
     loadLtTemplates();
+
+    // Sync persisted transcription window to backend
+    invoke("set_transcription_window", { samples: Math.round(transcriptionWindowSec * 16000) }).catch(() => {});
 
     invoke("get_remote_info")
       .then((info: any) => {
@@ -2483,6 +2490,12 @@ export default function App() {
     setVadThreshold(threshold);
     localStorage.setItem("pref_vadThreshold", val);
     invoke("set_vad_threshold", { threshold });
+  };
+
+  const updateTranscriptionWindow = (sec: number) => {
+    setTranscriptionWindowSec(sec);
+    localStorage.setItem("pref_transcriptionWindowSec", String(sec));
+    invoke("set_transcription_window", { samples: Math.round(sec * 16000) });
   };
 
   // ── Output window short-circuit ──────────────────────────────────────────────
@@ -3271,6 +3284,30 @@ export default function App() {
                     onChange={(e) => updateSettings({ ...settings, font_size: parseInt(e.target.value) })}
                     className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
                   />
+                </div>
+
+                {/* Transcription window */}
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <p className="text-xs text-slate-400 font-bold uppercase">Transcription Speed</p>
+                    <span className="text-xs font-mono text-amber-500">{transcriptionWindowSec.toFixed(1)}s window</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="3.0"
+                    step="0.5"
+                    value={transcriptionWindowSec}
+                    onChange={(e) => updateTranscriptionWindow(parseFloat(e.target.value))}
+                    className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                  />
+                  <div className="flex justify-between mt-1.5">
+                    <span className="text-[10px] text-slate-600">0.5s — fast, high CPU</span>
+                    <span className="text-[10px] text-slate-600">3.0s — slow, low CPU</span>
+                  </div>
+                  <p className="text-[10px] text-slate-600 italic mt-1">
+                    Takes effect immediately without restarting the session.
+                  </p>
                 </div>
 
                 {/* Theme selector */}
