@@ -8,7 +8,7 @@ This document lists the available keyboard shortcuts for managing the projection
 - **Enter**: Go Live with the currently staged item.
 - **Ctrl + O**: Toggle the Output Window (Show/Hide).
 - **Ctrl + B**: Toggle Blackout (Stop projection without clearing item).
-- **Ctrl + T**: Toggle Lower Third Deck (Show/Hide bottom dock).
+- **Ctrl + T**: Toggle Unified Bottom Studio Deck (Show/Hide bottom dock).
 - **Ctrl + S**: Toggle Settings Tab.
 
 ## Navigation & Tabs
@@ -17,7 +17,7 @@ This document lists the available keyboard shortcuts for managing the projection
 - **F2**: Switch to **Songs** Tab.
 - **F3**: Switch to **Media** Tab.
 - **F4**: Switch to **PPTX Presentations** Tab.
-- **F5**: Switch to **Custom Studio** Tab.
+- **F5**: Open **Unified Studio Deck** (Presentation & Lower Third Designer).
 
 ## Bible & Verses
 
@@ -31,9 +31,9 @@ This document lists the available keyboard shortcuts for managing the projection
 
 ## Lower Thirds
 
-- **Ctrl + Space**: Toggle Lower Third visibility (Show/Hide).
-- **Page Down**: Next Lyric Line (when in Lyrics mode and Lower Third is visible).
-- **Page Up**: Previous Lyric Line (when in Lyrics mode and Lower Third is visible).
+- **Ctrl + Space**: Toggle Lower Third visibility (Show/Hide on output).
+- **Page Down**: Next Lyric Line (when in Lyrics mode and Lower Third Deck is open).
+- **Page Up**: Previous Lyric Line (when in Lyrics mode and Lower Third Deck is open).
 
 ## Media Controls (Live Output)
 
