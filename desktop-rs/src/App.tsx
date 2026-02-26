@@ -1682,65 +1682,63 @@ function PreviewCard({
         <h2 className={`text-xs font-bold uppercase tracking-widest ${accent}`}>{label}</h2>
         {badge}
       </div>
-      <div className="flex-1 flex flex-col items-center justify-center bg-black/40 rounded-2xl border border-slate-800 p-6 text-center min-h-0 relative group">
+      <div className={`flex-1 flex flex-col items-center justify-center bg-black/40 rounded-2xl border border-slate-800 text-center min-h-0 relative group ${item?.type === "Media" || item?.type === "CameraFeed" ? "p-0 overflow-hidden" : "p-6"}`}>
         {item ? (
-          <div className="animate-in fade-in zoom-in-95 duration-300 w-full h-full flex flex-col items-center justify-center gap-3">
+          <div className="animate-in fade-in zoom-in-95 duration-300 w-full h-full flex flex-col items-center justify-center relative">
             {item.type === "Verse" ? (
-              <>
+              <div className="flex flex-col items-center justify-center gap-3">
                 <p className="text-xl font-serif text-slate-300 leading-snug line-clamp-5">
                   {item.data.text}
                 </p>
                 <p className="text-amber-500 font-bold uppercase tracking-widest text-sm shrink-0">
                   {item.data.book} {item.data.chapter}:{item.data.verse}
                 </p>
-              </>
+              </div>
             ) : item.type === "PresentationSlide" ? (
-              <>
+              <div className="flex flex-col items-center justify-center gap-3">
                 <div className="text-orange-400 text-xs font-black uppercase bg-orange-400/10 px-2 py-0.5 rounded">
                   SLIDE {item.data.slide_index + 1} / {item.data.slide_count || "?"}
                 </div>
                 <p className="text-slate-400 text-xs font-bold truncate max-w-full">
                   {item.data.presentation_name}
                 </p>
-              </>
+              </div>
             ) : item.type === "CustomSlide" ? (
               <div className="w-full" style={{ aspectRatio: "16/9" }}>
                 <CustomSlideRenderer slide={item.data} scale={0.25} />
               </div>
             ) : item.type === "CameraFeed" ? (
-              <>
-                <div className="w-full rounded overflow-hidden border border-slate-700" style={{ aspectRatio: "16/9", maxHeight: "8rem" }}>
-                  <CameraFeedRenderer deviceId={item.data.device_id} />
-                </div>
-                <p className="text-teal-400 text-xs font-bold uppercase truncate max-w-full">
+              <div className="w-full h-full rounded overflow-hidden relative">
+                <CameraFeedRenderer deviceId={item.data.device_id} />
+                <p className="text-teal-400 text-[10px] font-bold uppercase truncate max-w-full absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/60 px-2 py-0.5 rounded backdrop-blur-sm">
                   {item.data.label || item.data.device_id.slice(0, 16)}
                 </p>
-              </>
+              </div>
             ) : (
-              <>
+              <div className="w-full h-full overflow-hidden flex flex-col items-center justify-center relative">
                 {item.data.media_type === "Image" ? (
                   <img
                     src={convertFileSrc(item.data.path)}
-                    className="max-w-full max-h-32 object-contain rounded shadow-xl"
+                    className="w-full h-full object-contain rounded shadow-xl"
                     alt={item.data.name}
                   />
                 ) : (
                   <video
                     src={convertFileSrc(item.data.path)}
-                    className="max-w-full max-h-32 object-contain rounded"
+                    className="w-full h-full object-contain rounded"
                     muted
                     preload="metadata"
                   />
                 )}
-                <p className="text-slate-400 text-xs font-bold uppercase truncate max-w-full">
+                <p className="text-slate-400 text-[10px] font-bold uppercase truncate max-w-full absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/60 px-2 py-0.5 rounded backdrop-blur-sm">
                   {item.data.name}
                 </p>
-              </>
+              </div>
             )}
 
-            {/* Floating Media Controls for Live Output (only if it matches) */}
-            {label === "Live Output" && showControls && (
-              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-slate-900/90 backdrop-blur-md border border-slate-700 p-1.5 rounded-full shadow-2xl transition-all">
+            {/* Floating Media Controls (Show on both Stage and Live) */}
+            {showControls && (
+              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-slate-900/90 backdrop-blur-md border border-slate-700 p-1.5 rounded-full shadow-2xl transition-all z-20">
                 {isVideo && (
                   <>
                     <button
@@ -5033,38 +5031,15 @@ export default function App() {
               />
             </div>
 
-            {/* Horizontal drag handle (with GO LIVE and CLEAR buttons) */}
+            {/* Horizontal drag handle */}
             <div
-              className="w-1.5 bg-slate-800 hover:bg-amber-500/40 cursor-col-resize transition-colors shrink-0 flex items-center justify-center group relative"
+              className="w-1 bg-slate-800 hover:bg-amber-500/40 cursor-col-resize transition-colors shrink-0 flex items-center justify-center group relative"
               onMouseDown={(e) => {
                 horizDragRef.current = { active: true, startX: e.clientX, startPct: stagePct };
                 e.preventDefault();
               }}
             >
-              {/* Stacked control buttons centered on this handle */}
-              <div className="absolute z-20 flex flex-col gap-4 items-center" style={{ top: "50%", transform: "translateY(-50%)" }}>
-                <button
-                  onClick={goLive}
-                  disabled={!stagedItem}
-                  className="group/live relative w-16 h-16 bg-amber-500 hover:bg-amber-400 text-black rounded-full shadow-[0_0_30px_rgba(245,158,11,0.25)] flex flex-col items-center justify-center transition-all active:scale-95 disabled:grayscale disabled:opacity-40"
-                >
-                  <span className="text-base font-black leading-none">GO</span>
-                  <span className="text-[9px] font-bold">LIVE</span>
-                  {stagedItem && <div className="absolute inset-0 rounded-full animate-ping bg-amber-500 opacity-20 pointer-events-none" />}
-                </button>
-
-                <button
-                  onClick={async () => {
-                    await invoke("clear_live");
-                  }}
-                  className="group/clear relative w-12 h-12 bg-red-600 hover:bg-red-500 text-white rounded-full shadow-[0_0_20px_rgba(220,38,38,0.25)] flex flex-col items-center justify-center transition-all active:scale-90"
-                  title="Clear Output (ESC)"
-                >
-                  <X size={18} />
-                  <span className="text-[7px] font-bold">CLEAR</span>
-                </button>
-              </div>
-              <div className="h-8 w-0.5 bg-slate-600 group-hover:bg-amber-500/60 rounded-full transition-colors" />
+              <div className="h-8 w-px bg-slate-600 group-hover:bg-amber-500/60 rounded-full transition-colors" />
             </div>
 
             {/* Live Output + Next Verse strip */}
