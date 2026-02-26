@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { loadPptxZip, parseSingleSlide, getSlideCount } from "./pptxParser";
@@ -1673,7 +1673,7 @@ function PreviewCard({
     // We emit a global event that the OutputWindow (and other listeners) can catch
     const payload = { action, value };
     console.log("Emitting media-control:", payload);
-    app.emit("media-control", payload);
+    emit("media-control", payload);
   };
 
   return (
@@ -1832,139 +1832,6 @@ export default function App() {
   const [isSchedulePersistent, setIsSchedulePersistent] = useState(true);
   const [ltDeckOpen, setLtDeckOpen] = useState(false);
   const [isBlackout, setIsBlackout] = useState(false);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't trigger shortcuts if user is typing in an input/textarea
-      if (
-        document.activeElement?.tagName === "INPUT" ||
-        document.activeElement?.tagName === "TEXTAREA"
-      ) {
-        // Special case: ESC always clears live output
-        if (e.key === "Escape") invoke("clear_live");
-        return;
-      }
-
-      switch (e.key) {
-        // General Controls
-        case "Escape":
-          invoke("clear_live");
-          break;
-        case "Enter":
-          if (stagedItem) goLive();
-          break;
-        case "o":
-          if (e.ctrlKey) invoke("toggle_output_window");
-          break;
-        case "b":
-          if (e.ctrlKey) {
-             e.preventDefault();
-             const newBlank = !settings.is_blanked;
-             const newSettings = { ...settings, is_blanked: newBlank };
-             invoke("save_settings", { settings: newSettings });
-             setSettings(newSettings);
-             setIsBlackout(newBlank);
-          }
-          break;
-        case "t":
-          if (e.ctrlKey) { e.preventDefault(); setLtDeckOpen(!ltDeckOpen); }
-          break;
-        case "s":
-          if (e.ctrlKey) { e.preventDefault(); setActiveTab("settings"); }
-          break;
-
-        // Tab Switching
-        case "F1": setActiveTab("bible"); break;
-        case "F2": setActiveTab("songs"); break;
-        case "F3": setActiveTab("media"); break;
-        case "F4": setActiveTab("presentations"); break;
-        case "F5": setActiveTab("studio"); break;
-
-        // Bible / Verse Navigation
-        case "n":
-          if (nextVerse) {
-            const item: DisplayItem = { type: "Verse", data: nextVerse };
-            if (e.ctrlKey) sendLive(item);
-            else stageItem(item);
-          }
-          break;
-
-        // Presentations / Media
-        case "ArrowRight":
-          if (liveItem?.type === "PresentationSlide") {
-            const { slide_index, slide_count } = liveItem.data;
-            if (slide_index < (slide_count || 0) - 1) {
-              const next: DisplayItem = { ...liveItem, data: { ...liveItem.data, slide_index: slide_index + 1 } };
-              sendLive(next);
-            }
-          } else if (liveItem?.type === "CustomSlide") {
-             // Find presentation and move to next slide
-             const pres = studioPresentations.find(p => p.id === liveItem.data.presentation_id);
-             if (pres && liveItem.data.slide_index < pres.slides.length - 1) {
-                const nextData = { ...liveItem.data, slide_index: liveItem.data.slide_index + 1 };
-                // Update with slide data from the array
-                const slide = pres.slides[nextData.slide_index];
-                nextData.header = { ...slide.header, text: slide.header.text, font_size: slide.header.fontSize, font_family: slide.header.fontFamily };
-                nextData.body = { ...slide.body, text: slide.body.text, font_size: slide.body.fontSize, font_family: slide.body.fontFamily };
-                sendLive({ type: "CustomSlide", data: nextData as any });
-             }
-          }
-          break;
-        case "ArrowLeft":
-          if (liveItem?.type === "PresentationSlide") {
-            const { slide_index } = liveItem.data;
-            if (slide_index > 0) {
-              const prev: DisplayItem = { ...liveItem, data: { ...liveItem.data, slide_index: slide_index - 1 } };
-              sendLive(prev);
-            }
-          } else if (liveItem?.type === "CustomSlide") {
-             const pres = studioPresentations.find(p => p.id === liveItem.data.presentation_id);
-             if (pres && liveItem.data.slide_index > 0) {
-                const nextData = { ...liveItem.data, slide_index: liveItem.data.slide_index - 1 };
-                const slide = pres.slides[nextData.slide_index];
-                nextData.header = { ...slide.header, text: slide.header.text, font_size: slide.header.fontSize, font_family: slide.header.fontFamily };
-                nextData.body = { ...slide.body, text: slide.body.text, font_size: slide.body.fontSize, font_family: slide.body.fontFamily };
-                sendLive({ type: "CustomSlide", data: nextData as any });
-             }
-          }
-          break;
-
-        // Lower Thirds
-        case " ":
-          if (e.ctrlKey) {
-            e.preventDefault();
-            if (ltVisible) invoke("hide_lower_third").then(() => setLtVisible(false));
-            else {
-               // Logic from show button
-               let payload: LowerThirdData;
-               if (ltMode === "nameplate") payload = { kind: "Nameplate", data: { name: ltName, title: ltTitle || undefined } };
-               else if (ltMode === "freetext") payload = { kind: "FreeText", data: { text: ltFreeText } };
-               else {
-                 if (!ltSongId || ltFlatLines.length === 0) return;
-                 const line1 = ltFlatLines[ltLineIndex];
-                 const line2 = ltLinesPerDisplay === 2 ? ltFlatLines[ltLineIndex + 1] : undefined;
-                 payload = { kind: "Lyrics", data: { line1: line1.text, line2: line2?.text, section_label: line1.sectionLabel } };
-               }
-               invoke("show_lower_third", { data: payload, template: ltTemplate }).then(() => setLtVisible(true));
-            }
-          }
-          break;
-        case "PageDown":
-          if (ltMode === "lyrics" && ltVisible) ltAdvance(1);
-          break;
-        case "PageUp":
-          if (ltMode === "lyrics" && ltVisible) ltAdvance(-1);
-          break;
-
-        // Media Controls (Output)
-        case "k": app.emit("media-control", { action: "video-play-pause" }); break;
-        case "r": app.emit("media-control", { action: "video-restart" }); break;
-        case "m": app.emit("media-control", { action: "video-mute-toggle" }); break;
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [stagedItem, goLive, liveItem, studioPresentations, nextVerse, ltVisible, ltMode, ltName, ltTitle, ltFreeText, ltSongId, ltFlatLines, ltLineIndex, ltLinesPerDisplay, ltTemplate, ltAdvance]);
 
   // Settings
   const [settings, setSettings] = useState<PresentationSettings>({
@@ -2457,6 +2324,20 @@ export default function App() {
     });
   };
 
+  const deleteScheduleEntry = (id: string) => {
+    setScheduleEntries((prev) => prev.filter((e) => e.id !== id));
+  };
+
+  const moveScheduleEntry = (idx: number, dir: number) => {
+    const newEntries = [...scheduleEntries];
+    const target = idx + dir;
+    if (target < 0 || target >= newEntries.length) return;
+    const temp = newEntries[idx];
+    newEntries[idx] = newEntries[target];
+    newEntries[target] = temp;
+    setScheduleEntries(newEntries);
+  };
+
   const stageSuggested = () => {
     if (suggestedItem) {
       stageItem(suggestedItem);
@@ -2504,6 +2385,145 @@ export default function App() {
       setAudioError(String(err));
     }
   };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger shortcuts if user is typing in an input/textarea
+      if (
+        document.activeElement?.tagName === "INPUT" ||
+        document.activeElement?.tagName === "TEXTAREA"
+      ) {
+        // Special case: ESC always clears live output
+        if (e.key === "Escape") invoke("clear_live");
+        return;
+      }
+
+      switch (e.key) {
+        // General Controls
+        case "Escape":
+          invoke("clear_live");
+          break;
+        case "Enter":
+          if (stagedItem) goLive();
+          break;
+        case "o":
+          if (e.ctrlKey) invoke("toggle_output_window");
+          break;
+        case "b":
+          if (e.ctrlKey) {
+             e.preventDefault();
+             const newBlank = !settings.is_blanked;
+             const newSettings = { ...settings, is_blanked: newBlank };
+             invoke("save_settings", { settings: newSettings });
+             setSettings(newSettings);
+             setIsBlackout(newBlank);
+          }
+          break;
+        case "t":
+          if (e.ctrlKey) { e.preventDefault(); setLtDeckOpen(!ltDeckOpen); }
+          break;
+        case "s":
+          if (e.ctrlKey) { e.preventDefault(); setActiveTab("settings"); }
+          break;
+
+        // Tab Switching
+        case "F1": setActiveTab("bible"); break;
+        case "F2": setActiveTab("songs"); break;
+        case "F3": setActiveTab("media"); break;
+        case "F4": setActiveTab("presentations"); break;
+        case "F5": setActiveTab("studio"); break;
+
+        // Bible / Verse Navigation
+        case "n":
+          if (nextVerse) {
+            const item: DisplayItem = { type: "Verse", data: nextVerse };
+            if (e.ctrlKey) sendLive(item);
+            else stageItem(item);
+          }
+          break;
+
+        // Presentations / Media
+        case "ArrowRight":
+          if (liveItem?.type === "PresentationSlide") {
+            const { slide_index, slide_count } = liveItem.data;
+            if (slide_index < (slide_count || 0) - 1) {
+              const next: DisplayItem = { ...liveItem, data: { ...liveItem.data, slide_index: slide_index + 1 } };
+              sendLive(next);
+            }
+          } else if (liveItem?.type === "CustomSlide") {
+             const slides = studioSlides[liveItem.data.presentation_id];
+             if (slides && liveItem.data.slide_index < slides.length - 1) {
+                const nextIdx = liveItem.data.slide_index + 1;
+                const slide = slides[nextIdx];
+                const nextData: CustomSlideDisplayData = { 
+                  ...liveItem.data, 
+                  slide_index: nextIdx,
+                  header: { ...slide.header, font_size: slide.header.fontSize, font_family: slide.header.fontFamily },
+                  body: { ...slide.body, font_size: slide.body.fontSize, font_family: slide.body.fontFamily }
+                } as any;
+                sendLive({ type: "CustomSlide", data: nextData });
+             }
+          }
+          break;
+        case "ArrowLeft":
+          if (liveItem?.type === "PresentationSlide") {
+            const { slide_index } = liveItem.data;
+            if (slide_index > 0) {
+              const prev: DisplayItem = { ...liveItem, data: { ...liveItem.data, slide_index: slide_index - 1 } };
+              sendLive(prev);
+            }
+          } else if (liveItem?.type === "CustomSlide") {
+             const slides = studioSlides[liveItem.data.presentation_id];
+             if (slides && liveItem.data.slide_index > 0) {
+                const prevIdx = liveItem.data.slide_index - 1;
+                const slide = slides[prevIdx];
+                const prevData: CustomSlideDisplayData = { 
+                  ...liveItem.data, 
+                  slide_index: prevIdx,
+                  header: { ...slide.header, font_size: slide.header.fontSize, font_family: slide.header.fontFamily },
+                  body: { ...slide.body, font_size: slide.body.fontSize, font_family: slide.body.fontFamily }
+                } as any;
+                sendLive({ type: "CustomSlide", data: prevData });
+             }
+          }
+          break;
+
+        // Lower Thirds
+        case " ":
+          if (e.ctrlKey) {
+            e.preventDefault();
+            if (ltVisible) invoke("hide_lower_third").then(() => setLtVisible(false));
+            else {
+               // Logic from show button
+               let payload: LowerThirdData;
+               if (ltMode === "nameplate") payload = { kind: "Nameplate", data: { name: ltName, title: ltTitle || undefined } };
+               else if (ltMode === "freetext") payload = { kind: "FreeText", data: { text: ltFreeText } };
+               else {
+                 if (!ltSongId || ltFlatLines.length === 0) return;
+                 const line1 = ltFlatLines[ltLineIndex];
+                 const line2 = ltLinesPerDisplay === 2 ? ltFlatLines[ltLineIndex + 1] : undefined;
+                 payload = { kind: "Lyrics", data: { line1: line1.text, line2: line2?.text, section_label: line1.sectionLabel } };
+               }
+               invoke("show_lower_third", { data: payload, template: ltTemplate }).then(() => setLtVisible(true));
+            }
+          }
+          break;
+        case "PageDown":
+          if (ltMode === "lyrics" && ltVisible) ltAdvance(1);
+          break;
+        case "PageUp":
+          if (ltMode === "lyrics" && ltVisible) ltAdvance(-1);
+          break;
+
+        // Media Controls (Output)
+        case "k": emit("media-control", { action: "video-play-pause" }); break;
+        case "r": emit("media-control", { action: "video-restart" }); break;
+        case "m": emit("media-control", { action: "video-mute-toggle" }); break;
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [stagedItem, goLive, liveItem, studioSlides, nextVerse, ltVisible, ltMode, ltName, ltTitle, ltFreeText, ltSongId, ltFlatLines, ltLineIndex, ltLinesPerDisplay, ltTemplate, ltAdvance, settings, setIsBlackout, stageItem, sendLive]);
 
   // ── Search ──────────────────────────────────────────────────────────────────
 
@@ -3079,7 +3099,7 @@ export default function App() {
           <div className="p-3 bg-slate-900/40 border-t border-slate-900">
              <button 
                onClick={async () => {
-                 const s: Schedule = { id: uuidv4(), name: `Service ${new Date().toLocaleDateString()}`, items: scheduleEntries };
+                 const s: Schedule = { id: stableId(), name: `Service ${new Date().toLocaleDateString()}`, items: scheduleEntries };
                  await invoke("save_schedule", { schedule: s });
                  setToast("Schedule saved to disk");
                }}
