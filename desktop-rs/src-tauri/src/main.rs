@@ -571,6 +571,9 @@ async fn go_live(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), 
                     store::DisplayItem::CameraFeed(ref cam) => {
                         if cam.label.is_empty() { cam.device_id.clone() } else { cam.label.clone() }
                     }
+                    store::DisplayItem::Scene(ref s) => {
+                        s.get("name").and_then(|v| v.as_str()).unwrap_or("Scene").to_string()
+                    }
                 },
                 detected_item: Some(item.clone()),
                 confidence: 1.0,
@@ -722,6 +725,33 @@ async fn delete_studio_presentation(
     id: String,
 ) -> Result<(), String> {
     state.media_schedule.delete_studio_presentation(&id).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Scenes
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn list_scenes(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<serde_json::Value>, String> {
+    state.media_schedule.list_scenes().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn save_scene(
+    state: State<'_, Arc<AppState>>,
+    scene: serde_json::Value,
+) -> Result<(), String> {
+    state.media_schedule.save_scene(&scene).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_scene(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<(), String> {
+    state.media_schedule.delete_scene(&id).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -1081,6 +1111,9 @@ fn main() {
             save_studio_presentation,
             load_studio_presentation,
             delete_studio_presentation,
+            list_scenes,
+            save_scene,
+            delete_scene,
             list_songs,
             save_song,
             delete_song,

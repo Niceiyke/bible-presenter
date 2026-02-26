@@ -101,12 +101,35 @@ export interface CameraFeedData {
   label: string;
 }
 
+export interface SceneSlot {
+  id: string;
+  rowStart: number;
+  colStart: number;
+  rowSpan: number;
+  colSpan: number;
+  content: DisplayItem | null;
+  padding: number;
+  opacity: number;
+}
+
+export interface SceneData {
+  id: string;
+  name: string;
+  rows: number;
+  cols: number;
+  rowGap: number;
+  colGap: number;
+  slots: SceneSlot[];
+  background?: BackgroundSetting;
+}
+
 export type DisplayItem =
   | { type: "Verse"; data: Verse }
   | { type: "Media"; data: MediaItem }
   | { type: "PresentationSlide"; data: PresentationSlideData }
   | { type: "CustomSlide"; data: CustomSlideDisplayData }
-  | { type: "CameraFeed"; data: CameraFeedData };
+  | { type: "CameraFeed"; data: CameraFeedData }
+  | { type: "Scene"; data: SceneData };
 
 export interface ScheduleEntry {
   id: string;
@@ -265,6 +288,9 @@ function displayItemLabel(item: DisplayItem): string {
   }
   if (item.type === "CameraFeed") {
     return `Camera: ${item.data.label || item.data.device_id}`;
+  }
+  if (item.type === "Scene") {
+    return `Scene: ${item.data.name}`;
   }
   return item.data.name;
 }
@@ -486,6 +512,85 @@ function CustomSlideRenderer({
       <div className="flex items-center justify-center flex-1" style={{ padding: `${14 * scale}px ${24 * scale}px` }}>
         <p style={zoneStyle(body)}>{body.text}</p>
       </div>
+    </div>
+  );
+}
+
+function SmallItemPreview({ item }: { item: DisplayItem }) {
+  switch (item.type) {
+    case "Verse":
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-slate-900/50">
+          <p className="text-xs font-serif line-clamp-3 mb-1 opacity-80">{item.data.text}</p>
+          <p className="text-[8px] font-black text-amber-500 uppercase">{item.data.book} {item.data.chapter}:{item.data.verse}</p>
+        </div>
+      );
+    case "Media":
+      return item.data.media_type === "Image" ? (
+        <img src={convertFileSrc(item.data.path)} className="w-full h-full object-cover" />
+      ) : (
+        <video src={convertFileSrc(item.data.path)} className="w-full h-full object-cover" muted />
+      );
+    case "CameraFeed":
+      return <CameraFeedRenderer deviceId={item.data.device_id} />;
+    case "CustomSlide":
+      return <CustomSlideRenderer slide={item.data} scale={0.1} />;
+    case "PresentationSlide":
+      return <div className="w-full h-full bg-orange-900/20 flex items-center justify-center text-[10px] font-bold text-orange-500">PPTX SLIDE</div>;
+    case "Scene":
+      return <div className="w-full h-full bg-blue-900/20 flex items-center justify-center text-[10px] font-bold text-blue-500 italic uppercase text-center p-2">Nested Scene Layout</div>;
+    default:
+      return null;
+  }
+}
+
+function SceneRenderer({ scene, scale = 1, activeSlotId, onSlotClick }: { scene: SceneData; scale?: number; activeSlotId?: string | null; onSlotClick?: (id: string) => void }) {
+  const bg = scene.background;
+  return (
+    <div
+      className="w-full h-full relative overflow-hidden"
+      style={{
+        display: "grid",
+        gridTemplateRows: `repeat(${scene.rows}, 1fr)`,
+        gridTemplateColumns: `repeat(${scene.cols}, 1fr)`,
+        gap: `${scene.rowGap}px ${scene.colGap}px`,
+        padding: "10px",
+        transform: scale !== 1 ? `scale(${scale})` : undefined,
+        transformOrigin: "top left",
+        width: scale !== 1 ? `${100 / scale}%` : "100%",
+        height: scale !== 1 ? `${100 / scale}%` : "100%",
+        backgroundColor: bg?.type === "Color" ? bg.value : "#000000",
+        backgroundImage: bg?.type === "Image" ? `url(${convertFileSrc(bg.value)})` : undefined,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+      }}
+    >
+      {scene.slots.map(slot => (
+        <div
+          key={slot.id}
+          onClick={(e) => { e.stopPropagation(); onSlotClick?.(slot.id); }}
+          className={`relative rounded-lg overflow-hidden border transition-all cursor-pointer ${
+            activeSlotId === slot.id ? "border-amber-500 ring-2 ring-amber-500/50 z-10 bg-amber-500/5" : "border-slate-800 hover:border-slate-600 bg-slate-900/20"
+          }`}
+          style={{
+            gridRow: `${slot.rowStart} / span ${slot.rowSpan}`,
+            gridColumn: `${slot.colStart} / span ${slot.colSpan}`,
+            padding: `${slot.padding}px`,
+            opacity: slot.opacity ?? 1,
+          }}
+        >
+          {slot.content ? (
+            <SmallItemPreview item={slot.content} />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center">
+               <Plus size={16} className="text-slate-700" />
+            </div>
+          )}
+          {activeSlotId === slot.id && (
+            <div className="absolute top-1 right-1 bg-amber-500 text-black text-[8px] font-black px-1 rounded shadow-lg">ACTIVE</div>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
@@ -1286,9 +1391,22 @@ function buildLtLabelStyle(t: LowerThirdTemplate): React.CSSProperties {
   };
 }
 
-function ltAnimClass(t: LowerThirdTemplate): string {
-  // We now use Framer Motion for entry animations, so this just returns empty
-  return "";
+// ─── Lower Third Helpers ──────────────────────────────────────────────────────
+
+/** Builds a Lyrics LowerThirdData payload with safe bounds on line2. */
+function ltBuildLyricsPayload(
+  ltFlatLines: { text: string; sectionLabel: string }[],
+  lineIndex: number,
+  linesPerDisplay: 1 | 2,
+): LowerThirdData | null {
+  if (ltFlatLines.length === 0) return null;
+  const line1 = ltFlatLines[lineIndex];
+  if (!line1) return null;
+  const line2Entry = linesPerDisplay === 2 ? ltFlatLines[lineIndex + 1] : undefined;
+  return {
+    kind: "Lyrics",
+    data: { line1: line1.text, line2: line2Entry?.text, section_label: line1.sectionLabel },
+  };
 }
 
 // ─── Lower Third Overlay ──────────────────────────────────────────────────────
@@ -1388,8 +1506,9 @@ function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData; templa
               <span style={{
                 ...buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase),
                 display: "inline-block",
-                paddingLeft: t.scrollDirection === "ltr" ? "0" : "100%",
-                paddingRight: t.scrollDirection === "rtl" ? "0" : "100%",
+                // paddingLeft: 100% pushes the text off-screen; the keyframe direction determines which way it scrolls
+                paddingLeft: "100%",
+                paddingRight: "0",
                 animation: `lt-scroll-${t.scrollDirection} ${(11 - t.scrollSpeed) * 4}s linear infinite`,
                 willChange: "transform",
               }}>
@@ -1613,6 +1732,10 @@ function OutputWindow() {
                   />
                 )}
               </div>
+            ) : liveItem.type === "Scene" ? (
+              <div className="absolute inset-0">
+                <SceneRenderer scene={liveItem.data} />
+              </div>
             ) : null}
           </motion.div>
         ) : (
@@ -1713,6 +1836,10 @@ function PreviewCard({
                 <p className="text-teal-400 text-[10px] font-bold uppercase truncate max-w-full absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/60 px-2 py-0.5 rounded backdrop-blur-sm">
                   {item.data.label || item.data.device_id.slice(0, 16)}
                 </p>
+              </div>
+            ) : item.type === "Scene" ? (
+              <div className="w-full h-full relative border border-slate-800 rounded-lg overflow-hidden">
+                <SceneRenderer scene={item.data} scale={0.25} />
               </div>
             ) : (
               <div className="w-full h-full overflow-hidden flex flex-col items-center justify-center relative">
@@ -1829,8 +1956,24 @@ export default function App() {
   const [isTranscriptionCollapsed, setIsTranscriptionCollapsed] = useState(false);
   const [isSchedulePersistent, setIsSchedulePersistent] = useState(true);
   const [bottomDeckOpen, setBottomDeckOpen] = useState(false);
-  const [bottomDeckMode, setBottomDeckMode] = useState<"live-lt" | "studio-slides" | "studio-lt">("live-lt");
+  const [bottomDeckMode, setBottomDeckMode] = useState<"live-lt" | "studio-slides" | "studio-lt" | "scene-composer">("live-lt");
   const [isBlackout, setIsBlackout] = useState(false);
+
+  // Scene Composer states
+  const [workingScene, setWorkingScene] = useState<SceneData>({
+    id: stableId(),
+    name: "New Scene",
+    rows: 2,
+    cols: 2,
+    rowGap: 10,
+    colGap: 10,
+    slots: [
+      { id: stableId(), rowStart: 1, colStart: 1, rowSpan: 2, colSpan: 1, content: null, padding: 0, opacity: 1 },
+      { id: stableId(), rowStart: 1, colStart: 2, rowSpan: 2, colSpan: 1, content: null, padding: 0, opacity: 1 },
+    ]
+  });
+  const [activeSlotId, setActiveSlotId] = useState<string | null>(null);
+  const [savedScenes, setSavedScenes] = useState<SceneData[]>([]);
 
   // Settings
   const [settings, setSettings] = useState<PresentationSettings>({
@@ -1878,6 +2021,7 @@ export default function App() {
   const [ltLinesPerDisplay, setLtLinesPerDisplay] = useState<1 | 2>(2);
   const [ltAutoAdvance, setLtAutoAdvance] = useState(false);
   const [ltAutoSeconds, setLtAutoSeconds] = useState(4);
+  const [ltAtEnd, setLtAtEnd] = useState(false);
   const ltAutoRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
 
@@ -2023,13 +2167,23 @@ export default function App() {
 
   const loadLtTemplates = useCallback(async () => {
     try {
-      const result = await invoke<LowerThirdTemplate[]>("load_lt_templates");
-      if (Array.isArray(result) && result.length > 0) {
-        setLtSavedTemplates(result);
-        const savedId = localStorage.getItem("activeLtTemplateId");
-        const active = savedId ? result.find((t) => t.id === savedId) : null;
-        setLtTemplate(active ?? result[0]);
-      }
+      const raw = await invoke<unknown[]>("load_lt_templates");
+      if (!Array.isArray(raw) || raw.length === 0) return;
+      // Basic validation: only keep entries that have the required fields
+      const valid = raw.filter(
+        (t): t is LowerThirdTemplate =>
+          typeof t === "object" &&
+          t !== null &&
+          typeof (t as any).id === "string" &&
+          typeof (t as any).name === "string" &&
+          typeof (t as any).bgType === "string" &&
+          typeof (t as any).primaryFont === "string",
+      );
+      if (valid.length === 0) return;
+      setLtSavedTemplates(valid);
+      const savedId = localStorage.getItem("activeLtTemplateId");
+      const active = savedId ? valid.find((t) => t.id === savedId) : null;
+      setLtTemplate(active ?? valid[0]);
     } catch (err) {
       console.error("Failed to load lt templates:", err);
     }
@@ -2037,40 +2191,37 @@ export default function App() {
 
   // ── Lower Third helpers ──────────────────────────────────────────────────────
 
+  /** Memoized selected song — only changes when the selected song itself changes. */
+  const ltSelectedSong = useMemo(
+    () => songs.find((s) => s.id === ltSongId) ?? null,
+    [songs, ltSongId],
+  );
+
   /** Flattened list of all lines across all sections for the loaded song. */
   const ltFlatLines = useMemo((): { text: string; sectionLabel: string }[] => {
-    const song = songs.find((s) => s.id === ltSongId);
-    if (!song) return [];
+    if (!ltSelectedSong) return [];
     const flat: { text: string; sectionLabel: string }[] = [];
-    for (const section of song.sections) {
+    for (const section of ltSelectedSong.sections) {
       for (const line of section.lines) {
         flat.push({ text: line, sectionLabel: section.label });
       }
     }
     return flat;
-  }, [songs, ltSongId]);
+  }, [ltSelectedSong]);
 
   const ltSendCurrent = useCallback(async (index: number) => {
     if (ltFlatLines.length === 0) return;
     const clampedIndex = Math.max(0, Math.min(index, ltFlatLines.length - 1));
-    const line1 = ltFlatLines[clampedIndex];
-    const line2 = ltLinesPerDisplay === 2 ? ltFlatLines[clampedIndex + 1] : undefined;
-    const payload: LowerThirdData = {
-      kind: "Lyrics",
-      data: {
-        line1: line1.text,
-        line2: line2?.text,
-        section_label: line1.sectionLabel,
-      },
-    };
+    const payload = ltBuildLyricsPayload(ltFlatLines, clampedIndex, ltLinesPerDisplay);
+    if (!payload) return;
     await invoke("show_lower_third", { data: payload, template: ltTemplate });
   }, [ltFlatLines, ltLinesPerDisplay, ltTemplate]);
 
   const ltAdvance = useCallback(async (dir: 1 | -1) => {
     if (ltFlatLines.length === 0) return;
-    const step = ltLinesPerDisplay;
-    const next = Math.max(0, Math.min(ltLineIndex + dir * step, ltFlatLines.length - 1));
+    const next = Math.max(0, Math.min(ltLineIndex + dir * ltLinesPerDisplay, ltFlatLines.length - 1));
     setLtLineIndex(next);
+    setLtAtEnd(next >= ltFlatLines.length - 1);
     if (ltVisible) await ltSendCurrent(next);
   }, [ltFlatLines, ltLinesPerDisplay, ltLineIndex, ltVisible, ltSendCurrent]);
 
@@ -2083,13 +2234,17 @@ export default function App() {
       if (e.key === " " || e.key === "ArrowRight") { e.preventDefault(); ltAdvance(1); }
       if (e.key === "ArrowLeft") { e.preventDefault(); ltAdvance(-1); }
       if (e.key === "h" || e.key === "H") {
-        if (ltVisible) invoke("hide_lower_third").then(() => setLtVisible(false));
-        else {
+        if (ltVisible) {
+          invoke("hide_lower_third")
+            .then(() => setLtVisible(false))
+            .catch((err) => console.error("hide_lower_third failed:", err));
+        } else {
           if (!ltSongId || ltFlatLines.length === 0) return;
-          const line1 = ltFlatLines[ltLineIndex];
-          const line2 = ltLinesPerDisplay === 2 ? ltFlatLines[ltLineIndex + 1] : undefined;
-          const payload: LowerThirdData = { kind: "Lyrics", data: { line1: line1.text, line2: line2?.text, section_label: line1.sectionLabel } };
-          invoke("show_lower_third", { data: payload, template: ltTemplate }).then(() => setLtVisible(true));
+          const payload = ltBuildLyricsPayload(ltFlatLines, ltLineIndex, ltLinesPerDisplay);
+          if (!payload) return;
+          invoke("show_lower_third", { data: payload, template: ltTemplate })
+            .then(() => setLtVisible(true))
+            .catch((err) => console.error("show_lower_third failed:", err));
         }
       }
     };
@@ -2097,15 +2252,23 @@ export default function App() {
     return () => window.removeEventListener("keydown", handler);
   }, [activeTab, ltMode, ltAdvance, ltVisible, ltSongId, ltFlatLines, ltLineIndex, ltLinesPerDisplay, ltTemplate]);
 
-  // Auto-advance interval
+  // Auto-advance interval — stops at the last line instead of looping forever
   useEffect(() => {
     if (ltAutoRef.current) clearInterval(ltAutoRef.current);
     if (ltAutoAdvance && ltVisible && ltMode === "lyrics") {
       ltAutoRef.current = setInterval(() => {
         setLtLineIndex((prev) => {
-          const step = ltLinesPerDisplay;
-          const next = Math.min(prev + step, ltFlatLines.length - 1);
-          ltSendCurrent(next);
+          const maxIdx = ltFlatLines.length - 1;
+          if (prev >= maxIdx) {
+            // Reached the end — stop the interval and mark as finished
+            if (ltAutoRef.current) clearInterval(ltAutoRef.current);
+            setLtAtEnd(true);
+            return prev;
+          }
+          const next = Math.min(prev + ltLinesPerDisplay, maxIdx);
+          // Schedule the async invoke outside the state updater
+          Promise.resolve().then(() => ltSendCurrent(next)).catch(console.error);
+          if (next >= maxIdx) setLtAtEnd(true);
           return next;
         });
       }, ltAutoSeconds * 1000);
@@ -2130,6 +2293,7 @@ export default function App() {
     loadSchedule();
     loadSongs();
     loadLtTemplates();
+    invoke<SceneData[]>("list_scenes").then(setSavedScenes).catch(() => {});
 
     // Sync persisted transcription window to backend
     invoke("set_transcription_window", { samples: Math.round(transcriptionWindowSec * 16000) }).catch(() => {});
@@ -2303,6 +2467,16 @@ export default function App() {
   // ── Presentation actions ─────────────────────────────────────────────────────
 
   const stageItem = async (item: DisplayItem) => {
+    // If we are in scene composer and have an active slot, target that instead of staging globally
+    if (bottomDeckOpen && bottomDeckMode === "scene-composer" && activeSlotId) {
+       setWorkingScene(s => ({
+          ...s,
+          slots: s.slots.map(sl => sl.id === activeSlotId ? { ...sl, content: item } : sl)
+       }));
+       setToast(`Added to slot`);
+       return;
+    }
+
     setStagedItem(item);
     await invoke("stage_item", { item });
   };
@@ -2312,6 +2486,12 @@ export default function App() {
   };
 
   const sendLive = async (item: DisplayItem) => {
+    // If in scene composer and slot is active, just stage it to the slot
+    if (bottomDeckOpen && bottomDeckMode === "scene-composer" && activeSlotId) {
+       stageItem(item);
+       return;
+    }
+
     await stageItem(item);
     await new Promise((r) => setTimeout(r, 50));
     await goLive();
@@ -2491,27 +2671,32 @@ export default function App() {
         case " ":
           if (e.ctrlKey) {
             e.preventDefault();
-            if (ltVisible) invoke("hide_lower_third").then(() => setLtVisible(false));
-            else {
-               // Logic from show button
-               let payload: LowerThirdData;
-               if (ltMode === "nameplate") payload = { kind: "Nameplate", data: { name: ltName, title: ltTitle || undefined } };
-               else if (ltMode === "freetext") payload = { kind: "FreeText", data: { text: ltFreeText } };
-               else {
-                 if (!ltSongId || ltFlatLines.length === 0) return;
-                 const line1 = ltFlatLines[ltLineIndex];
-                 const line2 = ltLinesPerDisplay === 2 ? ltFlatLines[ltLineIndex + 1] : undefined;
-                 payload = { kind: "Lyrics", data: { line1: line1.text, line2: line2?.text, section_label: line1.sectionLabel } };
-               }
-               invoke("show_lower_third", { data: payload, template: ltTemplate }).then(() => setLtVisible(true));
+            if (ltVisible) {
+              invoke("hide_lower_third")
+                .then(() => setLtVisible(false))
+                .catch((err) => console.error("hide_lower_third failed:", err));
+            } else {
+              let payload: LowerThirdData | null = null;
+              if (ltMode === "nameplate") {
+                payload = { kind: "Nameplate", data: { name: ltName, title: ltTitle || undefined } };
+              } else if (ltMode === "freetext") {
+                payload = { kind: "FreeText", data: { text: ltFreeText } };
+              } else {
+                payload = ltBuildLyricsPayload(ltFlatLines, ltLineIndex, ltLinesPerDisplay);
+              }
+              if (!payload) break;
+              invoke("show_lower_third", { data: payload, template: ltTemplate })
+                .then(() => setLtVisible(true))
+                .catch((err) => console.error("show_lower_third failed:", err));
             }
           }
           break;
         case "PageDown":
-          if (ltMode === "lyrics" && ltVisible) ltAdvance(1);
+          // Allow navigation even when hidden (pre-cueing)
+          if (ltMode === "lyrics") ltAdvance(1);
           break;
         case "PageUp":
-          if (ltMode === "lyrics" && ltVisible) ltAdvance(-1);
+          if (ltMode === "lyrics") ltAdvance(-1);
           break;
 
         // Media Controls (Output)
@@ -3670,8 +3855,10 @@ export default function App() {
                               </p>
                             ) : entry.item.type === "CameraFeed" ? (
                               <p className="text-teal-400 text-[10px] font-bold uppercase truncate">CAM: {entry.item.data.label || entry.item.data.device_id.slice(0, 12)}</p>
+                            ) : entry.item.type === "Scene" ? (
+                              <p className="text-blue-500 text-[10px] font-black uppercase truncate italic">SCENE: {entry.item.data.name}</p>
                             ) : (
-                              <p className="text-blue-400 text-[10px] font-bold uppercase truncate">{entry.item.data.media_type}: {entry.item.data.name}</p>
+                              <p className="text-blue-400 text-[10px] font-bold uppercase truncate">{(entry.item.data as any).media_type}: {entry.item.data.name}</p>
                             )}
                           </div>
                           <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all shrink-0">
@@ -4309,28 +4496,40 @@ export default function App() {
                           </select>
                           <button
                             onClick={() => {
-                              const newTpl = { ...ltTemplate, id: stableId(), name: "New Template" };
+                              const newId = stableId();
+                              const newTpl: LowerThirdTemplate = { ...ltTemplate, id: newId, name: "New Template" };
                               setLtTemplate(newTpl);
+                              setLtSavedTemplates((prev) => [...prev, newTpl]);
+                              localStorage.setItem("activeLtTemplateId", newId);
                             }}
                             className="px-2 py-1 bg-slate-600 hover:bg-slate-500 text-white text-[10px] font-bold rounded"
                           >+ New</button>
                           <button
                             onClick={async () => {
+                              // Always use the current ltTemplate.id — never generate a new one on save
                               const updated = ltSavedTemplates.some((t) => t.id === ltTemplate.id)
                                 ? ltSavedTemplates.map((t) => t.id === ltTemplate.id ? ltTemplate : t)
-                                : [...ltSavedTemplates, { ...ltTemplate, id: stableId() }];
+                                : [...ltSavedTemplates, ltTemplate];
                               setLtSavedTemplates(updated);
                               localStorage.setItem("activeLtTemplateId", ltTemplate.id);
                               await invoke("save_lt_templates", { templates: updated });
+                              setToast("Template saved");
                             }}
                             className="px-2 py-1 bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold rounded"
                           >Save</button>
                           <button
                             onClick={async () => {
-                              if (ltSavedTemplates.length <= 1) return;
+                              if (ltSavedTemplates.length <= 1) {
+                                setToast("Cannot delete the last template");
+                                return;
+                              }
+                              if (!confirm(`Delete template "${ltTemplate.name}"?`)) return;
                               const updated = ltSavedTemplates.filter((t) => t.id !== ltTemplate.id);
+                              const next = updated[0];
+                              if (!next) return;
                               setLtSavedTemplates(updated);
-                              setLtTemplate(updated[0]);
+                              setLtTemplate(next);
+                              localStorage.setItem("activeLtTemplateId", next.id);
                               await invoke("save_lt_templates", { templates: updated });
                             }}
                             className="px-2 py-1 bg-red-800 hover:bg-red-700 text-white text-[10px] font-bold rounded"
@@ -4725,7 +4924,7 @@ export default function App() {
                       <select
                         className="flex-1 bg-slate-800 text-slate-200 text-xs rounded-lg px-2 py-2 border border-slate-700"
                         value={ltSongId || ""}
-                        onChange={(e) => { setLtSongId(e.target.value || null); setLtLineIndex(0); }}
+                        onChange={(e) => { setLtSongId(e.target.value || null); setLtLineIndex(0); setLtAtEnd(false); }}
                       >
                         <option value="">— Select a song —</option>
                         {songs.map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
@@ -4764,7 +4963,10 @@ export default function App() {
                     {/* Line navigator */}
                     {ltSongId && ltFlatLines.length > 0 && (
                       <div className="flex flex-col gap-2 bg-slate-900 border border-slate-800 rounded-xl p-3">
-                        <p className="text-[9px] text-slate-600 uppercase font-bold tracking-widest">Now Live</p>
+                        <div className="flex items-center justify-between">
+                          <p className="text-[9px] text-slate-600 uppercase font-bold tracking-widest">Now Live</p>
+                          <p className="text-[9px] text-slate-600 tabular-nums">{ltLineIndex + 1} / {ltFlatLines.length}</p>
+                        </div>
                         <div className="bg-slate-800 rounded-lg px-3 py-2">
                           <p className="text-[9px] text-amber-500 font-bold uppercase mb-0.5">{ltFlatLines[ltLineIndex]?.sectionLabel}</p>
                           <p className="text-sm text-slate-200 font-semibold">{ltFlatLines[ltLineIndex]?.text}</p>
@@ -4772,12 +4974,16 @@ export default function App() {
                             <p className="text-sm text-slate-300">{ltFlatLines[ltLineIndex + 1].text}</p>
                           )}
                         </div>
-                        {ltFlatLines[ltLineIndex + ltLinesPerDisplay] && (
+                        {ltAtEnd ? (
+                          <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-900/20 rounded border border-amber-800/40">
+                            <span className="text-[9px] text-amber-500 font-bold uppercase tracking-widest">End of Song</span>
+                          </div>
+                        ) : ltFlatLines[ltLineIndex + ltLinesPerDisplay] ? (
                           <div className="px-3 py-1.5">
                             <p className="text-[9px] text-slate-600 uppercase font-bold tracking-widest mb-0.5">Up Next</p>
                             <p className="text-xs text-slate-500 italic">{ltFlatLines[ltLineIndex + ltLinesPerDisplay]?.text}</p>
                           </div>
-                        )}
+                        ) : null}
                       </div>
                     )}
                   </div>
@@ -4800,28 +5006,51 @@ export default function App() {
                   <button
                     onClick={async () => {
                       if (ltVisible) {
-                        await invoke("hide_lower_third");
-                        setLtVisible(false);
+                        try {
+                          await invoke("hide_lower_third");
+                          setLtVisible(false);
+                        } catch (err) { console.error("hide_lower_third failed:", err); }
                       } else {
-                        let payload: LowerThirdData;
+                        let payload: LowerThirdData | null = null;
                         if (ltMode === "nameplate") {
                           payload = { kind: "Nameplate", data: { name: ltName, title: ltTitle || undefined } };
                         } else if (ltMode === "freetext") {
                           payload = { kind: "FreeText", data: { text: ltFreeText } };
                         } else {
                           if (!ltSongId || ltFlatLines.length === 0) return;
-                          const line1 = ltFlatLines[ltLineIndex];
-                          const line2 = ltLinesPerDisplay === 2 ? ltFlatLines[ltLineIndex + 1] : undefined;
-                          payload = { kind: "Lyrics", data: { line1: line1.text, line2: line2?.text, section_label: line1.sectionLabel } };
+                          payload = ltBuildLyricsPayload(ltFlatLines, ltLineIndex, ltLinesPerDisplay);
                         }
-                        await invoke("show_lower_third", { data: payload, template: ltTemplate });
-                        setLtVisible(true);
+                        if (!payload) return;
+                        try {
+                          await invoke("show_lower_third", { data: payload, template: ltTemplate });
+                          setLtVisible(true);
+                        } catch (err) { console.error("show_lower_third failed:", err); }
                       }
                     }}
                     className={`w-full py-3 text-sm font-black uppercase rounded-xl transition-all ${ltVisible ? "bg-red-700 hover:bg-red-600 text-white" : "bg-green-700 hover:bg-green-600 text-white"}`}
                   >
                     {ltVisible ? "HIDE Lower Third" : "SHOW Lower Third"}
                   </button>
+                </div>
+
+                {/* Keyboard shortcut legend */}
+                <div className="mt-2 border-t border-slate-800 pt-3">
+                  <p className="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-2">Keyboard Shortcuts</p>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                    {([
+                      ["Ctrl+Space", "Show / Hide"],
+                      ["H (LT tab)", "Show / Hide (Lyrics)"],
+                      ["Space / →", "Next line (LT tab)"],
+                      ["← Arrow", "Prev line (LT tab)"],
+                      ["Page Down", "Next line (global)"],
+                      ["Page Up", "Prev line (global)"],
+                    ] as const).map(([key, desc]) => (
+                      <div key={key} className="flex items-center gap-1.5">
+                        <span className="text-[8px] font-mono bg-slate-800 text-slate-400 px-1 py-0.5 rounded border border-slate-700 whitespace-nowrap">{key}</span>
+                        <span className="text-[9px] text-slate-600">{desc}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             )}
@@ -5101,6 +5330,12 @@ export default function App() {
                       className={`px-4 py-1.5 text-[9px] font-black uppercase tracking-widest transition-all ${bottomDeckMode === "studio-lt" ? "bg-amber-600 text-white" : "text-slate-500 hover:text-slate-300"}`}
                     >
                       LT DESIGNER
+                    </button>
+                    <button 
+                      onClick={() => setBottomDeckMode("scene-composer")}
+                      className={`px-4 py-1.5 text-[9px] font-black uppercase tracking-widest transition-all ${bottomDeckMode === "scene-composer" ? "bg-blue-600 text-white" : "text-slate-500 hover:text-slate-300"}`}
+                    >
+                      SCENE COMPOSER
                     </button>
                   </div>
                 </div>
@@ -5518,6 +5753,161 @@ export default function App() {
                   </>
                 )}
 
+                {/* ── Mode: SCENE COMPOSER (GRID STUDIO) ── */}
+                {bottomDeckMode === "scene-composer" && (
+                  <>
+                    <div className="w-64 border-r border-slate-800 p-4 overflow-y-auto space-y-4 bg-slate-900/50">
+                       <div className="space-y-4">
+                          {/* Saved Scenes */}
+                          {savedScenes.length > 0 && (
+                            <>
+                              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Saved Scenes</p>
+                              <div className="space-y-1 max-h-32 overflow-y-auto">
+                                {savedScenes.map(sc => (
+                                  <div key={sc.id} className="flex items-center gap-1 bg-slate-800/50 rounded px-2 py-1">
+                                    <span className="flex-1 text-[10px] text-slate-300 truncate">{sc.name}</span>
+                                    <button
+                                      onClick={() => setWorkingScene({ ...sc })}
+                                      className="text-[8px] font-black uppercase px-1.5 py-0.5 bg-blue-700 hover:bg-blue-600 text-white rounded"
+                                    >LOAD</button>
+                                    <button
+                                      onClick={async () => {
+                                        await invoke("delete_scene", { id: sc.id });
+                                        const list = await invoke<SceneData[]>("list_scenes");
+                                        setSavedScenes(list);
+                                      }}
+                                      className="text-[8px] font-black uppercase px-1.5 py-0.5 bg-red-900/50 hover:bg-red-600 text-red-300 hover:text-white rounded"
+                                    >DEL</button>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="border-t border-slate-800" />
+                            </>
+                          )}
+
+                          {/* Scene Background */}
+                          <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Scene Background</p>
+                          <BackgroundEditor
+                            label=""
+                            value={workingScene.background}
+                            onChange={(bg) => setWorkingScene(s => ({ ...s, background: bg }))}
+                            mediaImages={media.filter(m => m.media_type === "Image")}
+                            cameras={cameras}
+                          />
+
+                          <div className="border-t border-slate-800 my-4" />
+
+                          <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Grid Management</p>
+                          <div className="grid grid-cols-2 gap-2">
+                             <div className="flex flex-col gap-1">
+                                <span className="text-[8px] text-slate-600 uppercase font-bold">Rows</span>
+                                <div className="flex gap-1">
+                                   <button onClick={() => setWorkingScene(s => {
+                                     const newRows = Math.max(1, s.rows - 1);
+                                     return {
+                                       ...s, rows: newRows,
+                                       slots: s.slots
+                                         .map(sl => ({ ...sl, rowSpan: Math.min(sl.rowSpan, newRows - sl.rowStart + 1) }))
+                                         .filter(sl => sl.rowStart <= newRows),
+                                     };
+                                   })} className="bg-slate-800 text-white p-1 rounded hover:bg-slate-700 flex-1">-</button>
+                                   <span className="w-8 text-center text-xs font-bold leading-7">{workingScene.rows}</span>
+                                   <button onClick={() => setWorkingScene(s => ({...s, rows: Math.min(6, s.rows+1)}))} className="bg-slate-800 text-white p-1 rounded hover:bg-slate-700 flex-1">+</button>
+                                </div>
+                             </div>
+                             <div className="flex flex-col gap-1">
+                                <span className="text-[8px] text-slate-600 uppercase font-bold">Cols</span>
+                                <div className="flex gap-1">
+                                   <button onClick={() => setWorkingScene(s => {
+                                     const newCols = Math.max(1, s.cols - 1);
+                                     return {
+                                       ...s, cols: newCols,
+                                       slots: s.slots
+                                         .map(sl => ({ ...sl, colSpan: Math.min(sl.colSpan, newCols - sl.colStart + 1) }))
+                                         .filter(sl => sl.colStart <= newCols),
+                                     };
+                                   })} className="bg-slate-800 text-white p-1 rounded hover:bg-slate-700 flex-1">-</button>
+                                   <span className="w-8 text-center text-xs font-bold leading-7">{workingScene.cols}</span>
+                                   <button onClick={() => setWorkingScene(s => ({...s, cols: Math.min(6, s.cols+1)}))} className="bg-slate-800 text-white p-1 rounded hover:bg-slate-700 flex-1">+</button>
+                                </div>
+                             </div>
+                          </div>
+                          <div className="space-y-2">
+                             <div className="flex flex-col gap-1">
+                                <span className="text-[8px] text-slate-600 uppercase font-bold">Row Gap ({workingScene.rowGap}px)</span>
+                                <input type="range" min={0} max={100} value={workingScene.rowGap} onChange={(e) => setWorkingScene(s => ({...s, rowGap: parseInt(e.target.value)}))} className="w-full accent-blue-500" />
+                             </div>
+                             <div className="flex flex-col gap-1">
+                                <span className="text-[8px] text-slate-600 uppercase font-bold">Col Gap ({workingScene.colGap}px)</span>
+                                <input type="range" min={0} max={100} value={workingScene.colGap} onChange={(e) => setWorkingScene(s => ({...s, colGap: parseInt(e.target.value)}))} className="w-full accent-blue-500" />
+                             </div>
+                          </div>
+
+                          <div className="border-t border-slate-800 my-4" />
+
+                          <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Active Slot Config</p>
+                          {activeSlotId ? (
+                            <div className="space-y-3">
+                               {workingScene.slots.find(s => s.id === activeSlotId) && (
+                                 <>
+                                   <div className="grid grid-cols-2 gap-2">
+                                      <div className="flex flex-col gap-1">
+                                         <span className="text-[8px] text-slate-600 uppercase font-bold">Row Span</span>
+                                         <input type="number" min={1} value={workingScene.slots.find(s => s.id === activeSlotId)?.rowSpan} onChange={(e) => setWorkingScene(s => ({...s, slots: s.slots.map(sl => sl.id === activeSlotId ? {...sl, rowSpan: parseInt(e.target.value)} : sl)}))} className="bg-slate-950 text-white text-[10px] p-1 rounded border border-slate-800" />
+                                      </div>
+                                      <div className="flex flex-col gap-1">
+                                         <span className="text-[8px] text-slate-600 uppercase font-bold">Col Span</span>
+                                         <input type="number" min={1} value={workingScene.slots.find(s => s.id === activeSlotId)?.colSpan} onChange={(e) => setWorkingScene(s => ({...s, slots: s.slots.map(sl => sl.id === activeSlotId ? {...sl, colSpan: parseInt(e.target.value)} : sl)}))} className="bg-slate-950 text-white text-[10px] p-1 rounded border border-slate-800" />
+                                      </div>
+                                   </div>
+                                   <div className="flex flex-col gap-1">
+                                      <span className="text-[8px] text-slate-600 uppercase font-bold">Slot Padding</span>
+                                      <input type="range" min={0} max={100} value={workingScene.slots.find(s => s.id === activeSlotId)?.padding} onChange={(e) => setWorkingScene(s => ({...s, slots: s.slots.map(sl => sl.id === activeSlotId ? {...sl, padding: parseInt(e.target.value)} : sl)}))} className="w-full accent-amber-500" />
+                                   </div>
+                                   <div className="flex flex-col gap-1">
+                                      <span className="text-[8px] text-slate-600 uppercase font-bold">Slot Opacity ({Math.round((workingScene.slots.find(s => s.id === activeSlotId)?.opacity ?? 1) * 100)}%)</span>
+                                      <input type="range" min={0} max={1} step={0.05} value={workingScene.slots.find(s => s.id === activeSlotId)?.opacity ?? 1} onChange={(e) => setWorkingScene(s => ({...s, slots: s.slots.map(sl => sl.id === activeSlotId ? {...sl, opacity: parseFloat(e.target.value)} : sl)}))} className="w-full accent-blue-500" />
+                                   </div>
+                                   <button onClick={() => setWorkingScene(s => ({...s, slots: s.slots.map(sl => sl.id === activeSlotId ? {...sl, content: null} : sl)}))} className="w-full py-1.5 bg-red-900/40 hover:bg-red-600 text-red-200 text-[9px] font-black uppercase rounded border border-red-900/50">CLEAR CONTENT</button>
+                                   <button onClick={() => setWorkingScene(s => ({...s, slots: s.slots.filter(sl => sl.id !== activeSlotId)}))} className="w-full py-1.5 bg-slate-800 hover:bg-red-600 text-slate-400 hover:text-white text-[9px] font-black uppercase rounded">DELETE SLOT</button>
+                                 </>
+                               )}
+                            </div>
+                          ) : (
+                            <p className="text-[10px] text-slate-600 italic">Select a slot to configure</p>
+                          )}
+                          <button onClick={() => {
+                             const newSlot: SceneSlot = { id: stableId(), rowStart: 1, colStart: 1, rowSpan: 1, colSpan: 1, content: null, padding: 0, opacity: 1 };
+                             setWorkingScene(s => ({...s, slots: [...s.slots, newSlot]}));
+                             setActiveSlotId(newSlot.id);
+                          }} className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white text-[9px] font-black uppercase rounded shadow-lg">+ ADD NEW SLOT</button>
+                       </div>
+                    </div>
+                    <div className="flex-1 p-4 flex flex-col gap-4 overflow-hidden">
+                       <div className="flex-1 min-h-0 bg-black rounded-xl border border-slate-800 shadow-2xl relative">
+                          <SceneRenderer
+                            scene={workingScene}
+                            activeSlotId={activeSlotId}
+                            onSlotClick={setActiveSlotId}
+                          />
+                       </div>
+                       <div className="shrink-0 flex items-center justify-between gap-4">
+                          <div className="flex-1 flex gap-2">
+                             <input value={workingScene.name} onChange={(e) => setWorkingScene(s => ({...s, name: e.target.value}))} className="flex-1 bg-slate-950 text-slate-200 text-xs px-3 py-2 rounded-lg border border-slate-800" placeholder="Scene Name..." />
+                             <button onClick={async () => {
+                               await invoke("save_scene", { scene: workingScene });
+                               const list = await invoke<SceneData[]>("list_scenes");
+                               setSavedScenes(list);
+                               setToast("Scene saved");
+                             }} className="px-4 py-2 bg-green-700 hover:bg-green-600 text-white text-[10px] font-black uppercase rounded-lg">SAVE</button>
+                             <button onClick={() => stageItem({ type: "Scene", data: workingScene })} className="px-6 py-2 bg-slate-700 hover:bg-slate-600 text-white text-[10px] font-black uppercase rounded-lg">STAGE SCENE</button>
+                             <button onClick={() => sendLive({ type: "Scene", data: workingScene })} className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-black uppercase rounded-lg shadow-lg">GO LIVE</button>
+                          </div>
+                       </div>
+                    </div>
+                  </>
+                )}
+
                 {/* ── Composition Preview (Always Right) ── */}
                 <div className="w-96 border-l border-slate-800 p-4 bg-black/40 shrink-0">
                    <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-3">Composition Preview</p>
@@ -5527,14 +5917,18 @@ export default function App() {
                       </div>
                       <div style={{ position: "absolute", inset: 0, transform: "scale(0.19)", transformOrigin: "top left" }}>
                          <div style={{ width: 1920, height: 1080 }}>
-                            <LowerThirdOverlay 
-                               template={ltTemplate}
-                               data={
-                                 ltMode === "nameplate" ? { kind: "Nameplate", data: { name: ltName || "Full Name", title: ltTitle || "Title Info" } } :
-                                 ltMode === "freetext" ? { kind: "FreeText", data: { text: ltFreeText || "Your message here..." } } :
-                                 { kind: "Lyrics", data: { line1: ltFlatLines[ltLineIndex]?.text || "Lyric Line 1", line2: ltLinesPerDisplay === 2 ? ltFlatLines[ltLineIndex + 1]?.text : undefined, section_label: ltFlatLines[ltLineIndex]?.sectionLabel || "Verse 1" } }
-                               }
-                            />
+                            {bottomDeckMode === "scene-composer" ? (
+                               <SceneRenderer scene={workingScene} activeSlotId={activeSlotId} onSlotClick={setActiveSlotId} />
+                            ) : (
+                               <LowerThirdOverlay 
+                                  template={ltTemplate}
+                                  data={
+                                    ltMode === "nameplate" ? { kind: "Nameplate", data: { name: ltName || "Full Name", title: ltTitle || "Title Info" } } :
+                                    ltMode === "freetext" ? { kind: "FreeText", data: { text: ltFreeText || "Your message here..." } } :
+                                    { kind: "Lyrics", data: { line1: ltFlatLines[ltLineIndex]?.text || "Lyric Line 1", line2: ltLinesPerDisplay === 2 ? ltFlatLines[ltLineIndex + 1]?.text : undefined, section_label: ltFlatLines[ltLineIndex]?.sectionLabel || "Verse 1" } }
+                                  }
+                               />
+                            )}
                          </div>
                       </div>
                    </div>

@@ -116,6 +116,7 @@ pub enum DisplayItem {
     PresentationSlide(PresentationSlideData),
     CustomSlide(CustomSlideData),
     CameraFeed(CameraFeedData),
+    Scene(serde_json::Value),
 }
 
 /// A schedule entry with a stable ID so the frontend can use it as a React key.
@@ -268,6 +269,7 @@ pub struct MediaScheduleStore {
     presentations_dir: PathBuf,
     studio_dir: PathBuf,
     songs_dir: PathBuf,
+    scenes_dir: PathBuf,
 }
 
 fn classify_extension(ext: &str) -> Option<MediaItemType> {
@@ -296,12 +298,17 @@ impl MediaScheduleStore {
         if !songs_dir.exists() {
             fs::create_dir_all(&songs_dir)?;
         }
+        let scenes_dir = app_data_dir.join("scenes");
+        if !scenes_dir.exists() {
+            fs::create_dir_all(&scenes_dir)?;
+        }
         Ok(Self {
             app_data_dir,
             media_dir,
             presentations_dir,
             studio_dir,
             songs_dir,
+            scenes_dir,
         })
     }
 
@@ -804,5 +811,57 @@ impl MediaScheduleStore {
         } else {
             Ok(serde_json::json!([]))
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Scenes
+    // -----------------------------------------------------------------------
+
+    /// Returns a list of `{ id, name }` objects for each saved scene.
+    pub fn list_scenes(&self) -> Result<Vec<serde_json::Value>> {
+        let mut items = Vec::new();
+        let entries = fs::read_dir(&self.scenes_dir)?;
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() { continue; }
+            let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+            if ext != "json" { continue; }
+            if let Ok(json) = fs::read_to_string(&path) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json) {
+                    let id = val.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    if !id.is_empty() {
+                        items.push(val);
+                    }
+                }
+            }
+        }
+        items.sort_by(|a, b| {
+            let na = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let nb = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            na.to_lowercase().cmp(&nb.to_lowercase())
+        });
+        Ok(items)
+    }
+
+    /// Writes the full scene JSON to `scenes/{id}.json`.
+    pub fn save_scene(&self, data: &serde_json::Value) -> Result<()> {
+        let id = data
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Scene JSON missing 'id' field"))?;
+        let path = self.scenes_dir.join(format!("{}.json", id));
+        let json = serde_json::to_string_pretty(data)?;
+        fs::write(path, json)?;
+        Ok(())
+    }
+
+    /// Deletes `scenes/{id}.json`.
+    pub fn delete_scene(&self, id: &str) -> Result<()> {
+        let path = self.scenes_dir.join(format!("{}.json", id));
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        Ok(())
     }
 }
