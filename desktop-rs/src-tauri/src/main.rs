@@ -64,8 +64,8 @@ pub struct AppState {
     pub broadcast_tx: tokio::sync::broadcast::Sender<String>,
     /// Tauri AppHandle stored after setup so the remote module can emit events.
     pub app_handle: OnceLock<tauri::AppHandle>,
-    /// 4-digit PIN displayed in Settings tab; required for WS auth.
-    pub remote_pin: String,
+    /// 4-digit PIN displayed in Settings tab; required for WS auth. Mutable so it can be regenerated.
+    pub remote_pin: Mutex<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -807,9 +807,24 @@ async fn get_remote_info(state: State<'_, Arc<AppState>>) -> Result<RemoteInfo, 
 
     Ok(RemoteInfo {
         url: format!("http://{}:7420", lan_ip),
-        pin: state.remote_pin.clone(),
+        pin: state.remote_pin.lock().clone(),
         tailscale_url,
     })
+}
+
+#[tauri::command]
+async fn regenerate_remote_pin(state: State<'_, Arc<AppState>>) -> Result<String, String> {
+    let new_pin = format!("{:04}", rand::random::<u16>() % 10000);
+    *state.remote_pin.lock() = new_pin.clone();
+    // Persist so the new PIN survives the next restart
+    if let Some(handle) = state.app_handle.get() {
+        let dir = handle.path().app_local_data_dir()
+            .or_else(|_| handle.path().app_data_dir())
+            .map_err(|e| e.to_string())?;
+        std::fs::write(dir.join("remote_pin.txt"), &new_pin)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(new_pin)
 }
 
 // ---------------------------------------------------------------------------
@@ -943,7 +958,18 @@ fn main() {
             );
 
             let (broadcast_tx, _) = tokio::sync::broadcast::channel::<String>(128);
-            let remote_pin = format!("{:04}", rand::random::<u16>() % 10000);
+
+            // Load persisted PIN or generate a new one and save it.
+            let pin_file = app_data_dir.join("remote_pin.txt");
+            let remote_pin = std::fs::read_to_string(&pin_file)
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| s.len() == 4 && s.chars().all(|c| c.is_ascii_digit()))
+                .unwrap_or_else(|| {
+                    let pin = format!("{:04}", rand::random::<u16>() % 10000);
+                    let _ = std::fs::write(&pin_file, &pin);
+                    pin
+                });
             log_msg(app, &format!("Remote PIN: {}", remote_pin));
 
             let state = Arc::new(AppState {
@@ -959,7 +985,7 @@ fn main() {
                 lower_third: Arc::new(Mutex::new(None)),
                 broadcast_tx,
                 app_handle: OnceLock::new(),
-                remote_pin,
+                remote_pin: Mutex::new(remote_pin),
             });
 
             // Store app_handle so remote module can emit events to Tauri windows
@@ -1017,7 +1043,8 @@ fn main() {
             hide_lower_third,
             save_lt_templates,
             load_lt_templates,
-            get_remote_info
+            get_remote_info,
+            regenerate_remote_pin
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

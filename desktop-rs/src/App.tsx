@@ -3549,7 +3549,7 @@ export default function App() {
 
                     {/* PIN */}
                     <div>
-                      <p className="text-[10px] text-slate-500 uppercase font-bold mb-1.5">PIN <span className="normal-case text-slate-600 font-normal">(required on first connect)</span></p>
+                      <p className="text-[10px] text-slate-500 uppercase font-bold mb-1.5">PIN <span className="normal-case text-slate-600 font-normal">(persists across restarts)</span></p>
                       <div className="flex items-center gap-3">
                         <div className="flex gap-2">
                           {(remotePin || "----").split("").map((digit, i) => (
@@ -3565,6 +3565,15 @@ export default function App() {
                           onClick={() => { navigator.clipboard.writeText(remotePin); }}
                           className="px-3 py-2 text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition-colors"
                         >Copy</button>
+                        <button
+                          onClick={() => {
+                            invoke("regenerate_remote_pin")
+                              .then((pin: any) => setRemotePin(pin as string))
+                              .catch(() => {});
+                          }}
+                          className="px-3 py-2 text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700 rounded-lg transition-colors"
+                          title="Generate a new PIN"
+                        >↺ New</button>
                       </div>
                     </div>
 
