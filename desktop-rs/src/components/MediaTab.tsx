@@ -2,31 +2,8 @@ import React from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Upload } from "lucide-react";
 import { useAppStore } from "../store";
-import type { DisplayItem, MediaItem, CameraSource } from "../App";
-
-// ─── Camera Feed Renderer (local copy for preview thumbnails) ─────────────────
-
-function CameraFeedRenderer({ deviceId }: { deviceId: string }) {
-  const videoRef = React.useRef<HTMLVideoElement>(null);
-
-  React.useEffect(() => {
-    let stream: MediaStream | null = null;
-    navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } })
-      .then((s) => {
-        stream = s;
-        if (videoRef.current) videoRef.current.srcObject = s;
-      })
-      .catch((err) => console.error("CameraFeedRenderer: camera access failed", err));
-    return () => {
-      stream?.getTracks().forEach((t) => t.stop());
-      if (videoRef.current) videoRef.current.srcObject = null;
-    };
-  }, [deviceId]);
-
-  return <video ref={videoRef} className="w-full h-full object-cover" autoPlay muted playsInline />;
-}
-
-// ─── Props ────────────────────────────────────────────────────────────────────
+import { CameraFeedRenderer } from "./shared/Renderers";
+import type { DisplayItem, CameraSource } from "../types";
 
 interface MediaTabProps {
   onStage: (item: DisplayItem) => void;
@@ -173,7 +150,7 @@ export function MediaTab({
       {/* Camera feed tab */}
       {mediaFilter === "camera" && (
         <>
-          {/* LAN Camera Input Bank (WebRTC mobile sources) */}
+          {/* LAN Camera Input Bank */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">LAN Camera Inputs</h3>
@@ -184,7 +161,6 @@ export function MediaTab({
                 {cameraSources.size > 0 && (
                   <button
                     onClick={() => setPauseWhisper((p) => !p)}
-                    title={pauseWhisper ? "Resume Whisper auto-transcription" : "Pause Whisper to free CPU for video decode"}
                     className={`flex items-center gap-1 text-[8px] font-bold px-2 py-1 rounded border transition-all ${
                       pauseWhisper
                         ? "bg-amber-500/20 border-amber-500/50 text-amber-400"
@@ -199,7 +175,6 @@ export function MediaTab({
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-[8px] bg-blue-600 hover:bg-blue-500 text-white font-bold px-2 py-1 rounded transition-all"
-                  title="Open camera sender URL"
                 >
                   + ADD
                 </a>
@@ -208,7 +183,7 @@ export function MediaTab({
             {cameraSources.size === 0 ? (
               <div className="text-center py-6 text-slate-600 text-xs">
                 <p className="mb-2">No LAN cameras connected.</p>
-                <p className="text-[9px]">Share <span className="text-amber-400 font-mono">{remoteUrl || "http://…"}/camera</span> with a phone and enter the PIN <span className="text-amber-400 font-mono">{remotePin || "––––"}</span>.</p>
+                <p className="text-[9px]">Share <span className="text-amber-400 font-mono">{remoteUrl || "http://…"}/camera</span> with a phone and enter PIN <span className="text-amber-400 font-mono">{remotePin || "––––"}</span>.</p>
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-2">
@@ -218,7 +193,6 @@ export function MediaTab({
                       <button
                         onClick={() => onRemoveCameraSource(src.device_id)}
                         className="absolute top-1 left-1 z-10 text-[9px] bg-red-700/80 hover:bg-red-500 text-white w-4 h-4 flex items-center justify-center rounded font-bold transition-all leading-none"
-                        title="Remove camera"
                       >×</button>
 
                       {src.enabled ? (
@@ -265,7 +239,6 @@ export function MediaTab({
                         <button
                           onClick={() => onEnableCameraPreview(src.device_id)}
                           className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-slate-600 hover:text-slate-400 transition-all"
-                          title="Enable preview"
                         >
                           <span className="text-lg leading-none">⏻</span>
                           <span className="text-[8px]">Enable</span>
@@ -284,7 +257,6 @@ export function MediaTab({
                               ? "bg-green-600/20 border-green-500/40 text-green-400 hover:bg-red-600/20 hover:border-red-500/40 hover:text-red-400"
                               : "bg-slate-700/50 border-slate-600 text-slate-500 hover:text-slate-300"
                           }`}
-                          title={src.enabled ? "Disable preview" : "Enable preview"}
                         >{src.enabled ? "ON" : "OFF"}</button>
                       </div>
                       <div className="grid grid-cols-3 gap-0.5">
@@ -308,7 +280,7 @@ export function MediaTab({
             )}
           </div>
 
-          {/* Local Camera Inputs (getUserMedia) */}
+          {/* Local Camera Inputs */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Local Cameras</h3>
@@ -324,7 +296,7 @@ export function MediaTab({
               </button>
             </div>
             {cameras.length === 0 ? (
-              <p className="text-slate-700 text-xs italic text-center pt-4">No cameras found. Allow camera access and click Refresh.</p>
+              <p className="text-slate-700 text-xs italic text-center pt-4">No cameras found.</p>
             ) : (
               <div className="grid grid-cols-2 gap-2">
                 {cameras.map((cam) => {
@@ -338,7 +310,6 @@ export function MediaTab({
                             setEnabledLocalCameras((prev) => { const next = new Set(prev); next.delete(cam.deviceId); return next; });
                           }}
                           className="absolute top-1 left-1 z-10 text-[9px] bg-red-700/80 hover:bg-red-500 text-white w-4 h-4 flex items-center justify-center rounded font-bold transition-all leading-none"
-                          title="Remove camera"
                         >×</button>
                         {isOn ? (
                           <CameraFeedRenderer deviceId={cam.deviceId} />
@@ -346,7 +317,6 @@ export function MediaTab({
                           <button
                             onClick={() => setEnabledLocalCameras((prev) => new Set([...prev, cam.deviceId]))}
                             className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-slate-600 hover:text-slate-400 transition-all"
-                            title="Enable preview"
                           >
                             <span className="text-lg leading-none">⏻</span>
                             <span className="text-[8px]">Enable</span>
@@ -364,10 +334,9 @@ export function MediaTab({
                             })}
                             className={`text-[8px] font-bold px-1.5 py-0.5 rounded border transition-all shrink-0 ${
                               isOn
-                                ? "bg-green-600/20 border-green-500/40 text-green-400 hover:bg-red-600/20 hover:border-red-500/40 hover:text-red-400"
-                                : "bg-slate-700/50 border-slate-600 text-slate-500 hover:text-slate-300"
+                                ? "bg-green-600/20 border-green-500/40 text-green-400"
+                                : "bg-slate-700/50 border-slate-600 text-slate-500"
                             }`}
-                            title={isOn ? "Disable preview" : "Enable preview"}
                           >{isOn ? "ON" : "OFF"}</button>
                         </div>
                         <div className="grid grid-cols-3 gap-0.5">

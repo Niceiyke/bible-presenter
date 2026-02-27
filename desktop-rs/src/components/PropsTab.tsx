@@ -3,17 +3,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Image, Clock, Eye, EyeOff, X } from "lucide-react";
 import { useAppStore } from "../store";
-import type { PropItem } from "../App";
-
-function stableId(): string {
-  return crypto.randomUUID();
-}
+import { stableId } from "../utils";
+import type { PropItem } from "../types";
 
 interface PropsTabProps {
   onUpdateProps: (items: PropItem[]) => void;
 }
 
-export default function PropsTab({ onUpdateProps }: PropsTabProps) {
+export function PropsTab({ onUpdateProps }: PropsTabProps) {
   const { propItems, setPropItems } = useAppStore();
 
   const updateAndSave = async (next: PropItem[]) => {
@@ -30,10 +27,8 @@ export default function PropsTab({ onUpdateProps }: PropsTabProps) {
           <button
             onClick={async () => {
               const selected = await openDialog({ multiple: false, filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg"] }] });
-              if (!selected) return;
-              const path = typeof selected === "string" ? selected : (selected as any).path ?? (selected as any)[0]?.path ?? null;
-              if (!path) return;
-              const newProp: PropItem = { id: stableId(), kind: "image", path, x: 2, y: 2, w: 20, h: 15, opacity: 1, visible: true };
+              if (typeof selected !== "string") return;
+              const newProp: PropItem = { id: stableId(), kind: "image", path: selected, x: 2, y: 2, w: 20, h: 15, opacity: 1, visible: true };
               await updateAndSave([...propItems, newProp]);
             }}
             className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded border border-slate-700 transition-all flex items-center gap-1"
@@ -55,7 +50,7 @@ export default function PropsTab({ onUpdateProps }: PropsTabProps) {
                 if (!window.confirm("Remove all props?")) return;
                 await updateAndSave([]);
               }}
-              className="px-2 py-1 bg-red-900/50 hover:bg-red-900 text-red-400 text-xs rounded border border-red-900 transition-all"
+              className="px-2 py-1 bg-red-900/50 hover:bg-red-800 text-red-400 text-xs rounded border border-red-900 transition-all"
             >
               Clear All
             </button>
@@ -84,7 +79,6 @@ export default function PropsTab({ onUpdateProps }: PropsTabProps) {
                     await updateAndSave(propItems.map((p) => p.id === prop.id ? { ...p, visible: !p.visible } : p));
                   }}
                   className={`p-1.5 rounded transition-all ${prop.visible ? "text-amber-500 bg-amber-500/10" : "text-slate-600 bg-slate-800"}`}
-                  title={prop.visible ? "Hide" : "Show"}
                 >
                   {prop.visible ? <Eye size={12} /> : <EyeOff size={12} />}
                 </button>
@@ -93,13 +87,11 @@ export default function PropsTab({ onUpdateProps }: PropsTabProps) {
                     await updateAndSave(propItems.filter((p) => p.id !== prop.id));
                   }}
                   className="p-1.5 text-red-700 hover:text-red-400 bg-slate-800 rounded transition-all"
-                  title="Delete"
                 >
                   <X size={12} />
                 </button>
               </div>
 
-              {/* Position presets */}
               <div className="flex items-center gap-1">
                 <span className="text-[10px] text-slate-600 uppercase font-bold w-12">Position</span>
                 {[
@@ -121,7 +113,6 @@ export default function PropsTab({ onUpdateProps }: PropsTabProps) {
                 ))}
               </div>
 
-              {/* Opacity slider */}
               <div className="flex items-center gap-2">
                 <span className="text-[10px] text-slate-600 uppercase font-bold w-12">Opacity</span>
                 <input
@@ -135,7 +126,6 @@ export default function PropsTab({ onUpdateProps }: PropsTabProps) {
                 <span className="text-[10px] text-slate-500 w-8 text-right">{Math.round(prop.opacity * 100)}%</span>
               </div>
 
-              {/* Clock-specific: format and color */}
               {prop.kind === "clock" && (
                 <div className="flex gap-2">
                   <input
@@ -153,7 +143,6 @@ export default function PropsTab({ onUpdateProps }: PropsTabProps) {
                       await updateAndSave(propItems.map((p) => p.id === prop.id ? { ...p, color: e.target.value } : p));
                     }}
                     className="w-8 h-8 rounded border border-slate-700 bg-transparent cursor-pointer"
-                    title="Text color"
                   />
                 </div>
               )}
