@@ -398,6 +398,10 @@ impl MediaScheduleStore {
         self.media_dir.clone()
     }
 
+    pub fn get_pptx_cache_dir(&self, pres_id: &str) -> PathBuf {
+        self.app_data_dir.join("pptx_cache").join(pres_id)
+    }
+
     // -----------------------------------------------------------------------
     // Media
     // -----------------------------------------------------------------------
