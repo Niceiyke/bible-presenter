@@ -299,6 +299,42 @@ pub struct Schedule {
     pub items: Vec<ScheduleEntry>,
 }
 
+/// Lightweight summary returned by `list_services`.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ServiceMeta {
+    pub id: String,
+    pub name: String,
+    pub item_count: usize,
+    /// Unix milliseconds of the last write.
+    pub updated_at: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Persistent props layer
+// ---------------------------------------------------------------------------
+
+/// A persistent on-screen graphic that survives slide changes.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PropItem {
+    pub id: String,
+    /// "image" | "clock"
+    pub kind: String,
+    /// Absolute path (image kind).
+    pub path: Option<String>,
+    /// Clock format string (e.g. "HH:mm:ss") or a text label.
+    pub text: Option<String>,
+    /// CSS color for clock text.
+    pub color: Option<String>,
+    /// Canvas position / size as percentages (0–100).
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    /// Opacity 0–1.
+    pub opacity: f64,
+    pub visible: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
@@ -310,6 +346,7 @@ pub struct MediaScheduleStore {
     studio_dir: PathBuf,
     songs_dir: PathBuf,
     scenes_dir: PathBuf,
+    services_dir: PathBuf,
 }
 
 fn classify_extension(ext: &str) -> Option<MediaItemType> {
@@ -342,6 +379,10 @@ impl MediaScheduleStore {
         if !scenes_dir.exists() {
             fs::create_dir_all(&scenes_dir)?;
         }
+        let services_dir = app_data_dir.join("services");
+        if !services_dir.exists() {
+            fs::create_dir_all(&services_dir)?;
+        }
         Ok(Self {
             app_data_dir,
             media_dir,
@@ -349,6 +390,7 @@ impl MediaScheduleStore {
             studio_dir,
             songs_dir,
             scenes_dir,
+            services_dir,
         })
     }
 
@@ -711,6 +753,61 @@ impl MediaScheduleStore {
                 items: Vec::new(),
             })
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Named services (persistent multi-service workflow)
+    // -----------------------------------------------------------------------
+
+    pub fn list_services(&self) -> Result<Vec<ServiceMeta>> {
+        let mut out = Vec::new();
+        for entry in fs::read_dir(&self.services_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() { continue; }
+            let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+            if ext != "json" { continue; }
+            if let Ok(json) = fs::read_to_string(&path) {
+                if let Ok(sched) = serde_json::from_str::<Schedule>(&json) {
+                    let updated_at = path.metadata()
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    out.push(ServiceMeta {
+                        id: sched.id.clone(),
+                        name: sched.name.clone(),
+                        item_count: sched.items.len(),
+                        updated_at,
+                    });
+                }
+            }
+        }
+        out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        Ok(out)
+    }
+
+    pub fn save_service(&self, schedule: &Schedule) -> Result<()> {
+        let path = self.services_dir.join(format!("{}.json", schedule.id));
+        let json = serde_json::to_string_pretty(schedule)?;
+        fs::write(path, json)?;
+        Ok(())
+    }
+
+    pub fn load_service(&self, id: &str) -> Result<Schedule> {
+        let path = self.services_dir.join(format!("{}.json", id));
+        let json = fs::read_to_string(&path)
+            .map_err(|_| anyhow::anyhow!("Service '{}' not found", id))?;
+        Ok(serde_json::from_str(&json)?)
+    }
+
+    pub fn delete_service(&self, id: &str) -> Result<()> {
+        let path = self.services_dir.join(format!("{}.json", id));
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        Ok(())
     }
 
     // -----------------------------------------------------------------------

@@ -80,6 +80,8 @@ pub struct AppState {
     /// When true, the transcription pipeline drains its buffer without calling Whisper.
     /// Set by the operator when LAN cameras are active to free CPU for video decode.
     pub transcription_paused: Arc<AtomicBool>,
+    /// Persistent props layer — graphics that survive slide changes (logos, clocks).
+    pub props_layer: Arc<Mutex<Vec<store::PropItem>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -983,6 +985,50 @@ async fn regenerate_remote_pin(state: State<'_, Arc<AppState>>) -> Result<String
 }
 
 // ---------------------------------------------------------------------------
+// Named services
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn list_services(state: State<'_, Arc<AppState>>) -> Result<Vec<store::ServiceMeta>, String> {
+    state.media_schedule.list_services().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn save_service(state: State<'_, Arc<AppState>>, schedule: store::Schedule) -> Result<(), String> {
+    state.media_schedule.save_service(&schedule).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn load_service(state: State<'_, Arc<AppState>>, id: String) -> Result<store::Schedule, String> {
+    state.media_schedule.load_service(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_service(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
+    state.media_schedule.delete_service(&id).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Props layer
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn get_props(state: State<'_, Arc<AppState>>) -> Result<Vec<store::PropItem>, String> {
+    Ok(state.props_layer.lock().clone())
+}
+
+#[tauri::command]
+async fn set_props(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    props: Vec<store::PropItem>,
+) -> Result<(), String> {
+    *state.props_layer.lock() = props.clone();
+    let _ = app.emit("props-update", &props);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -1144,6 +1190,7 @@ fn main() {
                 transcription_window: Arc::new(Mutex::new(16000)), // 1 s default
                 signaling_clients: Arc::new(Mutex::new(HashMap::new())),
                 transcription_paused: Arc::new(AtomicBool::new(false)),
+                props_layer: Arc::new(Mutex::new(Vec::new())),
             });
 
             // Store app_handle so remote module can emit events to Tauri windows
@@ -1210,7 +1257,13 @@ fn main() {
             set_transcription_window,
             set_transcription_paused,
             update_timer,
-            toggle_stage_window
+            toggle_stage_window,
+            list_services,
+            save_service,
+            load_service,
+            delete_service,
+            get_props,
+            set_props
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
