@@ -110,6 +110,19 @@ pub struct CameraFeedData {
     pub device_name: String,
 }
 
+/// A timer / clock overlay item.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TimerData {
+    /// "countdown" | "countup" | "clock"
+    pub timer_type: String,
+    /// Countdown only: total duration in seconds.
+    pub duration_secs: Option<u32>,
+    /// Optional text label shown below the time.
+    pub label: Option<String>,
+    /// Unix milliseconds when the timer was started (None = not yet running).
+    pub started_at: Option<u64>,
+}
+
 // ---------------------------------------------------------------------------
 // Display item — what gets projected on the output window
 // ---------------------------------------------------------------------------
@@ -123,6 +136,7 @@ pub enum DisplayItem {
     CustomSlide(CustomSlideData),
     CameraFeed(CameraFeedData),
     Scene(serde_json::Value),
+    Timer(TimerData),
 }
 
 /// A schedule entry with a stable ID so the frontend can use it as a React key.
@@ -183,10 +197,24 @@ pub struct PresentationSettings {
     /// Base font size for scripture text (in pt or similar units used by frontend).
     #[serde(default = "default_font_size")]
     pub font_size: f64,
+    /// Slide transition animation type: "fade" | "slide-up" | "slide-left" | "zoom" | "none"
+    #[serde(default = "default_transition")]
+    pub slide_transition: String,
+    /// Duration of the slide transition in seconds (0.1–2.0).
+    #[serde(default = "default_transition_duration")]
+    pub slide_transition_duration: f32,
 }
 
 fn default_font_size() -> f64 {
     72.0
+}
+
+fn default_transition() -> String {
+    "fade".to_string()
+}
+
+fn default_transition_duration() -> f32 {
+    0.4
 }
 
 impl Default for PresentationSettings {
@@ -201,6 +229,8 @@ impl Default for PresentationSettings {
             logo_path: None,
             is_blanked: false,
             font_size: default_font_size(),
+            slide_transition: default_transition(),
+            slide_transition_duration: default_transition_duration(),
         }
     }
 }
@@ -222,6 +252,10 @@ pub struct Song {
     #[serde(default)]
     pub author: Option<String>,
     pub sections: Vec<LyricSection>,
+    /// Ordered section labels for playback (may repeat sections like choruses).
+    /// If empty, sections are used in their natural order.
+    #[serde(default)]
+    pub arrangement: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------

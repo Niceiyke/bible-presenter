@@ -409,6 +409,9 @@ async fn toggle_output_window(app: AppHandle, state: State<'_, Arc<AppState>>) -
                             store::DisplayItem::Scene(s) => {
                                 s.get("name").and_then(|v| v.as_str()).unwrap_or("Scene").to_string()
                             }
+                            store::DisplayItem::Timer(t) => {
+                                format!("Timer: {}", t.timer_type)
+                            }
                         },
                         detected_item: Some(item),
                         confidence: 1.0,
@@ -570,7 +573,9 @@ async fn stage_item(
     item: store::DisplayItem,
 ) -> Result<(), String> {
     *state.staged_item.lock() = Some(item.clone());
-    let _ = app.emit("item-staged", item);
+    let _ = app.emit("item-staged", &item);
+    // Notify stage display window
+    let _ = app.emit("stage-update", Some(&item));
     Ok(())
 }
 
@@ -596,6 +601,9 @@ async fn go_live(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), 
                     }
                     store::DisplayItem::Scene(ref s) => {
                         s.get("name").and_then(|v| v.as_str()).unwrap_or("Scene").to_string()
+                    }
+                    store::DisplayItem::Timer(ref t) => {
+                        format!("Timer: {}", t.timer_type)
                     }
                 },
                 detected_item: Some(item.clone()),
@@ -627,6 +635,48 @@ async fn clear_live(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(
     let _ = state.broadcast_tx.send(
         serde_json::json!({ "type": "state", "live_item": null }).to_string()
     );
+    // Clear stage display
+    let _ = app.emit("stage-update", Option::<store::DisplayItem>::None);
+    Ok(())
+}
+
+/// Updates the `started_at` timestamp on the currently-live timer item and re-emits it
+/// so both windows tick from the same reference point.
+#[tauri::command]
+async fn update_timer(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    started_at: Option<u64>,
+) -> Result<(), String> {
+    let mut live = state.live_item.lock();
+    if let Some(store::DisplayItem::Timer(ref mut t)) = *live {
+        t.started_at = started_at;
+        let item = live.clone().unwrap();
+        drop(live);
+        let _ = app.emit(
+            "transcription-update",
+            TranscriptionUpdate {
+                text: format!("Timer: {}", match &item { store::DisplayItem::Timer(t) => &t.timer_type, _ => "" }),
+                detected_item: Some(item),
+                confidence: 1.0,
+                source: "manual".to_string(),
+            },
+        );
+    }
+    Ok(())
+}
+
+/// Shows or hides the stage display window.
+#[tauri::command]
+async fn toggle_stage_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("stage") {
+        if window.is_visible().unwrap_or(false) {
+            window.hide().map_err(|e: tauri::Error| e.to_string())?;
+        } else {
+            window.show().map_err(|e: tauri::Error| e.to_string())?;
+            window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
+        }
+    }
     Ok(())
 }
 
@@ -1158,7 +1208,9 @@ fn main() {
             get_remote_info,
             regenerate_remote_pin,
             set_transcription_window,
-            set_transcription_paused
+            set_transcription_paused,
+            update_timer,
+            toggle_stage_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
