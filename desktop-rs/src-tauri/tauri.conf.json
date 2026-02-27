@@ -1,6 +1,6 @@
 {
   "productName": "Bible Presenter RS",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "identifier": "com.biblepresenter.rs",
   "build": {
     "beforeDevCommand": "npm run dev",

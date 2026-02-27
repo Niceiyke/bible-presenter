@@ -113,27 +113,32 @@ interface CameraSource {
   previewPc: RTCPeerConnection | null;
   status: 'connecting' | 'connected' | 'disconnected';
   connectedAt: number;
+  enabled: boolean;  // whether preview WebRTC is active
 }
 
-export interface SceneSlot {
+// LayerContent union — what a layer can show
+export type LayerContent =
+  | { kind: "empty" }
+  | { kind: "item"; item: DisplayItem }
+  | { kind: "lower-third"; ltData: LowerThirdData; template: LowerThirdTemplate };
+
+// SceneLayer — a single composited layer (replaces SceneSlot)
+export interface SceneLayer {
   id: string;
-  rowStart: number;
-  colStart: number;
-  rowSpan: number;
-  colSpan: number;
-  content: DisplayItem | null;
-  padding: number;
-  opacity: number;
+  name: string;
+  content: LayerContent;
+  x: number;      // left edge, 0–100 % of canvas width
+  y: number;      // top edge, 0–100 % of canvas height
+  w: number;      // width, 0–100 %
+  h: number;      // height, 0–100 %
+  opacity: number; // 0–1
+  visible: boolean;
 }
 
 export interface SceneData {
   id: string;
   name: string;
-  rows: number;
-  cols: number;
-  rowGap: number;
-  colGap: number;
-  slots: SceneSlot[];
+  layers: SceneLayer[];           // index 0 = bottom, last = top
   background?: BackgroundSetting;
 }
 
@@ -563,23 +568,104 @@ function SmallItemPreview({ item }: { item: DisplayItem }) {
     case "PresentationSlide":
       return <div className="w-full h-full bg-orange-900/20 flex items-center justify-center text-[10px] font-bold text-orange-500">PPTX SLIDE</div>;
     case "Scene":
-      return <div className="w-full h-full bg-blue-900/20 flex items-center justify-center text-[10px] font-bold text-blue-500 italic uppercase text-center p-2">Nested Scene Layout</div>;
+      return <SceneRenderer scene={item.data} />;
     default:
       return null;
   }
 }
 
-function SceneRenderer({ scene, scale = 1, activeSlotId, onSlotClick }: { scene: SceneData; scale?: number; activeSlotId?: string | null; onSlotClick?: (id: string) => void }) {
+// ─── Layer Content Renderer ───────────────────────────────────────────────────
+// Renders a single layer's content inside its absolutely-positioned div.
+
+function LayerContentRenderer({ content, outputMode = false }: { content: LayerContent; outputMode?: boolean }) {
+  if (content.kind === "empty") {
+    if (outputMode) return null;
+    return (
+      <div className="w-full h-full flex items-center justify-center"
+        style={{ background: "repeating-conic-gradient(#1e293b 0% 25%, #0f172a 0% 50%) 0 0 / 16px 16px" }}>
+        <Plus size={16} className="text-slate-600" />
+      </div>
+    );
+  }
+  if (content.kind === "lower-third") {
+    return (
+      <div className="absolute inset-0">
+        <LowerThirdOverlay data={content.ltData} template={content.template} />
+      </div>
+    );
+  }
+  // kind === "item"
+  const { item } = content;
+  switch (item.type) {
+    case "Verse":
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center">
+          <p className={outputMode ? "font-serif text-5xl text-white leading-snug drop-shadow-2xl" : "text-xs font-serif line-clamp-3 mb-1 opacity-80"}>
+            {item.data.text}
+          </p>
+          <p className={outputMode ? "text-2xl font-black text-amber-400 mt-4" : "text-[8px] font-black text-amber-500 uppercase"}>
+            {item.data.book} {item.data.chapter}:{item.data.verse}
+          </p>
+        </div>
+      );
+    case "Media":
+      return item.data.media_type === "Image" ? (
+        <img src={convertFileSrc(item.data.path)} className="w-full h-full object-cover" alt={item.data.name} />
+      ) : (
+        <video
+          src={convertFileSrc(item.data.path)}
+          className="w-full h-full object-cover"
+          autoPlay={outputMode}
+          loop={outputMode}
+          muted={!outputMode}
+        />
+      );
+    case "CameraFeed":
+      if (item.data.lan) {
+        return (
+          <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900/60 gap-1">
+            <span className="text-2xl">📷</span>
+            <p className="text-[8px] font-bold text-teal-400 uppercase text-center px-1 truncate max-w-full">
+              {item.data.device_name || item.data.label || "LAN Cam"}
+            </p>
+          </div>
+        );
+      }
+      return <CameraFeedRenderer deviceId={item.data.device_id} />;
+    case "CustomSlide":
+      return <CustomSlideRenderer slide={item.data} scale={outputMode ? 1 : 0.1} />;
+    case "PresentationSlide":
+      return (
+        <div className="w-full h-full bg-orange-900/20 flex items-center justify-center text-[10px] font-bold text-orange-500">
+          PPTX SLIDE
+        </div>
+      );
+    case "Scene":
+      return <SceneRenderer scene={item.data} outputMode={outputMode} />;
+    default:
+      return null;
+  }
+}
+
+function SceneRenderer({
+  scene,
+  scale = 1,
+  activeLayerId,
+  onLayerClick,
+  outputMode = false,
+}: {
+  scene: SceneData;
+  scale?: number;
+  activeLayerId?: string | null;
+  onLayerClick?: (id: string) => void;
+  outputMode?: boolean;
+}) {
   const bg = scene.background;
   return (
     <div
-      className="w-full h-full relative overflow-hidden"
       style={{
-        display: "grid",
-        gridTemplateRows: `repeat(${scene.rows}, 1fr)`,
-        gridTemplateColumns: `repeat(${scene.cols}, 1fr)`,
-        gap: `${scene.rowGap}px ${scene.colGap}px`,
-        padding: "10px",
+        position: "relative",
+        overflow: "hidden",
         transform: scale !== 1 ? `scale(${scale})` : undefined,
         transformOrigin: "top left",
         width: scale !== 1 ? `${100 / scale}%` : "100%",
@@ -590,29 +676,26 @@ function SceneRenderer({ scene, scale = 1, activeSlotId, onSlotClick }: { scene:
         backgroundPosition: "center",
       }}
     >
-      {scene.slots.map(slot => (
+      {(scene.layers ?? []).filter(l => l.visible).map((layer, i) => (
         <div
-          key={slot.id}
-          onClick={(e) => { e.stopPropagation(); onSlotClick?.(slot.id); }}
-          className={`relative rounded-lg overflow-hidden border transition-all cursor-pointer ${
-            activeSlotId === slot.id ? "border-amber-500 ring-2 ring-amber-500/50 z-10 bg-amber-500/5" : "border-slate-800 hover:border-slate-600 bg-slate-900/20"
-          }`}
+          key={layer.id}
+          onClick={(e) => { e.stopPropagation(); onLayerClick?.(layer.id); }}
           style={{
-            gridRow: `${slot.rowStart} / span ${slot.rowSpan}`,
-            gridColumn: `${slot.colStart} / span ${slot.colSpan}`,
-            padding: `${slot.padding}px`,
-            opacity: slot.opacity ?? 1,
+            position: "absolute",
+            left: `${layer.x}%`,
+            top: `${layer.y}%`,
+            width: `${layer.w}%`,
+            height: `${layer.h}%`,
+            opacity: layer.opacity,
+            zIndex: i,
+            outline: (!outputMode && activeLayerId === layer.id) ? "2px solid #3b82f6" : "none",
+            cursor: outputMode ? undefined : "pointer",
+            overflow: "hidden",
           }}
         >
-          {slot.content ? (
-            <SmallItemPreview item={slot.content} />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center">
-               <Plus size={16} className="text-slate-700" />
-            </div>
-          )}
-          {activeSlotId === slot.id && (
-            <div className="absolute top-1 right-1 bg-amber-500 text-black text-[8px] font-black px-1 rounded shadow-lg">ACTIVE</div>
+          <LayerContentRenderer content={layer.content} outputMode={outputMode} />
+          {!outputMode && activeLayerId === layer.id && (
+            <div className="absolute top-1 right-1 bg-blue-500 text-white text-[8px] font-black px-1 rounded shadow-lg pointer-events-none">ACTIVE</div>
           )}
         </div>
       ))}
@@ -1896,7 +1979,7 @@ function OutputWindow() {
               </div>
             ) : liveItem.type === "Scene" ? (
               <div className="absolute inset-0">
-                <SceneRenderer scene={liveItem.data} />
+                <SceneRenderer scene={liveItem.data} outputMode={true} />
               </div>
             ) : null}
           </motion.div>
@@ -2136,16 +2219,9 @@ export default function App() {
   const [workingScene, setWorkingScene] = useState<SceneData>({
     id: stableId(),
     name: "New Scene",
-    rows: 2,
-    cols: 2,
-    rowGap: 10,
-    colGap: 10,
-    slots: [
-      { id: stableId(), rowStart: 1, colStart: 1, rowSpan: 2, colSpan: 1, content: null, padding: 0, opacity: 1 },
-      { id: stableId(), rowStart: 1, colStart: 2, rowSpan: 2, colSpan: 1, content: null, padding: 0, opacity: 1 },
-    ]
+    layers: [],
   });
-  const [activeSlotId, setActiveSlotId] = useState<string | null>(null);
+  const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
   const [savedScenes, setSavedScenes] = useState<SceneData[]>([]);
 
   // Settings
@@ -2206,6 +2282,7 @@ export default function App() {
   // Media
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
+  const [enabledLocalCameras, setEnabledLocalCameras] = useState<Set<string>>(new Set());
   const [mediaFilter, setMediaFilter] = useState<"image" | "video" | "camera">("image");
 
   // LAN camera mixer
@@ -2218,6 +2295,10 @@ export default function App() {
   const previewVideoMapRef = useRef<Map<string, HTMLVideoElement>>(new Map());
   // Per-source IntersectionObservers for decode pause/resume
   const previewObserverMapRef = useRef<Map<string, IntersectionObserver>>(new Map());
+  // Buffered WebRTC offers for sources that aren't yet enabled
+  const pendingOffersRef = useRef<Map<string, { device_id: string; device_name?: string; sdp: string }>>(new Map());
+  // Tracks which device_ids have preview enabled (ref avoids stale closure in WS handler)
+  const cameraEnabledRef = useRef<Set<string>>(new Set());
   const [showLogoPicker, setShowLogoPicker] = useState(false);
   const [showGlobalBgPicker, setShowGlobalBgPicker] = useState(false);
 
@@ -2294,7 +2375,7 @@ export default function App() {
   const STUN_CONFIG: RTCConfiguration = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
   function connectOperatorWs(pin: string) {
-    const ws = new WebSocket(`ws://localhost:7420/ws`);
+    const ws = new WebSocket(`ws://127.0.0.1:7420/ws`);
     operatorWsRef.current = ws;
 
     ws.onopen = () => {
@@ -2308,12 +2389,13 @@ export default function App() {
       // Auth ack
       if (msg.type === "auth_ok") return;
 
-      // Mobile connected — add to camera sources
+      // Mobile connected — add to camera sources (preview off by default)
       if (msg.type === "camera_source_connected") {
         const { device_id, device_name } = msg;
         setCameraSources(prev => {
           const next = new Map(prev);
-          next.set(device_id, { device_id, device_name, previewStream: null, previewPc: null, status: "connecting", connectedAt: Date.now() });
+          const existing = prev.get(device_id);
+          next.set(device_id, { device_id, device_name, previewStream: null, previewPc: null, status: "disconnected", connectedAt: Date.now(), enabled: existing?.enabled ?? false });
           return next;
         });
         return;
@@ -2338,7 +2420,12 @@ export default function App() {
 
       // WebRTC offer from mobile → operator (preview stream)
       if (msg.cmd === "camera_offer" && (msg.target === "operator" || msg.target === "window:main")) {
-        await handlePreviewOffer(msg);
+        // Always buffer the latest offer in case the source is toggled on later
+        pendingOffersRef.current.set(msg.device_id, msg);
+        // Only process immediately if this source has preview enabled
+        if (cameraEnabledRef.current.has(msg.device_id)) {
+          await handlePreviewOffer(msg);
+        }
         return;
       }
 
@@ -2417,6 +2504,48 @@ export default function App() {
       target: `mobile:${device_id}`,
       sdp: answer.sdp,
     }));
+  }
+
+  async function enableCameraPreview(device_id: string) {
+    cameraEnabledRef.current.add(device_id);
+    setCameraSources(prev => {
+      const next = new Map(prev);
+      const src = next.get(device_id);
+      if (src) next.set(device_id, { ...src, enabled: true, status: "connecting" });
+      return next;
+    });
+    const pending = pendingOffersRef.current.get(device_id);
+    if (pending) await handlePreviewOffer(pending);
+  }
+
+  function disableCameraPreview(device_id: string) {
+    cameraEnabledRef.current.delete(device_id);
+    const pc = previewPcMapRef.current.get(device_id);
+    if (pc) { pc.close(); previewPcMapRef.current.delete(device_id); }
+    const videoEl = previewVideoMapRef.current.get(device_id);
+    if (videoEl) videoEl.srcObject = null;
+    setCameraSources(prev => {
+      const next = new Map(prev);
+      const src = next.get(device_id);
+      if (src) next.set(device_id, { ...src, enabled: false, previewStream: null, previewPc: null, status: "disconnected" });
+      return next;
+    });
+  }
+
+  function removeCameraSource(device_id: string) {
+    cameraEnabledRef.current.delete(device_id);
+    pendingOffersRef.current.delete(device_id);
+    const pc = previewPcMapRef.current.get(device_id);
+    if (pc) { pc.close(); previewPcMapRef.current.delete(device_id); }
+    const videoEl = previewVideoMapRef.current.get(device_id);
+    if (videoEl) { videoEl.srcObject = null; previewVideoMapRef.current.delete(device_id); }
+    const obs = previewObserverMapRef.current.get(device_id);
+    if (obs) { obs.disconnect(); previewObserverMapRef.current.delete(device_id); }
+    setCameraSources(prev => {
+      const next = new Map(prev);
+      next.delete(device_id);
+      return next;
+    });
   }
 
   // ── Loaders ─────────────────────────────────────────────────────────────────
@@ -2791,13 +2920,15 @@ export default function App() {
   // ── Presentation actions ─────────────────────────────────────────────────────
 
   const stageItem = async (item: DisplayItem) => {
-    // If we are in scene composer and have an active slot, target that instead of staging globally
-    if (bottomDeckOpen && bottomDeckMode === "scene-composer" && activeSlotId) {
+    // If we are in scene composer and have an active layer, assign the item there
+    if (bottomDeckOpen && bottomDeckMode === "scene-composer" && activeLayerId) {
        setWorkingScene(s => ({
           ...s,
-          slots: s.slots.map(sl => sl.id === activeSlotId ? { ...sl, content: item } : sl)
+          layers: s.layers.map(l => l.id === activeLayerId
+            ? { ...l, content: { kind: "item", item } }
+            : l)
        }));
-       setToast(`Added to slot`);
+       setToast(`Added to layer`);
        return;
     }
 
@@ -2805,13 +2936,29 @@ export default function App() {
     await invoke("stage_item", { item });
   };
 
+  const describeLayerContent = (c: LayerContent): string => {
+    if (c.kind === "empty") return "Empty";
+    if (c.kind === "lower-third") return `Lower Third (${c.ltData.kind})`;
+    return describeDisplayItem(c.item);
+  };
+
+  const describeDisplayItem = (item: DisplayItem): string => {
+    if (item.type === "Verse") return `${item.data.book} ${item.data.chapter}:${item.data.verse} (${item.data.version})`;
+    if (item.type === "Media") return item.data.name;
+    if (item.type === "PresentationSlide") return `${item.data.presentation_name} — Slide ${item.data.slide_index + 1}`;
+    if (item.type === "CustomSlide") return `${item.data.presentation_name} — Slide ${item.data.slide_index + 1}`;
+    if (item.type === "CameraFeed") return item.data.device_name ?? item.data.label;
+    if (item.type === "Scene") return `Scene: ${item.data.name}`;
+    return "Unknown";
+  };
+
   const goLive = async () => {
     await invoke("go_live");
   };
 
   const sendLive = async (item: DisplayItem) => {
-    // If in scene composer and slot is active, just stage it to the slot
-    if (bottomDeckOpen && bottomDeckMode === "scene-composer" && activeSlotId) {
+    // If in scene composer and a layer is active, assign item to that layer
+    if (bottomDeckOpen && bottomDeckMode === "scene-composer" && activeLayerId) {
        stageItem(item);
        return;
     }
@@ -4031,54 +4178,81 @@ export default function App() {
                       ) : (
                         <div className="grid grid-cols-2 gap-2">
                           {Array.from(cameraSources.values()).map((src) => (
-                            <div key={src.device_id} className="flex flex-col bg-slate-800/50 rounded-lg overflow-hidden border border-slate-700 hover:border-slate-600 transition-all">
+                            <div key={src.device_id} className={`flex flex-col rounded-lg overflow-hidden border transition-all ${src.enabled ? "bg-slate-800/50 border-slate-700 hover:border-slate-600" : "bg-slate-900/50 border-slate-800"}`}>
                               <div className="aspect-video overflow-hidden bg-slate-900 shrink-0 relative">
-                                <video
-                                  ref={(el) => {
-                                    const oldObs = previewObserverMapRef.current.get(src.device_id);
-                                    if (el) {
-                                      previewVideoMapRef.current.set(src.device_id, el);
-                                      // Restore stream if already established
-                                      if (src.previewStream && !el.srcObject) el.srcObject = src.previewStream;
-                                      // IntersectionObserver: pause video decode when thumbnail scrolls out of view
-                                      if (oldObs) oldObs.disconnect();
-                                      const obs = new IntersectionObserver(
-                                        (entries) => entries.forEach((entry) => {
-                                          const v = previewVideoMapRef.current.get(src.device_id);
-                                          if (v) {
-                                            if (entry.isIntersecting) v.play().catch(() => {});
-                                            else v.pause();
-                                          }
-                                        }),
-                                        { threshold: 0.1 }
-                                      );
-                                      obs.observe(el);
-                                      previewObserverMapRef.current.set(src.device_id, obs);
-                                    } else {
-                                      if (oldObs) { oldObs.disconnect(); previewObserverMapRef.current.delete(src.device_id); }
-                                      previewVideoMapRef.current.delete(src.device_id);
-                                    }
-                                  }}
-                                  className="w-full h-full object-cover"
-                                  autoPlay
-                                  muted
-                                  playsInline
-                                />
-                                {src.status !== "connected" && (
-                                  <div className="absolute inset-0 flex items-center justify-center bg-black/60">
-                                    <span className="text-[8px] text-slate-400 animate-pulse">
-                                      {src.status === "connecting" ? "Connecting…" : "Offline"}
-                                    </span>
-                                  </div>
+                                {/* Delete button */}
+                                <button
+                                  onClick={() => removeCameraSource(src.device_id)}
+                                  className="absolute top-1 left-1 z-10 text-[9px] bg-red-700/80 hover:bg-red-500 text-white w-4 h-4 flex items-center justify-center rounded font-bold transition-all leading-none"
+                                  title="Remove camera"
+                                >×</button>
+
+                                {src.enabled ? (
+                                  <>
+                                    <video
+                                      ref={(el) => {
+                                        const oldObs = previewObserverMapRef.current.get(src.device_id);
+                                        if (el) {
+                                          previewVideoMapRef.current.set(src.device_id, el);
+                                          if (src.previewStream && !el.srcObject) el.srcObject = src.previewStream;
+                                          if (oldObs) oldObs.disconnect();
+                                          const obs = new IntersectionObserver(
+                                            (entries) => entries.forEach((entry) => {
+                                              const v = previewVideoMapRef.current.get(src.device_id);
+                                              if (v) {
+                                                if (entry.isIntersecting) v.play().catch(() => {});
+                                                else v.pause();
+                                              }
+                                            }),
+                                            { threshold: 0.1 }
+                                          );
+                                          obs.observe(el);
+                                          previewObserverMapRef.current.set(src.device_id, obs);
+                                        } else {
+                                          if (oldObs) { oldObs.disconnect(); previewObserverMapRef.current.delete(src.device_id); }
+                                          previewVideoMapRef.current.delete(src.device_id);
+                                        }
+                                      }}
+                                      className="w-full h-full object-cover"
+                                      autoPlay muted playsInline
+                                    />
+                                    {src.status !== "connected" && (
+                                      <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+                                        <span className="text-[8px] text-slate-400 animate-pulse">
+                                          {src.status === "connecting" ? "Connecting…" : "Offline"}
+                                        </span>
+                                      </div>
+                                    )}
+                                    <div className={`absolute top-1 right-1 text-[7px] font-bold px-1.5 py-0.5 rounded ${src.status === "connected" ? "bg-green-500/90 text-white" : "bg-slate-700/90 text-slate-400"}`}>
+                                      {src.status === "connected" ? "● LIVE" : "◌"}
+                                    </div>
+                                  </>
+                                ) : (
+                                  <button
+                                    onClick={() => enableCameraPreview(src.device_id)}
+                                    className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-slate-600 hover:text-slate-400 transition-all"
+                                    title="Enable preview"
+                                  >
+                                    <span className="text-lg leading-none">⏻</span>
+                                    <span className="text-[8px]">Enable</span>
+                                  </button>
                                 )}
-                                <div className={`absolute top-1 right-1 text-[7px] font-bold px-1.5 py-0.5 rounded ${src.status === "connected" ? "bg-green-500/90 text-white" : "bg-slate-700/90 text-slate-400"}`}>
-                                  {src.status === "connected" ? "● LIVE" : "◌"}
-                                </div>
                               </div>
                               <div className="px-1.5 py-1.5">
-                                <p className="text-[8px] text-slate-300 truncate mb-1.5 font-medium">
-                                  {src.device_name || `Camera ${src.device_id.slice(0, 8)}`}
-                                </p>
+                                <div className="flex items-center gap-1 mb-1.5">
+                                  <p className="text-[8px] text-slate-300 truncate font-medium flex-1">
+                                    {src.device_name || `Camera ${src.device_id.slice(0, 8)}`}
+                                  </p>
+                                  <button
+                                    onClick={() => src.enabled ? disableCameraPreview(src.device_id) : enableCameraPreview(src.device_id)}
+                                    className={`text-[8px] font-bold px-1.5 py-0.5 rounded border transition-all shrink-0 ${
+                                      src.enabled
+                                        ? "bg-green-600/20 border-green-500/40 text-green-400 hover:bg-red-600/20 hover:border-red-500/40 hover:text-red-400"
+                                        : "bg-slate-700/50 border-slate-600 text-slate-500 hover:text-slate-300"
+                                    }`}
+                                    title={src.enabled ? "Disable preview" : "Enable preview"}
+                                  >{src.enabled ? "ON" : "OFF"}</button>
+                                </div>
                                 <div className="grid grid-cols-3 gap-0.5">
                                   <button
                                     onClick={() => stageItem({ type: "CameraFeed", data: { device_id: src.device_id, label: src.device_name || src.device_id, lan: true, device_name: src.device_name } })}
@@ -4119,30 +4293,68 @@ export default function App() {
                         <p className="text-slate-700 text-xs italic text-center pt-4">No cameras found. Allow camera access and click Refresh.</p>
                       ) : (
                         <div className="grid grid-cols-2 gap-2">
-                          {cameras.map((cam) => (
-                            <div key={cam.deviceId} className="flex flex-col bg-slate-800/50 rounded-lg overflow-hidden border border-slate-700 hover:border-slate-600 transition-all">
-                              <div className="aspect-video overflow-hidden bg-slate-900 shrink-0">
-                                <CameraFeedRenderer deviceId={cam.deviceId} />
-                              </div>
-                              <div className="px-1.5 py-1.5">
-                                <p className="text-[8px] text-slate-400 truncate mb-1.5">{cam.label || `Camera ${cam.deviceId.slice(0, 8)}`}</p>
-                                <div className="grid grid-cols-3 gap-0.5">
+                          {cameras.map((cam) => {
+                            const isOn = enabledLocalCameras.has(cam.deviceId);
+                            return (
+                              <div key={cam.deviceId} className={`flex flex-col rounded-lg overflow-hidden border transition-all ${isOn ? "bg-slate-800/50 border-slate-700 hover:border-slate-600" : "bg-slate-900/50 border-slate-800"}`}>
+                                <div className="aspect-video overflow-hidden bg-slate-900 shrink-0 relative">
+                                  {/* Remove from list */}
                                   <button
-                                    onClick={() => stageItem({ type: "CameraFeed", data: { device_id: cam.deviceId, label: cam.label } })}
-                                    className="bg-slate-700 hover:bg-slate-600 text-white text-[8px] font-bold py-1 rounded transition-all"
-                                  >STAGE</button>
-                                  <button
-                                    onClick={() => sendLive({ type: "CameraFeed", data: { device_id: cam.deviceId, label: cam.label } })}
-                                    className="bg-amber-500 hover:bg-amber-400 text-black text-[8px] font-bold py-1 rounded transition-all"
-                                  >LIVE</button>
-                                  <button
-                                    onClick={() => addToSchedule({ type: "CameraFeed", data: { device_id: cam.deviceId, label: cam.label } })}
-                                    className="bg-slate-700 hover:bg-slate-600 text-amber-400 text-[8px] font-bold py-1 rounded transition-all"
-                                  >+Q</button>
+                                    onClick={() => {
+                                      setCameras(prev => prev.filter(c => c.deviceId !== cam.deviceId));
+                                      setEnabledLocalCameras(prev => { const next = new Set(prev); next.delete(cam.deviceId); return next; });
+                                    }}
+                                    className="absolute top-1 left-1 z-10 text-[9px] bg-red-700/80 hover:bg-red-500 text-white w-4 h-4 flex items-center justify-center rounded font-bold transition-all leading-none"
+                                    title="Remove camera"
+                                  >×</button>
+                                  {isOn ? (
+                                    <CameraFeedRenderer deviceId={cam.deviceId} />
+                                  ) : (
+                                    <button
+                                      onClick={() => setEnabledLocalCameras(prev => new Set([...prev, cam.deviceId]))}
+                                      className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-slate-600 hover:text-slate-400 transition-all"
+                                      title="Enable preview"
+                                    >
+                                      <span className="text-lg leading-none">⏻</span>
+                                      <span className="text-[8px]">Enable</span>
+                                    </button>
+                                  )}
+                                </div>
+                                <div className="px-1.5 py-1.5">
+                                  <div className="flex items-center gap-1 mb-1.5">
+                                    <p className="text-[8px] text-slate-300 truncate font-medium flex-1">{cam.label || `Camera ${cam.deviceId.slice(0, 8)}`}</p>
+                                    <button
+                                      onClick={() => setEnabledLocalCameras(prev => {
+                                        const next = new Set(prev);
+                                        if (isOn) next.delete(cam.deviceId); else next.add(cam.deviceId);
+                                        return next;
+                                      })}
+                                      className={`text-[8px] font-bold px-1.5 py-0.5 rounded border transition-all shrink-0 ${
+                                        isOn
+                                          ? "bg-green-600/20 border-green-500/40 text-green-400 hover:bg-red-600/20 hover:border-red-500/40 hover:text-red-400"
+                                          : "bg-slate-700/50 border-slate-600 text-slate-500 hover:text-slate-300"
+                                      }`}
+                                      title={isOn ? "Disable preview" : "Enable preview"}
+                                    >{isOn ? "ON" : "OFF"}</button>
+                                  </div>
+                                  <div className="grid grid-cols-3 gap-0.5">
+                                    <button
+                                      onClick={() => stageItem({ type: "CameraFeed", data: { device_id: cam.deviceId, label: cam.label } })}
+                                      className="bg-slate-700 hover:bg-slate-600 text-white text-[8px] font-bold py-1 rounded transition-all"
+                                    >STAGE</button>
+                                    <button
+                                      onClick={() => sendLive({ type: "CameraFeed", data: { device_id: cam.deviceId, label: cam.label } })}
+                                      className="bg-amber-500 hover:bg-amber-400 text-black text-[8px] font-bold py-1 rounded transition-all"
+                                    >LIVE</button>
+                                    <button
+                                      onClick={() => addToSchedule({ type: "CameraFeed", data: { device_id: cam.deviceId, label: cam.label } })}
+                                      className="bg-slate-700 hover:bg-slate-600 text-amber-400 text-[8px] font-bold py-1 rounded transition-all"
+                                    >+Q</button>
+                                  </div>
                                 </div>
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       )}
                     </div>
@@ -5996,9 +6208,14 @@ export default function App() {
                             >
                               {ltSavedTemplates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                             </select>
-                            <button onClick={() => setLtTemplate({...ltTemplate, id: stableId(), name: "New Template"})} className="p-1.5 bg-slate-800 rounded text-white"><Plus size={14} /></button>
+                            <button onClick={() => {
+                              const newTpl: LowerThirdTemplate = {...ltTemplate, id: stableId(), name: "New Template"};
+                              setLtTemplate(newTpl);
+                              setLtSavedTemplates(prev => [...prev, newTpl]);
+                              localStorage.setItem("activeLtTemplateId", newTpl.id);
+                            }} className="p-1.5 bg-slate-800 rounded text-white"><Plus size={14} /></button>
                             <button onClick={async () => {
-                                const updated = ltSavedTemplates.some((t) => t.id === ltTemplate.id) ? ltSavedTemplates.map((t) => t.id === ltTemplate.id ? ltTemplate : t) : [...ltSavedTemplates, { ...ltTemplate, id: stableId() }];
+                                const updated = ltSavedTemplates.some((t) => t.id === ltTemplate.id) ? ltSavedTemplates.map((t) => t.id === ltTemplate.id ? ltTemplate : t) : [...ltSavedTemplates, ltTemplate];
                                 setLtSavedTemplates(updated); localStorage.setItem("activeLtTemplateId", ltTemplate.id); await invoke("save_lt_templates", { templates: updated }); setToast("Template saved");
                             }} className="px-3 bg-amber-600 rounded text-white text-[9px] font-bold">SAVE</button>
                             <button onClick={async () => {
@@ -6208,157 +6425,329 @@ export default function App() {
                   </>
                 )}
 
-                {/* ── Mode: SCENE COMPOSER (GRID STUDIO) ── */}
+                {/* ── Mode: SCENE COMPOSER (LAYER STUDIO) ── */}
                 {bottomDeckMode === "scene-composer" && (
                   <>
-                    <div className="w-64 border-r border-slate-800 p-4 overflow-y-auto space-y-4 bg-slate-900/50">
-                       <div className="space-y-4">
-                          {/* Saved Scenes */}
-                          {savedScenes.length > 0 && (
-                            <>
-                              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Saved Scenes</p>
-                              <div className="space-y-1 max-h-32 overflow-y-auto">
-                                {savedScenes.map(sc => (
-                                  <div key={sc.id} className="flex items-center gap-1 bg-slate-800/50 rounded px-2 py-1">
-                                    <span className="flex-1 text-[10px] text-slate-300 truncate">{sc.name}</span>
-                                    <button
-                                      onClick={() => setWorkingScene({ ...sc })}
-                                      className="text-[8px] font-black uppercase px-1.5 py-0.5 bg-blue-700 hover:bg-blue-600 text-white rounded"
-                                    >LOAD</button>
-                                    <button
-                                      onClick={async () => {
-                                        await invoke("delete_scene", { id: sc.id });
-                                        const list = await invoke<SceneData[]>("list_scenes");
-                                        setSavedScenes(list);
-                                      }}
-                                      className="text-[8px] font-black uppercase px-1.5 py-0.5 bg-red-900/50 hover:bg-red-600 text-red-300 hover:text-white rounded"
-                                    >DEL</button>
-                                  </div>
-                                ))}
-                              </div>
-                              <div className="border-t border-slate-800" />
-                            </>
-                          )}
-
-                          {/* Scene Background */}
-                          <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Scene Background</p>
-                          <BackgroundEditor
-                            label=""
-                            value={workingScene.background}
-                            onChange={(bg) => setWorkingScene(s => ({ ...s, background: bg }))}
-                            mediaImages={media.filter(m => m.media_type === "Image")}
-                            cameras={cameras}
-                          />
-
-                          <div className="border-t border-slate-800 my-4" />
-
-                          <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Grid Management</p>
-                          <div className="grid grid-cols-2 gap-2">
-                             <div className="flex flex-col gap-1">
-                                <span className="text-[8px] text-slate-600 uppercase font-bold">Rows</span>
-                                <div className="flex gap-1">
-                                   <button onClick={() => setWorkingScene(s => {
-                                     const newRows = Math.max(1, s.rows - 1);
-                                     return {
-                                       ...s, rows: newRows,
-                                       slots: s.slots
-                                         .map(sl => ({ ...sl, rowSpan: Math.min(sl.rowSpan, newRows - sl.rowStart + 1) }))
-                                         .filter(sl => sl.rowStart <= newRows),
-                                     };
-                                   })} className="bg-slate-800 text-white p-1 rounded hover:bg-slate-700 flex-1">-</button>
-                                   <span className="w-8 text-center text-xs font-bold leading-7">{workingScene.rows}</span>
-                                   <button onClick={() => setWorkingScene(s => ({...s, rows: Math.min(6, s.rows+1)}))} className="bg-slate-800 text-white p-1 rounded hover:bg-slate-700 flex-1">+</button>
+                    {/* LEFT: Layer Stack + Saved Scenes */}
+                    <div className="w-72 border-r border-slate-800 flex flex-col overflow-hidden bg-slate-900/50 shrink-0">
+                      <div className="flex-1 overflow-y-auto p-3 space-y-4">
+                        {/* Saved Scenes */}
+                        {savedScenes.length > 0 && (
+                          <>
+                            <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Saved Scenes</p>
+                            <div className="space-y-1">
+                              {savedScenes.map(sc => (
+                                <div key={sc.id} className="flex items-center gap-1 bg-slate-800/50 rounded px-2 py-1">
+                                  <span className="flex-1 text-[10px] text-slate-300 truncate">{sc.name}</span>
+                                  <button
+                                    onClick={() => { setWorkingScene({ ...sc }); setActiveLayerId(null); }}
+                                    className="text-[8px] font-black uppercase px-1.5 py-0.5 bg-blue-700 hover:bg-blue-600 text-white rounded"
+                                  >LOAD</button>
+                                  <button
+                                    onClick={async () => {
+                                      await invoke("delete_scene", { id: sc.id });
+                                      const list = await invoke<SceneData[]>("list_scenes");
+                                      setSavedScenes(list);
+                                    }}
+                                    className="text-[8px] font-black uppercase px-1.5 py-0.5 bg-red-900/50 hover:bg-red-600 text-red-300 hover:text-white rounded"
+                                  >DEL</button>
                                 </div>
-                             </div>
-                             <div className="flex flex-col gap-1">
-                                <span className="text-[8px] text-slate-600 uppercase font-bold">Cols</span>
-                                <div className="flex gap-1">
-                                   <button onClick={() => setWorkingScene(s => {
-                                     const newCols = Math.max(1, s.cols - 1);
-                                     return {
-                                       ...s, cols: newCols,
-                                       slots: s.slots
-                                         .map(sl => ({ ...sl, colSpan: Math.min(sl.colSpan, newCols - sl.colStart + 1) }))
-                                         .filter(sl => sl.colStart <= newCols),
-                                     };
-                                   })} className="bg-slate-800 text-white p-1 rounded hover:bg-slate-700 flex-1">-</button>
-                                   <span className="w-8 text-center text-xs font-bold leading-7">{workingScene.cols}</span>
-                                   <button onClick={() => setWorkingScene(s => ({...s, cols: Math.min(6, s.cols+1)}))} className="bg-slate-800 text-white p-1 rounded hover:bg-slate-700 flex-1">+</button>
-                                </div>
-                             </div>
-                          </div>
-                          <div className="space-y-2">
-                             <div className="flex flex-col gap-1">
-                                <span className="text-[8px] text-slate-600 uppercase font-bold">Row Gap ({workingScene.rowGap}px)</span>
-                                <input type="range" min={0} max={100} value={workingScene.rowGap} onChange={(e) => setWorkingScene(s => ({...s, rowGap: parseInt(e.target.value)}))} className="w-full accent-blue-500" />
-                             </div>
-                             <div className="flex flex-col gap-1">
-                                <span className="text-[8px] text-slate-600 uppercase font-bold">Col Gap ({workingScene.colGap}px)</span>
-                                <input type="range" min={0} max={100} value={workingScene.colGap} onChange={(e) => setWorkingScene(s => ({...s, colGap: parseInt(e.target.value)}))} className="w-full accent-blue-500" />
-                             </div>
-                          </div>
-
-                          <div className="border-t border-slate-800 my-4" />
-
-                          <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Active Slot Config</p>
-                          {activeSlotId ? (
-                            <div className="space-y-3">
-                               {workingScene.slots.find(s => s.id === activeSlotId) && (
-                                 <>
-                                   <div className="grid grid-cols-2 gap-2">
-                                      <div className="flex flex-col gap-1">
-                                         <span className="text-[8px] text-slate-600 uppercase font-bold">Row Span</span>
-                                         <input type="number" min={1} value={workingScene.slots.find(s => s.id === activeSlotId)?.rowSpan} onChange={(e) => setWorkingScene(s => ({...s, slots: s.slots.map(sl => sl.id === activeSlotId ? {...sl, rowSpan: parseInt(e.target.value)} : sl)}))} className="bg-slate-950 text-white text-[10px] p-1 rounded border border-slate-800" />
-                                      </div>
-                                      <div className="flex flex-col gap-1">
-                                         <span className="text-[8px] text-slate-600 uppercase font-bold">Col Span</span>
-                                         <input type="number" min={1} value={workingScene.slots.find(s => s.id === activeSlotId)?.colSpan} onChange={(e) => setWorkingScene(s => ({...s, slots: s.slots.map(sl => sl.id === activeSlotId ? {...sl, colSpan: parseInt(e.target.value)} : sl)}))} className="bg-slate-950 text-white text-[10px] p-1 rounded border border-slate-800" />
-                                      </div>
-                                   </div>
-                                   <div className="flex flex-col gap-1">
-                                      <span className="text-[8px] text-slate-600 uppercase font-bold">Slot Padding</span>
-                                      <input type="range" min={0} max={100} value={workingScene.slots.find(s => s.id === activeSlotId)?.padding} onChange={(e) => setWorkingScene(s => ({...s, slots: s.slots.map(sl => sl.id === activeSlotId ? {...sl, padding: parseInt(e.target.value)} : sl)}))} className="w-full accent-amber-500" />
-                                   </div>
-                                   <div className="flex flex-col gap-1">
-                                      <span className="text-[8px] text-slate-600 uppercase font-bold">Slot Opacity ({Math.round((workingScene.slots.find(s => s.id === activeSlotId)?.opacity ?? 1) * 100)}%)</span>
-                                      <input type="range" min={0} max={1} step={0.05} value={workingScene.slots.find(s => s.id === activeSlotId)?.opacity ?? 1} onChange={(e) => setWorkingScene(s => ({...s, slots: s.slots.map(sl => sl.id === activeSlotId ? {...sl, opacity: parseFloat(e.target.value)} : sl)}))} className="w-full accent-blue-500" />
-                                   </div>
-                                   <button onClick={() => setWorkingScene(s => ({...s, slots: s.slots.map(sl => sl.id === activeSlotId ? {...sl, content: null} : sl)}))} className="w-full py-1.5 bg-red-900/40 hover:bg-red-600 text-red-200 text-[9px] font-black uppercase rounded border border-red-900/50">CLEAR CONTENT</button>
-                                   <button onClick={() => setWorkingScene(s => ({...s, slots: s.slots.filter(sl => sl.id !== activeSlotId)}))} className="w-full py-1.5 bg-slate-800 hover:bg-red-600 text-slate-400 hover:text-white text-[9px] font-black uppercase rounded">DELETE SLOT</button>
-                                 </>
-                               )}
+                              ))}
                             </div>
-                          ) : (
-                            <p className="text-[10px] text-slate-600 italic">Select a slot to configure</p>
-                          )}
-                          <button onClick={() => {
-                             const newSlot: SceneSlot = { id: stableId(), rowStart: 1, colStart: 1, rowSpan: 1, colSpan: 1, content: null, padding: 0, opacity: 1 };
-                             setWorkingScene(s => ({...s, slots: [...s.slots, newSlot]}));
-                             setActiveSlotId(newSlot.id);
-                          }} className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white text-[9px] font-black uppercase rounded shadow-lg">+ ADD NEW SLOT</button>
-                       </div>
-                    </div>
-                    <div className="flex-1 p-4 flex flex-col gap-4 overflow-hidden">
-                       <div className="flex-1 min-h-0 bg-black rounded-xl border border-slate-800 shadow-2xl relative">
-                          <SceneRenderer
-                            scene={workingScene}
-                            activeSlotId={activeSlotId}
-                            onSlotClick={setActiveSlotId}
-                          />
-                       </div>
-                       <div className="shrink-0 flex items-center justify-between gap-4">
-                          <div className="flex-1 flex gap-2">
-                             <input value={workingScene.name} onChange={(e) => setWorkingScene(s => ({...s, name: e.target.value}))} className="flex-1 bg-slate-950 text-slate-200 text-xs px-3 py-2 rounded-lg border border-slate-800" placeholder="Scene Name..." />
-                             <button onClick={async () => {
-                               await invoke("save_scene", { scene: workingScene });
-                               const list = await invoke<SceneData[]>("list_scenes");
-                               setSavedScenes(list);
-                               setToast("Scene saved");
-                             }} className="px-4 py-2 bg-green-700 hover:bg-green-600 text-white text-[10px] font-black uppercase rounded-lg">SAVE</button>
-                             <button onClick={() => stageItem({ type: "Scene", data: workingScene })} className="px-6 py-2 bg-slate-700 hover:bg-slate-600 text-white text-[10px] font-black uppercase rounded-lg">STAGE SCENE</button>
-                             <button onClick={() => sendLive({ type: "Scene", data: workingScene })} className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-black uppercase rounded-lg shadow-lg">GO LIVE</button>
+                            <div className="border-t border-slate-800" />
+                          </>
+                        )}
+
+                        {/* Layer Stack (top → bottom display, bottom-to-top z-order) */}
+                        <div className="flex items-center justify-between">
+                          <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Layer Stack</p>
+                          <span className="text-[8px] text-slate-600">top ↑ bottom</span>
+                        </div>
+                        {workingScene.layers.length === 0 ? (
+                          <p className="text-[10px] text-slate-600 italic text-center py-2">No layers — add one below</p>
+                        ) : (
+                          <div className="space-y-1">
+                            {[...workingScene.layers].reverse().map((layer, revIdx) => {
+                              const realIdx = workingScene.layers.length - 1 - revIdx;
+                              const isLt = layer.content.kind === "lower-third";
+                              return (
+                                <div
+                                  key={layer.id}
+                                  onClick={() => setActiveLayerId(layer.id)}
+                                  className={`flex items-center gap-1.5 px-2 py-1.5 rounded cursor-pointer transition-all ${
+                                    activeLayerId === layer.id
+                                      ? "bg-blue-600/20 border border-blue-500/50"
+                                      : "bg-slate-800/40 border border-slate-700/30 hover:border-slate-600/50"
+                                  }`}
+                                >
+                                  {/* Eye toggle */}
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setWorkingScene(s => ({
+                                        ...s,
+                                        layers: s.layers.map(l => l.id === layer.id ? { ...l, visible: !l.visible } : l)
+                                      }));
+                                    }}
+                                    className="text-slate-500 hover:text-white transition-colors shrink-0"
+                                    title={layer.visible ? "Hide layer" : "Show layer"}
+                                  >
+                                    {layer.visible ? <Eye size={12} /> : <EyeOff size={12} />}
+                                  </button>
+                                  {/* Type badge */}
+                                  <span className={`text-[7px] font-black uppercase px-1 rounded shrink-0 ${
+                                    isLt ? "bg-amber-600/40 text-amber-300" :
+                                    layer.content.kind === "empty" ? "bg-slate-700/60 text-slate-400" :
+                                    "bg-blue-700/40 text-blue-300"
+                                  }`}>
+                                    {isLt ? "LT" : layer.content.kind === "empty" ? "—" : layer.content.kind === "item" ? layer.content.item.type.slice(0,3).toUpperCase() : "?"}
+                                  </span>
+                                  {/* Name */}
+                                  <span className="flex-1 text-[10px] text-slate-300 truncate">{layer.name}</span>
+                                  {/* Reorder up */}
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (realIdx >= workingScene.layers.length - 1) return;
+                                      setWorkingScene(s => {
+                                        const arr = [...s.layers];
+                                        [arr[realIdx], arr[realIdx + 1]] = [arr[realIdx + 1], arr[realIdx]];
+                                        return { ...s, layers: arr };
+                                      });
+                                    }}
+                                    className="text-slate-600 hover:text-white transition-colors shrink-0 text-[10px]"
+                                    title="Move up (higher z-order)"
+                                  >↑</button>
+                                  {/* Reorder down */}
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (realIdx <= 0) return;
+                                      setWorkingScene(s => {
+                                        const arr = [...s.layers];
+                                        [arr[realIdx], arr[realIdx - 1]] = [arr[realIdx - 1], arr[realIdx]];
+                                        return { ...s, layers: arr };
+                                      });
+                                    }}
+                                    className="text-slate-600 hover:text-white transition-colors shrink-0 text-[10px]"
+                                    title="Move down (lower z-order)"
+                                  >↓</button>
+                                  {/* Delete */}
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setWorkingScene(s => ({ ...s, layers: s.layers.filter(l => l.id !== layer.id) }));
+                                      if (activeLayerId === layer.id) setActiveLayerId(null);
+                                    }}
+                                    className="text-slate-600 hover:text-red-400 transition-colors shrink-0 text-[10px]"
+                                    title="Delete layer"
+                                  >×</button>
+                                </div>
+                              );
+                            })}
                           </div>
-                       </div>
+                        )}
+
+                        <div className="space-y-1.5 pt-1">
+                          <button
+                            onClick={() => {
+                              const id = stableId();
+                              const newLayer: SceneLayer = {
+                                id, name: `Layer ${workingScene.layers.length + 1}`,
+                                content: { kind: "empty" },
+                                x: 0, y: 0, w: 100, h: 100,
+                                opacity: 1, visible: true,
+                              };
+                              setWorkingScene(s => ({ ...s, layers: [...s.layers, newLayer] }));
+                              setActiveLayerId(id);
+                            }}
+                            className="w-full py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-[9px] font-black uppercase rounded border border-slate-600"
+                          >+ Add Empty Layer</button>
+                          <button
+                            onClick={() => {
+                              const ltCurrent: LowerThirdData = ltMode === "nameplate"
+                                ? { kind: "Nameplate", data: { name: ltName || "Full Name", title: ltTitle || undefined } }
+                                : ltMode === "freetext"
+                                ? { kind: "FreeText", data: { text: ltFreeText || "Text here" } }
+                                : { kind: "Lyrics", data: { line1: ltFlatLines[ltLineIndex]?.text || "Line 1", line2: ltLinesPerDisplay === 2 ? ltFlatLines[ltLineIndex + 1]?.text : undefined } };
+                              const id = stableId();
+                              const newLayer: SceneLayer = {
+                                id, name: "Lower Third",
+                                content: { kind: "lower-third", ltData: ltCurrent, template: ltTemplate },
+                                x: 0, y: 0, w: 100, h: 100,
+                                opacity: 1, visible: true,
+                              };
+                              setWorkingScene(s => ({ ...s, layers: [...s.layers, newLayer] }));
+                              setActiveLayerId(id);
+                            }}
+                            className="w-full py-1.5 bg-amber-700/50 hover:bg-amber-600/60 text-amber-200 text-[9px] font-black uppercase rounded border border-amber-700/40"
+                          >+ Add Lower Third Layer</button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* CENTER: Canvas + toolbar */}
+                    <div className="flex-1 p-4 flex flex-col gap-3 overflow-hidden min-w-0">
+                      <div className="flex-1 min-h-0 bg-black rounded-xl border border-slate-800 shadow-2xl relative overflow-hidden">
+                        <SceneRenderer
+                          scene={workingScene}
+                          activeLayerId={activeLayerId}
+                          onLayerClick={setActiveLayerId}
+                        />
+                      </div>
+                      <div className="shrink-0 flex items-center gap-2">
+                        <input
+                          value={workingScene.name}
+                          onChange={(e) => setWorkingScene(s => ({ ...s, name: e.target.value }))}
+                          className="flex-1 min-w-0 bg-slate-950 text-slate-200 text-xs px-3 py-2 rounded-lg border border-slate-800"
+                          placeholder="Scene Name..."
+                        />
+                        <button
+                          onClick={async () => {
+                            await invoke("save_scene", { scene: workingScene });
+                            const list = await invoke<SceneData[]>("list_scenes");
+                            setSavedScenes(list);
+                            setToast("Scene saved");
+                          }}
+                          className="px-3 py-2 bg-green-700 hover:bg-green-600 text-white text-[10px] font-black uppercase rounded-lg shrink-0"
+                        >SAVE</button>
+                        <button
+                          onClick={() => stageItem({ type: "Scene", data: workingScene })}
+                          className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-[10px] font-black uppercase rounded-lg shrink-0"
+                        >STAGE SCENE</button>
+                        <button
+                          onClick={() => sendLive({ type: "Scene", data: workingScene })}
+                          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-black uppercase rounded-lg shadow-lg shrink-0"
+                        >GO LIVE</button>
+                      </div>
+                    </div>
+
+                    {/* RIGHT: Layer Config */}
+                    <div className="w-80 border-l border-slate-800 p-3 overflow-y-auto bg-slate-950/50 shrink-0">
+                      {activeLayerId && workingScene.layers.find(l => l.id === activeLayerId) ? (() => {
+                        const layer = workingScene.layers.find(l => l.id === activeLayerId)!;
+                        const isLt = layer.content.kind === "lower-third";
+                        const updateLayer = (patch: Partial<SceneLayer>) =>
+                          setWorkingScene(s => ({ ...s, layers: s.layers.map(l => l.id === activeLayerId ? { ...l, ...patch } : l) }));
+
+                        return (
+                          <div className="space-y-4">
+                            <p className="text-[9px] font-black text-blue-400 uppercase tracking-widest">Layer Config</p>
+
+                            {/* Name */}
+                            <div className="flex flex-col gap-1">
+                              <span className="text-[8px] text-slate-500 uppercase font-bold">Name</span>
+                              <input
+                                value={layer.name}
+                                onChange={(e) => updateLayer({ name: e.target.value })}
+                                className="bg-slate-900 text-slate-200 text-xs px-2 py-1.5 rounded border border-slate-700 focus:outline-none focus:border-blue-500"
+                              />
+                            </div>
+
+                            {/* Content */}
+                            <div className="flex flex-col gap-1.5">
+                              <span className="text-[8px] text-slate-500 uppercase font-bold">Content</span>
+                              <div className="bg-slate-900 rounded p-2 text-[10px] min-h-[28px] flex items-center border border-slate-700">
+                                <span className={layer.content.kind === "empty" ? "text-slate-600 italic" : "text-amber-400 font-bold"}>
+                                  {describeLayerContent(layer.content)}
+                                </span>
+                              </div>
+                              {stagedItem && !isLt && (
+                                <button
+                                  onClick={() => updateLayer({ content: { kind: "item", item: stagedItem } })}
+                                  className="w-full py-1.5 bg-blue-700 hover:bg-blue-600 text-white text-[9px] font-black uppercase rounded"
+                                >
+                                  ↙ Assign Staged: {describeDisplayItem(stagedItem)}
+                                </button>
+                              )}
+                              {isLt && (
+                                <button
+                                  onClick={() => {
+                                    const ltCurrent: LowerThirdData = ltMode === "nameplate"
+                                      ? { kind: "Nameplate", data: { name: ltName || "Full Name", title: ltTitle || undefined } }
+                                      : ltMode === "freetext"
+                                      ? { kind: "FreeText", data: { text: ltFreeText || "Text here" } }
+                                      : { kind: "Lyrics", data: { line1: ltFlatLines[ltLineIndex]?.text || "Line 1", line2: ltLinesPerDisplay === 2 ? ltFlatLines[ltLineIndex + 1]?.text : undefined } };
+                                    updateLayer({ content: { kind: "lower-third", ltData: ltCurrent, template: ltTemplate } });
+                                  }}
+                                  className="w-full py-1.5 bg-amber-700/60 hover:bg-amber-600 text-amber-100 text-[9px] font-black uppercase rounded border border-amber-700/50"
+                                >+ Assign Current LT</button>
+                              )}
+                              {!isLt && !stagedItem && (
+                                <p className="text-[9px] text-slate-600 italic text-center py-1">
+                                  Stage a verse, media, slide, or camera — then click Assign
+                                </p>
+                              )}
+                              <button
+                                onClick={() => updateLayer({ content: { kind: "empty" } })}
+                                className="w-full py-1 bg-red-900/30 hover:bg-red-700/40 text-red-300 text-[9px] font-black uppercase rounded border border-red-900/40"
+                              >✕ Clear</button>
+                            </div>
+
+                            {/* Position & Size — hidden for LT layers (always full-screen) */}
+                            {!isLt && (
+                              <>
+                                <div className="border-t border-slate-800" />
+                                <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Position &amp; Size</p>
+                                <div className="space-y-2">
+                                  {(["x", "y", "w", "h"] as const).map(key => (
+                                    <div key={key} className="flex items-center gap-2">
+                                      <span className="text-[9px] text-slate-500 uppercase w-4 shrink-0">{key.toUpperCase()}</span>
+                                      <input
+                                        type="range" min={0} max={100} step={1}
+                                        value={layer[key]}
+                                        onChange={(e) => updateLayer({ [key]: parseFloat(e.target.value) })}
+                                        className="flex-1 accent-blue-500"
+                                      />
+                                      <span className="text-[9px] text-slate-400 w-8 text-right">{Math.round(layer[key])}%</span>
+                                    </div>
+                                  ))}
+                                </div>
+
+                                {/* Quick presets */}
+                                <div className="border-t border-slate-800" />
+                                <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Quick Presets</p>
+                                <div className="grid grid-cols-2 gap-1">
+                                  {[
+                                    { label: "Full Screen",    vals: { x:0, y:0, w:100, h:100 } },
+                                    { label: "Top Half",       vals: { x:0, y:0, w:100, h:50  } },
+                                    { label: "Bottom Half",    vals: { x:0, y:50, w:100, h:50 } },
+                                    { label: "Left Half",      vals: { x:0, y:0, w:50,  h:100 } },
+                                    { label: "Right Half",     vals: { x:50, y:0, w:50, h:100 } },
+                                    { label: "LT Strip",       vals: { x:0, y:75, w:100, h:25 } },
+                                    { label: "Top-Left ¼",    vals: { x:0, y:0, w:50,  h:50  } },
+                                    { label: "Center 50%",     vals: { x:25, y:25, w:50, h:50 } },
+                                  ].map(({ label, vals }) => (
+                                    <button
+                                      key={label}
+                                      onClick={() => updateLayer(vals)}
+                                      className="py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[8px] font-bold rounded border border-slate-700/50 transition-all"
+                                    >{label}</button>
+                                  ))}
+                                </div>
+                              </>
+                            )}
+
+                            {/* Opacity */}
+                            <div className="border-t border-slate-800" />
+                            <div className="flex items-center gap-2">
+                              <span className="text-[8px] text-slate-500 uppercase shrink-0">Opacity</span>
+                              <input
+                                type="range" min={0} max={1} step={0.05}
+                                value={layer.opacity}
+                                onChange={(e) => updateLayer({ opacity: parseFloat(e.target.value) })}
+                                className="flex-1 accent-blue-500"
+                              />
+                              <span className="text-[9px] text-slate-400 w-8 text-right">{Math.round(layer.opacity * 100)}%</span>
+                            </div>
+                          </div>
+                        );
+                      })() : (
+                        <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-4">
+                          <Layers size={24} className="text-slate-700" />
+                          <p className="text-[10px] text-slate-600">Select a layer to configure it, or add a new layer from the left panel.</p>
+                        </div>
+                      )}
                     </div>
                   </>
                 )}
@@ -6373,7 +6762,7 @@ export default function App() {
                       <div style={{ position: "absolute", inset: 0, transform: "scale(0.19)", transformOrigin: "top left" }}>
                          <div style={{ width: 1920, height: 1080 }}>
                             {bottomDeckMode === "scene-composer" ? (
-                               <SceneRenderer scene={workingScene} activeSlotId={activeSlotId} onSlotClick={setActiveSlotId} />
+                               <SceneRenderer scene={workingScene} activeLayerId={activeLayerId} onLayerClick={setActiveLayerId} />
                             ) : (
                                <LowerThirdOverlay 
                                   template={ltTemplate}
