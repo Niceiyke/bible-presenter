@@ -500,5 +500,11 @@ fn display_item_text(item: &store::DisplayItem) -> String {
         store::DisplayItem::Scene(s) => {
             s.get("name").and_then(|v| v.as_str()).unwrap_or("Scene").to_string()
         }
+        store::DisplayItem::Timer(t) => {
+            t.label.as_ref()
+                .filter(|l| !l.is_empty())
+                .cloned()
+                .unwrap_or_else(|| t.timer_type.clone())
+        }
     }
 }
