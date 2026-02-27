@@ -49,15 +49,15 @@
 
 ### P3 — High Impact, Medium Effort
 
-- [ ] **Library vs. Service Workflow**
+- [x] **Library vs. Service Workflow**
   - Current model: add things to a queue. ProPresenter's model: Library (permanent) → pull into Service (per-week)
   - Right now songs/media live in `{app_data}/` with no reuse concept — operators rebuild from scratch every week
-  - Fix: Separate `library/` from `services/` in the data model; services hold item IDs (references), not copies
+  - Fix: Named service plans in `services/{id}.json`; Schedule tab has service switcher + manager popover (rename/delete/new); auto-saves on switch
 
-- [ ] **Persistent Props Layer**
+- [x] **Persistent Props Layer**
   - ProPresenter "Props" = graphics that overlay *across all slide changes* (bugs, lower-third tickers, animated logos)
   - Scene Compositor approximates this but isn't connected to the main output pipeline
-  - Fix: Separate `props: Vec<PropItem>` in `AppState`; always rendered as absolute top layer on output regardless of `liveItem`
+  - Fix: `props_layer: Vec<PropItem>` in `AppState`; `PropsRenderer` at z-30 in OutputWindow above all slides; Props tab with image/clock support, position presets, opacity, visibility toggle
 
 - [ ] **PPTX Rendering Fidelity**
   - Current PPTX support parses slide XML in-browser — renders text only, no images/shapes/gradients/animations
@@ -109,8 +109,8 @@
 | Slide Transitions          | High     | Low        | P2       |
 | Song Arrangements          | High     | Low        | P2       |
 | Timers / Clocks            | High     | Low        | P2       |
-| Library vs Service model   | High     | Medium     | P3       |
-| Props Layer                | Medium   | Medium     | P3       |
+| ~~Library vs Service model~~| High    | Medium     | P3 ✓     |
+| ~~Props Layer~~            | Medium   | Medium     | P3 ✓     |
 | Multiple Outputs           | Critical | High       | P3       |
 | PPTX rendering (LibreOffice)| Medium  | Medium     | P3       |
 | MIDI / OSC                 | Medium   | Medium     | P3       |
