@@ -142,13 +142,21 @@ export interface SceneData {
   background?: BackgroundSetting;
 }
 
+export interface TimerData {
+  timer_type: "countdown" | "countup" | "clock";
+  duration_secs?: number;
+  label?: string;
+  started_at?: number;
+}
+
 export type DisplayItem =
   | { type: "Verse"; data: Verse }
   | { type: "Media"; data: MediaItem }
   | { type: "PresentationSlide"; data: PresentationSlideData }
   | { type: "CustomSlide"; data: CustomSlideDisplayData }
   | { type: "CameraFeed"; data: CameraFeedData }
-  | { type: "Scene"; data: SceneData };
+  | { type: "Scene"; data: SceneData }
+  | { type: "Timer"; data: TimerData };
 
 export interface ScheduleEntry {
   id: string;
@@ -167,6 +175,8 @@ export interface Song {
   title: string;
   author?: string;
   sections: LyricSection[];
+  /** Ordered section labels for playback (may repeat). Empty = use sections order. */
+  arrangement?: string[];
 }
 
 // ─── Lower third types ────────────────────────────────────────────────────────
@@ -250,6 +260,10 @@ export interface PresentationSettings {
   logo_path?: string;
   is_blanked: boolean;
   font_size: number;
+  /** Slide transition type: "fade" | "slide-up" | "slide-left" | "zoom" | "none" */
+  slide_transition?: string;
+  /** Transition duration in seconds (0.1–2.0). */
+  slide_transition_duration?: number;
 }
 
 // ─── Themes ───────────────────────────────────────────────────────────────────
@@ -310,6 +324,9 @@ function displayItemLabel(item: DisplayItem): string {
   }
   if (item.type === "Scene") {
     return `Scene: ${item.data.name}`;
+  }
+  if (item.type === "Timer") {
+    return `Timer: ${item.data.timer_type}`;
   }
   return item.data.name;
 }
@@ -1634,6 +1651,216 @@ function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData; templa
   );
 }
 
+// ─── Transition variants ──────────────────────────────────────────────────────
+
+function getTransitionVariants(type: string, duration: number) {
+  const d = { duration };
+  switch (type) {
+    case "slide-up":
+      return {
+        initial: { opacity: 0, y: 40 },
+        animate: { opacity: 1, y: 0 },
+        exit:    { opacity: 0, y: 40 },
+        transition: d,
+      };
+    case "slide-left":
+      return {
+        initial: { opacity: 0, x: 60 },
+        animate: { opacity: 1, x: 0 },
+        exit:    { opacity: 0, x: 60 },
+        transition: d,
+      };
+    case "zoom":
+      return {
+        initial: { opacity: 0, scale: 0.92 },
+        animate: { opacity: 1, scale: 1 },
+        exit:    { opacity: 0, scale: 0.92 },
+        transition: d,
+      };
+    case "none":
+      return {
+        initial: { opacity: 1 },
+        animate: { opacity: 1 },
+        exit:    { opacity: 1 },
+        transition: { duration: 0 },
+      };
+    default: // "fade"
+      return {
+        initial: { opacity: 0 },
+        animate: { opacity: 1 },
+        exit:    { opacity: 0 },
+        transition: d,
+      };
+  }
+}
+
+// ─── Timer renderer (used in both OutputWindow and StageWindow) ───────────────
+
+function TimerRenderer({ data }: { data: TimerData }) {
+  const [display, setDisplay] = useState("--:--:--");
+  const [isExpired, setIsExpired] = useState(false);
+
+  useEffect(() => {
+    const tick = () => {
+      const now = Date.now();
+      let totalSecs = 0;
+      let expired = false;
+
+      if (data.timer_type === "clock") {
+        const d = new Date();
+        const h = d.getHours().toString().padStart(2, "0");
+        const m = d.getMinutes().toString().padStart(2, "0");
+        const s = d.getSeconds().toString().padStart(2, "0");
+        setDisplay(`${h}:${m}:${s}`);
+        return;
+      }
+
+      if (data.started_at == null) {
+        if (data.timer_type === "countdown" && data.duration_secs != null) {
+          totalSecs = data.duration_secs;
+        } else {
+          totalSecs = 0;
+        }
+      } else {
+        const elapsed = Math.floor((now - data.started_at) / 1000);
+        if (data.timer_type === "countdown") {
+          const remaining = (data.duration_secs ?? 0) - elapsed;
+          totalSecs = Math.max(0, remaining);
+          expired = remaining <= 0;
+        } else {
+          totalSecs = elapsed;
+        }
+      }
+
+      const h = Math.floor(totalSecs / 3600);
+      const m = Math.floor((totalSecs % 3600) / 60);
+      const s = totalSecs % 60;
+      const parts = h > 0
+        ? `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`
+        : `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+      setDisplay(parts);
+      setIsExpired(expired);
+    };
+
+    tick();
+    const id = setInterval(tick, 100);
+    return () => clearInterval(id);
+  }, [data]);
+
+  const isLastMinute = data.timer_type === "countdown" && !isExpired && (() => {
+    if (data.started_at == null) return (data.duration_secs ?? 0) <= 60;
+    const elapsed = Math.floor((Date.now() - data.started_at) / 1000);
+    return (data.duration_secs ?? 0) - elapsed <= 60;
+  })();
+
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-6">
+      <div
+        className="font-mono font-black tracking-widest select-none"
+        style={{
+          fontSize: "clamp(80px, 15vw, 200px)",
+          color: isExpired ? "#ef4444" : isLastMinute ? "#f59e0b" : "#ffffff",
+          textShadow: "0 4px 32px rgba(0,0,0,0.5)",
+        }}
+      >
+        {display}
+      </div>
+      {data.label && (
+        <p className="text-4xl font-bold uppercase tracking-widest text-white/70">
+          {data.label}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ─── Stage Display Window ──────────────────────────────────────────────────────
+
+function StageWindow() {
+  const [liveItem, setLiveItem]   = useState<DisplayItem | null>(null);
+  const [stagedItem, setStagedItem] = useState<DisplayItem | null>(null);
+  const [clock, setClock] = useState("");
+
+  useEffect(() => {
+    const tick = () => {
+      const d = new Date();
+      const h = d.getHours().toString().padStart(2, "0");
+      const m = d.getMinutes().toString().padStart(2, "0");
+      const s = d.getSeconds().toString().padStart(2, "0");
+      setClock(`${h}:${m}:${s}`);
+    };
+    tick();
+    const id = setInterval(tick, 500);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    const unlisten1 = listen<{ text: string; detected_item: DisplayItem | null; source: string }>(
+      "transcription-update",
+      (ev) => {
+        if (ev.payload.source === "manual" && ev.payload.detected_item) {
+          setLiveItem(ev.payload.detected_item);
+        } else if (ev.payload.source === "manual" && !ev.payload.detected_item) {
+          setLiveItem(null);
+        }
+      }
+    );
+    const unlisten2 = listen<DisplayItem | null>("stage-update", (ev) => {
+      setStagedItem(ev.payload ?? null);
+    });
+    return () => { unlisten1.then((f) => f()); unlisten2.then((f) => f()); };
+  }, []);
+
+  function itemSummary(item: DisplayItem | null): string {
+    if (!item) return "—";
+    return displayItemLabel(item);
+  }
+
+  function itemDetail(item: DisplayItem | null): string {
+    if (!item) return "";
+    if (item.type === "Verse") return item.data.text;
+    if (item.type === "Timer") return `${item.data.timer_type}${item.data.duration_secs ? ` · ${Math.floor(item.data.duration_secs / 60)}:${String(item.data.duration_secs % 60).padStart(2,"0")}` : ""}`;
+    return "";
+  }
+
+  return (
+    <div className="h-screen w-screen bg-slate-950 text-white flex flex-col overflow-hidden select-none">
+      {/* Clock bar */}
+      <div className="flex items-center justify-between px-8 py-3 bg-slate-900 border-b border-slate-800 shrink-0">
+        <span className="text-slate-500 text-sm font-bold uppercase tracking-widest">Stage Display</span>
+        <span className="font-mono text-4xl font-black text-white tracking-widest">{clock}</span>
+        <span className="text-slate-500 text-sm font-bold uppercase tracking-widest">Bible Presenter</span>
+      </div>
+
+      {/* Content area */}
+      <div className="flex-1 grid grid-cols-2 gap-0 overflow-hidden">
+        {/* NOW LIVE panel */}
+        <div className="flex flex-col p-8 border-r border-slate-800 overflow-hidden">
+          <div className="flex items-center gap-3 mb-4 shrink-0">
+            <div className="w-3 h-3 rounded-full bg-red-500 animate-pulse" />
+            <span className="text-xs font-black uppercase tracking-widest text-red-400">Now Live</span>
+          </div>
+          <p className="text-xl font-bold text-slate-300 mb-3 shrink-0">{itemSummary(liveItem)}</p>
+          <p className="text-4xl font-serif leading-snug text-white flex-1 overflow-hidden line-clamp-[8]">
+            {itemDetail(liveItem)}
+          </p>
+        </div>
+
+        {/* UP NEXT panel */}
+        <div className="flex flex-col p-8 border-2 border-amber-500/40 bg-amber-950/10 overflow-hidden">
+          <div className="flex items-center gap-3 mb-4 shrink-0">
+            <span className="text-xs font-black uppercase tracking-widest text-amber-400">Up Next ▶</span>
+          </div>
+          <p className="text-xl font-bold text-amber-300 mb-3 shrink-0">{itemSummary(stagedItem)}</p>
+          <p className="text-4xl font-serif leading-snug text-amber-100 flex-1 overflow-hidden line-clamp-[8]">
+            {itemDetail(stagedItem)}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Output Window ────────────────────────────────────────────────────────────
 
 function OutputWindow() {
@@ -1910,10 +2137,10 @@ function OutputWindow() {
           <motion.div
             key={displayItemLabel(liveItem)}
             className="absolute inset-0 z-10"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.5 }}
+            {...getTransitionVariants(
+              settings.slide_transition ?? "fade",
+              settings.slide_transition_duration ?? 0.4
+            )}
           >
             {liveItem.type === "Verse" ? (
               <div className="absolute inset-0 flex flex-col items-center justify-center p-16 text-center">
@@ -1981,6 +2208,8 @@ function OutputWindow() {
               <div className="absolute inset-0">
                 <SceneRenderer scene={liveItem.data} outputMode={true} />
               </div>
+            ) : liveItem.type === "Timer" ? (
+              <TimerRenderer data={liveItem.data} />
             ) : null}
           </motion.div>
         ) : (
@@ -2097,24 +2326,35 @@ function PreviewCard({
               <div className="w-full h-full relative border border-slate-800 rounded-lg overflow-hidden">
                 <SceneRenderer scene={item.data} scale={0.25} />
               </div>
+            ) : item.type === "Timer" ? (
+              <div className="flex flex-col items-center justify-center gap-2">
+                <span className="text-4xl font-mono font-black text-cyan-400">⏱</span>
+                <p className="text-cyan-400 text-xs font-bold uppercase">{item.data.timer_type}</p>
+                {item.data.label && <p className="text-slate-400 text-[10px]">{item.data.label}</p>}
+                {item.data.timer_type === "countdown" && item.data.duration_secs != null && (
+                  <p className="text-slate-500 text-[10px] font-mono">
+                    {Math.floor(item.data.duration_secs / 60).toString().padStart(2,"0")}:{String(item.data.duration_secs % 60).padStart(2,"0")}
+                  </p>
+                )}
+              </div>
             ) : (
               <div className="w-full h-full overflow-hidden flex flex-col items-center justify-center relative">
-                {item.data.media_type === "Image" ? (
+                {(item.data as MediaItem).media_type === "Image" ? (
                   <img
-                    src={convertFileSrc(item.data.path)}
+                    src={convertFileSrc((item.data as MediaItem).path)}
                     className="w-full h-full object-contain rounded shadow-xl"
-                    alt={item.data.name}
+                    alt={(item.data as MediaItem).name}
                   />
                 ) : (
                   <video
-                    src={convertFileSrc(item.data.path)}
+                    src={convertFileSrc((item.data as MediaItem).path)}
                     className="w-full h-full object-contain rounded"
                     muted
                     preload="metadata"
                   />
                 )}
                 <p className="text-slate-400 text-[10px] font-bold uppercase truncate max-w-full absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/60 px-2 py-0.5 rounded backdrop-blur-sm">
-                  {item.data.name}
+                  {(item.data as MediaItem).name}
                 </p>
               </div>
             )}
@@ -2212,7 +2452,15 @@ export default function App() {
   const [isTranscriptionCollapsed, setIsTranscriptionCollapsed] = useState(false);
   const [isSchedulePersistent, setIsSchedulePersistent] = useState(true);
   const [bottomDeckOpen, setBottomDeckOpen] = useState(false);
-  const [bottomDeckMode, setBottomDeckMode] = useState<"live-lt" | "studio-slides" | "studio-lt" | "scene-composer">("live-lt");
+  const [bottomDeckMode, setBottomDeckMode] = useState<"live-lt" | "studio-slides" | "studio-lt" | "scene-composer" | "timer">("live-lt");
+
+  // Timer state
+  const [timerType, setTimerType] = useState<"countdown" | "countup" | "clock">("countdown");
+  const [timerHours, setTimerHours] = useState(0);
+  const [timerMinutes, setTimerMinutes] = useState(5);
+  const [timerSeconds, setTimerSeconds] = useState(0);
+  const [timerLabel, setTimerLabel] = useState("");
+  const [timerRunning, setTimerRunning] = useState(false);
   const [isBlackout, setIsBlackout] = useState(false);
 
   // Scene Composer states
@@ -2231,6 +2479,8 @@ export default function App() {
     background: { type: "None" },
     is_blanked: false,
     font_size: 72,
+    slide_transition: "fade",
+    slide_transition_duration: 0.4,
   });
 
   // Studio
@@ -2647,13 +2897,28 @@ export default function App() {
     [songs, ltSongId],
   );
 
-  /** Flattened list of all lines across all sections for the loaded song. */
+  /** Flattened list of all lines across all sections, respecting arrangement order. */
   const ltFlatLines = useMemo((): { text: string; sectionLabel: string }[] => {
     if (!ltSelectedSong) return [];
     const flat: { text: string; sectionLabel: string }[] = [];
-    for (const section of ltSelectedSong.sections) {
-      for (const line of section.lines) {
-        flat.push({ text: line, sectionLabel: section.label });
+    const arr = ltSelectedSong.arrangement;
+    const sections = ltSelectedSong.sections;
+    if (arr && arr.length > 0) {
+      // Use arrangement: may repeat sections (e.g. chorus after each verse)
+      for (const label of arr) {
+        const sec = sections.find((s) => s.label === label);
+        if (sec) {
+          for (const line of sec.lines) {
+            flat.push({ text: line, sectionLabel: sec.label });
+          }
+        }
+      }
+    } else {
+      // No arrangement — use sections in their natural order
+      for (const section of sections) {
+        for (const line of section.lines) {
+          flat.push({ text: line, sectionLabel: section.label });
+        }
       }
     }
     return flat;
@@ -3512,6 +3777,7 @@ export default function App() {
   // ── Output window short-circuit ──────────────────────────────────────────────
 
   if (label === "output") return <OutputWindow />;
+  if (label === "stage") return <StageWindow />;
 
   // ── Studio editor modal ──────────────────────────────────────────────────────
 
@@ -4509,8 +4775,10 @@ export default function App() {
                               <p className="text-teal-400 text-[10px] font-bold uppercase truncate">CAM: {entry.item.data.label || entry.item.data.device_id.slice(0, 12)}</p>
                             ) : entry.item.type === "Scene" ? (
                               <p className="text-blue-500 text-[10px] font-black uppercase truncate italic">SCENE: {entry.item.data.name}</p>
+                            ) : entry.item.type === "Timer" ? (
+                              <p className="text-cyan-400 text-[10px] font-bold uppercase truncate">TIMER: {entry.item.data.timer_type}{entry.item.data.label ? ` · ${entry.item.data.label}` : ""}</p>
                             ) : (
-                              <p className="text-blue-400 text-[10px] font-bold uppercase truncate">{(entry.item.data as any).media_type}: {entry.item.data.name}</p>
+                              <p className="text-blue-400 text-[10px] font-bold uppercase truncate">{(entry.item.data as MediaItem).media_type}: {(entry.item.data as MediaItem).name}</p>
                             )}
                           </div>
                           <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all shrink-0">
@@ -4557,6 +4825,40 @@ export default function App() {
                     onChange={(e) => updateSettings({ ...settings, font_size: parseInt(e.target.value) })}
                     className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
                   />
+                </div>
+
+                {/* Slide Transition */}
+                <div>
+                  <p className="text-xs text-slate-400 font-bold uppercase mb-3">Slide Transition</p>
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    {(["fade", "slide-up", "slide-left", "zoom", "none"] as const).map((t) => (
+                      <button
+                        key={t}
+                        onClick={() => updateSettings({ ...settings, slide_transition: t })}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                          (settings.slide_transition ?? "fade") === t
+                            ? "bg-amber-500 border-amber-500 text-black"
+                            : "bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500"
+                        }`}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                  {(settings.slide_transition ?? "fade") !== "none" && (
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="text-[10px] text-slate-500 uppercase font-bold">Duration</span>
+                      <span className="text-xs font-mono text-amber-500">{(settings.slide_transition_duration ?? 0.4).toFixed(1)}s</span>
+                    </div>
+                  )}
+                  {(settings.slide_transition ?? "fade") !== "none" && (
+                    <input
+                      type="range" min="0.1" max="2.0" step="0.1"
+                      value={settings.slide_transition_duration ?? 0.4}
+                      onChange={(e) => updateSettings({ ...settings, slide_transition_duration: parseFloat(e.target.value) })}
+                      className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                    />
+                  )}
                 </div>
 
                 {/* Transcription window */}
@@ -4813,6 +5115,22 @@ export default function App() {
                   </p>
                 </div>
 
+                {/* Stage Display */}
+                <div className="border-t border-slate-800 pt-5">
+                  <div className="flex items-center justify-between mb-2">
+                    <div>
+                      <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Stage Display</h2>
+                      <p className="text-[10px] text-slate-600 mt-0.5">Second monitor for performers — shows live + next item</p>
+                    </div>
+                    <button
+                      onClick={() => invoke("toggle_stage_window")}
+                      className="px-3 py-1.5 text-[10px] font-black uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition-colors"
+                    >
+                      Toggle
+                    </button>
+                  </div>
+                </div>
+
                 {/* Remote Control */}
                 <div className="border-t border-slate-800 pt-5">
                   <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4">Remote Control</h2>
@@ -4919,7 +5237,7 @@ export default function App() {
                       className="text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded"
                     >Import</button>
                     <button
-                      onClick={() => setEditingSong({ id: "", title: "", author: "", sections: [{ label: "Verse 1", lines: [""] }] })}
+                      onClick={() => setEditingSong({ id: "", title: "", author: "", sections: [{ label: "Verse 1", lines: [""] }], arrangement: [] })}
                       className="text-[10px] font-bold uppercase bg-amber-600 hover:bg-amber-500 text-white px-2 py-1 rounded"
                     >+ New</button>
                   </div>
@@ -5094,6 +5412,54 @@ export default function App() {
                           onClick={() => setEditingSong({ ...editingSong, sections: [...editingSong.sections, { label: `Section ${editingSong.sections.length + 1}`, lines: [""] }] })}
                           className="text-[10px] font-bold uppercase text-slate-500 hover:text-amber-400 border border-slate-700 hover:border-amber-500 rounded-lg py-2"
                         >+ Add Section</button>
+
+                        {/* Arrangement panel */}
+                        <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-3 flex flex-col gap-2">
+                          <div className="flex items-center justify-between">
+                            <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Arrangement</p>
+                            {(editingSong.arrangement ?? []).length > 0 && (
+                              <button
+                                onClick={() => setEditingSong({ ...editingSong, arrangement: [] })}
+                                className="text-[9px] font-bold uppercase text-slate-500 hover:text-red-400"
+                              >Clear</button>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-slate-600">Order sections for playback (repeat chorus, etc.)</p>
+                          {/* Available section chips */}
+                          <div className="flex flex-wrap gap-1.5">
+                            {editingSong.sections.map((sec) => (
+                              <button
+                                key={sec.label}
+                                onClick={() => setEditingSong({ ...editingSong, arrangement: [...(editingSong.arrangement ?? []), sec.label] })}
+                                className="px-2 py-0.5 text-[10px] font-bold rounded bg-slate-700 hover:bg-amber-700 text-slate-300 hover:text-white border border-slate-600 hover:border-amber-500 transition-all"
+                              >+ {sec.label}</button>
+                            ))}
+                          </div>
+                          {/* Current arrangement */}
+                          {(editingSong.arrangement ?? []).length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 mt-1">
+                              {(editingSong.arrangement ?? []).map((label, i) => (
+                                <span
+                                  key={`${label}-${i}`}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded bg-amber-900/50 text-amber-300 border border-amber-700"
+                                >
+                                  {i + 1}. {label}
+                                  <button
+                                    onClick={() => {
+                                      const arr = [...(editingSong.arrangement ?? [])];
+                                      arr.splice(i, 1);
+                                      setEditingSong({ ...editingSong, arrangement: arr });
+                                    }}
+                                    className="text-amber-500 hover:text-red-400 ml-0.5"
+                                  >×</button>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {(editingSong.arrangement ?? []).length === 0 && (
+                            <p className="text-[10px] text-slate-600 italic">Using natural section order</p>
+                          )}
+                        </div>
                       </div>
                       <div className="p-4 border-t border-slate-800 flex justify-end gap-2">
                         <button onClick={() => setEditingSong(null)} className="text-xs font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg">Cancel</button>
@@ -5998,11 +6364,17 @@ export default function App() {
                     >
                       LT DESIGNER
                     </button>
-                    <button 
+                    <button
                       onClick={() => setBottomDeckMode("scene-composer")}
                       className={`px-4 py-1.5 text-[9px] font-black uppercase tracking-widest transition-all ${bottomDeckMode === "scene-composer" ? "bg-blue-600 text-white" : "text-slate-500 hover:text-slate-300"}`}
                     >
                       SCENE COMPOSER
+                    </button>
+                    <button
+                      onClick={() => setBottomDeckMode("timer")}
+                      className={`px-4 py-1.5 text-[9px] font-black uppercase tracking-widest transition-all ${bottomDeckMode === "timer" ? "bg-cyan-600 text-white" : "text-slate-500 hover:text-slate-300"}`}
+                    >
+                      TIMER
                     </button>
                   </div>
                 </div>
@@ -6784,6 +7156,108 @@ export default function App() {
               </div>
             </section>
           )}
+
+                {/* ── Mode: TIMER ── */}
+                {bottomDeckMode === "timer" && (
+                  <section className="flex gap-4 p-4 overflow-y-auto">
+                    {/* Timer Config */}
+                    <div className="flex flex-col gap-3 min-w-[220px]">
+                      <div>
+                        <p className="text-[9px] font-black uppercase text-slate-500 mb-2">Timer Type</p>
+                        <div className="flex gap-2">
+                          {(["countdown", "countup", "clock"] as const).map((t) => (
+                            <button
+                              key={t}
+                              onClick={() => setTimerType(t)}
+                              className={`flex-1 py-1.5 text-[9px] font-black uppercase rounded-lg border transition-all ${timerType === t ? "bg-cyan-600 border-cyan-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500"}`}
+                            >{t}</button>
+                          ))}
+                        </div>
+                      </div>
+                      {timerType === "countdown" && (
+                        <div>
+                          <p className="text-[9px] font-black uppercase text-slate-500 mb-2">Duration</p>
+                          <div className="flex gap-2 items-center">
+                            <div className="flex flex-col items-center gap-0.5">
+                              <span className="text-[8px] text-slate-600 uppercase">H</span>
+                              <input type="number" min={0} max={23} value={timerHours} onChange={(e) => setTimerHours(parseInt(e.target.value) || 0)}
+                                className="w-14 bg-slate-800 text-slate-200 text-center text-sm rounded border border-slate-700 py-1" />
+                            </div>
+                            <span className="text-slate-500 font-bold">:</span>
+                            <div className="flex flex-col items-center gap-0.5">
+                              <span className="text-[8px] text-slate-600 uppercase">M</span>
+                              <input type="number" min={0} max={59} value={timerMinutes} onChange={(e) => setTimerMinutes(parseInt(e.target.value) || 0)}
+                                className="w-14 bg-slate-800 text-slate-200 text-center text-sm rounded border border-slate-700 py-1" />
+                            </div>
+                            <span className="text-slate-500 font-bold">:</span>
+                            <div className="flex flex-col items-center gap-0.5">
+                              <span className="text-[8px] text-slate-600 uppercase">S</span>
+                              <input type="number" min={0} max={59} value={timerSeconds} onChange={(e) => setTimerSeconds(parseInt(e.target.value) || 0)}
+                                className="w-14 bg-slate-800 text-slate-200 text-center text-sm rounded border border-slate-700 py-1" />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      <div>
+                        <p className="text-[9px] font-black uppercase text-slate-500 mb-1">Label (optional)</p>
+                        <input
+                          value={timerLabel}
+                          onChange={(e) => setTimerLabel(e.target.value)}
+                          placeholder="e.g. BREAK ENDS IN"
+                          className="w-full bg-slate-800 text-slate-200 text-xs rounded border border-slate-700 px-2 py-1.5"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Timer Controls */}
+                    <div className="flex flex-col gap-2 justify-center min-w-[160px]">
+                      <button
+                        onClick={async () => {
+                          const durSecs = timerType === "countdown"
+                            ? timerHours * 3600 + timerMinutes * 60 + timerSeconds
+                            : undefined;
+                          const timerItem: DisplayItem = {
+                            type: "Timer",
+                            data: { timer_type: timerType, duration_secs: durSecs, label: timerLabel || undefined, started_at: undefined },
+                          };
+                          await invoke("stage_item", { item: timerItem });
+                        }}
+                        className="py-2 text-xs font-black uppercase bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg"
+                      >Stage</button>
+                      <button
+                        onClick={async () => {
+                          const durSecs = timerType === "countdown"
+                            ? timerHours * 3600 + timerMinutes * 60 + timerSeconds
+                            : undefined;
+                          const timerItem: DisplayItem = {
+                            type: "Timer",
+                            data: { timer_type: timerType, duration_secs: durSecs, label: timerLabel || undefined, started_at: undefined },
+                          };
+                          await invoke("stage_item", { item: timerItem });
+                          await invoke("go_live");
+                        }}
+                        className="py-2 text-xs font-black uppercase bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg"
+                      >Stage + Live</button>
+                      <div className="border-t border-slate-800 pt-2 flex gap-2">
+                        <button
+                          onClick={async () => {
+                            const now = Date.now();
+                            await invoke("update_timer", { startedAt: now });
+                            setTimerRunning(true);
+                          }}
+                          className="flex-1 py-1.5 text-[9px] font-black uppercase bg-green-800 hover:bg-green-700 text-green-200 rounded"
+                        >Start</button>
+                        <button
+                          onClick={async () => {
+                            await invoke("update_timer", { startedAt: null });
+                            setTimerRunning(false);
+                          }}
+                          className="flex-1 py-1.5 text-[9px] font-black uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 rounded"
+                        >Reset</button>
+                      </div>
+                    </div>
+                  </section>
+                )}
         </main>
       </div>
 

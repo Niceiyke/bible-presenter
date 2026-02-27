@@ -26,6 +26,17 @@
         "alwaysOnTop": true,
         "fullscreen": false,
         "visible": false
+      },
+      {
+        "title": "Bible Presenter - Stage",
+        "label": "stage",
+        "width": 1280,
+        "height": 720,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": true,
+        "visible": false,
+        "resizable": true
       }
     ],
     "security": {

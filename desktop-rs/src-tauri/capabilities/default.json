@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capabilities for Bible Presenter",
-  "windows": ["main", "output"],
+  "windows": ["main", "output", "stage"],
   "permissions": [
     "core:default",
     "dialog:allow-open",
