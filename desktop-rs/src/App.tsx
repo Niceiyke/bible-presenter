@@ -2547,6 +2547,8 @@ export default function App() {
   const previewObserverMapRef = useRef<Map<string, IntersectionObserver>>(new Map());
   // Buffered WebRTC offers for sources that aren't yet enabled
   const pendingOffersRef = useRef<Map<string, { device_id: string; device_name?: string; sdp: string }>>(new Map());
+  // Buffered ICE candidates that arrive before the preview PC is created (e.g. while preview is disabled)
+  const pendingIceRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
   // Tracks which device_ids have preview enabled (ref avoids stale closure in WS handler)
   const cameraEnabledRef = useRef<Set<string>>(new Set());
   const [showLogoPicker, setShowLogoPicker] = useState(false);
@@ -2660,6 +2662,8 @@ export default function App() {
         if (videoEl) { videoEl.srcObject = null; previewVideoMapRef.current.delete(device_id); }
         const obs = previewObserverMapRef.current.get(device_id);
         if (obs) { obs.disconnect(); previewObserverMapRef.current.delete(device_id); }
+        pendingOffersRef.current.delete(device_id);
+        pendingIceRef.current.delete(device_id);
         setCameraSources(prev => {
           const next = new Map(prev);
           next.delete(device_id);
@@ -2684,6 +2688,11 @@ export default function App() {
         const pc = previewPcMapRef.current.get(msg.device_id);
         if (pc && msg.candidate) {
           try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
+        } else if (msg.candidate) {
+          // PC not created yet (preview disabled) — buffer for when it's enabled
+          const buf = pendingIceRef.current.get(msg.device_id) ?? [];
+          buf.push(msg.candidate);
+          pendingIceRef.current.set(msg.device_id, buf);
         }
         return;
       }
@@ -2745,6 +2754,14 @@ export default function App() {
     };
 
     await pc.setRemoteDescription({ type: "offer", sdp });
+
+    // Apply any ICE candidates that arrived while the PC didn't exist yet
+    const buffered = pendingIceRef.current.get(device_id) ?? [];
+    pendingIceRef.current.delete(device_id);
+    for (const candidate of buffered) {
+      try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch {}
+    }
+
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
@@ -2785,6 +2802,7 @@ export default function App() {
   function removeCameraSource(device_id: string) {
     cameraEnabledRef.current.delete(device_id);
     pendingOffersRef.current.delete(device_id);
+    pendingIceRef.current.delete(device_id);
     const pc = previewPcMapRef.current.get(device_id);
     if (pc) { pc.close(); previewPcMapRef.current.delete(device_id); }
     const videoEl = previewVideoMapRef.current.get(device_id);
