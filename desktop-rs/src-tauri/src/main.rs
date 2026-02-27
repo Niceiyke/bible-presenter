@@ -41,6 +41,7 @@ struct SessionStatus {
 // ---------------------------------------------------------------------------
 
 /// Paths to AI model files, resolved at startup and stored for lazy loading.
+#[derive(Clone)]
 struct ModelPaths {
     whisper: PathBuf,
     embedding_model: PathBuf,
@@ -67,9 +68,9 @@ pub struct AppState {
     /// Broadcast channel: every WS client subscribes to receive state updates.
     pub broadcast_tx: tokio::sync::broadcast::Sender<String>,
     /// Tauri AppHandle stored after setup so the remote module can emit events.
-    pub app_handle: OnceLock<tauri::AppHandle>,
+    pub app_handle: Arc<OnceLock<tauri::AppHandle>>,
     /// 4-digit PIN displayed in Settings tab; required for WS auth. Mutable so it can be regenerated.
-    pub remote_pin: Mutex<String>,
+    pub remote_pin: Arc<Mutex<String>>,
     /// Audio window fed to Whisper per inference call, in samples at 16 kHz.
     /// 8000 = 0.5 s (most responsive, highest CPU); 48000 = 3 s (lowest CPU, most latency).
     transcription_window: Arc<Mutex<usize>>,
@@ -82,6 +83,30 @@ pub struct AppState {
     pub transcription_paused: Arc<AtomicBool>,
     /// Persistent props layer — graphics that survive slide changes (logos, clocks).
     pub props_layer: Arc<Mutex<Vec<store::PropItem>>>,
+}
+
+impl Clone for AppState {
+    fn clone(&self) -> Self {
+        Self {
+            audio: self.audio.clone(),
+            engine: self.engine.clone(),
+            store: self.store.clone(),
+            media_schedule: self.media_schedule.clone(),
+            model_paths: self.model_paths.clone(),
+            is_running: self.is_running.clone(),
+            live_item: self.live_item.clone(),
+            staged_item: self.staged_item.clone(),
+            settings: self.settings.clone(),
+            lower_third: self.lower_third.clone(),
+            broadcast_tx: self.broadcast_tx.clone(),
+            app_handle: self.app_handle.clone(),
+            remote_pin: self.remote_pin.clone(),
+            transcription_window: self.transcription_window.clone(),
+            signaling_clients: self.signaling_clients.clone(),
+            transcription_paused: self.transcription_paused.clone(),
+            props_layer: self.props_layer.clone(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -106,7 +131,7 @@ fn log_msg(app: &tauri::App, message: &str) {
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     // ── C3: Guard — reject duplicate sessions ────────────────────────────
     {
         let mut running = state.is_running.lock();
@@ -332,7 +357,7 @@ async fn start_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
 /// Dropping the CPAL stream closes the audio channel, which causes
 /// the processing loop to exit on its next recv() call.
 #[tauri::command]
-async fn stop_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+async fn stop_session(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     state.audio.lock().stop();
     // Clear the guard immediately so START LIVE is available right away
     *state.is_running.lock() = false;
@@ -347,7 +372,7 @@ async fn stop_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result
 }
 
 #[tauri::command]
-async fn toggle_output_window(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("output") {
         if window.is_visible().unwrap_or(false) {
             window.hide().map_err(|e: tauri::Error| e.to_string())?;
@@ -428,7 +453,7 @@ async fn toggle_output_window(app: AppHandle, state: State<'_, Arc<AppState>>) -
 
 #[tauri::command]
 async fn get_audio_devices(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
 ) -> Result<Vec<(String, String)>, String> {
     let audio = state.audio.lock();
     audio
@@ -438,7 +463,7 @@ async fn get_audio_devices(
 
 #[tauri::command]
 async fn set_audio_device(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     device_name: String,
 ) -> Result<(), String> {
     let mut audio = state.audio.lock();
@@ -448,20 +473,20 @@ async fn set_audio_device(
 }
 
 #[tauri::command]
-async fn set_vad_threshold(state: State<'_, Arc<AppState>>, threshold: f32) -> Result<(), String> {
+async fn set_vad_threshold(state: State<'_, AppState>, threshold: f32) -> Result<(), String> {
     let mut audio = state.audio.lock();
     audio.set_vad_threshold(threshold);
     Ok(())
 }
 
 #[tauri::command]
-async fn get_bible_versions(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, String> {
+async fn get_bible_versions(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     Ok(state.store.get_available_versions())
 }
 
 #[tauri::command]
 async fn set_bible_version(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     version: String,
 ) -> Result<(), String> {
     state.store.set_active_version(&version);
@@ -470,7 +495,7 @@ async fn set_bible_version(
 
 #[tauri::command]
 async fn search_manual(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     query: String,
     version: String,
 ) -> Result<Vec<store::Verse>, String> {
@@ -483,7 +508,7 @@ async fn search_manual(
 /// Semantic search across all versions using ONNX embedding; falls back to keyword search.
 #[tauri::command]
 async fn search_semantic_query(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     query: String,
 ) -> Result<Vec<store::Verse>, String> {
     // Clone the inner Arc while holding the lock briefly, then release before embed().
@@ -513,7 +538,7 @@ async fn read_file_base64(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn get_books(state: State<'_, Arc<AppState>>, version: String) -> Result<Vec<String>, String> {
+async fn get_books(state: State<'_, AppState>, version: String) -> Result<Vec<String>, String> {
     state
         .store
         .get_books(&version)
@@ -522,7 +547,7 @@ async fn get_books(state: State<'_, Arc<AppState>>, version: String) -> Result<V
 
 #[tauri::command]
 async fn get_chapters(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     book: String,
     version: String,
 ) -> Result<Vec<i32>, String> {
@@ -534,7 +559,7 @@ async fn get_chapters(
 
 #[tauri::command]
 async fn get_verses_count(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     book: String,
     chapter: i32,
     version: String,
@@ -547,7 +572,7 @@ async fn get_verses_count(
 
 #[tauri::command]
 async fn get_verse(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     book: String,
     chapter: i32,
     verse: i32,
@@ -563,7 +588,7 @@ async fn get_verse(
 /// ensuring it shows current content even if it missed earlier events.
 #[tauri::command]
 async fn get_current_item(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
 ) -> Result<Option<store::DisplayItem>, String> {
     Ok(state.live_item.lock().clone())
 }
@@ -571,7 +596,7 @@ async fn get_current_item(
 #[tauri::command]
 async fn stage_item(
     app: AppHandle,
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     item: store::DisplayItem,
 ) -> Result<(), String> {
     *state.staged_item.lock() = Some(item.clone());
@@ -582,7 +607,7 @@ async fn stage_item(
 }
 
 #[tauri::command]
-async fn go_live(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+async fn go_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let staged = state.staged_item.lock().clone();
     if let Some(item) = staged {
         *state.live_item.lock() = Some(item.clone());
@@ -622,7 +647,7 @@ async fn go_live(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), 
 }
 
 #[tauri::command]
-async fn clear_live(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+async fn clear_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     *state.live_item.lock() = None;
     let _ = app.emit(
         "transcription-update",
@@ -647,7 +672,7 @@ async fn clear_live(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(
 #[tauri::command]
 async fn update_timer(
     app: AppHandle,
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     started_at: Option<u64>,
 ) -> Result<(), String> {
     let mut live = state.live_item.lock();
@@ -684,14 +709,14 @@ async fn toggle_stage_window(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 async fn list_presentations(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
 ) -> Result<Vec<store::PresentationFile>, String> {
     state.media_schedule.list_presentations().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn add_presentation(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     path: String,
 ) -> Result<store::PresentationFile, String> {
     state.media_schedule.add_presentation(PathBuf::from(path)).map_err(|e| e.to_string())
@@ -699,46 +724,46 @@ async fn add_presentation(
 
 #[tauri::command]
 async fn delete_presentation(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     id: String,
 ) -> Result<(), String> {
     state.media_schedule.delete_presentation(id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn list_media(state: State<'_, Arc<AppState>>) -> Result<Vec<store::MediaItem>, String> {
+async fn list_media(state: State<'_, AppState>) -> Result<Vec<store::MediaItem>, String> {
     state.media_schedule.list_media().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn add_media(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     path: String,
 ) -> Result<store::MediaItem, String> {
     state.media_schedule.add_media(PathBuf::from(path)).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn delete_media(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
+async fn delete_media(state: State<'_, AppState>, id: String) -> Result<(), String> {
     state.media_schedule.delete_media(id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn save_schedule(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     schedule: store::Schedule,
 ) -> Result<(), String> {
     state.media_schedule.save_schedule(schedule).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn load_schedule(state: State<'_, Arc<AppState>>) -> Result<store::Schedule, String> {
+async fn load_schedule(state: State<'_, AppState>) -> Result<store::Schedule, String> {
     state.media_schedule.load_schedule().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn get_next_verse(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     book: String,
     chapter: i32,
     verse: i32,
@@ -751,14 +776,14 @@ async fn get_next_verse(
 }
 
 #[tauri::command]
-async fn get_settings(state: State<'_, Arc<AppState>>) -> Result<store::PresentationSettings, String> {
+async fn get_settings(state: State<'_, AppState>) -> Result<store::PresentationSettings, String> {
     Ok(state.settings.lock().clone())
 }
 
 #[tauri::command]
 async fn save_settings(
     app: AppHandle,
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     settings: store::PresentationSettings,
 ) -> Result<(), String> {
     state
@@ -773,14 +798,14 @@ async fn save_settings(
 
 #[tauri::command]
 async fn list_studio_presentations(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
 ) -> Result<Vec<serde_json::Value>, String> {
     state.media_schedule.list_studio_presentations().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn save_studio_presentation(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     presentation: serde_json::Value,
 ) -> Result<(), String> {
     state.media_schedule.save_studio_presentation(&presentation).map_err(|e| e.to_string())
@@ -788,7 +813,7 @@ async fn save_studio_presentation(
 
 #[tauri::command]
 async fn load_studio_presentation(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     id: String,
 ) -> Result<serde_json::Value, String> {
     state.media_schedule.load_studio_presentation(&id).map_err(|e| e.to_string())
@@ -796,7 +821,7 @@ async fn load_studio_presentation(
 
 #[tauri::command]
 async fn delete_studio_presentation(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     id: String,
 ) -> Result<(), String> {
     state.media_schedule.delete_studio_presentation(&id).map_err(|e| e.to_string())
@@ -808,14 +833,14 @@ async fn delete_studio_presentation(
 
 #[tauri::command]
 async fn list_scenes(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
 ) -> Result<Vec<serde_json::Value>, String> {
     state.media_schedule.list_scenes().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn save_scene(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     scene: serde_json::Value,
 ) -> Result<(), String> {
     state.media_schedule.save_scene(&scene).map_err(|e| e.to_string())
@@ -823,7 +848,7 @@ async fn save_scene(
 
 #[tauri::command]
 async fn delete_scene(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     id: String,
 ) -> Result<(), String> {
     state.media_schedule.delete_scene(&id).map_err(|e| e.to_string())
@@ -834,17 +859,17 @@ async fn delete_scene(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-async fn list_songs(state: State<'_, Arc<AppState>>) -> Result<Vec<store::Song>, String> {
+async fn list_songs(state: State<'_, AppState>) -> Result<Vec<store::Song>, String> {
     state.media_schedule.list_songs().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn save_song(state: State<'_, Arc<AppState>>, song: store::Song) -> Result<store::Song, String> {
+async fn save_song(state: State<'_, AppState>, song: store::Song) -> Result<store::Song, String> {
     state.media_schedule.save_song(song).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn delete_song(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
+async fn delete_song(state: State<'_, AppState>, id: String) -> Result<(), String> {
     state.media_schedule.delete_song(&id).map_err(|e| e.to_string())
 }
 
@@ -855,7 +880,7 @@ async fn delete_song(state: State<'_, Arc<AppState>>, id: String) -> Result<(), 
 #[tauri::command]
 async fn show_lower_third(
     app: AppHandle,
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     data: store::LowerThirdData,
     template: serde_json::Value,
 ) -> Result<(), String> {
@@ -870,7 +895,7 @@ async fn show_lower_third(
 }
 
 #[tauri::command]
-async fn hide_lower_third(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+async fn hide_lower_third(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     *state.lower_third.lock() = None;
     let _ = app.emit("lower-third-update", Option::<serde_json::Value>::None);
     // Broadcast to WS remote clients
@@ -882,7 +907,7 @@ async fn hide_lower_third(app: AppHandle, state: State<'_, Arc<AppState>>) -> Re
 
 #[tauri::command]
 async fn save_lt_templates(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     templates: Vec<serde_json::Value>,
 ) -> Result<(), String> {
     state
@@ -893,7 +918,7 @@ async fn save_lt_templates(
 
 #[tauri::command]
 async fn load_lt_templates(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     state
         .media_schedule
@@ -931,7 +956,7 @@ fn get_tailscale_ip() -> Option<String> {
 }
 
 #[tauri::command]
-async fn get_remote_info(state: State<'_, Arc<AppState>>) -> Result<RemoteInfo, String> {
+async fn get_remote_info(state: State<'_, AppState>) -> Result<RemoteInfo, String> {
     let lan_ip = local_ip_address::local_ip()
         .map(|ip| ip.to_string())
         .unwrap_or_else(|_| "localhost".to_string());
@@ -952,7 +977,7 @@ async fn get_remote_info(state: State<'_, Arc<AppState>>) -> Result<RemoteInfo, 
 
 #[tauri::command]
 async fn set_transcription_window(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     samples: usize,
 ) -> Result<(), String> {
     // Clamp to 0.5 s – 3 s at 16 kHz
@@ -962,7 +987,7 @@ async fn set_transcription_window(
 
 #[tauri::command]
 async fn set_transcription_paused(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     paused: bool,
 ) -> Result<(), String> {
     state.transcription_paused.store(paused, Ordering::Relaxed);
@@ -970,7 +995,7 @@ async fn set_transcription_paused(
 }
 
 #[tauri::command]
-async fn regenerate_remote_pin(state: State<'_, Arc<AppState>>) -> Result<String, String> {
+async fn regenerate_remote_pin(state: State<'_, AppState>) -> Result<String, String> {
     let new_pin = format!("{:04}", rand::random::<u16>() % 10000);
     *state.remote_pin.lock() = new_pin.clone();
     // Persist so the new PIN survives the next restart
@@ -989,22 +1014,22 @@ async fn regenerate_remote_pin(state: State<'_, Arc<AppState>>) -> Result<String
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-async fn list_services(state: State<'_, Arc<AppState>>) -> Result<Vec<store::ServiceMeta>, String> {
+async fn list_services(state: State<'_, AppState>) -> Result<Vec<store::ServiceMeta>, String> {
     state.media_schedule.list_services().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn save_service(state: State<'_, Arc<AppState>>, schedule: store::Schedule) -> Result<(), String> {
+async fn save_service(state: State<'_, AppState>, schedule: store::Schedule) -> Result<(), String> {
     state.media_schedule.save_service(&schedule).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn load_service(state: State<'_, Arc<AppState>>, id: String) -> Result<store::Schedule, String> {
+async fn load_service(state: State<'_, AppState>, id: String) -> Result<store::Schedule, String> {
     state.media_schedule.load_service(&id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn delete_service(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
+async fn delete_service(state: State<'_, AppState>, id: String) -> Result<(), String> {
     state.media_schedule.delete_service(&id).map_err(|e| e.to_string())
 }
 
@@ -1013,14 +1038,14 @@ async fn delete_service(state: State<'_, Arc<AppState>>, id: String) -> Result<(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-async fn get_props(state: State<'_, Arc<AppState>>) -> Result<Vec<store::PropItem>, String> {
+async fn get_props(state: State<'_, AppState>) -> Result<Vec<store::PropItem>, String> {
     Ok(state.props_layer.lock().clone())
 }
 
 #[tauri::command]
 async fn set_props(
     app: AppHandle,
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     props: Vec<store::PropItem>,
 ) -> Result<(), String> {
     *state.props_layer.lock() = props.clone();
@@ -1043,7 +1068,7 @@ async fn check_libreoffice() -> bool {
 
 #[tauri::command]
 async fn convert_pptx_slides(
-    state: State<'_, Arc<AppState>>,
+    state: State<'_, AppState>,
     path: String,
     pres_id: String,
 ) -> Result<Vec<String>, String> {
@@ -1218,7 +1243,7 @@ fn main() {
                 });
             log_msg(app, &format!("Remote PIN: {}", remote_pin));
 
-            let state = Arc::new(AppState {
+            let state = AppState {
                 audio,
                 engine: Arc::new(Mutex::new(None)), // loaded lazily in start_session
                 store,
@@ -1230,19 +1255,19 @@ fn main() {
                 settings: Arc::new(Mutex::new(initial_settings)),
                 lower_third: Arc::new(Mutex::new(None)),
                 broadcast_tx,
-                app_handle: OnceLock::new(),
-                remote_pin: Mutex::new(remote_pin),
+                app_handle: Arc::new(OnceLock::new()),
+                remote_pin: Arc::new(Mutex::new(remote_pin)),
                 transcription_window: Arc::new(Mutex::new(16000)), // 1 s default
                 signaling_clients: Arc::new(Mutex::new(HashMap::new())),
                 transcription_paused: Arc::new(AtomicBool::new(false)),
                 props_layer: Arc::new(Mutex::new(Vec::new())),
-            });
+            };
 
             // Store app_handle so remote module can emit events to Tauri windows
             state.app_handle.set(app.handle().clone()).ok();
 
             // Start the LAN remote server in the background
-            let remote_state = state.clone();
+            let remote_state = Arc::new(state.clone());
             tauri::async_runtime::spawn(async move {
                 remote::start(remote_state, 7420).await;
             });

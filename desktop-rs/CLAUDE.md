@@ -78,7 +78,7 @@ Microphone → CPAL stream → Rubato resampler (→ 16kHz mono) → VAD gate (e
 - `engine: Option<Arc<TranscriptionEngine>>` — Whisper context + ONNX session (None if models missing)
 - `store: Arc<BibleStore>` — SQLite connection, verse cache, embeddings
 
-All Tauri commands receive `State<'_, Arc<AppState>>`.
+All Tauri commands receive `State<'_, AppState>`.
 
 ## Critical Dependency Constraint: ort + ndarray
 
