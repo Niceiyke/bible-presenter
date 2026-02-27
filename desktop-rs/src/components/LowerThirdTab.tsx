@@ -1,221 +1,15 @@
 import React, { useEffect, useRef, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { motion } from "framer-motion";
 import { useAppStore } from "../store";
-import type { LowerThirdData, LowerThirdTemplate } from "../App";
-
-// ─── Lower Third helpers ──────────────────────────────────────────────────────
-
-function hexToRgba(hex: string, opacity: number): string {
-  const h = hex.replace("#", "");
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${(opacity / 100).toFixed(2)})`;
-}
-
-function buildLtPositionStyle(t: LowerThirdTemplate): React.CSSProperties {
-  const style: React.CSSProperties = { position: "absolute", zIndex: 50, width: `${t.widthPct}%` };
-  let tx = "";
-  let ty = "";
-  if (t.hAlign === "left") { style.left = t.offsetX; }
-  else if (t.hAlign === "right") { style.right = t.offsetX; }
-  else { style.left = "50%"; tx = "-50%"; }
-  if (t.vAlign === "top") { style.top = t.offsetY; }
-  else if (t.vAlign === "bottom") { style.bottom = t.offsetY; }
-  else { style.top = "50%"; ty = "-50%"; }
-  if (tx || ty) style.transform = `translate(${tx || "0"}, ${ty || "0"})`;
-  return style;
-}
-
-function buildLtContainerStyle(t: LowerThirdTemplate): React.CSSProperties {
-  const style: React.CSSProperties = {
-    paddingLeft: t.paddingX, paddingRight: t.paddingX,
-    paddingTop: t.paddingY, paddingBottom: t.paddingY,
-    borderRadius: t.borderRadius, overflow: "hidden",
-    backdropFilter: t.bgBlur ? "blur(8px)" : undefined,
-  };
-  if (t.bgType === "solid") {
-    style.background = hexToRgba(t.bgColor, t.bgOpacity);
-  } else if (t.bgType === "gradient") {
-    style.background = `linear-gradient(135deg, ${hexToRgba(t.bgColor, t.bgOpacity)} 0%, ${hexToRgba(t.bgGradientEnd, t.bgOpacity)} 100%)`;
-  } else if (t.bgType === "image" && t.bgImagePath) {
-    style.backgroundImage = `url("${convertFileSrc(t.bgImagePath)}")`;
-    style.backgroundSize = "cover";
-    style.backgroundPosition = "center";
-    style.backgroundRepeat = "no-repeat";
-  } else {
-    style.background = "transparent";
-  }
-  if (t.accentEnabled) {
-    const border = `${t.accentWidth}px solid ${t.accentColor}`;
-    if (t.accentSide === "left") style.borderLeft = border;
-    else if (t.accentSide === "right") style.borderRight = border;
-    else if (t.accentSide === "top") style.borderTop = border;
-    else style.borderBottom = border;
-  }
-  return style;
-}
-
-function buildLtTextStyle(
-  font: string, size: number, color: string,
-  bold: boolean, italic: boolean, uppercase: boolean
-): React.CSSProperties {
-  return {
-    fontFamily: font, fontSize: size, color,
-    fontWeight: bold ? "bold" : "normal",
-    fontStyle: italic ? "italic" : "normal",
-    textTransform: uppercase ? "uppercase" : undefined,
-    lineHeight: 1.25, margin: 0,
-  };
-}
-
-function buildLtLabelStyle(t: LowerThirdTemplate): React.CSSProperties {
-  return {
-    ...buildLtTextStyle(t.secondaryFont, t.labelSize, t.labelColor, true, false, t.labelUppercase),
-    letterSpacing: "0.1em", marginBottom: 4,
-  };
-}
-
-function ltBuildLyricsPayload(
-  ltFlatLines: { text: string; sectionLabel: string }[],
-  lineIndex: number,
-  linesPerDisplay: 1 | 2,
-): LowerThirdData | null {
-  if (ltFlatLines.length === 0) return null;
-  const line1 = ltFlatLines[lineIndex];
-  if (!line1) return null;
-  const line2Entry = linesPerDisplay === 2 ? ltFlatLines[lineIndex + 1] : undefined;
-  return {
-    kind: "Lyrics",
-    data: { line1: line1.text, line2: line2Entry?.text, section_label: line1.sectionLabel },
-  };
-}
-
-// ─── Lower Third Overlay ──────────────────────────────────────────────────────
-
-function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData; template: LowerThirdTemplate }) {
-  const containerStyle = buildLtContainerStyle(t);
-
-  const getVariants = () => {
-    switch (t.animation) {
-      case "fade":
-        return { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 } };
-      case "slide-up":
-        return { initial: { opacity: 0, y: 30 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: 30 } };
-      case "slide-left":
-        return { initial: { opacity: 0, x: 50 }, animate: { opacity: 1, x: 0 }, exit: { opacity: 0, x: 50 } };
-      default:
-        return { initial: { opacity: 1 }, animate: { opacity: 1 }, exit: { opacity: 1 } };
-    }
-  };
-
-  const variants = getVariants();
-
-  return (
-    <motion.div
-      style={buildLtPositionStyle(t)}
-      initial={variants.initial}
-      animate={variants.animate}
-      exit={variants.exit}
-      transition={{ duration: 0.5, ease: "easeOut" }}
-    >
-      <div style={containerStyle}>
-        {data.kind === "Nameplate" && (
-          <div className="w-full">
-            {t.variant === "modern" ? (
-              <div className="flex flex-col items-center text-center">
-                <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
-                  {data.data.name}
-                </p>
-                {data.data.title && (
-                  <>
-                    <div className="w-1/4 h-px my-2 opacity-30" style={{ backgroundColor: t.secondaryColor }} />
-                    <p style={buildLtTextStyle(t.secondaryFont, t.secondarySize, t.secondaryColor, t.secondaryBold, t.secondaryItalic, t.secondaryUppercase)}>
-                      {data.data.title}
-                    </p>
-                  </>
-                )}
-              </div>
-            ) : t.variant === "banner" ? (
-              <div className="flex items-center gap-4">
-                <div className="shrink-0 py-1 px-4 rounded" style={{ background: t.accentColor, color: t.bgColor }}>
-                  <p className="font-black text-xl uppercase tracking-tighter">LIVE</p>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
-                    {data.data.name}
-                  </p>
-                  {data.data.title && (
-                    <p style={buildLtTextStyle(t.secondaryFont, t.secondarySize, t.secondaryColor, t.secondaryBold, t.secondaryItalic, t.secondaryUppercase)}>
-                      {data.data.title}
-                    </p>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <>
-                <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
-                  {data.data.name}
-                </p>
-                {data.data.title && (
-                  <p style={{ ...buildLtTextStyle(t.secondaryFont, t.secondarySize, t.secondaryColor, t.secondaryBold, t.secondaryItalic, t.secondaryUppercase), marginTop: 4 }}>
-                    {data.data.title}
-                  </p>
-                )}
-              </>
-            )}
-          </div>
-        )}
-        {data.kind === "Lyrics" && (
-          <>
-            {data.data.section_label && t.labelVisible && (
-              <p style={buildLtLabelStyle(t)}>{data.data.section_label}</p>
-            )}
-            <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
-              {data.data.line1}
-            </p>
-            {data.data.line2 && (
-              <p style={{ ...buildLtTextStyle(t.secondaryFont, t.secondarySize, t.secondaryColor, t.secondaryBold, t.secondaryItalic, t.secondaryUppercase), marginTop: 4 }}>
-                {data.data.line2}
-              </p>
-            )}
-          </>
-        )}
-        {data.kind === "FreeText" && (
-          t.scrollEnabled ? (
-            <div style={{ overflow: "hidden", whiteSpace: "nowrap" }}>
-              <span style={{
-                ...buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase),
-                display: "inline-block",
-                paddingLeft: "100%",
-                animation: `lt-scroll-${t.scrollDirection} ${(11 - t.scrollSpeed) * 4}s linear infinite`,
-                willChange: "transform",
-              }}>
-                {data.data.text}
-              </span>
-            </div>
-          ) : (
-            <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
-              {data.data.text}
-            </p>
-          )
-        )}
-      </div>
-    </motion.div>
-  );
-}
-
-// ─── LowerThirdTab — Fire-Only Operator Panel ─────────────────────────────────
-// Design controls (bg/accent/position/typography/animation) live in Design Hub.
+import { ltBuildLyricsPayload } from "../utils";
+import type { LowerThirdData } from "../types";
 
 interface LowerThirdTabProps {
   onLoadMedia: () => Promise<void>;
   onSetToast: (msg: string) => void;
 }
 
-export default function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
+export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
   const {
     activeTab,
     songs,
@@ -277,7 +71,6 @@ export default function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
     if (ltVisible) await ltSendCurrent(next);
   }, [ltFlatLines, ltLinesPerDisplay, ltLineIndex, ltVisible, ltSendCurrent]);
 
-  // Keyboard shortcuts (Space/→ = next, ← = prev, H = show/hide) — active in LT tab lyrics mode
   useEffect(() => {
     if (activeTab !== "lower-third" || ltMode !== "lyrics") return;
     const handler = (e: KeyboardEvent) => {
@@ -302,7 +95,6 @@ export default function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
     return () => window.removeEventListener("keydown", handler);
   }, [activeTab, ltMode, ltAdvance, ltVisible, ltSongId, ltFlatLines, ltLineIndex, ltLinesPerDisplay, ltTemplate]);
 
-  // Auto-advance interval
   useEffect(() => {
     if (ltAutoRef.current) clearInterval(ltAutoRef.current);
     if (ltAutoAdvance && ltVisible && ltMode === "lyrics") {
@@ -326,8 +118,6 @@ export default function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
 
   return (
     <div className="flex flex-col gap-3 p-3">
-
-      {/* ── Template selector ── */}
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center justify-between">
           <span className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Template</span>
@@ -347,7 +137,6 @@ export default function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
         </select>
       </div>
 
-      {/* ── Mode selector ── */}
       <div className="flex rounded-lg overflow-hidden border border-slate-700 shrink-0">
         {(["nameplate", "lyrics", "freetext"] as const).map((m) => (
           <button key={m} onClick={() => setLtMode(m)}
@@ -357,7 +146,6 @@ export default function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
         ))}
       </div>
 
-      {/* ── Nameplate mode ── */}
       {ltMode === "nameplate" && (
         <div className="flex flex-col gap-2">
           <input
@@ -375,7 +163,6 @@ export default function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
         </div>
       )}
 
-      {/* ── Free text mode ── */}
       {ltMode === "freetext" && (
         <div className="flex flex-col gap-2">
           <textarea
@@ -412,7 +199,6 @@ export default function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
         </div>
       )}
 
-      {/* ── Lyrics mode ── */}
       {ltMode === "lyrics" && (
         <div className="flex flex-col gap-3">
           <div className="flex gap-2 items-center">
@@ -482,7 +268,6 @@ export default function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
         </div>
       )}
 
-      {/* ── PREV / NEXT + SHOW/HIDE ── */}
       <div className="flex flex-col gap-2 pt-1">
         {ltMode === "lyrics" && (
           <div className="flex gap-2">
@@ -526,7 +311,6 @@ export default function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
         </button>
       </div>
 
-      {/* ── Keyboard shortcut legend ── */}
       <div className="border-t border-slate-800 pt-3">
         <p className="text-[9px] font-black text-slate-700 uppercase tracking-widest mb-2">Keyboard (LT tab active)</p>
         <div className="grid grid-cols-2 gap-x-3 gap-y-1">
@@ -542,7 +326,6 @@ export default function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
           ))}
         </div>
       </div>
-
     </div>
   );
 }

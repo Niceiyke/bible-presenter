@@ -1,13 +1,13 @@
 import React from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store";
-import type { DisplayItem, Song, LyricSection } from "../App";
+import type { Song, LyricSection } from "../types";
 
 interface SongsTabProps {
   onOpenLyricsMode: (songId: string) => void;
 }
 
-export default function SongsTab({ onOpenLyricsMode }: SongsTabProps) {
+export function SongsTab({ onOpenLyricsMode }: SongsTabProps) {
   const {
     songs, setSongs,
     songSearch, setSongSearch,
@@ -203,7 +203,6 @@ export default function SongsTab({ onOpenLyricsMode }: SongsTabProps) {
                 className="text-[10px] font-bold uppercase text-slate-500 hover:text-amber-400 border border-slate-700 hover:border-amber-500 rounded-lg py-2"
               >+ Add Section</button>
 
-              {/* Arrangement panel */}
               <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-3 flex flex-col gap-2">
                 <div className="flex items-center justify-between">
                   <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Arrangement</p>
