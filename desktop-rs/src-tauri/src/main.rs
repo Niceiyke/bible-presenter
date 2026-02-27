@@ -1029,6 +1029,51 @@ async fn set_props(
 }
 
 // ---------------------------------------------------------------------------
+// LibreOffice PPTX rendering
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn check_libreoffice() -> bool {
+    std::process::Command::new("libreoffice")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+async fn convert_pptx_slides(
+    state: State<'_, Arc<AppState>>,
+    path: String,
+    pres_id: String,
+) -> Result<Vec<String>, String> {
+    let cache_dir = state.media_schedule.get_pptx_cache_dir(&pres_id);
+    fs::create_dir_all(&cache_dir).map_err(|e| e.to_string())?;
+    let out = std::process::Command::new("libreoffice")
+        .args([
+            "--headless",
+            "--convert-to",
+            "png:impress_png_Export",
+            "--outdir",
+            cache_dir.to_str().unwrap_or(""),
+            &path,
+        ])
+        .output()
+        .map_err(|e| format!("Failed to run LibreOffice: {}", e))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).to_string());
+    }
+    let mut slides: Vec<String> = fs::read_dir(&cache_dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map(|x| x == "png").unwrap_or(false))
+        .map(|e| e.path().to_string_lossy().to_string())
+        .collect();
+    slides.sort();
+    Ok(slides)
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -1263,7 +1308,9 @@ fn main() {
             load_service,
             delete_service,
             get_props,
-            set_props
+            set_props,
+            check_libreoffice,
+            convert_pptx_slides
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
