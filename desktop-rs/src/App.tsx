@@ -2021,7 +2021,7 @@ function OutputWindow() {
   }
 
   function connectOutputWs(pin: string) {
-    const ws = new WebSocket("ws://localhost:7420/ws");
+    const ws = new WebSocket("ws://127.0.0.1:7420/ws");
     outputWsRef.current = ws;
 
     ws.onopen = () => {
@@ -2534,6 +2534,757 @@ function Toast({ message, onDone }: { message: string; onDone: () => void }) {
   );
 }
 
+// ─── Design Hub Window ────────────────────────────────────────────────────────
+// Separate Tauri window for all heavy design/config work. Shares helper functions
+// defined above (CustomSlideRenderer, LowerThirdOverlay, SceneRenderer, SlideEditor, etc.)
+
+function DesignHub() {
+  const [hubTab, setHubTab] = React.useState<"studio" | "lt-designer" | "scene" | "props" | "settings">("studio");
+
+  // Studio state
+  const [studioList, setStudioList] = React.useState<{ id: string; name: string; slide_count: number }[]>([]);
+  const [editorPresId, setEditorPresId] = React.useState<string | null>(null);
+  const [editorPres, setEditorPres] = React.useState<CustomPresentation | null>(null);
+  const [expandedId, setExpandedId] = React.useState<string | null>(null);
+  const [studioSlides, setStudioSlides] = React.useState<Record<string, CustomSlide[]>>({});
+  const [mediaImages, setMediaImages] = React.useState<MediaItem[]>([]);
+
+  // LT Designer state
+  const [ltTemplate, setLtTemplate] = React.useState<LowerThirdTemplate>(DEFAULT_LT_TEMPLATE);
+  const [ltSavedTemplates, setLtSavedTemplates] = React.useState<LowerThirdTemplate[]>([DEFAULT_LT_TEMPLATE]);
+  const [ltMode, setLtMode] = React.useState<"nameplate" | "lyrics" | "freetext">("nameplate");
+  const [ltName, setLtName] = React.useState("Full Name");
+  const [ltTitle, setLtTitle] = React.useState("Title Here");
+  const [ltFreeText, setLtFreeText] = React.useState("Your message here...");
+  const [ltVisible, setLtVisible] = React.useState(false);
+  const [ltTemplateName, setLtTemplateName] = React.useState("");
+
+  // Scene state
+  const [workingScene, setWorkingScene] = React.useState<SceneData>({ id: stableId(), name: "New Scene", layers: [] });
+  const [activeLayerId, setActiveLayerId] = React.useState<string | null>(null);
+  const [savedScenes, setSavedScenes] = React.useState<SceneData[]>([]);
+
+  // Props state
+  const [propItems, setPropItems] = React.useState<PropItem[]>([]);
+
+  // Settings state
+  const [settings, setSettings] = React.useState<PresentationSettings>({
+    theme: "dark", reference_position: "bottom", background: { type: "None" }, is_blanked: false, font_size: 72,
+    slide_transition: "fade", slide_transition_duration: 0.4,
+  });
+  const [cameras, setCameras] = React.useState<MediaDeviceInfo[]>([]);
+
+  const [toast, setToast] = React.useState<string | null>(null);
+
+  // Load data on mount
+  React.useEffect(() => {
+    invoke<{ id: string; name: string; slide_count: number }[]>("list_studio_presentations")
+      .then(setStudioList).catch(() => {});
+    invoke<MediaItem[]>("get_media").then((m) => setMediaImages(m.filter(i => i.media_type === "Image"))).catch(() => {});
+    invoke<LowerThirdTemplate[]>("load_lt_templates").then((ts) => {
+      if (ts?.length) { setLtSavedTemplates(ts); setLtTemplate(ts[0]); }
+    }).catch(() => {});
+    invoke<PropItem[]>("get_props").then(setPropItems).catch(() => {});
+    invoke<SceneData[]>("list_scenes").then(setSavedScenes).catch(() => {});
+    invoke<PresentationSettings>("get_settings").then((s) => { if (s) setSettings(s); }).catch(() => {});
+    navigator.mediaDevices?.enumerateDevices()
+      .then((devs) => setCameras(devs.filter((d) => d.kind === "videoinput")))
+      .catch(() => {});
+  }, []);
+
+  const loadStudioList = async () => {
+    const list = await invoke<{ id: string; name: string; slide_count: number }[]>("list_studio_presentations");
+    setStudioList(list);
+  };
+
+  const handleNewPresentation = async () => {
+    const pres: CustomPresentation = { id: stableId(), name: "Untitled Presentation", slides: [newDefaultSlide()] };
+    await invoke("save_studio_presentation", { presentation: pres });
+    await loadStudioList();
+    setEditorPres(pres);
+    setEditorPresId(pres.id);
+  };
+
+  const handleOpenEditor = async (id: string) => {
+    const data: any = await invoke("load_studio_presentation", { id });
+    setEditorPres(data as CustomPresentation);
+    setEditorPresId(id);
+  };
+
+  const handleDeletePresentation = async (id: string) => {
+    await invoke("delete_studio_presentation", { id });
+    setStudioList((prev) => prev.filter((p) => p.id !== id));
+    setStudioSlides((prev) => { const n = { ...prev }; delete n[id]; return n; });
+    if (expandedId === id) setExpandedId(null);
+  };
+
+  const handleExpandPresentation = async (id: string) => {
+    if (expandedId === id) { setExpandedId(null); return; }
+    if (!studioSlides[id]) {
+      const data: any = await invoke("load_studio_presentation", { id });
+      const pres = data as CustomPresentation;
+      setStudioSlides((prev) => ({ ...prev, [id]: pres.slides }));
+    }
+    setExpandedId(id);
+  };
+
+  const saveScene = async () => {
+    await invoke("save_scene", { scene: workingScene });
+    const scenes = await invoke<SceneData[]>("list_scenes");
+    setSavedScenes(scenes);
+    setToast("Scene saved");
+  };
+
+  const saveLtTemplates = async (templates: LowerThirdTemplate[]) => {
+    await invoke("save_lt_templates", { templates });
+  };
+
+  const updateSettings = async (next: PresentationSettings) => {
+    setSettings(next);
+    await invoke("save_settings", { settings: next });
+  };
+
+  const updateProps = async (items: PropItem[]) => {
+    setPropItems(items);
+    await invoke("set_props", { props: items });
+  };
+
+  // If editor is open, show it full screen
+  if (editorPresId && editorPres) {
+    return (
+      <SlideEditor
+        initialPres={editorPres}
+        mediaImages={mediaImages}
+        onClose={async (saved) => {
+          setEditorPresId(null);
+          setEditorPres(null);
+          if (saved) {
+            await loadStudioList();
+            setStudioSlides((prev) => { const n = { ...prev }; delete n[editorPresId]; return n; });
+          }
+        }}
+      />
+    );
+  }
+
+  return (
+    <div className="h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden">
+      {/* Header */}
+      <header className="flex items-center gap-3 px-4 py-3 border-b border-slate-800 bg-slate-900/60 shrink-0">
+        <span className="text-[10px] font-black uppercase tracking-widest text-purple-400">Design Hub</span>
+        <div className="h-4 w-px bg-slate-700" />
+        {/* Tab bar */}
+        <div className="flex gap-1">
+          {([
+            { id: "studio", label: "Studio" },
+            { id: "lt-designer", label: "LT Designer" },
+            { id: "scene", label: "Scene Builder" },
+            { id: "props", label: "Props" },
+            { id: "settings", label: "Preferences" },
+          ] as const).map(({ id, label }) => (
+            <button
+              key={id}
+              onClick={() => setHubTab(id)}
+              className={`px-3 py-1 rounded text-xs font-bold transition-all ${
+                hubTab === id
+                  ? "bg-purple-600 text-white"
+                  : "bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="ml-auto text-[9px] text-slate-600">Opens from Operator → DESIGN HUB</div>
+      </header>
+
+      <div className="flex-1 overflow-hidden">
+
+        {/* ── Studio Tab ── */}
+        {hubTab === "studio" && (
+          <div className="h-full flex flex-col overflow-hidden">
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800 shrink-0">
+              <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Custom Presentations</span>
+              <button
+                onClick={handleNewPresentation}
+                className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded transition-all"
+              >
+                <Plus size={12} /> New Presentation
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4">
+              {studioList.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-48 text-center gap-3">
+                  <Layers size={32} className="text-slate-800" />
+                  <p className="text-xs text-slate-600 italic">No presentations yet. Click "New Presentation" to get started.</p>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-3">
+                  {studioList.map((pres) => (
+                    <div key={pres.id} className="bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden">
+                      <div className="flex items-center gap-3 px-4 py-3">
+                        <Layers size={16} className="text-purple-400 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-bold text-slate-200 truncate">{pres.name}</p>
+                          <p className="text-[9px] text-slate-600">{pres.slide_count} slide{pres.slide_count !== 1 ? "s" : ""}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleExpandPresentation(pres.id)}
+                            className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[9px] font-bold rounded transition-all"
+                          >
+                            {expandedId === pres.id ? "▲ COLLAPSE" : "▼ SLIDES"}
+                          </button>
+                          <button
+                            onClick={() => handleOpenEditor(pres.id)}
+                            className="px-2 py-1 bg-purple-600/20 hover:bg-purple-600 text-purple-400 hover:text-white text-[9px] font-bold rounded border border-purple-600/30 transition-all"
+                          >
+                            EDIT
+                          </button>
+                          <button
+                            onClick={() => handleDeletePresentation(pres.id)}
+                            className="px-2 py-1 bg-red-900/20 hover:bg-red-600 text-red-400 hover:text-white text-[9px] font-bold rounded border border-red-900/30 transition-all"
+                          >
+                            DELETE
+                          </button>
+                        </div>
+                      </div>
+                      {expandedId === pres.id && studioSlides[pres.id] && (
+                        <div className="px-4 pb-4 border-t border-slate-800/60">
+                          <div className="grid grid-cols-4 gap-2 mt-3">
+                            {studioSlides[pres.id].map((slide, idx) => (
+                              <div
+                                key={slide.id}
+                                className="relative group aspect-video rounded overflow-hidden border border-slate-700 hover:border-purple-500/60 transition-all"
+                              >
+                                <CustomSlideRenderer slide={slide} scale={0.07} />
+                                <div className="absolute bottom-0 left-0 right-0 text-center text-[7px] text-white/60 bg-black/40 py-0.5">
+                                  {idx + 1}
+                                </div>
+                                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-all flex flex-col items-center justify-center gap-1 p-1">
+                                  <button
+                                    onClick={() => invoke("stage_item", {
+                                      item: {
+                                        type: "CustomSlide",
+                                        data: {
+                                          presentation_id: pres.id,
+                                          presentation_name: pres.name,
+                                          slide_index: idx,
+                                          slide_count: studioSlides[pres.id].length,
+                                          background_color: slide.backgroundColor,
+                                          background_image: slide.backgroundImage,
+                                          header_enabled: slide.headerEnabled ?? true,
+                                          header_height_pct: slide.headerHeightPct ?? 35,
+                                          header: { text: slide.header.text, font_size: slide.header.fontSize, font_family: slide.header.fontFamily, color: slide.header.color, bold: slide.header.bold, italic: slide.header.italic, align: slide.header.align },
+                                          body: { text: slide.body.text, font_size: slide.body.fontSize, font_family: slide.body.fontFamily, color: slide.body.color, bold: slide.body.bold, italic: slide.body.italic, align: slide.body.align },
+                                        },
+                                      }
+                                    })}
+                                    className="w-full bg-slate-600 hover:bg-slate-500 text-white text-[8px] font-bold py-0.5 rounded"
+                                  >STAGE</button>
+                                  <button
+                                    onClick={async () => {
+                                      await invoke("stage_item", {
+                                        item: {
+                                          type: "CustomSlide",
+                                          data: {
+                                            presentation_id: pres.id,
+                                            presentation_name: pres.name,
+                                            slide_index: idx,
+                                            slide_count: studioSlides[pres.id].length,
+                                            background_color: slide.backgroundColor,
+                                            background_image: slide.backgroundImage,
+                                            header_enabled: slide.headerEnabled ?? true,
+                                            header_height_pct: slide.headerHeightPct ?? 35,
+                                            header: { text: slide.header.text, font_size: slide.header.fontSize, font_family: slide.header.fontFamily, color: slide.header.color, bold: slide.header.bold, italic: slide.header.italic, align: slide.header.align },
+                                            body: { text: slide.body.text, font_size: slide.body.fontSize, font_family: slide.body.fontFamily, color: slide.body.color, bold: slide.body.bold, italic: slide.body.italic, align: slide.body.align },
+                                          },
+                                        }
+                                      });
+                                      await invoke("go_live");
+                                    }}
+                                    className="w-full bg-amber-500 hover:bg-amber-400 text-black text-[8px] font-bold py-0.5 rounded"
+                                  >LIVE</button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── LT Designer Tab ── */}
+        {hubTab === "lt-designer" && (
+          <div className="h-full flex overflow-hidden">
+            {/* Left: Controls */}
+            <div className="w-80 border-r border-slate-800 flex flex-col overflow-hidden shrink-0">
+              {/* Template management */}
+              <div className="p-4 border-b border-slate-800 flex flex-col gap-2 shrink-0">
+                <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Templates</p>
+                <div className="flex gap-2">
+                  <select
+                    value={ltTemplate.id}
+                    onChange={(e) => {
+                      const t = ltSavedTemplates.find((t) => t.id === e.target.value);
+                      if (t) setLtTemplate(t);
+                    }}
+                    className="flex-1 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none"
+                  >
+                    {ltSavedTemplates.map((t) => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={async () => {
+                      const name = ltTemplateName.trim() || `Template ${ltSavedTemplates.length + 1}`;
+                      const newT = { ...ltTemplate, id: stableId(), name };
+                      const updated = [...ltSavedTemplates, newT];
+                      setLtSavedTemplates(updated);
+                      setLtTemplate(newT);
+                      setLtTemplateName("");
+                      await saveLtTemplates(updated);
+                    }}
+                    className="px-2 py-1 bg-purple-600 hover:bg-purple-500 text-white text-[9px] font-bold rounded transition-all"
+                  >+ Save</button>
+                </div>
+                <input
+                  value={ltTemplateName}
+                  onChange={(e) => setLtTemplateName(e.target.value)}
+                  placeholder="New template name..."
+                  className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-purple-500"
+                />
+              </div>
+              {/* Design controls */}
+              <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+                {/* Background */}
+                <div className="flex flex-col gap-2 p-3 rounded-lg bg-slate-900/60 border border-slate-700/50">
+                  <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Background</p>
+                  <div className="flex gap-1">
+                    {(["solid", "gradient", "transparent", "image"] as const).map((type) => (
+                      <button key={type} onClick={() => setLtTemplate((t) => ({ ...t, bgType: type }))}
+                        className={`flex-1 py-0.5 text-[8px] font-bold rounded border transition-all ${ltTemplate.bgType === type ? "bg-purple-600/20 border-purple-500 text-purple-400" : "border-slate-700 text-slate-500 hover:border-slate-600"}`}>
+                        {type}
+                      </button>
+                    ))}
+                  </div>
+                  {ltTemplate.bgType !== "transparent" && ltTemplate.bgType !== "image" && (
+                    <div className="flex items-center gap-3">
+                      <input type="color" value={ltTemplate.bgColor} onChange={(e) => setLtTemplate((t) => ({ ...t, bgColor: e.target.value }))}
+                        className="w-8 h-8 rounded cursor-pointer border border-slate-700 bg-transparent" />
+                      <div className="flex-1 flex flex-col gap-0.5">
+                        <span className="text-[8px] text-slate-600">Opacity: {ltTemplate.bgOpacity}%</span>
+                        <input type="range" min={0} max={100} value={ltTemplate.bgOpacity} onChange={(e) => setLtTemplate((t) => ({ ...t, bgOpacity: parseInt(e.target.value) }))}
+                          className="w-full accent-purple-500" />
+                      </div>
+                    </div>
+                  )}
+                  {ltTemplate.bgType === "gradient" && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-[8px] text-slate-600">End:</span>
+                      <input type="color" value={ltTemplate.bgGradientEnd} onChange={(e) => setLtTemplate((t) => ({ ...t, bgGradientEnd: e.target.value }))}
+                        className="w-8 h-8 rounded cursor-pointer border border-slate-700 bg-transparent" />
+                    </div>
+                  )}
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={ltTemplate.bgBlur} onChange={(e) => setLtTemplate((t) => ({ ...t, bgBlur: e.target.checked }))} className="accent-purple-500" />
+                    <span className="text-[9px] text-slate-400">Backdrop blur</span>
+                  </label>
+                </div>
+
+                {/* Accent bar */}
+                <div className="flex flex-col gap-2 p-3 rounded-lg bg-slate-900/60 border border-slate-700/50">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Accent Bar</p>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input type="checkbox" checked={ltTemplate.accentEnabled} onChange={(e) => setLtTemplate((t) => ({ ...t, accentEnabled: e.target.checked }))} className="accent-purple-500" />
+                      <span className="text-[9px] text-slate-400">Enabled</span>
+                    </label>
+                  </div>
+                  {ltTemplate.accentEnabled && (
+                    <div className="flex gap-2 items-center flex-wrap">
+                      <input type="color" value={ltTemplate.accentColor} onChange={(e) => setLtTemplate((t) => ({ ...t, accentColor: e.target.value }))}
+                        className="w-7 h-7 rounded cursor-pointer border border-slate-700 bg-transparent" />
+                      <div className="flex gap-1">
+                        {(["left", "right", "top", "bottom"] as const).map((s) => (
+                          <button key={s} onClick={() => setLtTemplate((t) => ({ ...t, accentSide: s }))}
+                            className={`px-1.5 py-0.5 text-[8px] font-bold rounded border transition-all ${ltTemplate.accentSide === s ? "bg-purple-600/20 border-purple-500 text-purple-400" : "border-slate-700 text-slate-500"}`}>
+                            {s[0].toUpperCase()}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex-1 flex flex-col gap-0.5">
+                        <span className="text-[8px] text-slate-600">Width: {ltTemplate.accentWidth}px</span>
+                        <input type="range" min={2} max={16} value={ltTemplate.accentWidth} onChange={(e) => setLtTemplate((t) => ({ ...t, accentWidth: parseInt(e.target.value) }))}
+                          className="w-full accent-purple-500" />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Position */}
+                <div className="flex flex-col gap-2 p-3 rounded-lg bg-slate-900/60 border border-slate-700/50">
+                  <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Position & Size</p>
+                  <div className="grid grid-cols-3 gap-1">
+                    {(["left", "center", "right"] as const).map((h) => (
+                      <button key={h} onClick={() => setLtTemplate((t) => ({ ...t, hAlign: h }))}
+                        className={`py-0.5 text-[8px] font-bold rounded border transition-all ${ltTemplate.hAlign === h ? "bg-purple-600/20 border-purple-500 text-purple-400" : "border-slate-700 text-slate-500"}`}>
+                        {h}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-3 gap-1">
+                    {(["top", "middle", "bottom"] as const).map((v) => (
+                      <button key={v} onClick={() => setLtTemplate((t) => ({ ...t, vAlign: v }))}
+                        className={`py-0.5 text-[8px] font-bold rounded border transition-all ${ltTemplate.vAlign === v ? "bg-purple-600/20 border-purple-500 text-purple-400" : "border-slate-700 text-slate-500"}`}>
+                        {v}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-[8px] text-slate-500">
+                    <div>
+                      <p>Width: {ltTemplate.widthPct}%</p>
+                      <input type="range" min={20} max={100} value={ltTemplate.widthPct} onChange={(e) => setLtTemplate((t) => ({ ...t, widthPct: parseInt(e.target.value) }))} className="w-full accent-purple-500" />
+                    </div>
+                    <div>
+                      <p>Border radius: {ltTemplate.borderRadius}</p>
+                      <input type="range" min={0} max={32} value={ltTemplate.borderRadius} onChange={(e) => setLtTemplate((t) => ({ ...t, borderRadius: parseInt(e.target.value) }))} className="w-full accent-purple-500" />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Typography */}
+                <div className="flex flex-col gap-2 p-3 rounded-lg bg-slate-900/60 border border-slate-700/50">
+                  <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Primary Text</p>
+                  <div className="flex gap-2">
+                    <select value={ltTemplate.primaryFont} onChange={(e) => setLtTemplate((t) => ({ ...t, primaryFont: e.target.value }))}
+                      className="flex-1 bg-slate-800 border border-slate-700 rounded px-1 py-0.5 text-xs text-slate-200 focus:outline-none">
+                      {FONTS.map((f) => <option key={f} value={f}>{f}</option>)}
+                    </select>
+                    <input type="number" min={12} max={120} value={ltTemplate.primarySize}
+                      onChange={(e) => setLtTemplate((t) => ({ ...t, primarySize: parseInt(e.target.value) }))}
+                      className="w-14 bg-slate-800 border border-slate-700 rounded px-1 py-0.5 text-xs text-slate-200 focus:outline-none" />
+                    <input type="color" value={ltTemplate.primaryColor} onChange={(e) => setLtTemplate((t) => ({ ...t, primaryColor: e.target.value }))}
+                      className="w-7 h-7 rounded cursor-pointer border border-slate-700" />
+                  </div>
+                </div>
+
+                {/* Animation */}
+                <div className="flex flex-col gap-2 p-3 rounded-lg bg-slate-900/60 border border-slate-700/50">
+                  <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Animation</p>
+                  <div className="flex gap-1">
+                    {(["fade", "slide-up", "slide-left", "none"] as const).map((a) => (
+                      <button key={a} onClick={() => setLtTemplate((t) => ({ ...t, animation: a }))}
+                        className={`flex-1 py-0.5 text-[8px] font-bold rounded border transition-all ${ltTemplate.animation === a ? "bg-purple-600/20 border-purple-500 text-purple-400" : "border-slate-700 text-slate-500"}`}>
+                        {a}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Fire Controls */}
+                <div className="flex flex-col gap-2 p-3 rounded-lg bg-slate-900/60 border border-slate-700/50">
+                  <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Fire Controls</p>
+                  <div className="flex gap-2">
+                    {(["nameplate", "lyrics", "freetext"] as const).map((m) => (
+                      <button key={m} onClick={() => setLtMode(m)}
+                        className={`flex-1 py-1 text-[9px] font-bold rounded border transition-all ${ltMode === m ? "bg-amber-500/20 border-amber-500 text-amber-400" : "border-slate-700 text-slate-500 hover:border-slate-600"}`}>
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                  {ltMode === "nameplate" && (
+                    <div className="flex flex-col gap-1">
+                      <input value={ltName} onChange={(e) => setLtName(e.target.value)} placeholder="Name..." className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500" />
+                      <input value={ltTitle} onChange={(e) => setLtTitle(e.target.value)} placeholder="Title..." className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500" />
+                    </div>
+                  )}
+                  {ltMode === "freetext" && (
+                    <textarea value={ltFreeText} onChange={(e) => setLtFreeText(e.target.value)} rows={2}
+                      className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 resize-none focus:outline-none focus:ring-1 focus:ring-amber-500" />
+                  )}
+                  <button
+                    onClick={async () => {
+                      let data: LowerThirdData;
+                      if (ltMode === "nameplate") data = { kind: "Nameplate", data: { name: ltName, title: ltTitle || undefined } };
+                      else if (ltMode === "freetext") data = { kind: "FreeText", data: { text: ltFreeText } };
+                      else data = { kind: "FreeText", data: { text: "Lyrics mode: use Operator LT tab" } };
+                      if (ltVisible) {
+                        await invoke("hide_lower_third");
+                        setLtVisible(false);
+                      } else {
+                        await invoke("show_lower_third", { data, template: ltTemplate });
+                        setLtVisible(true);
+                      }
+                    }}
+                    className={`py-2 text-xs font-black uppercase rounded-lg transition-all ${ltVisible ? "bg-red-600 text-white" : "bg-green-600 text-white"}`}
+                  >
+                    {ltVisible ? "HIDE LOWER THIRD" : "SHOW LOWER THIRD"}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Right: 16:9 live preview */}
+            <div className="flex-1 flex items-center justify-center bg-black p-8 overflow-hidden">
+              <div className="relative w-full" style={{ aspectRatio: "16/9", maxHeight: "100%" }}>
+                <div className="w-full h-full bg-slate-900 rounded-xl overflow-hidden shadow-2xl border border-slate-700 relative" style={{ aspectRatio: "16/9" }}>
+                  {/* Simulated background */}
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <span className="font-serif text-2xl italic text-slate-800">Preview Background</span>
+                  </div>
+                  {/* LT overlay preview */}
+                  <div className="absolute inset-0" style={{ width: 1920, height: 1080, transform: `scale(${Math.min(1, 1)})`, transformOrigin: "top left" }}>
+                    <div style={{ position: "absolute", inset: 0, transform: "scale(0.5)", transformOrigin: "top left", width: "200%", height: "200%" }}>
+                      <LowerThirdOverlay
+                        template={ltTemplate}
+                        data={
+                          ltMode === "nameplate" ? { kind: "Nameplate", data: { name: ltName || "Full Name", title: ltTitle || "Title Here" } } :
+                          ltMode === "freetext" ? { kind: "FreeText", data: { text: ltFreeText || "Your message here..." } } :
+                          { kind: "Lyrics", data: { line1: "Lyric Line 1", line2: "Lyric Line 2", section_label: "Verse 1" } }
+                        }
+                      />
+                    </div>
+                  </div>
+                </div>
+                <p className="text-center text-[9px] text-slate-600 mt-2">Live preview — 16:9 • 1920×1080</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Scene Builder Tab ── */}
+        {hubTab === "scene" && (
+          <div className="h-full flex overflow-hidden">
+            {/* Left: Layer panel */}
+            <div className="w-72 border-r border-slate-800 flex flex-col overflow-hidden shrink-0">
+              <div className="p-3 border-b border-slate-800 flex items-center justify-between shrink-0">
+                <span className="text-[9px] font-black uppercase text-slate-500">Scene Layers</span>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      const layer: SceneLayer = {
+                        id: stableId(), name: `Layer ${workingScene.layers.length + 1}`,
+                        content: { kind: "empty" }, x: 0, y: 0, w: 100, h: 100, opacity: 1, visible: true,
+                      };
+                      setWorkingScene((s) => ({ ...s, layers: [...s.layers, layer] }));
+                    }}
+                    className="px-2 py-0.5 bg-blue-600 hover:bg-blue-500 text-white text-[9px] font-bold rounded transition-all"
+                  >
+                    + Layer
+                  </button>
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-1">
+                {workingScene.layers.length === 0 ? (
+                  <p className="text-[10px] text-slate-600 text-center italic mt-8">Add layers to build your scene.</p>
+                ) : (
+                  [...workingScene.layers].reverse().map((layer) => (
+                    <div
+                      key={layer.id}
+                      onClick={() => setActiveLayerId(layer.id)}
+                      className={`flex items-center gap-2 px-2 py-2 rounded-lg border cursor-pointer transition-all ${
+                        activeLayerId === layer.id
+                          ? "bg-blue-600/10 border-blue-500/40 text-blue-400"
+                          : "bg-slate-900/40 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-300"
+                      }`}
+                    >
+                      <span className="text-[9px] font-bold truncate flex-1">{layer.name}</span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setWorkingScene((s) => ({
+                            ...s,
+                            layers: s.layers.map((l) => l.id === layer.id ? { ...l, visible: !l.visible } : l),
+                          }));
+                        }}
+                        className="text-slate-500 hover:text-slate-300"
+                      >
+                        {layer.visible ? <Eye size={11} /> : <EyeOff size={11} />}
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setWorkingScene((s) => ({ ...s, layers: s.layers.filter((l) => l.id !== layer.id) }));
+                          if (activeLayerId === layer.id) setActiveLayerId(null);
+                        }}
+                        className="text-red-600 hover:text-red-400"
+                      >
+                        <X size={11} />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="p-3 border-t border-slate-800 flex flex-col gap-2 shrink-0">
+                <input
+                  value={workingScene.name}
+                  onChange={(e) => setWorkingScene((s) => ({ ...s, name: e.target.value }))}
+                  className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  placeholder="Scene name..."
+                />
+                <button onClick={saveScene} className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white text-[9px] font-black uppercase rounded transition-all">
+                  Save Scene
+                </button>
+                {savedScenes.length > 0 && (
+                  <div className="flex flex-col gap-1 max-h-32 overflow-y-auto">
+                    {savedScenes.map((scene) => (
+                      <button
+                        key={scene.id}
+                        onClick={() => { setWorkingScene(scene); setActiveLayerId(null); }}
+                        className="text-left px-2 py-1 bg-slate-900/40 hover:bg-slate-800 text-slate-400 text-[9px] rounded border border-slate-800 transition-all"
+                      >
+                        {scene.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Center: Scene canvas preview */}
+            <div className="flex-1 flex items-center justify-center bg-black/60 overflow-hidden p-6">
+              <div
+                className="relative rounded-lg overflow-hidden ring-2 ring-slate-700 shadow-2xl"
+                style={{ aspectRatio: "16/9", width: "100%", maxHeight: "100%" }}
+              >
+                <SceneRenderer scene={workingScene} activeLayerId={activeLayerId} onLayerClick={setActiveLayerId} />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Props Tab ── */}
+        {hubTab === "props" && (
+          <div className="h-full overflow-y-auto">
+            <div className="p-4 flex flex-col gap-4">
+              <div className="flex items-center justify-between shrink-0">
+                <span className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Persistent Props Layer</span>
+                <div className="flex gap-2">
+                  <button
+                    onClick={async () => {
+                      const selected = await invoke<string | null>("open_file_dialog", {}).catch(() => null);
+                      if (!selected) return;
+                      const newProp: PropItem = {
+                        id: stableId(), kind: "image", path: selected,
+                        x: 10, y: 10, w: 30, h: 20, opacity: 1, visible: true,
+                      };
+                      await updateProps([...propItems, newProp]);
+                    }}
+                    className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-bold rounded transition-all flex items-center gap-1"
+                  >
+                    <Plus size={12} /> Image
+                  </button>
+                  <button
+                    onClick={async () => {
+                      const newProp: PropItem = {
+                        id: stableId(), kind: "clock",
+                        text: "HH:mm:ss", color: "#ffffff",
+                        x: 75, y: 5, w: 20, h: 10, opacity: 1, visible: true,
+                      };
+                      await updateProps([...propItems, newProp]);
+                    }}
+                    className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-bold rounded transition-all flex items-center gap-1"
+                  >
+                    <Clock size={12} /> Clock
+                  </button>
+                  {propItems.length > 0 && (
+                    <button
+                      onClick={() => updateProps([])}
+                      className="px-3 py-1.5 bg-red-900/40 hover:bg-red-600 text-red-300 text-xs font-bold rounded transition-all"
+                    >
+                      Clear All
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {propItems.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-48 gap-3 text-center">
+                  <Monitor size={32} className="text-slate-800" />
+                  <p className="text-xs text-slate-600 italic">No props yet. Add images or clocks that stay visible on the output window.</p>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {propItems.map((prop) => (
+                    <div key={prop.id} className="bg-slate-900/50 border border-slate-800 rounded-xl p-3 flex flex-col gap-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          {prop.kind === "clock" ? <Clock size={14} className="text-amber-400" /> : <Image size={14} className="text-blue-400" />}
+                          <span className="text-xs font-bold text-slate-300 capitalize">{prop.kind}</span>
+                          {prop.kind === "image" && prop.path && (
+                            <span className="text-[9px] text-slate-600 truncate max-w-[160px]">{prop.path.split(/[/\\]/).pop()}</span>
+                          )}
+                          {prop.kind === "clock" && (
+                            <span className="text-[9px] text-slate-500 font-mono">{prop.text}</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => updateProps(propItems.map((p) => p.id === prop.id ? { ...p, visible: !p.visible } : p))}
+                            className={`p-1 rounded transition-all ${prop.visible ? "text-green-400" : "text-slate-600"}`}
+                          >
+                            {prop.visible ? <Eye size={13} /> : <EyeOff size={13} />}
+                          </button>
+                          <button
+                            onClick={() => updateProps(propItems.filter((p) => p.id !== prop.id))}
+                            className="p-1 text-red-600 hover:text-red-400 rounded transition-all"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-[8px] text-slate-500">
+                        <div>
+                          <p>Opacity: {Math.round(prop.opacity * 100)}%</p>
+                          <input type="range" min={0} max={1} step={0.05} value={prop.opacity}
+                            onChange={(e) => updateProps(propItems.map((p) => p.id === prop.id ? { ...p, opacity: parseFloat(e.target.value) } : p))}
+                            className="w-full accent-amber-500" />
+                        </div>
+                        <div className="grid grid-cols-2 gap-1">
+                          {([["x", "X"], ["y", "Y"], ["w", "W%"], ["h", "H%"]] as [keyof PropItem, string][]).map(([k, lbl]) => (
+                            <div key={k}>
+                              <span>{lbl}: {Math.round(prop[k] as number)}</span>
+                              <input type="range" min={0} max={100}
+                                value={prop[k] as number}
+                                onChange={(e) => updateProps(propItems.map((p) => p.id === prop.id ? { ...p, [k]: parseFloat(e.target.value) } : p))}
+                                className="w-full accent-amber-500" />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Preferences Tab ── */}
+        {hubTab === "settings" && (
+          <div className="h-full overflow-y-auto p-4">
+            <SettingsTab
+              onUpdateSettings={updateSettings}
+              onUpdateTranscriptionWindow={(sec) => invoke("set_transcription_window", { samples: Math.round(sec * 16000) })}
+              onUploadMedia={async () => {}}
+            />
+          </div>
+        )}
+      </div>
+
+      <AnimatePresence>
+        {toast && <Toast key={toast} message={toast} onDone={() => setToast(null)} />}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 // ─── Main Operator Window ─────────────────────────────────────────────────────
 
 export default function App() {
@@ -2593,7 +3344,7 @@ export default function App() {
   const [studioSlides, setStudioSlides] = useState<Record<string, CustomSlide[]>>({});
 
   // UI
-  const [activeTab, setActiveTab] = useState<"bible" | "media" | "presentations" | "studio" | "schedule" | "lower-third" | "songs" | "settings" | "props">("bible");
+  const [activeTab, setActiveTab] = useState<"bible" | "media" | "presentations" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props">("bible");
   const [toast, setToast] = useState<string | null>(null);
 
   // Songs library
@@ -2729,7 +3480,14 @@ export default function App() {
 
   // ── LAN Camera Mixer — Operator WebSocket + WebRTC ───────────────────────────
 
-  const STUN_CONFIG: RTCConfiguration = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+  const STUN_CONFIG: RTCConfiguration = { 
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+      { urls: "stun:stun2.l.google.com:19302" }
+    ], 
+    iceCandidatePoolSize: 10 
+  };
 
   function connectOperatorWs(pin: string) {
     const ws = new WebSocket(`ws://127.0.0.1:7420/ws`);
@@ -3929,6 +4687,7 @@ export default function App() {
 
   if (label === "output") return <OutputWindow />;
   if (label === "stage") return <StageWindow />;
+  if (label === "design") return <DesignHub />;
 
   // ── Studio editor modal ──────────────────────────────────────────────────────
 
@@ -4008,6 +4767,15 @@ export default function App() {
           >
             {settings.is_blanked ? <Eye size={14} /> : <EyeOff size={14} />}
             {settings.is_blanked ? "UNBLANK" : "BLANK"}
+          </button>
+
+          <button
+            onClick={() => invoke("toggle_design_window")}
+            className="bg-slate-800 hover:bg-slate-700 text-purple-400 font-bold py-2 px-3 rounded border border-purple-700/40 transition-all text-sm flex items-center gap-1.5"
+            title="Open Design Hub (Studio, LT Designer, Scene Builder, Props, Preferences)"
+          >
+            <Layers size={14} />
+            DESIGN HUB
           </button>
 
           <button
@@ -4096,93 +4864,7 @@ export default function App() {
 
       <div className="flex-1 flex overflow-hidden">
 
-        {/* ── 1. Persistent Service Schedule (Leftmost) ── */}
-        <aside className="w-64 bg-slate-950 border-r border-slate-900 flex flex-col overflow-hidden shrink-0">
-          <div className="p-3 border-b border-slate-900 bg-slate-900/20 flex items-center justify-between shrink-0">
-            <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-1.5">
-              <CalendarDays size={12} className="text-amber-500" /> Service Schedule
-            </h2>
-            <button 
-              onClick={() => setActiveTab("schedule")}
-              className="text-[9px] font-bold bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded transition-colors"
-            >
-              EDIT
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto p-2 space-y-1">
-            {scheduleEntries.length === 0 ? (
-              <div className="h-32 flex flex-col items-center justify-center text-center p-4">
-                <CalendarDays size={24} className="text-slate-800 mb-2" />
-                <p className="text-[10px] text-slate-600 font-medium leading-tight italic">Schedule is empty. Add items from Bible, Media or Songs tabs.</p>
-              </div>
-            ) : (
-              scheduleEntries.map((entry, idx) => (
-                <div 
-                  key={entry.id}
-                  className={`group relative flex flex-col p-2 rounded-lg border transition-all cursor-pointer ${
-                    stagedItem && displayItemLabel(stagedItem) === displayItemLabel(entry.item)
-                      ? "bg-amber-500/10 border-amber-500/30 ring-1 ring-amber-500/20"
-                      : "bg-slate-900/40 border-slate-800/50 hover:bg-slate-800/60 hover:border-slate-700"
-                  }`}
-                  onClick={() => stageItem(entry.item)}
-                >
-                  <div className="flex items-start justify-between gap-2 mb-1">
-                    <span className="text-[9px] font-black text-slate-600 bg-black/40 px-1.5 py-0.5 rounded tabular-nums">
-                      {String(idx + 1).padStart(2, "0")}
-                    </span>
-                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); sendLive(entry.item); }}
-                        className="bg-amber-600 hover:bg-amber-500 text-black p-1 rounded shadow-lg"
-                        title="Quick Live"
-                      >
-                        <Zap size={10} fill="currentColor" />
-                      </button>
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); moveScheduleEntry(idx, -1); }}
-                        className="bg-slate-700 hover:bg-slate-600 text-slate-200 p-1 rounded"
-                      >
-                        <ChevronUp size={10} />
-                      </button>
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); deleteScheduleEntry(entry.id); }}
-                        className="bg-red-900/40 hover:bg-red-600 text-red-200 p-1 rounded"
-                      >
-                        <X size={10} />
-                      </button>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="p-1.5 rounded bg-slate-800 text-slate-400 group-hover:text-amber-500 transition-colors">
-                      {entry.item.type === "Verse" ? <BookOpen size={12} /> : 
-                       entry.item.type === "Media" ? <Image size={12} /> :
-                       entry.item.type === "PresentationSlide" ? <Presentation size={12} /> :
-                       entry.item.type === "CustomSlide" ? <Layers size={12} /> : <Mic size={12} />}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                       <p className="text-[11px] font-bold text-slate-200 truncate">{displayItemLabel(entry.item)}</p>
-                       <p className="text-[9px] text-slate-500 uppercase tracking-tighter font-black">{entry.item.type}</p>
-                    </div>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-          <div className="p-3 bg-slate-900/40 border-t border-slate-900">
-             <button 
-               onClick={async () => {
-                 const s: Schedule = { id: stableId(), name: `Service ${new Date().toLocaleDateString()}`, items: scheduleEntries };
-                 await invoke("save_schedule", { schedule: s });
-                 setToast("Schedule saved to disk");
-               }}
-               className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all border border-slate-700"
-             >
-               SAVE SETLIST
-             </button>
-          </div>
-        </aside>
-
-        {/* ── 2. Resizable Sidebar (Content Tabs) ── */}
+        {/* ── 1. Content Browser Sidebar ── */}
         <aside 
           className="bg-slate-900/30 border-r border-slate-800 flex flex-col overflow-hidden shrink-0"
           style={{ width: sidebarWidth }}
@@ -4194,24 +4876,16 @@ export default function App() {
                 { id: "bible",         icon: <BookOpen size={13} />,      label: "Bible" },
                 { id: "media",         icon: <Image size={13} />,         label: "Media" },
                 { id: "presentations", icon: <Presentation size={13} />,  label: "PPTX" },
-                { id: "studio",        icon: <Layers size={13} />,        label: "Studio" },
                 { id: "songs",         icon: <Music size={13} />,         label: "Songs" },
-                { id: "props",         icon: <Monitor size={13} />,       label: "Props" },
-                { id: "settings",      icon: <Settings size={13} />,      label: "Prefs" },
+                { id: "lower-third",   icon: <Type size={13} />,          label: "Lower 3rd" },
+                { id: "timers",        icon: <Clock size={13} />,         label: "Timers" },
               ] as const
             ).map(({ id, icon, label }) => (
               <button
                 key={id}
-                onClick={() => {
-                  if (id === "studio") {
-                    setBottomDeckOpen(true);
-                    setBottomDeckMode("studio-slides");
-                  } else {
-                    setActiveTab(id);
-                  }
-                }}
+                onClick={() => setActiveTab(id as any)}
                 className={`flex-1 py-2.5 flex flex-col items-center gap-0.5 transition-all relative whitespace-nowrap px-1 ${
-                  (activeTab === id && id !== "studio") || (id === "studio" && bottomDeckOpen && (bottomDeckMode === "studio-slides" || bottomDeckMode === "studio-lt"))
+                  activeTab === id
                     ? "bg-slate-800 text-amber-500 border-b-2 border-amber-500"
                     : "text-slate-500 hover:text-slate-300 hover:bg-slate-800/50"
                 }`}
@@ -4291,6 +4965,75 @@ export default function App() {
             {/* ── Lower Third Tab ── */}
             {activeTab === "lower-third" && (
               <LowerThirdTab onLoadMedia={loadMedia} onSetToast={setToast} />
+            )}
+
+            {/* ── Timers Tab ── */}
+            {(activeTab as string) === "timers" && (
+              <div className="flex flex-col gap-4">
+                <div>
+                  <p className="text-[9px] font-black uppercase text-slate-500 mb-2">Timer Type</p>
+                  <div className="flex gap-2">
+                    {(["countdown", "countup", "clock"] as const).map((t) => (
+                      <button
+                        key={t}
+                        onClick={() => setTimerType(t)}
+                        className={`flex-1 py-1.5 text-[9px] font-black uppercase rounded-lg border transition-all ${timerType === t ? "bg-cyan-600 border-cyan-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500"}`}
+                      >{t}</button>
+                    ))}
+                  </div>
+                </div>
+                {timerType === "countdown" && (
+                  <div>
+                    <p className="text-[9px] font-black uppercase text-slate-500 mb-2">Duration</p>
+                    <div className="flex gap-2 items-center">
+                      {([["Hours", timerHours, setTimerHours, 23], ["Mins", timerMinutes, setTimerMinutes, 59], ["Secs", timerSeconds, setTimerSeconds, 59]] as [string, number, (n: number) => void, number][]).map(([lbl, val, setter, max]) => (
+                        <div key={lbl} className="flex flex-col items-center gap-0.5 flex-1">
+                          <span className="text-[8px] text-slate-600 uppercase">{lbl}</span>
+                          <input type="number" min={0} max={max} value={val}
+                            onChange={(e) => setter(parseInt(e.target.value) || 0)}
+                            className="w-full bg-slate-800 text-slate-200 text-center text-sm rounded border border-slate-700 py-1" />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div>
+                  <p className="text-[9px] font-black uppercase text-slate-500 mb-1">Label (optional)</p>
+                  <input
+                    value={timerLabel}
+                    onChange={(e) => setTimerLabel(e.target.value)}
+                    placeholder="e.g. BREAK ENDS IN"
+                    className="w-full bg-slate-800 text-slate-200 text-xs rounded border border-slate-700 px-2 py-1.5"
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <button
+                    onClick={async () => {
+                      const durSecs = timerType === "countdown" ? timerHours * 3600 + timerMinutes * 60 + timerSeconds : undefined;
+                      await invoke("stage_item", { item: { type: "Timer", data: { timer_type: timerType, duration_secs: durSecs, label: timerLabel || undefined, started_at: undefined } } });
+                    }}
+                    className="py-2 text-xs font-black uppercase bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg transition-all"
+                  >Stage</button>
+                  <button
+                    onClick={async () => {
+                      const durSecs = timerType === "countdown" ? timerHours * 3600 + timerMinutes * 60 + timerSeconds : undefined;
+                      await invoke("stage_item", { item: { type: "Timer", data: { timer_type: timerType, duration_secs: durSecs, label: timerLabel || undefined, started_at: undefined } } });
+                      await invoke("go_live");
+                    }}
+                    className="py-2 text-xs font-black uppercase bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg transition-all"
+                  >Stage + Live</button>
+                  <div className="flex gap-2 pt-2 border-t border-slate-800">
+                    <button
+                      onClick={async () => { await invoke("update_timer", { startedAt: Date.now() }); setTimerRunning(true); }}
+                      className="flex-1 py-1.5 text-[9px] font-black uppercase bg-green-800 hover:bg-green-700 text-green-200 rounded transition-all"
+                    >▶ Start</button>
+                    <button
+                      onClick={async () => { await invoke("update_timer", { startedAt: null }); setTimerRunning(false); }}
+                      className="flex-1 py-1.5 text-[9px] font-black uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition-all"
+                    >↺ Reset</button>
+                  </div>
+                </div>
+              </div>
             )}
 
             {/* LT background image picker modal */}
@@ -4377,16 +5120,21 @@ export default function App() {
                 <Mic size={12} /> {isTranscriptionCollapsed ? "SHOW MIC" : "HIDE MIC"}
               </button>
               <div className="h-4 w-px bg-slate-800 mx-2" />
-              <button 
-                 onClick={() => {
-                    if (bottomDeckOpen && bottomDeckMode === "live-lt") setBottomDeckOpen(false);
-                    else { setBottomDeckOpen(true); setBottomDeckMode("live-lt"); }
-                 }}
+              <button
+                 onClick={() => setActiveTab("lower-third")}
                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${
-                    bottomDeckOpen && bottomDeckMode === "live-lt" ? "bg-amber-500 text-black shadow-[0_0_15px_rgba(245,158,11,0.4)]" : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                    activeTab === "lower-third" ? "bg-amber-500 text-black shadow-[0_0_15px_rgba(245,158,11,0.4)]" : "bg-slate-800 text-slate-400 hover:bg-slate-700"
                  }`}
               >
                 <Type size={12} /> LOWER THIRD
+              </button>
+              <button
+                 onClick={() => setActiveTab("timers" as any)}
+                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${
+                    (activeTab as string) === "timers" ? "bg-cyan-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                 }`}
+              >
+                <Clock size={12} /> TIMERS
               </button>
             </div>
 
@@ -5464,6 +6212,75 @@ export default function App() {
                   </section>
                 )}
         </main>
+
+        {/* ── Service Schedule (Right Column — ProPresenter style) ── */}
+        <aside className="w-60 bg-slate-950 border-l border-slate-900 flex flex-col overflow-hidden shrink-0">
+          <div className="p-3 border-b border-slate-900 bg-slate-900/20 flex items-center justify-between shrink-0">
+            <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-1.5">
+              <CalendarDays size={12} className="text-amber-500" /> Setlist
+            </h2>
+            <button
+              onClick={async () => {
+                const s: Schedule = { id: stableId(), name: `Service ${new Date().toLocaleDateString()}`, items: scheduleEntries };
+                await invoke("save_schedule", { schedule: s });
+                setToast("Schedule saved");
+              }}
+              className="text-[9px] font-bold bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded transition-colors"
+            >
+              SAVE
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-2 space-y-1">
+            {scheduleEntries.length === 0 ? (
+              <div className="h-32 flex flex-col items-center justify-center text-center p-4">
+                <CalendarDays size={24} className="text-slate-800 mb-2" />
+                <p className="text-[10px] text-slate-600 font-medium leading-tight italic">Add items from Bible, Media or Songs.</p>
+              </div>
+            ) : (
+              scheduleEntries.map((entry, idx) => (
+                <div
+                  key={entry.id}
+                  className={`group relative flex items-center gap-2 p-2 rounded-lg border transition-all cursor-pointer ${
+                    stagedItem && displayItemLabel(stagedItem) === displayItemLabel(entry.item)
+                      ? "bg-amber-500/10 border-amber-500/30 ring-1 ring-amber-500/20"
+                      : liveItem && displayItemLabel(liveItem) === displayItemLabel(entry.item)
+                      ? "bg-red-900/20 border-red-900/40"
+                      : "bg-slate-900/40 border-slate-800/50 hover:bg-slate-800/60 hover:border-slate-700"
+                  }`}
+                  onClick={() => stageItem(entry.item)}
+                >
+                  <span className="text-[8px] font-black text-slate-700 tabular-nums shrink-0 w-4">{idx + 1}</span>
+                  <div className="shrink-0 text-slate-600 group-hover:text-amber-500 transition-colors">
+                    {entry.item.type === "Verse" ? <BookOpen size={11} /> :
+                     entry.item.type === "Media" ? <Image size={11} /> :
+                     entry.item.type === "PresentationSlide" ? <Presentation size={11} /> :
+                     entry.item.type === "CustomSlide" ? <Layers size={11} /> :
+                     entry.item.type === "Timer" ? <Clock size={11} /> : <Mic size={11} />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[10px] font-bold text-slate-300 truncate">{displayItemLabel(entry.item)}</p>
+                    <p className="text-[8px] text-slate-600 uppercase tracking-tighter font-bold">{entry.item.type}</p>
+                  </div>
+                  <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); sendLive(entry.item); }}
+                      className="bg-amber-600 hover:bg-amber-500 text-black p-0.5 rounded"
+                      title="Quick Live"
+                    >
+                      <Zap size={9} fill="currentColor" />
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); deleteScheduleEntry(entry.id); }}
+                      className="bg-red-900/40 hover:bg-red-600 text-red-200 p-0.5 rounded"
+                    >
+                      <X size={9} />
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </aside>
       </div>
 
       <AnimatePresence>

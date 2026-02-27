@@ -162,7 +162,14 @@
 <script>
 // ── Config ────────────────────────────────────────────────────────────────────
 const WS_URL = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
-const STUN   = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+const STUN   = { 
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' }
+  ], 
+  iceCandidatePoolSize: 10 
+};
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let ws          = null;
@@ -300,12 +307,17 @@ function connectWs(pin) {
 
 // Select the right PC based on which window sent the answer
 function selectPc(msg) {
-  // Heuristic: if programPc is pending (has sent an offer but no answer yet), match it first.
-  // The offer sent to "output" target gets answered by "window:output".
-  // We tag PCs with their target.
-  if (programPc && programPc._target && msg._from === 'output') return programPc;
-  if (previewPc) return previewPc;
-  return null;
+  // Answers/ICE from the output window (window:output) go to programPc
+  if (msg._from === 'window:output' && programPc) return programPc;
+  // Answers/ICE from the operator window (window:main) go to previewPc
+  if (msg._from === 'window:main' && previewPc) return previewPc;
+  
+  // Fallback to signalingState heuristic if _from is missing (older backend versions)
+  if (programPc && programPc.signalingState === 'have-local-offer') return programPc;
+  if (previewPc && previewPc.signalingState === 'have-local-offer') return previewPc;
+  
+  // Last resort: default to previewPc
+  return previewPc;
 }
 
 // ── Camera ───────────────────────────────────────────────────────────────────
@@ -505,25 +517,9 @@ function closeProgramPc() {
 }
 
 // ── WebRTC answer routing ─────────────────────────────────────────────────────
-// The server routes camera_answer messages to us tagged with originating window.
-// We override the WS message handler to correctly direct answers to the right PC.
-// The caller's target determines which PC created the offer:
-//   - Operator answered our preview offer → previewPc
-//   - Output answered our program offer  → programPc
-// We detect this by checking the original offer targets stored on each PC.
-// The answer message has target="mobile:{deviceId}" but we need to know the source.
-// We resolve by checking which PC is in "have-local-offer" state.
-(function patchSelectPc() {
-  // Monkey-patch selectPc to use signalingState
-  window.selectPc = function(msg) {
-    // If programPc is waiting for answer, prefer it for answers from output direction.
-    // We don't have sender info reliably, so use signalingState:
-    if (programPc && programPc.signalingState === 'have-local-offer') return programPc;
-    if (previewPc && previewPc.signalingState === 'have-local-offer') return previewPc;
-    if (previewPc) return previewPc;
-    return null;
-  };
-})();
+// The server now routes camera_answer and camera_ice messages to us tagged 
+// with the _from field (e.g. "window:main" or "window:output").
+// The selectPc function uses this to route signaling to the correct PC.
 
 // ── UI helpers ────────────────────────────────────────────────────────────────
 function showCameraScreen() {

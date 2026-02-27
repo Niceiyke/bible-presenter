@@ -1,6 +1,6 @@
 {
   "productName": "Bible Presenter RS",
-  "version": "0.5.7",
+  "version": "0.6.0",
   "identifier": "com.biblepresenter.rs",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -35,6 +35,17 @@
         "decorations": true,
         "transparent": false,
         "alwaysOnTop": true,
+        "visible": false,
+        "resizable": true
+      },
+      {
+        "title": "Bible Presenter - Design Hub",
+        "label": "design",
+        "width": 1440,
+        "height": 900,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": false,
         "visible": false,
         "resizable": true
       }

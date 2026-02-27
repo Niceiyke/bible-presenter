@@ -707,6 +707,20 @@ async fn toggle_stage_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Shows or hides the Design Hub window.
+#[tauri::command]
+async fn toggle_design_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("design") {
+        if window.is_visible().unwrap_or(false) {
+            window.hide().map_err(|e: tauri::Error| e.to_string())?;
+        } else {
+            window.show().map_err(|e: tauri::Error| e.to_string())?;
+            window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn list_presentations(
     state: State<'_, AppState>,
@@ -1328,6 +1342,7 @@ fn main() {
             set_transcription_paused,
             update_timer,
             toggle_stage_window,
+            toggle_design_window,
             list_services,
             save_service,
             load_service,
