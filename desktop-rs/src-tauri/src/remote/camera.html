@@ -161,12 +161,22 @@
 
 <script>
 // ── Config ────────────────────────────────────────────────────────────────────
-const WS_URL = `ws://${location.host}/ws`;
+const WS_URL = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
 const STUN   = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let ws          = null;
-let deviceId    = localStorage.getItem('cam_device_id') || crypto.randomUUID();
+
+// Secure-context fallback for randomUUID
+const generateId = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+};
+
+let deviceId    = localStorage.getItem('cam_device_id') || generateId();
 let deviceName  = localStorage.getItem('cam_device_name') || '';
 let localStream = null;   // getUserMedia stream (full resolution)
 let previewPc   = null;   // RTCPeerConnection to operator (always open)
@@ -319,7 +329,9 @@ async function startCamera() {
     await openPreviewPc();
   } catch (err) {
     console.error('Camera error:', err);
-    document.getElementById('no-cam').style.display = 'flex';
+    const noCam = document.getElementById('no-cam');
+    noCam.innerHTML = `Camera error: ${err.name || 'Error'}<br>${err.message || 'Please allow permission or use HTTPS'}`;
+    noCam.style.display = 'flex';
   }
 }
 
