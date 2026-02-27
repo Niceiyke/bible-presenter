@@ -1,19 +1,16 @@
 import React from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Settings, Edit2, Trash2 } from "lucide-react";
+import { Settings, Edit2, Trash2, Repeat, Zap } from "lucide-react";
 import { useAppStore } from "../store";
-import type { DisplayItem, MediaItem, Schedule } from "../App";
-
-function stableId(): string {
-  return crypto.randomUUID();
-}
+import { stableId } from "../utils";
+import type { DisplayItem, MediaItem, Schedule } from "../types";
 
 interface ScheduleTabProps {
   onSendItem: (item: DisplayItem, idx: number) => void;
   onPersist: () => void;
 }
 
-export default function ScheduleTab({ onSendItem, onPersist }: ScheduleTabProps) {
+export function ScheduleTab({ onSendItem, onPersist }: ScheduleTabProps) {
   const {
     scheduleEntries, setScheduleEntries,
     activeScheduleIdx, setActiveScheduleIdx,
@@ -21,20 +18,33 @@ export default function ScheduleTab({ onSendItem, onPersist }: ScheduleTabProps)
     activeServiceId, setActiveServiceId,
     serviceManagerOpen, setServiceManagerOpen,
     newServiceName, setNewServiceName,
+    isSchedulePersistent, setIsSchedulePersistent,
   } = useAppStore();
+
+  const sendAndMaybeRemove = (item: DisplayItem, idx: number, entryId: string) => {
+    onSendItem(item, idx);
+    if (!isSchedulePersistent) {
+      const next = scheduleEntries.filter((e) => e.id !== entryId);
+      setScheduleEntries(next);
+      setActiveScheduleIdx(null);
+      onPersist();
+    } else {
+      setActiveScheduleIdx(idx);
+    }
+  };
 
   const handlePrevItem = async () => {
     if (activeScheduleIdx === null || activeScheduleIdx <= 0) return;
     const idx = activeScheduleIdx - 1;
-    setActiveScheduleIdx(idx);
-    onSendItem(scheduleEntries[idx].item, idx);
+    const entry = scheduleEntries[idx];
+    sendAndMaybeRemove(entry.item, idx, entry.id);
   };
 
   const handleNextItem = async () => {
     const next = activeScheduleIdx === null ? 0 : activeScheduleIdx + 1;
     if (next >= scheduleEntries.length) return;
-    setActiveScheduleIdx(next);
-    onSendItem(scheduleEntries[next].item, next);
+    const entry = scheduleEntries[next];
+    sendAndMaybeRemove(entry.item, next, entry.id);
   };
 
   const removeFromSchedule = async (id: string) => {
@@ -45,7 +55,6 @@ export default function ScheduleTab({ onSendItem, onPersist }: ScheduleTabProps)
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Service switcher */}
       <div className="flex items-center gap-2">
         <select
           value={activeServiceId}
@@ -65,14 +74,12 @@ export default function ScheduleTab({ onSendItem, onPersist }: ScheduleTabProps)
         </select>
         <button
           onClick={() => setServiceManagerOpen(!serviceManagerOpen)}
-          title="Manage services"
           className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 rounded border border-slate-700 transition-all"
         >
           <Settings size={12} />
         </button>
       </div>
 
-      {/* Service manager popover */}
       {serviceManagerOpen && (
         <div className="bg-slate-900 border border-slate-700 rounded-lg p-3 flex flex-col gap-2">
           <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Manage Services</p>
@@ -89,7 +96,6 @@ export default function ScheduleTab({ onSendItem, onPersist }: ScheduleTabProps)
                   setServices(list as any);
                 }}
                 className="text-slate-500 hover:text-slate-200 p-1 rounded"
-                title="Rename"
               >
                 <Edit2 size={10} />
               </button>
@@ -102,7 +108,6 @@ export default function ScheduleTab({ onSendItem, onPersist }: ScheduleTabProps)
                   setServices(list as any);
                 }}
                 className="text-red-700 hover:text-red-400 p-1 rounded disabled:opacity-30"
-                title="Delete"
               >
                 <Trash2 size={10} />
               </button>
@@ -150,7 +155,21 @@ export default function ScheduleTab({ onSendItem, onPersist }: ScheduleTabProps)
       )}
 
       <div className="flex justify-between items-center">
-        <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Items</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Items</h2>
+          <button
+            onClick={() => setIsSchedulePersistent(!isSchedulePersistent)}
+            title={isSchedulePersistent ? "Persistent: items stay after play" : "One-shot: items removed after play"}
+            className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold border transition-all ${
+              isSchedulePersistent
+                ? "bg-emerald-900/40 border-emerald-700/50 text-emerald-400 hover:bg-emerald-900/60"
+                : "bg-amber-900/40 border-amber-700/50 text-amber-400 hover:bg-amber-900/60"
+            }`}
+          >
+            {isSchedulePersistent ? <Repeat size={9} /> : <Zap size={9} />}
+            {isSchedulePersistent ? "LOOP" : "ONCE"}
+          </button>
+        </div>
         {scheduleEntries.length > 0 && (
           <div className="flex gap-1">
             <button
@@ -214,8 +233,8 @@ export default function ScheduleTab({ onSendItem, onPersist }: ScheduleTabProps)
                   )}
                 </div>
                 <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all shrink-0">
-                  <button onClick={() => onSendItem(entry.item, idx)} title="Send live" className="p-1 bg-amber-500 hover:bg-amber-400 text-black rounded text-[10px] font-bold">▶</button>
-                  <button onClick={() => removeFromSchedule(entry.id)} title="Remove" className="p-1 bg-red-900/50 text-red-400 rounded hover:bg-red-900 hover:text-white">✕</button>
+                  <button onClick={() => sendAndMaybeRemove(entry.item, idx, entry.id)} className="p-1 bg-amber-500 hover:bg-amber-400 text-black rounded text-[10px] font-bold">▶</button>
+                  <button onClick={() => removeFromSchedule(entry.id)} className="p-1 bg-red-900/50 text-red-400 rounded hover:bg-red-900 hover:text-white">✕</button>
                 </div>
               </div>
             );

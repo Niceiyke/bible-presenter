@@ -4,67 +4,8 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { loadPptxZip, parseSingleSlide, getSlideCount } from "../pptxParser";
 import type { ParsedSlide } from "../pptxParser";
 import { useAppStore } from "../store";
-import type { DisplayItem, PresentationFile } from "../App";
-
-// ─── Slide Thumbnail ──────────────────────────────────────────────────────────
-
-function SlideThumbnail({
-  slide,
-  index,
-  onStage,
-  onLive,
-}: {
-  slide: ParsedSlide;
-  index: number;
-  onStage: () => void;
-  onLive: () => void;
-}) {
-  const bgStyle: React.CSSProperties = slide.backgroundColor
-    ? { backgroundColor: slide.backgroundColor }
-    : { backgroundColor: "#1a1a2e" };
-
-  return (
-    <div
-      className="group relative aspect-video rounded overflow-hidden border border-slate-700 hover:border-amber-500/50 transition-all cursor-pointer"
-      style={bgStyle}
-    >
-      {slide.images[0] && (
-        <img src={slide.images[0].dataUrl} className="absolute inset-0 w-full h-full object-cover" alt="" />
-      )}
-      {slide.textBoxes[0] && (
-        <div className="absolute inset-0 flex items-center justify-center p-1">
-          <p
-            className="text-center font-bold leading-tight"
-            style={{
-              fontSize: "8px",
-              color: slide.textBoxes[0].color ?? "#ffffff",
-              textShadow: "0 1px 3px rgba(0,0,0,0.8)",
-            }}
-          >
-            {slide.textBoxes[0].text.slice(0, 60)}
-          </p>
-        </div>
-      )}
-      <div className="absolute bottom-0 left-0 px-1 py-0.5 bg-black/50">
-        <span className="text-[7px] text-white/70">{index + 1}</span>
-      </div>
-      <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-all flex flex-col items-center justify-center gap-1 p-1">
-        <button
-          onClick={onStage}
-          className="w-full bg-slate-600 hover:bg-slate-500 text-white text-[9px] font-bold py-1 rounded"
-        >
-          STAGE
-        </button>
-        <button
-          onClick={onLive}
-          className="w-full bg-amber-500 hover:bg-amber-400 text-black text-[9px] font-bold py-1 rounded"
-        >
-          DISPLAY
-        </button>
-      </div>
-    </div>
-  );
-}
+import { SlideThumbnail } from "./shared/Renderers";
+import type { DisplayItem, PresentationFile } from "../types";
 
 // ─── PNG Slide Thumbnail (LibreOffice rendered) ───────────────────────────────
 
@@ -87,13 +28,13 @@ function PngSlideThumbnail({
       </div>
       <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-all flex flex-col items-center justify-center gap-1 p-1">
         <button
-          onClick={onStage}
+          onClick={(e) => { e.stopPropagation(); onStage(); }}
           className="w-full bg-slate-600 hover:bg-slate-500 text-white text-[9px] font-bold py-1 rounded"
         >
           STAGE
         </button>
         <button
-          onClick={onLive}
+          onClick={(e) => { e.stopPropagation(); onLive(); }}
           className="w-full bg-amber-500 hover:bg-amber-400 text-black text-[9px] font-bold py-1 rounded"
         >
           DISPLAY
@@ -111,7 +52,7 @@ interface PresentationsTabProps {
   onAddToSchedule: (item: DisplayItem) => void;
 }
 
-export default function PresentationsTab({ onStage, onLive, onAddToSchedule }: PresentationsTabProps) {
+export function PresentationsTab({ onStage, onLive, onAddToSchedule }: PresentationsTabProps) {
   const {
     presentations, setPresentations,
     selectedPresId, setSelectedPresId,
@@ -122,27 +63,21 @@ export default function PresentationsTab({ onStage, onLive, onAddToSchedule }: P
 
   const presZipsRef = useRef<Record<string, any>>({});
 
-  // Check LibreOffice availability on mount
   useEffect(() => {
     invoke<boolean>("check_libreoffice").then(setLibreOfficeAvailable).catch(() => {});
   }, []);
 
-  // When a presentation is selected:
-  // - If LibreOffice is available, convert to PNGs
-  // - Otherwise, parse with JS PPTX parser
   useEffect(() => {
     if (!selectedPresId) return;
     const pres = presentations.find((p) => p.id === selectedPresId);
     if (!pres) return;
 
     if (libreOfficeAvailable) {
-      // LibreOffice path: convert to PNG if not already done
       if (pptxPngSlides[selectedPresId]) return;
       invoke<string[]>("convert_pptx_slides", { path: pres.path, presId: selectedPresId })
         .then((paths) => setPptxPngSlides((prev) => ({ ...prev, [selectedPresId]: paths })))
         .catch(console.error);
     } else {
-      // JS fallback path: parse with JSZip
       if (loadedSlides[selectedPresId]) return;
       (async () => {
         try {
@@ -171,7 +106,7 @@ export default function PresentationsTab({ onStage, onLive, onAddToSchedule }: P
         multiple: false,
         filters: [{ name: "PowerPoint", extensions: ["pptx"] }],
       });
-      if (!selected) return;
+      if (typeof selected !== "string") return;
       const pres: PresentationFile = await invoke("add_presentation", { path: selected });
       setPresentations([...presentations, pres]);
       setSelectedPresId(pres.id);
@@ -225,7 +160,6 @@ export default function PresentationsTab({ onStage, onLive, onAddToSchedule }: P
         </p>
       ) : (
         <>
-          {/* Presentation file list */}
           <div className="flex flex-col gap-1">
             {presentations.map((pres) => (
               <button
@@ -250,7 +184,6 @@ export default function PresentationsTab({ onStage, onLive, onAddToSchedule }: P
                   role="button"
                   onClick={(e) => { e.stopPropagation(); handleDelete(pres.id); }}
                   className="shrink-0 text-red-500/50 hover:text-red-400 text-xs px-1 cursor-pointer"
-                  title="Delete"
                 >
                   ✕
                 </span>
@@ -258,19 +191,13 @@ export default function PresentationsTab({ onStage, onLive, onAddToSchedule }: P
             ))}
           </div>
 
-          {/* Slide grid for the selected presentation */}
           {selectedPresId && (() => {
             const pres = presentations.find((p) => p.id === selectedPresId)!;
             const pngSlides = pptxPngSlides[selectedPresId];
             const jsSlides = loadedSlides[selectedPresId];
 
             if (libreOfficeAvailable) {
-              // LibreOffice: show PNG thumbnails
-              if (!pngSlides) {
-                return (
-                  <p className="text-slate-600 text-xs italic text-center py-4">Converting slides...</p>
-                );
-              }
+              if (!pngSlides) return <p className="text-slate-600 text-xs italic text-center py-4">Converting slides...</p>;
               return (
                 <div>
                   <p className="text-[9px] text-slate-600 uppercase font-bold mb-2 tracking-widest">Slides</p>
@@ -288,12 +215,7 @@ export default function PresentationsTab({ onStage, onLive, onAddToSchedule }: P
                 </div>
               );
             } else {
-              // JS fallback: show parsed slide thumbnails
-              if (!jsSlides) {
-                return (
-                  <p className="text-slate-600 text-xs italic text-center py-4">Parsing slides...</p>
-                );
-              }
+              if (!jsSlides) return <p className="text-slate-600 text-xs italic text-center py-4">Parsing slides...</p>;
               return (
                 <div>
                   <p className="text-[9px] text-slate-600 uppercase font-bold mb-2 tracking-widest">Slides</p>
