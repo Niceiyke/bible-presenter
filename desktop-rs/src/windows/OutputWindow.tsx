@@ -62,8 +62,11 @@ export function OutputWindow() {
 
   async function handleProgramOffer(msg: { device_id: string; sdp: string }) {
     const { device_id, sdp } = msg;
+    // Clear ref before setRemoteDescription so stray ICE candidates don't hit an
+    // uninitialized PC and get silently dropped.
+    programPcRef.current = null;
+
     const pc = new RTCPeerConnection(OUTPUT_STUN);
-    programPcRef.current = pc;
 
     pc.ontrack = (ev: RTCTrackEvent) => {
       const stream = ev.streams[0] ?? new MediaStream([ev.track]);
@@ -83,6 +86,8 @@ export function OutputWindow() {
     };
 
     await pc.setRemoteDescription({ type: "offer", sdp });
+    // Register only after remote description is set so addIceCandidate won't fail.
+    programPcRef.current = pc;
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     sendOutputWs({ cmd: "camera_answer", device_id, target: `mobile:${device_id}`, sdp: answer.sdp });

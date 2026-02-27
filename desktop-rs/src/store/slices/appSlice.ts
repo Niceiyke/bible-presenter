@@ -19,8 +19,8 @@ export interface AppSlice {
   setIsSchedulePersistent: (v: boolean) => void;
   bottomDeckOpen: boolean;
   setBottomDeckOpen: (v: boolean) => void;
-  bottomDeckMode: "live-lt" | "studio-slides" | "studio-lt" | "scene-composer" | "timer";
-  setBottomDeckMode: (v: "live-lt" | "studio-slides" | "studio-lt" | "scene-composer" | "timer") => void;
+  bottomDeckMode: "live-lt" | "timer";
+  setBottomDeckMode: (v: "live-lt" | "timer") => void;
   topPanelPct: number;
   setTopPanelPct: (v: number | ((prev: number) => number)) => void;
   stagePct: number;
