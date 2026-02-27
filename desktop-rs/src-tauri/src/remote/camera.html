@@ -184,6 +184,7 @@ let programPc   = null;   // RTCPeerConnection to output (on demand)
 let videoMuted  = false;
 let previewStatus = 'disconnected';
 let programActive = false;
+let previewRetryTimer = null; // retry offer if ICE never connects
 
 localStorage.setItem('cam_device_id', deviceId);
 
@@ -285,6 +286,7 @@ function connectWs(pin) {
 
   ws.onclose = () => {
     if (programActive) { closeProgramPc(); }
+    if (previewRetryTimer) { clearTimeout(previewRetryTimer); previewRetryTimer = null; }
     setStatus('disconnected');
     // Reconnect after 3 s
     setTimeout(() => {
@@ -392,6 +394,9 @@ function updateResolutionStat() {
 
 // ── WebRTC – Preview PC ───────────────────────────────────────────────────────
 async function openPreviewPc() {
+  // Cancel any pending retry
+  if (previewRetryTimer) { clearTimeout(previewRetryTimer); previewRetryTimer = null; }
+
   if (previewPc) { previewPc.close(); }
 
   previewPc = new RTCPeerConnection(STUN);
@@ -413,6 +418,15 @@ async function openPreviewPc() {
     previewStatus = s === 'connected' || s === 'completed' ? 'connected' : s;
     updateStatus();
     document.getElementById('stat-preview').textContent = s;
+    // Clear retry timer once connected
+    if (s === 'connected' || s === 'completed') {
+      if (previewRetryTimer) { clearTimeout(previewRetryTimer); previewRetryTimer = null; }
+    }
+    // ICE failed — retry immediately with a new offer
+    if (s === 'failed') {
+      if (previewRetryTimer) clearTimeout(previewRetryTimer);
+      previewRetryTimer = setTimeout(() => openPreviewPc().catch(console.error), 2000);
+    }
   };
 
   // Create offer
@@ -434,6 +448,13 @@ async function openPreviewPc() {
   }
 
   setStatus('connecting');
+
+  // If no answer / connection within 12 s, re-offer (handles disabled-preview race condition)
+  previewRetryTimer = setTimeout(() => {
+    if (previewStatus !== 'connected') {
+      openPreviewPc().catch(console.error);
+    }
+  }, 12000);
 }
 
 // ── WebRTC – Program PC ───────────────────────────────────────────────────────
