@@ -4053,7 +4053,10 @@ export default function App() {
   // ── Bible picker cascades ────────────────────────────────────────────────────
 
   // When version changes: notify Rust, reload books list, preserve selection if possible
+  // Guard on label === "main" so this only runs in the operator window, and only after
+  // the window label has been confirmed (giving Rust setup time to finish managing state).
   useEffect(() => {
+    if (label !== "main") return;
     invoke("set_bible_version", { version: bibleVersion }).catch(() => {});
     invoke("get_books", { version: bibleVersion })
       .then((b: any) => {
@@ -4062,10 +4065,10 @@ export default function App() {
         setSelectedBook((prev) => (b.includes(prev) ? prev : (b.length > 0 ? b[0] : "")));
       })
       .catch((err: any) => setAudioError(`Failed to load books: ${err}`));
-  }, [bibleVersion]);
+  }, [bibleVersion, label]);
 
   useEffect(() => {
-    if (!selectedBook) return;
+    if (label !== "main" || !selectedBook) return;
     invoke("get_chapters", { book: selectedBook, version: bibleVersion })
       .then((c: any) => {
         setChapters(c);
@@ -4073,10 +4076,10 @@ export default function App() {
         setSelectedChapter((prev) => (c.includes(prev) ? prev : (c.length > 0 ? c[0] : 0)));
       })
       .catch((err: any) => setAudioError(`Failed to load chapters: ${err}`));
-  }, [selectedBook, bibleVersion]);
+  }, [selectedBook, bibleVersion, label]);
 
   useEffect(() => {
-    if (!selectedBook || !selectedChapter) return;
+    if (label !== "main" || !selectedBook || !selectedChapter) return;
     invoke("get_verses_count", { book: selectedBook, chapter: selectedChapter, version: bibleVersion })
       .then((v: any) => {
         setVerses(v);
@@ -4084,7 +4087,7 @@ export default function App() {
         setSelectedVerse((prev) => (v.includes(prev) ? prev : (v.length > 0 ? v[0] : 0)));
       })
       .catch((err: any) => setAudioError(`Failed to load verses: ${err}`));
-  }, [selectedBook, selectedChapter, bibleVersion]);
+  }, [selectedBook, selectedChapter, bibleVersion, label]);
 
   // ── Presentation actions ─────────────────────────────────────────────────────
 
