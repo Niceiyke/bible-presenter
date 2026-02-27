@@ -344,8 +344,15 @@ async function startCamera() {
   } catch (err) {
     console.error('Camera error:', err);
     const noCam = document.getElementById('no-cam');
-    noCam.innerHTML = `Camera error: ${err.name || 'Error'}<br>${err.message || 'Please allow permission or use HTTPS'}`;
+    const isLocalhost = /^(localhost|127\.|::1)/.test(location.hostname);
+    const needsHttps = !isLocalhost && location.protocol !== 'https:';
+    let msg = err.message || 'Check browser permissions and reload.';
+    if (needsHttps && (err.name === 'NotAllowedError' || err.name === 'SecurityError' || err.name === 'NotSupportedError')) {
+      msg = 'Camera requires HTTPS on mobile browsers. Use the desktop app\'s Settings → Remote URL (HTTPS address), then reconnect.';
+    }
+    noCam.innerHTML = `Camera error: ${err.name || 'Error'}<br>${msg}`;
     noCam.style.display = 'flex';
+    setStatus('disconnected');
   }
 }
 
@@ -430,14 +437,14 @@ async function openPreviewPc() {
     previewStatus = s === 'connected' || s === 'completed' ? 'connected' : s;
     updateStatus();
     document.getElementById('stat-preview').textContent = s;
-    // Clear retry timer once connected
     if (s === 'connected' || s === 'completed') {
       if (previewRetryTimer) { clearTimeout(previewRetryTimer); previewRetryTimer = null; }
     }
-    // ICE failed — retry immediately with a new offer
+    // Only retry on hard failure — not on 'checking'/'disconnected'.
+    // Retrying during 'checking' would interrupt ongoing ICE connectivity checks.
     if (s === 'failed') {
       if (previewRetryTimer) clearTimeout(previewRetryTimer);
-      previewRetryTimer = setTimeout(() => openPreviewPc().catch(console.error), 2000);
+      previewRetryTimer = setTimeout(() => openPreviewPc().catch(console.error), 3000);
     }
   };
 
@@ -460,13 +467,9 @@ async function openPreviewPc() {
   }
 
   setStatus('connecting');
-
-  // If no answer / connection within 12 s, re-offer (handles disabled-preview race condition)
-  previewRetryTimer = setTimeout(() => {
-    if (previewStatus !== 'connected') {
-      openPreviewPc().catch(console.error);
-    }
-  }, 12000);
+  // Retry is handled by oniceconnectionstatechange on 'failed' only.
+  // Removed the 12-second blind timer — it was interrupting ICE 'checking' state
+  // mid-negotiation, causing an infinite reset loop and preventing connection.
 }
 
 // ── WebRTC – Program PC ───────────────────────────────────────────────────────

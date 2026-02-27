@@ -20,22 +20,18 @@ import { PresentationsTab } from "./components/PresentationsTab";
 import { SongsTab } from "./components/SongsTab";
 import { LowerThirdTab } from "./components/LowerThirdTab";
 import { TimersTab } from "./components/TimersTab";
-import { StudioTab } from "./components/StudioTab";
 import { ScheduleTab } from "./components/ScheduleTab";
 import { SettingsTab } from "./components/SettingsTab";
 import { PropsTab } from "./components/PropsTab";
-import { SceneComposerTab } from "./components/SceneComposerTab";
-import { LtDesignerTab } from "./components/LtDesignerTab";
 import { PreviewCard } from "./components/PreviewCard";
 import { Toast } from "./components/Toast";
-import { SlideEditor } from "./components/editors/SlideEditor";
 import { OutputWindow, StageWindow, DesignHub } from "./windows";
-import { stableId, newDefaultSlide } from "./utils";
+import { stableId } from "./utils";
 import { useLanCamera } from "./hooks/useLanCamera";
 import { useAppInitialization } from "./hooks/useAppInitialization";
 import { useBibleCascade } from "./hooks/useBibleCascade";
-import type { 
-  DisplayItem, CustomPresentation, 
+import type {
+  DisplayItem,
   PresentationSettings,
   Schedule, ScheduleEntry, PropItem, MediaItem
 } from "./types";
@@ -51,8 +47,7 @@ export default function App() {
     ltSongId, scheduleEntries, setScheduleEntries, services,
     activeServiceId, media, setMedia, pauseWhisper, transcript, sessionState, micLevel,
     remoteUrl, remotePin, bibleVersion, topPanelPct, setTopPanelPct, stagePct, setStagePct, 
-    setStudioList, workingScene, setWorkingScene, activeLayerId, studioSlides, 
-    editorPresId, setEditorPresId, editorPres, setEditorPres, 
+    setStudioList, studioSlides,
     setIsBlackout, songs, setPropItems, audioError, setAudioError, deviceError
   } = useAppStore();
 
@@ -87,42 +82,24 @@ export default function App() {
     return flat;
   }, [songs, ltSongId]);
 
-  // ── Window Routing ─────────────────────────────────────────────────────────
-
-  if (label === "output") return <OutputWindow />;
-  if (label === "stage") return <StageWindow />;
-  if (label === "design") return <DesignHub />;
-
   // ── Operators Handlers ─────────────────────────────────────────────────────
 
   const stageItem = useCallback(async (item: DisplayItem) => {
-    if (bottomDeckOpen && bottomDeckMode === "scene-composer" && activeLayerId) {
-      setWorkingScene({
-        ...workingScene,
-        layers: workingScene.layers.map(l => l.id === activeLayerId ? { ...l, content: { kind: "item", item } } : l)
-      });
-      setToast(`Added to layer`);
-      return;
-    }
     setStagedItem(item);
     await invoke("stage_item", { item });
-  }, [bottomDeckOpen, bottomDeckMode, activeLayerId, workingScene, setWorkingScene, setStagedItem, setToast]);
+  }, [setStagedItem]);
 
   const goLive = useCallback(async () => {
     await invoke("go_live");
   }, []);
 
   const sendLive = useCallback(async (item: DisplayItem) => {
-    if (bottomDeckOpen && bottomDeckMode === "scene-composer" && activeLayerId) {
-      stageItem(item);
-      return;
-    }
     await stageItem(item);
     await new Promise((r) => setTimeout(r, 50));
     await goLive();
     const lbl = displayItemLabel(item);
     setVerseHistory([item, ...verseHistory.filter(h => displayItemLabel(h) !== lbl)].slice(0, 10));
-  }, [bottomDeckOpen, bottomDeckMode, activeLayerId, stageItem, goLive, verseHistory, setVerseHistory]);
+  }, [stageItem, goLive, verseHistory, setVerseHistory]);
 
   const addToSchedule = useCallback(async (item: DisplayItem) => {
     const entry: ScheduleEntry = { id: stableId(), item };
@@ -183,6 +160,7 @@ export default function App() {
 
   useEffect(() => {
     const handleKD = (e: KeyboardEvent) => {
+      if (label && label !== "main") return;
       if (document.activeElement?.tagName === "INPUT" || document.activeElement?.tagName === "TEXTAREA") {
         if (e.key === "Escape") invoke("clear_live");
         return;
@@ -197,7 +175,7 @@ export default function App() {
         case "F2": setActiveTab("songs"); break;
         case "F3": setActiveTab("media"); break;
         case "F4": setActiveTab("presentations"); break;
-        case "F5": setBottomDeckOpen(true); setBottomDeckMode("studio-slides"); break;
+        case "F5": invoke("toggle_design_window"); break;
         case "n": if (nextVerse) { const it: DisplayItem = { type: "Verse", data: nextVerse }; if (e.ctrlKey) sendLive(it); else stageItem(it); } break;
         case "ArrowRight": 
           if (liveItem?.type === "PresentationSlide") { 
@@ -261,21 +239,12 @@ export default function App() {
       }
     };
     window.addEventListener("keydown", handleKD); return () => window.removeEventListener("keydown", handleKD);
-  }, [stagedItem, goLive, liveItem, studioSlides, nextVerse, ltVisible, ltFlatLines, ltLineIndex, ltTemplate, settings, bottomDeckOpen, setSettings, setIsBlackout, setActiveTab, setBottomDeckOpen, setBottomDeckMode, sendLive, stageItem, setLtVisible, ltLinesPerDisplay, ltMode, setLtLineIndex]);
+  }, [label, stagedItem, goLive, liveItem, studioSlides, nextVerse, ltVisible, ltFlatLines, ltLineIndex, ltTemplate, settings, bottomDeckOpen, setSettings, setIsBlackout, setActiveTab, setBottomDeckOpen, setBottomDeckMode, sendLive, stageItem, setLtVisible, ltLinesPerDisplay, ltMode, setLtLineIndex]);
 
-  // ── Helper functions for Studio Editor ─────────────────────────────────────
-
-  const handleNewStudioPresentation = async () => {
-    const pres: CustomPresentation = { id: stableId(), name: "Untitled Presentation", slides: [newDefaultSlide()] };
-    await invoke("save_studio_presentation", { presentation: pres });
-    const list: any[] = await invoke("list_studio_presentations"); setStudioList(list);
-    setEditorPres(pres); setEditorPresId(pres.id);
-  };
-
-  const handleOpenStudioEditor = async (id: string) => {
-    const data = await invoke<any>("load_studio_presentation", { id });
-    setEditorPres(data); setEditorPresId(id);
-  };
+  // ── Window Routing (after all hooks to satisfy React rules) ───────────────
+  if (label === "output") return <OutputWindow />;
+  if (label === "stage") return <StageWindow />;
+  if (label === "design") return <DesignHub />;
 
   const updateSettings = async (next: PresentationSettings) => {
     setSettings(next);
@@ -389,7 +358,7 @@ export default function App() {
               </button>
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={() => setBottomDeckOpen(!bottomDeckOpen)} className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${bottomDeckOpen ? "bg-purple-600 text-white" : "bg-slate-800 text-slate-500"}`}>STUDIO</button>
+              <button onClick={() => setBottomDeckOpen(!bottomDeckOpen)} className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${bottomDeckOpen ? "bg-purple-600 text-white" : "bg-slate-800 text-slate-500"}`}>TOOLS</button>
               <div className="h-4 w-px bg-slate-800 mx-1" />
               <button onClick={() => invoke("clear_live")} className="px-4 py-1.5 bg-red-900/40 hover:bg-red-600 text-red-200 text-[10px] font-black uppercase rounded-lg border border-red-900/50">CLEAR</button>
               <button onClick={goLive} disabled={!stagedItem} className="px-6 py-1.5 bg-amber-500 hover:bg-amber-400 text-black text-[10px] font-black uppercase rounded-lg shadow-lg shadow-amber-500/20 disabled:opacity-30">GO LIVE</button>
@@ -457,8 +426,11 @@ export default function App() {
             <section className="h-[400px] bg-slate-900 border-t border-slate-800 flex flex-col shrink-0 z-40">
               <div className="flex items-center justify-between px-4 py-2 border-b border-slate-800 bg-slate-800/50">
                 <div className="flex rounded-lg overflow-hidden border border-slate-700 bg-black/20 p-0.5">
-                  {(["live-lt", "studio-slides", "studio-lt", "scene-composer", "timer"] as const).map(m => (
-                    <button key={m} onClick={() => setBottomDeckMode(m)} className={`px-4 py-1.5 text-[9px] font-black uppercase tracking-widest rounded-md transition-all ${bottomDeckMode === m ? "bg-amber-500 text-black shadow-lg" : "text-slate-500 hover:text-slate-300"}`}>{m.replace("-", " ")}</button>
+                  {([
+                    { id: "live-lt", label: "Lower Third" },
+                    { id: "timer", label: "Timers" },
+                  ] as const).map(({ id, label: lbl }) => (
+                    <button key={id} onClick={() => setBottomDeckMode(id)} className={`px-4 py-1.5 text-[9px] font-black uppercase tracking-widest rounded-md transition-all ${bottomDeckMode === id ? "bg-amber-500 text-black shadow-lg" : "text-slate-500 hover:text-slate-300"}`}>{lbl}</button>
                   ))}
                 </div>
                 <button onClick={() => setBottomDeckOpen(false)} className="text-slate-500 hover:text-white p-1"><X size={20} /></button>
@@ -466,9 +438,6 @@ export default function App() {
               <div className="flex-1 overflow-hidden p-4">
                 {bottomDeckMode === "live-lt" && <LowerThirdTab onSetToast={setToast} onLoadMedia={handleFileUpload} />}
                 {bottomDeckMode === "timer" && <TimersTab onStage={stageItem} onLive={sendLive} />}
-                {bottomDeckMode === "studio-slides" && <StudioTab onStage={stageItem} onLive={sendLive} onOpenEditor={handleOpenStudioEditor} onNewPresentation={handleNewStudioPresentation} />}
-                {bottomDeckMode === "scene-composer" && <SceneComposerTab onStage={stageItem} onLive={sendLive} onSetToast={setToast} />}
-                {bottomDeckMode === "studio-lt" && <LtDesignerTab onSetToast={setToast} onLoadMedia={handleFileUpload} />}
               </div>
             </section>
           )}
@@ -504,13 +473,6 @@ export default function App() {
       <AnimatePresence>
         {toast && <Toast key={toast} message={toast} onDone={() => setToast(null)} />}
       </AnimatePresence>
-
-      {editorPresId && editorPres && (
-        <SlideEditor initialPres={editorPres} mediaImages={media.filter(i => i.media_type === "Image")} onClose={async (saved) => {
-          setEditorPresId(null); setEditorPres(null);
-          if (saved) { const list: any[] = await invoke("list_studio_presentations"); setStudioList(list); }
-        }} />
-      )}
     </div>
   );
 }

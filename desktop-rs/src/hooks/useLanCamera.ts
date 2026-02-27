@@ -25,10 +25,16 @@ export function useLanCamera(pin: string | null) {
   const handlePreviewOffer = useCallback(async (msg: { device_id: string; device_name?: string; sdp: string }) => {
     const { device_id, sdp } = msg;
     const oldPc = previewPcMapRef.current.get(device_id);
-    if (oldPc) oldPc.close();
+    if (oldPc) {
+      oldPc.close();
+      // Remove from map immediately so any ICE candidates arriving before
+      // setRemoteDescription completes are buffered in pendingIceRef, not
+      // silently dropped by addIceCandidate on an uninitialized PC.
+      previewPcMapRef.current.delete(device_id);
+    }
 
     const pc = new RTCPeerConnection(STUN_CONFIG);
-    previewPcMapRef.current.set(device_id, pc);
+    // Do NOT register in previewPcMapRef yet — wait until after setRemoteDescription.
 
     pc.ontrack = (ev: RTCTrackEvent) => {
       const stream = ev.streams[0] ?? new MediaStream([ev.track]);
@@ -44,11 +50,11 @@ export function useLanCamera(pin: string | null) {
 
     pc.onicecandidate = (ev) => {
       if (ev.candidate) {
-        operatorWsRef.current?.send(JSON.stringify({ 
-          cmd: "camera_ice", 
-          device_id, 
-          target: `mobile:${device_id}`, 
-          candidate: ev.candidate 
+        operatorWsRef.current?.send(JSON.stringify({
+          cmd: "camera_ice",
+          device_id,
+          target: `mobile:${device_id}`,
+          candidate: ev.candidate
         }));
       }
     };
@@ -59,8 +65,8 @@ export function useLanCamera(pin: string | null) {
         const next = new Map(prev);
         const src = next.get(device_id);
         if (!src) return prev;
-        const status = (s === "connected" || s === "completed") ? "connected" 
-          : (s === "failed" || s === "disconnected" || s === "closed") ? "disconnected" 
+        const status = (s === "connected" || s === "completed") ? "connected"
+          : (s === "failed" || s === "disconnected" || s === "closed") ? "disconnected"
           : "connecting";
         next.set(device_id, { ...src, status });
         return next;
@@ -68,17 +74,22 @@ export function useLanCamera(pin: string | null) {
     };
 
     await pc.setRemoteDescription({ type: "offer", sdp });
+
+    // Register in map only after remote description is set — now safe to add candidates.
+    previewPcMapRef.current.set(device_id, pc);
+
+    // Flush any ICE candidates that arrived while setRemoteDescription was in progress.
     const buffered = pendingIceRef.current.get(device_id) ?? [];
     pendingIceRef.current.delete(device_id);
     for (const candidate of buffered) { try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch {} }
 
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    operatorWsRef.current?.send(JSON.stringify({ 
-      cmd: "camera_answer", 
-      device_id, 
-      target: `mobile:${device_id}`, 
-      sdp: answer.sdp 
+    operatorWsRef.current?.send(JSON.stringify({
+      cmd: "camera_answer",
+      device_id,
+      target: `mobile:${device_id}`,
+      sdp: answer.sdp
     }));
   }, []);
 
