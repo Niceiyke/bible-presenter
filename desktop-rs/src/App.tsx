@@ -10,6 +10,7 @@ import {
   BookOpen, Image, Presentation, Layers, CalendarDays, Type, Music, Settings,
   RefreshCw, X, ChevronUp, ChevronDown, ChevronRight, ChevronLeft,
   Eye, EyeOff, Monitor, Mic, MicOff, Upload, Plus, Clock, Zap,
+  Edit2, Trash2,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -238,6 +239,27 @@ export interface Schedule {
   id: string;
   name: string;
   items: ScheduleEntry[];
+}
+
+export interface ServiceMeta {
+  id: string;
+  name: string;
+  item_count: number;
+  updated_at: number;
+}
+
+export interface PropItem {
+  id: string;
+  kind: "image" | "clock";
+  path?: string;
+  text?: string;
+  color?: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  opacity: number;
+  visible: boolean;
 }
 
 // Background is a serde-tagged enum: { type: "None" } | { type: "Color"; value: string } | { type: "Image"; value: string } | { type: "Camera"; value: string }
@@ -1863,9 +1885,69 @@ function StageWindow() {
 
 // ─── Output Window ────────────────────────────────────────────────────────────
 
+// ─── Props layer (persistent graphics above slides) ────────────────────────────
+
+function PropClockRenderer({ color, format }: { color?: string; format?: string }) {
+  const [time, setTime] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const fmt = format ?? "HH:mm:ss";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const h = pad(time.getHours());
+  const h12 = pad(time.getHours() % 12 || 12);
+  const m = pad(time.getMinutes());
+  const s = pad(time.getSeconds());
+  const ampm = time.getHours() < 12 ? "AM" : "PM";
+  const display = fmt
+    .replace("HH", h)
+    .replace("hh", h12)
+    .replace("mm", m)
+    .replace("ss", s)
+    .replace("a", ampm);
+
+  return (
+    <div className="w-full h-full flex items-center justify-center">
+      <span className="font-mono font-black text-4xl drop-shadow-lg" style={{ color: color ?? "#ffffff" }}>
+        {display}
+      </span>
+    </div>
+  );
+}
+
+function PropsRenderer({ items }: { items: PropItem[] }) {
+  return (
+    <div className="absolute inset-0 z-30 pointer-events-none">
+      {items.filter((p) => p.visible).map((p) => (
+        <div
+          key={p.id}
+          style={{
+            position: "absolute",
+            left: `${p.x}%`,
+            top: `${p.y}%`,
+            width: `${p.w}%`,
+            height: `${p.h}%`,
+            opacity: p.opacity,
+          }}
+        >
+          {p.kind === "image" && p.path && (
+            <img src={convertFileSrc(p.path)} className="w-full h-full object-contain" alt="" />
+          )}
+          {p.kind === "clock" && (
+            <PropClockRenderer color={p.color} format={p.text} />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function OutputWindow() {
   const [liveItem, setLiveItem] = useState<DisplayItem | null>(null);
   const [lowerThird, setLowerThird] = useState<{ data: LowerThirdData; template: LowerThirdTemplate } | null>(null);
+  const [propItems, setPropItems] = useState<PropItem[]>([]);
   const [settings, setSettings] = useState<PresentationSettings>({
     theme: "dark",
     reference_position: "bottom",
@@ -2019,11 +2101,19 @@ function OutputWindow() {
       }
     });
 
+    const unlistenProps = listen("props-update", (event: any) => {
+      setPropItems((event.payload as PropItem[]) ?? []);
+    });
+
+    // Load initial props
+    invoke<PropItem[]>("get_props").then(setPropItems).catch(() => {});
+
     return () => {
       unlisten.then((f) => f());
       unlistenSettings.then((f) => f());
       unlistenLt.then((f) => f());
       unlistenMedia.then((f) => f());
+      unlistenProps.then((f) => f());
     };
   }, []);
 
@@ -2227,6 +2317,9 @@ function OutputWindow() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Props layer — persistent graphics above slides but below lower third */}
+      <PropsRenderer items={propItems} />
 
       {/* Lower Third Overlay — always on top, independent of liveItem */}
       <AnimatePresence>
@@ -2491,7 +2584,7 @@ export default function App() {
   const [studioSlides, setStudioSlides] = useState<Record<string, CustomSlide[]>>({});
 
   // UI
-  const [activeTab, setActiveTab] = useState<"bible" | "media" | "presentations" | "studio" | "schedule" | "lower-third" | "songs" | "settings">("bible");
+  const [activeTab, setActiveTab] = useState<"bible" | "media" | "presentations" | "studio" | "schedule" | "lower-third" | "songs" | "settings" | "props">("bible");
   const [toast, setToast] = useState<string | null>(null);
 
   // Songs library
@@ -2528,6 +2621,15 @@ export default function App() {
   const [scheduleEntries, setScheduleEntries] = useState<ScheduleEntry[]>([]);
   const scheduleRef = useRef<ScheduleEntry[]>([]);
   const [activeScheduleIdx, setActiveScheduleIdx] = useState<number | null>(null);
+
+  // Service workflow
+  const [services, setServices] = useState<ServiceMeta[]>([]);
+  const [activeServiceId, setActiveServiceId] = useState("default");
+  const [serviceManagerOpen, setServiceManagerOpen] = useState(false);
+  const [newServiceName, setNewServiceName] = useState("");
+
+  // Props layer
+  const [propItems, setPropItems] = useState<PropItem[]>([]);
 
   // Media
   const [media, setMedia] = useState<MediaItem[]>([]);
@@ -3026,6 +3128,29 @@ export default function App() {
     loadSchedule();
     loadSongs();
     loadLtTemplates();
+
+    // Load services list and create default if needed
+    invoke<ServiceMeta[]>("list_services").then(async (list) => {
+      if (list.length === 0) {
+        // Create a default service from the current schedule entries
+        const defaultSvc: Schedule = { id: "default", name: "Sunday Service", items: [] };
+        await invoke("save_service", { schedule: defaultSvc }).catch(() => {});
+        setServices([{ id: "default", name: "Sunday Service", item_count: 0, updated_at: Date.now() }]);
+      } else {
+        setServices(list);
+        // Load the most-recently-used service if stored
+        const saved = localStorage.getItem("activeServiceId");
+        const found = saved ? list.find((s) => s.id === saved) : null;
+        if (found) {
+          setActiveServiceId(found.id);
+        } else {
+          setActiveServiceId(list[0].id);
+        }
+      }
+    }).catch(() => {});
+
+    // Load persisted props
+    invoke<PropItem[]>("get_props").then(setPropItems).catch(() => {})
     invoke<SceneData[]>("list_scenes").then(setSavedScenes).catch(() => {});
 
     // Sync persisted transcription window to backend
@@ -3686,8 +3811,13 @@ export default function App() {
 
   const persistSchedule = async (entries: ScheduleEntry[]) => {
     try {
-      const schedule: Schedule = { id: "default", name: "Default Schedule", items: entries };
+      const svcName = services.find((s) => s.id === activeServiceId)?.name ?? "Default Schedule";
+      const schedule: Schedule = { id: activeServiceId, name: svcName, items: entries };
       await invoke("save_schedule", { schedule });
+      // Also persist to the named service file
+      await invoke("save_service", { schedule });
+      // Refresh service list to update item_count
+      invoke<ServiceMeta[]>("list_services").then(setServices).catch(() => {});
     } catch (err) {
       console.error("Failed to save schedule:", err);
     }
@@ -4063,6 +4193,7 @@ export default function App() {
                 { id: "presentations", icon: <Presentation size={13} />,  label: "PPTX" },
                 { id: "studio",        icon: <Layers size={13} />,        label: "Studio" },
                 { id: "songs",         icon: <Music size={13} />,         label: "Songs" },
+                { id: "props",         icon: <Monitor size={13} />,       label: "Props" },
                 { id: "settings",      icon: <Settings size={13} />,      label: "Prefs" },
               ] as const
             ).map(({ id, icon, label }) => (
@@ -4735,8 +4866,114 @@ export default function App() {
             {/* ── Schedule Tab ── */}
             {activeTab === "schedule" && (
               <div className="flex flex-col gap-3">
+                {/* Service switcher */}
+                <div className="flex items-center gap-2">
+                  <select
+                    value={activeServiceId}
+                    onChange={async (e) => {
+                      const id = e.target.value;
+                      // Auto-save current before switching
+                      await persistSchedule(scheduleEntries);
+                      const loaded: Schedule = await invoke("load_service", { id });
+                      setScheduleEntries(loaded.items ?? []);
+                      setActiveServiceId(id);
+                      localStorage.setItem("activeServiceId", id);
+                    }}
+                    className="flex-1 bg-slate-800 text-slate-200 text-xs rounded border border-slate-700 px-2 py-1.5 font-bold"
+                  >
+                    {services.map((s) => (
+                      <option key={s.id} value={s.id}>{s.name} ({s.item_count})</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => setServiceManagerOpen((o) => !o)}
+                    title="Manage services"
+                    className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 rounded border border-slate-700 transition-all"
+                  >
+                    <Settings size={12} />
+                  </button>
+                </div>
+
+                {/* Service manager popover */}
+                {serviceManagerOpen && (
+                  <div className="bg-slate-900 border border-slate-700 rounded-lg p-3 flex flex-col gap-2">
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Manage Services</p>
+                    {services.map((s) => (
+                      <div key={s.id} className="flex items-center gap-2">
+                        <span className={`flex-1 text-xs truncate ${s.id === activeServiceId ? "text-amber-400 font-bold" : "text-slate-300"}`}>{s.name}</span>
+                        <button
+                          onClick={async () => {
+                            const newName = window.prompt("Rename service:", s.name);
+                            if (!newName || newName === s.name) return;
+                            const loaded: Schedule = await invoke<Schedule>("load_service", { id: s.id }).catch(() => ({ id: s.id, name: s.name, items: [] } as Schedule));
+                            const renamed = { ...loaded, name: newName };
+                            await invoke("save_service", { schedule: renamed });
+                            const list = await invoke<ServiceMeta[]>("list_services");
+                            setServices(list);
+                          }}
+                          className="text-slate-500 hover:text-slate-200 p-1 rounded"
+                          title="Rename"
+                        >
+                          <Edit2 size={10} />
+                        </button>
+                        <button
+                          disabled={s.id === activeServiceId || services.length <= 1}
+                          onClick={async () => {
+                            if (!window.confirm(`Delete service "${s.name}"?`)) return;
+                            await invoke("delete_service", { id: s.id });
+                            const list = await invoke<ServiceMeta[]>("list_services");
+                            setServices(list);
+                          }}
+                          className="text-red-700 hover:text-red-400 p-1 rounded disabled:opacity-30"
+                          title="Delete"
+                        >
+                          <Trash2 size={10} />
+                        </button>
+                      </div>
+                    ))}
+                    <hr className="border-slate-700" />
+                    <div className="flex gap-2">
+                      <input
+                        value={newServiceName}
+                        onChange={(e) => setNewServiceName(e.target.value)}
+                        placeholder="New service name…"
+                        className="flex-1 bg-slate-800 text-slate-200 text-xs rounded border border-slate-700 px-2 py-1"
+                        onKeyDown={async (e) => {
+                          if (e.key !== "Enter" || !newServiceName.trim()) return;
+                          const id = stableId();
+                          const svc: Schedule = { id, name: newServiceName.trim(), items: [] };
+                          await invoke("save_service", { schedule: svc });
+                          const list = await invoke<ServiceMeta[]>("list_services");
+                          setServices(list);
+                          setActiveServiceId(id);
+                          setScheduleEntries([]);
+                          localStorage.setItem("activeServiceId", id);
+                          setNewServiceName("");
+                        }}
+                      />
+                      <button
+                        onClick={async () => {
+                          if (!newServiceName.trim()) return;
+                          const id = stableId();
+                          const svc: Schedule = { id, name: newServiceName.trim(), items: [] };
+                          await invoke("save_service", { schedule: svc });
+                          const list = await invoke<ServiceMeta[]>("list_services");
+                          setServices(list);
+                          setActiveServiceId(id);
+                          setScheduleEntries([]);
+                          localStorage.setItem("activeServiceId", id);
+                          setNewServiceName("");
+                        }}
+                        className="px-2 py-1 bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold rounded"
+                      >
+                        + New
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex justify-between items-center">
-                  <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Live Schedule</h2>
+                  <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Items</h2>
                   {scheduleEntries.length > 0 && (
                     <div className="flex gap-1">
                       <button
@@ -4806,6 +5043,166 @@ export default function App() {
                         </div>
                       );
                     })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Props Tab ── */}
+            {activeTab === "props" && (
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Persistent Props</h2>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={async () => {
+                        const selected = await openDialog({ multiple: false, filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg"] }] });
+                        if (!selected) return;
+                        const path = typeof selected === "string" ? selected : (selected as any).path ?? (selected as any)[0]?.path ?? null;
+                        if (!path) return;
+                        const newProp: PropItem = { id: stableId(), kind: "image", path, x: 2, y: 2, w: 20, h: 15, opacity: 1, visible: true };
+                        const next = [...propItems, newProp];
+                        setPropItems(next);
+                        await invoke("set_props", { props: next });
+                      }}
+                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded border border-slate-700 transition-all flex items-center gap-1"
+                    >
+                      <Image size={10} /> Image
+                    </button>
+                    <button
+                      onClick={async () => {
+                        const newProp: PropItem = { id: stableId(), kind: "clock", text: "HH:mm:ss", color: "#ffffff", x: 35, y: 2, w: 30, h: 10, opacity: 1, visible: true };
+                        const next = [...propItems, newProp];
+                        setPropItems(next);
+                        await invoke("set_props", { props: next });
+                      }}
+                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded border border-slate-700 transition-all flex items-center gap-1"
+                    >
+                      <Clock size={10} /> Clock
+                    </button>
+                    {propItems.length > 0 && (
+                      <button
+                        onClick={async () => {
+                          if (!window.confirm("Remove all props?")) return;
+                          setPropItems([]);
+                          await invoke("set_props", { props: [] });
+                        }}
+                        className="px-2 py-1 bg-red-900/50 hover:bg-red-900 text-red-400 text-xs rounded border border-red-900 transition-all"
+                      >
+                        Clear All
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {propItems.length === 0 ? (
+                  <p className="text-slate-700 text-xs italic text-center pt-8">No props. Add an image logo or clock overlay above.</p>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    {propItems.map((prop) => (
+                      <div key={prop.id} className="bg-slate-800/40 border border-slate-700/40 rounded-lg p-3 flex flex-col gap-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 bg-slate-900 rounded flex items-center justify-center shrink-0">
+                            {prop.kind === "image" ? <Image size={14} className="text-slate-500" /> : <Clock size={14} className="text-slate-500" />}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-bold text-slate-300 truncate">
+                              {prop.kind === "clock" ? (prop.text ?? "HH:mm:ss") : (prop.path?.split("/").pop() ?? prop.path?.split("\\").pop() ?? "Image")}
+                            </p>
+                            <p className="text-[10px] text-slate-600 uppercase">{prop.kind}</p>
+                          </div>
+                          <button
+                            onClick={async () => {
+                              const updated = propItems.map((p) => p.id === prop.id ? { ...p, visible: !p.visible } : p);
+                              setPropItems(updated);
+                              await invoke("set_props", { props: updated });
+                            }}
+                            className={`p-1.5 rounded transition-all ${prop.visible ? "text-amber-500 bg-amber-500/10" : "text-slate-600 bg-slate-800"}`}
+                            title={prop.visible ? "Hide" : "Show"}
+                          >
+                            {prop.visible ? <Eye size={12} /> : <EyeOff size={12} />}
+                          </button>
+                          <button
+                            onClick={async () => {
+                              const next = propItems.filter((p) => p.id !== prop.id);
+                              setPropItems(next);
+                              await invoke("set_props", { props: next });
+                            }}
+                            className="p-1.5 text-red-700 hover:text-red-400 bg-slate-800 rounded transition-all"
+                            title="Delete"
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+
+                        {/* Position presets */}
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-slate-600 uppercase font-bold w-12">Position</span>
+                          {[
+                            { label: "TL", x: 1, y: 1 },
+                            { label: "TR", x: 79, y: 1 },
+                            { label: "BL", x: 1, y: 83 },
+                            { label: "BR", x: 79, y: 83 },
+                            { label: "TC", x: 35, y: 1 },
+                          ].map(({ label, x, y }) => (
+                            <button
+                              key={label}
+                              onClick={async () => {
+                                const updated = propItems.map((p) => p.id === prop.id ? { ...p, x, y } : p);
+                                setPropItems(updated);
+                                await invoke("set_props", { props: updated });
+                              }}
+                              className="px-1.5 py-0.5 text-[9px] font-bold bg-slate-800 hover:bg-slate-700 text-slate-400 rounded border border-slate-700"
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* Opacity slider */}
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-slate-600 uppercase font-bold w-12">Opacity</span>
+                          <input
+                            type="range" min={0} max={1} step={0.05}
+                            value={prop.opacity}
+                            onChange={async (e) => {
+                              const updated = propItems.map((p) => p.id === prop.id ? { ...p, opacity: parseFloat(e.target.value) } : p);
+                              setPropItems(updated);
+                              await invoke("set_props", { props: updated });
+                            }}
+                            className="flex-1 accent-amber-500"
+                          />
+                          <span className="text-[10px] text-slate-500 w-8 text-right">{Math.round(prop.opacity * 100)}%</span>
+                        </div>
+
+                        {/* Clock-specific: format and color */}
+                        {prop.kind === "clock" && (
+                          <div className="flex gap-2">
+                            <input
+                              value={prop.text ?? "HH:mm:ss"}
+                              onChange={async (e) => {
+                                const updated = propItems.map((p) => p.id === prop.id ? { ...p, text: e.target.value } : p);
+                                setPropItems(updated);
+                                await invoke("set_props", { props: updated });
+                              }}
+                              className="flex-1 bg-slate-900 text-slate-300 text-xs rounded border border-slate-700 px-2 py-1"
+                              placeholder="HH:mm:ss"
+                            />
+                            <input
+                              type="color"
+                              value={prop.color ?? "#ffffff"}
+                              onChange={async (e) => {
+                                const updated = propItems.map((p) => p.id === prop.id ? { ...p, color: e.target.value } : p);
+                                setPropItems(updated);
+                                await invoke("set_props", { props: updated });
+                              }}
+                              className="w-8 h-8 rounded border border-slate-700 bg-transparent cursor-pointer"
+                              title="Text color"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
