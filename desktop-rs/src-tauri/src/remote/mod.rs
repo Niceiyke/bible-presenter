@@ -230,7 +230,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     while let Some(Ok(msg)) = receiver.next().await {
         if let Message::Text(text) = msg {
             if let Ok(v) = serde_json::from_str::<Value>(&text) {
-                route_or_handle(&state, v, &text).await;
+                route_or_handle(&state, v, &text, &client_key).await;
             }
         }
     }
@@ -253,13 +253,23 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
 
 /// Routes a WebSocket message either to a specific client (signaling relay) or
 /// to the general command handler (remote panel commands, state queries, etc.).
-async fn route_or_handle(state: &Arc<AppState>, v: Value, raw: &str) {
+async fn route_or_handle(state: &Arc<AppState>, v: Value, raw: &str, from_key: &str) {
     // If the message carries an explicit `target`, relay it directly.
     if let Some(target_raw) = v.get("target").and_then(|t| t.as_str()) {
         let target_key = normalize_target(target_raw);
+
+        // Inject _from into the message so the recipient knows who sent it.
+        // This is crucial for WebRTC clients to match answers to the correct PC.
+        let relayed_raw = if let Some(mut obj) = v.as_object().cloned() {
+            obj.insert("_from".to_string(), json!(from_key));
+            Value::Object(obj).to_string()
+        } else {
+            raw.to_string()
+        };
+
         let clients = state.signaling_clients.lock();
         if let Some(ch) = clients.get(&target_key) {
-            let _ = ch.send(raw.to_string());
+            let _ = ch.send(relayed_raw);
         }
         return;
     }

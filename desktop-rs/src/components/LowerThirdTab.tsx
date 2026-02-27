@@ -1,22 +1,9 @@
 import React, { useEffect, useRef, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { motion } from "framer-motion";
 import { useAppStore } from "../store";
-import type { LowerThirdData, LowerThirdTemplate, MediaItem } from "../App";
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const FONTS = [
-  "Arial", "Verdana", "Helvetica", "Trebuchet MS",
-  "Georgia", "Times New Roman", "Palatino",
-  "Impact", "Arial Black", "Courier New",
-];
-
-function stableId(): string {
-  return crypto.randomUUID();
-}
+import type { LowerThirdData, LowerThirdTemplate } from "../App";
 
 // ─── Lower Third helpers ──────────────────────────────────────────────────────
 
@@ -154,7 +141,7 @@ function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData; templa
             ) : t.variant === "banner" ? (
               <div className="flex items-center gap-4">
                 <div className="shrink-0 py-1 px-4 rounded" style={{ background: t.accentColor, color: t.bgColor }}>
-                   <p className="font-black text-xl uppercase tracking-tighter">LIVE</p>
+                  <p className="font-black text-xl uppercase tracking-tighter">LIVE</p>
                 </div>
                 <div className="flex-1 min-w-0">
                   <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
@@ -203,7 +190,6 @@ function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData; templa
                 ...buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase),
                 display: "inline-block",
                 paddingLeft: "100%",
-                paddingRight: "0",
                 animation: `lt-scroll-${t.scrollDirection} ${(11 - t.scrollSpeed) * 4}s linear infinite`,
                 willChange: "transform",
               }}>
@@ -221,90 +207,22 @@ function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData; templa
   );
 }
 
-// ─── Media Picker Modal (local copy) ─────────────────────────────────────────
-
-function MediaPickerModal({
-  images,
-  onSelect,
-  onClose,
-  onUpload,
-}: {
-  images: MediaItem[];
-  onSelect: (path: string) => void;
-  onClose: () => void;
-  onUpload: () => Promise<void>;
-}) {
-  const [uploading, setUploading] = React.useState(false);
-
-  const handleUpload = async () => {
-    setUploading(true);
-    try { await onUpload(); } finally { setUploading(false); }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-8" style={{ backgroundColor: "rgba(0,0,0,0.75)" }}>
-      <div className="bg-slate-900 rounded-xl border border-slate-700 flex flex-col w-full max-w-2xl" style={{ maxHeight: "80vh" }}>
-        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 shrink-0">
-          <span className="text-sm font-bold text-slate-200">Media Library — Pick Image</span>
-          <div className="flex gap-2">
-            <button
-              onClick={handleUpload}
-              disabled={uploading}
-              className="text-[10px] bg-amber-500 hover:bg-amber-400 text-black font-bold px-3 py-1.5 rounded transition-all disabled:opacity-50"
-            >
-              {uploading ? "Uploading..." : "+ Upload New"}
-            </button>
-            <button onClick={onClose} className="text-slate-400 hover:text-white text-lg leading-none px-1">×</button>
-          </div>
-        </div>
-        <div className="flex-1 overflow-y-auto p-4">
-          {images.length === 0 ? (
-            <p className="text-slate-600 text-xs italic text-center py-12">
-              No images in library yet. Click "+ Upload New" to add images.
-            </p>
-          ) : (
-            <div className="grid grid-cols-3 gap-2">
-              {images.map((img) => (
-                <button
-                  key={img.id}
-                  onClick={() => { onSelect(img.path); onClose(); }}
-                  className="aspect-video rounded-lg overflow-hidden border border-slate-700 hover:border-amber-500 transition-all group relative"
-                >
-                  <img src={convertFileSrc(img.path)} className="w-full h-full object-cover" alt={img.name} />
-                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center">
-                    <span className="text-white text-[10px] font-bold">SELECT</span>
-                  </div>
-                  <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
-                    <p className="text-[8px] text-white truncate">{img.name}</p>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── LowerThirdTab ────────────────────────────────────────────────────────────
+// ─── LowerThirdTab — Fire-Only Operator Panel ─────────────────────────────────
+// Design controls (bg/accent/position/typography/animation) live in Design Hub.
 
 interface LowerThirdTabProps {
   onLoadMedia: () => Promise<void>;
   onSetToast: (msg: string) => void;
 }
 
-export default function LowerThirdTab({ onLoadMedia, onSetToast }: LowerThirdTabProps) {
+export default function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
   const {
     activeTab,
     songs,
-    media,
     ltMode, setLtMode,
     ltVisible, setLtVisible,
     ltTemplate, setLtTemplate,
-    ltSavedTemplates, setLtSavedTemplates,
-    ltDesignOpen, setLtDesignOpen,
-    showLtImgPicker, setShowLtImgPicker,
+    ltSavedTemplates,
     ltName, setLtName,
     ltTitle, setLtTitle,
     ltFreeText, setLtFreeText,
@@ -332,16 +250,12 @@ export default function LowerThirdTab({ onLoadMedia, onSetToast }: LowerThirdTab
       for (const label of arr) {
         const sec = sections.find((s) => s.label === label);
         if (sec) {
-          for (const line of sec.lines) {
-            flat.push({ text: line, sectionLabel: sec.label });
-          }
+          for (const line of sec.lines) flat.push({ text: line, sectionLabel: sec.label });
         }
       }
     } else {
       for (const section of sections) {
-        for (const line of section.lines) {
-          flat.push({ text: line, sectionLabel: section.label });
-        }
+        for (const line of section.lines) flat.push({ text: line, sectionLabel: section.label });
       }
     }
     return flat;
@@ -363,7 +277,7 @@ export default function LowerThirdTab({ onLoadMedia, onSetToast }: LowerThirdTab
     if (ltVisible) await ltSendCurrent(next);
   }, [ltFlatLines, ltLinesPerDisplay, ltLineIndex, ltVisible, ltSendCurrent]);
 
-  // Keyboard shortcuts (Space/→ = next, ← = prev, H = show/hide)
+  // Keyboard shortcuts (Space/→ = next, ← = prev, H = show/hide) — active in LT tab lyrics mode
   useEffect(() => {
     if (activeTab !== "lower-third" || ltMode !== "lyrics") return;
     const handler = (e: KeyboardEvent) => {
@@ -411,363 +325,33 @@ export default function LowerThirdTab({ onLoadMedia, onSetToast }: LowerThirdTab
   }, [ltAutoAdvance, ltVisible, ltMode, ltAutoSeconds, ltLinesPerDisplay, ltFlatLines, ltSendCurrent]);
 
   return (
-    <div className="flex flex-col gap-4">
-      <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Lower Third</h2>
+    <div className="flex flex-col gap-3 p-3">
 
-      {/* ── Design Panel ── */}
-      <div className="border border-slate-700 rounded-xl overflow-hidden">
-        <button
-          onClick={() => setLtDesignOpen(!ltDesignOpen)}
-          className="w-full flex items-center justify-between px-3 py-2 bg-slate-800 hover:bg-slate-750 text-xs font-bold text-slate-300 uppercase tracking-widest"
+      {/* ── Template selector ── */}
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Template</span>
+          <span className="text-[9px] text-purple-400/60 italic">Edit in Design Hub ↗</span>
+        </div>
+        <select
+          className="w-full bg-slate-800 text-slate-200 text-xs rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-amber-500"
+          value={ltTemplate.id}
+          onChange={(e) => {
+            const found = ltSavedTemplates.find((t) => t.id === e.target.value);
+            if (found) { setLtTemplate(found); localStorage.setItem("activeLtTemplateId", found.id); }
+          }}
         >
-          <span>Design</span>
-          <span className="text-slate-500">{ltDesignOpen ? "▲" : "▼"}</span>
-        </button>
-
-        {ltDesignOpen && (
-          <div className="p-3 flex flex-col gap-4">
-
-            {/* Template selector */}
-            <div className="flex flex-col gap-2">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Template</p>
-              <div className="flex gap-1.5">
-                <input
-                  className="flex-1 bg-slate-900 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700"
-                  placeholder="Template name"
-                  value={ltTemplate.name}
-                  onChange={(e) => setLtTemplate((t) => ({ ...t, name: e.target.value }))}
-                />
-              </div>
-              <div className="flex gap-1.5">
-                <select
-                  className="flex-1 bg-slate-900 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700"
-                  value={ltTemplate.id}
-                  onChange={(e) => {
-                    const found = ltSavedTemplates.find((t) => t.id === e.target.value);
-                    if (found) {
-                      setLtTemplate(found);
-                      localStorage.setItem("activeLtTemplateId", found.id);
-                    }
-                  }}
-                >
-                  {ltSavedTemplates.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name}</option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => {
-                    const newId = stableId();
-                    const newTpl: LowerThirdTemplate = { ...ltTemplate, id: newId, name: "New Template" };
-                    setLtTemplate(newTpl);
-                    setLtSavedTemplates([...ltSavedTemplates, newTpl]);
-                    localStorage.setItem("activeLtTemplateId", newId);
-                  }}
-                  className="px-2 py-1 bg-slate-600 hover:bg-slate-500 text-white text-[10px] font-bold rounded"
-                >+ New</button>
-                <button
-                  onClick={async () => {
-                    const updated = ltSavedTemplates.some((t) => t.id === ltTemplate.id)
-                      ? ltSavedTemplates.map((t) => t.id === ltTemplate.id ? ltTemplate : t)
-                      : [...ltSavedTemplates, ltTemplate];
-                    setLtSavedTemplates(updated);
-                    localStorage.setItem("activeLtTemplateId", ltTemplate.id);
-                    await invoke("save_lt_templates", { templates: updated });
-                    onSetToast("Template saved");
-                  }}
-                  className="px-2 py-1 bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold rounded"
-                >Save</button>
-                <button
-                  onClick={async () => {
-                    if (ltSavedTemplates.length <= 1) { onSetToast("Cannot delete the last template"); return; }
-                    if (!confirm(`Delete template "${ltTemplate.name}"?`)) return;
-                    const updated = ltSavedTemplates.filter((t) => t.id !== ltTemplate.id);
-                    const next = updated[0];
-                    if (!next) return;
-                    setLtSavedTemplates(updated);
-                    setLtTemplate(next);
-                    localStorage.setItem("activeLtTemplateId", next.id);
-                    await invoke("save_lt_templates", { templates: updated });
-                  }}
-                  className="px-2 py-1 bg-red-800 hover:bg-red-700 text-white text-[10px] font-bold rounded"
-                >Del</button>
-              </div>
-            </div>
-
-            <div className="border-t border-slate-700" />
-
-            {/* Background */}
-            <div className="flex flex-col gap-2">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Background</p>
-              <div className="flex gap-1">
-                {(["solid", "gradient", "image", "transparent"] as const).map((bt) => (
-                  <button key={bt} onClick={() => setLtTemplate((t) => ({ ...t, bgType: bt }))}
-                    className={`flex-1 py-1 text-[10px] font-bold rounded ${ltTemplate.bgType === bt ? "bg-slate-600 text-white" : "bg-slate-800 text-slate-400"}`}>
-                    {bt === "solid" ? "Solid" : bt === "gradient" ? "Grad" : bt === "image" ? "Image" : "None"}
-                  </button>
-                ))}
-              </div>
-              {ltTemplate.bgType === "image" && (
-                <div className="flex flex-col gap-1.5">
-                  <button
-                    onClick={() => {
-                      if (media.filter((m) => m.media_type === "Image").length > 0) {
-                        setShowLtImgPicker(true);
-                      } else {
-                        onSetToast("No images in media library. Upload images in the Media tab first.");
-                      }
-                    }}
-                    className="w-full py-1.5 text-[10px] font-bold rounded bg-slate-700 hover:bg-slate-600 text-slate-300 border border-slate-600"
-                  >
-                    {ltTemplate.bgImagePath ? "Change Image" : "Pick Image from Library"}
-                  </button>
-                  {ltTemplate.bgImagePath && (
-                    <div className="relative rounded overflow-hidden border border-slate-700" style={{ aspectRatio: "16/9" }}>
-                      <img src={convertFileSrc(ltTemplate.bgImagePath)} className="w-full h-full object-cover" alt="Background preview" />
-                      <button
-                        onClick={() => setLtTemplate((t) => ({ ...t, bgImagePath: undefined }))}
-                        className="absolute top-1 right-1 bg-black/70 text-white text-[10px] rounded px-1 hover:bg-red-700"
-                      >✕</button>
-                    </div>
-                  )}
-                </div>
-              )}
-              {(ltTemplate.bgType === "solid" || ltTemplate.bgType === "gradient") && (
-                <div className="flex flex-col gap-1.5">
-                  <div className="flex items-center gap-2">
-                    <label className="text-[10px] text-slate-400 w-12">Color</label>
-                    <input type="color" value={ltTemplate.bgColor}
-                      onChange={(e) => setLtTemplate((t) => ({ ...t, bgColor: e.target.value }))}
-                      className="w-8 h-6 rounded cursor-pointer border-0 bg-transparent" />
-                    <label className="text-[10px] text-slate-400">Opacity</label>
-                    <input type="range" min={0} max={100} value={ltTemplate.bgOpacity}
-                      onChange={(e) => setLtTemplate((t) => ({ ...t, bgOpacity: Number(e.target.value) }))}
-                      className="flex-1" />
-                    <span className="text-[10px] text-slate-400 w-8 text-right">{ltTemplate.bgOpacity}%</span>
-                  </div>
-                  {ltTemplate.bgType === "gradient" && (
-                    <div className="flex items-center gap-2">
-                      <label className="text-[10px] text-slate-400 w-12">End</label>
-                      <input type="color" value={ltTemplate.bgGradientEnd}
-                        onChange={(e) => setLtTemplate((t) => ({ ...t, bgGradientEnd: e.target.value }))}
-                        className="w-8 h-6 rounded cursor-pointer border-0 bg-transparent" />
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2">
-                    <label className="text-[10px] text-slate-400">Blur</label>
-                    <input type="checkbox" checked={ltTemplate.bgBlur}
-                      onChange={(e) => setLtTemplate((t) => ({ ...t, bgBlur: e.target.checked }))} />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="border-t border-slate-700" />
-
-            {/* Accent Bar */}
-            <div className="flex flex-col gap-2">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Accent Bar</p>
-              <div className="flex items-center gap-2">
-                <input type="checkbox" checked={ltTemplate.accentEnabled}
-                  onChange={(e) => setLtTemplate((t) => ({ ...t, accentEnabled: e.target.checked }))} />
-                <label className="text-[10px] text-slate-400">Enabled</label>
-              </div>
-              {ltTemplate.accentEnabled && (
-                <>
-                  <div className="flex items-center gap-2">
-                    <label className="text-[10px] text-slate-400 w-12">Color</label>
-                    <input type="color" value={ltTemplate.accentColor}
-                      onChange={(e) => setLtTemplate((t) => ({ ...t, accentColor: e.target.value }))}
-                      className="w-8 h-6 rounded cursor-pointer border-0 bg-transparent" />
-                    <label className="text-[10px] text-slate-400">Side</label>
-                    <div className="flex gap-1">
-                      {(["left", "right", "top", "bottom"] as const).map((s) => (
-                        <button key={s} onClick={() => setLtTemplate((t) => ({ ...t, accentSide: s }))}
-                          className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${ltTemplate.accentSide === s ? "bg-amber-600 text-white" : "bg-slate-700 text-slate-400"}`}>
-                          {s[0].toUpperCase()}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <label className="text-[10px] text-slate-400 w-12">Width</label>
-                    <input type="range" min={1} max={20} value={ltTemplate.accentWidth}
-                      onChange={(e) => setLtTemplate((t) => ({ ...t, accentWidth: Number(e.target.value) }))}
-                      className="flex-1" />
-                    <span className="text-[10px] text-slate-400 w-6 text-right">{ltTemplate.accentWidth}</span>
-                  </div>
-                </>
-              )}
-            </div>
-
-            <div className="border-t border-slate-700" />
-
-            {/* Position & Size */}
-            <div className="flex flex-col gap-2">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Position & Size</p>
-              <div className="grid grid-cols-3 gap-1">
-                {(["top","middle","bottom"] as const).map((v) =>
-                  (["left","center","right"] as const).map((h) => (
-                    <button key={`${v}-${h}`}
-                      onClick={() => setLtTemplate((t) => ({ ...t, vAlign: v, hAlign: h }))}
-                      className={`py-1.5 text-[9px] rounded border transition-all ${ltTemplate.vAlign === v && ltTemplate.hAlign === h ? "border-amber-500 bg-amber-900/40 text-amber-300" : "border-slate-700 bg-slate-900 text-slate-500 hover:border-slate-500"}`}>
-                      {v[0].toUpperCase()}{h[0].toUpperCase()}
-                    </button>
-                  ))
-                )}
-              </div>
-              {[
-                { label: "Offset X", key: "offsetX" as const, min: 0, max: 200, unit: "px" },
-                { label: "Offset Y", key: "offsetY" as const, min: 0, max: 200, unit: "px" },
-                { label: "Width %", key: "widthPct" as const, min: 10, max: 100, unit: "%" },
-                { label: "Pad X", key: "paddingX" as const, min: 0, max: 80, unit: "px" },
-                { label: "Pad Y", key: "paddingY" as const, min: 0, max: 80, unit: "px" },
-                { label: "Radius", key: "borderRadius" as const, min: 0, max: 40, unit: "px" },
-              ].map(({ label, key, min, max, unit }) => (
-                <div key={key} className="flex items-center gap-2">
-                  <label className="text-[10px] text-slate-400 w-14">{label}</label>
-                  <input type="range" min={min} max={max} value={ltTemplate[key] as number}
-                    onChange={(e) => setLtTemplate((t) => ({ ...t, [key]: Number(e.target.value) }))}
-                    className="flex-1" />
-                  <span className="text-[10px] text-slate-400 w-8 text-right">{ltTemplate[key] as number}{unit}</span>
-                </div>
-              ))}
-            </div>
-
-            <div className="border-t border-slate-700" />
-
-            {/* Typography */}
-            <div className="flex flex-col gap-3">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Typography</p>
-              {/* Primary */}
-              <div className="flex flex-col gap-1">
-                <p className="text-[9px] text-slate-600 uppercase tracking-widest">Primary (name / line 1 / text)</p>
-                <div className="flex gap-1.5 flex-wrap items-center">
-                  <select value={ltTemplate.primaryFont}
-                    onChange={(e) => setLtTemplate((t) => ({ ...t, primaryFont: e.target.value }))}
-                    className="bg-slate-900 text-slate-200 text-[10px] rounded px-1 py-0.5 border border-slate-700 flex-1 min-w-0">
-                    {FONTS.map((f) => <option key={f} value={f}>{f}</option>)}
-                  </select>
-                  <input type="number" min={8} max={120} value={ltTemplate.primarySize}
-                    onChange={(e) => setLtTemplate((t) => ({ ...t, primarySize: Number(e.target.value) }))}
-                    className="w-12 bg-slate-900 text-slate-200 text-[10px] rounded px-1 py-0.5 border border-slate-700 text-center" />
-                  <input type="color" value={ltTemplate.primaryColor}
-                    onChange={(e) => setLtTemplate((t) => ({ ...t, primaryColor: e.target.value }))}
-                    className="w-7 h-6 rounded cursor-pointer border-0 bg-transparent" />
-                  <button onClick={() => setLtTemplate((t) => ({ ...t, primaryBold: !t.primaryBold }))}
-                    className={`px-1.5 py-0.5 text-[10px] font-black rounded ${ltTemplate.primaryBold ? "bg-slate-500 text-white" : "bg-slate-800 text-slate-500"}`}>B</button>
-                  <button onClick={() => setLtTemplate((t) => ({ ...t, primaryItalic: !t.primaryItalic }))}
-                    className={`px-1.5 py-0.5 text-[10px] italic rounded ${ltTemplate.primaryItalic ? "bg-slate-500 text-white" : "bg-slate-800 text-slate-500"}`}>I</button>
-                  <button onClick={() => setLtTemplate((t) => ({ ...t, primaryUppercase: !t.primaryUppercase }))}
-                    className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${ltTemplate.primaryUppercase ? "bg-slate-500 text-white" : "bg-slate-800 text-slate-500"}`}>AA</button>
-                </div>
-              </div>
-              {/* Secondary */}
-              <div className="flex flex-col gap-1">
-                <p className="text-[9px] text-slate-600 uppercase tracking-widest">Secondary (title / line 2)</p>
-                <div className="flex gap-1.5 flex-wrap items-center">
-                  <select value={ltTemplate.secondaryFont}
-                    onChange={(e) => setLtTemplate((t) => ({ ...t, secondaryFont: e.target.value }))}
-                    className="bg-slate-900 text-slate-200 text-[10px] rounded px-1 py-0.5 border border-slate-700 flex-1 min-w-0">
-                    {FONTS.map((f) => <option key={f} value={f}>{f}</option>)}
-                  </select>
-                  <input type="number" min={8} max={120} value={ltTemplate.secondarySize}
-                    onChange={(e) => setLtTemplate((t) => ({ ...t, secondarySize: Number(e.target.value) }))}
-                    className="w-12 bg-slate-900 text-slate-200 text-[10px] rounded px-1 py-0.5 border border-slate-700 text-center" />
-                  <input type="color" value={ltTemplate.secondaryColor}
-                    onChange={(e) => setLtTemplate((t) => ({ ...t, secondaryColor: e.target.value }))}
-                    className="w-7 h-6 rounded cursor-pointer border-0 bg-transparent" />
-                  <button onClick={() => setLtTemplate((t) => ({ ...t, secondaryBold: !t.secondaryBold }))}
-                    className={`px-1.5 py-0.5 text-[10px] font-black rounded ${ltTemplate.secondaryBold ? "bg-slate-500 text-white" : "bg-slate-800 text-slate-500"}`}>B</button>
-                  <button onClick={() => setLtTemplate((t) => ({ ...t, secondaryItalic: !t.secondaryItalic }))}
-                    className={`px-1.5 py-0.5 text-[10px] italic rounded ${ltTemplate.secondaryItalic ? "bg-slate-500 text-white" : "bg-slate-800 text-slate-500"}`}>I</button>
-                  <button onClick={() => setLtTemplate((t) => ({ ...t, secondaryUppercase: !t.secondaryUppercase }))}
-                    className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${ltTemplate.secondaryUppercase ? "bg-slate-500 text-white" : "bg-slate-800 text-slate-500"}`}>AA</button>
-                </div>
-              </div>
-              {/* Label */}
-              <div className="flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                  <p className="text-[9px] text-slate-600 uppercase tracking-widest flex-1">Section Label</p>
-                  <input type="checkbox" checked={ltTemplate.labelVisible}
-                    onChange={(e) => setLtTemplate((t) => ({ ...t, labelVisible: e.target.checked }))} />
-                </div>
-                {ltTemplate.labelVisible && (
-                  <div className="flex gap-1.5 flex-wrap items-center">
-                    <input type="number" min={8} max={60} value={ltTemplate.labelSize}
-                      onChange={(e) => setLtTemplate((t) => ({ ...t, labelSize: Number(e.target.value) }))}
-                      className="w-12 bg-slate-900 text-slate-200 text-[10px] rounded px-1 py-0.5 border border-slate-700 text-center" />
-                    <input type="color" value={ltTemplate.labelColor}
-                      onChange={(e) => setLtTemplate((t) => ({ ...t, labelColor: e.target.value }))}
-                      className="w-7 h-6 rounded cursor-pointer border-0 bg-transparent" />
-                    <button onClick={() => setLtTemplate((t) => ({ ...t, labelUppercase: !t.labelUppercase }))}
-                      className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${ltTemplate.labelUppercase ? "bg-slate-500 text-white" : "bg-slate-800 text-slate-500"}`}>AA</button>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="border-t border-slate-700" />
-
-            {/* Design Variant */}
-            <div className="flex flex-col gap-2">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Design Variant</p>
-              <div className="flex gap-1">
-                {(["classic", "modern", "banner"] as const).map((v) => (
-                  <button key={v} onClick={() => setLtTemplate((t) => ({ ...t, variant: v }))}
-                    className={`flex-1 py-1 text-[9px] font-bold rounded uppercase ${ltTemplate.variant === v ? "bg-amber-700 text-white" : "bg-slate-800 text-slate-400"}`}>
-                    {v}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="border-t border-slate-700" />
-
-            {/* Animation */}
-            <div className="flex flex-col gap-2">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Animation</p>
-              <div className="flex gap-1">
-                {(["fade","slide-up","slide-left","none"] as const).map((a) => (
-                  <button key={a} onClick={() => setLtTemplate((t) => ({ ...t, animation: a }))}
-                    className={`flex-1 py-1 text-[9px] font-bold rounded ${ltTemplate.animation === a ? "bg-amber-700 text-white" : "bg-slate-800 text-slate-400"}`}>
-                    {a === "slide-up" ? "↑" : a === "slide-left" ? "←" : a === "fade" ? "Fade" : "None"}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="border-t border-slate-700" />
-
-            {/* Preview */}
-            <div className="flex flex-col gap-2">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Preview</p>
-              <div className="relative bg-black rounded overflow-hidden" style={{ width: 240, height: 135 }}>
-                <div style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
-                  <div style={{ width: 1920, height: 1080, position: "absolute", top: 0, left: 0, transformOrigin: "top left", transform: `scale(${240 / 1920})` }}>
-                    <LowerThirdOverlay
-                      template={ltTemplate}
-                      data={
-                        ltMode === "nameplate"
-                          ? { kind: "Nameplate", data: { name: ltName || "Name Here", title: ltTitle || "Title / Role" } }
-                          : ltMode === "freetext"
-                          ? { kind: "FreeText", data: { text: ltFreeText || "Lower third text" } }
-                          : { kind: "Lyrics", data: { line1: ltFlatLines[ltLineIndex]?.text || "Song Line 1", line2: ltLinesPerDisplay === 2 ? (ltFlatLines[ltLineIndex + 1]?.text || "Song Line 2") : undefined, section_label: ltFlatLines[ltLineIndex]?.sectionLabel || "Verse 1" } }
-                      }
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-          </div>
-        )}
+          {ltSavedTemplates.map((t) => (
+            <option key={t.id} value={t.id}>{t.name}</option>
+          ))}
+        </select>
       </div>
 
-      {/* Mode selector */}
-      <div className="flex rounded-lg overflow-hidden border border-slate-700">
+      {/* ── Mode selector ── */}
+      <div className="flex rounded-lg overflow-hidden border border-slate-700 shrink-0">
         {(["nameplate", "lyrics", "freetext"] as const).map((m) => (
           <button key={m} onClick={() => setLtMode(m)}
-            className={`flex-1 py-1.5 text-[10px] font-bold uppercase tracking-widest transition-all ${ltMode === m ? "bg-slate-700 text-amber-400" : "text-slate-500 hover:text-slate-300"}`}>
+            className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest transition-all ${ltMode === m ? "bg-slate-700 text-amber-400" : "text-slate-500 hover:text-slate-300"}`}>
             {m === "freetext" ? "Free Text" : m === "nameplate" ? "Nameplate" : "Lyrics"}
           </button>
         ))}
@@ -775,7 +359,7 @@ export default function LowerThirdTab({ onLoadMedia, onSetToast }: LowerThirdTab
 
       {/* ── Nameplate mode ── */}
       {ltMode === "nameplate" && (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-2">
           <input
             className="w-full bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700 placeholder-slate-500"
             placeholder="Name"
@@ -800,12 +384,12 @@ export default function LowerThirdTab({ onLoadMedia, onSetToast }: LowerThirdTab
             value={ltFreeText}
             onChange={(e) => setLtFreeText(e.target.value)}
           />
-          <div className="flex gap-1.5 items-center">
+          <div className="flex gap-1.5 items-center flex-wrap">
             <span className="text-[10px] text-slate-400 uppercase font-bold mr-1">Scroll:</span>
             {([
               { label: "Static", enabled: false, dir: null },
-              { label: "→→ Scroll", enabled: true, dir: "ltr" as const },
-              { label: "←← Scroll", enabled: true, dir: "rtl" as const },
+              { label: "→→", enabled: true, dir: "ltr" as const },
+              { label: "←←", enabled: true, dir: "rtl" as const },
             ] as const).map((opt) => {
               const active = !ltTemplate.scrollEnabled && !opt.enabled
                 ? true
@@ -825,18 +409,6 @@ export default function LowerThirdTab({ onLoadMedia, onSetToast }: LowerThirdTab
               );
             })}
           </div>
-          {ltTemplate.scrollEnabled && (
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-slate-400 uppercase font-bold whitespace-nowrap">Speed:</span>
-              <input
-                type="range" min={1} max={10} step={1}
-                value={ltTemplate.scrollSpeed}
-                onChange={(e) => setLtTemplate((p) => ({ ...p, scrollSpeed: Number(e.target.value) }))}
-                className="flex-1 accent-amber-500"
-              />
-              <span className="text-[10px] text-slate-400 w-4 text-right">{ltTemplate.scrollSpeed}</span>
-            </div>
-          )}
         </div>
       )}
 
@@ -896,7 +468,7 @@ export default function LowerThirdTab({ onLoadMedia, onSetToast }: LowerThirdTab
                 )}
               </div>
               {ltAtEnd ? (
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-900/20 rounded border border-amber-800/40">
+                <div className="px-3 py-1.5 bg-amber-900/20 rounded border border-amber-800/40">
                   <span className="text-[9px] text-amber-500 font-bold uppercase tracking-widest">End of Song</span>
                 </div>
               ) : ltFlatLines[ltLineIndex + ltLinesPerDisplay] ? (
@@ -910,27 +482,25 @@ export default function LowerThirdTab({ onLoadMedia, onSetToast }: LowerThirdTab
         </div>
       )}
 
-      {/* ── Show / Hide + Nav controls ── */}
-      <div className="flex flex-col gap-2 mt-2">
+      {/* ── PREV / NEXT + SHOW/HIDE ── */}
+      <div className="flex flex-col gap-2 pt-1">
         {ltMode === "lyrics" && (
           <div className="flex gap-2">
             <button
               onClick={() => ltAdvance(-1)}
-              className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-lg"
+              className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-lg transition-all"
             >◀ PREV</button>
             <button
               onClick={() => ltAdvance(1)}
-              className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-lg"
+              className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-lg transition-all"
             >NEXT ▶</button>
           </div>
         )}
         <button
           onClick={async () => {
             if (ltVisible) {
-              try {
-                await invoke("hide_lower_third");
-                setLtVisible(false);
-              } catch (err) { console.error("hide_lower_third failed:", err); }
+              try { await invoke("hide_lower_third"); setLtVisible(false); }
+              catch (err) { console.error("hide_lower_third failed:", err); }
             } else {
               let payload: LowerThirdData | null = null;
               if (ltMode === "nameplate") {
@@ -942,29 +512,28 @@ export default function LowerThirdTab({ onLoadMedia, onSetToast }: LowerThirdTab
                 payload = ltBuildLyricsPayload(ltFlatLines, ltLineIndex, ltLinesPerDisplay);
               }
               if (!payload) return;
-              try {
-                await invoke("show_lower_third", { data: payload, template: ltTemplate });
-                setLtVisible(true);
-              } catch (err) { console.error("show_lower_third failed:", err); }
+              try { await invoke("show_lower_third", { data: payload, template: ltTemplate }); setLtVisible(true); }
+              catch (err) { console.error("show_lower_third failed:", err); }
             }
           }}
-          className={`w-full py-3 text-sm font-black uppercase rounded-xl transition-all ${ltVisible ? "bg-red-700 hover:bg-red-600 text-white" : "bg-green-700 hover:bg-green-600 text-white"}`}
+          className={`w-full py-3 text-sm font-black uppercase rounded-xl transition-all ${
+            ltVisible
+              ? "bg-red-700 hover:bg-red-600 text-white shadow-[0_0_16px_rgba(185,28,28,0.4)]"
+              : "bg-green-700 hover:bg-green-600 text-white"
+          }`}
         >
-          {ltVisible ? "HIDE Lower Third" : "SHOW Lower Third"}
+          {ltVisible ? "■ HIDE Lower Third" : "▶ SHOW Lower Third"}
         </button>
       </div>
 
-      {/* Keyboard shortcut legend */}
-      <div className="mt-2 border-t border-slate-800 pt-3">
-        <p className="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-2">Keyboard Shortcuts</p>
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+      {/* ── Keyboard shortcut legend ── */}
+      <div className="border-t border-slate-800 pt-3">
+        <p className="text-[9px] font-black text-slate-700 uppercase tracking-widest mb-2">Keyboard (LT tab active)</p>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1">
           {([
-            ["Ctrl+Space", "Show / Hide"],
-            ["H (LT tab)", "Show / Hide (Lyrics)"],
-            ["Space / →", "Next line (LT tab)"],
-            ["← Arrow", "Prev line (LT tab)"],
-            ["Page Down", "Next line (global)"],
-            ["Page Up", "Prev line (global)"],
+            ["Space / →", "Next line"],
+            ["← Arrow", "Prev line"],
+            ["H", "Show / Hide"],
           ] as const).map(([key, desc]) => (
             <div key={key} className="flex items-center gap-1.5">
               <span className="text-[8px] font-mono bg-slate-800 text-slate-400 px-1 py-0.5 rounded border border-slate-700 whitespace-nowrap">{key}</span>
@@ -974,23 +543,6 @@ export default function LowerThirdTab({ onLoadMedia, onSetToast }: LowerThirdTab
         </div>
       </div>
 
-      {/* LT background image picker modal */}
-      {showLtImgPicker && (
-        <MediaPickerModal
-          images={media.filter((m) => m.media_type === "Image")}
-          onSelect={(path) => {
-            setLtTemplate((t) => ({ ...t, bgType: "image", bgImagePath: path }));
-          }}
-          onClose={() => setShowLtImgPicker(false)}
-          onUpload={async () => {
-            const selected = await openDialog({ multiple: false, filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp"] }] });
-            if (selected) {
-              await invoke("add_media", { path: selected });
-              await onLoadMedia();
-            }
-          }}
-        />
-      )}
     </div>
   );
 }

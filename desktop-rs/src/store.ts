@@ -107,8 +107,8 @@ export interface AppStore {
   setStudioSlides: (v: Record<string, CustomSlide[]>) => void;
 
   // UI
-  activeTab: "bible" | "media" | "presentations" | "studio" | "schedule" | "lower-third" | "songs" | "settings" | "props";
-  setActiveTab: (v: "bible" | "media" | "presentations" | "studio" | "schedule" | "lower-third" | "songs" | "settings" | "props") => void;
+  activeTab: "bible" | "media" | "presentations" | "songs" | "lower-third" | "timers";
+  setActiveTab: (v: "bible" | "media" | "presentations" | "songs" | "lower-third" | "timers") => void;
   toast: string | null;
   setToast: (v: string | null) => void;
 
@@ -333,7 +333,7 @@ export const useAppStore = create<AppStore>()((set) => ({
   setStudioSlides: (v) => set({ studioSlides: v }),
 
   // UI
-  activeTab: "bible",
+  activeTab: "bible" as const,
   setActiveTab: (v) => set({ activeTab: v }),
   toast: null,
   setToast: (v) => set({ toast: v }),
