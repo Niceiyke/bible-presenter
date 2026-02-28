@@ -2,13 +2,12 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { CameraSource } from "../types";
 
-const STUN_CONFIG: RTCConfiguration = { 
-  iceServers: [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" },
-    { urls: "stun:stun2.l.google.com:19302" }
-  ], 
-  iceCandidatePoolSize: 10 
+// LAN-only: no external STUN needed — host candidates (local IPs) are sufficient
+// for same-subnet communication. External STUN can interfere by introducing
+// server-reflexive candidates that conflict with host candidates on LAN.
+const STUN_CONFIG: RTCConfiguration = {
+  iceServers: [],
+  iceCandidatePoolSize: 0,
 };
 
 export function useLanCamera(pin: string | null) {
