@@ -12,7 +12,7 @@ interface LowerThirdTabProps {
 export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
   const {
     activeTab,
-    songs,
+    songs, setSongs,
     ltMode, setLtMode,
     ltVisible, setLtVisible,
     ltTemplate, setLtTemplate,

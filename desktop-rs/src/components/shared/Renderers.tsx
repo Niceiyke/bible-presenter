@@ -573,12 +573,8 @@ export function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData;
       style={positionStyle}
       initial={variants.initial}
       animate={variants.animate}
-      exit={variants.exit}
-      transition={{ 
-        duration: t.animationDuration || 0.5, 
-        exit: { duration: t.exitDuration ?? 0.2 },
-        ease: "easeOut" 
-      }}
+      exit={{ ...variants.exit, transition: { duration: t.exitDuration ?? 0.2 } }}
+      transition={{ duration: t.animationDuration || 0.5, ease: "easeOut" }}
     >
       <div style={containerStyle}>
         {data.kind === "Nameplate" && (
