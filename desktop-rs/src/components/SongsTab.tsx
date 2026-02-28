@@ -1,13 +1,16 @@
 import React from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store";
-import type { Song, LyricSection } from "../types";
+import type { Song, LyricSection, DisplayItem } from "../types";
 
 interface SongsTabProps {
   onOpenLyricsMode: (songId: string) => void;
+  onStage: (item: DisplayItem) => void;
+  onLive: (item: DisplayItem) => void;
+  onAddToSchedule: (item: DisplayItem) => void;
 }
 
-export function SongsTab({ onOpenLyricsMode }: SongsTabProps) {
+export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }: SongsTabProps) {
   const {
     songs, setSongs,
     songSearch, setSongSearch,
@@ -15,6 +18,31 @@ export function SongsTab({ onOpenLyricsMode }: SongsTabProps) {
     songImportText, setSongImportText,
     showSongImport, setShowSongImport,
   } = useAppStore();
+
+  const getSongDisplayItem = (song: Song, flatIndex = 0): DisplayItem => {
+    const flat: { label: string; lines: string[] }[] = [];
+    if (song.arrangement && song.arrangement.length > 0) {
+      for (const label of song.arrangement) {
+        const sec = song.sections.find((s) => s.label === label);
+        if (sec) flat.push(sec);
+      }
+    } else {
+      flat.push(...song.sections);
+    }
+    const item = flat[flatIndex] || flat[0];
+    return {
+      type: "Song",
+      data: {
+        song_id: song.id,
+        title: song.title,
+        author: song.author,
+        section_label: item.label,
+        lines: item.lines,
+        slide_index: flatIndex,
+        total_slides: flat.length,
+      },
+    };
+  };
 
   return (
     <div className="flex flex-col gap-4">
@@ -27,7 +55,7 @@ export function SongsTab({ onOpenLyricsMode }: SongsTabProps) {
             className="text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded"
           >Import</button>
           <button
-            onClick={() => setEditingSong({ id: "", title: "", author: "", sections: [{ label: "Verse 1", lines: [""] }], arrangement: [] })}
+            onClick={() => setEditingSong({ id: "", title: "", author: "", sections: [{ label: "Verse 1", lines: [""] }], arrangement: [], style: "LowerThird" })}
             className="text-[10px] font-bold uppercase bg-amber-600 hover:bg-amber-500 text-white px-2 py-1 rounded"
           >+ New</button>
         </div>
@@ -68,7 +96,7 @@ export function SongsTab({ onOpenLyricsMode }: SongsTabProps) {
                 }
                 if (current && current.lines.length > 0) sections.push(current);
                 if (sections.length === 0) return;
-                const saved = await invoke<Song>("save_song", { song: { id: "", title, author: "", sections } });
+                const saved = await invoke<Song>("save_song", { song: { id: "", title, author: "", sections, style: "LowerThird" } });
                 setSongs([...songs, saved].sort((a, b) => a.title.localeCompare(b.title)));
                 setSongImportText("");
                 setShowSongImport(false);
@@ -97,10 +125,33 @@ export function SongsTab({ onOpenLyricsMode }: SongsTabProps) {
                 <p className="text-[10px] text-slate-600 mt-0.5">{song.sections.length} section{song.sections.length !== 1 ? "s" : ""} · {song.sections.reduce((a, s) => a + s.lines.length, 0)} lines</p>
               </div>
               <div className="flex gap-1">
-                <button
-                  onClick={() => onOpenLyricsMode(song.id)}
-                  className="text-[9px] font-black uppercase bg-green-700 hover:bg-green-600 text-white px-2 py-1 rounded"
-                >Use</button>
+                {song.style === "FullSlide" ? (
+                  <>
+                    <button
+                      onClick={() => onStage(getSongDisplayItem(song, 0))}
+                      className="text-[9px] font-black uppercase bg-amber-600 hover:bg-amber-500 text-white px-2 py-1 rounded"
+                    >Stage</button>
+                    <button
+                      onClick={() => onLive(getSongDisplayItem(song, 0))}
+                      className="text-[9px] font-black uppercase bg-red-700 hover:bg-red-600 text-white px-2 py-1 rounded"
+                    >Live</button>
+                    <button
+                      onClick={() => onAddToSchedule(getSongDisplayItem(song, 0))}
+                      className="text-[9px] font-black uppercase bg-slate-800 hover:bg-slate-700 text-slate-400 px-2 py-1 rounded border border-slate-700"
+                    >+ Queue</button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => onOpenLyricsMode(song.id)}
+                      className="text-[9px] font-black uppercase bg-green-700 hover:bg-green-600 text-white px-2 py-1 rounded"
+                    >Use</button>
+                    <button
+                      onClick={() => onAddToSchedule(getSongDisplayItem(song, 0))}
+                      className="text-[9px] font-black uppercase bg-slate-800 hover:bg-slate-700 text-slate-400 px-2 py-1 rounded border border-slate-700"
+                    >+ Queue</button>
+                  </>
+                )}
                 <button
                   onClick={() => setEditingSong(JSON.parse(JSON.stringify(song)))}
                   className="text-[9px] font-black uppercase bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-1 rounded"
@@ -143,6 +194,14 @@ export function SongsTab({ onOpenLyricsMode }: SongsTabProps) {
                   value={editingSong.author || ""}
                   onChange={(e) => setEditingSong({ ...editingSong, author: e.target.value })}
                 />
+                <select
+                  className="bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700 focus:outline-none"
+                  value={editingSong.style || "LowerThird"}
+                  onChange={(e) => setEditingSong({ ...editingSong, style: e.target.value as any })}
+                >
+                  <option value="LowerThird">Lower Third</option>
+                  <option value="FullSlide">Full Slide (Hymn Style)</option>
+                </select>
               </div>
               {editingSong.sections.map((section, si) => (
                 <div key={si} className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 flex flex-col gap-2">

@@ -12,6 +12,7 @@ interface MediaTabProps {
   onLoadMedia: () => void;
   onDeleteMedia: (id: string) => void;
   onSetAsLogo: (path: string) => void;
+  onSetAsBackgroundLogo: (path: string) => void;
   remoteUrl: string;
   remotePin: string;
   cameraSources: Map<string, CameraSource>;
@@ -35,6 +36,7 @@ export function MediaTab({
   onLoadMedia,
   onDeleteMedia,
   onSetAsLogo,
+  onSetAsBackgroundLogo,
   remoteUrl,
   remotePin,
   cameraSources,
@@ -133,12 +135,13 @@ export function MediaTab({
                       >{label}</button>
                     ))}
                   </div>
-                  <div className="grid grid-cols-5 gap-0.5">
-                    <button onClick={() => onStage({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-white text-[7px] font-bold py-1 rounded transition-all" title="Stage">STG</button>
-                    <button onClick={() => onLive({ type: "Media", data: item })} className="bg-amber-500 hover:bg-amber-400 text-black text-[7px] font-bold py-1 rounded transition-all" title="Display Live">LIVE</button>
-                    <button onClick={() => onAddToSchedule({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-amber-400 text-[7px] font-bold py-1 rounded transition-all" title="Add to Queue">+Q</button>
-                    <button onClick={() => onSetAsLogo(item.path)} className="bg-teal-900/50 hover:bg-teal-700 text-teal-300 text-[7px] font-bold py-1 rounded transition-all" title="Set as Background Logo">LOGO</button>
-                    <button onClick={() => onDeleteMedia(item.id)} className="bg-red-900/50 hover:bg-red-800 text-red-300 text-[7px] font-bold py-1 rounded transition-all" title="Delete">DEL</button>
+                  <div className="grid grid-cols-3 gap-1">
+                    <button onClick={() => onStage({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-white text-[7px] font-bold py-1.5 rounded transition-all" title="Stage">STG</button>
+                    <button onClick={() => onLive({ type: "Media", data: item })} className="bg-amber-500 hover:bg-amber-400 text-black text-[7px] font-bold py-1.5 rounded transition-all" title="Display Live">LIVE</button>
+                    <button onClick={() => onAddToSchedule({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-amber-400 text-[7px] font-bold py-1.5 rounded transition-all" title="Add to Queue">+Q</button>
+                    <button onClick={() => onSetAsBackgroundLogo(item.path)} className="bg-purple-900/50 hover:bg-purple-700 text-purple-300 text-[7px] font-bold py-1.5 rounded transition-all" title="Set as Background Logo">BG LOGO</button>
+                    <button onClick={() => onSetAsLogo(item.path)} className="bg-teal-900/50 hover:bg-teal-700 text-teal-300 text-[7px] font-bold py-1.5 rounded transition-all" title="Set as Corner Logo">CORNER</button>
+                    <button onClick={() => onDeleteMedia(item.id)} className="bg-red-900/50 hover:bg-red-800 text-red-300 text-[7px] font-bold py-1.5 rounded transition-all" title="Delete">DEL</button>
                   </div>
                 </div>
               </div>
@@ -178,12 +181,13 @@ export function MediaTab({
                       >{label}</button>
                     ))}
                   </div>
-                  <div className="grid grid-cols-5 gap-0.5">
-                    <button onClick={() => onStage({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-white text-[7px] font-bold py-1 rounded transition-all" title="Stage">STG</button>
-                    <button onClick={() => onLive({ type: "Media", data: item })} className="bg-amber-500 hover:bg-amber-400 text-black text-[7px] font-bold py-1 rounded transition-all" title="Display Live">LIVE</button>
-                    <button onClick={() => onAddToSchedule({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-amber-400 text-[7px] font-bold py-1 rounded transition-all" title="Add to Queue">+Q</button>
-                    <button onClick={() => onSetAsLogo(item.path)} className="bg-teal-900/50 hover:bg-teal-700 text-teal-300 text-[7px] font-bold py-1 rounded transition-all" title="Set as Background Logo">LOGO</button>
-                    <button onClick={() => onDeleteMedia(item.id)} className="bg-red-900/50 hover:bg-red-800 text-red-300 text-[7px] font-bold py-1 rounded transition-all" title="Delete">DEL</button>
+                  <div className="grid grid-cols-3 gap-1">
+                    <button onClick={() => onStage({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-white text-[7px] font-bold py-1.5 rounded transition-all" title="Stage">STG</button>
+                    <button onClick={() => onLive({ type: "Media", data: item })} className="bg-amber-500 hover:bg-amber-400 text-black text-[7px] font-bold py-1.5 rounded transition-all" title="Display Live">LIVE</button>
+                    <button onClick={() => onAddToSchedule({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-amber-400 text-[7px] font-bold py-1.5 rounded transition-all" title="Add to Queue">+Q</button>
+                    <button onClick={() => onSetAsBackgroundLogo(item.path)} className="bg-purple-900/50 hover:bg-purple-700 text-purple-300 text-[7px] font-bold py-1.5 rounded transition-all" title="Set as Background Logo">BG LOGO</button>
+                    <button onClick={() => onSetAsLogo(item.path)} className="bg-teal-900/50 hover:bg-teal-700 text-teal-300 text-[7px] font-bold py-1.5 rounded transition-all" title="Set as Corner Logo">CORNER</button>
+                    <button onClick={() => onDeleteMedia(item.id)} className="bg-red-900/50 hover:bg-red-800 text-red-300 text-[7px] font-bold py-1.5 rounded transition-all" title="Delete">DEL</button>
                   </div>
                 </div>
               </div>

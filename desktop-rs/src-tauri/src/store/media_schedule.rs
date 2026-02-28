@@ -167,6 +167,17 @@ pub struct TimerData {
     pub started_at: Option<u64>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SongSlideData {
+    pub song_id: String,
+    pub title: String,
+    pub author: Option<String>,
+    pub section_label: String,
+    pub lines: Vec<String>,
+    pub slide_index: u32,
+    pub total_slides: u32,
+}
+
 // ---------------------------------------------------------------------------
 // Display item — what gets projected on the output window
 // ---------------------------------------------------------------------------
@@ -181,6 +192,7 @@ pub enum DisplayItem {
     CameraFeed(CameraFeedData),
     Scene(serde_json::Value),
     Timer(TimerData),
+    Song(SongSlideData),
 }
 
 /// A schedule entry with a stable ID so the frontend can use it as a React key.
@@ -258,6 +270,11 @@ pub struct PresentationSettings {
     pub media_background: BackgroundSetting,
     /// Path to a logo image to display on the output window.
     pub logo_path: Option<String>,
+    /// Path to a background logo image/video to cover the output window.
+    pub background_logo_path: Option<String>,
+    /// Whether the background logo is currently active.
+    #[serde(default)]
+    pub show_background_logo: bool,
     /// Whether the output screen is currently blanked (black).
     #[serde(default)]
     pub is_blanked: bool,
@@ -318,6 +335,8 @@ impl Default for PresentationSettings {
             presentation_background: BackgroundSetting::default(),
             media_background: BackgroundSetting::default(),
             logo_path: None,
+            background_logo_path: None,
+            show_background_logo: false,
             is_blanked: false,
             font_size: default_font_size(),
             slide_transition: default_transition(),
@@ -351,6 +370,8 @@ pub struct Song {
     /// If empty, sections are used in their natural order.
     #[serde(default)]
     pub arrangement: Vec<String>,
+    #[serde(default)]
+    pub style: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

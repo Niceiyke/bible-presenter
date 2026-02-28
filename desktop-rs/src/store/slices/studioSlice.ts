@@ -3,8 +3,8 @@ import { AppStore } from "../index";
 import { CustomPresentation, CustomSlide } from "../../types";
 
 export interface StudioSlice {
-  studioList: { id: string; name: string; slide_count: number }[];
-  setStudioList: (v: { id: string; name: string; slide_count: number }[] | ((prev: { id: string; name: string; slide_count: number }[]) => { id: string; name: string; slide_count: number }[])) => void;
+  studioList: { id: string; name: string; slide_count: number; updated_at?: number }[];
+  setStudioList: (v: { id: string; name: string; slide_count: number; updated_at?: number }[] | ((prev: { id: string; name: string; slide_count: number; updated_at?: number }[]) => { id: string; name: string; slide_count: number; updated_at?: number }[])) => void;
   editorPresId: string | null;
   setEditorPresId: (v: string | null) => void;
   editorPres: CustomPresentation | null;

@@ -16,6 +16,7 @@ import {
   SceneRenderer,
   CameraFeedRenderer,
   TimerRenderer,
+  SongSlideRenderer,
   LowerThirdOverlay,
   PropsRenderer,
   type SceneLiveContext
@@ -49,6 +50,17 @@ export function OutputWindow() {
   const programDeviceId = useRef<string | null>(null);
   const outputWsRef = useRef<WebSocket | null>(null);
   const sceneCameraHandlersRef = useRef<Map<string, (msg: any) => void>>(new Map());
+  const [windowScale, setWindowScale] = useState(1);
+
+  // Calculate font scale based on current window height relative to 1080p reference
+  useEffect(() => {
+    const updateScale = () => {
+      setWindowScale(window.innerHeight / 1080);
+    };
+    updateScale();
+    window.addEventListener("resize", updateScale);
+    return () => window.removeEventListener("resize", updateScale);
+  }, []);
 
   function sendOutputWs(obj: object) {
     if (outputWsRef.current?.readyState === WebSocket.OPEN) {
@@ -289,11 +301,11 @@ export function OutputWindow() {
   const ReferenceTag = liveItem?.type === "Verse" ? (
     <p
       className="uppercase tracking-widest font-bold shrink-0"
-      style={{ color: refColor, fontSize: `${refFontSize}pt`, fontFamily: refFontFamily }}
+      style={{ color: refColor, fontSize: `${refFontSize * windowScale}pt`, fontFamily: refFontFamily }}
     >
       {liveItem.data.book} {liveItem.data.chapter}:{liveItem.data.verse}
       {liveItem.data.version && (
-        <span className="font-normal opacity-60 ml-2" style={{ fontSize: `${Math.round(refFontSize * 0.65)}pt` }}>
+        <span className="font-normal opacity-60 ml-2" style={{ fontSize: `${Math.round(refFontSize * 0.65 * windowScale)}pt` }}>
           ({liveItem.data.version})
         </span>
       )}
@@ -304,13 +316,34 @@ export function OutputWindow() {
 
   return (
     <div
-      className="h-screen w-screen overflow-hidden relative"
+      className="h-screen w-screen overflow-hidden relative cursor-none"
       style={
         cameraBgId || isLanCameraLive || videoBg
           ? { color: colors.verseText }
           : { ...bgStyle, color: colors.verseText }
       }
     >
+      {/* Background logo overlay - topmost level below props */}
+      {settings.show_background_logo && settings.background_logo_path && (
+        <div className="absolute inset-0 z-50 bg-black">
+          {settings.background_logo_path.toLowerCase().match(/\.(mp4|webm|mov|mkv|avi)$/) ? (
+            <video
+              src={convertFileSrc(settings.background_logo_path)}
+              className="w-full h-full object-cover"
+              autoPlay
+              loop
+              muted
+            />
+          ) : (
+            <img
+              src={convertFileSrc(settings.background_logo_path)}
+              className="w-full h-full object-cover"
+              alt="Background Logo"
+            />
+          )}
+        </div>
+      )}
+
       {/* Background video element — rendered at z-0, below all content */}
       <video
         ref={bgVideoRef}
@@ -376,7 +409,7 @@ export function OutputWindow() {
                     className="leading-tight drop-shadow-2xl"
                     style={{
                       color: colors.verseText,
-                      fontSize: `${settings.font_size}pt`,
+                      fontSize: `${settings.font_size * windowScale}pt`,
                       fontFamily: settings.verse_font_family ?? "Georgia, serif",
                     }}
                   >
@@ -388,7 +421,7 @@ export function OutputWindow() {
             ) : liveItem.type === "PresentationSlide" ? (
               <div className="absolute inset-0">
                 {currentSlide ? (
-                  <SlideRenderer slide={currentSlide} />
+                  <SlideRenderer slide={currentSlide} scale={windowScale} />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center">
                     <span className="font-serif text-2xl italic" style={{ color: colors.waitingText }}>
@@ -399,7 +432,7 @@ export function OutputWindow() {
               </div>
             ) : liveItem.type === "CustomSlide" ? (
               <div className="absolute inset-0">
-                <CustomSlideRenderer slide={liveItem.data} appDataDir={appDataDir} />
+                <CustomSlideRenderer slide={liveItem.data} scale={windowScale} appDataDir={appDataDir} />
               </div>
             ) : liveItem.type === "CameraFeed" ? (
               liveItem.data.lan ? (
@@ -439,6 +472,7 @@ export function OutputWindow() {
               <div className="absolute inset-0">
                 <SceneRenderer
                   scene={liveItem.data}
+                  scale={windowScale}
                   outputMode={true}
                   appDataDir={appDataDir}
                   liveContext={{
@@ -451,6 +485,14 @@ export function OutputWindow() {
               </div>
             ) : liveItem.type === "Timer" ? (
               <TimerRenderer data={liveItem.data} />
+            ) : liveItem.type === "Song" ? (
+              <SongSlideRenderer 
+                data={liveItem.data} 
+                scale={windowScale} 
+                fontSize={settings.font_size}
+                fontFamily={settings.verse_font_family}
+                color={colors.verseText}
+              />
             ) : null}
           </motion.div>
         ) : (

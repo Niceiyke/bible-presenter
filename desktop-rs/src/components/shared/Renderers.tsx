@@ -11,11 +11,14 @@ import type {
   LayerContent,
   LowerThirdData,
   LowerThirdTemplate,
-  TimerData,
-  PropItem
-} from "../../types";
-
-// ─── Live Context (for OBS-style source layers in SceneRenderer) ─────────────
+    TimerData,
+    PropItem,
+    SongSlideData,
+    PresentationSettings
+  } from "../../types";
+  
+  // ─── Live Context (for OBS-style source layers in Scene Renderer) ─────────────
+  
 
 export interface SceneLiveContext {
   liveItem: DisplayItem | null;
@@ -36,7 +39,7 @@ export function hexToRgba(hex: string, opacity: number): string {
 
 // ─── Slide Renderer ───────────────────────────────────────────────────────────
 
-export function SlideRenderer({ slide }: { slide: ParsedSlide }) {
+export function SlideRenderer({ slide, scale = 1 }: { slide: ParsedSlide; scale?: number }) {
   const bgStyle: React.CSSProperties = slide.backgroundColor
     ? { backgroundColor: slide.backgroundColor }
     : { backgroundColor: "#1a1a2e" };
@@ -75,7 +78,7 @@ export function SlideRenderer({ slide }: { slide: ParsedSlide }) {
             className="text-center leading-tight drop-shadow-2xl whitespace-pre-wrap"
             style={{
               color: tb.color || "#ffffff",
-              fontSize: tb.fontSize ? `${tb.fontSize}pt` : "3rem",
+              fontSize: tb.fontSize ? `${tb.fontSize * scale}pt` : `${3 * scale}rem`,
               fontWeight: tb.bold ? "bold" : "normal",
             }}
           >
@@ -144,8 +147,9 @@ export function CustomSlideRenderer({
           };
 
           if (el.kind === "text") {
+            const vAlign = el.v_align === "middle" ? "center" : el.v_align === "bottom" ? "flex-end" : "flex-start";
             return (
-              <div key={el.id} style={elStyle} className="flex flex-col">
+              <div key={el.id} style={{ ...elStyle, display: "flex", flexDirection: "column", justifyContent: vAlign }}>
                 <p style={{
                   fontFamily: el.font_family ?? "Arial",
                   fontSize: `${(el.font_size ?? 32) * scale}pt`,
@@ -226,6 +230,50 @@ export function CameraFeedRenderer({ deviceId }: { deviceId: string }) {
   }, [deviceId]);
 
   return <video ref={videoRef} className="w-full h-full object-cover" autoPlay muted playsInline />;
+}
+
+// ─── Song Slide Renderer ─────────────────────────────────────────────────────
+
+export function SongSlideRenderer({
+  data,
+  scale = 1,
+  fontSize = 72,
+  fontFamily = "Georgia, serif",
+  color = "#ffffff",
+}: {
+  data: SongSlideData;
+  scale?: number;
+  fontSize?: number;
+  fontFamily?: string;
+  color?: string;
+}) {
+  return (
+    <div className="w-full h-full relative overflow-hidden flex flex-col items-center justify-center p-[8%] text-center">
+      <div className="flex flex-col items-center justify-center max-w-[95%]">
+        {data.section_label && (
+          <p className="uppercase tracking-[0.25em] font-black text-amber-500/50 mb-6" style={{ fontSize: `${18 * scale}pt` }}>
+            {data.section_label}
+          </p>
+        )}
+        <div className="flex flex-col gap-4">
+          {data.lines.map((line, i) => (
+            <p key={i} className="font-serif leading-tight drop-shadow-2xl" style={{ 
+              color,
+              fontSize: `${fontSize * 0.85 * scale}pt`,
+              fontFamily: fontFamily,
+            }}>
+              {line}
+            </p>
+          ))}
+        </div>
+        {data.slide_index === data.total_slides - 1 && data.author && (
+          <p className="mt-12 text-white/30 italic font-medium" style={{ fontSize: `${16 * scale}pt` }}>
+            — {data.author}
+          </p>
+        )}
+      </div>
+    </div>
+  );
 }
 
 // ─── LAN Camera Layer (live WebRTC source for scene layers) ──────────────────
@@ -336,10 +384,8 @@ export function SceneRenderer({
       style={{
         position: "relative",
         overflow: "hidden",
-        transform: scale !== 1 ? `scale(${scale})` : undefined,
-        transformOrigin: "top left",
-        width: scale !== 1 ? `${100 / scale}%` : "100%",
-        height: scale !== 1 ? `${100 / scale}%` : "100%",
+        width: "100%",
+        height: "100%",
         backgroundColor: bg?.type === "Color" ? bg.value : "#000000",
         backgroundImage: resolvedBg ? `url(${convertFileSrc(resolvedBg)})` : undefined,
         backgroundSize: "cover",
@@ -363,7 +409,7 @@ export function SceneRenderer({
             overflow: "hidden",
           }}
         >
-          <LayerContentRenderer content={layer.content} outputMode={outputMode} liveContext={liveContext} appDataDir={appDataDir} />
+          <LayerContentRenderer content={layer.content} scale={scale} outputMode={outputMode} liveContext={liveContext} appDataDir={appDataDir} />
           {!outputMode && activeLayerId === layer.id && (
             <div className="absolute top-1 right-1 bg-blue-500 text-white text-[8px] font-black px-1 rounded shadow-lg pointer-events-none">ACTIVE</div>
           )}
@@ -375,11 +421,13 @@ export function SceneRenderer({
 
 export function LayerContentRenderer({
   content,
+  scale = 1,
   outputMode = false,
   liveContext,
   appDataDir = null,
 }: {
   content: LayerContent;
+  scale?: number;
   outputMode?: boolean;
   liveContext?: SceneLiveContext;
   appDataDir?: string | null;
@@ -412,7 +460,7 @@ export function LayerContentRenderer({
     if (src.type === "live-output") {
       const li = liveContext?.liveItem;
       if (li && li.type !== "Scene") {
-        return <LayerContentRenderer content={{ kind: "item", item: li }} outputMode={outputMode} liveContext={liveContext} />;
+        return <LayerContentRenderer content={{ kind: "item", item: li }} scale={scale} outputMode={outputMode} liveContext={liveContext} />;
       }
       return (
         <div className="w-full h-full flex flex-col items-center justify-center gap-1"
@@ -452,10 +500,12 @@ export function LayerContentRenderer({
     case "Verse":
       return (
         <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center">
-          <p className={outputMode ? "font-serif text-5xl text-white leading-snug drop-shadow-2xl" : "text-xs font-serif line-clamp-3 mb-1 opacity-80"}>
+          <p className={outputMode ? "font-serif text-5xl text-white leading-snug drop-shadow-2xl" : "text-xs font-serif line-clamp-3 mb-1 opacity-80"}
+             style={outputMode ? { fontSize: `${48 * scale}pt` } : undefined}>
             {item.data.text}
           </p>
-          <p className={outputMode ? "text-2xl font-black text-amber-400 mt-4" : "text-[8px] font-black text-amber-500 uppercase"}>
+          <p className={outputMode ? "text-2xl font-black text-amber-400 mt-4" : "text-[8px] font-black text-amber-500 uppercase"}
+             style={outputMode ? { fontSize: `${24 * scale}pt` } : undefined}>
             {item.data.book} {item.data.chapter}:{item.data.verse}
           </p>
         </div>
@@ -485,7 +535,7 @@ export function LayerContentRenderer({
       }
       return <CameraFeedRenderer deviceId={item.data.device_id} />;
     case "CustomSlide":
-      return <CustomSlideRenderer slide={item.data} scale={outputMode ? 1 : 0.1} appDataDir={appDataDir} />;
+      return <CustomSlideRenderer slide={item.data} scale={outputMode ? scale : 0.1} appDataDir={appDataDir} />;
     case "PresentationSlide":
       return (
         <div className="w-full h-full bg-orange-900/20 flex items-center justify-center text-[10px] font-bold text-orange-500">
@@ -493,9 +543,11 @@ export function LayerContentRenderer({
         </div>
       );
     case "Scene":
-      return <SceneRenderer scene={item.data} outputMode={outputMode} />;
+      return <SceneRenderer scene={item.data} scale={scale} outputMode={outputMode} />;
     case "Timer":
       return <TimerRenderer data={item.data} />;
+    case "Song":
+      return <SongSlideRenderer data={item.data} scale={0.2} />;
     default:
       return null;
   }
@@ -849,6 +901,8 @@ export function SmallItemPreview({ item, appDataDir = null }: { item: DisplayIte
       return <SceneRenderer scene={item.data} />;
     case "Timer":
       return <TimerRenderer data={item.data} />;
+    case "Song":
+      return <SongSlideRenderer data={item.data} scale={0.2} />;
     default:
       return null;
   }

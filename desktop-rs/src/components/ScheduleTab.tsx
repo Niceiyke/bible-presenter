@@ -228,6 +228,8 @@ export function ScheduleTab({ onSendItem, onPersist }: ScheduleTabProps) {
                     <p className="text-blue-500 text-[10px] font-black uppercase truncate italic">SCENE: {entry.item.data.name}</p>
                   ) : entry.item.type === "Timer" ? (
                     <p className="text-cyan-400 text-[10px] font-bold uppercase truncate">TIMER: {entry.item.data.timer_type}{entry.item.data.label ? ` · ${entry.item.data.label}` : ""}</p>
+                  ) : entry.item.type === "Song" ? (
+                    <p className="text-pink-400 text-[10px] font-bold uppercase truncate">SONG: {entry.item.data.title} ({entry.item.data.section_label})</p>
                   ) : (
                     <p className="text-blue-400 text-[10px] font-bold uppercase truncate">{(entry.item.data as MediaItem).media_type}: {(entry.item.data as MediaItem).name}</p>
                   )}
