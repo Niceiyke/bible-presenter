@@ -25,6 +25,8 @@ export interface AppSlice {
   setTopPanelPct: (v: number | ((prev: number) => number)) => void;
   stagePct: number;
   setStagePct: (v: number | ((prev: number) => number)) => void;
+  appDataDir: string | null;
+  setAppDataDir: (v: string | null) => void;
 }
 
 export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) => ({
@@ -50,4 +52,6 @@ export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) =>
   setTopPanelPct: (v) => set((s) => ({ topPanelPct: typeof v === "function" ? v(s.topPanelPct) : v })),
   stagePct: parseInt(localStorage.getItem("pref_stagePct") ?? "50", 10),
   setStagePct: (v) => set((s) => ({ stagePct: typeof v === "function" ? v(s.stagePct) : v })),
+  appDataDir: null,
+  setAppDataDir: (v) => set({ appDataDir: v }),
 });

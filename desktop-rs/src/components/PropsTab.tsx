@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Image, Clock, Eye, EyeOff, X } from "lucide-react";
 import { useAppStore } from "../store";
-import { stableId } from "../utils";
+import { stableId, relativizePath } from "../utils";
 import type { PropItem } from "../types";
 
 interface PropsTabProps {
@@ -11,7 +11,7 @@ interface PropsTabProps {
 }
 
 export function PropsTab({ onUpdateProps }: PropsTabProps) {
-  const { propItems, setPropItems } = useAppStore();
+  const { propItems, setPropItems, appDataDir } = useAppStore();
 
   const updateAndSave = async (next: PropItem[]) => {
     setPropItems(next);
@@ -28,7 +28,8 @@ export function PropsTab({ onUpdateProps }: PropsTabProps) {
             onClick={async () => {
               const selected = await openDialog({ multiple: false, filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg"] }] });
               if (typeof selected !== "string") return;
-              const newProp: PropItem = { id: stableId(), kind: "image", path: selected, x: 2, y: 2, w: 20, h: 15, opacity: 1, visible: true };
+              const rel = relativizePath(selected, appDataDir);
+              const newProp: PropItem = { id: stableId(), kind: "image", path: rel, x: 2, y: 2, w: 20, h: 15, opacity: 1, visible: true };
               await updateAndSave([...propItems, newProp]);
             }}
             className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded border border-slate-700 transition-all flex items-center gap-1"

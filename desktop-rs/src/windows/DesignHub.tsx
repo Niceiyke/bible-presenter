@@ -33,6 +33,7 @@ export function DesignHub() {
     settings, setSettings,
     setCameras,
     toast, setToast,
+    setAppDataDir,
   } = useAppStore();
 
   const [hubTab, setHubTab] = useState<"studio" | "lt-designer" | "scene" | "props" | "settings">("studio");
@@ -43,13 +44,14 @@ export function DesignHub() {
 
   useEffect(() => {
     const loadAll = async () => {
-      const [studioRes, mediaRes, ltRes, propsRes, scenesRes, settingsRes] = await Promise.all([
+      const [studioRes, mediaRes, ltRes, propsRes, scenesRes, settingsRes, appDirRes] = await Promise.all([
         invoke<{ id: string; name: string; slide_count: number }[]>("list_studio_presentations").catch(() => []),
         invoke<MediaItem[]>("list_media").catch(() => []),
         invoke<LowerThirdTemplate[]>("load_lt_templates").catch(() => []),
         invoke<PropItem[]>("get_props").catch(() => []),
         invoke<SceneData[]>("list_scenes").catch(() => []),
         invoke<PresentationSettings>("get_settings").catch(() => null),
+        invoke<string>("get_app_data_dir").catch(() => null),
       ]);
 
       setStudioList(studioRes);
@@ -61,6 +63,7 @@ export function DesignHub() {
       setPropItems(propsRes);
       setSavedScenes(scenesRes);
       if (settingsRes) setSettings(settingsRes);
+      if (appDirRes) setAppDataDir(appDirRes);
 
       navigator.mediaDevices?.enumerateDevices()
         .then((devs) => setCameras(devs.filter((d) => d.kind === "videoinput")))
@@ -76,7 +79,6 @@ export function DesignHub() {
 
   const handleLive = async (item: DisplayItem) => {
     await invoke("stage_item", { item });
-    await new Promise(r => setTimeout(r, 50));
     await invoke("go_live");
     setToast("Item live from Hub");
   };
@@ -131,7 +133,7 @@ export function DesignHub() {
           <span className="text-[10px] font-black uppercase tracking-widest text-purple-400">Design Hub</span>
         </div>
         <div className="h-4 w-px bg-slate-700 mx-2" />
-        <div className="flex gap-1">
+        <div className="flex gap-1 flex-wrap">
           {([
             { id: "studio", label: "Studio" },
             { id: "lt-designer", label: "LT Designer" },
@@ -152,18 +154,24 @@ export function DesignHub() {
         </div>
       </header>
 
-      <div className="flex-1 overflow-hidden p-4">
-        {hubTab === "studio" && <StudioTab onStage={handleStage} onLive={handleLive} onOpenEditor={handleOpenEditor} onNewPresentation={handleNewPresentation} />}
+      <div className="flex-1 overflow-hidden">
+        {/* Full-height fill tabs — no padding wrapper */}
         {hubTab === "lt-designer" && <LtDesignerTab onSetToast={setToast} onLoadMedia={async () => {}} />}
         {hubTab === "scene" && <SceneComposerTab onStage={handleStage} onLive={handleLive} onSetToast={setToast} />}
-        {hubTab === "props" && <PropsTab onUpdateProps={updateProps} />}
-        {hubTab === "settings" && (
-          <SettingsTab
-            onUpdateSettings={updateSettings}
-            onUpdateTranscriptionWindow={(sec) => invoke("set_transcription_window", { samples: Math.round(sec * 16000) })}
-            onUpdateVadThreshold={(val) => invoke("set_vad_threshold", { threshold: val })}
-            onUploadMedia={async () => {}}
-          />
+        {/* Scrollable tabs — padded, overflow-y-auto */}
+        {(hubTab === "studio" || hubTab === "props" || hubTab === "settings") && (
+          <div className="h-full overflow-y-auto p-4 custom-scrollbar">
+            {hubTab === "studio" && <StudioTab onStage={handleStage} onLive={handleLive} onOpenEditor={handleOpenEditor} onNewPresentation={handleNewPresentation} />}
+            {hubTab === "props" && <PropsTab onUpdateProps={updateProps} />}
+            {hubTab === "settings" && (
+              <SettingsTab
+                onUpdateSettings={updateSettings}
+                onUpdateTranscriptionWindow={(sec) => invoke("set_transcription_window", { samples: Math.round(sec * 16000) })}
+                onUpdateVadThreshold={(val) => invoke("set_vad_threshold", { threshold: val })}
+                onUploadMedia={async () => {}}
+              />
+            )}
+          </div>
         )}
       </div>
 

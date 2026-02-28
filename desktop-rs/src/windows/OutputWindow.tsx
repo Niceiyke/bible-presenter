@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import type { DisplayItem, PropItem, PresentationSettings, LowerThirdData, LowerThirdTemplate } from "../types";
@@ -9,14 +9,15 @@ import {
   getTransitionVariants, 
   displayItemLabel 
 } from "../utils";
-import { 
-  SlideRenderer, 
-  CustomSlideRenderer, 
-  SceneRenderer, 
-  CameraFeedRenderer, 
-  TimerRenderer, 
-  LowerThirdOverlay, 
-  PropsRenderer 
+import {
+  SlideRenderer,
+  CustomSlideRenderer,
+  SceneRenderer,
+  CameraFeedRenderer,
+  TimerRenderer,
+  LowerThirdOverlay,
+  PropsRenderer,
+  type SceneLiveContext
 } from "../components/shared/Renderers";
 import { loadPptxZip, parseSingleSlide } from "../pptxParser";
 import type { ParsedSlide } from "../pptxParser";
@@ -35,6 +36,7 @@ export function OutputWindow() {
     is_blanked: false,
     font_size: 72,
   });
+  const [appDataDir, setAppDataDir] = useState<string | null>(null);
   const [currentSlide, setCurrentSlide] = useState<ParsedSlide | null>(null);
   const outputZipsRef = useRef<Record<string, any>>({});
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -44,6 +46,7 @@ export function OutputWindow() {
   const programPcRef = useRef<RTCPeerConnection | null>(null);
   const programDeviceId = useRef<string | null>(null);
   const outputWsRef = useRef<WebSocket | null>(null);
+  const sceneCameraHandlersRef = useRef<Map<string, (msg: any) => void>>(new Map());
 
   function sendOutputWs(obj: object) {
     if (outputWsRef.current?.readyState === WebSocket.OPEN) {
@@ -107,10 +110,14 @@ export function OutputWindow() {
       if (msg.type === "auth_ok") return;
 
       if (msg.cmd === "camera_offer" && (msg.target === "output" || msg.target === "window:output")) {
+        const sceneHandler = sceneCameraHandlersRef.current.get(msg.device_id);
+        if (sceneHandler) { sceneHandler(msg); return; }
         await handleProgramOffer(msg);
         return;
       }
       if (msg.cmd === "camera_ice" && (msg.target === "output" || msg.target === "window:output")) {
+        const sceneHandler = sceneCameraHandlersRef.current.get(msg.device_id);
+        if (sceneHandler) { sceneHandler(msg); return; }
         if (programPcRef.current && msg.candidate) {
           try { await programPcRef.current.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
         }
@@ -128,12 +135,20 @@ export function OutputWindow() {
       .then((v: any) => { if (v) setLiveItem(v); })
       .catch(() => {});
 
+    invoke("get_current_lower_third")
+      .then((lt: any) => { if (lt) setLowerThird(lt); })
+      .catch(() => {});
+
     invoke("get_settings")
       .then((s: any) => { if (s) setSettings(s); })
       .catch(() => {});
 
     invoke("get_remote_info")
       .then((info: any) => { if (info?.pin) connectOutputWs(info.pin); })
+      .catch(() => {});
+
+    invoke<string>("get_app_data_dir")
+      .then(setAppDataDir)
       .catch(() => {});
 
     const unlistenTrans = listen("transcription-update", (event: any) => {
@@ -286,7 +301,7 @@ export function OutputWindow() {
       {settings.logo_path && (
         <img
           src={convertFileSrc(settings.logo_path)}
-          className="absolute bottom-8 right-8 w-24 h-24 object-contain opacity-50 z-50"
+          className="absolute bottom-8 right-8 w-24 h-24 object-contain opacity-50 z-60"
           alt="Logo"
         />
       )}
@@ -333,7 +348,7 @@ export function OutputWindow() {
               </div>
             ) : liveItem.type === "CustomSlide" ? (
               <div className="absolute inset-0">
-                <CustomSlideRenderer slide={liveItem.data} />
+                <CustomSlideRenderer slide={liveItem.data} appDataDir={appDataDir} />
               </div>
             ) : liveItem.type === "CameraFeed" ? (
               liveItem.data.lan ? (
@@ -363,7 +378,17 @@ export function OutputWindow() {
               </div>
             ) : liveItem.type === "Scene" ? (
               <div className="absolute inset-0">
-                <SceneRenderer scene={liveItem.data} outputMode={true} />
+                <SceneRenderer
+                  scene={liveItem.data}
+                  outputMode={true}
+                  appDataDir={appDataDir}
+                  liveContext={{
+                    liveItem,
+                    lowerThird,
+                    outputWsRef: outputWsRef as React.RefObject<WebSocket | null>,
+                    sceneCameraHandlers: sceneCameraHandlersRef,
+                  } satisfies SceneLiveContext}
+                />
               </div>
             ) : liveItem.type === "Timer" ? (
               <TimerRenderer data={liveItem.data} />
@@ -385,20 +410,11 @@ export function OutputWindow() {
         )}
       </AnimatePresence>
 
-      <PropsRenderer items={propItems} />
+      <PropsRenderer items={propItems} appDataDir={appDataDir} />
 
       <AnimatePresence>
         {lowerThird && (
-          <motion.div
-            key="lower-third"
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 16 }}
-            transition={{ duration: 0.35 }}
-            className="absolute inset-0 pointer-events-none z-50"
-          >
-            <LowerThirdOverlay data={lowerThird.data} template={lowerThird.template} />
-          </motion.div>
+          <LowerThirdOverlay key="lower-third" data={lowerThird.data} template={lowerThird.template} />
         )}
       </AnimatePresence>
     </div>

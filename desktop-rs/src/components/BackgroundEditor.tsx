@@ -1,5 +1,7 @@
 import React, { useState } from "react";
 import { MediaPickerModal } from "./MediaPickerModal";
+import { useAppStore } from "../store";
+import { relativizePath } from "../utils";
 import type { BackgroundSetting, MediaItem } from "../types";
 
 export function BackgroundEditor({
@@ -17,6 +19,7 @@ export function BackgroundEditor({
   onUploadMedia?: () => Promise<void>;
   cameras?: MediaDeviceInfo[];
 }) {
+  const { appDataDir } = useAppStore();
   const [showPicker, setShowPicker] = useState(false);
   const current: BackgroundSetting = value ?? { type: "None" };
 
@@ -96,7 +99,7 @@ export function BackgroundEditor({
       {showPicker && (
         <MediaPickerModal
           images={mediaImages}
-          onSelect={(path) => { onChange({ type: "Image", value: path }); }}
+          onSelect={(path) => { onChange({ type: "Image", value: relativizePath(path, appDataDir) }); }}
           onClose={() => setShowPicker(false)}
           onUpload={onUploadMedia}
         />

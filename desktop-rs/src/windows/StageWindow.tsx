@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { DisplayItem } from "../types";
 import { displayItemLabel } from "../utils";
@@ -9,6 +10,9 @@ export function StageWindow() {
   const [clock, setClock] = useState("");
 
   useEffect(() => {
+    invoke<DisplayItem>("get_current_item").then(setLiveItem).catch(() => {});
+    invoke<DisplayItem>("get_staged_item").then(setStagedItem).catch(() => {});
+
     const tick = () => {
       const d = new Date();
       const h = d.getHours().toString().padStart(2, "0");
@@ -50,7 +54,12 @@ export function StageWindow() {
     if (!item) return "";
     if (item.type === "Verse") return item.data.text;
     if (item.type === "Timer") return `${item.data.timer_type}${item.data.duration_secs ? ` · ${Math.floor(item.data.duration_secs / 60)}:${String(item.data.duration_secs % 60).padStart(2,"0")}` : ""}`;
-    if (item.type === "CustomSlide") return item.data.body.text;
+    if (item.type === "CustomSlide") {
+      if (item.data.elements && item.data.elements.length > 0) {
+        return item.data.elements.filter(e => e.kind === "text").map(e => e.content).join("\n");
+      }
+      return item.data.body?.text || "";
+    }
     return "";
   }
 

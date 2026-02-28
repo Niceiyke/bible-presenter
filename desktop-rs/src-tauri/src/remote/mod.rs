@@ -182,6 +182,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
 
     // ── 3. Broadcast mobile connect event ─────────────────────────────────────
     if is_mobile && !device_id.is_empty() {
+        state.connected_cameras.lock().await.insert(device_id.clone(), device_name.clone());
         let msg = json!({
             "type": "camera_source_connected",
             "device_id": device_id,
@@ -240,6 +241,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     state.signaling_clients.lock().remove(&client_key);
 
     if is_mobile && !device_id.is_empty() {
+        state.connected_cameras.lock().await.remove(&device_id);
         let msg = json!({
             "type": "camera_source_disconnected",
             "device_id": device_id,

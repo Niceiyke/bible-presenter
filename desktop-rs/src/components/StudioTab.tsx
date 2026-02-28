@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Plus, Edit2, Play, Trash2, ChevronUp, ChevronDown } from "lucide-react";
 import { useAppStore } from "../store";
 import { SlideThumbnail } from "./shared/Renderers";
+import { buildCustomSlideItem } from "../utils";
 import type { CustomPresentation, CustomSlide, CustomSlideDisplayData, DisplayItem } from "../types";
 
 interface StudioTabProps {
@@ -17,6 +18,7 @@ export function StudioTab({ onStage, onLive, onOpenEditor, onNewPresentation }: 
     studioList, setStudioList,
     expandedStudioPresId, setExpandedStudioPresId,
     studioSlides, setStudioSlides,
+    appDataDir,
   } = useAppStore();
 
   const handlePresentStudio = async (id: string) => {
@@ -46,25 +48,6 @@ export function StudioTab({ onStage, onLive, onOpenEditor, onNewPresentation }: 
     } catch (err) {
       console.error("Delete failed:", err);
     }
-  };
-
-  const buildCustomSlideItem = (presItem: { id: string; name: string; slide_count: number }, slides: CustomSlide[], slideIdx: number): DisplayItem => {
-    const slide = slides[slideIdx];
-    return {
-      type: "CustomSlide",
-      data: {
-        presentation_id: presItem.id,
-        presentation_name: presItem.name,
-        slide_index: slideIdx,
-        slide_count: slides.length,
-        background_color: slide.backgroundColor,
-        background_image: slide.backgroundImage,
-        header_enabled: slide.headerEnabled ?? true,
-        header_height_pct: slide.headerHeightPct ?? 35,
-        header: { text: slide.header.text, font_size: slide.header.fontSize, font_family: slide.header.fontFamily, color: slide.header.color, bold: slide.header.bold, italic: slide.header.italic, align: slide.header.align },
-        body:   { text: slide.body.text,   font_size: slide.body.fontSize,   font_family: slide.body.fontFamily,   color: slide.body.color,   bold: slide.body.bold,   italic: slide.body.italic,   align: slide.body.align },
-      } as CustomSlideDisplayData,
-    };
   };
 
   return (
@@ -125,6 +108,7 @@ export function StudioTab({ onStage, onLive, onOpenEditor, onNewPresentation }: 
                       index={idx}
                       onStage={() => onStage(buildCustomSlideItem(pres, studioSlides[pres.id], idx))}
                       onLive={() => onLive(buildCustomSlideItem(pres, studioSlides[pres.id], idx))}
+                      appDataDir={appDataDir}
                     />
                   ))}
                 </div>

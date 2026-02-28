@@ -83,6 +83,8 @@ pub struct AppState {
     pub transcription_paused: Arc<AtomicBool>,
     /// Persistent props layer — graphics that survive slide changes (logos, clocks).
     pub props_layer: Arc<Mutex<Vec<store::PropItem>>>,
+    /// Currently connected LAN camera clients: device_id → device_name.
+    pub connected_cameras: Arc<tokio::sync::Mutex<HashMap<String, String>>>,
 }
 
 impl Clone for AppState {
@@ -105,6 +107,7 @@ impl Clone for AppState {
             signaling_clients: self.signaling_clients.clone(),
             transcription_paused: self.transcription_paused.clone(),
             props_layer: self.props_layer.clone(),
+            connected_cameras: self.connected_cameras.clone(),
         }
     }
 }
@@ -594,6 +597,13 @@ async fn get_current_item(
 }
 
 #[tauri::command]
+async fn get_staged_item(
+    state: State<'_, AppState>,
+) -> Result<Option<store::DisplayItem>, String> {
+    Ok(state.staged_item.lock().clone())
+}
+
+#[tauri::command]
 async fn stage_item(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -820,7 +830,7 @@ async fn list_studio_presentations(
 #[tauri::command]
 async fn save_studio_presentation(
     state: State<'_, AppState>,
-    presentation: serde_json::Value,
+    presentation: store::CustomPresentation,
 ) -> Result<(), String> {
     state.media_schedule.save_studio_presentation(&presentation).map_err(|e| e.to_string())
 }
@@ -829,7 +839,7 @@ async fn save_studio_presentation(
 async fn load_studio_presentation(
     state: State<'_, AppState>,
     id: String,
-) -> Result<serde_json::Value, String> {
+) -> Result<store::CustomPresentation, String> {
     state.media_schedule.load_studio_presentation(&id).map_err(|e| e.to_string())
 }
 
@@ -866,6 +876,16 @@ async fn delete_scene(
     id: String,
 ) -> Result<(), String> {
     state.media_schedule.delete_scene(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_connected_cameras(
+    state: State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let cameras = state.connected_cameras.lock().await;
+    Ok(cameras.iter().map(|(id, name)| {
+        serde_json::json!({ "device_id": id, "device_name": name })
+    }).collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -967,6 +987,13 @@ fn get_tailscale_ip() -> Option<String> {
         }
     }
     None
+}
+
+#[tauri::command]
+async fn get_current_lower_third(
+    state: State<'_, AppState>,
+) -> Result<Option<serde_json::Value>, String> {
+    Ok(state.lower_third.lock().clone())
 }
 
 #[tauri::command]
@@ -1110,6 +1137,14 @@ async fn convert_pptx_slides(
         .collect();
     slides.sort();
     Ok(slides)
+}
+
+#[tauri::command]
+async fn get_app_data_dir(app: AppHandle) -> Result<String, String> {
+    app.path().app_local_data_dir()
+        .or_else(|_| app.path().app_data_dir())
+        .map(|p| p.to_string_lossy().to_string())
+        .map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -1275,6 +1310,7 @@ fn main() {
                 signaling_clients: Arc::new(Mutex::new(HashMap::new())),
                 transcription_paused: Arc::new(AtomicBool::new(false)),
                 props_layer: Arc::new(Mutex::new(Vec::new())),
+                connected_cameras: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             };
 
             // Store app_handle so remote module can emit events to Tauri windows
@@ -1304,6 +1340,7 @@ fn main() {
             search_semantic_query,
             read_file_base64,
             get_current_item,
+            get_staged_item,
             get_books,
             get_chapters,
             get_verses_count,
@@ -1329,6 +1366,7 @@ fn main() {
             list_scenes,
             save_scene,
             delete_scene,
+            list_connected_cameras,
             list_songs,
             save_song,
             delete_song,
@@ -1336,6 +1374,7 @@ fn main() {
             hide_lower_third,
             save_lt_templates,
             load_lt_templates,
+            get_current_lower_third,
             get_remote_info,
             regenerate_remote_pin,
             set_transcription_window,
@@ -1350,7 +1389,8 @@ fn main() {
             get_props,
             set_props,
             check_libreoffice,
-            convert_pptx_slides
+            convert_pptx_slides,
+            get_app_data_dir
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

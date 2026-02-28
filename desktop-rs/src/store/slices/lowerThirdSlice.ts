@@ -33,6 +33,8 @@ export interface LowerThirdSlice {
   setLtAutoSeconds: (v: number) => void;
   ltAtEnd: boolean;
   setLtAtEnd: (v: boolean) => void;
+  ltPreviewBg: "dark" | "green" | "checkered";
+  setLtPreviewBg: (v: "dark" | "green" | "checkered") => void;
   songs: Song[];
   setSongs: (v: Song[]) => void;
   songSearch: string;
@@ -52,8 +54,9 @@ export const createLowerThirdSlice: StateCreator<AppStore, [], [], LowerThirdSli
   setLtVisible: (v) => set({ ltVisible: v }),
   ltTemplate: {
     id: "default", name: "Default",
-    bgType: "solid", bgColor: "#000000", bgOpacity: 85, bgGradientEnd: "#141428", bgBlur: false,
+    bgType: "solid", bgColor: "#000000", bgOpacity: 85, bgGradientEnd: "#141428", bgBlur: false, bgBlurAmount: 8,
     accentEnabled: true, accentColor: "#f59e0b", accentSide: "left", accentWidth: 4,
+    borderEnabled: false, borderColor: "#ffffff", borderWidth: 1,
     hAlign: "left", vAlign: "bottom", offsetX: 48, offsetY: 40,
     widthPct: 60, paddingX: 24, paddingY: 16, borderRadius: 12,
     primaryFont: "Georgia", primarySize: 36, primaryColor: "#ffffff",
@@ -61,9 +64,13 @@ export const createLowerThirdSlice: StateCreator<AppStore, [], [], LowerThirdSli
     secondaryFont: "Arial", secondarySize: 22, secondaryColor: "#f59e0b",
     secondaryBold: false, secondaryItalic: false, secondaryUppercase: false,
     labelVisible: true, labelColor: "#f59e0b", labelSize: 13, labelUppercase: true,
-    animation: "slide-up",
-    variant: "classic",
-    scrollEnabled: false, scrollDirection: "ltr", scrollSpeed: 5,
+    textShadow: true, textShadowColor: "rgba(0,0,0,0.8)", textShadowBlur: 4,
+    textOutline: false, textOutlineColor: "#000000", textOutlineWidth: 1,
+    boxShadow: false, boxShadowColor: "rgba(0,0,0,0.5)", boxShadowBlur: 20,
+    animation: "slide-up", animationDuration: 0.5, exitDuration: 0.2,
+    variant: "classic", bannerBadgeText: "LIVE",
+    scrollEnabled: false, scrollDirection: "rtl", scrollSpeed: 5, scrollSeparator: "  •  ",
+    scrollGap: 50, maxLines: 0,
   },
   setLtTemplate: (v) => set((s) => ({ ltTemplate: typeof v === "function" ? v(s.ltTemplate) : v })),
   ltSavedTemplates: [],
@@ -90,6 +97,8 @@ export const createLowerThirdSlice: StateCreator<AppStore, [], [], LowerThirdSli
   setLtAutoSeconds: (v) => set({ ltAutoSeconds: v }),
   ltAtEnd: false,
   setLtAtEnd: (v) => set({ ltAtEnd: v }),
+  ltPreviewBg: "dark",
+  setLtPreviewBg: (v) => set({ ltPreviewBg: v }),
   songs: [],
   setSongs: (v) => set({ songs: v }),
   songSearch: "",

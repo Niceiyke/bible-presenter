@@ -71,6 +71,38 @@ pub struct CustomSlideZone {
     pub align: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SlideElement {
+    pub id: String,
+    pub kind: String, // "text" | "image" | "shape"
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    pub z_index: i32,
+    pub content: String,
+    #[serde(default)]
+    pub font_size: Option<f64>,
+    #[serde(default)]
+    pub font_family: Option<String>,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub align: Option<String>,
+    #[serde(default)]
+    pub bold: Option<bool>,
+    #[serde(default)]
+    pub italic: Option<bool>,
+    #[serde(default)]
+    pub opacity: Option<f64>,
+    #[serde(default)]
+    pub locked: Option<bool>,
+    #[serde(default)]
+    pub shadow: Option<bool>,
+    #[serde(default)]
+    pub shadow_color: Option<String>,
+}
+
 /// Payload sent when a custom studio slide goes live.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CustomSlideData {
@@ -84,14 +116,19 @@ pub struct CustomSlideData {
     pub background_color: String,
     /// Absolute path to a background image, or None.
     pub background_image: Option<String>,
-    /// Whether the header/title zone is shown (default true).
-    #[serde(default = "default_header_enabled")]
-    pub header_enabled: bool,
-    /// Header zone height as a percentage of the slide (10–60, default 35).
-    #[serde(default = "default_header_height_pct")]
-    pub header_height_pct: f64,
-    pub header: CustomSlideZone,
-    pub body: CustomSlideZone,
+    
+    // Legacy fields
+    #[serde(default)]
+    pub header_enabled: Option<bool>,
+    #[serde(default)]
+    pub header_height_pct: Option<f64>,
+    #[serde(default)]
+    pub header: Option<CustomSlideZone>,
+    #[serde(default)]
+    pub body: Option<CustomSlideZone>,
+
+    #[serde(default)]
+    pub elements: Vec<SlideElement>,
 }
 
 fn default_header_enabled() -> bool { true }
@@ -355,6 +392,33 @@ fn classify_extension(ext: &str) -> Option<MediaItemType> {
         "mp4" | "webm" | "mov" | "mkv" | "avi" => Some(MediaItemType::Video),
         _ => None,
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CustomSlide {
+    pub id: String,
+    pub background_color: String,
+    pub background_image: Option<String>,
+    pub elements: Vec<SlideElement>,
+    
+    // Legacy fields
+    #[serde(default)]
+    pub header_enabled: Option<bool>,
+    #[serde(default)]
+    pub header_height_pct: Option<f64>,
+    #[serde(default)]
+    pub header: Option<CustomSlideZone>,
+    #[serde(default)]
+    pub body: Option<CustomSlideZone>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CustomPresentation {
+    pub id: String,
+    pub name: String,
+    pub slides: Vec<CustomSlide>,
+    #[serde(default)]
+    pub version: Option<u32>,
 }
 
 impl MediaScheduleStore {
@@ -864,19 +928,15 @@ impl MediaScheduleStore {
     }
 
     /// Writes the full presentation JSON to `studio/{id}.json`.
-    pub fn save_studio_presentation(&self, data: &serde_json::Value) -> Result<()> {
-        let id = data
-            .get("id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Presentation JSON missing 'id' field"))?;
-        let path = self.studio_dir.join(format!("{}.json", id));
-        let json = serde_json::to_string_pretty(data)?;
+    pub fn save_studio_presentation(&self, presentation: &CustomPresentation) -> Result<()> {
+        let path = self.studio_dir.join(format!("{}.json", presentation.id));
+        let json = serde_json::to_string_pretty(presentation)?;
         fs::write(path, json)?;
         Ok(())
     }
 
     /// Reads and returns the full presentation JSON for the given id.
-    pub fn load_studio_presentation(&self, id: &str) -> Result<serde_json::Value> {
+    pub fn load_studio_presentation(&self, id: &str) -> Result<CustomPresentation> {
         let path = self.studio_dir.join(format!("{}.json", id));
         let json = fs::read_to_string(&path)
             .map_err(|_| anyhow::anyhow!("Studio presentation '{}' not found", id))?;

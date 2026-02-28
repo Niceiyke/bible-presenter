@@ -94,9 +94,11 @@ export function useAppInitialization() {
     const unlistenTrans = listen("transcription-update", (ev: any) => {
       const { text, detected_item, confidence, source } = ev.payload;
       setTranscript(text);
-      if (detected_item) {
-        if (source === "manual") setLiveItem(detected_item);
-        else { setSuggestedItem(detected_item); setSuggestedConfidence(confidence ?? 0); }
+      if (source === "manual") {
+        setLiveItem(detected_item ?? null);
+      } else if (detected_item) {
+        setSuggestedItem(detected_item);
+        setSuggestedConfidence(confidence ?? 0);
       }
     });
     

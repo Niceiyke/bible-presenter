@@ -210,7 +210,44 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
               <option value="">— Select a song —</option>
               {songs.map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
             </select>
+            <button 
+              onClick={() => {
+                if (ltSongId === "quick-lyrics") {
+                  setLtSongId(null);
+                } else {
+                  setLtSongId("quick-lyrics");
+                  if (!songs.find(s => s.id === "quick-lyrics")) {
+                    setSongs([...songs, { id: "quick-lyrics", title: "Quick Lyrics", sections: [{ label: "QUICK", lines: [] }], arrangement: ["QUICK"] } as any]);
+                  }
+                  setLtLineIndex(0);
+                }
+              }}
+              className={`px-3 py-2 rounded-lg border text-[10px] font-bold transition-all ${ltSongId === "quick-lyrics" ? "bg-amber-500 text-black border-amber-400" : "bg-slate-800 text-slate-400 border-slate-700 hover:text-slate-200"}`}
+              title="Quick Lyrics Entry"
+            >
+              QUICK
+            </button>
           </div>
+
+          {ltSongId === "quick-lyrics" && (
+            <div className="flex flex-col gap-2 bg-slate-800/50 p-2 rounded-lg border border-slate-700/50">
+              <p className="text-[9px] text-slate-500 uppercase font-black">Quick Paste (Newlines = Lines)</p>
+              <textarea
+                className="w-full bg-slate-900 text-slate-200 text-[11px] rounded p-2 border border-slate-700 focus:outline-none focus:border-amber-500/50 resize-none h-20"
+                placeholder="Paste lyrics here..."
+                onChange={(e) => {
+                  const lines = e.target.value.split("\n").filter(l => l.trim());
+                  const quickSong = {
+                    id: "quick-lyrics",
+                    title: "Quick Lyrics",
+                    sections: [{ label: "QUICK", lines }],
+                    arrangement: ["QUICK"]
+                  };
+                  setSongs([...songs.filter(s => s.id !== "quick-lyrics"), quickSong as any]);
+                }}
+              />
+            </div>
+          )}
 
           <div className="flex gap-3 items-center flex-wrap">
             <div className="flex items-center gap-1">

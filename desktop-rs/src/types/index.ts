@@ -43,20 +43,45 @@ export interface SlideZone {
 
 export type TextZone = SlideZone; // Alias for backward compatibility if needed
 
+export interface SlideElement {
+  id: string;
+  kind: "text" | "image" | "shape";
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  z_index: number;
+  content: string; // text string, or image path, or shape type
+  font_size?: number;
+  font_family?: string;
+  color?: string;
+  align?: "left" | "center" | "right";
+  bold?: boolean;
+  italic?: boolean;
+  opacity?: number;
+  locked?: boolean;
+  shadow?: boolean;
+  shadow_color?: string;
+}
+
 export interface CustomSlide {
   id: string;
   backgroundColor: string;
   backgroundImage?: string;
-  headerEnabled: boolean;
-  headerHeightPct: number;
-  header: SlideZone;
-  body: SlideZone;
+  elements: SlideElement[];
+  
+  // Legacy fields
+  headerEnabled?: boolean;
+  headerHeightPct?: number;
+  header?: SlideZone;
+  body?: SlideZone;
 }
 
 export interface CustomPresentation {
   id: string;
   name: string;
   slides: CustomSlide[];
+  version?: number;
 }
 
 export interface CustomSlideDisplayData {
@@ -66,10 +91,14 @@ export interface CustomSlideDisplayData {
   slide_count: number;
   background_color: string;
   background_image?: string;
+  
+  elements?: SlideElement[];
+  
+  // Legacy fields
   header_enabled?: boolean;
   header_height_pct?: number;
-  header: { text: string; font_size: number; font_family: string; color: string; bold: boolean; italic: boolean; align: string };
-  body: { text: string; font_size: number; font_family: string; color: string; bold: boolean; italic: boolean; align: string };
+  header?: { text: string; font_size: number; font_family: string; color: string; bold: boolean; italic: boolean; align: string };
+  body?: { text: string; font_size: number; font_family: string; color: string; bold: boolean; italic: boolean; align: string };
 }
 
 export interface CameraFeedData {
@@ -98,9 +127,11 @@ export interface LowerThirdTemplate {
   id: string; name: string;
   bgType: "solid" | "gradient" | "transparent" | "image";
   bgColor: string; bgOpacity: number; bgGradientEnd: string; bgBlur: boolean;
+  bgBlurAmount: number;
   bgImagePath?: string;
   accentEnabled: boolean; accentColor: string;
   accentSide: "left" | "right" | "top" | "bottom"; accentWidth: number;
+  borderEnabled: boolean; borderColor: string; borderWidth: number;
   hAlign: "left" | "center" | "right"; vAlign: "top" | "middle" | "bottom";
   offsetX: number; offsetY: number;
   widthPct: number; paddingX: number; paddingY: number; borderRadius: number;
@@ -109,11 +140,20 @@ export interface LowerThirdTemplate {
   secondaryFont: string; secondarySize: number; secondaryColor: string;
   secondaryBold: boolean; secondaryItalic: boolean; secondaryUppercase: boolean;
   labelVisible: boolean; labelColor: string; labelSize: number; labelUppercase: boolean;
+  textShadow: boolean; textShadowColor: string; textShadowBlur: number;
+  textOutline: boolean; textOutlineColor: string; textOutlineWidth: number;
+  boxShadow: boolean; boxShadowColor: string; boxShadowBlur: number;
   animation: "fade" | "slide-up" | "slide-left" | "none";
+  animationDuration: number;
+  exitDuration: number;
   variant: "classic" | "modern" | "banner";
+  bannerBadgeText: string;
   scrollEnabled: boolean;
   scrollDirection: "ltr" | "rtl";
   scrollSpeed: number;
+  scrollSeparator: string;
+  scrollGap: number;
+  maxLines: number;
 }
 
 export type BackgroundSetting =
@@ -122,10 +162,19 @@ export type BackgroundSetting =
   | { type: "Image"; value: string }
   | { type: "Camera"; value: string };
 
+export type LayerSource =
+  | { type: "live-output" }
+  | { type: "lower-third" }
+  | { type: "camera-lan"; device_id: string; device_name: string }
+  | { type: "camera-local"; device_id: string; label: string };
+
 export type LayerContent =
   | { kind: "empty" }
   | { kind: "item"; item: DisplayItem }
-  | { kind: "lower-third"; ltData: LowerThirdData; template: LowerThirdTemplate };
+  | { kind: "lower-third"; ltData: LowerThirdData; template: LowerThirdTemplate }
+  | { kind: "source"; source: LayerSource }
+  | { kind: "static-color"; color: string }
+  | { kind: "static-image"; path: string };
 
 export interface SceneLayer {
   id: string;
@@ -251,8 +300,9 @@ export const FONTS = [
 
 export const DEFAULT_LT_TEMPLATE: LowerThirdTemplate = {
   id: "default", name: "Default",
-  bgType: "solid", bgColor: "#000000", bgOpacity: 85, bgGradientEnd: "#141428", bgBlur: false,
+  bgType: "solid", bgColor: "#000000", bgOpacity: 85, bgGradientEnd: "#141428", bgBlur: false, bgBlurAmount: 8,
   accentEnabled: true, accentColor: "#f59e0b", accentSide: "left", accentWidth: 4,
+  borderEnabled: false, borderColor: "#ffffff", borderWidth: 1,
   hAlign: "left", vAlign: "bottom", offsetX: 48, offsetY: 40,
   widthPct: 60, paddingX: 24, paddingY: 16, borderRadius: 12,
   primaryFont: "Georgia", primarySize: 36, primaryColor: "#ffffff",
@@ -260,9 +310,13 @@ export const DEFAULT_LT_TEMPLATE: LowerThirdTemplate = {
   secondaryFont: "Arial", secondarySize: 22, secondaryColor: "#f59e0b",
   secondaryBold: false, secondaryItalic: false, secondaryUppercase: false,
   labelVisible: true, labelColor: "#f59e0b", labelSize: 13, labelUppercase: true,
-  animation: "slide-up",
-  variant: "classic",
-  scrollEnabled: false, scrollDirection: "ltr", scrollSpeed: 5,
+  textShadow: true, textShadowColor: "rgba(0,0,0,0.8)", textShadowBlur: 4,
+  textOutline: false, textOutlineColor: "#000000", textOutlineWidth: 1,
+  boxShadow: false, boxShadowColor: "rgba(0,0,0,0.5)", boxShadowBlur: 20,
+  animation: "slide-up", animationDuration: 0.5, exitDuration: 0.2,
+  variant: "classic", bannerBadgeText: "LIVE",
+  scrollEnabled: false, scrollDirection: "ltr", scrollSpeed: 5, scrollSeparator: "  •  ", scrollGap: 50,
+  maxLines: 0,
 };
 
 export const DEFAULT_SETTINGS: PresentationSettings = {
