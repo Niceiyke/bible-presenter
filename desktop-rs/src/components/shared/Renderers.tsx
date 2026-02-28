@@ -408,9 +408,6 @@ export function SceneRenderer({
     </div>
   );
 }
-    </div>
-  );
-}
 
 export function LayerContentRenderer({
   content,

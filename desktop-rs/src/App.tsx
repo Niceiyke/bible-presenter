@@ -78,9 +78,12 @@ export default function App() {
     if (liveItem?.type === "CameraFeed" && liveItem.data.lan) {
       activeDeviceIdA = liveItem.data.device_id;
     } else if (liveItem?.type === "Scene") {
-      const lanNodes = liveItem.data.nodes.filter((n: any) => n.type === "camera" && n.data.lan);
-      if (lanNodes[0]) activeDeviceIdA = lanNodes[0].data.device_id;
-      if (lanNodes[1]) activeDeviceIdB = lanNodes[1].data.device_id;
+      const lanSources = liveItem.data.layers
+        .map(l => l.content)
+        .filter((c): c is any => c.kind === "source" && c.source.type === "camera-lan")
+        .map(c => c.source);
+      if (lanSources[0]) activeDeviceIdA = lanSources[0].device_id;
+      if (lanSources[1]) activeDeviceIdB = lanSources[1].device_id;
     }
     
     setLiveCamera(activeDeviceIdA, 'A');
