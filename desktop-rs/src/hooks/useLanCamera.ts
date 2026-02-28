@@ -121,7 +121,26 @@ export function useLanCamera(pin: string | null) {
       }
       if (msg.cmd === "camera_offer") {
         pendingOffersRef.current.set(msg.device_id, msg);
-        if (cameraEnabledRef.current.has(msg.device_id)) await handlePreviewOffer(msg);
+        // Ensure the source appears in the UI even if camera_source_connected was
+        // missed (e.g. operator WS reconnected after the mobile was already online).
+        setCameraSources(prev => {
+          if (prev.has(msg.device_id)) return prev;
+          const next = new Map(prev);
+          next.set(msg.device_id, {
+            device_id: msg.device_id,
+            device_name: msg.device_name ?? msg.device_id.slice(0, 8),
+            previewStream: null,
+            previewPc: null,
+            status: "connecting",
+            connectedAt: Date.now(),
+            enabled: false,
+          });
+          return next;
+        });
+        // Always answer the offer — preview WebRTC connects automatically.
+        // The 'enabled' flag controls visibility in the operator panel, not
+        // whether the connection is established.
+        await handlePreviewOffer(msg);
       }
       if (msg.cmd === "camera_ice") {
         const pc = previewPcMapRef.current.get(msg.device_id);
@@ -150,11 +169,16 @@ export function useLanCamera(pin: string | null) {
     setCameraSources(prev => {
       const next = new Map(prev);
       const src = next.get(device_id);
-      if (src) next.set(device_id, { ...src, enabled: true, status: "connecting" });
+      if (src) next.set(device_id, { ...src, enabled: true });
       return next;
     });
-    const pending = pendingOffersRef.current.get(device_id);
-    if (pending) await handlePreviewOffer(pending);
+    // WebRTC preview connects automatically on offer receipt.
+    // Only re-initiate if the PC was lost (closed/failed) and a pending offer exists.
+    const existingPc = previewPcMapRef.current.get(device_id);
+    if (!existingPc) {
+      const pending = pendingOffersRef.current.get(device_id);
+      if (pending) await handlePreviewOffer(pending);
+    }
   }, [handlePreviewOffer]);
 
   const disableCameraPreview = useCallback((device_id: string) => {

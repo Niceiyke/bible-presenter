@@ -51,7 +51,16 @@ export function describeDisplayItem(item: DisplayItem): string {
 export function describeLayerContent(c: LayerContent): string {
   if (c.kind === "empty") return "Empty";
   if (c.kind === "lower-third") return `Lower Third (${c.ltData.kind})`;
-  return describeDisplayItem(c.item);
+  if (c.kind === "static-color") return `Color: ${c.color}`;
+  if (c.kind === "static-image") return `Image: ${c.path.split(/[\\/]/).pop() ?? c.path}`;
+  if (c.kind === "source") {
+    const s = c.source;
+    if (s.type === "live-output") return "SOURCE: Live Output";
+    if (s.type === "lower-third") return "SOURCE: Lower Third";
+    if (s.type === "camera-lan") return `SOURCE: ${s.device_name} (LAN)`;
+    if (s.type === "camera-local") return `SOURCE: ${s.label} (Local)`;
+  }
+  return describeDisplayItem((c as any).item);
 }
 
 export function hexToRgba(hex: string, opacity: number): string {
@@ -62,14 +71,70 @@ export function hexToRgba(hex: string, opacity: number): string {
   return `rgba(${r},${g},${b},${(opacity / 100).toFixed(2)})`;
 }
 
+export function resolvePath(path: string | undefined, baseDir: string | null): string {
+  if (!path) return "";
+  if (!baseDir) return path;
+  // If it's already absolute (starts with / or C:\ etc), return as is
+  if (path.startsWith("/") || /^[a-zA-Z]:\\/.test(path)) return path;
+  // Otherwise, join with baseDir/media
+  const separator = baseDir.includes("\\") ? "\\" : "/";
+  return `${baseDir}${separator}media${separator}${path}`;
+}
+
+export function relativizePath(path: string | undefined, baseDir: string | null): string {
+  if (!path) return "";
+  if (!baseDir) return path;
+  const mediaDir = `${baseDir}${baseDir.includes("\\") ? "\\" : "/"}media`;
+  if (path.startsWith(mediaDir)) {
+    return path.slice(mediaDir.length + 1);
+  }
+  return path;
+}
+
 export function newDefaultSlide(): CustomSlide {
   return {
     id: stableId(),
     backgroundColor: "#1a1a2e",
-    headerEnabled: true,
-    headerHeightPct: 35,
-    header: { text: "Header Text", fontSize: 32, fontFamily: "Arial", color: "#ffffff", align: "center" as const, bold: true, italic: false },
-    body:   { text: "Body Content Goes Here", fontSize: 48, fontFamily: "Arial", color: "#ffffff", align: "center" as const, bold: false, italic: false },
+    elements: [
+      {
+        id: stableId(),
+        kind: "text",
+        x: 10, y: 10, w: 80, h: 20, z_index: 1,
+        content: "Header Text",
+        font_size: 48, font_family: "Arial", color: "#ffffff", align: "center", bold: true, italic: false
+      },
+      {
+        id: stableId(),
+        kind: "text",
+        x: 10, y: 35, w: 80, h: 50, z_index: 2,
+        content: "Body Content Goes Here",
+        font_size: 32, font_family: "Arial", color: "#ffffff", align: "center", bold: false, italic: false
+      }
+    ]
+  };
+}
+
+export function newTitleSlide(): CustomSlide {
+  return {
+    id: stableId(),
+    backgroundColor: "#1a1a2e",
+    elements: [
+      {
+        id: stableId(),
+        kind: "text",
+        x: 10, y: 35, w: 80, h: 30, z_index: 1,
+        content: "Presentation Title",
+        font_size: 72, font_family: "Georgia", color: "#ffffff", align: "center", bold: true, italic: false
+      }
+    ]
+  };
+}
+
+export function newBlankSlide(): CustomSlide {
+  return {
+    id: stableId(),
+    backgroundColor: "#1a1a2e",
+    elements: []
   };
 }
 
@@ -103,9 +168,11 @@ export function buildCustomSlideItem(
       slide_count: slides.length,
       background_color: slide.backgroundColor,
       background_image: slide.backgroundImage,
+      elements: slide.elements,
+      // Legacy fields
       header_enabled: slide.headerEnabled ?? true,
       header_height_pct: slide.headerHeightPct ?? 35,
-      header: { 
+      header: slide.header ? { 
         text: slide.header.text, 
         font_size: slide.header.fontSize, 
         font_family: slide.header.fontFamily, 
@@ -113,8 +180,8 @@ export function buildCustomSlideItem(
         bold: slide.header.bold, 
         italic: slide.header.italic, 
         align: slide.header.align 
-      },
-      body: { 
+      } : undefined,
+      body: slide.body ? { 
         text: slide.body.text,   
         font_size: slide.body.fontSize,   
         font_family: slide.body.fontFamily,   
@@ -122,7 +189,7 @@ export function buildCustomSlideItem(
         bold: slide.body.bold,   
         italic: slide.body.italic,   
         align: slide.body.align 
-      },
+      } : undefined,
     },
   };
 }

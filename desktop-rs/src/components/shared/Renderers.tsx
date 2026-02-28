@@ -1,18 +1,28 @@
 import React, { useRef, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { 
-  ParsedSlide, 
-  CustomSlide, 
-  CustomSlideDisplayData, 
-  DisplayItem, 
-  SceneData, 
+import { resolvePath } from "../../utils";
+import type {
+  ParsedSlide,
+  CustomSlide,
+  CustomSlideDisplayData,
+  DisplayItem,
+  SceneData,
   LayerContent,
   LowerThirdData,
   LowerThirdTemplate,
   TimerData,
   PropItem
 } from "../../types";
+
+// ─── Live Context (for OBS-style source layers in SceneRenderer) ─────────────
+
+export interface SceneLiveContext {
+  liveItem: DisplayItem | null;
+  lowerThird: { data: LowerThirdData; template: LowerThirdTemplate } | null;
+  outputWsRef: React.RefObject<WebSocket | null>;
+  sceneCameraHandlers: React.RefObject<Map<string, (msg: any) => void>>;
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -82,22 +92,27 @@ export function SlideRenderer({ slide }: { slide: ParsedSlide }) {
 export function CustomSlideRenderer({
   slide,
   scale = 1,
+  appDataDir = null,
 }: {
   slide: CustomSlide | CustomSlideDisplayData;
   scale?: number;
+  appDataDir?: string | null;
 }) {
   const isDisplayData = "background_color" in slide;
   
-  const header = isDisplayData ? (slide as CustomSlideDisplayData).header : (slide as CustomSlide).header;
-  const body = isDisplayData ? (slide as CustomSlideDisplayData).body : (slide as CustomSlide).body;
   const bgColor = isDisplayData ? (slide as CustomSlideDisplayData).background_color : (slide as CustomSlide).backgroundColor;
   const bgImage = isDisplayData ? (slide as CustomSlideDisplayData).background_image : (slide as CustomSlide).backgroundImage;
+  const elements = isDisplayData ? (slide as CustomSlideDisplayData).elements : (slide as CustomSlide).elements;
 
+  // Fallback to legacy structure if elements are missing
   const headerEnabled = isDisplayData ? (slide as CustomSlideDisplayData).header_enabled : (slide as CustomSlide).headerEnabled;
   const headerHeightPct = (isDisplayData ? (slide as CustomSlideDisplayData).header_height_pct : (slide as CustomSlide).headerHeightPct) ?? 35;
+  const header = isDisplayData ? (slide as CustomSlideDisplayData).header : (slide as CustomSlide).header;
+  const body = isDisplayData ? (slide as CustomSlideDisplayData).body : (slide as CustomSlide).body;
 
-  const bgStyle: React.CSSProperties = bgImage
-    ? { backgroundImage: `url(${convertFileSrc(bgImage)})`, backgroundSize: "cover", backgroundPosition: "center" }
+  const resolvedBgImage = resolvePath(bgImage, appDataDir);
+  const bgStyle: React.CSSProperties = resolvedBgImage
+    ? { backgroundImage: `url(${convertFileSrc(resolvedBgImage)})`, backgroundSize: "cover", backgroundPosition: "center" }
     : { backgroundColor: bgColor };
 
   const zoneStyle = (z: any): React.CSSProperties => ({
@@ -113,11 +128,66 @@ export function CustomSlideRenderer({
     margin: 0,
   });
 
+  // Modern Elements Rendering
+  if (elements && elements.length > 0) {
+    return (
+      <div className="w-full h-full relative overflow-hidden" style={bgStyle}>
+        {elements.map((el) => {
+          const elStyle: React.CSSProperties = {
+            position: "absolute",
+            left: `${el.x}%`,
+            top: `${el.y}%`,
+            width: `${el.w}%`,
+            height: `${el.h}%`,
+            zIndex: el.z_index,
+            opacity: el.opacity ?? 1,
+          };
+
+          if (el.kind === "text") {
+            return (
+              <div key={el.id} style={elStyle} className="flex flex-col">
+                <p style={{
+                  fontFamily: el.font_family ?? "Arial",
+                  fontSize: `${(el.font_size ?? 32) * scale}pt`,
+                  color: el.color ?? "#ffffff",
+                  fontWeight: el.bold ? "bold" : "normal",
+                  fontStyle: el.italic ? "italic" : "normal",
+                  textAlign: (el.align ?? "left") as React.CSSProperties["textAlign"],
+                  textShadow: el.shadow === false ? "none" : `0 2px 8px ${el.shadow_color || "rgba(0,0,0,0.6)"}`,
+                  whiteSpace: "pre-wrap",
+                  lineHeight: 1.3,
+                  margin: 0,
+                  width: "100%",
+                }}>
+                  {el.content}
+                </p>
+              </div>
+            );
+          } else if (el.kind === "image") {
+            const resolvedImg = resolvePath(el.content, appDataDir);
+            return (
+              <div key={el.id} style={elStyle}>
+                <img src={convertFileSrc(resolvedImg)} className="w-full h-full object-contain" alt="" />
+              </div>
+            );
+          } else if (el.kind === "shape") {
+            // Basic support for shapes (e.g., color blocks)
+            return (
+              <div key={el.id} style={{ ...elStyle, backgroundColor: el.color ?? "#ffffff" }} />
+            );
+          }
+          return null;
+        })}
+      </div>
+    );
+  }
+
+  // Legacy fallback rendering
   if (headerEnabled === false) {
     return (
       <div className="w-full h-full relative overflow-hidden flex flex-col" style={bgStyle}>
         <div className="flex items-center justify-center flex-1" style={{ padding: `${14 * scale}px ${24 * scale}px` }}>
-          <p style={zoneStyle(body)}>{body.text}</p>
+          {body && <p style={zoneStyle(body)}>{body.text}</p>}
         </div>
       </div>
     );
@@ -126,11 +196,11 @@ export function CustomSlideRenderer({
   return (
     <div className="w-full h-full relative overflow-hidden flex flex-col" style={bgStyle}>
       <div className="flex items-center justify-center" style={{ flex: `0 0 ${headerHeightPct}%`, padding: `${14 * scale}px ${24 * scale}px` }}>
-        <p style={zoneStyle(header)}>{header.text}</p>
+        {header && <p style={zoneStyle(header)}>{header.text}</p>}
       </div>
       <div style={{ height: `${Math.max(1, scale)}px`, backgroundColor: "rgba(255,255,255,0.15)", margin: `0 ${24 * scale}px` }} />
       <div className="flex items-center justify-center flex-1" style={{ padding: `${14 * scale}px ${24 * scale}px` }}>
-        <p style={zoneStyle(body)}>{body.text}</p>
+        {body && <p style={zoneStyle(body)}>{body.text}</p>}
       </div>
     </div>
   );
@@ -158,6 +228,88 @@ export function CameraFeedRenderer({ deviceId }: { deviceId: string }) {
   return <video ref={videoRef} className="w-full h-full object-cover" autoPlay muted playsInline />;
 }
 
+// ─── LAN Camera Layer (live WebRTC source for scene layers) ──────────────────
+
+function SceneLanCameraLayer({
+  deviceId,
+  deviceName,
+  liveContext,
+}: {
+  deviceId: string;
+  deviceName: string;
+  liveContext?: SceneLiveContext;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+
+  useEffect(() => {
+    if (!liveContext) return;
+
+    const OUTPUT_STUN: RTCConfiguration = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+    function sendWs(obj: object) {
+      const ws = liveContext!.outputWsRef.current;
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(obj));
+      }
+    }
+
+    async function handleOffer(msg: { device_id: string; sdp: string }) {
+      const pc = new RTCPeerConnection(OUTPUT_STUN);
+      pcRef.current = pc;
+
+      pc.ontrack = (ev: RTCTrackEvent) => {
+        const stream = ev.streams[0] ?? new MediaStream([ev.track]);
+        if (videoRef.current) videoRef.current.srcObject = stream;
+      };
+
+      pc.onicecandidate = (ev: RTCPeerConnectionIceEvent) => {
+        if (ev.candidate) {
+          sendWs({ cmd: "camera_ice", device_id: deviceId, target: `mobile:${deviceId}`, candidate: ev.candidate });
+        }
+      };
+
+      await pc.setRemoteDescription({ type: "offer", sdp: msg.sdp });
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      sendWs({ cmd: "camera_answer", device_id: deviceId, target: `mobile:${deviceId}`, sdp: answer.sdp });
+    }
+
+    function handler(msg: any) {
+      if (msg.cmd === "camera_offer") handleOffer(msg).catch(console.error);
+      if (msg.cmd === "camera_ice" && pcRef.current && msg.candidate) {
+        pcRef.current.addIceCandidate(new RTCIceCandidate(msg.candidate)).catch(() => {});
+      }
+    }
+
+    liveContext.sceneCameraHandlers.current.set(deviceId, handler);
+    sendWs({ cmd: "camera_connect_program", device_id: deviceId });
+
+    return () => {
+      liveContext.sceneCameraHandlers.current.delete(deviceId);
+      if (pcRef.current) { pcRef.current.close(); pcRef.current = null; }
+      if (videoRef.current) videoRef.current.srcObject = null;
+      sendWs({ cmd: "camera_disconnect_program", device_id: deviceId });
+    };
+  }, [deviceId, liveContext]);
+
+  if (!liveContext) {
+    return (
+      <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900/70 gap-1">
+        <span className="text-2xl">📷</span>
+        <p className="text-[8px] font-bold text-teal-400 uppercase text-center px-1 truncate max-w-full">
+          {deviceName || deviceId}
+        </p>
+        <p className="text-[7px] text-slate-500 uppercase">LAN CAMERA</p>
+      </div>
+    );
+  }
+
+  return (
+    <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" />
+  );
+}
+
 // ─── Scene Renderer ──────────────────────────────────────────────────────────
 
 export function SceneRenderer({
@@ -166,14 +318,19 @@ export function SceneRenderer({
   activeLayerId,
   onLayerClick,
   outputMode = false,
+  liveContext,
+  appDataDir = null,
 }: {
   scene: SceneData;
   scale?: number;
   activeLayerId?: string | null;
   onLayerClick?: (id: string) => void;
   outputMode?: boolean;
+  liveContext?: SceneLiveContext;
+  appDataDir?: string | null;
 }) {
   const bg = scene.background;
+  const resolvedBg = bg?.type === "Image" ? resolvePath(bg.value, appDataDir) : null;
   return (
     <div
       style={{
@@ -184,7 +341,7 @@ export function SceneRenderer({
         width: scale !== 1 ? `${100 / scale}%` : "100%",
         height: scale !== 1 ? `${100 / scale}%` : "100%",
         backgroundColor: bg?.type === "Color" ? bg.value : "#000000",
-        backgroundImage: bg?.type === "Image" ? `url(${convertFileSrc(bg.value)})` : undefined,
+        backgroundImage: resolvedBg ? `url(${convertFileSrc(resolvedBg)})` : undefined,
         backgroundSize: "cover",
         backgroundPosition: "center",
       }}
@@ -206,7 +363,7 @@ export function SceneRenderer({
             overflow: "hidden",
           }}
         >
-          <LayerContentRenderer content={layer.content} outputMode={outputMode} />
+          <LayerContentRenderer content={layer.content} outputMode={outputMode} liveContext={liveContext} appDataDir={appDataDir} />
           {!outputMode && activeLayerId === layer.id && (
             <div className="absolute top-1 right-1 bg-blue-500 text-white text-[8px] font-black px-1 rounded shadow-lg pointer-events-none">ACTIVE</div>
           )}
@@ -216,7 +373,17 @@ export function SceneRenderer({
   );
 }
 
-export function LayerContentRenderer({ content, outputMode = false }: { content: LayerContent; outputMode?: boolean }) {
+export function LayerContentRenderer({
+  content,
+  outputMode = false,
+  liveContext,
+  appDataDir = null,
+}: {
+  content: LayerContent;
+  outputMode?: boolean;
+  liveContext?: SceneLiveContext;
+  appDataDir?: string | null;
+}) {
   if (content.kind === "empty") {
     if (outputMode) return null;
     return (
@@ -233,8 +400,54 @@ export function LayerContentRenderer({ content, outputMode = false }: { content:
       </div>
     );
   }
-  
-  const { item } = content;
+  if (content.kind === "static-color") {
+    return <div style={{ background: content.color }} className="w-full h-full" />;
+  }
+  if (content.kind === "static-image") {
+    const resolved = resolvePath(content.path, appDataDir);
+    return <img src={convertFileSrc(resolved)} className="w-full h-full object-cover" alt="" />;
+  }
+  if (content.kind === "source") {
+    const src = content.source;
+    if (src.type === "live-output") {
+      const li = liveContext?.liveItem;
+      if (li && li.type !== "Scene") {
+        return <LayerContentRenderer content={{ kind: "item", item: li }} outputMode={outputMode} liveContext={liveContext} />;
+      }
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center gap-1"
+          style={{ background: "repeating-conic-gradient(#1e293b 0% 25%, #0f172a 0% 50%) 0 0 / 16px 16px" }}>
+          <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">LIVE OUTPUT</span>
+        </div>
+      );
+    }
+    if (src.type === "lower-third") {
+      const lt = liveContext?.lowerThird;
+      if (lt) {
+        return (
+          <div className="absolute inset-0">
+            <LowerThirdOverlay data={lt.data} template={lt.template} />
+          </div>
+        );
+      }
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center gap-1 bg-gradient-to-b from-transparent to-black/60">
+          <span className="text-[10px] font-black text-amber-400 uppercase tracking-widest">LOWER THIRD</span>
+        </div>
+      );
+    }
+    if (src.type === "camera-lan") {
+      return (
+        <SceneLanCameraLayer deviceId={src.device_id} deviceName={src.device_name} liveContext={liveContext} />
+      );
+    }
+    if (src.type === "camera-local") {
+      return <CameraFeedRenderer deviceId={src.device_id} />;
+    }
+    return null;
+  }
+
+  const { item } = content as { kind: "item"; item: any };
   switch (item.type) {
     case "Verse":
       return (
@@ -272,7 +485,7 @@ export function LayerContentRenderer({ content, outputMode = false }: { content:
       }
       return <CameraFeedRenderer deviceId={item.data.device_id} />;
     case "CustomSlide":
-      return <CustomSlideRenderer slide={item.data} scale={outputMode ? 1 : 0.1} />;
+      return <CustomSlideRenderer slide={item.data} scale={outputMode ? 1 : 0.1} appDataDir={appDataDir} />;
     case "PresentationSlide":
       return (
         <div className="w-full h-full bg-orange-900/20 flex items-center justify-center text-[10px] font-bold text-orange-500">
@@ -290,19 +503,28 @@ export function LayerContentRenderer({ content, outputMode = false }: { content:
 
 // ─── Lower Third Overlay ──────────────────────────────────────────────────────
 
+const substituteTokens = (text: string) => {
+  const now = new Date();
+  return text
+    .replace(/{time}/g, now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
+    .replace(/{date}/g, now.toLocaleDateString());
+};
+
 export function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData; template: LowerThirdTemplate }) {
   const containerStyle = {
     paddingLeft: t.paddingX, paddingRight: t.paddingX,
     paddingTop: t.paddingY, paddingBottom: t.paddingY,
     borderRadius: t.borderRadius, overflow: "hidden",
-    backdropFilter: t.bgBlur ? "blur(8px)" : undefined,
+    backdropFilter: t.bgBlur ? `blur(${t.bgBlurAmount ?? 8}px)` : undefined,
     ...(t.bgType === "solid" ? { background: hexToRgba(t.bgColor, t.bgOpacity) } : 
        t.bgType === "gradient" ? { background: `linear-gradient(135deg, ${hexToRgba(t.bgColor, t.bgOpacity)} 0%, ${hexToRgba(t.bgGradientEnd, t.bgOpacity)} 100%)` } :
        t.bgType === "image" && t.bgImagePath ? { backgroundImage: `url("${convertFileSrc(t.bgImagePath)}")`, backgroundSize: "cover", backgroundPosition: "center", backgroundRepeat: "no-repeat" } :
        { background: "transparent" }),
     ...(t.accentEnabled ? {
       [`border${t.accentSide.charAt(0).toUpperCase() + t.accentSide.slice(1)}`]: `${t.accentWidth}px solid ${t.accentColor}`
-    } : {})
+    } : {}),
+    ...(t.borderEnabled ? { border: `${t.borderWidth}px solid ${t.borderColor}` } : {}),
+    ...(t.boxShadow ? { boxShadow: `0 10px 30px ${t.boxShadowColor || "rgba(0,0,0,0.5)"}` } : {})
   } as React.CSSProperties;
 
   const buildLtTextStyle = (
@@ -313,7 +535,16 @@ export function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData;
     fontWeight: bold ? "bold" : "normal",
     fontStyle: italic ? "italic" : "normal",
     textTransform: uppercase ? "uppercase" : undefined,
+    textShadow: t.textShadow ? `0 2px ${t.textShadowBlur}px ${t.textShadowColor}` : "none",
+    WebkitTextStroke: t.textOutline ? `${t.textOutlineWidth}px ${t.textOutlineColor}` : undefined,
     lineHeight: 1.25, margin: 0,
+    ...(t.maxLines > 0 ? {
+      display: "-webkit-box",
+      WebkitLineClamp: t.maxLines,
+      WebkitBoxOrient: "vertical",
+      overflow: "hidden",
+      textOverflow: "ellipsis"
+    } : {})
   });
 
   const getVariants = () => {
@@ -331,7 +562,8 @@ export function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData;
 
   const variants = getVariants();
   const positionStyle = {
-    position: "absolute", zIndex: 50, width: `${t.widthPct}%`,
+    position: "absolute", zIndex: 40, width: `${t.widthPct}%`,
+    pointerEvents: "none",
     ...(t.hAlign === "left" ? { left: t.offsetX } : t.hAlign === "right" ? { right: t.offsetX } : { left: "50%", transform: "translateX(-50%)" }),
     ...(t.vAlign === "top" ? { top: t.offsetY } : t.vAlign === "bottom" ? { bottom: t.offsetY } : { top: "50%", transform: (t.hAlign === "center" ? "translate(-50%, -50%)" : "translateY(-50%)") })
   } as React.CSSProperties;
@@ -342,7 +574,11 @@ export function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData;
       initial={variants.initial}
       animate={variants.animate}
       exit={variants.exit}
-      transition={{ duration: 0.5, ease: "easeOut" }}
+      transition={{ 
+        duration: t.animationDuration || 0.5, 
+        exit: { duration: t.exitDuration ?? 0.2 },
+        ease: "easeOut" 
+      }}
     >
       <div style={containerStyle}>
         {data.kind === "Nameplate" && (
@@ -350,13 +586,13 @@ export function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData;
             {t.variant === "modern" ? (
               <div className="flex flex-col items-center text-center">
                 <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
-                  {data.data.name}
+                  {substituteTokens(data.data.name)}
                 </p>
                 {data.data.title && (
                   <>
                     <div className="w-1/4 h-px my-2 opacity-30" style={{ backgroundColor: t.secondaryColor }} />
                     <p style={buildLtTextStyle(t.secondaryFont, t.secondarySize, t.secondaryColor, t.secondaryBold, t.secondaryItalic, t.secondaryUppercase)}>
-                      {data.data.title}
+                      {substituteTokens(data.data.title)}
                     </p>
                   </>
                 )}
@@ -364,15 +600,15 @@ export function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData;
             ) : t.variant === "banner" ? (
               <div className="flex items-center gap-4">
                 <div className="shrink-0 py-1 px-4 rounded" style={{ background: t.accentColor, color: t.bgColor }}>
-                   <p className="font-black text-xl uppercase tracking-tighter">LIVE</p>
+                   <p className="font-black text-xl uppercase tracking-tighter">{t.bannerBadgeText || "LIVE"}</p>
                 </div>
                 <div className="flex-1 min-w-0">
                   <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
-                    {data.data.name}
+                    {substituteTokens(data.data.name)}
                   </p>
                   {data.data.title && (
                     <p style={buildLtTextStyle(t.secondaryFont, t.secondarySize, t.secondaryColor, t.secondaryBold, t.secondaryItalic, t.secondaryUppercase)}>
-                      {data.data.title}
+                      {substituteTokens(data.data.title)}
                     </p>
                   )}
                 </div>
@@ -380,11 +616,11 @@ export function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData;
             ) : (
               <>
                 <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
-                  {data.data.name}
+                  {substituteTokens(data.data.name)}
                 </p>
                 {data.data.title && (
                   <p style={{ ...buildLtTextStyle(t.secondaryFont, t.secondarySize, t.secondaryColor, t.secondaryBold, t.secondaryItalic, t.secondaryUppercase), marginTop: 4 }}>
-                    {data.data.title}
+                    {substituteTokens(data.data.title)}
                   </p>
                 )}
               </>
@@ -411,20 +647,30 @@ export function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData;
         {data.kind === "FreeText" && (
           t.scrollEnabled ? (
             <div style={{ overflow: "hidden", whiteSpace: "nowrap" }}>
-              <span style={{
-                ...buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase),
-                display: "inline-block",
-                paddingLeft: "100%",
-                paddingRight: "0",
+              <div className="flex whitespace-nowrap" style={{ 
                 animation: `lt-scroll-${t.scrollDirection} ${(11 - t.scrollSpeed) * 4}s linear infinite`,
-                willChange: "transform",
+                width: "max-content"
               }}>
-                {data.data.text}
-              </span>
+                <span style={{
+                  ...buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase),
+                  paddingRight: t.scrollGap ?? 50
+                }}>
+                  {substituteTokens(data.data.text)}
+                  {t.scrollSeparator && <span className="mx-2 opacity-50">{t.scrollSeparator}</span>}
+                </span>
+                {/* Repeat for seamless loop */}
+                <span style={{
+                  ...buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase),
+                  paddingRight: t.scrollGap ?? 50
+                }}>
+                  {substituteTokens(data.data.text)}
+                  {t.scrollSeparator && <span className="mx-2 opacity-50">{t.scrollSeparator}</span>}
+                </span>
+              </div>
             </div>
           ) : (
             <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
-              {data.data.text}
+              {substituteTokens(data.data.text)}
             </p>
           )
         )}
@@ -545,9 +791,9 @@ export function PropClockRenderer({ color, format }: { color?: string; format?: 
   );
 }
 
-export function PropsRenderer({ items }: { items: PropItem[] }) {
+export function PropsRenderer({ items, appDataDir = null }: { items: PropItem[]; appDataDir?: string | null }) {
   return (
-    <div className="absolute inset-0 z-30 pointer-events-none">
+    <div className="absolute inset-0 z-50 pointer-events-none">
       {items.filter((p) => p.visible).map((p) => (
         <div
           key={p.id}
@@ -561,7 +807,7 @@ export function PropsRenderer({ items }: { items: PropItem[] }) {
           }}
         >
           {p.kind === "image" && p.path && (
-            <img src={convertFileSrc(p.path)} className="w-full h-full object-contain" alt="" />
+            <img src={convertFileSrc(resolvePath(p.path, appDataDir))} className="w-full h-full object-contain" alt="" />
           )}
           {p.kind === "clock" && (
             <PropClockRenderer color={p.color} format={p.text} />
@@ -572,7 +818,7 @@ export function PropsRenderer({ items }: { items: PropItem[] }) {
   );
 }
 
-export function SmallItemPreview({ item }: { item: DisplayItem }) {
+export function SmallItemPreview({ item, appDataDir = null }: { item: DisplayItem; appDataDir?: string | null }) {
   switch (item.type) {
     case "Verse":
       return (
@@ -600,7 +846,7 @@ export function SmallItemPreview({ item }: { item: DisplayItem }) {
       }
       return <CameraFeedRenderer deviceId={item.data.device_id} />;
     case "CustomSlide":
-      return <CustomSlideRenderer slide={item.data} scale={0.1} />;
+      return <CustomSlideRenderer slide={item.data} scale={0.1} appDataDir={appDataDir} />;
     case "PresentationSlide":
       return <div className="w-full h-full bg-orange-900/20 flex items-center justify-center text-[10px] font-bold text-orange-500">PPTX SLIDE</div>;
     case "Scene":
@@ -617,11 +863,13 @@ export function SlideThumbnail({
   index,
   onStage,
   onLive,
+  appDataDir = null,
 }: {
   slide: ParsedSlide | CustomSlide;
   index: number;
   onStage: () => void;
   onLive: () => void;
+  appDataDir?: string | null;
 }) {
   const isCustom = "header" in slide;
   
@@ -631,7 +879,7 @@ export function SlideThumbnail({
         className="group relative aspect-video rounded overflow-hidden border border-slate-700 hover:border-amber-500/50 transition-all cursor-pointer"
         onClick={onStage}
       >
-        <CustomSlideRenderer slide={slide as CustomSlide} scale={0.1} />
+        <CustomSlideRenderer slide={slide as CustomSlide} scale={0.1} appDataDir={appDataDir} />
         <div className="absolute bottom-0 left-0 px-1 py-0.5 bg-black/50">
           <span className="text-[7px] text-white/70">{index + 1}</span>
         </div>

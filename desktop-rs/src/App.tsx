@@ -51,6 +51,10 @@ export default function App() {
     setIsBlackout, songs, setPropItems, audioError, setAudioError, deviceError
   } = useAppStore();
 
+  const [outputVisible, setOutputVisible] = React.useState(false);
+  const [bottomDeckH, setBottomDeckH] = React.useState(() => Number(localStorage.getItem("pref_bottomDeckH") || 280));
+  const [scheduleWidth, setScheduleWidth] = React.useState(() => Number(localStorage.getItem("pref_scheduleWidth") || 240));
+
   // Initialization & Listeners
   useAppInitialization();
 
@@ -81,6 +85,24 @@ export default function App() {
     }
     return flat;
   }, [songs, ltSongId]);
+
+  // ── Next item after what's currently live ──────────────────────────────────
+  const nextLiveItem = useMemo((): DisplayItem | null => {
+    if (!liveItem) return null;
+    if (liveItem.type === "Verse" && nextVerse) return { type: "Verse", data: nextVerse };
+    if (liveItem.type === "PresentationSlide") {
+      const next = liveItem.data.slide_index + 1;
+      if (next < (liveItem.data.slide_count || 0))
+        return { type: "PresentationSlide", data: { ...liveItem.data, slide_index: next } };
+    }
+    if (liveItem.type === "CustomSlide") {
+      const slides = studioSlides[liveItem.data.presentation_id];
+      const next = liveItem.data.slide_index + 1;
+      if (slides && next < slides.length)
+        return buildCustomSlideItem({ id: liveItem.data.presentation_id, name: liveItem.data.presentation_name, slide_count: slides.length }, slides, next);
+    }
+    return null;
+  }, [liveItem, nextVerse, studioSlides]);
 
   // ── Operators Handlers ─────────────────────────────────────────────────────
 
@@ -168,7 +190,7 @@ export default function App() {
       switch (e.key) {
         case "Escape": invoke("clear_live"); break;
         case "Enter": if (stagedItem) goLive(); break;
-        case "o": if (e.ctrlKey) invoke("toggle_output_window"); break;
+        case "o": if (e.ctrlKey) { invoke("toggle_output_window"); setOutputVisible(v => !v); } break;
         case "b": if (e.ctrlKey) { e.preventDefault(); const nb = !settings.is_blanked; setSettings({ ...settings, is_blanked: nb }); setIsBlackout(nb); invoke("save_settings", { settings: { ...settings, is_blanked: nb } }); } break;
         case "t": if (e.ctrlKey) { e.preventDefault(); setBottomDeckOpen(!bottomDeckOpen); } break;
         case "F1": setActiveTab("bible"); break;
@@ -274,7 +296,7 @@ export default function App() {
             <div className="w-8 h-8 bg-amber-500 rounded-lg flex items-center justify-center text-black font-black text-xl shadow-lg shadow-amber-500/20">BP</div>
             <span className="font-black text-xs uppercase tracking-widest text-slate-400">Presenter <span className="text-amber-500/60">RS</span></span>
           </div>
-          <nav className="flex gap-1">
+          <nav className="flex gap-1 overflow-x-auto">
             {([
               { id: "bible", label: "Bible", icon: BookOpen },
               { id: "media", label: "Media", icon: ImageIcon },
@@ -300,6 +322,11 @@ export default function App() {
               <span className={`text-[8px] font-black uppercase ${sessionState === "running" ? "text-green-500" : "text-slate-600"}`}>{sessionState}</span>
             </div>
           </div>
+          <button
+            onClick={() => { invoke("toggle_output_window"); setOutputVisible(v => !v); }}
+            className={`p-2 rounded-lg transition-all ${outputVisible ? "bg-green-500/20 text-green-400 ring-1 ring-green-500/40" : "text-slate-400 hover:text-green-400 hover:bg-green-500/10"}`}
+            title="Toggle Output Window (Ctrl+O)"
+          ><Monitor size={18} /></button>
           <button onClick={() => invoke("toggle_design_window")} className="p-2 text-slate-400 hover:text-purple-400 hover:bg-purple-500/10 rounded-lg transition-all" title="Design Hub"><Layout size={18} /></button>
           <button onClick={() => setActiveTab("settings")} className={`p-2 rounded-lg transition-all ${activeTab === "settings" ? "bg-slate-800 text-amber-500" : "text-slate-400 hover:text-white hover:bg-slate-800"}`}><Settings size={18} /></button>
         </div>
@@ -395,9 +422,66 @@ export default function App() {
             </section>
           )}
 
-          <section className="flex-1 flex overflow-hidden bg-slate-950 relative">
-            <div className="p-5 flex flex-col overflow-hidden shrink-0 border-r border-slate-900" style={{ width: `${stagePct}%` }}>
-              <PreviewCard item={stagedItem} label="Stage Preview" accent="text-amber-500/60" badge={<span className="text-[9px] bg-amber-500/10 text-amber-500 px-2 py-0.5 rounded border border-amber-500/20 font-black">NEXT</span>} empty="Stage is empty" />
+          <section className="flex-1 flex overflow-hidden bg-slate-950 relative min-h-[180px]">
+            <div className="p-5 flex flex-col overflow-hidden shrink-0 border-r border-slate-900 gap-3" style={{ width: `${stagePct}%` }}>
+              {/* Staged item — uses PreviewCard with action buttons injected into badge slot */}
+              <div className="flex flex-col min-h-0" style={{ flex: "1 1 65%" }}>
+                <PreviewCard
+                  item={stagedItem}
+                  label="Stage Preview"
+                  accent="text-amber-500/60"
+                  isLocalPreview={true}
+                  badge={
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => setStagedItem(null)}
+                        className="px-2 py-0.5 text-[9px] font-black uppercase text-slate-600 hover:text-red-400 hover:bg-red-500/10 rounded transition-all"
+                        title="Clear stage"
+                      >✕</button>
+                      <button
+                        onClick={goLive}
+                        disabled={!stagedItem}
+                        className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-black text-[9px] font-black uppercase rounded-lg shadow-lg shadow-amber-500/20 disabled:opacity-30 transition-all"
+                      >GO LIVE</button>
+                      <span className="text-[9px] bg-amber-500/10 text-amber-500 px-2 py-0.5 rounded border border-amber-500/20 font-black">NEXT</span>
+                    </div>
+                  }
+                  empty="Stage is empty"
+                />
+              </div>
+              {/* Up Next — compact info card, no full render */}
+              <div className="flex flex-col shrink-0" style={{ flex: "0 0 30%" }}>
+                <div className="flex items-center justify-between mb-2 shrink-0">
+                  <h2 className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Up Next from Live</h2>
+                  {nextLiveItem && (
+                    <button onClick={() => sendLive(nextLiveItem)} className="px-2 py-0.5 bg-slate-800 hover:bg-amber-500 hover:text-black text-slate-400 text-[9px] font-black uppercase rounded-lg transition-all flex items-center gap-1">SEND <ChevronRight size={11} /></button>
+                  )}
+                </div>
+                <div className="flex-1 bg-black/20 rounded-xl border border-slate-900 flex flex-col items-center justify-center p-4 min-h-0 text-center">
+                  {nextLiveItem ? (
+                    nextLiveItem.type === "Verse" ? (
+                      <div>
+                        <p className="text-slate-400 text-xs leading-snug line-clamp-3 font-serif mb-1">{nextLiveItem.data.text}</p>
+                        <p className="text-amber-500/60 text-[10px] font-bold uppercase tracking-wider">{nextLiveItem.data.book} {nextLiveItem.data.chapter}:{nextLiveItem.data.verse}</p>
+                      </div>
+                    ) : nextLiveItem.type === "PresentationSlide" ? (
+                      <div>
+                        <p className="text-orange-400 text-sm font-black">Slide {nextLiveItem.data.slide_index + 1}</p>
+                        <p className="text-slate-500 text-[10px] truncate max-w-full">{nextLiveItem.data.presentation_name}</p>
+                      </div>
+                    ) : nextLiveItem.type === "CustomSlide" ? (
+                      <div>
+                        <p className="text-purple-400 text-sm font-black">Slide {nextLiveItem.data.slide_index + 1}</p>
+                        <p className="text-slate-500 text-[10px] truncate max-w-full">{nextLiveItem.data.presentation_name}</p>
+                      </div>
+                    ) : (
+                      <p className="text-slate-400 text-xs font-bold">{displayItemLabel(nextLiveItem)}</p>
+                    )
+                  ) : (
+                    <p className="text-slate-800 italic text-xs">Nothing after current live</p>
+                  )}
+                </div>
+              </div>
             </div>
             <div className="w-1 bg-slate-900 hover:bg-amber-500/40 cursor-col-resize transition-colors absolute top-0 bottom-0 z-10" style={{ left: `${stagePct}%` }} onMouseDown={(e) => {
               const startX = e.clientX; const startP = stagePct;
@@ -408,22 +492,24 @@ export default function App() {
               const up = () => { document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); };
               document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
             }} />
-            <div className="flex-1 p-5 flex flex-col overflow-hidden gap-2">
+            <div className="flex-1 p-5 flex flex-col overflow-hidden">
               <PreviewCard item={liveItem} label="Live Output" accent="text-red-500/60" badge={<div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" /><span className="text-[9px] text-red-500 font-black uppercase">On Air</span></div>} empty="Output is empty" />
-              {nextVerse && (
-                <div className="mt-auto bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[8px] text-slate-600 uppercase font-black">Coming up next</p>
-                    <p className="text-xs text-slate-300 truncate font-bold">{nextVerse.book} {nextVerse.chapter}:{nextVerse.verse}</p>
-                  </div>
-                  <button onClick={() => sendLive({ type: "Verse", data: nextVerse })} className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500 text-amber-500 hover:text-black border border-amber-500/30 rounded-lg text-[10px] font-black transition-all flex items-center gap-1">SEND LIVE <ChevronRight size={14} /></button>
-                </div>
-              )}
             </div>
           </section>
 
           {bottomDeckOpen && (
-            <section className="h-[400px] bg-slate-900 border-t border-slate-800 flex flex-col shrink-0 z-40">
+            <section className="bg-slate-900 border-t border-slate-800 flex flex-col shrink-0 z-40 relative" style={{ height: bottomDeckH }}>
+              <div className="h-1 bg-slate-900 hover:bg-amber-500/40 cursor-row-resize transition-colors absolute top-0 left-0 right-0 z-10"
+                onMouseDown={(e) => {
+                  const startY = e.clientY; const startH = bottomDeckH;
+                  const move = (em: MouseEvent) => {
+                    const next = Math.max(180, Math.min(window.innerHeight * 0.55, startH - (em.clientY - startY)));
+                    setBottomDeckH(next); localStorage.setItem("pref_bottomDeckH", String(Math.round(next)));
+                  };
+                  const up = () => { document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); };
+                  document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
+                }}
+              />
               <div className="flex items-center justify-between px-4 py-2 border-b border-slate-800 bg-slate-800/50">
                 <div className="flex rounded-lg overflow-hidden border border-slate-700 bg-black/20 p-0.5">
                   {([
@@ -444,7 +530,18 @@ export default function App() {
         </main>
 
         {/* 5. Schedule / Setlist */}
-        <aside className="w-64 bg-slate-900/20 border-l border-slate-900 flex flex-col overflow-hidden shrink-0">
+        <div className="w-1 bg-slate-900 hover:bg-amber-500/40 cursor-col-resize transition-colors shrink-0"
+          onMouseDown={(e) => {
+            const startX = e.clientX; const startW = scheduleWidth;
+            const move = (em: MouseEvent) => {
+              const next = Math.max(160, Math.min(400, startW - (em.clientX - startX)));
+              setScheduleWidth(next); localStorage.setItem("pref_scheduleWidth", String(Math.round(next)));
+            };
+            const up = () => { document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); };
+            document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
+          }}
+        />
+        <aside className="bg-slate-900/20 border-l border-slate-900 flex flex-col overflow-hidden shrink-0" style={{ width: scheduleWidth }}>
           <div className="p-4 border-b border-slate-900 flex items-center justify-between shrink-0">
             <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-2"><CalendarDays size={14} className="text-amber-500" /> Service Setlist</h2>
             <button onClick={persistSchedule} className="text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded transition-colors">SAVE</button>

@@ -4,7 +4,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "../store";
 import { BackgroundEditor } from "./BackgroundEditor";
 import { MediaPickerModal } from "./MediaPickerModal";
-import { computePreviewBackground } from "../utils";
+import { computePreviewBackground, relativizePath } from "../utils";
 import { THEMES } from "../types";
 import type { PresentationSettings, BackgroundSetting } from "../types";
 
@@ -34,6 +34,7 @@ export function SettingsTab({
     tailscaleUrl,
     showLogoPicker, setShowLogoPicker,
     showGlobalBgPicker, setShowGlobalBgPicker,
+    appDataDir,
   } = useAppStore();
 
   const handlePickLogo = async () => {
@@ -43,7 +44,8 @@ export function SettingsTab({
         filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"] }],
       });
       if (typeof selected !== "string") return;
-      onUpdateSettings({ ...settings, logo_path: selected });
+      const rel = relativizePath(selected, appDataDir);
+      onUpdateSettings({ ...settings, logo_path: rel });
     } catch (err: any) {
       console.error("Failed to set logo:", err);
     }
@@ -56,7 +58,8 @@ export function SettingsTab({
         filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"] }],
       });
       if (typeof selected !== "string") return;
-      onUpdateSettings({ ...settings, background: { type: "Image", value: selected } });
+      const rel = relativizePath(selected, appDataDir);
+      onUpdateSettings({ ...settings, background: { type: "Image", value: rel } });
     } catch (err: any) {
       console.error("Failed to set background image:", err);
     }
@@ -221,7 +224,7 @@ export function SettingsTab({
         {showLogoPicker && (
           <MediaPickerModal
             images={media.filter((m) => m.media_type === "Image")}
-            onSelect={(path) => onUpdateSettings({ ...settings, logo_path: path })}
+            onSelect={(path) => onUpdateSettings({ ...settings, logo_path: relativizePath(path, appDataDir) })}
             onClose={() => setShowLogoPicker(false)}
             onUpload={onUploadMedia}
           />
@@ -299,7 +302,7 @@ export function SettingsTab({
         {showGlobalBgPicker && (
           <MediaPickerModal
             images={media.filter((m) => m.media_type === "Image")}
-            onSelect={(path) => onUpdateSettings({ ...settings, background: { type: "Image", value: path } })}
+            onSelect={(path) => onUpdateSettings({ ...settings, background: { type: "Image", value: relativizePath(path, appDataDir) } })}
             onClose={() => setShowGlobalBgPicker(false)}
             onUpload={onUploadMedia}
           />
