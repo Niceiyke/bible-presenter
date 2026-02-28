@@ -68,8 +68,24 @@ export default function App() {
   // LAN Camera WebRTC Hook
   const {
     cameraSources, enableCameraPreview, disableCameraPreview, 
-    removeCameraSource, previewVideoMapRef, previewObserverMapRef
+    removeCameraSource, previewVideoMapRef, previewObserverMapRef, setLiveCamera
   } = useLanCamera(remotePin);
+
+  React.useEffect(() => {
+    let activeDeviceIdA: string | null = null;
+    let activeDeviceIdB: string | null = null;
+
+    if (liveItem?.type === "CameraFeed" && liveItem.data.lan) {
+      activeDeviceIdA = liveItem.data.device_id;
+    } else if (liveItem?.type === "Scene") {
+      const lanNodes = liveItem.data.nodes.filter((n: any) => n.type === "camera" && n.data.lan);
+      if (lanNodes[0]) activeDeviceIdA = lanNodes[0].data.device_id;
+      if (lanNodes[1]) activeDeviceIdB = lanNodes[1].data.device_id;
+    }
+    
+    setLiveCamera(activeDeviceIdA, 'A');
+    setLiveCamera(activeDeviceIdB, 'B');
+  }, [liveItem, setLiveCamera]);
 
   // ── Compute ltFlatLines for shortcuts ──────────────────────────────────────
 

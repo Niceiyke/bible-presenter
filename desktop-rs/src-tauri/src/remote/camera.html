@@ -167,6 +167,7 @@ const STUN = { iceServers: [], iceCandidatePoolSize: 0 };
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let ws          = null;
+let wakeLock    = null;
 
 // Secure-context fallback for randomUUID
 const generateId = () => {
@@ -179,15 +180,45 @@ const generateId = () => {
 
 let deviceId    = localStorage.getItem('cam_device_id') || generateId();
 let deviceName  = localStorage.getItem('cam_device_name') || '';
-let localStream = null;   // getUserMedia stream (full resolution)
-let previewPc   = null;   // RTCPeerConnection to operator (always open)
-let programPc   = null;   // RTCPeerConnection to output (on demand)
+let localStream = null;   
+let pc          = null;   
 let videoMuted  = false;
-let previewStatus = 'disconnected';
-let programActive = false;
-let previewRetryTimer = null; // retry offer if ICE never connects
+let connectionStatus = 'disconnected';
+let retryTimer  = null;
+let telemetryInterval = null;
 
 localStorage.setItem('cam_device_id', deviceId);
+
+// ── Professional Features ──────────────────────────────────────────────────────
+
+async function requestWakeLock() {
+  try {
+    if ('wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      console.log('Wake Lock active');
+    }
+  } catch (err) {
+    console.warn('Wake Lock failed:', err);
+  }
+}
+
+async function sendTelemetry() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  
+  let batteryLevel = null;
+  try {
+    const battery = await navigator.getBattery();
+    batteryLevel = Math.round(battery.level * 100);
+  } catch (e) {}
+
+  sendMsg({
+    cmd: 'camera_telemetry',
+    device_id: deviceId,
+    target: 'operator',
+    battery: batteryLevel,
+    timestamp: Date.now()
+  });
+}
 
 // ── PIN screen ────────────────────────────────────────────────────────────────
 const pinInputs = [0,1,2,3].map(i => document.getElementById(`p${i}`));
@@ -233,6 +264,8 @@ function connectWs(pin) {
       device_id: deviceId,
       device_name: deviceName || deviceId.slice(0, 8),
     }));
+    requestWakeLock();
+    telemetryInterval = setInterval(sendTelemetry, 10000); // Every 10s
   };
 
   ws.onmessage = async (e) => {
@@ -251,28 +284,28 @@ function connectWs(pin) {
       return;
     }
 
-    // Lifecycle events from server
     if (msg.event === 'connect_program') {
-      await openProgramPc();
+      document.getElementById('prog-badge').classList.add('visible');
+      document.body.style.boxShadow = 'inset 0 0 0 8px #ef4444'; // Visual Tally
+      document.getElementById('stat-program').textContent = 'LIVE';
+      if ('vibrate' in navigator) navigator.vibrate([100, 50, 100]); // Haptic alert
       return;
     }
     if (msg.event === 'disconnect_program') {
-      closeProgramPc();
+      document.getElementById('prog-badge').classList.remove('visible');
+      document.body.style.boxShadow = 'none';
+      document.getElementById('stat-program').textContent = 'Standby';
       return;
     }
 
-    // WebRTC signaling: answer for preview PC
     if (msg.cmd === 'camera_answer' && msg.device_id === deviceId) {
-      const pc = selectPc(msg);
       if (pc && msg.sdp) {
         await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
       }
       return;
     }
 
-    // ICE candidates
     if (msg.cmd === 'camera_ice' && msg.device_id === deviceId && msg.candidate) {
-      const pc = selectPc(msg);
       if (pc) {
         try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
       }
@@ -281,15 +314,15 @@ function connectWs(pin) {
   };
 
   ws.onerror = () => {
-    document.getElementById('pin-err').textContent = 'Connection failed. Check the URL and try again.';
+    document.getElementById('pin-err').textContent = 'Connection failed.';
     document.getElementById('pin-btn').disabled = false;
   };
 
   ws.onclose = () => {
-    if (programActive) { closeProgramPc(); }
-    if (previewRetryTimer) { clearTimeout(previewRetryTimer); previewRetryTimer = null; }
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+    if (telemetryInterval) { clearInterval(telemetryInterval); telemetryInterval = null; }
+    if (wakeLock) { wakeLock.release(); wakeLock = null; }
     setStatus('disconnected');
-    // Reconnect after 3 s
     setTimeout(() => {
       if (ws.readyState === WebSocket.CLOSED) {
         const pin = getPin();
@@ -297,21 +330,6 @@ function connectWs(pin) {
       }
     }, 3000);
   };
-}
-
-// Select the right PC based on which window sent the answer
-function selectPc(msg) {
-  // Answers/ICE from the output window (window:output) go to programPc
-  if (msg._from === 'window:output' && programPc) return programPc;
-  // Answers/ICE from the operator window (window:main) go to previewPc
-  if (msg._from === 'window:main' && previewPc) return previewPc;
-  
-  // Fallback to signalingState heuristic if _from is missing (older backend versions)
-  if (programPc && programPc.signalingState === 'have-local-offer') return programPc;
-  if (previewPc && previewPc.signalingState === 'have-local-offer') return previewPc;
-  
-  // Last resort: default to previewPc
-  return previewPc;
 }
 
 // ── Camera ───────────────────────────────────────────────────────────────────
@@ -323,9 +341,13 @@ async function startCamera() {
 
     const selectedId = localStorage.getItem('cam_selected_device');
     const constraints = {
-      video: selectedId
-        ? { deviceId: { ideal: selectedId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
-        : { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
+      video: {
+        deviceId: selectedId ? { exact: selectedId } : undefined,
+        facingMode: selectedId ? undefined : 'environment',
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 30 }
+      },
       audio: false,
     };
 
@@ -334,19 +356,26 @@ async function startCamera() {
     document.getElementById('no-cam').style.display = 'none';
 
     updateResolutionStat();
-    await openPreviewPc();
+    await openPc();
   } catch (err) {
     console.error('Camera error:', err);
     const noCam = document.getElementById('no-cam');
-    const isLocalhost = /^(localhost|127\.|::1)/.test(location.hostname);
-    const needsHttps = !isLocalhost && location.protocol !== 'https:';
-    let msg = err.message || 'Check browser permissions and reload.';
-    if (needsHttps && (err.name === 'NotAllowedError' || err.name === 'SecurityError' || err.name === 'NotSupportedError')) {
-      msg = 'Camera requires HTTPS on mobile browsers. Use the desktop app\'s Settings → Remote URL (HTTPS address), then reconnect.';
-    }
-    noCam.innerHTML = `Camera error: ${err.name || 'Error'}<br>${msg}`;
     noCam.style.display = 'flex';
     setStatus('disconnected');
+  }
+}
+
+async function toggleTorch() {
+  if (!localStream) return;
+  const track = localStream.getVideoTracks()[0];
+  const caps = track.getCapabilities();
+  if (caps.torch) {
+    const settings = track.getSettings();
+    await track.applyConstraints({
+      advanced: [{ torch: !settings.torch }]
+    });
+  } else {
+    alert('Flash/Torch not supported on this camera.');
   }
 }
 
@@ -367,7 +396,6 @@ async function switchCamera() {
   const deviceId_ = document.getElementById('cam-select').value;
   localStorage.setItem('cam_selected_device', deviceId_);
 
-  // Stop old tracks
   if (localStream) localStream.getTracks().forEach(t => t.stop());
 
   localStream = await navigator.mediaDevices.getUserMedia({
@@ -376,16 +404,12 @@ async function switchCamera() {
   });
   document.getElementById('preview-video').srcObject = localStream;
 
-  // Replace track in preview PC
-  if (previewPc) replaceTrack(previewPc, localStream.getVideoTracks()[0]);
-  if (programPc) replaceTrack(programPc, localStream.getVideoTracks()[0]);
+  if (pc) {
+    const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+    if (sender) sender.replaceTrack(localStream.getVideoTracks()[0]).catch(console.error);
+  }
 
   updateResolutionStat();
-}
-
-function replaceTrack(pc, newTrack) {
-  const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
-  if (sender) sender.replaceTrack(newTrack).catch(console.error);
 }
 
 function toggleMute() {
@@ -405,127 +429,55 @@ function updateResolutionStat() {
     settings.width && settings.height ? `${settings.width}×${settings.height}` : '–';
 }
 
-// ── WebRTC – Preview PC ───────────────────────────────────────────────────────
-async function openPreviewPc() {
-  // Cancel any pending retry
-  if (previewRetryTimer) { clearTimeout(previewRetryTimer); previewRetryTimer = null; }
+// ── WebRTC – Single PC (Hub Architecture) ────────────────────────────────────
+async function openPc() {
+  if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+  if (pc) { pc.close(); }
 
-  if (previewPc) { previewPc.close(); }
+  pc = new RTCPeerConnection(STUN);
 
-  previewPc = new RTCPeerConnection(STUN);
-  previewPc._target = 'operator';
-
-  // Add local video track
   const track = localStream.getVideoTracks()[0];
-  const sender = previewPc.addTrack(track, localStream);
+  const sender = pc.addTrack(track, localStream);
 
-  // Low-quality encoding for preview thumbnail
-  previewPc.onnegotiationneeded = null; // handled manually below
-
-  previewPc.onicecandidate = (e) => {
+  pc.onicecandidate = (e) => {
     if (e.candidate) sendMsg({ cmd: 'camera_ice', device_id: deviceId, target: 'operator', candidate: e.candidate });
   };
 
-  previewPc.oniceconnectionstatechange = () => {
-    const s = previewPc.iceConnectionState;
-    previewStatus = s === 'connected' || s === 'completed' ? 'connected' : s;
+  pc.oniceconnectionstatechange = () => {
+    const s = pc.iceConnectionState;
+    connectionStatus = s === 'connected' || s === 'completed' ? 'connected' : s;
     updateStatus();
     document.getElementById('stat-preview').textContent = s;
     if (s === 'connected' || s === 'completed') {
-      if (previewRetryTimer) { clearTimeout(previewRetryTimer); previewRetryTimer = null; }
+      if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
     }
-    // Only retry on hard failure — not on 'checking'/'disconnected'.
-    // Retrying during 'checking' would interrupt ongoing ICE connectivity checks.
     if (s === 'failed') {
-      if (previewRetryTimer) clearTimeout(previewRetryTimer);
-      previewRetryTimer = setTimeout(() => openPreviewPc().catch(console.error), 3000);
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => openPc().catch(console.error), 3000);
     }
   };
 
-  // Create offer
-  const offer = await previewPc.createOffer({ offerToReceiveVideo: false });
-  await previewPc.setLocalDescription(offer);
+  const offer = await pc.createOffer({ offerToReceiveVideo: false });
+  await pc.setLocalDescription(offer);
 
   sendMsg({ cmd: 'camera_offer', device_id: deviceId, device_name: deviceName || deviceId.slice(0, 8), target: 'operator', sdp: offer.sdp });
 
-  // Apply low-bitrate encoding after offer
-  try {
-    const params = sender.getParameters();
-    if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-    params.encodings[0].maxBitrate = 400_000;
-    params.encodings[0].scaleResolutionDownBy = 4;
-    params.encodings[0].maxFramerate = 12;
-    await sender.setParameters(params);
-  } catch (e) {
-    // setParameters before negotiation complete — ignore, will apply after
-  }
-
-  setStatus('connecting');
-  // Retry is handled by oniceconnectionstatechange on 'failed' only.
-  // Removed the 12-second blind timer — it was interrupting ICE 'checking' state
-  // mid-negotiation, causing an infinite reset loop and preventing connection.
-}
-
-// ── WebRTC – Program PC ───────────────────────────────────────────────────────
-async function openProgramPc() {
-  if (programPc) { programPc.close(); }
-
-  programPc = new RTCPeerConnection(STUN);
-  programPc._target = 'output';
-  programActive = true;
-
-  const track = localStream.getVideoTracks()[0];
-  const sender = programPc.addTrack(track, localStream);
-
-  programPc.onicecandidate = (e) => {
-    if (e.candidate) sendMsg({ cmd: 'camera_ice', device_id: deviceId, target: 'output', candidate: e.candidate });
-  };
-
-  programPc.oniceconnectionstatechange = () => {
-    const s = programPc.iceConnectionState;
-    const live = s === 'connected' || s === 'completed';
-    document.getElementById('prog-badge').classList.toggle('visible', live);
-    document.getElementById('stat-program').textContent = s;
-    updateStatus();
-  };
-
-  const offer = await programPc.createOffer({ offerToReceiveVideo: false });
-  await programPc.setLocalDescription(offer);
-
-  sendMsg({ cmd: 'camera_offer', device_id: deviceId, device_name: deviceName || deviceId.slice(0, 8), target: 'output', sdp: offer.sdp });
-
-  // Full-quality encoding for program
   try {
     const params = sender.getParameters();
     if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
     params.encodings[0].maxBitrate = 4_000_000;
     delete params.encodings[0].scaleResolutionDownBy;
-    delete params.encodings[0].maxFramerate;
     await sender.setParameters(params);
-  } catch {}
-}
+  } catch (e) {}
 
-function closeProgramPc() {
-  if (programPc) { programPc.close(); programPc = null; }
-  programActive = false;
-  document.getElementById('prog-badge').classList.remove('visible');
-  document.getElementById('stat-program').textContent = '–';
-  updateStatus();
+  setStatus('connecting');
 }
-
-// ── WebRTC answer routing ─────────────────────────────────────────────────────
-// The server now routes camera_answer and camera_ice messages to us tagged 
-// with the _from field (e.g. "window:main" or "window:output").
-// The selectPc function uses this to route signaling to the correct PC.
 
 // ── UI helpers ────────────────────────────────────────────────────────────────
 function showCameraScreen() {
   document.getElementById('pin-screen').style.display = 'none';
   document.getElementById('cam-screen').style.display = 'flex';
-
-  // Populate name input from saved value
-  const nameInput = document.getElementById('name-input');
-  nameInput.value = deviceName;
+  document.getElementById('name-input').value = deviceName;
   setStatus('connecting');
 }
 
@@ -534,26 +486,21 @@ function saveName() {
   if (!val) return;
   deviceName = val;
   localStorage.setItem('cam_device_name', val);
-  // Reconnect preview to update device_name in operator
-  if (previewPc) {
-    openPreviewPc().catch(console.error);
-  }
+  if (pc) openPc().catch(console.error);
 }
 
 function setStatus(s) {
   const dot  = document.getElementById('status-dot');
   const text = document.getElementById('status-text');
   dot.className = 'dot ' + s;
-  const map = { connecting: 'Connecting…', connected: 'Preview Live', disconnected: 'Offline', program: 'ON AIR' };
+  const map = { connecting: 'Connecting…', connected: 'Live', disconnected: 'Offline' };
   text.textContent = map[s] || s;
 }
 
 function updateStatus() {
-  if (programActive && (programPc?.iceConnectionState === 'connected' || programPc?.iceConnectionState === 'completed')) {
-    setStatus('program');
-  } else if (previewStatus === 'connected') {
+  if (connectionStatus === 'connected') {
     setStatus('connected');
-  } else if (previewStatus === 'connecting' || previewStatus === 'checking') {
+  } else if (connectionStatus === 'connecting' || connectionStatus === 'checking') {
     setStatus('connecting');
   } else {
     setStatus('disconnected');

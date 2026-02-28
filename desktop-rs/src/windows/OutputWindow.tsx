@@ -46,7 +46,9 @@ export function OutputWindow() {
 
   const bgVideoRef = useRef<HTMLVideoElement>(null);
   const programVideoRef = useRef<HTMLVideoElement>(null);
-  const programPcRef = useRef<RTCPeerConnection | null>(null);
+  const [hubRelayStreamA, setHubRelayStreamA] = useState<MediaStream | null>(null);
+  const [hubRelayStreamB, setHubRelayStreamB] = useState<MediaStream | null>(null);
+  const programPcsRef = useRef<Record<string, RTCPeerConnection | null>>({ A: null, B: null });
   const programDeviceId = useRef<string | null>(null);
   const outputWsRef = useRef<WebSocket | null>(null);
   const sceneCameraHandlersRef = useRef<Map<string, (msg: any) => void>>(new Map());
@@ -69,8 +71,6 @@ export function OutputWindow() {
   }
 
   function closeProgramPc() {
-    if (programPcRef.current) { programPcRef.current.close(); programPcRef.current = null; }
-    if (programVideoRef.current) programVideoRef.current.srcObject = null;
     if (programDeviceId.current) {
       sendOutputWs({ cmd: "camera_disconnect_program", device_id: programDeviceId.current });
     }
@@ -79,27 +79,49 @@ export function OutputWindow() {
 
   async function handleProgramOffer(msg: { device_id: string; sdp: string }) {
     const { device_id, sdp } = msg;
-    // Clear ref before setRemoteDescription so stray ICE candidates don't hit an
-    // uninitialized PC and get silently dropped.
-    programPcRef.current = null;
+    const slot = device_id === "hub_relay_b" ? 'B' : 'A';
+    
+    if (programPcsRef.current[slot]) {
+        programPcsRef.current[slot]!.close();
+    }
 
     const pc = new RTCPeerConnection(OUTPUT_STUN);
+    programPcsRef.current[slot] = pc;
 
     pc.ontrack = (ev: RTCTrackEvent) => {
       const stream = ev.streams[0] ?? new MediaStream([ev.track]);
-      if (programVideoRef.current) programVideoRef.current.srcObject = stream;
+      if (slot === 'A') {
+        if (programVideoRef.current) programVideoRef.current.srcObject = stream;
+        setHubRelayStreamA(stream);
+      } else {
+        setHubRelayStreamB(stream);
+      }
     };
+
+    const target = device_id.startsWith("hub_relay_") ? "window:main" : `mobile:${device_id}`;
 
     pc.onicecandidate = (ev: RTCPeerConnectionIceEvent) => {
       if (ev.candidate) {
-        sendOutputWs({ cmd: "camera_ice", device_id, target: `mobile:${device_id}`, candidate: ev.candidate });
+        sendOutputWs({ cmd: "camera_ice", device_id, target, candidate: ev.candidate });
       }
     };
 
     pc.oniceconnectionstatechange = () => {
       if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
-        if (programVideoRef.current) programVideoRef.current.srcObject = null;
+        if (slot === 'A') {
+          if (programVideoRef.current) programVideoRef.current.srcObject = null;
+          setHubRelayStreamA(null);
+        } else {
+          setHubRelayStreamB(null);
+        }
       }
+    };
+
+    await pc.setRemoteDescription({ type: "offer", sdp });
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    sendOutputWs({ cmd: "camera_answer", device_id, target, sdp: answer.sdp });
+  }
     };
 
     await pc.setRemoteDescription({ type: "offer", sdp });
@@ -107,7 +129,7 @@ export function OutputWindow() {
     programPcRef.current = pc;
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    sendOutputWs({ cmd: "camera_answer", device_id, target: `mobile:${device_id}`, sdp: answer.sdp });
+    sendOutputWs({ cmd: "camera_answer", device_id, target, sdp: answer.sdp });
   }
 
   function connectOutputWs(pin: string) {
@@ -116,6 +138,8 @@ export function OutputWindow() {
 
     ws.onopen = () => {
       ws.send(JSON.stringify({ cmd: "auth", pin, client_type: "window:output" }));
+      // Notify the Hub that a new output window is ready for a Relay offer
+      ws.send(JSON.stringify({ cmd: "output_ready", target: "operator" }));
     };
 
     ws.onmessage = async (e: MessageEvent) => {
@@ -253,7 +277,6 @@ export function OutputWindow() {
       if (programDeviceId.current === newDeviceId) return;
 
       if (programDeviceId.current) {
-        if (programPcRef.current) { programPcRef.current.close(); programPcRef.current = null; }
         sendOutputWs({ cmd: "camera_disconnect_program", device_id: programDeviceId.current });
       }
 
@@ -478,7 +501,9 @@ export function OutputWindow() {
                     lowerThird,
                     outputWsRef: outputWsRef as React.RefObject<WebSocket | null>,
                     sceneCameraHandlers: sceneCameraHandlersRef,
-                  } satisfies SceneLiveContext}
+                    hubRelayStreamA,
+                    hubRelayStreamB,
+                  } as any}
                 />
               </div>
             ) : liveItem.type === "Timer" ? (
