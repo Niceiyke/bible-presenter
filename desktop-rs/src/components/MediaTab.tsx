@@ -116,7 +116,7 @@ export function MediaTab({
             {media.filter((m) => m.media_type === "Image").map((item) => (
               <div key={item.id} className="flex flex-col bg-slate-800/50 rounded-lg overflow-hidden border border-slate-700 hover:border-slate-600 transition-all">
                 <div className="aspect-video overflow-hidden bg-slate-900 shrink-0">
-                  <img src={convertFileSrc(item.path)} className="w-full h-full object-cover" alt={item.name} />
+                  <img src={convertFileSrc(item.thumbnail_path || item.path)} className="w-full h-full object-cover" alt={item.name} />
                 </div>
                 <div className="px-1.5 py-1.5">
                   <p className="text-[8px] text-slate-400 truncate mb-1.5">{item.name}</p>

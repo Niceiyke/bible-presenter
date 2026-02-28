@@ -1,9 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::fs;
+use std::collections::HashMap;
+use parking_lot::Mutex;
 use anyhow::Result;
 use uuid::Uuid;
 use crate::store::Verse;
+use image::GenericImageView;
 
 // ---------------------------------------------------------------------------
 // Media types
@@ -193,6 +196,42 @@ pub enum DisplayItem {
     Scene(serde_json::Value),
     Timer(TimerData),
     Song(SongSlideData),
+}
+
+impl DisplayItem {
+    pub fn to_label(&self) -> String {
+        match self {
+            DisplayItem::Verse(v) => format!("{} {}:{}", v.book, v.chapter, v.verse),
+            DisplayItem::Media(m) => m.name.clone(),
+            DisplayItem::PresentationSlide(p) => {
+                format!("{} – slide {}", p.presentation_name, p.slide_index + 1)
+            }
+            DisplayItem::CustomSlide(c) => {
+                format!("{} – slide {}", c.presentation_name, c.slide_index + 1)
+            }
+            DisplayItem::CameraFeed(cam) => {
+                if !cam.label.is_empty() {
+                    cam.label.clone()
+                } else if !cam.device_name.is_empty() {
+                    cam.device_name.clone()
+                } else {
+                    cam.device_id.clone()
+                }
+            }
+            DisplayItem::Scene(s) => {
+                s.get("name").and_then(|v| v.as_str()).unwrap_or("Scene").to_string()
+            }
+            DisplayItem::Timer(t) => {
+                t.label.as_ref()
+                    .filter(|l| !l.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| format!("Timer: {}", t.timer_type))
+            }
+            DisplayItem::Song(s) => {
+                format!("{} ({})", s.title, s.section_label)
+            }
+        }
+    }
 }
 
 /// A schedule entry with a stable ID so the frontend can use it as a React key.
@@ -458,11 +497,16 @@ pub struct PropItem {
 pub struct MediaScheduleStore {
     app_data_dir: PathBuf,
     media_dir: PathBuf,
+    thumbnails_dir: PathBuf,
     presentations_dir: PathBuf,
     studio_dir: PathBuf,
     songs_dir: PathBuf,
     scenes_dir: PathBuf,
     services_dir: PathBuf,
+    /// Maps media ID -> absolute file path for O(1) lookups.
+    media_cache: Mutex<HashMap<String, PathBuf>>,
+    /// Maps presentation ID -> absolute file path for O(1) lookups.
+    pres_cache: Mutex<HashMap<String, PathBuf>>,
 }
 
 fn classify_extension(ext: &str) -> Option<MediaItemType> {
@@ -509,6 +553,10 @@ impl MediaScheduleStore {
         if !media_dir.exists() {
             fs::create_dir_all(&media_dir)?;
         }
+        let thumbnails_dir = app_data_dir.join("thumbnails");
+        if !thumbnails_dir.exists() {
+            fs::create_dir_all(&thumbnails_dir)?;
+        }
         let presentations_dir = app_data_dir.join("presentations");
         if !presentations_dir.exists() {
             fs::create_dir_all(&presentations_dir)?;
@@ -529,15 +577,56 @@ impl MediaScheduleStore {
         if !services_dir.exists() {
             fs::create_dir_all(&services_dir)?;
         }
-        Ok(Self {
+        let mut store = Self {
             app_data_dir,
             media_dir,
+            thumbnails_dir,
             presentations_dir,
             studio_dir,
             songs_dir,
             scenes_dir,
             services_dir,
-        })
+            media_cache: Mutex::new(HashMap::new()),
+            pres_cache: Mutex::new(HashMap::new()),
+        };
+        let _ = store.refresh_caches();
+        Ok(store)
+    }
+
+    pub fn refresh_caches(&self) -> Result<()> {
+        {
+            let mut cache = self.media_cache.lock();
+            cache.clear();
+            if let Ok(entries) = fs::read_dir(&self.media_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        let name = path.file_name().unwrap_or_default().to_string_lossy();
+                        if !name.starts_with('.') && !name.ends_with(".mediaid") && !name.ends_with(".mediafit") {
+                            let id = self.get_or_create_id(&path);
+                            cache.insert(id, path);
+                        }
+                    }
+                }
+            }
+        }
+        {
+            let mut cache = self.pres_cache.lock();
+            cache.clear();
+            if let Ok(entries) = fs::read_dir(&self.presentations_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        let name = path.file_name().unwrap_or_default().to_string_lossy();
+                        if !name.starts_with('.') && !name.ends_with(".presid") && path.extension().and_then(|e| e.to_str()) == Some("pptx") {
+                            let id = self.get_or_create_pres_id(&path);
+                            cache.insert(id, path);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn get_media_dir(&self) -> PathBuf {
@@ -553,54 +642,59 @@ impl MediaScheduleStore {
     // -----------------------------------------------------------------------
 
     pub fn list_media(&self) -> Result<Vec<MediaItem>> {
+        let _ = self.refresh_caches(); // Refresh so we pick up manual file additions
         let mut items = Vec::new();
-        let entries = fs::read_dir(&self.media_dir)?;
+        let cache = self.media_cache.lock();
 
-        for entry in entries {
-            let entry = entry?;
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-
-            let name = path.file_name().unwrap().to_string_lossy().to_string();
-
-            // Skip hidden and metadata files (e.g. .DS_Store, thumbs.db)
-            if name.starts_with('.') {
-                continue;
-            }
-
-            // Skip sidecar files
-            if name.ends_with(".mediaid") || name.ends_with(".mediafit") {
-                continue;
-            }
-
-            let ext = path
-                .extension()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_lowercase();
-
+        for (id, path) in cache.iter() {
+            let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
             let media_type = match classify_extension(ext.as_str()) {
                 Some(t) => t,
                 None => continue,
             };
 
-            let id = self.get_or_create_id(&path);
-            let fit_mode = self.read_fit_mode(&path);
+            let fit_mode = self.read_fit_mode(path);
+            let thumbnail_path = if matches!(media_type, MediaItemType::Image) {
+                self.get_or_create_thumbnail(path, id)
+            } else {
+                None
+            };
 
             items.push(MediaItem {
-                id,
+                id: id.clone(),
                 name,
                 path: path.to_string_lossy().to_string(),
                 media_type,
-                thumbnail_path: None,
+                thumbnail_path,
                 fit_mode,
             });
         }
 
         items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         Ok(items)
+    }
+
+    fn get_or_create_thumbnail(&self, media_path: &PathBuf, id: &str) -> Option<String> {
+        let thumb_name = format!("{}.jpg", id);
+        let thumb_path = self.thumbnails_dir.join(&thumb_name);
+
+        if thumb_path.exists() {
+            return Some(thumb_path.to_string_lossy().to_string());
+        }
+
+        // Generate thumbnail for images
+        if let Ok(img) = image::open(media_path) {
+            let (w, h) = img.dimensions();
+            let scale = 320.0 / (w.max(h) as f32);
+            let nw = (w as f32 * scale) as u32;
+            let nh = (h as f32 * scale) as u32;
+            let thumb = img.resize(nw, nh, image::imageops::FilterType::Lanczos3);
+            if thumb.save(&thumb_path).is_ok() {
+                return Some(thumb_path.to_string_lossy().to_string());
+            }
+        }
+        None
     }
 
     /// Reads a UUID from a `.mediaid` sidecar file next to `media_path`.
@@ -639,17 +733,17 @@ impl MediaScheduleStore {
     }
 
     pub fn set_media_fit(&self, id: &str, fit_mode: &str) -> Result<()> {
-        for entry in fs::read_dir(&self.media_dir)? {
-            let path = entry?.path();
-            if !path.is_file() { continue; }
-            let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-            if name.ends_with(".mediaid") || name.ends_with(".mediafit") { continue; }
-            if self.get_or_create_id(&path) == id {
-                fs::write(Self::fit_sidecar(&path), fit_mode)?;
-                return Ok(());
-            }
+        let path = {
+            let cache = self.media_cache.lock();
+            cache.get(id).cloned()
+        };
+
+        if let Some(path) = path {
+            fs::write(Self::fit_sidecar(&path), fit_mode)?;
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Media item not found: {}", id))
         }
-        Err(anyhow::anyhow!("Media item not found: {}", id))
     }
 
     pub fn add_media(&self, source_path: PathBuf) -> Result<MediaItem> {
@@ -678,6 +772,10 @@ impl MediaScheduleStore {
         fs::copy(&source_path, &dest_path)?;
 
         let id = self.get_or_create_id(&dest_path);
+        {
+            let mut cache = self.media_cache.lock();
+            cache.insert(id.clone(), dest_path.clone());
+        }
 
         Ok(MediaItem {
             id,
@@ -715,29 +813,29 @@ impl MediaScheduleStore {
     }
 
     pub fn delete_media(&self, id: String) -> Result<()> {
-        let entries = fs::read_dir(&self.media_dir)?;
-        for entry in entries {
-            let entry = entry?;
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            if path.extension().and_then(|e| e.to_str()) == Some("mediaid") {
-                continue;
-            }
-            if self.get_or_create_id(&path) == id {
-                let sidecar = path.with_extension(
-                    format!(
-                        "{}.mediaid",
-                        path.extension().unwrap_or_default().to_string_lossy()
-                    )
-                );
-                fs::remove_file(&path)?;
-                let _ = fs::remove_file(sidecar);
-                return Ok(());
-            }
+        let path = {
+            let mut cache = self.media_cache.lock();
+            cache.remove(&id)
+        };
+
+        if let Some(path) = path {
+            let id_sidecar = path.with_extension(
+                format!(
+                    "{}.mediaid",
+                    path.extension().unwrap_or_default().to_string_lossy()
+                )
+            );
+            let fit_sidecar = Self::fit_sidecar(&path);
+            let thumb_path = self.thumbnails_dir.join(format!("{}.jpg", id));
+
+            fs::remove_file(&path)?;
+            let _ = fs::remove_file(id_sidecar);
+            let _ = fs::remove_file(fit_sidecar);
+            let _ = fs::remove_file(thumb_path);
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Media item not found: {}", id))
         }
-        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -745,38 +843,14 @@ impl MediaScheduleStore {
     // -----------------------------------------------------------------------
 
     pub fn list_presentations(&self) -> Result<Vec<PresentationFile>> {
+        let _ = self.refresh_caches(); // Refresh so we pick up manual file additions
         let mut items = Vec::new();
-        let entries = fs::read_dir(&self.presentations_dir)?;
+        let cache = self.pres_cache.lock();
 
-        for entry in entries {
-            let entry = entry?;
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-
-            let name = path.file_name().unwrap().to_string_lossy().to_string();
-            if name.starts_with('.') {
-                continue;
-            }
-            if name.ends_with(".presid") {
-                continue;
-            }
-
-            let ext = path
-                .extension()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_lowercase();
-
-            if ext != "pptx" {
-                continue;
-            }
-
-            let id = self.get_or_create_pres_id(&path);
-
+        for (id, path) in cache.iter() {
+            let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
             items.push(PresentationFile {
-                id,
+                id: id.clone(),
                 name,
                 path: path.to_string_lossy().to_string(),
                 slide_count: 0, // populated by the frontend after ZIP parsing
@@ -814,6 +888,10 @@ impl MediaScheduleStore {
         fs::copy(&source_path, &dest_path)?;
 
         let id = self.get_or_create_pres_id(&dest_path);
+        {
+            let mut cache = self.pres_cache.lock();
+            cache.insert(id.clone(), dest_path.clone());
+        }
 
         Ok(PresentationFile {
             id,
@@ -824,29 +902,24 @@ impl MediaScheduleStore {
     }
 
     pub fn delete_presentation(&self, id: String) -> Result<()> {
-        let entries = fs::read_dir(&self.presentations_dir)?;
-        for entry in entries {
-            let entry = entry?;
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            if path.extension().and_then(|e| e.to_str()) == Some("presid") {
-                continue;
-            }
-            if self.get_or_create_pres_id(&path) == id {
-                let sidecar = path.with_extension(
-                    format!(
-                        "{}.presid",
-                        path.extension().unwrap_or_default().to_string_lossy()
-                    )
-                );
-                fs::remove_file(&path)?;
-                let _ = fs::remove_file(sidecar);
-                return Ok(());
-            }
+        let path = {
+            let mut cache = self.pres_cache.lock();
+            cache.remove(&id)
+        };
+
+        if let Some(path) = path {
+            let sidecar = path.with_extension(
+                format!(
+                    "{}.presid",
+                    path.extension().unwrap_or_default().to_string_lossy()
+                )
+            );
+            fs::remove_file(&path)?;
+            let _ = fs::remove_file(sidecar);
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Presentation not found: {}", id))
         }
-        Ok(())
     }
 
     fn get_or_create_pres_id(&self, pres_path: &PathBuf) -> String {

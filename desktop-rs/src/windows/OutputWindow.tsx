@@ -167,11 +167,9 @@ export function OutputWindow() {
 
     const unlistenTrans = listen("transcription-update", (event: any) => {
       const { detected_item, source } = event.payload;
-      if (detected_item) {
-        setLiveItem(detected_item);
-        setCameraMuted(false);
-      } else if (source === "manual") {
-        setLiveItem(null);
+      if (source === "manual") {
+        setLiveItem(detected_item ?? null);
+        if (detected_item) setCameraMuted(false);
       }
     });
 

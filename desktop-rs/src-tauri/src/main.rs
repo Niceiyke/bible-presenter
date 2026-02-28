@@ -422,27 +422,7 @@ async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) -> Res
                 let _ = app.emit(
                     "transcription-update",
                     TranscriptionUpdate {
-                        text: match &item {
-                            store::DisplayItem::Verse(v) => {
-                                format!("{} {}:{}", v.book, v.chapter, v.verse)
-                            }
-                            store::DisplayItem::Media(m) => m.name.clone(),
-                            store::DisplayItem::PresentationSlide(p) => {
-                                format!("{} – slide {}", p.presentation_name, p.slide_index + 1)
-                            }
-                            store::DisplayItem::CustomSlide(c) => {
-                                format!("{} – slide {}", c.presentation_name, c.slide_index + 1)
-                            }
-                            store::DisplayItem::CameraFeed(cam) => {
-                                if cam.label.is_empty() { cam.device_id.clone() } else { cam.label.clone() }
-                            }
-                            store::DisplayItem::Scene(s) => {
-                                s.get("name").and_then(|v| v.as_str()).unwrap_or("Scene").to_string()
-                            }
-                            store::DisplayItem::Timer(t) => {
-                                format!("Timer: {}", t.timer_type)
-                            }
-                        },
+                        text: item.to_label(),
                         detected_item: Some(item),
                         confidence: 1.0,
                         source: "manual".to_string(),
@@ -624,25 +604,7 @@ async fn go_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), Strin
         let _ = app.emit(
             "transcription-update",
             TranscriptionUpdate {
-                text: match item {
-                    store::DisplayItem::Verse(ref v) => format!("{} {}:{}", v.book, v.chapter, v.verse),
-                    store::DisplayItem::Media(ref m) => m.name.clone(),
-                    store::DisplayItem::PresentationSlide(ref p) => {
-                        format!("{} – slide {}", p.presentation_name, p.slide_index + 1)
-                    }
-                    store::DisplayItem::CustomSlide(ref c) => {
-                        format!("{} – slide {}", c.presentation_name, c.slide_index + 1)
-                    }
-                    store::DisplayItem::CameraFeed(ref cam) => {
-                        if cam.label.is_empty() { cam.device_id.clone() } else { cam.label.clone() }
-                    }
-                    store::DisplayItem::Scene(ref s) => {
-                        s.get("name").and_then(|v| v.as_str()).unwrap_or("Scene").to_string()
-                    }
-                    store::DisplayItem::Timer(ref t) => {
-                        format!("Timer: {}", t.timer_type)
-                    }
-                },
+                text: item.to_label(),
                 detected_item: Some(item.clone()),
                 confidence: 1.0,
                 source: "manual".to_string(),
@@ -693,7 +655,7 @@ async fn update_timer(
         let _ = app.emit(
             "transcription-update",
             TranscriptionUpdate {
-                text: format!("Timer: {}", match &item { store::DisplayItem::Timer(t) => &t.timer_type, _ => "" }),
+                text: item.to_label(),
                 detected_item: Some(item),
                 confidence: 1.0,
                 source: "manual".to_string(),

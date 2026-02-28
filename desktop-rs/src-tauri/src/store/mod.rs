@@ -70,10 +70,7 @@ impl BibleStore {
         let mut version_offsets: Vec<usize> = Vec::new();
         let mut version_lengths: Vec<usize> = Vec::new();
 
-        for &version in EMBEDDED_VERSIONS {
-            if !available_versions.iter().any(|v| v == version) {
-                continue;
-            }
+        for version in &available_versions {
             let offset = verse_cache.len();
             version_offsets.push(offset);
 
@@ -207,8 +204,8 @@ impl BibleStore {
         }
 
         let patterns = RegexSet::new(&[
-            r"(?i)([1-3]?\s*[a-z]+)\s+(\d+)[:\s]+(\d+)",
-            r"(?i)(1st|2nd|3rd|first|second|third)\s+([a-z]+)\s+(\d+)[:\s]+(\d+)",
+            r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)[:\s]+(\d+)",
+            r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)",
         ])?;
 
         Ok(Self {
@@ -261,7 +258,7 @@ impl BibleStore {
         let matches: Vec<_> = self.patterns.matches(text).into_iter().collect();
         if matches.is_empty() { return None; }
 
-        let re = Regex::new(r"(?i)([1-3]?\s*[a-z]+)\s+(\d+)[:\s]+(\d+)").ok()?;
+        let re = Regex::new(r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)[:\s]+(\d+)").ok()?;
         if let Some(caps) = re.captures(text) {
             let book = self.normalize_book(caps.get(1)?.as_str());
             let chapter: i32 = caps.get(2)?.as_str().parse().ok()?;
@@ -470,14 +467,14 @@ impl BibleStore {
 
     /// Returns the verse_cache slice that belongs to `version`.
     fn version_slice(&self, version: &str) -> &[Verse] {
-        let idx = EMBEDDED_VERSIONS.iter().position(|&v| v == version);
+        let idx = self.available_versions.iter().position(|v| v == version);
         match idx {
             Some(i) if i < self.version_offsets.len() => {
                 let start = self.version_offsets[i];
                 let len = self.version_lengths[i];
                 &self.verse_cache[start..start + len]
             }
-            _ => &[], // version not in embedded set; fall back to empty
+            _ => &[], // version not found; return empty
         }
     }
 

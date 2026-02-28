@@ -547,7 +547,7 @@ export function LayerContentRenderer({
     case "Timer":
       return <TimerRenderer data={item.data} />;
     case "Song":
-      return <SongSlideRenderer data={item.data} scale={0.2} />;
+      return <SongSlideRenderer data={item.data} scale={outputMode ? scale : 0.2} />;
     default:
       return null;
   }
