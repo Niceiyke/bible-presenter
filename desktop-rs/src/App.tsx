@@ -200,7 +200,6 @@ export default function App() {
   const sendLive = useCallback(async (item: DisplayItem) => {
     // We want to send THIS item live, then stage its successor
     await stageItem(item);
-    await new Promise((r) => setTimeout(r, 50));
     await invoke("go_live");
     
     const lbl = displayItemLabel(item);

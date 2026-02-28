@@ -399,7 +399,6 @@ async fn handle_command(state: &Arc<AppState>, v: Value) {
                 match serde_json::from_value::<store::DisplayItem>(item_val.clone()) {
                     Ok(item) => {
                         *state.live_item.lock() = Some(item.clone());
-                        *state.staged_item.lock() = Some(item.clone());
 
                         if let Some(handle) = state.app_handle.get() {
                             use tauri::Emitter;
@@ -491,32 +490,5 @@ fn send_error(state: &Arc<AppState>, message: &str) {
 }
 
 fn display_item_text(item: &store::DisplayItem) -> String {
-    match item {
-        store::DisplayItem::Verse(v) => format!("{} {}:{}", v.book, v.chapter, v.verse),
-        store::DisplayItem::Media(m) => m.name.clone(),
-        store::DisplayItem::PresentationSlide(p) => {
-            format!("{} – slide {}", p.presentation_name, p.slide_index + 1)
-        }
-        store::DisplayItem::CustomSlide(c) => {
-            format!("{} – slide {}", c.presentation_name, c.slide_index + 1)
-        }
-        store::DisplayItem::CameraFeed(cam) => {
-            if !cam.device_name.is_empty() {
-                cam.device_name.clone()
-            } else if !cam.label.is_empty() {
-                cam.label.clone()
-            } else {
-                cam.device_id.clone()
-            }
-        }
-        store::DisplayItem::Scene(s) => {
-            s.get("name").and_then(|v| v.as_str()).unwrap_or("Scene").to_string()
-        }
-        store::DisplayItem::Timer(t) => {
-            t.label.as_ref()
-                .filter(|l| !l.is_empty())
-                .cloned()
-                .unwrap_or_else(|| t.timer_type.clone())
-        }
-    }
+    item.to_label()
 }
