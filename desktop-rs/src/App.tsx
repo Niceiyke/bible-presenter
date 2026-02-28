@@ -21,19 +21,22 @@ import { SongsTab } from "./components/SongsTab";
 import { LowerThirdTab } from "./components/LowerThirdTab";
 import { TimersTab } from "./components/TimersTab";
 import { ScheduleTab } from "./components/ScheduleTab";
+import { StudioTab } from "./components/StudioTab";
+import { SceneComposerTab } from "./components/SceneComposerTab";
 import { SettingsTab } from "./components/SettingsTab";
 import { PropsTab } from "./components/PropsTab";
 import { PreviewCard } from "./components/PreviewCard";
 import { Toast } from "./components/Toast";
+import { SlideEditor } from "./components/editors/SlideEditor";
 import { OutputWindow, StageWindow, DesignHub } from "./windows";
-import { stableId } from "./utils";
+import { stableId, newDefaultSlide } from "./utils";
 import { useLanCamera } from "./hooks/useLanCamera";
 import { useAppInitialization } from "./hooks/useAppInitialization";
 import { useBibleCascade } from "./hooks/useBibleCascade";
 import type {
   DisplayItem,
   PresentationSettings,
-  Schedule, ScheduleEntry, PropItem, MediaItem
+  Schedule, ScheduleEntry, PropItem, MediaItem, CustomPresentation
 } from "./types";
 
 export default function App() {
@@ -47,11 +50,12 @@ export default function App() {
     ltSongId, scheduleEntries, setScheduleEntries, services,
     activeServiceId, media, setMedia, pauseWhisper, transcript, sessionState, micLevel,
     remoteUrl, remotePin, bibleVersion, topPanelPct, setTopPanelPct, stagePct, setStagePct, 
-    setStudioList, studioSlides,
+    studioList, setStudioList, studioSlides, setStudioSlides,
     setIsBlackout, songs, setPropItems, audioError, setAudioError, deviceError
   } = useAppStore();
 
   const [outputVisible, setOutputVisible] = React.useState(false);
+  const [editingPres, setEditingPres] = useState<CustomPresentation | null>(null);
   const [bottomDeckH, setBottomDeckH] = React.useState(() => Number(localStorage.getItem("pref_bottomDeckH") || 280));
   const [scheduleWidth, setScheduleWidth] = React.useState(() => Number(localStorage.getItem("pref_scheduleWidth") || 240));
 
@@ -101,8 +105,37 @@ export default function App() {
       if (slides && next < slides.length)
         return buildCustomSlideItem({ id: liveItem.data.presentation_id, name: liveItem.data.presentation_name, slide_count: slides.length }, slides, next);
     }
+    if (liveItem.type === "Song") {
+      const nextIdx = liveItem.data.slide_index + 1;
+      if (nextIdx < liveItem.data.total_slides) {
+        const song = songs.find(s => s.id === liveItem.data.song_id);
+        if (song) {
+          const flat: { label: string; lines: string[] }[] = [];
+          if (song.arrangement && song.arrangement.length > 0) {
+            for (const label of song.arrangement) {
+              const sec = song.sections.find((s) => s.label === label);
+              if (sec) flat.push(sec);
+            }
+          } else {
+            flat.push(...song.sections);
+          }
+          const next = flat[nextIdx];
+          if (next) {
+            return {
+              type: "Song",
+              data: {
+                ...liveItem.data,
+                section_label: next.label,
+                lines: next.lines,
+                slide_index: nextIdx
+              }
+            };
+          }
+        }
+      }
+    }
     return null;
-  }, [liveItem, nextVerse, studioSlides]);
+  }, [liveItem, nextVerse, studioSlides, songs]);
 
   // ── Operators Handlers ─────────────────────────────────────────────────────
 
@@ -113,15 +146,72 @@ export default function App() {
 
   const goLive = useCallback(async () => {
     await invoke("go_live");
-  }, []);
+    // After going live, if there's a next item, stage it automatically
+    if (nextLiveItem) {
+      stageItem(nextLiveItem);
+    }
+  }, [nextLiveItem, stageItem]);
+
+  const getNextItem = useCallback((item: DisplayItem): DisplayItem | null => {
+    if (item.type === "Verse" && nextVerse) return { type: "Verse", data: nextVerse };
+    if (item.type === "PresentationSlide") {
+      const idx = item.data.slide_index + 1;
+      if (idx < (item.data.slide_count || 0))
+        return { type: "PresentationSlide", data: { ...item.data, slide_index: idx } };
+    }
+    if (item.type === "CustomSlide") {
+      const slides = studioSlides[item.data.presentation_id];
+      const idx = item.data.slide_index + 1;
+      if (slides && idx < slides.length)
+        return buildCustomSlideItem({ id: item.data.presentation_id, name: item.data.presentation_name, slide_count: slides.length }, slides, idx);
+    }
+    if (item.type === "Song") {
+      const idx = item.data.slide_index + 1;
+      if (idx < item.data.total_slides) {
+        const song = songs.find(s => s.id === item.data.song_id);
+        if (song) {
+          const flat: { label: string; lines: string[] }[] = [];
+          if (song.arrangement && song.arrangement.length > 0) {
+            for (const label of song.arrangement) {
+              const sec = song.sections.find((s) => s.label === label);
+              if (sec) flat.push(sec);
+            }
+          } else {
+            flat.push(...song.sections);
+          }
+          const next = flat[idx];
+          if (next) {
+            return {
+              type: "Song",
+              data: {
+                ...item.data,
+                section_label: next.label,
+                lines: next.lines,
+                slide_index: idx
+              }
+            };
+          }
+        }
+      }
+    }
+    return null;
+  }, [nextVerse, studioSlides, songs]);
 
   const sendLive = useCallback(async (item: DisplayItem) => {
+    // We want to send THIS item live, then stage its successor
     await stageItem(item);
     await new Promise((r) => setTimeout(r, 50));
-    await goLive();
+    await invoke("go_live");
+    
     const lbl = displayItemLabel(item);
     setVerseHistory([item, ...verseHistory.filter(h => displayItemLabel(h) !== lbl)].slice(0, 10));
-  }, [stageItem, goLive, verseHistory, setVerseHistory]);
+    
+    // Calculate next item
+    const next = getNextItem(item);
+    if (next) {
+      stageItem(next);
+    }
+  }, [stageItem, verseHistory, setVerseHistory, getNextItem]);
 
   const addToSchedule = useCallback(async (item: DisplayItem) => {
     const entry: ScheduleEntry = { id: stableId(), item };
@@ -211,6 +301,10 @@ export default function App() {
               sendLive(buildCustomSlideItem({ id: liveItem.data.presentation_id, name: liveItem.data.presentation_name, slide_count: slides.length }, slides, ni));
             } 
           }
+          else if (liveItem?.type === "Song") {
+            const next = getNextItem(liveItem);
+            if (next) sendLive(next);
+          }
           break;
         case "ArrowLeft":
           if (liveItem?.type === "PresentationSlide") { 
@@ -223,6 +317,35 @@ export default function App() {
               const ni = liveItem.data.slide_index - 1; 
               sendLive(buildCustomSlideItem({ id: liveItem.data.presentation_id, name: liveItem.data.presentation_name, slide_count: slides.length }, slides, ni));
             } 
+          }
+          else if (liveItem?.type === "Song") {
+            if (liveItem.data.slide_index > 0) {
+              const song = songs.find(s => s.id === liveItem.data.song_id);
+              if (song) {
+                const flat: { label: string; lines: string[] }[] = [];
+                if (song.arrangement && song.arrangement.length > 0) {
+                  for (const label of song.arrangement) {
+                    const sec = song.sections.find((s) => s.label === label);
+                    if (sec) flat.push(sec);
+                  }
+                } else {
+                  flat.push(...song.sections);
+                }
+                const prevIdx = liveItem.data.slide_index - 1;
+                const prev = flat[prevIdx];
+                if (prev) {
+                  sendLive({
+                    type: "Song",
+                    data: {
+                      ...liveItem.data,
+                      section_label: prev.label,
+                      lines: prev.lines,
+                      slide_index: prevIdx
+                    }
+                  });
+                }
+              }
+            }
           }
           break;
         case " ":
@@ -302,6 +425,8 @@ export default function App() {
               { id: "media", label: "Media", icon: ImageIcon },
               { id: "presentations", label: "PPTX", icon: Presentation },
               { id: "songs", label: "Songs", icon: Mic },
+              { id: "studio", label: "Studio", icon: Layers },
+              { id: "scenes", label: "Scenes", icon: Layout },
               { id: "schedule", label: "Service", icon: CalendarDays },
             ] as const).map(({ id, label: lbl, icon: Icon }) => (
               <button key={id} onClick={() => setActiveTab(id)}
@@ -352,13 +477,51 @@ export default function App() {
                 onStage={stageItem} onLive={sendLive} onAddToSchedule={addToSchedule}
                 onLoadMedia={handleFileUpload} onDeleteMedia={handleDeleteMedia}
                 onSetAsLogo={(path) => updateSettings({ ...settings, logo_path: path })}
+                onSetAsBackgroundLogo={(path) => {
+                  updateSettings({ ...settings, background_logo_path: path, show_background_logo: true });
+                  setToast("Background logo set & activated");
+                }}
                 remoteUrl={remoteUrl} remotePin={remotePin}
                 cameraSources={cameraSources} onEnableCameraPreview={enableCameraPreview} onDisableCameraPreview={disableCameraPreview}
                 onRemoveCameraSource={removeCameraSource} previewVideoMapRef={previewVideoMapRef} previewObserverMapRef={previewObserverMapRef}
               />
             )}
             {activeTab === "presentations" && <PresentationsTab onStage={stageItem} onLive={sendLive} onAddToSchedule={addToSchedule} />}
-            {activeTab === "songs" && <SongsTab onOpenLyricsMode={(id) => { setActiveTab("lower-third"); useAppStore.getState().setLtSongId(id); useAppStore.getState().setLtMode("lyrics"); }} />}
+            {activeTab === "studio" && (
+              <StudioTab
+                onStage={stageItem}
+                onLive={sendLive}
+                onOpenEditor={(id) => {
+                  invoke("load_studio_presentation", { id }).then((data: any) => {
+                    const pres = data as CustomPresentation;
+                    setStudioSlides({ ...studioSlides, [id]: pres.slides });
+                    setEditingPres(pres);
+                  });
+                }}
+                onNewPresentation={() => {
+                  const id = stableId();
+                  const newPres: CustomPresentation = { id, name: "New Presentation", slides: [newDefaultSlide()], version: 1 };
+                  invoke("save_studio_presentation", { presentation: newPres }).then(() => {
+                    setStudioList([...studioList, { id, name: newPres.name, slide_count: 1, updated_at: Date.now() }]);
+                    setStudioSlides({ ...studioSlides, [id]: newPres.slides });
+                    setEditingPres(newPres);
+                  });
+                }}
+              />
+            )}
+            {activeTab === "scenes" && (
+              <SceneComposerTab
+                onStage={stageItem}
+                onLive={sendLive}
+                onSetToast={setToast}
+              />
+            )}
+            {activeTab === "songs" && <SongsTab 
+              onStage={stageItem} 
+              onLive={sendLive} 
+              onAddToSchedule={addToSchedule}
+              onOpenLyricsMode={(id) => { setActiveTab("lower-third"); useAppStore.getState().setLtSongId(id); useAppStore.getState().setLtMode("lyrics"); }} 
+            />}
             {activeTab === "schedule" && <ScheduleTab onSendItem={sendLive} onPersist={persistSchedule} />}
             {activeTab === "settings" && <SettingsTab onUpdateSettings={updateSettings} onUpdateTranscriptionWindow={updateTranscriptionWindow} onUpdateVadThreshold={updateVadThreshold} onUploadMedia={handleFileUpload} />}
             {activeTab === "lower-third" && <LowerThirdTab onSetToast={setToast} onLoadMedia={handleFileUpload} />}
@@ -381,6 +544,10 @@ export default function App() {
               <button onClick={() => { const nb = !settings.is_blanked; setSettings({ ...settings, is_blanked: nb }); setIsBlackout(nb); invoke("save_settings", { settings: { ...settings, is_blanked: nb } }); }}
                 className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${settings.is_blanked ? "bg-red-600 text-white" : "bg-slate-800 text-slate-500 hover:text-slate-300"}`}>
                 <EyeOff size={12} className="inline mr-1.5" /> {settings.is_blanked ? "BLACKOUT ON" : "BLACKOUT"}
+              </button>
+              <button onClick={() => { const nl = !settings.show_background_logo; updateSettings({ ...settings, show_background_logo: nl }); }}
+                className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${settings.show_background_logo ? "bg-purple-600 text-white" : "bg-slate-800 text-slate-500 hover:text-slate-300"}`}>
+                <Layers size={12} className="inline mr-1.5" /> {settings.show_background_logo ? "BG LOGO ON" : "BG LOGO"}
               </button>
               <button onClick={() => setIsTranscriptionCollapsed(!isTranscriptionCollapsed)} className="px-3 py-1.5 bg-slate-800 rounded-lg text-[10px] font-black uppercase tracking-widest text-slate-500 hover:text-slate-300">
                 <Mic size={12} className="inline mr-1.5" /> {isTranscriptionCollapsed ? "SHOW AI" : "HIDE AI"}
@@ -587,6 +754,23 @@ export default function App() {
       <AnimatePresence>
         {toast && <Toast key={toast} message={toast} onDone={() => setToast(null)} />}
       </AnimatePresence>
+
+      {editingPres && (
+        <SlideEditor
+          initialPres={editingPres}
+          mediaImages={media.filter(m => m.media_type === "Image")}
+          onClose={(saved) => {
+            if (saved) {
+              invoke("list_studio_presentations").then((list: any) => setStudioList(list));
+              // Refresh slides if the edited one is currently being presented in the studio tab
+              invoke("load_studio_presentation", { id: editingPres.id }).then((data: any) => {
+                setStudioSlides({ ...studioSlides, [editingPres.id]: data.slides });
+              });
+            }
+            setEditingPres(null);
+          }}
+        />
+      )}
     </div>
   );
 }

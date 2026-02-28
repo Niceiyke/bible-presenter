@@ -35,6 +35,9 @@ export function displayItemLabel(item: DisplayItem): string {
   if (item.type === "Timer") {
     return `Timer: ${item.data.timer_type}`;
   }
+  if (item.type === "Song") {
+    return `Song: ${item.data.title} (${item.data.section_label})`;
+  }
   return (item as any).data?.name || "Item";
 }
 
@@ -46,6 +49,7 @@ export function describeDisplayItem(item: DisplayItem): string {
   if (item.type === "CameraFeed") return item.data.device_name ?? item.data.label;
   if (item.type === "Scene") return `Scene: ${item.data.name}`;
   if (item.type === "Timer") return `Timer: ${item.data.timer_type}`;
+  if (item.type === "Song") return `${item.data.title} (${item.data.section_label})`;
   return "Unknown";
 }
 
@@ -102,14 +106,14 @@ export function newDefaultSlide(): CustomSlide {
         kind: "text",
         x: 10, y: 10, w: 80, h: 20, z_index: 1,
         content: "Header Text",
-        font_size: 48, font_family: "Arial", color: "#ffffff", align: "center", bold: true, italic: false
+        font_size: 48, font_family: "Arial", color: "#ffffff", align: "center", v_align: "middle", bold: true, italic: false
       },
       {
         id: stableId(),
         kind: "text",
         x: 10, y: 35, w: 80, h: 50, z_index: 2,
         content: "Body Content Goes Here",
-        font_size: 32, font_family: "Arial", color: "#ffffff", align: "center", bold: false, italic: false
+        font_size: 32, font_family: "Arial", color: "#ffffff", align: "center", v_align: "middle", bold: false, italic: false
       }
     ]
   };
@@ -125,7 +129,7 @@ export function newTitleSlide(): CustomSlide {
         kind: "text",
         x: 10, y: 35, w: 80, h: 30, z_index: 1,
         content: "Presentation Title",
-        font_size: 72, font_family: "Georgia", color: "#ffffff", align: "center", bold: true, italic: false
+        font_size: 72, font_family: "Georgia", color: "#ffffff", align: "center", v_align: "middle", bold: true, italic: false
       }
     ]
   };

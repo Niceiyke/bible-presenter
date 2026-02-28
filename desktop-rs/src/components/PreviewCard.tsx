@@ -8,6 +8,7 @@ import {
   CustomSlideRenderer,
   CameraFeedRenderer,
   SceneRenderer,
+  SongSlideRenderer,
 } from "./shared/Renderers";
 import { useAppStore } from "../store";
 import type { DisplayItem, MediaItem } from "../types";
@@ -216,6 +217,10 @@ export function PreviewCard({
                     {String(item.data.duration_secs % 60).padStart(2, "0")}
                   </p>
                 )}
+              </div>
+            ) : item.type === "Song" ? (
+              <div className="w-full" style={{ aspectRatio: "16/9" }}>
+                <SongSlideRenderer data={item.data} scale={0.25} fontSize={48} />
               </div>
             ) : (
               /* Media (image or video) */

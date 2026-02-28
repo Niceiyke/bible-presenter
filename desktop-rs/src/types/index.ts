@@ -59,6 +59,7 @@ export interface SlideElement {
   font_family?: string;
   color?: string;
   align?: "left" | "center" | "right";
+  v_align?: "top" | "middle" | "bottom";
   bold?: boolean;
   italic?: boolean;
   opacity?: number;
@@ -222,7 +223,8 @@ export type DisplayItem =
   | { type: "CustomSlide"; data: CustomSlideDisplayData }
   | { type: "CameraFeed"; data: CameraFeedData }
   | { type: "Scene"; data: SceneData }
-  | { type: "Timer"; data: TimerData };
+  | { type: "Timer"; data: TimerData }
+  | { type: "Song"; data: SongSlideData };
 
 export interface ScheduleEntry {
   id: string;
@@ -247,12 +249,25 @@ export interface LyricSection {
   lines: string[];
 }
 
+export type SongStyle = "FullSlide" | "LowerThird";
+
 export interface Song {
   id: string;
   title: string;
   author?: string;
   sections: LyricSection[];
   arrangement?: string[];
+  style?: SongStyle;
+}
+
+export interface SongSlideData {
+  song_id: string;
+  title: string;
+  author?: string;
+  section_label: string;
+  lines: string[];
+  slide_index: number;
+  total_slides: number;
 }
 
 export interface PropItem {
@@ -284,6 +299,8 @@ export interface PresentationSettings {
   presentation_background?: BackgroundSetting;
   media_background?: BackgroundSetting;
   logo_path?: string;
+  background_logo_path?: string;
+  show_background_logo?: boolean;
   is_blanked: boolean;
   font_size: number;
   slide_transition?: string;
@@ -341,6 +358,7 @@ export const DEFAULT_SETTINGS: PresentationSettings = {
   theme: "dark",
   reference_position: "bottom",
   background: { type: "None" },
+  show_background_logo: false,
   is_blanked: false,
   font_size: 72,
   slide_transition: "fade",

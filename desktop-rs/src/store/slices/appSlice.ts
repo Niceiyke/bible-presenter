@@ -7,8 +7,8 @@ export interface AppSlice {
   setLabel: (v: string) => void;
   settings: PresentationSettings;
   setSettings: (v: PresentationSettings | ((prev: PresentationSettings) => PresentationSettings)) => void;
-  activeTab: "bible" | "media" | "presentations" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props";
-  setActiveTab: (v: "bible" | "media" | "presentations" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props") => void;
+  activeTab: "bible" | "media" | "presentations" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "scenes";
+  setActiveTab: (v: "bible" | "media" | "presentations" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "scenes") => void;
   toast: string | null;
   setToast: (v: string | null) => void;
   sidebarWidth: number;

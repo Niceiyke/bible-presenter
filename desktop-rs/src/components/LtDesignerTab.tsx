@@ -63,8 +63,14 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
   }, [songs, ltSongId]);
 
   const saveTemplates = async (ts: LowerThirdTemplate[]) => {
-    await invoke("save_lt_templates", { templates: ts });
-    onSetToast("Templates saved");
+    try {
+      await invoke("save_lt_templates", { templates: ts });
+      setLtSavedTemplates(ts);
+      onSetToast("Templates saved");
+    } catch (err) {
+      console.error("Save failed:", err);
+      onSetToast("Save failed");
+    }
   };
 
   const updateTpl = (patch: Partial<LowerThirdTemplate>) => {
@@ -120,7 +126,14 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
             <select className="flex-1 bg-slate-950 text-slate-200 text-[11px] rounded p-2 border border-slate-800 focus:border-amber-500/50 outline-none" value={ltTemplate.id} onChange={(e) => { const t = ltSavedTemplates.find(t => t.id === e.target.value); if (t) { setLtTemplate(t); localStorage.setItem("activeLtTemplateId", t.id); } }}>
               {ltSavedTemplates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
-            <button onClick={() => { const n: LowerThirdTemplate = { ...ltTemplate, id: stableId(), name: "New Template" }; setLtTemplate(n); setLtSavedTemplates([...ltSavedTemplates, n]); }} className="p-2 bg-slate-800 hover:bg-slate-700 rounded text-white transition-colors" title="Duplicate"><Plus size={14} /></button>
+            <button onClick={async () => { 
+              const n: LowerThirdTemplate = { ...ltTemplate, id: stableId(), name: `${ltTemplate.name} (Copy)` }; 
+              const newList = [...ltSavedTemplates, n];
+              setLtSavedTemplates(newList);
+              setLtTemplate(n); 
+              await invoke("save_lt_templates", { templates: newList });
+              onSetToast("New template created");
+            }} className="p-2 bg-slate-800 hover:bg-slate-700 rounded text-white transition-colors" title="Duplicate"><Plus size={14} /></button>
             <button onClick={() => saveTemplates(ltSavedTemplates.map(t => t.id === ltTemplate.id ? ltTemplate : t))} className="px-4 bg-amber-600 hover:bg-amber-500 rounded text-white text-[10px] font-bold transition-colors">SAVE</button>
           </div>
           <div className="flex gap-1.5">

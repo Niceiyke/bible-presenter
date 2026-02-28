@@ -58,6 +58,26 @@ export function SlideEditor({ initialPres, mediaImages, onClose }: SlideEditorPr
   const [showBgImagePicker, setShowBgImagePicker] = useState(false);
   const [showElementImagePicker, setShowElementImagePicker] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const [canvasScale, setCanvasScale] = useState(1);
+
+  // Calculate scale based on canvas height vs 1080p reference
+  useEffect(() => {
+    const updateScale = () => {
+      if (canvasRef.current) {
+        const height = canvasRef.current.clientHeight;
+        setCanvasScale(height / 1080);
+      }
+    };
+
+    updateScale();
+    window.addEventListener("resize", updateScale);
+    // Also update after a short delay to account for sidebar animations or layout shifts
+    const timer = setTimeout(updateScale, 100);
+    return () => {
+      window.removeEventListener("resize", updateScale);
+      clearTimeout(timer);
+    };
+  }, [pres.slides.length]); // Re-run when slides change as it might affect layout
 
   const slide = pres.slides[activeSlideIdx] || pres.slides[0];
 
@@ -206,7 +226,7 @@ export function SlideEditor({ initialPres, mediaImages, onClose }: SlideEditorPr
     const newEl: SlideElement = {
       id: stableId(), kind: "text",
       x: 10, y: 10, w: 80, h: 20, z_index: slide.elements.length + 1,
-      content: "New Text", font_size: 32, font_family: "Arial", color: "#ffffff", align: "center", bold: false, italic: false
+      content: "New Text", font_size: 32, font_family: "Arial", color: "#ffffff", align: "center", v_align: "middle", bold: false, italic: false
     };
     setPres(prev => {
       const currentSlide = prev.slides[activeSlideIdx];
@@ -488,7 +508,7 @@ export function SlideEditor({ initialPres, mediaImages, onClose }: SlideEditorPr
                 const newEl: SlideElement = {
                   id: stableId(), kind: "text",
                   x: 10, y: 10, w: 80, h: 80, z_index: slide.elements.length + 1,
-                  content: `${verse.text}\n— ${verse.book} ${verse.chapter}:${verse.verse}`, font_size: 40, font_family: "Georgia", color: "#ffffff", align: "center", bold: false, italic: true
+                  content: `${verse.text}\n— ${verse.book} ${verse.chapter}:${verse.verse}`, font_size: 40, font_family: "Georgia", color: "#ffffff", align: "center", v_align: "middle", bold: false, italic: true
                 };
                 setPres(prev => {
                   const currentSlide = prev.slides[activeSlideIdx];
@@ -517,7 +537,7 @@ export function SlideEditor({ initialPres, mediaImages, onClose }: SlideEditorPr
               className="w-full max-w-5xl shadow-2xl ring-1 ring-slate-700 relative select-none" 
               style={{ aspectRatio: "16/9", backgroundColor: slide.backgroundColor }}
             >
-              <CustomSlideRenderer slide={slide} appDataDir={appDataDir} />
+              <CustomSlideRenderer slide={slide} scale={canvasScale} appDataDir={appDataDir} />
               
               {/* Interactive Overlay */}
               <div className="absolute inset-0 z-50 pointer-events-none">
@@ -690,14 +710,28 @@ export function SlideEditor({ initialPres, mediaImages, onClose }: SlideEditorPr
                       </div>
 
                       <div className="flex gap-2">
-                        <div className="flex bg-slate-950 border border-slate-700 rounded overflow-hidden">
-                          {(["left", "center", "right"] as const).map((a) => (
-                            <button key={a} onClick={() => updateElement(activeElement.id, { align: a })} className={`px-2 py-1 text-[10px] font-bold ${activeElement.align === a ? "bg-amber-500 text-black" : "text-slate-400 hover:text-white"}`}>{a.charAt(0).toUpperCase()}</button>
-                          ))}
+                        <div className="flex flex-col gap-1.5 flex-1">
+                          <span className="text-[8px] text-slate-500 uppercase font-black">H-Align</span>
+                          <div className="flex bg-slate-950 border border-slate-700 rounded overflow-hidden">
+                            {(["left", "center", "right"] as const).map((a) => (
+                              <button key={a} onClick={() => updateElement(activeElement.id, { align: a })} className={`flex-1 px-2 py-1 text-[10px] font-bold ${activeElement.align === a ? "bg-amber-500 text-black" : "text-slate-400 hover:text-white"}`}>{a.charAt(0).toUpperCase()}</button>
+                            ))}
+                          </div>
                         </div>
-                        <div className="flex bg-slate-950 border border-slate-700 rounded overflow-hidden">
-                          <button onClick={() => updateElement(activeElement.id, { bold: !activeElement.bold })} className={`px-2 py-1 text-[10px] font-bold ${activeElement.bold ? "bg-amber-500 text-black" : "text-slate-400"}`}>B</button>
-                          <button onClick={() => updateElement(activeElement.id, { italic: !activeElement.italic })} className={`px-2 py-1 text-[10px] font-serif italic ${activeElement.italic ? "bg-amber-500 text-black" : "text-slate-400"}`}>I</button>
+                        <div className="flex flex-col gap-1.5 flex-1">
+                          <span className="text-[8px] text-slate-500 uppercase font-black">V-Align</span>
+                          <div className="flex bg-slate-950 border border-slate-700 rounded overflow-hidden">
+                            {(["top", "middle", "bottom"] as const).map((a) => (
+                              <button key={a} onClick={() => updateElement(activeElement.id, { v_align: a })} className={`flex-1 px-2 py-1 text-[10px] font-bold ${(activeElement.v_align === a || (!activeElement.v_align && a === 'top')) ? "bg-amber-500 text-black" : "text-slate-400 hover:text-white"}`}>{a.charAt(0).toUpperCase()}</button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                          <span className="text-[8px] text-slate-500 uppercase font-black">Style</span>
+                          <div className="flex bg-slate-950 border border-slate-700 rounded overflow-hidden">
+                            <button onClick={() => updateElement(activeElement.id, { bold: !activeElement.bold })} className={`px-2 py-1 text-[10px] font-bold ${activeElement.bold ? "bg-amber-500 text-black" : "text-slate-400"}`}>B</button>
+                            <button onClick={() => updateElement(activeElement.id, { italic: !activeElement.italic })} className={`px-2 py-1 text-[10px] font-serif italic ${activeElement.italic ? "bg-amber-500 text-black" : "text-slate-400"}`}>I</button>
+                          </div>
                         </div>
                       </div>
 

@@ -3,8 +3,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { DisplayItem } from "../types";
 import { displayItemLabel } from "../utils";
+import { CustomSlideRenderer } from "../components/shared/Renderers";
+import { useAppStore } from "../store";
 
 export function StageWindow() {
+  const { appDataDir } = useAppStore();
   const [liveItem, setLiveItem] = useState<DisplayItem | null>(null);
   const [stagedItem, setStagedItem] = useState<DisplayItem | null>(null);
   const [clock, setClock] = useState("");
@@ -78,9 +81,15 @@ export function StageWindow() {
             <span className="text-xs font-black uppercase tracking-widest text-red-400">Now Live</span>
           </div>
           <p className="text-xl font-bold text-slate-300 mb-3 shrink-0 truncate">{itemSummary(liveItem)}</p>
-          <p className="text-4xl font-serif leading-snug text-white flex-1 overflow-hidden line-clamp-[8]">
-            {itemDetail(liveItem)}
-          </p>
+          <div className="text-4xl font-serif leading-snug text-white flex-1 overflow-hidden">
+            {liveItem?.type === "CustomSlide" ? (
+              <div className="w-full h-full relative border border-slate-800 rounded-lg overflow-hidden">
+                <CustomSlideRenderer slide={liveItem.data} scale={0.2} appDataDir={appDataDir} />
+              </div>
+            ) : (
+              <p className="line-clamp-[8]">{itemDetail(liveItem)}</p>
+            )}
+          </div>
         </div>
 
         <div className="flex flex-col p-8 border-2 border-amber-500/40 bg-amber-950/10 overflow-hidden">
@@ -88,9 +97,15 @@ export function StageWindow() {
             <span className="text-xs font-black uppercase tracking-widest text-amber-400">Up Next ▶</span>
           </div>
           <p className="text-xl font-bold text-amber-300 mb-3 shrink-0 truncate">{itemSummary(stagedItem)}</p>
-          <p className="text-4xl font-serif leading-snug text-amber-100 flex-1 overflow-hidden line-clamp-[8]">
-            {itemDetail(stagedItem)}
-          </p>
+          <div className="text-4xl font-serif leading-snug text-amber-100 flex-1 overflow-hidden">
+            {stagedItem?.type === "CustomSlide" ? (
+              <div className="w-full h-full relative border border-slate-800 rounded-lg overflow-hidden">
+                <CustomSlideRenderer slide={stagedItem.data} scale={0.2} appDataDir={appDataDir} />
+              </div>
+            ) : (
+              <p className="line-clamp-[8]">{itemDetail(stagedItem)}</p>
+            )}
+          </div>
         </div>
       </div>
     </div>
