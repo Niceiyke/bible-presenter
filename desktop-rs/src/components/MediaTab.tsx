@@ -1,9 +1,9 @@
 import React from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { Upload } from "lucide-react";
 import { useAppStore } from "../store";
 import { CameraFeedRenderer } from "./shared/Renderers";
-import type { DisplayItem, CameraSource } from "../types";
+import type { DisplayItem, CameraSource, MediaFitMode } from "../types";
 
 interface MediaTabProps {
   onStage: (item: DisplayItem) => void;
@@ -11,6 +11,7 @@ interface MediaTabProps {
   onAddToSchedule: (item: DisplayItem) => void;
   onLoadMedia: () => void;
   onDeleteMedia: (id: string) => void;
+  onSetAsLogo: (path: string) => void;
   remoteUrl: string;
   remotePin: string;
   cameraSources: Map<string, CameraSource>;
@@ -21,12 +22,19 @@ interface MediaTabProps {
   previewObserverMapRef: React.RefObject<Map<string, IntersectionObserver>>;
 }
 
+const FIT_OPTIONS: { mode: MediaFitMode; label: string; title: string }[] = [
+  { mode: "contain", label: "FIT",    title: "Fit — show entire image, letterbox if needed" },
+  { mode: "cover",   label: "CROP",   title: "Crop — fill frame, clip edges to maintain ratio" },
+  { mode: "fill",    label: "STRETCH",title: "Stretch — fill frame, ignore aspect ratio" },
+];
+
 export function MediaTab({
   onStage,
   onLive,
   onAddToSchedule,
   onLoadMedia,
   onDeleteMedia,
+  onSetAsLogo,
   remoteUrl,
   remotePin,
   cameraSources,
@@ -37,12 +45,17 @@ export function MediaTab({
   previewObserverMapRef,
 }: MediaTabProps) {
   const {
-    media,
+    media, setMedia,
     cameras, setCameras,
     enabledLocalCameras, setEnabledLocalCameras,
     mediaFilter, setMediaFilter,
     pauseWhisper, setPauseWhisper,
   } = useAppStore();
+
+  async function handleSetFit(id: string, fitMode: MediaFitMode) {
+    await invoke("set_media_fit", { id, fitMode });
+    setMedia(media.map((m) => m.id === id ? { ...m, fit_mode: fitMode } : m));
+  }
 
   return (
     <div className="flex flex-col gap-3">
@@ -105,11 +118,27 @@ export function MediaTab({
                 </div>
                 <div className="px-1.5 py-1.5">
                   <p className="text-[8px] text-slate-400 truncate mb-1.5">{item.name}</p>
-                  <div className="grid grid-cols-4 gap-0.5">
-                    <button onClick={() => onStage({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-white text-[8px] font-bold py-1 rounded transition-all" title="Stage">STG</button>
-                    <button onClick={() => onLive({ type: "Media", data: item })} className="bg-amber-500 hover:bg-amber-400 text-black text-[8px] font-bold py-1 rounded transition-all" title="Display Live">LIVE</button>
-                    <button onClick={() => onAddToSchedule({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-amber-400 text-[8px] font-bold py-1 rounded transition-all" title="Add to Queue">+Q</button>
-                    <button onClick={() => onDeleteMedia(item.id)} className="bg-red-900/50 hover:bg-red-800 text-red-300 text-[8px] font-bold py-1 rounded transition-all" title="Delete">DEL</button>
+                  {/* Fit mode selector */}
+                  <div className="flex gap-0.5 mb-1.5">
+                    {FIT_OPTIONS.map(({ mode, label, title }) => (
+                      <button
+                        key={mode}
+                        onClick={() => handleSetFit(item.id, mode)}
+                        title={title}
+                        className={`flex-1 text-[7px] font-bold py-0.5 rounded transition-all ${
+                          (item.fit_mode ?? "contain") === mode
+                            ? "bg-blue-600 text-white"
+                            : "bg-slate-700 text-slate-400 hover:text-slate-200"
+                        }`}
+                      >{label}</button>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-5 gap-0.5">
+                    <button onClick={() => onStage({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-white text-[7px] font-bold py-1 rounded transition-all" title="Stage">STG</button>
+                    <button onClick={() => onLive({ type: "Media", data: item })} className="bg-amber-500 hover:bg-amber-400 text-black text-[7px] font-bold py-1 rounded transition-all" title="Display Live">LIVE</button>
+                    <button onClick={() => onAddToSchedule({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-amber-400 text-[7px] font-bold py-1 rounded transition-all" title="Add to Queue">+Q</button>
+                    <button onClick={() => onSetAsLogo(item.path)} className="bg-teal-900/50 hover:bg-teal-700 text-teal-300 text-[7px] font-bold py-1 rounded transition-all" title="Set as Background Logo">LOGO</button>
+                    <button onClick={() => onDeleteMedia(item.id)} className="bg-red-900/50 hover:bg-red-800 text-red-300 text-[7px] font-bold py-1 rounded transition-all" title="Delete">DEL</button>
                   </div>
                 </div>
               </div>
@@ -134,11 +163,27 @@ export function MediaTab({
                 </div>
                 <div className="px-1.5 py-1.5">
                   <p className="text-[8px] text-slate-400 truncate mb-1.5">{item.name}</p>
-                  <div className="grid grid-cols-4 gap-0.5">
-                    <button onClick={() => onStage({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-white text-[8px] font-bold py-1 rounded transition-all" title="Stage">STG</button>
-                    <button onClick={() => onLive({ type: "Media", data: item })} className="bg-amber-500 hover:bg-amber-400 text-black text-[8px] font-bold py-1 rounded transition-all" title="Display Live">LIVE</button>
-                    <button onClick={() => onAddToSchedule({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-amber-400 text-[8px] font-bold py-1 rounded transition-all" title="Add to Queue">+Q</button>
-                    <button onClick={() => onDeleteMedia(item.id)} className="bg-red-900/50 hover:bg-red-800 text-red-300 text-[8px] font-bold py-1 rounded transition-all" title="Delete">DEL</button>
+                  {/* Fit mode selector */}
+                  <div className="flex gap-0.5 mb-1.5">
+                    {FIT_OPTIONS.map(({ mode, label, title }) => (
+                      <button
+                        key={mode}
+                        onClick={() => handleSetFit(item.id, mode)}
+                        title={title}
+                        className={`flex-1 text-[7px] font-bold py-0.5 rounded transition-all ${
+                          (item.fit_mode ?? "contain") === mode
+                            ? "bg-blue-600 text-white"
+                            : "bg-slate-700 text-slate-400 hover:text-slate-200"
+                        }`}
+                      >{label}</button>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-5 gap-0.5">
+                    <button onClick={() => onStage({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-white text-[7px] font-bold py-1 rounded transition-all" title="Stage">STG</button>
+                    <button onClick={() => onLive({ type: "Media", data: item })} className="bg-amber-500 hover:bg-amber-400 text-black text-[7px] font-bold py-1 rounded transition-all" title="Display Live">LIVE</button>
+                    <button onClick={() => onAddToSchedule({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-amber-400 text-[7px] font-bold py-1 rounded transition-all" title="Add to Queue">+Q</button>
+                    <button onClick={() => onSetAsLogo(item.path)} className="bg-teal-900/50 hover:bg-teal-700 text-teal-300 text-[7px] font-bold py-1 rounded transition-all" title="Set as Background Logo">LOGO</button>
+                    <button onClick={() => onDeleteMedia(item.id)} className="bg-red-900/50 hover:bg-red-800 text-red-300 text-[7px] font-bold py-1 rounded transition-all" title="Delete">DEL</button>
                   </div>
                 </div>
               </div>

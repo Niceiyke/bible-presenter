@@ -773,6 +773,15 @@ async fn delete_media(state: State<'_, AppState>, id: String) -> Result<(), Stri
 }
 
 #[tauri::command]
+async fn set_media_fit(
+    state: State<'_, AppState>,
+    id: String,
+    fit_mode: String,
+) -> Result<(), String> {
+    state.media_schedule.set_media_fit(&id, &fit_mode).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn save_schedule(
     state: State<'_, AppState>,
     schedule: store::Schedule,
@@ -1324,6 +1333,20 @@ fn main() {
 
             app.manage(state);
 
+            // Intercept close on secondary windows — hide instead of destroy so
+            // the toggle commands can show them again later.
+            for label in ["output", "stage", "design"] {
+                if let Some(win) = app.get_webview_window(label) {
+                    let win2 = win.clone();
+                    win.on_window_event(move |event| {
+                        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                            api.prevent_close();
+                            let _ = win2.hide();
+                        }
+                    });
+                }
+            }
+
             log_msg(app, "App state managed. Ready.");
             Ok(())
         })
@@ -1352,6 +1375,7 @@ fn main() {
             list_media,
             add_media,
             delete_media,
+            set_media_fit,
             save_schedule,
             load_schedule,
             stage_item,

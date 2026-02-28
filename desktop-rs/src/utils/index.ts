@@ -1,8 +1,9 @@
-import type { 
-  DisplayItem, 
-  CustomSlide, 
-  BackgroundSetting, 
-  PresentationSettings, 
+import type {
+  DisplayItem,
+  CustomSlide,
+  BackgroundSetting,
+  VideoBackground,
+  PresentationSettings,
   LowerThirdData,
   LowerThirdTemplate,
   ThemeColors,
@@ -212,6 +213,10 @@ export function computeOutputBackground(
       };
     }
   }
+  // Video backgrounds are rendered as a separate <video> element
+  if (settings.background.type === "Video") {
+    return {};
+  }
   return { backgroundColor: colors.background };
 }
 
@@ -244,6 +249,21 @@ export function getCameraBackgroundDeviceId(
     bg = settings.presentation_background;
   const effective = (bg && bg.type !== "None") ? bg : settings.background;
   if (effective?.type === "Camera") return effective.value;
+  return null;
+}
+
+/** Returns the VideoBackground config if the effective background for the current item is a video, otherwise null. */
+export function getVideoBackground(
+  settings: PresentationSettings,
+  item: DisplayItem | null
+): VideoBackground | null {
+  let bg: BackgroundSetting | undefined;
+  if (item?.type === "Verse") bg = settings.bible_background;
+  else if (item?.type === "Media") bg = settings.media_background;
+  else if (item?.type === "PresentationSlide" || item?.type === "CustomSlide")
+    bg = settings.presentation_background;
+  const effective = (bg && bg.type !== "None") ? bg : settings.background;
+  if (effective?.type === "Video" && effective.value.path) return effective.value;
   return null;
 }
 

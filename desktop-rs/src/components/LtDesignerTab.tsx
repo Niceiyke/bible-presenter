@@ -15,6 +15,27 @@ interface LtDesignerTabProps {
   onLoadMedia: () => Promise<void>;
 }
 
+function Section({ title, icon: Icon, children }: { title: string; icon: any; children: React.ReactNode }) {
+  return (
+    <div className="space-y-3 pb-4 border-b border-slate-800/50">
+      <div className="flex items-center gap-2 text-slate-500">
+        <Icon size={12} />
+        <span className="text-[10px] font-black uppercase tracking-widest">{title}</span>
+      </div>
+      <div className="space-y-3 px-1">{children}</div>
+    </div>
+  );
+}
+
+function ControlGroup({ label, children, vertical = false }: { label: string; children: React.ReactNode; vertical?: boolean }) {
+  return (
+    <div className={`flex ${vertical ? 'flex-col gap-1.5' : 'items-center justify-between gap-4'}`}>
+      <span className="text-[9px] text-slate-500 uppercase font-bold shrink-0">{label}</span>
+      <div className={vertical ? 'w-full' : 'flex-1 flex justify-end'}>{children}</div>
+    </div>
+  );
+}
+
 export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
   const {
     ltTemplate, setLtTemplate,
@@ -87,23 +108,6 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
       onSetToast("Invalid template file");
     }
   };
-
-  const Section = ({ title, icon: Icon, children }: { title: string; icon: any; children: React.ReactNode }) => (
-    <div className="space-y-3 pb-4 border-b border-slate-800/50">
-      <div className="flex items-center gap-2 text-slate-500">
-        <Icon size={12} />
-        <span className="text-[10px] font-black uppercase tracking-widest">{title}</span>
-      </div>
-      <div className="space-y-3 px-1">{children}</div>
-    </div>
-  );
-
-  const ControlGroup = ({ label, children, vertical = false }: { label: string; children: React.ReactNode; vertical?: boolean }) => (
-    <div className={`flex ${vertical ? 'flex-col gap-1.5' : 'items-center justify-between gap-4'}`}>
-      <span className="text-[9px] text-slate-500 uppercase font-bold shrink-0">{label}</span>
-      <div className={vertical ? 'w-full' : 'flex-1 flex justify-end'}>{children}</div>
-    </div>
-  );
 
   return (
     <div className="h-full flex overflow-hidden">

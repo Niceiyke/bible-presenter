@@ -8,12 +8,15 @@ export interface Verse {
   version: string;
 }
 
+export type MediaFitMode = "contain" | "cover" | "fill";
+
 export interface MediaItem {
   id: string;
   name: string;
   path: string;
   media_type: MediaItemType;
   thumbnail_path?: string;
+  fit_mode?: MediaFitMode;
 }
 
 export interface PresentationFile {
@@ -156,11 +159,21 @@ export interface LowerThirdTemplate {
   maxLines: number;
 }
 
+export type VideoBackground = {
+  path: string;
+  loopVideo: boolean;
+  muted: boolean;
+  objectFit: "cover" | "contain" | "fill";
+  opacity: number;
+  playbackRate: number;
+};
+
 export type BackgroundSetting =
   | { type: "None"; value?: string }
   | { type: "Color"; value: string }
   | { type: "Image"; value: string }
-  | { type: "Camera"; value: string };
+  | { type: "Camera"; value: string }
+  | { type: "Video"; value: VideoBackground };
 
 export type LayerSource =
   | { type: "live-output" }
@@ -275,6 +288,11 @@ export interface PresentationSettings {
   font_size: number;
   slide_transition?: string;
   slide_transition_duration?: number;
+  verse_font_family?: string;
+  reference_font_size?: number;
+  /** Hex color override for the reference line. Empty / undefined = use theme color. */
+  reference_color?: string;
+  reference_font_family?: string;
 }
 
 export interface ParsedSlide {
@@ -327,6 +345,10 @@ export const DEFAULT_SETTINGS: PresentationSettings = {
   font_size: 72,
   slide_transition: "fade",
   slide_transition_duration: 0.4,
+  verse_font_family: "Georgia, serif",
+  reference_font_size: 36,
+  reference_color: "",
+  reference_font_family: "Arial, sans-serif",
 };
 
 export const THEMES: Record<string, { label: string; colors: ThemeColors }> = {

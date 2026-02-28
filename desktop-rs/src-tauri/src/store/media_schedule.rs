@@ -22,6 +22,13 @@ pub struct MediaItem {
     pub path: String,
     pub media_type: MediaItemType,
     pub thumbnail_path: Option<String>,
+    /// How the media fills the output frame: "contain" | "cover" | "fill"
+    #[serde(default = "default_media_fit_mode")]
+    pub fit_mode: String,
+}
+
+fn default_media_fit_mode() -> String {
+    "contain".to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +194,27 @@ pub struct ScheduleEntry {
 // Presentation settings
 // ---------------------------------------------------------------------------
 
+/// Options for a video file used as a background.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoBackground {
+    pub path: String,
+    #[serde(default = "vbg_default_true")]
+    pub loop_video: bool,
+    #[serde(default = "vbg_default_true")]
+    pub muted: bool,
+    #[serde(default = "vbg_default_cover")]
+    pub object_fit: String,
+    #[serde(default = "vbg_default_one")]
+    pub opacity: f32,
+    #[serde(default = "vbg_default_one")]
+    pub playback_rate: f32,
+}
+
+fn vbg_default_true() -> bool { true }
+fn vbg_default_cover() -> String { "cover".to_string() }
+fn vbg_default_one() -> f32 { 1.0 }
+
 /// How the output-window background is rendered — independently of the theme.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", content = "value")]
@@ -199,6 +227,8 @@ pub enum BackgroundSetting {
     Image(String),
     /// A live camera feed by deviceId string.
     Camera(String),
+    /// A looping video file as background.
+    Video(VideoBackground),
 }
 
 impl Default for BackgroundSetting {
@@ -240,6 +270,18 @@ pub struct PresentationSettings {
     /// Duration of the slide transition in seconds (0.1–2.0).
     #[serde(default = "default_transition_duration")]
     pub slide_transition_duration: f32,
+    /// Font family for the verse text body (e.g. "Georgia, serif").
+    #[serde(default = "default_verse_font_family")]
+    pub verse_font_family: String,
+    /// Font size for the scripture reference line (in pt).
+    #[serde(default = "default_reference_font_size")]
+    pub reference_font_size: f64,
+    /// Hex color override for the scripture reference. Empty string means use theme color.
+    #[serde(default)]
+    pub reference_color: String,
+    /// Font family for the scripture reference line.
+    #[serde(default = "default_reference_font_family")]
+    pub reference_font_family: String,
 }
 
 fn default_font_size() -> f64 {
@@ -252,6 +294,18 @@ fn default_transition() -> String {
 
 fn default_transition_duration() -> f32 {
     0.4
+}
+
+fn default_verse_font_family() -> String {
+    "Georgia, serif".to_string()
+}
+
+fn default_reference_font_size() -> f64 {
+    36.0
+}
+
+fn default_reference_font_family() -> String {
+    "Arial, sans-serif".to_string()
 }
 
 impl Default for PresentationSettings {
@@ -268,6 +322,10 @@ impl Default for PresentationSettings {
             font_size: default_font_size(),
             slide_transition: default_transition(),
             slide_transition_duration: default_transition_duration(),
+            verse_font_family: default_verse_font_family(),
+            reference_font_size: default_reference_font_size(),
+            reference_color: String::new(),
+            reference_font_family: default_reference_font_family(),
         }
     }
 }
@@ -397,14 +455,17 @@ fn classify_extension(ext: &str) -> Option<MediaItemType> {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CustomSlide {
     pub id: String,
+    // Frontend uses camelCase; alias accepts legacy snake_case from old saved files
+    #[serde(rename = "backgroundColor", alias = "background_color")]
     pub background_color: String,
+    #[serde(rename = "backgroundImage", alias = "background_image", default)]
     pub background_image: Option<String>,
     pub elements: Vec<SlideElement>,
-    
+
     // Legacy fields
-    #[serde(default)]
+    #[serde(rename = "headerEnabled", alias = "header_enabled", default)]
     pub header_enabled: Option<bool>,
-    #[serde(default)]
+    #[serde(rename = "headerHeightPct", alias = "header_height_pct", default)]
     pub header_height_pct: Option<f64>,
     #[serde(default)]
     pub header: Option<CustomSlideZone>,
@@ -488,8 +549,8 @@ impl MediaScheduleStore {
                 continue;
             }
 
-            // Skip ID-sidecar files
-            if name.ends_with(".mediaid") {
+            // Skip sidecar files
+            if name.ends_with(".mediaid") || name.ends_with(".mediafit") {
                 continue;
             }
 
@@ -505,6 +566,7 @@ impl MediaScheduleStore {
             };
 
             let id = self.get_or_create_id(&path);
+            let fit_mode = self.read_fit_mode(&path);
 
             items.push(MediaItem {
                 id,
@@ -512,6 +574,7 @@ impl MediaScheduleStore {
                 path: path.to_string_lossy().to_string(),
                 media_type,
                 thumbnail_path: None,
+                fit_mode,
             });
         }
 
@@ -537,6 +600,35 @@ impl MediaScheduleStore {
         let id = Uuid::new_v4().to_string();
         let _ = fs::write(&sidecar, &id);
         id
+    }
+
+    fn fit_sidecar(media_path: &PathBuf) -> PathBuf {
+        media_path.with_extension(format!(
+            "{}.mediafit",
+            media_path.extension().unwrap_or_default().to_string_lossy()
+        ))
+    }
+
+    fn read_fit_mode(& self, media_path: &PathBuf) -> String {
+        fs::read_to_string(Self::fit_sidecar(media_path))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| matches!(s.as_str(), "contain" | "cover" | "fill"))
+            .unwrap_or_else(default_media_fit_mode)
+    }
+
+    pub fn set_media_fit(&self, id: &str, fit_mode: &str) -> Result<()> {
+        for entry in fs::read_dir(&self.media_dir)? {
+            let path = entry?.path();
+            if !path.is_file() { continue; }
+            let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            if name.ends_with(".mediaid") || name.ends_with(".mediafit") { continue; }
+            if self.get_or_create_id(&path) == id {
+                fs::write(Self::fit_sidecar(&path), fit_mode)?;
+                return Ok(());
+            }
+        }
+        Err(anyhow::anyhow!("Media item not found: {}", id))
     }
 
     pub fn add_media(&self, source_path: PathBuf) -> Result<MediaItem> {
@@ -572,6 +664,7 @@ impl MediaScheduleStore {
             path: dest_path.to_string_lossy().to_string(),
             media_type,
             thumbnail_path: None,
+            fit_mode: default_media_fit_mode(),
         })
     }
 
