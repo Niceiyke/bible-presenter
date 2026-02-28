@@ -348,9 +348,11 @@ export default function App() {
           <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
             {activeTab === "bible" && <BibleTab onStage={stageItem} onLive={sendLive} onAddToSchedule={addToSchedule} />}
             {activeTab === "media" && (
-              <MediaTab 
+              <MediaTab
                 onStage={stageItem} onLive={sendLive} onAddToSchedule={addToSchedule}
-                onLoadMedia={handleFileUpload} onDeleteMedia={handleDeleteMedia} remoteUrl={remoteUrl} remotePin={remotePin}
+                onLoadMedia={handleFileUpload} onDeleteMedia={handleDeleteMedia}
+                onSetAsLogo={(path) => updateSettings({ ...settings, logo_path: path })}
+                remoteUrl={remoteUrl} remotePin={remotePin}
                 cameraSources={cameraSources} onEnableCameraPreview={enableCameraPreview} onDisableCameraPreview={disableCameraPreview}
                 onRemoveCameraSource={removeCameraSource} previewVideoMapRef={previewVideoMapRef} previewObserverMapRef={previewObserverMapRef}
               />
@@ -382,6 +384,21 @@ export default function App() {
               </button>
               <button onClick={() => setIsTranscriptionCollapsed(!isTranscriptionCollapsed)} className="px-3 py-1.5 bg-slate-800 rounded-lg text-[10px] font-black uppercase tracking-widest text-slate-500 hover:text-slate-300">
                 <Mic size={12} className="inline mr-1.5" /> {isTranscriptionCollapsed ? "SHOW AI" : "HIDE AI"}
+              </button>
+              <button
+                onClick={() => {
+                  const bg = settings.background;
+                  if (bg.type === "Image" && bg.value) updateSettings({ ...settings, logo_path: bg.value });
+                }}
+                disabled={settings.background.type !== "Image" || !(settings.background as { type: "Image"; value: string }).value}
+                title="Set current background image as corner logo"
+                className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
+                  settings.background.type === "Image" && (settings.background as { type: "Image"; value: string }).value && settings.logo_path === (settings.background as { type: "Image"; value: string }).value
+                    ? "bg-teal-600/30 border border-teal-600/40 text-teal-400"
+                    : "bg-slate-800 text-slate-500 hover:text-teal-400"
+                }`}
+              >
+                <ImageIcon size={12} className="inline mr-1.5" /> BG→LOGO
               </button>
             </div>
             <div className="flex items-center gap-2">

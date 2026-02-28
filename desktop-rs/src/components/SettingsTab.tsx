@@ -5,7 +5,7 @@ import { useAppStore } from "../store";
 import { BackgroundEditor } from "./BackgroundEditor";
 import { MediaPickerModal } from "./MediaPickerModal";
 import { computePreviewBackground, relativizePath } from "../utils";
-import { THEMES } from "../types";
+import { THEMES, FONTS } from "../types";
 import type { PresentationSettings, BackgroundSetting } from "../types";
 
 interface SettingsTabProps {
@@ -94,16 +94,30 @@ export function SettingsTab({
       </div>
 
       <div>
-        <div className="flex justify-between items-center mb-3">
-          <p className="text-xs text-slate-400 font-bold uppercase">Verse Font Size</p>
+        <p className="text-xs text-slate-400 font-bold uppercase mb-3">Scripture Verse</p>
+        <div className="flex justify-between items-center mb-1">
+          <span className="text-[10px] text-slate-500 uppercase font-bold">Font Size</span>
           <span className="text-xs font-mono text-amber-500">{settings.font_size}pt</span>
         </div>
         <input
           type="range" min="24" max="144" step="2"
           value={settings.font_size}
           onChange={(e) => onUpdateSettings({ ...settings, font_size: parseInt(e.target.value) })}
-          className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
+          className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500 mb-3"
         />
+        <div className="flex justify-between items-center mb-1">
+          <span className="text-[10px] text-slate-500 uppercase font-bold">Font Family</span>
+        </div>
+        <select
+          value={settings.verse_font_family ?? "Georgia, serif"}
+          onChange={(e) => onUpdateSettings({ ...settings, verse_font_family: e.target.value })}
+          className="w-full bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-2 cursor-pointer focus:outline-none focus:border-amber-500"
+          style={{ fontFamily: settings.verse_font_family ?? "Georgia, serif" }}
+        >
+          {FONTS.map((f) => (
+            <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>
+          ))}
+        </select>
       </div>
 
       <div>
@@ -233,7 +247,8 @@ export function SettingsTab({
 
       <div>
         <p className="text-xs text-slate-400 font-bold uppercase mb-3">Scripture Reference</p>
-        <div className="flex gap-2">
+        <p className="text-[10px] text-slate-500 uppercase font-bold mb-2">Position</p>
+        <div className="flex gap-2 mb-4">
           {(["top", "bottom"] as const).map((pos) => (
             <button
               key={pos}
@@ -248,6 +263,55 @@ export function SettingsTab({
             </button>
           ))}
         </div>
+        <div className="flex justify-between items-center mb-1">
+          <span className="text-[10px] text-slate-500 uppercase font-bold">Font Size</span>
+          <span className="text-xs font-mono text-amber-500">{settings.reference_font_size ?? 36}pt</span>
+        </div>
+        <input
+          type="range" min="12" max="96" step="2"
+          value={settings.reference_font_size ?? 36}
+          onChange={(e) => onUpdateSettings({ ...settings, reference_font_size: parseInt(e.target.value) })}
+          className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500 mb-4"
+        />
+        <div className="flex justify-between items-center mb-2">
+          <span className="text-[10px] text-slate-500 uppercase font-bold">Color</span>
+          <span className="text-[10px] text-slate-500">(empty = use theme color)</span>
+        </div>
+        <div className="flex items-center gap-3 mb-4">
+          <input
+            type="color"
+            value={settings.reference_color && settings.reference_color !== "" ? settings.reference_color : "#f59e0b"}
+            onChange={(e) => onUpdateSettings({ ...settings, reference_color: e.target.value })}
+            className="w-10 h-8 rounded cursor-pointer bg-transparent border-0"
+          />
+          <span
+            className="text-xs font-mono text-slate-300"
+            style={{ color: settings.reference_color && settings.reference_color !== "" ? settings.reference_color : undefined }}
+          >
+            {settings.reference_color && settings.reference_color !== "" ? settings.reference_color : "theme default"}
+          </span>
+          {settings.reference_color && settings.reference_color !== "" && (
+            <button
+              onClick={() => onUpdateSettings({ ...settings, reference_color: "" })}
+              className="ml-auto text-[10px] text-red-400 hover:text-red-300 font-bold"
+            >
+              Reset
+            </button>
+          )}
+        </div>
+        <div className="flex justify-between items-center mb-1">
+          <span className="text-[10px] text-slate-500 uppercase font-bold">Font Family</span>
+        </div>
+        <select
+          value={settings.reference_font_family ?? "Arial, sans-serif"}
+          onChange={(e) => onUpdateSettings({ ...settings, reference_font_family: e.target.value })}
+          className="w-full bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-2 cursor-pointer focus:outline-none focus:border-amber-500"
+          style={{ fontFamily: settings.reference_font_family ?? "Arial, sans-serif" }}
+        >
+          {FONTS.map((f) => (
+            <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>
+          ))}
+        </select>
       </div>
 
       <div>

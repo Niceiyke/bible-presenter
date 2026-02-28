@@ -3,11 +3,12 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import type { DisplayItem, PropItem, PresentationSettings, LowerThirdData, LowerThirdTemplate } from "../types";
 import { THEMES } from "../types";
-import { 
-  getEffectiveBackground, 
-  getCameraBackgroundDeviceId, 
-  getTransitionVariants, 
-  displayItemLabel 
+import {
+  getEffectiveBackground,
+  getCameraBackgroundDeviceId,
+  getVideoBackground,
+  getTransitionVariants,
+  displayItemLabel
 } from "../utils";
 import {
   SlideRenderer,
@@ -42,6 +43,7 @@ export function OutputWindow() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [cameraMuted, setCameraMuted] = useState(false);
 
+  const bgVideoRef = useRef<HTMLVideoElement>(null);
   const programVideoRef = useRef<HTMLVideoElement>(null);
   const programPcRef = useRef<RTCPeerConnection | null>(null);
   const programDeviceId = useRef<string | null>(null);
@@ -152,9 +154,12 @@ export function OutputWindow() {
       .catch(() => {});
 
     const unlistenTrans = listen("transcription-update", (event: any) => {
-      if (event.payload.detected_item) {
-        setLiveItem(event.payload.detected_item);
+      const { detected_item, source } = event.payload;
+      if (detected_item) {
+        setLiveItem(detected_item);
         setCameraMuted(false);
+      } else if (source === "manual") {
+        setLiveItem(null);
       }
     });
 
@@ -249,6 +254,23 @@ export function OutputWindow() {
     }
   }, [liveItem]);
 
+  const videoBg = getVideoBackground(settings, liveItem);
+
+  // Sync playback rate when it changes without unmounting the video element
+  useEffect(() => {
+    if (bgVideoRef.current && videoBg) {
+      bgVideoRef.current.playbackRate = videoBg.playbackRate;
+    }
+  }, [videoBg?.playbackRate]);
+
+  // Reload video when source path changes
+  useEffect(() => {
+    if (bgVideoRef.current) {
+      bgVideoRef.current.load();
+      if (videoBg?.path) bgVideoRef.current.play().catch(() => {});
+    }
+  }, [videoBg?.path]);
+
   if (settings.is_blanked) {
     return <div className="h-screen w-screen bg-black" />;
   }
@@ -258,14 +280,22 @@ export function OutputWindow() {
   const bgStyle = getEffectiveBackground(settings, liveItem, colors);
   const cameraBgId = getCameraBackgroundDeviceId(settings, liveItem);
 
+  const refColor = settings.reference_color && settings.reference_color !== ""
+    ? settings.reference_color
+    : colors.referenceText;
+  const refFontSize = settings.reference_font_size ?? 36;
+  const refFontFamily = settings.reference_font_family ?? "Arial, sans-serif";
+
   const ReferenceTag = liveItem?.type === "Verse" ? (
     <p
-      className="text-4xl uppercase tracking-widest font-bold shrink-0"
-      style={{ color: colors.referenceText }}
+      className="uppercase tracking-widest font-bold shrink-0"
+      style={{ color: refColor, fontSize: `${refFontSize}pt`, fontFamily: refFontFamily }}
     >
       {liveItem.data.book} {liveItem.data.chapter}:{liveItem.data.verse}
       {liveItem.data.version && (
-        <span className="text-2xl font-normal opacity-60 ml-2">({liveItem.data.version})</span>
+        <span className="font-normal opacity-60 ml-2" style={{ fontSize: `${Math.round(refFontSize * 0.65)}pt` }}>
+          ({liveItem.data.version})
+        </span>
       )}
     </p>
   ) : null;
@@ -276,11 +306,28 @@ export function OutputWindow() {
     <div
       className="h-screen w-screen overflow-hidden relative"
       style={
-        cameraBgId || isLanCameraLive
+        cameraBgId || isLanCameraLive || videoBg
           ? { color: colors.verseText }
           : { ...bgStyle, color: colors.verseText }
       }
     >
+      {/* Background video element — rendered at z-0, below all content */}
+      <video
+        ref={bgVideoRef}
+        className="absolute inset-0 w-full h-full pointer-events-none"
+        style={{
+          zIndex: 0,
+          objectFit: videoBg?.objectFit ?? "cover",
+          opacity: videoBg?.opacity ?? 1,
+          visibility: videoBg?.path ? "visible" : "hidden",
+        }}
+        src={videoBg?.path ? convertFileSrc(videoBg.path) : undefined}
+        autoPlay
+        loop={videoBg?.loopVideo ?? true}
+        muted={videoBg?.muted ?? true}
+        playsInline
+      />
+
       <video
         ref={programVideoRef}
         className="absolute inset-0 w-full h-full object-cover"
@@ -326,8 +373,12 @@ export function OutputWindow() {
                 >
                   {isTop && ReferenceTag}
                   <h1
-                    className="font-serif leading-tight drop-shadow-2xl"
-                    style={{ color: colors.verseText, fontSize: `${settings.font_size}pt` }}
+                    className="leading-tight drop-shadow-2xl"
+                    style={{
+                      color: colors.verseText,
+                      fontSize: `${settings.font_size}pt`,
+                      fontFamily: settings.verse_font_family ?? "Georgia, serif",
+                    }}
                   >
                     {liveItem.data.text}
                   </h1>
@@ -358,24 +409,32 @@ export function OutputWindow() {
                   <CameraFeedRenderer deviceId={liveItem.data.device_id} />
                 </div>
               )
-            ) : liveItem.type === "Media" ? (
-              <div className="absolute inset-0 flex items-center justify-center">
-                {liveItem.data.media_type === "Image" ? (
-                  <img
-                    src={convertFileSrc(liveItem.data.path)}
-                    className="max-w-full max-h-full object-contain"
-                    alt={liveItem.data.name}
-                  />
-                ) : (
-                  <video
-                    ref={videoRef}
-                    src={convertFileSrc(liveItem.data.path)}
-                    className="max-w-full max-h-full object-contain"
-                    autoPlay
-                    loop
-                  />
-                )}
-              </div>
+            ) : liveItem.type === "Media" ? (() => {
+                const fitClass = liveItem.data.fit_mode === "cover"
+                  ? "object-cover"
+                  : liveItem.data.fit_mode === "fill"
+                  ? "object-fill"
+                  : "object-contain";
+                return (
+                  <div className="absolute inset-0">
+                    {liveItem.data.media_type === "Image" ? (
+                      <img
+                        src={convertFileSrc(liveItem.data.path)}
+                        className={`w-full h-full ${fitClass}`}
+                        alt={liveItem.data.name}
+                      />
+                    ) : (
+                      <video
+                        ref={videoRef}
+                        src={convertFileSrc(liveItem.data.path)}
+                        className={`w-full h-full ${fitClass}`}
+                        autoPlay
+                        loop
+                      />
+                    )}
+                  </div>
+                );
+              })()
             ) : liveItem.type === "Scene" ? (
               <div className="absolute inset-0">
                 <SceneRenderer

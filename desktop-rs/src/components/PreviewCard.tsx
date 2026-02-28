@@ -219,11 +219,11 @@ export function PreviewCard({
               </div>
             ) : (
               /* Media (image or video) */
-              <div className="w-full h-full overflow-hidden flex flex-col items-center justify-center relative">
+              <div className="w-full h-full overflow-hidden relative">
                 {(item.data as MediaItem).media_type === "Image" ? (
                   <img
                     src={convertFileSrc((item.data as MediaItem).path)}
-                    className="w-full h-full object-contain rounded shadow-xl"
+                    className={`w-full h-full rounded shadow-xl ${{cover:"object-cover",fill:"object-fill"}[(item.data as MediaItem).fit_mode ?? ""] ?? "object-contain"}`}
                     alt={(item.data as MediaItem).name}
                   />
                 ) : (
@@ -232,7 +232,7 @@ export function PreviewCard({
                     key={videoPath}
                     ref={setVideoRefCallback}
                     src={videoPath}
-                    className="w-full h-full object-contain rounded"
+                    className={`w-full h-full rounded ${{cover:"object-cover",fill:"object-fill"}[(item.data as MediaItem).fit_mode ?? ""] ?? "object-contain"}`}
                     preload={isLocalPreview ? "auto" : "metadata"}
                   />
                 )}
