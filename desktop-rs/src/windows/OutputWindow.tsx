@@ -122,15 +122,6 @@ export function OutputWindow() {
     await pc.setLocalDescription(answer);
     sendOutputWs({ cmd: "camera_answer", device_id, target, sdp: answer.sdp });
   }
-    };
-
-    await pc.setRemoteDescription({ type: "offer", sdp });
-    // Register only after remote description is set so addIceCandidate won't fail.
-    programPcRef.current = pc;
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    sendOutputWs({ cmd: "camera_answer", device_id, target, sdp: answer.sdp });
-  }
 
   function connectOutputWs(pin: string) {
     const ws = new WebSocket("ws://127.0.0.1:7420/ws");
@@ -156,8 +147,11 @@ export function OutputWindow() {
       if (msg.cmd === "camera_ice" && (msg.target === "output" || msg.target === "window:output")) {
         const sceneHandler = sceneCameraHandlersRef.current.get(msg.device_id);
         if (sceneHandler) { sceneHandler(msg); return; }
-        if (programPcRef.current && msg.candidate) {
-          try { await programPcRef.current.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
+        
+        const slot = msg.device_id === "hub_relay_b" ? 'B' : 'A';
+        const pc = programPcsRef.current[slot];
+        if (pc && msg.candidate) {
+          try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
         }
         return;
       }

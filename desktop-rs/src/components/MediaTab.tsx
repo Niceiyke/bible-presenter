@@ -357,7 +357,8 @@ export function MediaTab({
                       </div>
                     </div>
                   </div>
-                ))}
+                );
+              })}
               </div>
             )}
           </div>
