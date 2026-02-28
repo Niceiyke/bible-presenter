@@ -179,6 +179,14 @@ pub struct SongSlideData {
     pub lines: Vec<String>,
     pub slide_index: u32,
     pub total_slides: u32,
+    #[serde(default)]
+    pub font: Option<String>,
+    #[serde(default)]
+    pub font_size: Option<f64>,
+    #[serde(default)]
+    pub font_weight: Option<String>,
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -338,7 +346,22 @@ pub struct PresentationSettings {
     /// Font family for the scripture reference line.
     #[serde(default = "default_reference_font_family")]
     pub reference_font_family: String,
+    /// List of disabled Bible version names.
+    #[serde(default)]
+    pub disabled_bible_versions: Vec<String>,
+    /// Font for the version tag (e.g. "(KJV)")
+    #[serde(default = "default_version_font")]
+    pub version_font_family: String,
+    /// Size for the version tag
+    #[serde(default = "default_version_size")]
+    pub version_font_size: f64,
+    /// Color for the version tag
+    #[serde(default)]
+    pub version_color: String,
 }
+
+fn default_version_font() -> String { "Arial, sans-serif".to_string() }
+fn default_version_size() -> f64 { 24.0 }
 
 fn default_font_size() -> f64 {
     72.0
@@ -384,6 +407,10 @@ impl Default for PresentationSettings {
             reference_font_size: default_reference_font_size(),
             reference_color: String::new(),
             reference_font_family: default_reference_font_family(),
+            disabled_bible_versions: Vec::new(),
+            version_font_family: default_version_font(),
+            version_font_size: default_version_size(),
+            version_color: String::new(),
         }
     }
 }
@@ -411,6 +438,14 @@ pub struct Song {
     pub arrangement: Vec<String>,
     #[serde(default)]
     pub style: Option<String>,
+    #[serde(default)]
+    pub font: Option<String>,
+    #[serde(default)]
+    pub font_size: Option<f64>,
+    #[serde(default)]
+    pub font_weight: Option<String>,
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

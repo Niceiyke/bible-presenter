@@ -70,7 +70,7 @@ export const createLowerThirdSlice: StateCreator<AppStore, [], [], LowerThirdSli
     animation: "slide-up", animationDuration: 0.5, exitDuration: 0.2,
     variant: "classic", bannerBadgeText: "LIVE",
     scrollEnabled: false, scrollDirection: "rtl", scrollSpeed: 5, scrollSeparator: "  •  ",
-    scrollGap: 50, maxLines: 0,
+    scrollGap: 50, scrollCount: 0, autoHideSeconds: 0, maxLines: 0,
   },
   setLtTemplate: (v) => set((s) => ({ ltTemplate: typeof v === "function" ? v(s.ltTemplate) : v })),
   ltSavedTemplates: [],

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { AnimatePresence } from "framer-motion";
 import { Layers, Plus, X, Monitor } from "lucide-react";
 import { useAppStore } from "../store";
@@ -72,21 +73,12 @@ export function DesignHub() {
     loadAll();
   }, []);
 
-  const handleStage = async (item: DisplayItem) => {
-    await invoke("stage_item", { item });
-    setToast("Item staged from Hub");
-  };
-
-  const handleLive = async (item: DisplayItem) => {
-    await invoke("stage_item", { item });
-    await invoke("go_live");
-    setToast("Item live from Hub");
-  };
-
   const handleNewPresentation = async () => {
     const pres: CustomPresentation = { id: stableId(), name: "Untitled Presentation", slides: [newDefaultSlide()] };
     await invoke("save_studio_presentation", { presentation: pres });
-    const list: any[] = await invoke("list_studio_presentations"); setStudioList(list);
+    const list: any[] = await invoke("list_studio_presentations");
+    setStudioList(list);
+    emit("studio-sync", list);
     setEditorPres(pres);
     setEditorPresId(pres.id);
   };
@@ -118,7 +110,17 @@ export function DesignHub() {
           if (saved) {
             const list: any[] = await invoke("list_studio_presentations");
             setStudioList(list);
-            setStudioSlides((prev) => { const n = { ...prev }; delete n[editorPresId]; return n; });
+            emit("studio-sync", list);
+            
+            // Sync slides too
+            const data: any = await invoke("load_studio_presentation", { id: editorPresId });
+            const slides = data.slides;
+            setStudioSlides((prev) => {
+               const n = { ...prev };
+               n[editorPresId] = slides;
+               return n;
+            });
+            emit("studio-slides-sync", { id: editorPresId, slides });
           }
         }}
       />
@@ -157,11 +159,11 @@ export function DesignHub() {
       <div className="flex-1 overflow-hidden">
         {/* Full-height fill tabs — no padding wrapper */}
         {hubTab === "lt-designer" && <LtDesignerTab onSetToast={setToast} onLoadMedia={async () => {}} />}
-        {hubTab === "scene" && <SceneComposerTab onStage={handleStage} onLive={handleLive} onSetToast={setToast} />}
+        {hubTab === "scene" && <SceneComposerTab onSetToast={setToast} />}
         {/* Scrollable tabs — padded, overflow-y-auto */}
         {(hubTab === "studio" || hubTab === "props" || hubTab === "settings") && (
           <div className="h-full overflow-y-auto p-4 custom-scrollbar">
-            {hubTab === "studio" && <StudioTab onStage={handleStage} onLive={handleLive} onOpenEditor={handleOpenEditor} onNewPresentation={handleNewPresentation} />}
+            {hubTab === "studio" && <StudioTab onOpenEditor={handleOpenEditor} onNewPresentation={handleNewPresentation} />}
             {hubTab === "props" && <PropsTab onUpdateProps={updateProps} />}
             {hubTab === "settings" && (
               <SettingsTab

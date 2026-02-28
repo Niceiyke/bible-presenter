@@ -1,6 +1,8 @@
 import React from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { useAppStore } from "../store";
+import { FONTS } from "../types";
 import type { Song, LyricSection, DisplayItem } from "../types";
 
 interface SongsTabProps {
@@ -40,6 +42,10 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
         lines: item.lines,
         slide_index: flatIndex,
         total_slides: flat.length,
+        font: song.font,
+        font_size: song.font_size,
+        font_weight: song.font_weight,
+        color: song.color,
       },
     };
   };
@@ -64,10 +70,10 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
       {/* Import text area */}
       {showSongImport && (
         <div className="flex flex-col gap-2 bg-slate-900 border border-slate-700 rounded-xl p-3">
-          <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">Paste lyrics — use [Section] headers</p>
+          <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">Paste lyrics — every line becomes a new slide</p>
           <textarea
             className="w-full h-32 bg-slate-950 text-slate-200 text-xs rounded-lg p-2 border border-slate-700 resize-none font-mono"
-            placeholder={"[Verse 1]\nAmazing grace how sweet the sound\nThat saved a wretch like me\n\n[Chorus]\nMy chains are gone"}
+            placeholder={"Line 1\nLine 2\nLine 3..."}
             value={songImportText}
             onChange={(e) => setSongImportText(e.target.value)}
           />
@@ -82,22 +88,14 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
               onClick={async () => {
                 const titleEl = document.getElementById("import-song-title") as HTMLInputElement;
                 const title = titleEl?.value.trim() || "Untitled";
-                const sections: LyricSection[] = [];
-                let current: LyricSection | null = null;
-                for (const raw of songImportText.split("\n")) {
-                  const line = raw.trim();
-                  const m = line.match(/^\[(.+)\]$/);
-                  if (m) {
-                    if (current) sections.push(current);
-                    current = { label: m[1], lines: [] };
-                  } else if (line && current) {
-                    current.lines.push(line);
-                  }
-                }
-                if (current && current.lines.length > 0) sections.push(current);
+                const lines = songImportText.split("\n").map(l => l.trim()).filter(l => l !== "");
+                const sections: LyricSection[] = lines.map(line => ({ label: "", lines: [line] }));
+                
                 if (sections.length === 0) return;
                 const saved = await invoke<Song>("save_song", { song: { id: "", title, author: "", sections, style: "LowerThird" } });
-                setSongs([...songs, saved].sort((a, b) => a.title.localeCompare(b.title)));
+                const next = [...songs, saved].sort((a, b) => a.title.localeCompare(b.title));
+                setSongs(next);
+                emit("songs-sync", next);
                 setSongImportText("");
                 setShowSongImport(false);
               }}
@@ -159,7 +157,9 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
                 <button
                   onClick={async () => {
                     await invoke("delete_song", { id: song.id });
-                    setSongs(songs.filter((s) => s.id !== song.id));
+                    const next = songs.filter((s) => s.id !== song.id);
+                    setSongs(next);
+                    emit("songs-sync", next);
                   }}
                   className="text-[9px] font-black uppercase bg-red-900/50 hover:bg-red-800 text-red-400 px-2 py-1 rounded"
                 >Del</button>
@@ -262,6 +262,78 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
                 className="text-[10px] font-bold uppercase text-slate-500 hover:text-amber-400 border border-slate-700 hover:border-amber-500 rounded-lg py-2"
               >+ Add Section</button>
 
+              <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-3 flex flex-col gap-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Song Styling</p>
+                  {(editingSong.font || editingSong.font_size || editingSong.font_weight || editingSong.color) && (
+                    <button
+                      onClick={() => setEditingSong({ ...editingSong, font: undefined, font_size: undefined, font_weight: undefined, color: undefined })}
+                      className="text-[9px] font-bold uppercase text-slate-500 hover:text-red-400"
+                    >Reset Style</button>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] text-slate-500 uppercase font-bold">Font Family</label>
+                    <select
+                      className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700 focus:outline-none"
+                      value={editingSong.font || ""}
+                      onChange={(e) => setEditingSong({ ...editingSong, font: e.target.value || undefined })}
+                    >
+                      <option value="">Default (Theme)</option>
+                      {FONTS.map(f => <option key={f} value={f}>{f}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] text-slate-500 uppercase font-bold">Font Size (pt)</label>
+                    <input
+                      type="number"
+                      className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700 focus:outline-none"
+                      value={editingSong.font_size || ""}
+                      placeholder="Default"
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value);
+                        setEditingSong({ ...editingSong, font_size: isNaN(val) ? undefined : val });
+                      }}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] text-slate-500 uppercase font-bold">Font Weight</label>
+                    <select
+                      className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700 focus:outline-none"
+                      value={editingSong.font_weight || ""}
+                      onChange={(e) => setEditingSong({ ...editingSong, font_weight: e.target.value || undefined })}
+                    >
+                      <option value="">Default</option>
+                      <option value="normal">Normal</option>
+                      <option value="bold">Bold</option>
+                      <option value="100">Thin (100)</option>
+                      <option value="300">Light (300)</option>
+                      <option value="500">Medium (500)</option>
+                      <option value="700">Bold (700)</option>
+                      <option value="900">Black (900)</option>
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] text-slate-500 uppercase font-bold">Text Color</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="color"
+                        className="w-8 h-8 bg-transparent border-none cursor-pointer rounded-lg overflow-hidden"
+                        value={editingSong.color || "#ffffff"}
+                        onChange={(e) => setEditingSong({ ...editingSong, color: e.target.value })}
+                      />
+                      <input
+                        className="flex-1 bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700 focus:outline-none"
+                        value={editingSong.color || ""}
+                        placeholder="Default"
+                        onChange={(e) => setEditingSong({ ...editingSong, color: e.target.value || undefined })}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-3 flex flex-col gap-2">
                 <div className="flex items-center justify-between">
                   <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Arrangement</p>
@@ -313,8 +385,11 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
                 onClick={async () => {
                   const saved = await invoke<Song>("save_song", { song: editingSong });
                   const idx = songs.findIndex((s) => s.id === saved.id);
-                  if (idx >= 0) { const n = [...songs]; n[idx] = saved; setSongs(n); }
-                  else { setSongs([...songs, saved].sort((a, b) => a.title.localeCompare(b.title))); }
+                  let next;
+                  if (idx >= 0) { next = [...songs]; next[idx] = saved; }
+                  else { next = [...songs, saved].sort((a, b) => a.title.localeCompare(b.title)); }
+                  setSongs(next);
+                  emit("songs-sync", next);
                   setEditingSong(null);
                 }}
                 className="text-xs font-bold uppercase bg-amber-600 hover:bg-amber-500 text-white px-4 py-2 rounded-lg"

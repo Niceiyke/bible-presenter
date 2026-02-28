@@ -1,5 +1,6 @@
 import React from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { writeFile, readTextFile } from "@tauri-apps/plugin-fs";
 import { useAppStore } from "../store";
@@ -66,6 +67,7 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
     try {
       await invoke("save_lt_templates", { templates: ts });
       setLtSavedTemplates(ts);
+      emit("lower-third-template-sync", ts);
       onSetToast("Templates saved");
     } catch (err) {
       console.error("Save failed:", err);
@@ -74,7 +76,10 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
   };
 
   const updateTpl = (patch: Partial<LowerThirdTemplate>) => {
-    setLtTemplate(t => ({ ...t, ...patch }));
+    const next = { ...ltTemplate, ...patch };
+    setLtTemplate(next);
+    // Also sync to other windows immediately
+    emit("lower-third-template-sync", [next]);
   };
 
   const exportTemplate = async () => {
@@ -151,9 +156,14 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
 
         {/* Layout */}
         <Section title="Layout & Positioning" icon={Move}>
-          <div className="space-y-4">
             <div className="flex flex-col gap-2">
-              <span className="text-[9px] text-slate-500 uppercase font-bold">Alignment</span>
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] text-slate-500 uppercase font-bold">Alignment</span>
+                <button 
+                  onClick={() => updateTpl({ widthPct: 100, borderRadius: 0, hAlign: "center", offsetX: 0 })}
+                  className={`text-[8px] font-black px-2 py-0.5 rounded border transition-all ${ltTemplate.widthPct === 100 && ltTemplate.borderRadius === 0 ? 'bg-amber-500 text-white border-amber-400' : 'bg-slate-950 text-slate-500 border-slate-800'}`}
+                >FULL WIDTH</button>
+              </div>
               <div className="grid grid-cols-3 gap-1 w-24 mx-auto">
                 {(['top', 'middle', 'bottom'] as const).map(v => 
                   (['left', 'center', 'right'] as const).map(h => (
@@ -187,7 +197,6 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
                 <input type="range" min={0} max={100} value={ltTemplate.paddingY} onChange={(e) => updateTpl({ paddingY: parseInt(e.target.value) })} className="w-full accent-amber-500" />
               </ControlGroup>
             </div>
-          </div>
         </Section>
 
         {/* Background */}
@@ -386,6 +395,15 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
               </ControlGroup>
             </div>
 
+            {!ltTemplate.scrollEnabled && (
+              <ControlGroup label="Auto Hide (s)" vertical>
+                <div className="flex items-center gap-2">
+                  <input type="range" min={0} max={60} step={1} value={ltTemplate.autoHideSeconds} onChange={(e) => updateTpl({ autoHideSeconds: parseInt(e.target.value) })} className="flex-1 accent-amber-500" />
+                  <span className="text-[10px] text-slate-400 w-8 text-right">{ltTemplate.autoHideSeconds}s</span>
+                </div>
+              </ControlGroup>
+            )}
+
             {ltTemplate.variant === "banner" && (
               <ControlGroup label="Badge Text" vertical>
                 <input type="text" value={ltTemplate.bannerBadgeText} onChange={(e) => updateTpl({ bannerBadgeText: e.target.value })} className="w-full bg-slate-950 text-slate-300 text-[10px] p-1.5 rounded border border-slate-800" placeholder="LIVE" />
@@ -418,6 +436,14 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
                     </ControlGroup>
                     <ControlGroup label="Gap (px)" vertical>
                       <input type="number" min={0} max={500} value={ltTemplate.scrollGap} onChange={(e) => updateTpl({ scrollGap: parseInt(e.target.value) })} className="w-full bg-slate-950 text-slate-300 text-[10px] p-1 rounded border border-slate-800" />
+                    </ControlGroup>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <ControlGroup label="Cycles (0=∞)" vertical>
+                      <input type="number" min={0} max={100} value={ltTemplate.scrollCount} onChange={(e) => updateTpl({ scrollCount: parseInt(e.target.value) })} className="w-full bg-slate-950 text-slate-300 text-[10px] p-1 rounded border border-slate-800" />
+                    </ControlGroup>
+                    <ControlGroup label="Auto Hide (s)" vertical>
+                      <input type="number" min={0} max={120} value={ltTemplate.autoHideSeconds} onChange={(e) => updateTpl({ autoHideSeconds: parseInt(e.target.value) })} className="w-full bg-slate-950 text-slate-300 text-[10px] p-1 rounded border border-slate-800" />
                     </ControlGroup>
                   </div>
                 </div>

@@ -1,5 +1,6 @@
 import React from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { Plus, Edit2, Play, Trash2, ChevronUp, ChevronDown } from "lucide-react";
 import { useAppStore } from "../store";
 import { SlideThumbnail } from "./shared/Renderers";
@@ -7,8 +8,8 @@ import { buildCustomSlideItem } from "../utils";
 import type { CustomPresentation, CustomSlide, CustomSlideDisplayData, DisplayItem } from "../types";
 
 interface StudioTabProps {
-  onStage: (item: DisplayItem) => void;
-  onLive: (item: DisplayItem) => void;
+  onStage?: (item: DisplayItem) => void;
+  onLive?: (item: DisplayItem) => void;
   onOpenEditor: (id: string) => void;
   onNewPresentation: () => void;
 }
@@ -43,7 +44,9 @@ export function StudioTab({ onStage, onLive, onOpenEditor, onNewPresentation }: 
     if (!window.confirm("Delete this presentation?")) return;
     try {
       await invoke("delete_studio_presentation", { id });
-      setStudioList(studioList.filter((p) => p.id !== id));
+      const next = studioList.filter((p) => p.id !== id);
+      setStudioList(next);
+      emit("studio-sync", next);
       if (expandedStudioPresId === id) setExpandedStudioPresId(null);
     } catch (err) {
       console.error("Delete failed:", err);
@@ -106,8 +109,8 @@ export function StudioTab({ onStage, onLive, onOpenEditor, onNewPresentation }: 
                       key={slide.id}
                       slide={slide}
                       index={idx}
-                      onStage={() => onStage(buildCustomSlideItem(pres, studioSlides[pres.id], idx))}
-                      onLive={() => onLive(buildCustomSlideItem(pres, studioSlides[pres.id], idx))}
+                      onStage={onStage ? (() => onStage(buildCustomSlideItem(pres, studioSlides[pres.id], idx))) : (() => {})}
+                      onLive={onLive ? (() => onLive(buildCustomSlideItem(pres, studioSlides[pres.id], idx))) : (() => {})}
                       appDataDir={appDataDir}
                     />
                   ))}

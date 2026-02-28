@@ -2,8 +2,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import type { CameraSource } from "../types";
 
 const STUN_CONFIG: RTCConfiguration = {
-  iceServers: [],
-  iceCandidatePoolSize: 0,
+  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+  iceCandidatePoolSize: 10,
 };
 
 export function useLanCamera(pin: string | null) {
@@ -140,7 +140,12 @@ export function useLanCamera(pin: string | null) {
   }, []);
 
   const connectOperatorWs = useCallback((authPin: string) => {
-    const ws = new WebSocket(`ws://127.0.0.1:7420/ws`);
+    // Dynamically resolve the backend host if accessed via browser on another machine
+    const host = window.location.hostname === 'localhost' || window.location.hostname === 'tauri.localhost' || !window.location.hostname
+      ? '127.0.0.1' 
+      : window.location.hostname;
+    
+    const ws = new WebSocket(`ws://${host}:7420/ws`);
     operatorWsRef.current = ws;
     ws.onopen = () => {
       ws.send(JSON.stringify({ cmd: "auth", pin: authPin, client_type: "window:main" }));
