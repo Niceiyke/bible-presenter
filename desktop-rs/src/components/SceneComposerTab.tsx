@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { useAppStore } from "../store";
 import { stableId, ltBuildLyricsPayload, describeLayerContent, relativizePath } from "../utils";
 import { SceneRenderer } from "./shared/Renderers";
@@ -7,22 +8,22 @@ import { Eye, EyeOff, Layers, RefreshCw } from "lucide-react";
 import type { DisplayItem, LayerContent, LowerThirdData, SceneData, SceneLayer } from "../types";
 
 interface SceneComposerTabProps {
-  onStage: (item: DisplayItem) => void;
-  onLive: (item: DisplayItem) => void;
   onSetToast: (msg: string) => void;
 }
 
-export function SceneComposerTab({ onStage, onLive, onSetToast }: SceneComposerTabProps) {
+export function SceneComposerTab({ onSetToast }: SceneComposerTabProps) {
   const {
     workingScene, setWorkingScene,
     activeLayerId, setActiveLayerId,
     savedScenes, setSavedScenes,
     stagedItem,
     ltMode, ltName, ltTitle, ltFreeText, ltLineIndex, ltLinesPerDisplay, ltTemplate,
+    ltSavedTemplates,
     songs, ltSongId,
     media: mediaItems,
     cameras: storeCameras,
     appDataDir,
+    settings,
   } = useAppStore();
 
   const [availableLanCams, setAvailableLanCams] = useState<{ device_id: string; device_name: string }[]>([]);
@@ -124,7 +125,7 @@ export function SceneComposerTab({ onStage, onLive, onSetToast }: SceneComposerT
                   <div key={sc.id} className="flex items-center gap-1 bg-slate-800/50 rounded px-2 py-1">
                     <span className="flex-1 text-[10px] text-slate-300 truncate">{sc.name}</span>
                     <button onClick={() => { setWorkingScene(sc); setActiveLayerId(null); }} className="text-[8px] font-black uppercase px-1.5 py-0.5 bg-blue-700 hover:bg-blue-600 text-white rounded">LOAD</button>
-                    <button onClick={async () => { await invoke("delete_scene", { id: sc.id }); const list = await invoke<SceneData[]>("list_scenes"); setSavedScenes(list); }} className="text-[8px] font-black uppercase px-1.5 py-0.5 bg-red-900/50 hover:bg-red-600 text-red-300 hover:text-white rounded">DEL</button>
+                    <button onClick={async () => { await invoke("delete_scene", { id: sc.id }); const list = await invoke<SceneData[]>("list_scenes"); setSavedScenes(list); emit("scenes-sync", list); }} className="text-[8px] font-black uppercase px-1.5 py-0.5 bg-red-900/50 hover:bg-red-600 text-red-300 hover:text-white rounded">DEL</button>
                   </div>
                 ))}
               </div>
@@ -154,15 +155,35 @@ export function SceneComposerTab({ onStage, onLive, onSetToast }: SceneComposerT
           <div className="space-y-2 pt-1">
             {/* Source layers */}
             <p className="text-[8px] font-black text-teal-500 uppercase tracking-widest border-t border-slate-800 pt-2">Add Source Layer</p>
-            <div className="flex gap-1 flex-wrap">
+            <div className="flex gap-1 flex-wrap items-center">
               <button
                 onClick={() => addLayer({ kind: "source", source: { type: "live-output" } }, "Live Output")}
                 className="px-2 py-1 bg-teal-800/50 hover:bg-teal-700/60 text-teal-200 text-[8px] font-black uppercase rounded border border-teal-700/40"
               >Live Output</button>
-              <button
-                onClick={() => addLayer({ kind: "source", source: { type: "lower-third" } }, "Lower Third")}
-                className="px-2 py-1 bg-amber-800/50 hover:bg-amber-700/60 text-amber-200 text-[8px] font-black uppercase rounded border border-amber-700/40"
-              >Lower Third</button>
+              
+              <div className="flex items-center bg-amber-800/30 rounded border border-amber-700/40 overflow-hidden">
+                <button
+                  onClick={() => addLayer({ kind: "source", source: { type: "lower-third" } }, "Lower Third")}
+                  className="px-2 py-1 bg-amber-800/50 hover:bg-amber-700/60 text-amber-200 text-[8px] font-black uppercase"
+                >Lower Third</button>
+                <select 
+                  className="bg-transparent text-amber-400 text-[8px] border-l border-amber-700/40 px-1 py-1 focus:outline-none"
+                  defaultValue=""
+                  onChange={(e) => {
+                    const t = ltSavedTemplates.find(tpl => tpl.id === e.target.value);
+                    if (t) {
+                       // Custom implementation for when a specific template is chosen for the source
+                       // But the standard LayerContent for source doesn't store template.
+                       // It uses the global one. If we want a specific one, we should use kind: 'lower-third' (static)
+                       addLayer({ kind: "lower-third", ltData: getCurrentLtData(), template: t }, `LT: ${t.name}`);
+                    }
+                    e.target.value = "";
+                  }}
+                >
+                  <option value="" disabled>Template...</option>
+                  {ltSavedTemplates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
             </div>
             {/* LAN cameras */}
             <div className="flex items-center gap-1">
@@ -233,9 +254,31 @@ export function SceneComposerTab({ onStage, onLive, onSetToast }: SceneComposerT
 
             {/* Other */}
             <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest border-t border-slate-800 pt-2">Other</p>
-            <div className="flex gap-1">
+            <div className="flex gap-1 items-center">
               <button onClick={() => { const id = stableId(); setWorkingScene(s => ({ ...s, layers: [...s.layers, { id, name: `Layer ${s.layers.length + 1}`, content: { kind: "empty" }, x: 0, y: 0, w: 100, h: 100, opacity: 1, visible: true }] })); setActiveLayerId(id); }} className="flex-1 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-[8px] font-black uppercase rounded border border-slate-600">+ Empty</button>
-              <button onClick={() => { const id = stableId(); setWorkingScene(s => ({ ...s, layers: [...s.layers, { id, name: "Lower Third", content: { kind: "lower-third", ltData: getCurrentLtData(), template: ltTemplate }, x: 0, y: 0, w: 100, h: 100, opacity: 1, visible: true }] })); setActiveLayerId(id); }} className="flex-1 py-1.5 bg-amber-700/50 hover:bg-amber-600/60 text-amber-200 text-[8px] font-black uppercase rounded border border-amber-700/40">+ LT (snap)</button>
+              
+              <div className="flex-1 flex items-center bg-amber-700/30 rounded border border-amber-700/40 overflow-hidden">
+                <button 
+                  onClick={() => { const id = stableId(); setWorkingScene(s => ({ ...s, layers: [...s.layers, { id, name: "Lower Third", content: { kind: "lower-third", ltData: getCurrentLtData(), template: ltTemplate }, x: 0, y: 0, w: 100, h: 100, opacity: 1, visible: true }] })); setActiveLayerId(id); }} 
+                  className="flex-1 py-1.5 bg-amber-700/50 hover:bg-amber-600/60 text-amber-200 text-[8px] font-black uppercase"
+                >+ LT</button>
+                <select 
+                  className="bg-transparent text-amber-400 text-[8px] border-l border-amber-700/40 px-1 py-1 focus:outline-none"
+                  defaultValue=""
+                  onChange={(e) => {
+                    const t = ltSavedTemplates.find(tpl => tpl.id === e.target.value);
+                    if (t) {
+                       const id = stableId();
+                       setWorkingScene(s => ({ ...s, layers: [...s.layers, { id, name: `LT: ${t.name}`, content: { kind: "lower-third", ltData: getCurrentLtData(), template: t }, x: 0, y: 0, w: 100, h: 100, opacity: 1, visible: true }] }));
+                       setActiveLayerId(id);
+                    }
+                    e.target.value = "";
+                  }}
+                >
+                  <option value="" disabled>...</option>
+                  {ltSavedTemplates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
             </div>
           </div>
         </div>
@@ -244,13 +287,11 @@ export function SceneComposerTab({ onStage, onLive, onSetToast }: SceneComposerT
       {/* ── Center: Preview canvas ── */}
       <div className="flex-1 p-4 flex flex-col gap-3 overflow-hidden min-w-0">
         <div className="flex-1 min-h-0 bg-black rounded-xl border border-slate-800 shadow-2xl relative overflow-hidden">
-          <SceneRenderer scene={workingScene} activeLayerId={activeLayerId} onLayerClick={setActiveLayerId} appDataDir={appDataDir} />
+          <SceneRenderer scene={workingScene} activeLayerId={activeLayerId} onLayerClick={setActiveLayerId} appDataDir={appDataDir} settings={settings} />
         </div>
         <div className="shrink-0 flex items-center gap-2">
           <input value={workingScene.name} onChange={(e) => setWorkingScene(s => ({ ...s, name: e.target.value }))} className="flex-1 min-w-0 bg-slate-950 text-slate-200 text-xs px-3 py-2 rounded-lg border border-slate-800" placeholder="Scene Name..." />
-          <button onClick={async () => { await invoke("save_scene", { scene: workingScene }); const list = await invoke<SceneData[]>("list_scenes"); setSavedScenes(list); onSetToast("Scene saved"); }} className="px-3 py-2 bg-green-700 hover:bg-green-600 text-white text-[10px] font-black uppercase rounded-lg">SAVE</button>
-          <button onClick={() => onStage({ type: "Scene", data: workingScene })} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-[10px] font-black uppercase rounded-lg">STAGE</button>
-          <button onClick={() => onLive({ type: "Scene", data: workingScene })} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-black uppercase rounded-lg shadow-lg">GO LIVE</button>
+          <button onClick={async () => { await invoke("save_scene", { scene: workingScene }); const list = await invoke<SceneData[]>("list_scenes"); setSavedScenes(list); emit("scenes-sync", list); onSetToast("Scene saved"); }} className="px-3 py-2 bg-green-700 hover:bg-green-600 text-white text-[10px] font-black uppercase rounded-lg">SAVE</button>
         </div>
       </div>
 
@@ -318,7 +359,24 @@ export function SceneComposerTab({ onStage, onLive, onSetToast }: SceneComposerT
                   <button onClick={() => updateLayer({ content: { kind: "item", item: stagedItem } })} className="w-full py-1.5 bg-blue-700 hover:bg-blue-600 text-white text-[9px] font-black uppercase rounded">Assign Staged</button>
                 )}
                 {isLt && (
-                  <button onClick={() => updateLayer({ content: { kind: "lower-third", ltData: getCurrentLtData(), template: ltTemplate } })} className="w-full py-1.5 bg-amber-700/60 hover:bg-amber-600 text-amber-100 text-[9px] font-black uppercase rounded border border-amber-700/50">Assign Current LT</button>
+                  <div className="space-y-2">
+                    <button onClick={() => updateLayer({ content: { kind: "lower-third", ltData: getCurrentLtData(), template: ltTemplate } })} className="w-full py-1.5 bg-amber-700/60 hover:bg-amber-600 text-amber-100 text-[9px] font-black uppercase rounded border border-amber-700/50">Assign Current LT Data</button>
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[8px] text-slate-500 uppercase font-bold">Template</span>
+                      <select 
+                        className="bg-slate-900 text-slate-200 text-[10px] px-2 py-1.5 rounded border border-slate-700"
+                        value={(layer.content as any).template.id}
+                        onChange={(e) => {
+                          const t = ltSavedTemplates.find(tpl => tpl.id === e.target.value);
+                          if (t) {
+                            updateLayer({ content: { ...layer.content, template: t } as any });
+                          }
+                        }}
+                      >
+                        {ltSavedTemplates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      </select>
+                    </div>
+                  </div>
                 )}
                 <button onClick={() => updateLayer({ content: { kind: "empty" } })} className="w-full py-1 bg-red-900/30 hover:bg-red-700/40 text-red-300 text-[9px] font-black uppercase rounded border border-red-900/40">Clear</button>
               </div>

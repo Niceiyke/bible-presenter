@@ -249,6 +249,11 @@ export function SongSlideRenderer({
   fontFamily?: string;
   color?: string;
 }) {
+  const finalFontSize = data.font_size || fontSize;
+  const finalFontFamily = data.font || fontFamily;
+  const finalColor = data.color || color;
+  const fontWeight = data.font_weight || "normal";
+
   return (
     <div className="w-full h-full relative overflow-hidden flex flex-col items-center justify-center p-[8%] text-center">
       <div className="flex flex-col items-center justify-center max-w-[95%]">
@@ -259,10 +264,11 @@ export function SongSlideRenderer({
         )}
         <div className="flex flex-col gap-4">
           {data.lines.map((line, i) => (
-            <p key={i} className="font-serif leading-tight drop-shadow-2xl" style={{ 
-              color,
-              fontSize: `${fontSize * 0.85 * scale}pt`,
-              fontFamily: fontFamily,
+            <p key={i} className="leading-tight drop-shadow-2xl" style={{ 
+              color: finalColor,
+              fontSize: `${finalFontSize * 0.85 * scale}pt`,
+              fontFamily: finalFontFamily,
+              fontWeight: fontWeight,
             }}>
               {line}
             </p>
@@ -344,6 +350,7 @@ export function SceneRenderer({
   outputMode = false,
   liveContext,
   appDataDir = null,
+  settings,
 }: {
   scene: SceneData;
   scale?: number;
@@ -352,6 +359,7 @@ export function SceneRenderer({
   outputMode?: boolean;
   liveContext?: SceneLiveContext;
   appDataDir?: string | null;
+  settings?: PresentationSettings;
 }) {
   const bg = scene.background;
   const resolvedBg = bg?.type === "Image" ? resolvePath(bg.value, appDataDir) : null;
@@ -398,7 +406,7 @@ export function SceneRenderer({
               slotIndex={lanCameraLayers.indexOf(layer)}
             />
           ) : (
-            <LayerContentRenderer content={layer.content} scale={scale} outputMode={outputMode} liveContext={liveContext} appDataDir={appDataDir} />
+            <LayerContentRenderer content={layer.content} scale={scale} outputMode={outputMode} liveContext={liveContext} appDataDir={appDataDir} settings={settings} />
           )}
           {!outputMode && activeLayerId === layer.id && (
             <div className="absolute top-1 right-1 bg-blue-500 text-white text-[8px] font-black px-1 rounded shadow-lg pointer-events-none">ACTIVE</div>
@@ -409,18 +417,70 @@ export function SceneRenderer({
   );
 }
 
+// ─── Reference Tag ───────────────────────────────────────────────────────────
+
+function ReferenceTag({
+  book,
+  chapter,
+  verse,
+  version,
+  settings,
+  scale = 1,
+}: {
+  book: string;
+  chapter: number;
+  verse: number;
+  version: string;
+  settings?: PresentationSettings;
+  scale?: number;
+}) {
+  const finalFontSize = (settings?.reference_font_size ?? 36) * scale;
+  const finalFontFamily = settings?.reference_font_family ?? "Arial, sans-serif";
+  const finalColor = (settings?.reference_color && settings.reference_color !== "") ? settings.reference_color : "#f59e0b";
+
+  const vFontSize = (settings?.version_font_size ?? 24) * scale;
+  const vFontFamily = settings?.version_font_family ?? "Arial, sans-serif";
+  const vColor = (settings?.version_color && settings.version_color !== "") ? settings.version_color : undefined;
+
+  return (
+    <div className="flex items-baseline gap-3 mt-4">
+      <p style={{
+        fontSize: `${finalFontSize}pt`,
+        fontFamily: finalFontFamily,
+        color: finalColor,
+        fontWeight: "900",
+        textTransform: "uppercase",
+        letterSpacing: "0.05em",
+      }}>
+        {book} {chapter}:{verse}
+      </p>
+      <p style={{
+        fontSize: `${vFontSize}pt`,
+        fontFamily: vFontFamily,
+        color: vColor || finalColor,
+        opacity: vColor ? 1 : 0.5,
+        fontWeight: "700",
+      }}>
+        ({version})
+      </p>
+    </div>
+  );
+}
+
 export function LayerContentRenderer({
   content,
   scale = 1,
   outputMode = false,
   liveContext,
   appDataDir = null,
+  settings,
 }: {
   content: LayerContent;
   scale?: number;
   outputMode?: boolean;
   liveContext?: SceneLiveContext;
   appDataDir?: string | null;
+  settings?: PresentationSettings;
 }) {
   if (content.kind === "empty") {
     if (outputMode) return null;
@@ -450,7 +510,7 @@ export function LayerContentRenderer({
     if (src.type === "live-output") {
       const li = liveContext?.liveItem;
       if (li && li.type !== "Scene") {
-        return <LayerContentRenderer content={{ kind: "item", item: li }} scale={scale} outputMode={outputMode} liveContext={liveContext} />;
+        return <LayerContentRenderer content={{ kind: "item", item: li }} scale={scale} outputMode={outputMode} liveContext={liveContext} settings={settings} />;
       }
       return (
         <div className="w-full h-full flex flex-col items-center justify-center gap-1"
@@ -491,13 +551,16 @@ export function LayerContentRenderer({
       return (
         <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center">
           <p className={outputMode ? "font-serif text-5xl text-white leading-snug drop-shadow-2xl" : "text-xs font-serif line-clamp-3 mb-1 opacity-80"}
-             style={outputMode ? { fontSize: `${48 * scale}pt` } : undefined}>
+             style={outputMode ? { fontSize: `${(settings?.font_size ?? 48) * scale}pt`, fontFamily: settings?.verse_font_family } : undefined}>
             {item.data.text}
           </p>
-          <p className={outputMode ? "text-2xl font-black text-amber-400 mt-4" : "text-[8px] font-black text-amber-500 uppercase"}
-             style={outputMode ? { fontSize: `${24 * scale}pt` } : undefined}>
-            {item.data.book} {item.data.chapter}:{item.data.verse}
-          </p>
+          {outputMode ? (
+            <ReferenceTag book={item.data.book} chapter={item.data.chapter} verse={item.data.verse} version={item.data.version} settings={settings} scale={scale} />
+          ) : (
+            <p className="text-[8px] font-black text-amber-500 uppercase">
+              {item.data.book} {item.data.chapter}:{item.data.verse} ({item.data.version})
+            </p>
+          )}
         </div>
       );
     case "Media":
@@ -552,7 +615,17 @@ const substituteTokens = (text: string) => {
     .replace(/{date}/g, now.toLocaleDateString());
 };
 
-export function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData; template: LowerThirdTemplate }) {
+export function LowerThirdOverlay({
+  data,
+  template: t,
+  onCycleComplete
+}: {
+  data: LowerThirdData;
+  template: LowerThirdTemplate;
+  onCycleComplete?: () => void;
+}) {
+  // Guards against onCycleComplete firing multiple times per scroll cycle
+  const cycleCompleteFiredRef = useRef(false);
   const containerStyle = {
     paddingLeft: t.paddingX, paddingRight: t.paddingX,
     paddingTop: t.paddingY, paddingBottom: t.paddingY,
@@ -594,21 +667,45 @@ export function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData;
       case "fade":
         return { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 } };
       case "slide-up":
-        return { initial: { opacity: 0, y: 30 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: 30 } };
+        return { initial: { opacity: 0, y: 100 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: 100 } };
       case "slide-left":
-        return { initial: { opacity: 0, x: 50 }, animate: { opacity: 1, x: 0 }, exit: { opacity: 0, x: 50 } };
+        return { initial: { opacity: 0, x: 100 }, animate: { opacity: 1, x: 0 }, exit: { opacity: 0, x: 100 } };
       default:
         return { initial: { opacity: 1 }, animate: { opacity: 1 }, exit: { opacity: 1 } };
     }
   };
 
   const variants = getVariants();
-  const positionStyle = {
-    position: "absolute", zIndex: 40, width: `${t.widthPct}%`,
+  
+  // Robust positioning logic
+  const isFullWidth = t.widthPct >= 100;
+  const positionStyle: React.CSSProperties = {
+    position: "absolute",
+    zIndex: 40,
+    width: isFullWidth ? "100%" : `${t.widthPct}%`,
     pointerEvents: "none",
-    ...(t.hAlign === "left" ? { left: t.offsetX } : t.hAlign === "right" ? { right: t.offsetX } : { left: "50%", transform: "translateX(-50%)" }),
-    ...(t.vAlign === "top" ? { top: t.offsetY } : t.vAlign === "bottom" ? { bottom: t.offsetY } : { top: "50%", transform: (t.hAlign === "center" ? "translate(-50%, -50%)" : "translateY(-50%)") })
-  } as React.CSSProperties;
+  };
+
+  if (isFullWidth) {
+    positionStyle.left = 0;
+  } else if (t.hAlign === "left") {
+    positionStyle.left = t.offsetX;
+  } else if (t.hAlign === "right") {
+    positionStyle.right = t.offsetX;
+  } else {
+    positionStyle.left = "50%";
+    positionStyle.transform = "translateX(-50%)";
+  }
+
+  if (t.vAlign === "top") {
+    positionStyle.top = t.offsetY;
+  } else if (t.vAlign === "bottom") {
+    positionStyle.bottom = t.offsetY;
+  } else {
+    positionStyle.top = "50%";
+    const currentTransform = positionStyle.transform || "";
+    positionStyle.transform = `${currentTransform} translateY(-50%)`.trim();
+  }
 
   return (
     <motion.div
@@ -684,27 +781,46 @@ export function LowerThirdOverlay({ data, template: t }: { data: LowerThirdData;
         )}
         {data.kind === "FreeText" && (
           t.scrollEnabled ? (
-            <div style={{ overflow: "hidden", whiteSpace: "nowrap" }}>
-              <div className="flex whitespace-nowrap" style={{ 
-                animation: `lt-scroll-${t.scrollDirection} ${(11 - t.scrollSpeed) * 4}s linear infinite`,
-                width: "max-content"
-              }}>
-                <span style={{
-                  ...buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase),
-                  paddingRight: t.scrollGap ?? 50
-                }}>
-                  {substituteTokens(data.data.text)}
-                  {t.scrollSeparator && <span className="mx-2 opacity-50">{t.scrollSeparator}</span>}
-                </span>
-                {/* Repeat for seamless loop */}
-                <span style={{
-                  ...buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase),
-                  paddingRight: t.scrollGap ?? 50
-                }}>
-                  {substituteTokens(data.data.text)}
-                  {t.scrollSeparator && <span className="mx-2 opacity-50">{t.scrollSeparator}</span>}
-                </span>
-              </div>
+            // Two-span seamless loop: animate by exactly -50% (one span width) so the
+            // duplicate span picks up invisibly, giving a continuous ticker effect.
+            <div style={{ overflow: "hidden", position: "relative" }}>
+              <motion.div
+                className="flex whitespace-nowrap"
+                initial={{ x: t.scrollDirection === "rtl" ? "0%" : "-50%" }}
+                animate={{ x: t.scrollDirection === "rtl" ? "-50%" : "0%" }}
+                transition={{
+                  duration: (11 - t.scrollSpeed) * 4,
+                  ease: "linear",
+                  repeat: Infinity,
+                  repeatType: "loop",
+                }}
+                onUpdate={(latest: any) => {
+                  // Fire onCycleComplete exactly once per cycle using a latch ref.
+                  // RTL: animation goes 0 → -50. Near -50 = cycle ending.
+                  // LTR: animation goes -50 → 0. Near 0 = cycle ending.
+                  const pct = parseFloat(latest.x);
+                  const nearEnd = t.scrollDirection === "rtl" ? pct < -49 : pct > -1;
+                  if (nearEnd && !cycleCompleteFiredRef.current) {
+                    cycleCompleteFiredRef.current = true;
+                    onCycleComplete?.();
+                  } else if (!nearEnd) {
+                    cycleCompleteFiredRef.current = false;
+                  }
+                }}
+              >
+                {/* Span repeated twice for seamless looping */}
+                {[0, 1].map((i) => (
+                  <span key={i} style={{
+                    ...buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase),
+                    paddingRight: t.scrollGap ?? 50,
+                    display: "inline-block",
+                    flexShrink: 0,
+                  }}>
+                    {substituteTokens(data.data.text)}
+                    {t.scrollSeparator && <span className="mx-2 opacity-50">{t.scrollSeparator}</span>}
+                  </span>
+                ))}
+              </motion.div>
             </div>
           ) : (
             <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
@@ -907,11 +1023,12 @@ export function SlideThumbnail({
 }: {
   slide: ParsedSlide | CustomSlide;
   index: number;
-  onStage: () => void;
-  onLive: () => void;
+  onStage?: () => void;
+  onLive?: () => void;
   appDataDir?: string | null;
 }) {
   const isCustom = "header" in slide;
+  const showOverlay = onStage || onLive;
   
   if (isCustom) {
     return (
@@ -923,20 +1040,26 @@ export function SlideThumbnail({
         <div className="absolute bottom-0 left-0 px-1 py-0.5 bg-black/50">
           <span className="text-[7px] text-white/70">{index + 1}</span>
         </div>
-        <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-all flex flex-col items-center justify-center gap-1 p-1">
-          <button
-            onClick={(e) => { e.stopPropagation(); onStage(); }}
-            className="w-full bg-slate-600 hover:bg-slate-500 text-white text-[9px] font-bold py-1 rounded"
-          >
-            STAGE
-          </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); onLive(); }}
-            className="w-full bg-amber-500 hover:bg-amber-400 text-black text-[9px] font-bold py-1 rounded"
-          >
-            DISPLAY
-          </button>
-        </div>
+        {showOverlay && (
+          <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-all flex flex-col items-center justify-center gap-1 p-1">
+            {onStage && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onStage(); }}
+                className="w-full bg-slate-600 hover:bg-slate-500 text-white text-[9px] font-bold py-1 rounded"
+              >
+                STAGE
+              </button>
+            )}
+            {onLive && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onLive(); }}
+                className="w-full bg-amber-500 hover:bg-amber-400 text-black text-[9px] font-bold py-1 rounded"
+              >
+                DISPLAY
+              </button>
+            )}
+          </div>
+        )}
       </div>
     );
   }
@@ -972,20 +1095,26 @@ export function SlideThumbnail({
       <div className="absolute bottom-0 left-0 px-1 py-0.5 bg-black/50">
         <span className="text-[7px] text-white/70">{index + 1}</span>
       </div>
-      <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-all flex flex-col items-center justify-center gap-1 p-1">
-        <button
-          onClick={(e) => { e.stopPropagation(); onStage(); }}
-          className="w-full bg-slate-600 hover:bg-slate-500 text-white text-[9px] font-bold py-1 rounded"
-        >
-          STAGE
-        </button>
-        <button
-          onClick={(e) => { e.stopPropagation(); onLive(); }}
-          className="w-full bg-amber-500 hover:bg-amber-400 text-black text-[9px] font-bold py-1 rounded"
-        >
-          DISPLAY
-        </button>
-      </div>
+      {showOverlay && (
+        <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-all flex flex-col items-center justify-center gap-1 p-1">
+          {onStage && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onStage(); }}
+              className="w-full bg-slate-600 hover:bg-slate-500 text-white text-[9px] font-bold py-1 rounded"
+            >
+              STAGE
+            </button>
+          )}
+          {onLive && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onLive(); }}
+              className="w-full bg-amber-500 hover:bg-amber-400 text-black text-[9px] font-bold py-1 rounded"
+            >
+              DISPLAY
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -19,6 +19,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
   const {
     bibleVersion, setBibleVersion,
     availableVersions,
+    settings,
     books, chapters, verses,
     selectedBook, setSelectedBook,
     selectedChapter, setSelectedChapter,
@@ -75,7 +76,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
     <div className="flex flex-col gap-4">
       {/* Version selector */}
       <div className="flex items-center gap-1.5 flex-wrap">
-        {availableVersions.map((v) => (
+        {availableVersions.filter(v => !(settings.disabled_bible_versions || []).includes(v)).map((v) => (
           <button
             key={v}
             onClick={() => { setBibleVersion(v); localStorage.setItem("pref_bibleVersion", v); }}

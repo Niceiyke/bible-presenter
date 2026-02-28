@@ -159,6 +159,8 @@ export interface LowerThirdTemplate {
   scrollSpeed: number;
   scrollSeparator: string;
   scrollGap: number;
+  scrollCount: number; // 0 = infinite
+  autoHideSeconds: number; // 0 = manual
   maxLines: number;
 }
 
@@ -260,6 +262,10 @@ export interface Song {
   sections: LyricSection[];
   arrangement?: string[];
   style?: SongStyle;
+  font?: string;
+  font_size?: number;
+  font_weight?: string;
+  color?: string;
 }
 
 export interface SongSlideData {
@@ -270,6 +276,10 @@ export interface SongSlideData {
   lines: string[];
   slide_index: number;
   total_slides: number;
+  font?: string;
+  font_size?: number;
+  font_weight?: string;
+  color?: string;
 }
 
 export interface PropItem {
@@ -312,6 +322,10 @@ export interface PresentationSettings {
   /** Hex color override for the reference line. Empty / undefined = use theme color. */
   reference_color?: string;
   reference_font_family?: string;
+  disabled_bible_versions: string[];
+  version_font_family?: string;
+  version_font_size?: number;
+  version_color?: string;
 }
 
 export interface ParsedSlide {
@@ -353,6 +367,7 @@ export const DEFAULT_LT_TEMPLATE: LowerThirdTemplate = {
   animation: "slide-up", animationDuration: 0.5, exitDuration: 0.2,
   variant: "classic", bannerBadgeText: "LIVE",
   scrollEnabled: false, scrollDirection: "ltr", scrollSpeed: 5, scrollSeparator: "  •  ", scrollGap: 50,
+  scrollCount: 0, autoHideSeconds: 0,
   maxLines: 0,
 };
 
@@ -369,6 +384,7 @@ export const DEFAULT_SETTINGS: PresentationSettings = {
   reference_font_size: 36,
   reference_color: "",
   reference_font_family: "Arial, sans-serif",
+  disabled_bible_versions: [],
 };
 
 export const THEMES: Record<string, { label: string; colors: ThemeColors }> = {

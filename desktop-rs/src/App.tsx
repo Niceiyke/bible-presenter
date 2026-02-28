@@ -41,7 +41,7 @@ import type {
 
 export default function App() {
   const {
-    label, liveItem, stagedItem, setStagedItem, suggestedItem, setSuggestedItem,
+    label, liveItem, setLiveItem, stagedItem, setStagedItem, suggestedItem, setSuggestedItem,
     suggestedConfidence, nextVerse, setNextVerse, verseHistory, setVerseHistory,
     sidebarWidth, setSidebarWidth, isTranscriptionCollapsed, setIsTranscriptionCollapsed,
     bottomDeckOpen, setBottomDeckOpen, bottomDeckMode, setBottomDeckMode,
@@ -456,6 +456,18 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              invoke("clear_live").catch(console.error);
+              invoke("hide_lower_third").catch(console.error);
+              setLiveItem(null);
+              setLtVisible(false);
+            }}
+            className="px-3 py-1.5 bg-red-900/30 hover:bg-red-600 text-red-400 hover:text-white rounded-lg text-[10px] font-black uppercase transition-all flex items-center gap-2 border border-red-900/50"
+            title="Clear Output (Shift+C)"
+          >
+            <X size={14} /> Clear
+          </button>
           <div className="h-8 w-px bg-slate-800 mx-2" />
           <div className="flex flex-col items-end gap-0.5">
             <div className="flex items-center gap-2 px-3 py-1 bg-slate-950 rounded-full border border-slate-800">
@@ -520,7 +532,9 @@ export default function App() {
                   const id = stableId();
                   const newPres: CustomPresentation = { id, name: "New Presentation", slides: [newDefaultSlide()], version: 1 };
                   invoke("save_studio_presentation", { presentation: newPres }).then(() => {
-                    setStudioList([...studioList, { id, name: newPres.name, slide_count: 1, updated_at: Date.now() }]);
+                    const nextList = [...studioList, { id, name: newPres.name, slide_count: 1, updated_at: Date.now() }];
+                    setStudioList(nextList);
+                    emit("studio-sync", nextList);
                     setStudioSlides({ ...studioSlides, [id]: newPres.slides });
                     setEditingPres(newPres);
                   });
@@ -529,8 +543,6 @@ export default function App() {
             )}
             {activeTab === "scenes" && (
               <SceneComposerTab
-                onStage={stageItem}
-                onLive={sendLive}
                 onSetToast={setToast}
               />
             )}
@@ -779,10 +791,15 @@ export default function App() {
           mediaImages={media.filter(m => m.media_type === "Image")}
           onClose={(saved) => {
             if (saved) {
-              invoke("list_studio_presentations").then((list: any) => setStudioList(list));
+              invoke("list_studio_presentations").then((list: any) => {
+                setStudioList(list);
+                emit("studio-sync", list);
+              });
               // Refresh slides if the edited one is currently being presented in the studio tab
               invoke("load_studio_presentation", { id: editingPres.id }).then((data: any) => {
-                setStudioSlides({ ...studioSlides, [editingPres.id]: data.slides });
+                const slides = data.slides;
+                setStudioSlides({ ...studioSlides, [editingPres.id]: slides });
+                emit("studio-slides-sync", { id: editingPres.id, slides });
               });
             }
             setEditingPres(null);

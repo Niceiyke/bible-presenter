@@ -56,6 +56,7 @@ export function StageWindow() {
   function itemDetail(item: DisplayItem | null): string {
     if (!item) return "";
     if (item.type === "Verse") return item.data.text;
+    if (item.type === "Song") return item.data.lines.join("\n");
     if (item.type === "Timer") return `${item.data.timer_type}${item.data.duration_secs ? ` · ${Math.floor(item.data.duration_secs / 60)}:${String(item.data.duration_secs % 60).padStart(2,"0")}` : ""}`;
     if (item.type === "CustomSlide") {
       if (item.data.elements && item.data.elements.length > 0) {

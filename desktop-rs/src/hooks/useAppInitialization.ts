@@ -12,7 +12,7 @@ import type {
 
 export function useAppInitialization() {
   const {
-    setLabel, setMedia, setPresentations, setStudioList, 
+    setLabel, setMedia, setPresentations, setStudioList, setStudioSlides,
     setScheduleEntries, setSongs, setLtSavedTemplates, 
     setLtTemplate, setSettings, setRemoteUrl, setRemotePin, 
     setTailscaleUrl, setAvailableVersions, setBibleVersion, 
@@ -112,6 +112,32 @@ export function useAppInitialization() {
       else setSessionState("idle");
     });
     const unlistenAudioErr = listen("audio-error", (ev: any) => setAudioError(ev.payload as string));
+    const unlistenLtSync = listen<LowerThirdTemplate[]>("lower-third-template-sync", (ev) => {
+      const incoming = ev.payload;
+      if (incoming.length === 1) {
+        const t = incoming[0];
+        setLtSavedTemplates(useAppStore.getState().ltSavedTemplates.map(old => old.id === t.id ? t : old));
+        if (useAppStore.getState().ltTemplate.id === t.id) setLtTemplate(t);
+      } else {
+        setLtSavedTemplates(incoming);
+        const activeId = useAppStore.getState().ltTemplate.id;
+        const active = incoming.find(t => t.id === activeId);
+        if (active) setLtTemplate(active);
+      }
+    });
+    const unlistenScenesSync = listen<SceneData[]>("scenes-sync", (ev) => {
+      setSavedScenes(ev.payload);
+    });
+    const unlistenSongsSync = listen<Song[]>("songs-sync", (ev) => {
+      setSongs(ev.payload);
+    });
+    const unlistenStudioSync = listen<any[]>("studio-sync", (ev) => {
+      setStudioList(ev.payload);
+    });
+    const unlistenStudioSlidesSync = listen<{ id: string; slides: any[] }>("studio-slides-sync", (ev) => {
+      const { id, slides } = ev.payload;
+      setStudioSlides({ ...useAppStore.getState().studioSlides, [id]: slides });
+    });
 
     const decayInterval = setInterval(() => setMicLevel((prev) => (prev > 0.01 ? prev * 0.85 : 0)), 50);
 
@@ -122,6 +148,11 @@ export function useAppInitialization() {
       unlistenSettings.then(f => f());
       unlistenStatus.then(f => f());
       unlistenAudioErr.then(f => f());
+      unlistenLtSync.then(f => f());
+      unlistenScenesSync.then(f => f());
+      unlistenSongsSync.then(f => f());
+      unlistenStudioSync.then(f => f());
+      unlistenStudioSlidesSync.then(f => f());
       clearInterval(decayInterval);
     };
   }, []);

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import type { DisplayItem, PropItem, PresentationSettings, LowerThirdData, LowerThirdTemplate } from "../types";
@@ -37,6 +37,7 @@ export function OutputWindow() {
     background: { type: "None" },
     is_blanked: false,
     font_size: 72,
+    disabled_bible_versions: [],
   });
   const [appDataDir, setAppDataDir] = useState<string | null>(null);
   const [currentSlide, setCurrentSlide] = useState<ParsedSlide | null>(null);
@@ -124,7 +125,10 @@ export function OutputWindow() {
   }
 
   function connectOutputWs(pin: string) {
-    const ws = new WebSocket("ws://127.0.0.1:7420/ws");
+    const host = window.location.hostname === 'localhost' || window.location.hostname === 'tauri.localhost' || !window.location.hostname
+      ? '127.0.0.1' 
+      : window.location.hostname;
+    const ws = new WebSocket(`ws://${host}:7420/ws`);
     outputWsRef.current = ws;
 
     ws.onopen = () => {
@@ -241,12 +245,58 @@ export function OutputWindow() {
     };
   }, []);
 
+  // Lower Third Auto-Hide Logic
+  const remainingScrolls = useRef<number>(0);
+  const autoHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (autoHideTimer.current) {
+      clearTimeout(autoHideTimer.current);
+      autoHideTimer.current = null;
+    }
+
+    if (!lowerThird) {
+      remainingScrolls.current = 0;
+      return;
+    }
+
+    const t = lowerThird.template;
+    
+    // Setup scroll count
+    if (t.scrollEnabled && t.scrollCount > 0) {
+      remainingScrolls.current = t.scrollCount;
+    } else {
+      remainingScrolls.current = 0;
+    }
+
+    // Setup auto-hide timer (only if not infinite scrolling)
+    if (t.autoHideSeconds > 0 && !(t.scrollEnabled && t.scrollCount === 0)) {
+      autoHideTimer.current = setTimeout(() => {
+        invoke("hide_lower_third").catch(console.error);
+      }, t.autoHideSeconds * 1000);
+    }
+
+    return () => {
+      if (autoHideTimer.current) clearTimeout(autoHideTimer.current);
+    };
+  }, [lowerThird]);
+
+  const handleLtCycleComplete = useCallback(() => {
+    if (remainingScrolls.current > 0) {
+      remainingScrolls.current -= 1;
+      if (remainingScrolls.current === 0) {
+        invoke("hide_lower_third").catch(console.error);
+      }
+    }
+  }, []);
+
   useEffect(() => {
     if (liveItem?.type !== "PresentationSlide") {
       setCurrentSlide(null);
       return;
     }
     const { presentation_id, presentation_path, slide_index } = liveItem.data;
+
     (async () => {
       try {
         let zip = outputZipsRef.current[presentation_id];
@@ -320,7 +370,15 @@ export function OutputWindow() {
     >
       {liveItem.data.book} {liveItem.data.chapter}:{liveItem.data.verse}
       {liveItem.data.version && (
-        <span className="font-normal opacity-60 ml-2" style={{ fontSize: `${Math.round(refFontSize * 0.65 * windowScale)}pt` }}>
+        <span 
+          className="font-normal ml-2" 
+          style={{ 
+            fontSize: `${(settings.version_font_size ?? Math.round(refFontSize * 0.65)) * windowScale}pt`,
+            fontFamily: settings.version_font_family ?? refFontFamily,
+            color: (settings.version_color && settings.version_color !== "") ? settings.version_color : undefined,
+            opacity: (settings.version_color && settings.version_color !== "") ? 1 : 0.6,
+          }}
+        >
           ({liveItem.data.version})
         </span>
       )}
@@ -490,6 +548,7 @@ export function OutputWindow() {
                   scale={windowScale}
                   outputMode={true}
                   appDataDir={appDataDir}
+                  settings={settings}
                   liveContext={{
                     liveItem,
                     lowerThird,
@@ -532,7 +591,12 @@ export function OutputWindow() {
 
       <AnimatePresence>
         {lowerThird && (
-          <LowerThirdOverlay key="lower-third" data={lowerThird.data} template={lowerThird.template} />
+          <LowerThirdOverlay 
+            key="lower-third" 
+            data={lowerThird.data} 
+            template={lowerThird.template} 
+            onCycleComplete={handleLtCycleComplete}
+          />
         )}
       </AnimatePresence>
     </div>
