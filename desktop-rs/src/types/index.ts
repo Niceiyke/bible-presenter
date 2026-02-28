@@ -120,6 +120,8 @@ export interface CameraSource {
   status: 'connecting' | 'connected' | 'disconnected';
   connectedAt: number;
   enabled: boolean;
+  battery?: number; // 0-100
+  lastTelemetryAt?: number;
 }
 
 export type LowerThirdData =

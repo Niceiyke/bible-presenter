@@ -52,7 +52,21 @@ export function MediaTab({
     enabledLocalCameras, setEnabledLocalCameras,
     mediaFilter, setMediaFilter,
     pauseWhisper, setPauseWhisper,
+    liveItem,
   } = useAppStore();
+
+  const isLiveOnProgram = (deviceId: string) => {
+    if (!liveItem) return false;
+    if (liveItem.type === "CameraFeed" && (liveItem.data as any).lan && (liveItem.data as any).device_id === deviceId) return true;
+    if (liveItem.type === "Scene") {
+      return (liveItem.data.layers ?? []).some(layer => 
+        layer.content.kind === "source" && 
+        layer.content.source.type === "camera-lan" && 
+        layer.content.source.device_id === deviceId
+      );
+    }
+    return false;
+  };
 
   async function handleSetFit(id: string, fitMode: MediaFitMode) {
     await invoke("set_media_fit", { id, fitMode });
@@ -236,52 +250,71 @@ export function MediaTab({
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-2">
-                {Array.from(cameraSources.values()).map((src) => (
-                  <div key={src.device_id} className={`flex flex-col rounded-lg overflow-hidden border transition-all ${src.enabled ? "bg-slate-800/50 border-slate-700 hover:border-slate-600" : "bg-slate-900/50 border-slate-800"}`}>
-                    <div className="aspect-video overflow-hidden bg-slate-900 shrink-0 relative">
-                      <button
-                        onClick={() => onRemoveCameraSource(src.device_id)}
-                        className="absolute top-1 left-1 z-10 text-[9px] bg-red-700/80 hover:bg-red-500 text-white w-4 h-4 flex items-center justify-center rounded font-bold transition-all leading-none"
-                      >×</button>
+                {Array.from(cameraSources.values()).map((src) => {
+                  const onProgram = isLiveOnProgram(src.device_id);
+                  return (
+                    <div key={src.device_id} className={`flex flex-col rounded-lg overflow-hidden border transition-all ${onProgram ? "border-red-600 ring-1 ring-red-600 ring-inset" : src.enabled ? "bg-slate-800/50 border-slate-700 hover:border-slate-600" : "bg-slate-900/50 border-slate-800"}`}>
+                      <div className="aspect-video overflow-hidden bg-slate-900 shrink-0 relative">
+                        <button
+                          onClick={() => onRemoveCameraSource(src.device_id)}
+                          className="absolute top-1 left-1 z-10 text-[9px] bg-red-700/80 hover:bg-red-500 text-white w-4 h-4 flex items-center justify-center rounded font-bold transition-all leading-none"
+                        >×</button>
 
-                      {src.enabled ? (
-                        <>
-                          <video
-                            ref={(el) => {
-                              const oldObs = previewObserverMapRef.current?.get(src.device_id);
-                              if (el) {
-                                previewVideoMapRef.current?.set(src.device_id, el);
-                                if (src.previewStream && !el.srcObject) el.srcObject = src.previewStream;
-                                if (oldObs) oldObs.disconnect();
-                                const obs = new IntersectionObserver(
-                                  (entries) => entries.forEach((entry) => {
-                                    const v = previewVideoMapRef.current?.get(src.device_id);
-                                    if (v) {
-                                      if (entry.isIntersecting) v.play().catch(() => {});
-                                      else v.pause();
-                                    }
-                                  }),
-                                  { threshold: 0.1 }
-                                );
-                                obs.observe(el);
-                                previewObserverMapRef.current?.set(src.device_id, obs);
-                              } else {
-                                if (oldObs) { oldObs.disconnect(); previewObserverMapRef.current?.delete(src.device_id); }
-                                previewVideoMapRef.current?.delete(src.device_id);
-                              }
-                            }}
-                            className="w-full h-full object-cover"
-                            autoPlay muted playsInline
-                          />
-                          {src.status !== "connected" && (
-                            <div className="absolute inset-0 flex items-center justify-center bg-black/60">
-                              <span className="text-[8px] text-slate-400 animate-pulse">
-                                {src.status === "connecting" ? "Connecting…" : "Offline"}
-                              </span>
+                        {src.enabled ? (
+                          <>
+                            <video
+                              ref={(el) => {
+                                const oldObs = previewObserverMapRef.current?.get(src.device_id);
+                                if (el) {
+                                  previewVideoMapRef.current?.set(src.device_id, el);
+                                  if (src.previewStream && !el.srcObject) el.srcObject = src.previewStream;
+                                  if (oldObs) oldObs.disconnect();
+                                  const obs = new IntersectionObserver(
+                                    (entries) => entries.forEach((entry) => {
+                                      const v = previewVideoMapRef.current?.get(src.device_id);
+                                      if (v) {
+                                        if (entry.isIntersecting) v.play().catch(() => {});
+                                        else v.pause();
+                                      }
+                                    }),
+                                    { threshold: 0.1 }
+                                  );
+                                  obs.observe(el);
+                                  previewObserverMapRef.current?.set(src.device_id, obs);
+                                } else {
+                                  if (oldObs) { oldObs.disconnect(); previewObserverMapRef.current?.delete(src.device_id); }
+                                  previewVideoMapRef.current?.delete(src.device_id);
+                                }
+                              }}
+                              className="w-full h-full object-cover"
+                              autoPlay muted playsInline
+                            />
+                            {src.status !== "connected" && (
+                              <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+                                <span className="text-[8px] text-slate-400 animate-pulse">
+                                  {src.status === "connecting" ? "Connecting…" : "Offline"}
+                                </span>
+                              </div>
+                            )}
+                            <div className={`absolute top-1 right-1 text-[7px] font-bold px-1.5 py-0.5 rounded shadow-lg ${onProgram ? "bg-red-600 text-white" : src.status === "connected" ? "bg-green-500/90 text-white" : "bg-slate-700/90 text-slate-400"}`}>
+                              {onProgram ? "● PROGRAM" : src.status === "connected" ? "● LIVE" : "◌"}
                             </div>
-                          )}
-                          <div className={`absolute top-1 right-1 text-[7px] font-bold px-1.5 py-0.5 rounded ${src.status === "connected" ? "bg-green-500/90 text-white" : "bg-slate-700/90 text-slate-400"}`}>
-                            {src.status === "connected" ? "● LIVE" : "◌"}
+
+                            {/* Telemetry overlay */}
+                          <div className="absolute bottom-1 right-1 flex items-center gap-1.5 pointer-events-none">
+                            {src.battery !== undefined && (
+                              <div className={`flex items-center gap-0.5 text-[7px] font-black px-1 py-0.5 rounded shadow-sm ${
+                                src.battery < 20 ? "bg-red-500/80 text-white animate-pulse" : 
+                                src.battery < 50 ? "bg-amber-500/80 text-black" : "bg-black/60 text-emerald-400 border border-emerald-400/20"
+                              }`}>
+                                {src.battery}%
+                              </div>
+                            )}
+                            <div className={`flex items-center gap-0.5 text-[7px] font-black px-1 py-0.5 rounded shadow-sm ${
+                              src.status === 'connected' ? "bg-black/60 text-sky-400 border border-sky-400/20" : "bg-slate-800/80 text-slate-400"
+                            }`}>
+                              {src.status === 'connected' ? '📶' : '✖'}
+                            </div>
                           </div>
                         </>
                       ) : (

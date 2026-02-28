@@ -25,6 +25,8 @@ export interface SceneLiveContext {
   lowerThird: { data: LowerThirdData; template: LowerThirdTemplate } | null;
   outputWsRef: React.RefObject<WebSocket | null>;
   sceneCameraHandlers: React.RefObject<Map<string, (msg: any) => void>>;
+  hubRelayStreamA?: MediaStream | null;
+  hubRelayStreamB?: MediaStream | null;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -282,18 +284,17 @@ function SceneLanCameraLayer({
   deviceId,
   deviceName,
   liveContext,
+  slotIndex = 0,
 }: {
   deviceId: string;
   deviceName: string;
   liveContext?: SceneLiveContext;
+  slotIndex?: number;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const pcRef = useRef<RTCPeerConnection | null>(null);
 
   useEffect(() => {
     if (!liveContext) return;
-
-    const OUTPUT_STUN: RTCConfiguration = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
     function sendWs(obj: object) {
       const ws = liveContext!.outputWsRef.current;
@@ -302,44 +303,19 @@ function SceneLanCameraLayer({
       }
     }
 
-    async function handleOffer(msg: { device_id: string; sdp: string }) {
-      const pc = new RTCPeerConnection(OUTPUT_STUN);
-      pcRef.current = pc;
-
-      pc.ontrack = (ev: RTCTrackEvent) => {
-        const stream = ev.streams[0] ?? new MediaStream([ev.track]);
-        if (videoRef.current) videoRef.current.srcObject = stream;
-      };
-
-      pc.onicecandidate = (ev: RTCPeerConnectionIceEvent) => {
-        if (ev.candidate) {
-          sendWs({ cmd: "camera_ice", device_id: deviceId, target: `mobile:${deviceId}`, candidate: ev.candidate });
-        }
-      };
-
-      await pc.setRemoteDescription({ type: "offer", sdp: msg.sdp });
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      sendWs({ cmd: "camera_answer", device_id: deviceId, target: `mobile:${deviceId}`, sdp: answer.sdp });
-    }
-
-    function handler(msg: any) {
-      if (msg.cmd === "camera_offer") handleOffer(msg).catch(console.error);
-      if (msg.cmd === "camera_ice" && pcRef.current && msg.candidate) {
-        pcRef.current.addIceCandidate(new RTCIceCandidate(msg.candidate)).catch(() => {});
-      }
-    }
-
-    liveContext.sceneCameraHandlers.current.set(deviceId, handler);
     sendWs({ cmd: "camera_connect_program", device_id: deviceId });
 
     return () => {
-      liveContext.sceneCameraHandlers.current.delete(deviceId);
-      if (pcRef.current) { pcRef.current.close(); pcRef.current = null; }
-      if (videoRef.current) videoRef.current.srcObject = null;
       sendWs({ cmd: "camera_disconnect_program", device_id: deviceId });
     };
   }, [deviceId, liveContext]);
+
+  useEffect(() => {
+    if (videoRef.current && liveContext) {
+      const stream = slotIndex === 0 ? liveContext.hubRelayStreamA : liveContext.hubRelayStreamB;
+      videoRef.current.srcObject = stream ?? null;
+    }
+  }, [liveContext?.hubRelayStreamA, liveContext?.hubRelayStreamB, slotIndex]);
 
   if (!liveContext) {
     return (
@@ -379,6 +355,11 @@ export function SceneRenderer({
 }) {
   const bg = scene.background;
   const resolvedBg = bg?.type === "Image" ? resolvePath(bg.value, appDataDir) : null;
+  
+  // Identify all LAN camera layers to assign slots A and B based on order
+  const lanCameraLayers = (scene.layers ?? [])
+    .filter(l => l.content.kind === 'source' && l.content.source.type === 'camera-lan');
+
   return (
     <div
       style={{
@@ -409,12 +390,24 @@ export function SceneRenderer({
             overflow: "hidden",
           }}
         >
-          <LayerContentRenderer content={layer.content} scale={scale} outputMode={outputMode} liveContext={liveContext} appDataDir={appDataDir} />
+          {layer.content.kind === 'source' && layer.content.source.type === 'camera-lan' ? (
+            <SceneLanCameraLayer 
+              deviceId={layer.content.source.device_id} 
+              deviceName={layer.content.source.device_name} 
+              liveContext={liveContext} 
+              slotIndex={lanCameraLayers.indexOf(layer)}
+            />
+          ) : (
+            <LayerContentRenderer content={layer.content} scale={scale} outputMode={outputMode} liveContext={liveContext} appDataDir={appDataDir} />
+          )}
           {!outputMode && activeLayerId === layer.id && (
             <div className="absolute top-1 right-1 bg-blue-500 text-white text-[8px] font-black px-1 rounded shadow-lg pointer-events-none">ACTIVE</div>
           )}
         </div>
       ))}
+    </div>
+  );
+}
     </div>
   );
 }

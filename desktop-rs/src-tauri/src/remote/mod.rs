@@ -138,7 +138,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
 
                             let key = match client_type {
                                 "window:main"   => "window:main".to_string(),
-                                "window:output" => "window:output".to_string(),
+                                "window:output" => format!("window:output:{}", uuid::Uuid::new_v4()),
                                 "mobile" if !device_id.is_empty() => {
                                     format!("mobile:{}", device_id)
                                 }
@@ -256,18 +256,30 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
 /// Routes a WebSocket message either to a specific client (signaling relay) or
 /// to the general command handler (remote panel commands, state queries, etc.).
 async fn route_or_handle(state: &Arc<AppState>, v: Value, raw: &str, from_key: &str) {
-    // If the message carries an explicit `target`, relay it directly.
+    // If the message carries an explicit `target`, relay it.
     if let Some(target_raw) = v.get("target").and_then(|t| t.as_str()) {
         let target_key = normalize_target(target_raw);
 
-        // Inject _from into the message so the recipient knows who sent it.
-        // This is crucial for WebRTC clients to match answers to the correct PC.
+        // Inject _from into the message.
         let relayed_raw = if let Some(mut obj) = v.as_object().cloned() {
             obj.insert("_from".to_string(), json!(from_key));
             Value::Object(obj).to_string()
         } else {
             raw.to_string()
         };
+
+        // SPECIAL CASE: Messages to "window:output" or "output" are broadcast
+        // to ALL connected output windows. This ensures the Hub Relay works
+        // for multiple projectors/stage displays.
+        if target_key == "window:output" || target_key == "output" {
+            let clients = state.signaling_clients.lock();
+            for (key, ch) in clients.iter() {
+                if key.starts_with("window:output:") {
+                    let _ = ch.send(relayed_raw.clone());
+                }
+            }
+            return;
+        }
 
         let clients = state.signaling_clients.lock();
         if let Some(ch) = clients.get(&target_key) {
@@ -305,7 +317,13 @@ async fn route_or_handle(state: &Arc<AppState>, v: Value, raw: &str, from_key: &
 fn normalize_target(target: &str) -> String {
     match target {
         "operator" => "window:main".to_string(),
-        "output"   => "window:output".to_string(),
+        "output"   => {
+            // "output" shorthand can't target a specific unique window:output:uuid
+            // without more logic, but "window:output" messages should be broadcast
+            // or we must use a broadcast channel for the relay.
+            // For now, let's keep it as is, but handle shorthand.
+            "window:output".to_string()
+        },
         other      => other.to_string(),
     }
 }
