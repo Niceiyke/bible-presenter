@@ -409,32 +409,32 @@ export function OutputWindow() {
                   <CameraFeedRenderer deviceId={liveItem.data.device_id} />
                 </div>
               )
-            ) : liveItem.type === "Media" ? (() => {
-                const fitClass = liveItem.data.fit_mode === "cover"
-                  ? "object-cover"
-                  : liveItem.data.fit_mode === "fill"
-                  ? "object-fill"
-                  : "object-contain";
-                return (
-                  <div className="absolute inset-0">
-                    {liveItem.data.media_type === "Image" ? (
-                      <img
-                        src={convertFileSrc(liveItem.data.path)}
-                        className={`w-full h-full ${fitClass}`}
-                        alt={liveItem.data.name}
-                      />
-                    ) : (
-                      <video
-                        ref={videoRef}
-                        src={convertFileSrc(liveItem.data.path)}
-                        className={`w-full h-full ${fitClass}`}
-                        autoPlay
-                        loop
-                      />
-                    )}
-                  </div>
-                );
-              })()
+            ) : liveItem.type === "Media" ? (
+              <div className="absolute inset-0">
+                {liveItem.data.media_type === "Image" ? (
+                  <img
+                    src={convertFileSrc(liveItem.data.path)}
+                    className={`w-full h-full ${
+                      liveItem.data.fit_mode === "cover" ? "object-cover"
+                      : liveItem.data.fit_mode === "fill" ? "object-fill"
+                      : "object-contain"
+                    }`}
+                    alt={liveItem.data.name}
+                  />
+                ) : (
+                  <video
+                    ref={videoRef}
+                    src={convertFileSrc(liveItem.data.path)}
+                    className={`w-full h-full ${
+                      liveItem.data.fit_mode === "cover" ? "object-cover"
+                      : liveItem.data.fit_mode === "fill" ? "object-fill"
+                      : "object-contain"
+                    }`}
+                    autoPlay
+                    loop
+                  />
+                )}
+              </div>
             ) : liveItem.type === "Scene" ? (
               <div className="absolute inset-0">
                 <SceneRenderer

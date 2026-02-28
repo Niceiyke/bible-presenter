@@ -223,7 +223,7 @@ export function PreviewCard({
                 {(item.data as MediaItem).media_type === "Image" ? (
                   <img
                     src={convertFileSrc((item.data as MediaItem).path)}
-                    className={`w-full h-full rounded shadow-xl ${{cover:"object-cover",fill:"object-fill"}[(item.data as MediaItem).fit_mode ?? ""] ?? "object-contain"}`}
+                    className={`w-full h-full rounded shadow-xl ${({cover:"object-cover",fill:"object-fill"} as Record<string,string>)[(item.data as MediaItem).fit_mode ?? ""] ?? "object-contain"}`}
                     alt={(item.data as MediaItem).name}
                   />
                 ) : (
@@ -232,7 +232,7 @@ export function PreviewCard({
                     key={videoPath}
                     ref={setVideoRefCallback}
                     src={videoPath}
-                    className={`w-full h-full rounded ${{cover:"object-cover",fill:"object-fill"}[(item.data as MediaItem).fit_mode ?? ""] ?? "object-contain"}`}
+                    className={`w-full h-full rounded ${({cover:"object-cover",fill:"object-fill"} as Record<string,string>)[(item.data as MediaItem).fit_mode ?? ""] ?? "object-contain"}`}
                     preload={isLocalPreview ? "auto" : "metadata"}
                   />
                 )}

@@ -162,14 +162,8 @@
 <script>
 // ── Config ────────────────────────────────────────────────────────────────────
 const WS_URL = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
-const STUN   = { 
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' }
-  ], 
-  iceCandidatePoolSize: 10 
-};
+// LAN-only: host candidates (local IPs) are sufficient for same-subnet use.
+const STUN = { iceServers: [], iceCandidatePoolSize: 0 };
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let ws          = null;
