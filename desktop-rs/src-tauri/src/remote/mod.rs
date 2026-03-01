@@ -143,18 +143,18 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
                                 .to_string();
                             let is_mobile = client_type == "mobile";
 
-                            // Only loopback connections may claim to be a Tauri window.
+                            // Only loopback connections may claim to be a Tauri window:main.
                             // This prevents a mobile client from hijacking the operator slot.
                             let key = match client_type {
-                                "window:main" if is_local  => "window:main".to_string(),
-                                "window:output" if is_local => format!("window:output:{}", uuid::Uuid::new_v4()),
-                                "window:main" | "window:output" => {
-                                    return Some(None); // reject window claims from non-local IPs
+                                "window:main" if is_local  => format!("window:main:{}", uuid::Uuid::new_v4()),
+                                "window:output" => format!("window:output:{}", uuid::Uuid::new_v4()),
+                                "window:main" => {
+                                    return Some(None); // reject window:main claims from non-local IPs
                                 }
                                 "mobile" if !device_id.is_empty() => {
                                     format!("mobile:{}", device_id)
                                 }
-                                _ => format!("remote:{}", uuid::Uuid::new_v4()),
+                                _ => format!("{}:{}", client_type, uuid::Uuid::new_v4()),
                             };
 
                             return Some(Some(ClientInfo { key, device_id, device_name, is_mobile }));
@@ -280,22 +280,21 @@ async fn route_or_handle(state: &Arc<AppState>, v: Value, raw: &str, from_key: &
             raw.to_string()
         };
 
-        // SPECIAL CASE: Messages to "window:output" or "output" are broadcast
-        // to ALL connected output windows. This ensures the Hub Relay works
-        // for multiple projectors/stage displays.
-        if target_key == "window:output" || target_key == "output" {
-            let clients = state.signaling_clients.lock();
-            for (key, ch) in clients.iter() {
-                if key.starts_with("window:output:") {
-                    let _ = ch.send(relayed_raw.clone());
-                }
-            }
-            return;
-        }
-
+        // Broadcast to all clients matching the target prefix (e.g. "window:main" or "window:output")
         let clients = state.signaling_clients.lock();
-        if let Some(ch) = clients.get(&target_key) {
-            let _ = ch.send(relayed_raw);
+        let mut sent = false;
+        for (key, ch) in clients.iter() {
+            if key == &target_key || key.starts_with(&format!("{}:", target_key)) {
+                let _ = ch.send(relayed_raw.clone());
+                sent = true;
+            }
+        }
+        
+        if !sent {
+            // If no prefix match found, try exact match (for mobile:uuid etc)
+            if let Some(ch) = clients.get(&target_key) {
+                let _ = ch.send(relayed_raw);
+            }
         }
         return;
     }
@@ -329,13 +328,7 @@ async fn route_or_handle(state: &Arc<AppState>, v: Value, raw: &str, from_key: &
 fn normalize_target(target: &str) -> String {
     match target {
         "operator" => "window:main".to_string(),
-        "output"   => {
-            // "output" shorthand can't target a specific unique window:output:uuid
-            // without more logic, but "window:output" messages should be broadcast
-            // or we must use a broadcast channel for the relay.
-            // For now, let's keep it as is, but handle shorthand.
-            "window:output".to_string()
-        },
+        "output"   => "window:output".to_string(),
         other      => other.to_string(),
     }
 }

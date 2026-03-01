@@ -6,7 +6,7 @@ const STUN_CONFIG: RTCConfiguration = {
   iceCandidatePoolSize: 10,
 };
 
-export function useLanCamera(pin: string | null) {
+export function useLanCamera(pin: string | null, label: string) {
   const [cameraSources, setCameraSources] = useState<Map<string, CameraSource>>(new Map());
   
   const operatorWsRef = useRef<WebSocket | null>(null);
@@ -25,6 +25,9 @@ export function useLanCamera(pin: string | null) {
 
   // Initialize a persistent relay connection for a specific slot (A or B)
   const initRelayPc = useCallback(async (slot: 'A' | 'B') => {
+    // Only the main operator window should initiate relays
+    if (label !== "main") return;
+
     const existingPc = relayPcRef.current[slot];
     // If already connected and healthy, nothing to do — output_ready will
     // re-trigger us if the output window reconnects.
@@ -69,7 +72,7 @@ export function useLanCamera(pin: string | null) {
         sdp: offer.sdp
       }));
     }
-  }, []);
+  }, [label]);
 
   const handlePreviewOffer = useCallback(async (msg: { device_id: string; device_name?: string; sdp: string }) => {
     const { device_id, sdp } = msg;
@@ -146,6 +149,11 @@ export function useLanCamera(pin: string | null) {
   }, []);
 
   const connectOperatorWs = useCallback((authPin: string) => {
+    // If not main/operator, we connect as a window:stage or window:output
+    // but ONLY if explicitly needed. For now, let's keep it restricted to main
+    // to avoid registration hijacking in the backend.
+    const clientType = label === "main" ? "window:main" : `window:${label}`;
+
     // Dynamically resolve the backend host if accessed via browser on another machine
     const host = window.location.hostname === 'localhost' || window.location.hostname === 'tauri.localhost' || !window.location.hostname
       ? '127.0.0.1' 
@@ -154,10 +162,11 @@ export function useLanCamera(pin: string | null) {
     const ws = new WebSocket(`ws://${host}:7420/ws`);
     operatorWsRef.current = ws;
     ws.onopen = () => {
-      ws.send(JSON.stringify({ cmd: "auth", pin: authPin, client_type: "window:main" }));
+      ws.send(JSON.stringify({ cmd: "auth", pin: authPin, client_type: clientType }));
     };
     ws.onmessage = async (e) => {
       let msg: any; try { msg = JSON.parse(e.data); } catch { return; }
+      console.log("[LanCamera] WS Msg:", msg.cmd || msg.type, msg);
       if (msg.type === "auth_ok") {
         // Request any mobiles that connected before us to re-send their offer
         ws.send(JSON.stringify({ cmd: "request_all_offers" }));
@@ -258,10 +267,12 @@ export function useLanCamera(pin: string | null) {
       }
     };
     ws.onclose = () => setTimeout(() => { if (operatorWsRef.current?.readyState === WebSocket.CLOSED) connectOperatorWs(authPin); }, 5000);
-  }, [handlePreviewOffer, initRelayPc]);
+  }, [label, handlePreviewOffer, initRelayPc]);
 
   useEffect(() => {
-    if (pin) connectOperatorWs(pin);
+    // Only connect if it's the main operator window. 
+    // Other windows (Output, Stage) have their own specialized signaling if needed.
+    if (pin && label === "main") connectOperatorWs(pin);
     return () => {
       operatorWsRef.current?.close();
       if (relayPcRef.current.A) relayPcRef.current.A.close();
@@ -270,7 +281,7 @@ export function useLanCamera(pin: string | null) {
         stream?.getTracks().forEach(t => t.stop());
       }
     };
-  }, [pin, connectOperatorWs]);
+  }, [pin, label, connectOperatorWs]);
 
   const lastLiveDeviceIdsRef = useRef<Record<string, string | null>>({ A: null, B: null });
 

@@ -7,29 +7,29 @@
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   :root{
-    --bg:#0f1117;--panel:#1a1d27;--border:#2a2d3a;--text:#e2e8f0;--muted:#64748b;
-    --amber:#f59e0b;--green:#22c55e;--red:#ef4444;--blue:#3b82f6;
-    --radius:10px;--font:'Segoe UI',system-ui,sans-serif;
+    --bg:#0f1117;--text:#e2e8f0;--muted:#64748b;
+    --amber:#f59e0b;--green:#22c55e;--red:#ef4444;
+    --radius:12px;--font:'Segoe UI',system-ui,sans-serif;
   }
-  body{
-    font-family:var(--font);background:var(--bg);color:var(--text);
-    min-height:100dvh;display:flex;flex-direction:column;overflow:hidden;
+  html,body{
+    font-family:var(--font);background:#000;color:var(--text);
+    height:100%;width:100%;overflow:hidden;position:fixed;inset:0;
   }
-
-  /* ── Screens ───────────────────────────────────────────────────────── */
-  #pin-screen,#cam-screen{flex:1;display:flex;flex-direction:column}
-  #cam-screen{display:none}
 
   /* ── PIN Screen ─────────────────────────────────────────────────────── */
-  #pin-screen{align-items:center;justify-content:center;gap:20px;padding:24px}
+  #pin-screen{
+    position:fixed;inset:0;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:20px;padding:24px;
+    background:var(--bg);
+  }
   .logo{font-size:2.5rem;margin-bottom:4px}
   .title{font-size:1.25rem;font-weight:700}
   .subtitle{font-size:.8rem;color:var(--muted);text-align:center;max-width:280px}
   .pin-row{display:flex;gap:8px;margin-top:8px}
   .pin-row input{
     width:54px;height:66px;text-align:center;font-size:1.9rem;font-weight:700;
-    border:2px solid var(--border);border-radius:var(--radius);
-    background:var(--panel);color:var(--text);outline:none;caret-color:var(--amber);
+    border:2px solid #2a2d3a;border-radius:var(--radius);
+    background:#1a1d27;color:var(--text);outline:none;caret-color:var(--amber);
   }
   .pin-row input:focus{border-color:var(--amber)}
   .btn{
@@ -41,61 +41,96 @@
   .btn-primary:disabled{opacity:.45;cursor:default;filter:none}
   .err-msg{color:var(--red);font-size:.8rem;min-height:1.1em;text-align:center}
 
-  /* ── Camera Screen ──────────────────────────────────────────────────── */
-  #cam-screen{flex-direction:column;gap:0}
-  .cam-header{
-    background:var(--panel);border-bottom:1px solid var(--border);
-    padding:10px 14px;display:flex;align-items:center;justify-content:space-between;
-    flex-shrink:0;
-  }
-  .cam-header h1{font-size:.7rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
-  .status-pill{
-    display:flex;align-items:center;gap:6px;font-size:.7rem;font-weight:700;
-    padding:4px 10px;border-radius:20px;border:1px solid var(--border);
-  }
-  .dot{width:7px;height:7px;border-radius:50%;background:var(--muted)}
-  .dot.connecting{background:var(--amber);animation:blink 1s infinite}
-  .dot.live{background:var(--green)}
-  .dot.program{background:var(--red);animation:blink .6s infinite}
-  @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+  /* ── Camera Screen — full bleed ─────────────────────────────────────── */
+  #cam-screen{position:fixed;inset:0;display:none}
 
-  /* Preview video */
-  .preview-wrap{
-    flex:1;background:#000;overflow:hidden;position:relative;
-    display:flex;align-items:center;justify-content:center;min-height:0;
+  #preview-video{
+    position:fixed;inset:0;width:100%;height:100%;object-fit:cover;display:block;
   }
-  #preview-video{width:100%;height:100%;object-fit:cover}
-  .no-cam{color:var(--muted);font-size:.85rem;text-align:center;padding:16px}
+  #no-cam{
+    position:fixed;inset:0;display:none;flex-direction:column;
+    align-items:center;justify-content:center;gap:12px;
+    color:var(--muted);font-size:.85rem;text-align:center;padding:24px;
+    background:#000;
+  }
+  #no-cam a{color:var(--amber);text-decoration:underline}
 
-  /* Program badge */
+  /* Tally border (ON AIR) */
+  #tally-border{
+    position:fixed;inset:0;pointer-events:none;z-index:30;display:none;
+    box-shadow:inset 0 0 0 7px var(--red);
+  }
+  #tally-border.visible{display:block;animation:tallyPulse 1.5s ease-in-out infinite}
+  @keyframes tallyPulse{0%,100%{box-shadow:inset 0 0 0 7px var(--red)}50%{box-shadow:inset 0 0 0 7px rgba(239,68,68,.5)}}
+
+  /* Top gradient overlay */
+  .top-overlay{
+    position:fixed;top:0;left:0;right:0;z-index:20;
+    display:flex;align-items:flex-start;justify-content:space-between;
+    padding:max(env(safe-area-inset-top),14px) 14px 28px;
+    background:linear-gradient(to bottom,rgba(0,0,0,.65) 0%,transparent 100%);
+    pointer-events:none;
+  }
+  .top-overlay>*{pointer-events:auto}
+
   .prog-badge{
-    position:absolute;top:10px;left:10px;background:var(--red);color:#fff;
-    font-size:.65rem;font-weight:700;padding:3px 8px;border-radius:4px;
-    letter-spacing:.06em;display:none;
+    font-size:.65rem;font-weight:700;padding:5px 11px;border-radius:6px;
+    background:var(--red);color:#fff;letter-spacing:.08em;display:none;
   }
   .prog-badge.visible{display:block}
 
-  /* Controls */
-  .controls{
-    flex-shrink:0;background:var(--panel);border-top:1px solid var(--border);
-    padding:12px 14px;display:flex;flex-direction:column;gap:10px;
+  .status-pill{
+    display:flex;align-items:center;gap:6px;font-size:.7rem;font-weight:700;
+    padding:5px 12px;border-radius:20px;
+    background:rgba(0,0,0,.55);backdrop-filter:blur(6px);
+    border:1px solid rgba(255,255,255,.12);
   }
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--muted)}
+  .dot.connecting{background:var(--amber);animation:blink 1s infinite}
+  .dot.connected{background:var(--green)}
+  .dot.disconnected{background:var(--muted)}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
+  /* Bottom controls overlay */
+  .controls-overlay{
+    position:fixed;bottom:0;left:0;right:0;z-index:20;
+    padding:32px 16px max(env(safe-area-inset-bottom),16px);
+    background:linear-gradient(to top,rgba(0,0,0,.82) 0%,transparent 100%);
+    transition:opacity .25s,transform .25s;
+  }
+  .controls-overlay.hidden{
+    opacity:0;transform:translateY(12px);pointer-events:none;
+  }
+
+  /* Drag handle bar */
+  .drag-handle{
+    width:40px;height:4px;border-radius:2px;background:rgba(255,255,255,.3);
+    margin:0 auto 16px;cursor:pointer;
+  }
+
+  .ctrl-group{margin-bottom:11px}
+  .ctrl-label{font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.45);margin-bottom:5px}
   .row{display:flex;gap:8px;align-items:center}
-  .ctrl-label{font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+
   input[type=text],select{
-    flex:1;padding:9px 12px;background:var(--bg);border:1px solid var(--border);
-    border-radius:8px;color:var(--text);font-size:.85rem;outline:none;
+    flex:1;padding:10px 12px;
+    background:rgba(10,11,16,.75);border:1px solid rgba(255,255,255,.14);
+    border-radius:10px;color:var(--text);font-size:.85rem;outline:none;
+    backdrop-filter:blur(6px);
   }
   input[type=text]:focus,select:focus{border-color:var(--amber)}
+
   .icon-btn{
-    padding:9px 12px;background:var(--bg);border:1px solid var(--border);
-    border-radius:8px;color:var(--muted);font-size:1rem;cursor:pointer;
+    padding:10px 13px;background:rgba(10,11,16,.75);border:1px solid rgba(255,255,255,.14);
+    border-radius:10px;color:var(--muted);font-size:1rem;cursor:pointer;
     display:flex;align-items:center;justify-content:center;transition:.15s;
+    backdrop-filter:blur(6px);flex-shrink:0;
   }
   .icon-btn:hover{border-color:var(--amber);color:var(--amber)}
   .icon-btn.active{border-color:var(--red);color:var(--red)}
-  .info-row{font-size:.7rem;color:var(--muted);display:flex;gap:12px;flex-wrap:wrap}
-  .info-row span b{color:var(--text)}
+
+  .info-row{font-size:.68rem;color:rgba(255,255,255,.4);display:flex;gap:14px;flex-wrap:wrap;margin-top:2px}
+  .info-row span b{color:rgba(255,255,255,.75)}
 </style>
 </head>
 <body>
@@ -117,23 +152,29 @@
 
 <!-- ── Camera Screen ─────────────────────────────────────────────────────── -->
 <div id="cam-screen">
-  <div class="cam-header">
-    <h1>Camera Sender</h1>
-    <div class="status-pill" id="status-pill">
+  <video id="preview-video" autoplay muted playsinline></video>
+  <div id="no-cam">
+    <span style="font-size:2rem">📵</span>
+    No camera access.<br>Please allow camera permission and reload.
+  </div>
+
+  <!-- Tally border -->
+  <div id="tally-border"></div>
+
+  <!-- Top overlay: ON AIR badge + status pill -->
+  <div class="top-overlay">
+    <div class="prog-badge" id="prog-badge">● ON AIR</div>
+    <div class="status-pill">
       <div class="dot" id="status-dot"></div>
       <span id="status-text">Connecting…</span>
     </div>
   </div>
 
-  <div class="preview-wrap" id="preview-wrap">
-    <video id="preview-video" autoplay muted playsinline></video>
-    <div id="no-cam" class="no-cam" style="display:none">No camera access.<br>Please allow camera permission and reload.</div>
-    <div class="prog-badge" id="prog-badge">● ON AIR</div>
-  </div>
+  <!-- Bottom controls (tap video to toggle) -->
+  <div class="controls-overlay" id="controls-overlay">
+    <div class="drag-handle" onclick="toggleControls()"></div>
 
-  <div class="controls">
-    <!-- Device name -->
-    <div>
+    <div class="ctrl-group">
       <div class="ctrl-label">Device Name</div>
       <div class="row">
         <input type="text" id="name-input" placeholder="e.g. Balcony Cam" maxlength="40">
@@ -141,8 +182,7 @@
       </div>
     </div>
 
-    <!-- Camera selector -->
-    <div>
+    <div class="ctrl-group">
       <div class="ctrl-label">Camera</div>
       <div class="row">
         <select id="cam-select" onchange="switchCamera()"></select>
@@ -150,7 +190,6 @@
       </div>
     </div>
 
-    <!-- Stats -->
     <div class="info-row">
       <span>Preview: <b id="stat-preview">–</b></span>
       <span>Program: <b id="stat-program">–</b></span>
@@ -162,16 +201,15 @@
 <script>
 // ── Config ────────────────────────────────────────────────────────────────────
 const WS_URL = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
-// LAN-only: host candidates (local IPs) are sufficient for same-subnet use.
-// Adding a public STUN server for better connectivity on different networks or when mDNS is an issue.
 const STUN = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }], iceCandidatePoolSize: 10 };
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let ws          = null;
 let wakeLock    = null;
 let authFailed  = false;
+let controlsVisible = true;
+let controlsHideTimer = null;
 
-// Secure-context fallback for randomUUID
 const generateId = () => {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
@@ -182,48 +220,55 @@ const generateId = () => {
 
 let deviceId    = localStorage.getItem('cam_device_id') || generateId();
 let deviceName  = localStorage.getItem('cam_device_name') || '';
-let localStream = null;   
-let pc          = null;   
+let localStream = null;
+let pc          = null;
 let videoMuted  = false;
 let connectionStatus = 'disconnected';
 let retryTimer  = null;
 let telemetryInterval = null;
-let pendingIce  = []; // Buffer for ICE candidates arriving before answer
+let pendingIce  = [];
 
 localStorage.setItem('cam_device_id', deviceId);
 
-// ── Professional Features ──────────────────────────────────────────────────────
+// ── Controls visibility ───────────────────────────────────────────────────────
+function toggleControls() {
+  controlsVisible = !controlsVisible;
+  document.getElementById('controls-overlay').classList.toggle('hidden', !controlsVisible);
+}
 
+function autoHideControls() {
+  if (controlsHideTimer) clearTimeout(controlsHideTimer);
+  controlsHideTimer = setTimeout(() => {
+    controlsVisible = false;
+    document.getElementById('controls-overlay').classList.add('hidden');
+  }, 4000);
+}
+
+// Tap anywhere on video to toggle controls
+document.getElementById('preview-video')?.addEventListener('click', () => {
+  toggleControls();
+  if (controlsVisible) autoHideControls();
+});
+
+// ── Wake Lock ─────────────────────────────────────────────────────────────────
 async function requestWakeLock() {
   try {
     if ('wakeLock' in navigator) {
       wakeLock = await navigator.wakeLock.request('screen');
-      console.log('Wake Lock active');
     }
-  } catch (err) {
-    console.warn('Wake Lock failed:', err);
-  }
+  } catch (err) {}
 }
 
+// ── Telemetry ─────────────────────────────────────────────────────────────────
 async function sendTelemetry() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
-  // getBattery is Chrome-only; skip telemetry entirely on unsupported browsers
   if (typeof navigator.getBattery !== 'function') return;
-
   let batteryLevel = null;
   try {
     const battery = await navigator.getBattery();
     batteryLevel = Math.round(battery.level * 100);
   } catch (e) { return; }
-
-  sendMsg({
-    cmd: 'camera_telemetry',
-    device_id: deviceId,
-    target: 'operator',
-    battery: batteryLevel,
-    timestamp: Date.now()
-  });
+  sendMsg({ cmd: 'camera_telemetry', device_id: deviceId, target: 'operator', battery: batteryLevel, timestamp: Date.now() });
 }
 
 // ── PIN screen ────────────────────────────────────────────────────────────────
@@ -231,29 +276,21 @@ const pinInputs = [0,1,2,3].map(i => document.getElementById(`p${i}`));
 
 pinInputs.forEach((inp, idx) => {
   inp.addEventListener('input', () => {
-    // Keep only the last digit typed (handles paste of multiple chars)
     const val = inp.value.replace(/\D/g, '').slice(-1);
     inp.value = val;
     if (val && idx < 3) pinInputs[idx + 1].focus();
   });
   inp.addEventListener('keydown', (e) => {
-    if (e.key === 'Backspace' && !inp.value && idx > 0) {
-      pinInputs[idx - 1].focus();
-    }
+    if (e.key === 'Backspace' && !inp.value && idx > 0) pinInputs[idx - 1].focus();
     if (e.key === 'Enter') doAuth();
   });
 });
 
-function getPin() {
-  return pinInputs.map(i => i.value).join('');
-}
+function getPin() { return pinInputs.map(i => i.value).join(''); }
 
 async function doAuth() {
   const pin = getPin();
-  if (pin.length < 4) {
-    document.getElementById('pin-err').textContent = 'Enter all 4 digits.';
-    return;
-  }
+  if (pin.length < 4) { document.getElementById('pin-err').textContent = 'Enter all 4 digits.'; return; }
   authFailed = false;
   document.getElementById('pin-btn').disabled = true;
   document.getElementById('pin-err').textContent = '';
@@ -265,50 +302,34 @@ function connectWs(pin) {
   ws = new WebSocket(WS_URL);
 
   ws.onopen = () => {
-    ws.send(JSON.stringify({
-      cmd: 'auth',
-      pin,
-      client_type: 'mobile',
-      device_id: deviceId,
-      device_name: deviceName || deviceId.slice(0, 8),
-    }));
+    ws.send(JSON.stringify({ cmd: 'auth', pin, client_type: 'mobile', device_id: deviceId, device_name: deviceName || deviceId.slice(0, 8) }));
     requestWakeLock();
-    telemetryInterval = setInterval(sendTelemetry, 10000); // Every 10s
+    telemetryInterval = setInterval(sendTelemetry, 10000);
   };
 
   ws.onmessage = async (e) => {
-    let msg;
-    try { msg = JSON.parse(e.data); } catch { return; }
+    let msg; try { msg = JSON.parse(e.data); } catch { return; }
 
-    if (msg.type === 'auth_ok') {
-      showCameraScreen();
-      await startCamera();
-      return;
-    }
+    if (msg.type === 'auth_ok') { showCameraScreen(); await startCamera(); return; }
     if (msg.type === 'auth_fail') {
       authFailed = true;
       document.getElementById('pin-err').textContent = 'Wrong PIN. Try again.';
       document.getElementById('pin-btn').disabled = false;
-      ws.close();
-      return;
+      ws.close(); return;
     }
 
-    if (msg.event === 'request_offer') {
-      // Operator WS reconnected after us — re-send offer so it can answer
-      if (localStream) openPc().catch(console.error);
-      return;
-    }
+    if (msg.event === 'request_offer') { if (localStream) openPc().catch(console.error); return; }
 
     if (msg.event === 'connect_program') {
       document.getElementById('prog-badge').classList.add('visible');
-      document.body.style.boxShadow = 'inset 0 0 0 8px #ef4444'; // Visual Tally
+      document.getElementById('tally-border').classList.add('visible');
       document.getElementById('stat-program').textContent = 'LIVE';
-      if ('vibrate' in navigator) navigator.vibrate([100, 50, 100]); // Haptic alert
+      if ('vibrate' in navigator) navigator.vibrate([100, 50, 100]);
       return;
     }
     if (msg.event === 'disconnect_program') {
       document.getElementById('prog-badge').classList.remove('visible');
-      document.body.style.boxShadow = 'none';
+      document.getElementById('tally-border').classList.remove('visible');
       document.getElementById('stat-program').textContent = 'Standby';
       return;
     }
@@ -316,21 +337,15 @@ function connectWs(pin) {
     if (msg.cmd === 'camera_answer' && msg.device_id === deviceId) {
       if (pc && msg.sdp) {
         await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
-        // Process buffered ICE candidates
-        for (const candidate of pendingIce) {
-          try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
-        }
+        for (const candidate of pendingIce) { try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {} }
         pendingIce = [];
       }
       return;
     }
 
     if (msg.cmd === 'camera_ice' && msg.device_id === deviceId && msg.candidate) {
-      if (pc && pc.remoteDescription) {
-        try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
-      } else {
-        pendingIce.push(msg.candidate);
-      }
+      if (pc && pc.remoteDescription) { try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {} }
+      else pendingIce.push(msg.candidate);
       return;
     }
   };
@@ -346,12 +361,7 @@ function connectWs(pin) {
     if (wakeLock) { wakeLock.release(); wakeLock = null; }
     setStatus('disconnected');
     if (!authFailed) {
-      setTimeout(() => {
-        if (ws.readyState === WebSocket.CLOSED) {
-          const pin = getPin();
-          if (pin.length === 4) connectWs(pin);
-        }
-      }, 3000);
+      setTimeout(() => { if (ws.readyState === WebSocket.CLOSED) { const pin = getPin(); if (pin.length === 4) connectWs(pin); } }, 3000);
     }
     authFailed = false;
   };
@@ -361,31 +371,24 @@ function connectWs(pin) {
 async function startCamera() {
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
-    const videoDevices = devices.filter(d => d.kind === 'videoinput');
-    populateCameraSelect(videoDevices);
+    populateCameraSelect(devices.filter(d => d.kind === 'videoinput'));
 
     const selectedId = localStorage.getItem('cam_selected_device');
-    const constraints = {
+    localStream = await navigator.mediaDevices.getUserMedia({
       video: {
         deviceId: selectedId ? { exact: selectedId } : undefined,
         facingMode: selectedId ? undefined : 'environment',
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-        frameRate: { ideal: 30 }
+        width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 }
       },
       audio: false,
-    };
-
-    localStream = await navigator.mediaDevices.getUserMedia(constraints);
+    });
     document.getElementById('preview-video').srcObject = localStream;
-    document.getElementById('no-cam').style.display = 'none';
-
     updateResolutionStat();
     await openPc();
+    autoHideControls();
   } catch (err) {
     console.error('Camera error:', err);
-    const noCam = document.getElementById('no-cam');
-    noCam.style.display = 'flex';
+    document.getElementById('no-cam').style.display = 'flex';
     setStatus('disconnected');
   }
 }
@@ -396,30 +399,25 @@ function populateCameraSelect(devices) {
   const saved = localStorage.getItem('cam_selected_device');
   devices.forEach((d, i) => {
     const opt = document.createElement('option');
-    opt.value = d.deviceId;
-    opt.textContent = d.label || `Camera ${i + 1}`;
+    opt.value = d.deviceId; opt.textContent = d.label || `Camera ${i + 1}`;
     if (d.deviceId === saved) opt.selected = true;
     sel.appendChild(opt);
   });
 }
 
 async function switchCamera() {
-  const deviceId_ = document.getElementById('cam-select').value;
-  localStorage.setItem('cam_selected_device', deviceId_);
-
+  const id = document.getElementById('cam-select').value;
+  localStorage.setItem('cam_selected_device', id);
   if (localStream) localStream.getTracks().forEach(t => t.stop());
-
   localStream = await navigator.mediaDevices.getUserMedia({
-    video: { deviceId: { exact: deviceId_ }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+    video: { deviceId: { exact: id }, width: { ideal: 1920 }, height: { ideal: 1080 } },
     audio: false,
   });
   document.getElementById('preview-video').srcObject = localStream;
-
   if (pc) {
     const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
     if (sender) sender.replaceTrack(localStream.getVideoTracks()[0]).catch(console.error);
   }
-
   updateResolutionStat();
 }
 
@@ -433,23 +431,19 @@ function toggleMute() {
 
 function updateResolutionStat() {
   if (!localStream) return;
-  const track = localStream.getVideoTracks()[0];
-  if (!track) return;
-  const settings = track.getSettings();
+  const settings = localStream.getVideoTracks()[0]?.getSettings();
   document.getElementById('stat-res').textContent =
-    settings.width && settings.height ? `${settings.width}×${settings.height}` : '–';
+    settings?.width && settings?.height ? `${settings.width}×${settings.height}` : '–';
 }
 
-// ── WebRTC – Single PC (Hub Architecture) ────────────────────────────────────
+// ── WebRTC ────────────────────────────────────────────────────────────────────
 async function openPc() {
   if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
   pendingIce = [];
-  if (pc) { pc.close(); }
+  if (pc) pc.close();
 
   pc = new RTCPeerConnection(STUN);
-
-  const track = localStream.getVideoTracks()[0];
-  const sender = pc.addTrack(track, localStream);
+  const sender = pc.addTrack(localStream.getVideoTracks()[0], localStream);
 
   pc.onicecandidate = (e) => {
     if (e.candidate) sendMsg({ cmd: 'camera_ice', device_id: deviceId, target: 'operator', candidate: e.candidate });
@@ -457,12 +451,9 @@ async function openPc() {
 
   pc.oniceconnectionstatechange = () => {
     const s = pc.iceConnectionState;
-    connectionStatus = s === 'connected' || s === 'completed' ? 'connected' : s;
+    connectionStatus = (s === 'connected' || s === 'completed') ? 'connected' : s;
     updateStatus();
     document.getElementById('stat-preview').textContent = s;
-    if (s === 'connected' || s === 'completed') {
-      if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
-    }
     if (s === 'failed') {
       if (retryTimer) clearTimeout(retryTimer);
       retryTimer = setTimeout(() => openPc().catch(console.error), 3000);
@@ -471,7 +462,6 @@ async function openPc() {
 
   const offer = await pc.createOffer({ offerToReceiveVideo: false });
   await pc.setLocalDescription(offer);
-
   sendMsg({ cmd: 'camera_offer', device_id: deviceId, device_name: deviceName || deviceId.slice(0, 8), target: 'operator', sdp: offer.sdp });
 
   try {
@@ -488,7 +478,7 @@ async function openPc() {
 // ── UI helpers ────────────────────────────────────────────────────────────────
 function showCameraScreen() {
   document.getElementById('pin-screen').style.display = 'none';
-  document.getElementById('cam-screen').style.display = 'flex';
+  document.getElementById('cam-screen').style.display = 'block';
   document.getElementById('name-input').value = deviceName;
   setStatus('connecting');
 }
@@ -498,36 +488,22 @@ function saveName() {
   if (!val) return;
   deviceName = val;
   localStorage.setItem('cam_device_name', val);
-  // Name is stored locally — takes effect on next reconnect.
-  // Do NOT re-open the PC here; dropping the live connection just to rename is disruptive.
 }
 
 function setStatus(s) {
   const dot  = document.getElementById('status-dot');
   const text = document.getElementById('status-text');
   dot.className = 'dot ' + s;
-  const map = { connecting: 'Connecting…', connected: 'Live', disconnected: 'Offline' };
-  text.textContent = map[s] || s;
+  text.textContent = { connecting: 'Connecting…', connected: 'Live', disconnected: 'Offline' }[s] || s;
 }
 
 function updateStatus() {
-  if (connectionStatus === 'connected') {
-    setStatus('connected');
-  } else if (connectionStatus === 'connecting' || connectionStatus === 'checking') {
-    setStatus('connecting');
-  } else {
-    setStatus('disconnected');
-  }
+  setStatus(connectionStatus === 'connected' ? 'connected' : connectionStatus === 'connecting' || connectionStatus === 'checking' ? 'connecting' : 'disconnected');
 }
 
 function sendMsg(obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(obj));
-  }
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
 }
-
-// ── PIN digit auto-advance ────────────────────────────────────────────────────
-// (handled above in pinInputs.forEach — nothing extra needed here)
 </script>
 </body>
 </html>
