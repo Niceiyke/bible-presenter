@@ -516,4 +516,26 @@ impl BibleStore {
         }
         Ok(verses)
     }
+
+    pub fn get_chapter_verses(&self, book: &str, chapter: i32, version: &str) -> anyhow::Result<Vec<Verse>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT title, chapter, verse, text FROM super_bible \
+             WHERE title = ?1 AND chapter = ?2 AND version = ?3 ORDER BY verse"
+        )?;
+        let rows = stmt.query_map(params![book, chapter, version], |row| {
+            Ok(Verse {
+                book: row.get(0)?,
+                chapter: row.get(1)?,
+                verse: row.get(2)?,
+                text: row.get(3)?,
+                version: version.to_string(),
+            })
+        })?;
+        let mut verses = Vec::new();
+        for v in rows {
+            verses.push(v?);
+        }
+        Ok(verses)
+    }
 }

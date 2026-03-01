@@ -141,9 +141,6 @@ pub struct CustomSlideData {
     pub elements: Vec<SlideElement>,
 }
 
-fn default_header_enabled() -> bool { true }
-fn default_header_height_pct() -> f64 { 35.0 }
-
 /// A live camera feed — either a local getUserMedia device or a LAN WebRTC mobile stream.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CameraFeedData {

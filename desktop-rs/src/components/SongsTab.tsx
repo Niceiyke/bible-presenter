@@ -15,11 +15,14 @@ interface SongsTabProps {
 export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }: SongsTabProps) {
   const {
     songs, setSongs,
+    hymnLibrary,
     songSearch, setSongSearch,
     editingSong, setEditingSong,
     songImportText, setSongImportText,
     showSongImport, setShowSongImport,
   } = useAppStore();
+
+  const [activeSubTab, setActiveSubTab] = React.useState<"mine" | "library">("mine");
 
   const getSongDisplayItem = (song: Song, flatIndex = 0): DisplayItem => {
     const flat: { label: string; lines: string[] }[] = [];
@@ -50,25 +53,43 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
     };
   };
 
+  const filteredSongs = (activeSubTab === "mine" ? songs : hymnLibrary).filter((s) => 
+    s.title.toLowerCase().includes(songSearch.toLowerCase()) ||
+    (s.author && s.author.toLowerCase().includes(songSearch.toLowerCase()))
+  );
+
   return (
     <div className="flex flex-col gap-4">
       {/* Header */}
       <div className="flex justify-between items-center">
-        <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Songs Library</h2>
+        <div className="flex gap-4 items-center">
+          <button
+            onClick={() => setActiveSubTab("mine")}
+            className={`text-xs font-bold uppercase tracking-widest ${activeSubTab === "mine" ? "text-amber-500 border-b-2 border-amber-500" : "text-slate-500 hover:text-slate-300"}`}
+          >My Songs</button>
+          <button
+            onClick={() => setActiveSubTab("library")}
+            className={`text-xs font-bold uppercase tracking-widest ${activeSubTab === "library" ? "text-amber-500 border-b-2 border-amber-500" : "text-slate-500 hover:text-slate-300"}`}
+          >Hymn Library</button>
+        </div>
         <div className="flex gap-2">
-          <button
-            onClick={() => setShowSongImport(!showSongImport)}
-            className="text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded"
-          >Import</button>
-          <button
-            onClick={() => setEditingSong({ id: "", title: "", author: "", sections: [{ label: "Verse 1", lines: [""] }], arrangement: [], style: "LowerThird" })}
-            className="text-[10px] font-bold uppercase bg-amber-600 hover:bg-amber-500 text-white px-2 py-1 rounded"
-          >+ New</button>
+          {activeSubTab === "mine" && (
+            <>
+              <button
+                onClick={() => setShowSongImport(!showSongImport)}
+                className="text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded"
+              >Import</button>
+              <button
+                onClick={() => setEditingSong({ id: "", title: "", author: "", sections: [{ label: "Verse 1", lines: [""] }], arrangement: [], style: "LowerThird" })}
+                className="text-[10px] font-bold uppercase bg-amber-600 hover:bg-amber-500 text-white px-2 py-1 rounded"
+              >+ New</button>
+            </>
+          )}
         </div>
       </div>
 
       {/* Import text area */}
-      {showSongImport && (
+      {showSongImport && activeSubTab === "mine" && (
         <div className="flex flex-col gap-2 bg-slate-900 border border-slate-700 rounded-xl p-3">
           <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">Paste lyrics — every line becomes a new slide</p>
           <textarea
@@ -107,14 +128,14 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
       {/* Search */}
       <input
         className="w-full bg-slate-800 text-slate-200 text-xs rounded-lg px-3 py-2 border border-slate-700 placeholder-slate-500"
-        placeholder="Search songs..."
+        placeholder={activeSubTab === "mine" ? "Search my songs..." : "Search hymn library..."}
         value={songSearch}
         onChange={(e) => setSongSearch(e.target.value)}
       />
 
       {/* Song list */}
       <div className="flex flex-col gap-2">
-        {songs.filter((s) => s.title.toLowerCase().includes(songSearch.toLowerCase())).map((song) => (
+        {filteredSongs.map((song) => (
           <div key={song.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-col gap-1">
             <div className="flex justify-between items-start">
               <div>
@@ -123,52 +144,71 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
                 <p className="text-[10px] text-slate-600 mt-0.5">{song.sections.length} section{song.sections.length !== 1 ? "s" : ""} · {song.sections.reduce((a, s) => a + s.lines.length, 0)} lines</p>
               </div>
               <div className="flex gap-1">
-                {song.style === "FullSlide" ? (
+                {activeSubTab === "mine" ? (
                   <>
-                    <button
-                      onClick={() => onStage(getSongDisplayItem(song, 0))}
-                      className="text-[9px] font-black uppercase bg-amber-600 hover:bg-amber-500 text-white px-2 py-1 rounded"
-                    >Stage</button>
-                    <button
-                      onClick={() => onLive(getSongDisplayItem(song, 0))}
-                      className="text-[9px] font-black uppercase bg-red-700 hover:bg-red-600 text-white px-2 py-1 rounded"
-                    >Live</button>
+                    {song.style === "FullSlide" ? (
+                      <>
+                        <button
+                          onClick={() => onStage(getSongDisplayItem(song, 0))}
+                          className="text-[9px] font-black uppercase bg-amber-600 hover:bg-amber-500 text-white px-2 py-1 rounded"
+                        >Stage</button>
+                        <button
+                          onClick={() => onLive(getSongDisplayItem(song, 0))}
+                          className="text-[9px] font-black uppercase bg-red-700 hover:bg-red-600 text-white px-2 py-1 rounded"
+                        >Live</button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => onOpenLyricsMode(song.id)}
+                        className="text-[9px] font-black uppercase bg-green-700 hover:bg-green-600 text-white px-2 py-1 rounded"
+                      >Use</button>
+                    )}
                     <button
                       onClick={() => onAddToSchedule(getSongDisplayItem(song, 0))}
                       className="text-[9px] font-black uppercase bg-slate-800 hover:bg-slate-700 text-slate-400 px-2 py-1 rounded border border-slate-700"
                     >+ Queue</button>
+                    <button
+                      onClick={() => setEditingSong(JSON.parse(JSON.stringify(song)))}
+                      className="text-[9px] font-black uppercase bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-1 rounded"
+                    >Edit</button>
+                    <button
+                      onClick={async () => {
+                        await invoke("delete_song", { id: song.id });
+                        const next = songs.filter((s) => s.id !== song.id);
+                        setSongs(next);
+                        emit("songs-sync", next);
+                      }}
+                      className="text-[9px] font-black uppercase bg-red-900/50 hover:bg-red-800 text-red-400 px-2 py-1 rounded"
+                    >Del</button>
                   </>
                 ) : (
                   <>
                     <button
-                      onClick={() => onOpenLyricsMode(song.id)}
-                      className="text-[9px] font-black uppercase bg-green-700 hover:bg-green-600 text-white px-2 py-1 rounded"
-                    >Use</button>
+                      onClick={async () => {
+                        // Import from library
+                        const toImport = { ...song, id: "" }; // Clear ID to generate new one
+                        const saved = await invoke<Song>("save_song", { song: toImport });
+                        const next = [...songs, saved].sort((a, b) => a.title.localeCompare(b.title));
+                        setSongs(next);
+                        emit("songs-sync", next);
+                        setActiveSubTab("mine");
+                      }}
+                      className="text-[9px] font-black uppercase bg-amber-600 hover:bg-amber-500 text-white px-2 py-1 rounded"
+                    >Import</button>
                     <button
-                      onClick={() => onAddToSchedule(getSongDisplayItem(song, 0))}
-                      className="text-[9px] font-black uppercase bg-slate-800 hover:bg-slate-700 text-slate-400 px-2 py-1 rounded border border-slate-700"
-                    >+ Queue</button>
+                      onClick={() => onStage(getSongDisplayItem(song, 0))}
+                      className="text-[9px] font-black uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded"
+                    >Preview</button>
                   </>
                 )}
-                <button
-                  onClick={() => setEditingSong(JSON.parse(JSON.stringify(song)))}
-                  className="text-[9px] font-black uppercase bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-1 rounded"
-                >Edit</button>
-                <button
-                  onClick={async () => {
-                    await invoke("delete_song", { id: song.id });
-                    const next = songs.filter((s) => s.id !== song.id);
-                    setSongs(next);
-                    emit("songs-sync", next);
-                  }}
-                  className="text-[9px] font-black uppercase bg-red-900/50 hover:bg-red-800 text-red-400 px-2 py-1 rounded"
-                >Del</button>
               </div>
             </div>
           </div>
         ))}
-        {songs.length === 0 && (
-          <p className="text-slate-600 text-xs italic text-center py-4">No songs yet. Create one or import lyrics.</p>
+        {filteredSongs.length === 0 && (
+          <p className="text-slate-600 text-xs italic text-center py-4">
+            {activeSubTab === "mine" ? "No songs yet. Create one or import lyrics." : "No hymns found in library."}
+          </p>
         )}
       </div>
 

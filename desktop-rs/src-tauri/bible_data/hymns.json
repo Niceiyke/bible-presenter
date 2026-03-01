@@ -1,0 +1,198 @@
+[
+  {
+    "id": "hymn-amazing-grace",
+    "title": "Amazing Grace",
+    "author": "John Newton",
+    "sections": [
+      {
+        "label": "Verse 1",
+        "lines": [
+          "Amazing grace! How sweet the sound",
+          "That saved a wretch like me!",
+          "I once was lost, but now am found;",
+          "Was blind, but now I see."
+        ]
+      },
+      {
+        "label": "Verse 2",
+        "lines": [
+          "'Twas grace that taught my heart to fear,",
+          "And grace my fears relieved;",
+          "How precious did that grace appear",
+          "The hour I first believed."
+        ]
+      },
+      {
+        "label": "Verse 3",
+        "lines": [
+          "Through many dangers, toils and snares,",
+          "I have already come;",
+          "'Tis grace hath brought me safe thus far,",
+          "And grace will lead me home."
+        ]
+      },
+      {
+        "label": "Verse 4",
+        "lines": [
+          "The Lord has promised good to me,",
+          "His Word my hope secures;",
+          "He will my Shield and Portion be,",
+          "As long as life endures."
+        ]
+      },
+      {
+        "label": "Verse 5",
+        "lines": [
+          "Yea, when this flesh and heart shall fail,",
+          "And mortal life shall cease,",
+          "I shall possess, within the veil,",
+          "A life of joy and peace."
+        ]
+      }
+    ],
+    "style": "FullSlide"
+  },
+  {
+    "id": "hymn-it-is-well",
+    "title": "It Is Well With My Soul",
+    "author": "Horatio Spafford",
+    "sections": [
+      {
+        "label": "Verse 1",
+        "lines": [
+          "When peace like a river attendeth my way,",
+          "When sorrows like sea billows roll;",
+          "Whatever my lot, Thou hast taught me to say,",
+          "It is well, it is well with my soul."
+        ]
+      },
+      {
+        "label": "Chorus",
+        "lines": [
+          "It is well (it is well)",
+          "With my soul (with my soul)",
+          "It is well, it is well with my soul."
+        ]
+      },
+      {
+        "label": "Verse 2",
+        "lines": [
+          "Though Satan should buffet, though trials should come,",
+          "Let this blest assurance control,",
+          "That Christ has regarded my helpless estate,",
+          "And hath shed His own blood for my soul."
+        ]
+      },
+      {
+        "label": "Verse 3",
+        "lines": [
+          "My sin, oh, the bliss of this glorious thought!",
+          "My sin, not in part but the whole,",
+          "Is nailed to the cross, and I bear it no more,",
+          "Praise the Lord, praise the Lord, O my soul!"
+        ]
+      },
+      {
+        "label": "Verse 4",
+        "lines": [
+          "And Lord, haste the day when my faith shall be sight,",
+          "The clouds be rolled back as a scroll;",
+          "The trump shall resound, and the Lord shall descend,",
+          "Even so, it is well with my soul."
+        ]
+      }
+    ],
+    "arrangement": ["Verse 1", "Chorus", "Verse 2", "Chorus", "Verse 3", "Chorus", "Verse 4", "Chorus"],
+    "style": "FullSlide"
+  },
+  {
+    "id": "hymn-blessed-assurance",
+    "title": "Blessed Assurance",
+    "author": "Fanny Crosby",
+    "sections": [
+      {
+        "label": "Verse 1",
+        "lines": [
+          "Blessed assurance, Jesus is mine!",
+          "Oh, what a foretaste of glory divine!",
+          "Heir of salvation, purchase of God,",
+          "Born of His Spirit, washed in His blood."
+        ]
+      },
+      {
+        "label": "Chorus",
+        "lines": [
+          "This is my story, this is my song,",
+          "Praising my Savior all the day long;",
+          "This is my story, this is my song,",
+          "Praising my Savior all the day long."
+        ]
+      },
+      {
+        "label": "Verse 2",
+        "lines": [
+          "Perfect submission, perfect delight,",
+          "Visions of rapture now burst on my sight;",
+          "Angels, descending, bring from above",
+          "Echoes of mercy, whispers of love."
+        ]
+      },
+      {
+        "label": "Verse 3",
+        "lines": [
+          "Perfect submission, all is at rest,",
+          "I in my Savior am happy and blest,",
+          "Watching and waiting, looking above,",
+          "Filled with His goodness, lost in His love."
+        ]
+      }
+    ],
+    "arrangement": ["Verse 1", "Chorus", "Verse 2", "Chorus", "Verse 3", "Chorus"],
+    "style": "FullSlide"
+  },
+  {
+    "id": "hymn-great-is-thy-faithfulness",
+    "title": "Great Is Thy Faithfulness",
+    "author": "Thomas Chisholm",
+    "sections": [
+      {
+        "label": "Verse 1",
+        "lines": [
+          "Great is Thy faithfulness, O God my Father,",
+          "There is no shadow of turning with Thee;",
+          "Thou changest not, Thy compassions, they fail not",
+          "As Thou hast been Thou forever wilt be."
+        ]
+      },
+      {
+        "label": "Chorus",
+        "lines": [
+          "Great is Thy faithfulness! Great is Thy faithfulness!",
+          "Morning by morning new mercies I see;",
+          "All I have needed Thy hand hath provided",
+          "Great is Thy faithfulness, Lord, unto me!"
+        ]
+      },
+      {
+        "label": "Verse 2",
+        "lines": [
+          "Summer and winter, and springtime and harvest,",
+          "Sun, moon and stars in their courses above,",
+          "Join with all nature in manifold witness",
+          "To Thy great faithfulness, mercy and love."
+        ]
+      },
+      {
+        "label": "Verse 3",
+        "lines": [
+          "Pardon for sin and a peace that endureth,",
+          "Thine own dear presence to cheer and to guide;",
+          "Strength for today and bright hope for tomorrow,",
+          "Blessings all mine, with ten thousand beside!"
+        ]
+      }
+    ],
+    "arrangement": ["Verse 1", "Chorus", "Verse 2", "Chorus", "Verse 3", "Chorus"],
+    "style": "FullSlide"
+  }
+]

@@ -13,7 +13,7 @@ import type {
 export function useAppInitialization() {
   const {
     setLabel, setMedia, setPresentations, setStudioList, setStudioSlides,
-    setScheduleEntries, setSongs, setLtSavedTemplates, 
+    setScheduleEntries, setSongs, setHymnLibrary, setLtSavedTemplates, 
     setLtTemplate, setSettings, setRemoteUrl, setRemotePin, 
     setTailscaleUrl, setAvailableVersions, setBibleVersion, 
     setPropItems, setSavedScenes, setServices, setLiveItem,
@@ -39,7 +39,7 @@ export function useAppInitialization() {
       if (versionsRes.length === 0) return; // backend never became ready
 
       const [
-        mediaRes, presRes, studioRes, scheduleRes, songsRes,
+        mediaRes, presRes, studioRes, scheduleRes, songsRes, hymnLibraryRes,
         ltRes, settingsRes, remoteRes, propsRes,
         scenesRes, servicesRes
       ] = await Promise.all([
@@ -48,6 +48,7 @@ export function useAppInitialization() {
         invoke<any[]>("list_studio_presentations").catch(() => []),
         invoke<any>("load_schedule").catch(() => ({ items: [] })),
         invoke<Song[]>("list_songs").catch(() => []),
+        invoke<Song[]>("get_hymn_library").catch(() => []),
         invoke<LowerThirdTemplate[]>("load_lt_templates").catch(() => []),
         invoke<PresentationSettings>("get_settings").catch(() => null),
         invoke<any>("get_remote_info").catch(() => null),
@@ -61,6 +62,7 @@ export function useAppInitialization() {
       setStudioList(studioRes);
       setScheduleEntries(scheduleRes.items.map((e: any) => ({ id: e.id || stableId(), item: e.item ?? e })));
       setSongs(songsRes);
+      setHymnLibrary(hymnLibraryRes);
 
       if (ltRes.length) {
         setLtSavedTemplates(ltRes);
