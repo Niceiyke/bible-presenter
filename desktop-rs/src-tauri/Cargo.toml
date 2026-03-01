@@ -26,6 +26,7 @@ ort = "2.0.0-rc.11"
 ndarray = "0.15"     # Tensor manipulation
 ndarray-npy = "0.8"  # Load .npy files
 hnsw_rs = "0.1.19"
+memmap2 = "0.9"
 anyhow = "1.0"        
 parking_lot = "0.12" 
 regex = "1.10"       
