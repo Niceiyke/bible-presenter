@@ -4,10 +4,9 @@ use std::sync::Arc;
 use std::collections::HashMap;
 use parking_lot::Mutex;
 use regex::{Regex, RegexSet};
-use ndarray::Array2;
-use ndarray_npy::ReadNpyExt;
 use std::fs::File;
 use hnsw_rs::prelude::*;
+use memmap2::Mmap;
 
 pub mod media_schedule;
 pub use media_schedule::*;
@@ -29,28 +28,33 @@ pub struct Verse {
     pub total_splits: Option<usize>,
 }
 
-/// A lightweight version of Verse for memory-efficient caching.
+/// A compact version of Verse for memory-efficient caching.
+/// Only 6 bytes per verse: (u16 book_idx, u16 chapter, u16 verse, u8 version_idx)
 #[derive(Clone)]
-pub struct VerseMetadata {
-    pub book: String,
-    pub chapter: i32,
-    pub verse: i32,
-    pub version: String,
+pub struct CachedVerse {
+    pub book_idx: u16,
+    pub chapter: u16,
+    pub verse: u16,
+    pub version_idx: u8,
 }
 
 pub struct BibleStore {
     conn: Arc<Mutex<Connection>>,
     patterns: RegexSet,
     book_map: HashMap<String, String>,
+    /// All books found in the DB, for indexing CachedVerse.
+    books: Vec<String>,
+    /// All available versions found in the DB, for indexing CachedVerse.
+    available_versions: Vec<String>,
     /// All verses from all embedded versions, stacked in EMBEDDED_VERSIONS order.
     /// verse_cache[i] corresponds to row i in the HNSW index.
-    verse_cache: Vec<VerseMetadata>,
+    verse_cache: Vec<CachedVerse>,
+    /// Memory-mapped embeddings file.
+    _mmap: Option<Mmap>,
     /// HNSW index for fast semantic search (L2 distance on normalized embeddings).
     hnsw_index: Option<Hnsw<f32, DistL2>>,
     /// Currently active version for display queries.
     active_version: Mutex<String>,
-    /// All available versions found in the DB.
-    available_versions: Vec<String>,
 }
 
 impl BibleStore {
@@ -79,6 +83,13 @@ impl BibleStore {
                          WHERE language = 'EN' AND text IS NOT NULL AND text != ''", [])?;
         }
 
+        // Discover all books across all versions
+        let books: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT DISTINCT title FROM super_bible ORDER BY title")?;
+            let rows = stmt.query_map([], |row| row.get(0))?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+
         // Discover which versions are in the DB
         let mut available_versions: Vec<String> = {
             let mut stmt = conn.prepare(
@@ -93,20 +104,22 @@ impl BibleStore {
         });
         println!("BibleStore: Available versions: {:?}", available_versions);
 
-        // Pre-load verse_cache for every embedded version (in EMBEDDED_VERSIONS order)
-        let mut verse_cache: Vec<VerseMetadata> = Vec::new();
-        for version in &available_versions {
+        // Pre-load verse_cache for every version (in specific order to match embeddings)
+        let mut verse_cache: Vec<CachedVerse> = Vec::new();
+        for (v_idx, version) in available_versions.iter().enumerate() {
             let mut stmt = conn.prepare(
                 "SELECT title, chapter, verse FROM super_bible \
                  WHERE version = ?1 AND language = 'EN' AND text IS NOT NULL AND text != '' \
                  ORDER BY book, chapter, verse"
             )?;
             let rows = stmt.query_map(params![version], |row| {
-                Ok(VerseMetadata {
-                    book: row.get(0)?,
-                    chapter: row.get(1)?,
-                    verse: row.get(2)?,
-                    version: version.to_string(),
+                let book: String = row.get(0)?;
+                let book_idx = books.iter().position(|b| b == &book).unwrap_or(0) as u16;
+                Ok(CachedVerse {
+                    book_idx,
+                    chapter: row.get::<_, i32>(1)? as u16,
+                    verse: row.get::<_, i32>(2)? as u16,
+                    version_idx: v_idx as u8,
                 })
             })?;
             for row in rows {
@@ -115,31 +128,54 @@ impl BibleStore {
         }
         println!("BibleStore: Total cached verses: {}", verse_cache.len());
 
-        // Load stacked embeddings into HNSW index
+        // Load stacked embeddings into HNSW index (Memory-Mapped)
         let mut hnsw_index = None;
+        let mut _mmap = None;
         if let Some(path) = embeddings_path {
             match File::open(path) {
-                Ok(mut file) => match Array2::<f32>::read_npy(&mut file) {
-                    Ok(arr) => {
-                        println!(
-                            "BibleStore: Building HNSW index ({} rows, {} dims)",
-                            arr.nrows(), arr.ncols()
-                        );
-                        let max_nb_conn = 16;
-                        let max_layer = 16;
-                        let ef_construction = 200;
-                        let hnsw = Hnsw::new(max_nb_conn, arr.nrows(), max_layer, ef_construction, DistL2 {});
-                        
-                        // Insert embeddings in parallel (or just sequentially for safety in new)
-                        let mut data_to_insert = Vec::with_capacity(arr.nrows());
-                        for i in 0..arr.nrows() {
-                            let row = arr.row(i).to_vec();
-                            data_to_insert.push((row, i));
+                Ok(file) => {
+                    match unsafe { Mmap::map(&file) } {
+                        Ok(m) => {
+                            // Simple NPY header parsing to find data offset
+                            let header_len_raw = &m[8..10];
+                            let header_len = u16::from_le_bytes([header_len_raw[0], header_len_raw[1]]) as usize;
+                            let data_offset = 10 + header_len;
+                            
+                            // Get pointer to raw f32 data
+                            let byte_slice = &m[data_offset..];
+                            let f32_count = byte_slice.len() / 4;
+                            let f32_ptr = byte_slice.as_ptr() as *const f32;
+                            let f32_slice = unsafe { std::slice::from_raw_parts(f32_ptr, f32_count) };
+                            
+                            let n_rows = verse_cache.len();
+                            let n_dims = 384;
+                            
+                            if f32_count < n_rows * n_dims {
+                                eprintln!("Warning: Embedding file size mismatch (found {}, expected {})", f32_count, n_rows * n_dims);
+                            } else {
+                                println!("BibleStore: Building HNSW index from MMap'd data ({} rows, {} dims)", n_rows, n_dims);
+                                
+                                let max_nb_conn = 16;
+                                let max_layer = 16;
+                                let ef_construction = 200;
+                                let hnsw = Hnsw::new(max_nb_conn, n_rows, max_layer, ef_construction, DistL2 {});
+                                
+                                // Insert embeddings in parallel
+                                let data_to_insert: Vec<(Vec<f32>, usize)> = (0..n_rows)
+                                    .map(|i| {
+                                        let start = i * n_dims;
+                                        let end = start + n_dims;
+                                        (f32_slice[start..end].to_vec(), i)
+                                    })
+                                    .collect();
+                                
+                                hnsw.parallel_insert(&data_to_insert);
+                                hnsw_index = Some(hnsw);
+                                _mmap = Some(m);
+                            }
                         }
-                        hnsw.parallel_insert(&data_to_insert);
-                        hnsw_index = Some(hnsw);
+                        Err(e) => eprintln!("Warning: Failed to MMap embeddings: {}", e),
                     }
-                    Err(e) => eprintln!("Warning: Failed to parse embeddings .npy: {}", e),
                 },
                 Err(e) => eprintln!("Warning: Could not open embeddings at {}: {}", path, e),
             }
@@ -152,16 +188,7 @@ impl BibleStore {
             .unwrap_or_else(|| available_versions.first().cloned().unwrap_or_else(|| "KJV".to_string()));
 
         let mut book_map = HashMap::new();
-        // ... (rest of book_map initialization)
-
-        let default_version = EMBEDDED_VERSIONS
-            .iter()
-            .find(|&&v| available_versions.iter().any(|a| a == v))
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| available_versions.first().cloned().unwrap_or_else(|| "KJV".to_string()));
-
-        let mut book_map = HashMap::new();
-        let books = vec![
+        let alias_books = vec![
             ("genesis", "Genesis"), ("gen", "Genesis"), ("gn", "Genesis"),
             ("exodus", "Exodus"), ("exod", "Exodus"), ("ex", "Exodus"),
             ("leviticus", "Leviticus"), ("lev", "Leviticus"), ("lv", "Leviticus"),
@@ -230,7 +257,7 @@ impl BibleStore {
             ("revelation", "Revelation"), ("rev", "Revelation"), ("rv", "Revelation"),
         ];
 
-        for (alias, full) in books {
+        for (alias, full) in alias_books {
             book_map.insert(alias.to_string(), full.to_string());
         }
 
@@ -243,10 +270,12 @@ impl BibleStore {
             conn: Arc::new(Mutex::new(conn)),
             patterns,
             book_map,
+            books,
+            available_versions,
             verse_cache,
+            _mmap,
             hnsw_index,
             active_version: Mutex::new(default_version),
-            available_versions,
         })
     }
 
@@ -329,38 +358,38 @@ impl BibleStore {
     /// Searches the full stacked embeddings matrix across all embedded versions.
     /// Returns `(Option<Verse>, score)` — the best match and its cosine similarity score.
     fn search_semantic_stacked(&self, embedding: &[f32]) -> (Option<Verse>, f32) {
-        let Some(embeddings) = self.embeddings.as_ref() else {
-            return (None, 0.0);
+        let hnsw = match self.hnsw_index.as_ref() {
+            Some(h) => h,
+            None => return (None, 0.0),
         };
-        let query = ndarray::ArrayView1::from(embedding);
-        let similarities = embeddings.dot(&query);
 
-        let mut best_idx = 0;
-        let mut max_score = 0.0f32;
-        for (idx, &score) in similarities.iter().enumerate() {
-            if score > max_score {
-                max_score = score;
-                best_idx = idx;
-            }
+        let search_results = hnsw.search(embedding, 1, 128);
+        if search_results.is_empty() {
+            return (None, 0.0);
         }
 
-        if max_score < 0.45 {
-            return (None, max_score);
+        let neighbor = &search_results[0];
+        let score = 1.0 - neighbor.distance; // Approximate similarity for DistL2
+        
+        if score < 0.45 {
+            return (None, score);
         }
 
-        // Identify the verse coordinates from the best-matching cache entry
-        let Some(matched) = self.verse_cache.get(best_idx) else {
-            return (None, 0.0);
-        };
-        let active_version = self.get_active_version();
+        let idx = neighbor.d_idx;
+        if let Some(matched) = self.verse_cache.get(idx) {
+            let book = &self.books[matched.book_idx as usize];
+            let version = &self.available_versions[matched.version_idx as usize];
+            let active_version = self.get_active_version();
 
-        // Look up the same (book, chapter, verse) in the active display version
-        let verse = self.get_verse(&matched.book, matched.chapter, matched.verse, &active_version)
-            .ok()
-            .flatten()
-            // Fallback: return matched verse as-is if active version doesn't have it
-            .or_else(|| Some(matched.clone()));
-        (verse, max_score)
+            // Look up the same (book, chapter, verse) in the active display version
+            let verse = self.get_verse(book, matched.chapter as i32, matched.verse as i32, &active_version)
+                .ok()
+                .flatten()
+                .or_else(|| self.get_verse(book, matched.chapter as i32, matched.verse as i32, version).ok().flatten());
+            
+            return (verse, score);
+        }
+        (None, 0.0)
     }
 
     pub fn get_verse(&self, book: &str, chapter: i32, verse: i32, version: &str) -> anyhow::Result<Option<Verse>> {
@@ -431,16 +460,18 @@ impl BibleStore {
             }
             let idx = neighbor.d_idx;
             if let Some(matched) = self.verse_cache.get(idx) {
-                let key = (matched.book.clone(), matched.chapter, matched.verse);
+                let book = &self.books[matched.book_idx as usize];
+                let key = (matched.book_idx, matched.chapter, matched.verse);
                 if seen.insert(key) {
                     // 1. Try to get this verse in the active version
-                    let mut verse = self.get_verse(&matched.book, matched.chapter, matched.verse, &active_version)
+                    let mut verse = self.get_verse(book, matched.chapter as i32, matched.verse as i32, &active_version)
                         .ok()
                         .flatten();
                     
                     // 2. Fallback to original version found in search if active doesn't have it
                     if verse.is_none() {
-                        verse = self.get_verse(&matched.book, matched.chapter, matched.verse, &matched.version)
+                        let version = &self.available_versions[matched.version_idx as usize];
+                        verse = self.get_verse(book, matched.chapter as i32, matched.verse as i32, version)
                             .ok()
                             .flatten();
                     }
