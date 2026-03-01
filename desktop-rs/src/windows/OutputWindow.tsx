@@ -133,14 +133,16 @@ export function OutputWindow() {
 
     ws.onopen = () => {
       ws.send(JSON.stringify({ cmd: "auth", pin, client_type: "window:output" }));
-      // Notify the Hub that a new output window is ready for a Relay offer
-      ws.send(JSON.stringify({ cmd: "output_ready", target: "operator" }));
     };
 
     ws.onmessage = async (e: MessageEvent) => {
       let msg: any;
       try { msg = JSON.parse(e.data); } catch { return; }
-      if (msg.type === "auth_ok") return;
+      if (msg.type === "auth_ok") {
+        // Now registered in signaling_clients — safe to notify operator for relay offers
+        ws.send(JSON.stringify({ cmd: "output_ready", target: "operator" }));
+        return;
+      }
 
       if (msg.cmd === "camera_offer" && (msg.target === "output" || msg.target === "window:output")) {
         const sceneHandler = sceneCameraHandlersRef.current.get(msg.device_id);

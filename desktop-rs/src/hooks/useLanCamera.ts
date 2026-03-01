@@ -20,20 +20,16 @@ export function useLanCamera(pin: string | null) {
   // Relay connections to the Output Window
   const relayPcRef = useRef<Record<string, RTCPeerConnection | null>>({ A: null, B: null });
   const relaySenderRef = useRef<Record<string, RTCRtpSender | null>>({ A: null, B: null });
+  // Reusable black-frame streams — created once per slot, never leaked
+  const blackFrameStreamRef = useRef<Record<string, MediaStream | null>>({ A: null, B: null });
 
   // Initialize a persistent relay connection for a specific slot (A or B)
   const initRelayPc = useCallback(async (slot: 'A' | 'B') => {
     const existingPc = relayPcRef.current[slot];
-    if (existingPc && existingPc.iceConnectionState === 'connected') {
-        const offer = await existingPc.createOffer();
-        await existingPc.setLocalDescription(offer);
-        operatorWsRef.current?.send(JSON.stringify({
-            cmd: "camera_offer",
-            device_id: `hub_relay_${slot.toLowerCase()}`,
-            target: "window:output",
-            sdp: offer.sdp
-        }));
-        return;
+    // If already connected and healthy, nothing to do — output_ready will
+    // re-trigger us if the output window reconnects.
+    if (existingPc && (existingPc.iceConnectionState === 'connected' || existingPc.iceConnectionState === 'completed')) {
+      return;
     }
 
     if (existingPc) existingPc.close();
@@ -83,60 +79,70 @@ export function useLanCamera(pin: string | null) {
       previewPcMapRef.current.delete(device_id);
     }
 
-    const pc = new RTCPeerConnection(STUN_CONFIG);
+    try {
+      const pc = new RTCPeerConnection(STUN_CONFIG);
 
-    pc.ontrack = (ev: RTCTrackEvent) => {
-      const stream = ev.streams[0] ?? new MediaStream([ev.track]);
+      pc.ontrack = (ev: RTCTrackEvent) => {
+        const stream = ev.streams[0] ?? new MediaStream([ev.track]);
+        setCameraSources(prev => {
+          const next = new Map(prev);
+          const src = next.get(device_id);
+          if (src) next.set(device_id, { ...src, previewStream: stream, previewPc: pc, status: "connected" });
+          return next;
+        });
+        const videoEl = previewVideoMapRef.current.get(device_id);
+        if (videoEl) videoEl.srcObject = stream;
+      };
+
+      pc.onicecandidate = (ev) => {
+        if (ev.candidate) {
+          operatorWsRef.current?.send(JSON.stringify({
+            cmd: "camera_ice",
+            device_id,
+            target: `mobile:${device_id}`,
+            candidate: ev.candidate
+          }));
+        }
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        const s = pc.iceConnectionState;
+        setCameraSources(prev => {
+          const next = new Map(prev);
+          const src = next.get(device_id);
+          if (!src) return prev;
+          const status = (s === "connected" || s === "completed") ? "connected"
+            : (s === "failed" || s === "disconnected" || s === "closed") ? "disconnected"
+            : "connecting";
+          next.set(device_id, { ...src, status });
+          return next;
+        });
+      };
+
+      await pc.setRemoteDescription({ type: "offer", sdp });
+      previewPcMapRef.current.set(device_id, pc);
+
+      const buffered = pendingIceRef.current.get(device_id) ?? [];
+      pendingIceRef.current.delete(device_id);
+      for (const candidate of buffered) { try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch {} }
+
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      operatorWsRef.current?.send(JSON.stringify({
+        cmd: "camera_answer",
+        device_id,
+        target: `mobile:${device_id}`,
+        sdp: answer.sdp
+      }));
+    } catch (err) {
+      console.error(`[LanCamera] handlePreviewOffer failed for ${device_id}:`, err);
       setCameraSources(prev => {
         const next = new Map(prev);
         const src = next.get(device_id);
-        if (src) next.set(device_id, { ...src, previewStream: stream, previewPc: pc, status: "connected" });
+        if (src) next.set(device_id, { ...src, status: "disconnected" });
         return next;
       });
-      const videoEl = previewVideoMapRef.current.get(device_id);
-      if (videoEl) videoEl.srcObject = stream;
-    };
-
-    pc.onicecandidate = (ev) => {
-      if (ev.candidate) {
-        operatorWsRef.current?.send(JSON.stringify({
-          cmd: "camera_ice",
-          device_id,
-          target: `mobile:${device_id}`,
-          candidate: ev.candidate
-        }));
-      }
-    };
-
-    pc.oniceconnectionstatechange = () => {
-      const s = pc.iceConnectionState;
-      setCameraSources(prev => {
-        const next = new Map(prev);
-        const src = next.get(device_id);
-        if (!src) return prev;
-        const status = (s === "connected" || s === "completed") ? "connected"
-          : (s === "failed" || s === "disconnected" || s === "closed") ? "disconnected"
-          : "connecting";
-        next.set(device_id, { ...src, status });
-        return next;
-      });
-    };
-
-    await pc.setRemoteDescription({ type: "offer", sdp });
-    previewPcMapRef.current.set(device_id, pc);
-
-    const buffered = pendingIceRef.current.get(device_id) ?? [];
-    pendingIceRef.current.delete(device_id);
-    for (const candidate of buffered) { try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch {} }
-
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    operatorWsRef.current?.send(JSON.stringify({
-      cmd: "camera_answer",
-      device_id,
-      target: `mobile:${device_id}`,
-      sdp: answer.sdp
-    }));
+    }
   }, []);
 
   const connectOperatorWs = useCallback((authPin: string) => {
@@ -149,19 +155,21 @@ export function useLanCamera(pin: string | null) {
     operatorWsRef.current = ws;
     ws.onopen = () => {
       ws.send(JSON.stringify({ cmd: "auth", pin: authPin, client_type: "window:main" }));
-      // Initialize relay slots to output window once connected
-      setTimeout(() => {
-        initRelayPc('A');
-        initRelayPc('B');
-      }, 1000);
     };
     ws.onmessage = async (e) => {
       let msg: any; try { msg = JSON.parse(e.data); } catch { return; }
-      if (msg.type === "auth_ok") return;
+      if (msg.type === "auth_ok") {
+        // Request any mobiles that connected before us to re-send their offer
+        ws.send(JSON.stringify({ cmd: "request_all_offers" }));
+        // Init relay in case the output window is already connected and waiting
+        initRelayPc('A');
+        initRelayPc('B');
+        return;
+      }
 
       // Handle Relay Answer from Output Window
       if (msg.cmd === "camera_answer" && msg.device_id.startsWith("hub_relay_")) {
-        const slot = msg.device_id.endsWith("_a") ? 'A' : 'B';
+        const slot: 'A' | 'B' = msg.device_id === "hub_relay_a" ? 'A' : 'B';
         const pc = relayPcRef.current[slot];
         if (pc && msg.sdp) {
           try { await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp }); } catch {}
@@ -170,7 +178,7 @@ export function useLanCamera(pin: string | null) {
       }
       // Handle Relay ICE from Output Window
       if (msg.cmd === "camera_ice" && msg.device_id.startsWith("hub_relay_")) {
-        const slot = msg.device_id.endsWith("_a") ? 'A' : 'B';
+        const slot: 'A' | 'B' = msg.device_id === "hub_relay_a" ? 'A' : 'B';
         const pc = relayPcRef.current[slot];
         if (pc && msg.candidate) {
           try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
@@ -258,6 +266,9 @@ export function useLanCamera(pin: string | null) {
       operatorWsRef.current?.close();
       if (relayPcRef.current.A) relayPcRef.current.A.close();
       if (relayPcRef.current.B) relayPcRef.current.B.close();
+      for (const stream of Object.values(blackFrameStreamRef.current)) {
+        stream?.getTracks().forEach(t => t.stop());
+      }
     };
   }, [pin, connectOperatorWs]);
 
@@ -280,13 +291,16 @@ export function useLanCamera(pin: string | null) {
     if (!sender || !relayPcRef.current[slot]) return;
     
     if (!device_id) {
-      // Send black frame if no camera is live in this slot
-      const canvas = document.createElement("canvas");
-      canvas.width = 640; canvas.height = 360;
-      const ctx = canvas.getContext("2d");
-      if (ctx) { ctx.fillStyle = "black"; ctx.fillRect(0, 0, 640, 360); }
-      const stream = canvas.captureStream(1);
-      sender.replaceTrack(stream.getVideoTracks()[0]);
+      // Reuse a single black-frame stream per slot — never create more than one
+      if (!blackFrameStreamRef.current[slot]) {
+        const canvas = document.createElement("canvas");
+        canvas.width = 2; canvas.height = 2;
+        const ctx = canvas.getContext("2d");
+        if (ctx) { ctx.fillStyle = "black"; ctx.fillRect(0, 0, 2, 2); }
+        blackFrameStreamRef.current[slot] = canvas.captureStream(1);
+      }
+      const track = blackFrameStreamRef.current[slot]!.getVideoTracks()[0];
+      sender.replaceTrack(track);
       return;
     }
 
