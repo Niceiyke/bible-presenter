@@ -1,6 +1,6 @@
 import { StateCreator } from "zustand";
 import { AppStore } from "../index";
-import { LowerThirdTemplate, Song } from "../../types";
+import { LowerThirdTemplate, Song, DEFAULT_LT_TEMPLATE } from "../../types";
 
 export interface LowerThirdSlice {
   ltMode: "nameplate" | "lyrics" | "freetext";
@@ -54,28 +54,9 @@ export const createLowerThirdSlice: StateCreator<AppStore, [], [], LowerThirdSli
   setLtMode: (v) => set({ ltMode: v }),
   ltVisible: false,
   setLtVisible: (v) => set({ ltVisible: v }),
-  ltTemplate: {
-    id: "default", name: "Default",
-    bgType: "solid", bgColor: "#000000", bgOpacity: 85, bgGradientEnd: "#141428", bgBlur: false, bgBlurAmount: 8,
-    accentEnabled: true, accentColor: "#f59e0b", accentSide: "left", accentWidth: 4,
-    borderEnabled: false, borderColor: "#ffffff", borderWidth: 1,
-    hAlign: "left", vAlign: "bottom", offsetX: 48, offsetY: 40,
-    widthPct: 60, paddingX: 24, paddingY: 16, borderRadius: 12,
-    primaryFont: "Georgia", primarySize: 36, primaryColor: "#ffffff",
-    primaryBold: true, primaryItalic: false, primaryUppercase: false,
-    secondaryFont: "Arial", secondarySize: 22, secondaryColor: "#f59e0b",
-    secondaryBold: false, secondaryItalic: false, secondaryUppercase: false,
-    labelVisible: true, labelColor: "#f59e0b", labelSize: 13, labelUppercase: true,
-    textShadow: true, textShadowColor: "rgba(0,0,0,0.8)", textShadowBlur: 4,
-    textOutline: false, textOutlineColor: "#000000", textOutlineWidth: 1,
-    boxShadow: false, boxShadowColor: "rgba(0,0,0,0.5)", boxShadowBlur: 20,
-    animation: "slide-up", animationDuration: 0.5, exitDuration: 0.2,
-    variant: "classic", bannerBadgeText: "LIVE",
-    scrollEnabled: false, scrollDirection: "rtl", scrollSpeed: 5, scrollSeparator: "  •  ",
-    scrollGap: 50, scrollCount: 0, autoHideSeconds: 0, maxLines: 0,
-  },
+  ltTemplate: DEFAULT_LT_TEMPLATE,
   setLtTemplate: (v) => set((s) => ({ ltTemplate: typeof v === "function" ? v(s.ltTemplate) : v })),
-  ltSavedTemplates: [],
+  ltSavedTemplates: [DEFAULT_LT_TEMPLATE],
   setLtSavedTemplates: (v) => set({ ltSavedTemplates: v }),
   ltDesignOpen: false,
   setLtDesignOpen: (v) => set({ ltDesignOpen: v }),

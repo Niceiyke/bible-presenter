@@ -160,6 +160,17 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
             value={ltTitle}
             onChange={(e) => setLtTitle(e.target.value)}
           />
+          <div className="flex items-center gap-2 mt-1">
+            <span className="text-[10px] text-slate-400 uppercase font-bold">Auto-hide after:</span>
+            <input 
+              type="number" min={0} max={60}
+              className="w-12 bg-slate-800 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700 text-center focus:outline-none focus:border-amber-500"
+              value={ltTemplate.autoHideSeconds || 0}
+              onChange={(e) => setLtTemplate(p => ({ ...p, autoHideSeconds: parseInt(e.target.value) || 0 }))}
+            />
+            <span className="text-[10px] text-slate-500">sec</span>
+            <span className="text-[9px] text-slate-600 italic ml-1">(0 = manual)</span>
+          </div>
         </div>
       )}
 
@@ -196,6 +207,18 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
               );
             })}
           </div>
+          {ltTemplate.scrollEnabled && (
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-[10px] text-slate-400 uppercase font-bold">Repeats:</span>
+              <input 
+                type="number" min={0} max={50}
+                className="w-12 bg-slate-800 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700 text-center focus:outline-none focus:border-amber-500"
+                value={ltTemplate.scrollCount || 0}
+                onChange={(e) => setLtTemplate(p => ({ ...p, scrollCount: parseInt(e.target.value) || 0 }))}
+              />
+              <span className="text-[9px] text-slate-600 italic">(0 = infinite)</span>
+            </div>
+          )}
         </div>
       )}
 
@@ -258,6 +281,16 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
                   {n}
                 </button>
               ))}
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-[10px] text-slate-400 uppercase font-bold ml-1">Auto-hide:</span>
+              <input 
+                type="number" min={0} max={60}
+                className="w-10 bg-slate-800 text-slate-200 text-xs rounded px-1 py-1 border border-slate-700 text-center focus:outline-none focus:border-amber-500"
+                value={ltTemplate.autoHideSeconds || 0}
+                onChange={(e) => setLtTemplate(p => ({ ...p, autoHideSeconds: parseInt(e.target.value) || 0 }))}
+              />
+              <span className="text-[9px] text-slate-500">sec</span>
             </div>
             <div className="flex items-center gap-1">
               <button onClick={() => setLtAutoAdvance(!ltAutoAdvance)}

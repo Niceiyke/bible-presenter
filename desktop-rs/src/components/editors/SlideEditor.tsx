@@ -4,6 +4,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Plus, Trash2, Save, X, ChevronLeft, ChevronRight, Type, Image as ImageIcon, Copy, Square, Undo2, Redo2, AlignCenter, AlignJustify, AlignLeft, AlignRight, ArrowUp, ArrowDown, MoveUp, MoveDown, BookOpen, Lock, Unlock } from "lucide-react";
 import { CustomSlideRenderer } from "../shared/Renderers";
 import { MediaPickerModal } from "../MediaPickerModal";
+import { BiblePickerModal } from "../BiblePickerModal";
 import { newDefaultSlide, newTitleSlide, newBlankSlide, stableId, relativizePath } from "../../utils";
 import { useAppStore } from "../../store";
 import type { CustomPresentation, CustomSlide, MediaItem, SlideElement } from "../../types";
@@ -57,6 +58,7 @@ export function SlideEditor({ initialPres, mediaImages, onClose }: SlideEditorPr
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
   const [showBgImagePicker, setShowBgImagePicker] = useState(false);
   const [showElementImagePicker, setShowElementImagePicker] = useState(false);
+  const [showBiblePicker, setShowBiblePicker] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
   const [canvasScale, setCanvasScale] = useState(1);
 
@@ -502,6 +504,9 @@ export function SlideEditor({ initialPres, mediaImages, onClose }: SlideEditorPr
             <button onClick={addShapeElement} className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded">
               <Square size={14} /> Add Shape
             </button>
+            <button onClick={() => setShowBiblePicker(true)} className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded">
+              <BookOpen size={14} /> Search Bible
+            </button>
             {stagedItem?.type === "Verse" && (
               <button onClick={() => {
                 const verse = stagedItem.data;
@@ -822,6 +827,27 @@ export function SlideEditor({ initialPres, mediaImages, onClose }: SlideEditorPr
             } catch (err) {
               console.error("Upload failed", err);
             }
+          }}
+        />
+      )}
+      {showBiblePicker && (
+        <BiblePickerModal
+          onClose={() => setShowBiblePicker(false)}
+          onSelect={(verse) => {
+            const newEl: SlideElement = {
+              id: stableId(), kind: "text",
+              x: 10, y: 10, w: 80, h: 80, z_index: slide.elements.length + 1,
+              content: `${verse.text}\n\n— ${verse.book} ${verse.chapter}:${verse.verse} (${verse.version})`, 
+              font_size: 40, font_family: "Georgia", color: "#ffffff", align: "center", v_align: "middle", bold: false, italic: true
+            };
+            setPres(prev => {
+              const currentSlide = prev.slides[activeSlideIdx];
+              const nextSlides = [...prev.slides];
+              nextSlides[activeSlideIdx] = { ...currentSlide, elements: [...currentSlide.elements, newEl] };
+              return { ...prev, slides: nextSlides };
+            });
+            setActiveElementId(newEl.id);
+            setShowBiblePicker(false);
           }}
         />
       )}

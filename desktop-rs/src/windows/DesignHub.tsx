@@ -35,6 +35,9 @@ export function DesignHub() {
     setCameras,
     toast, setToast,
     setAppDataDir,
+    setStagedItem,
+    setLiveItem,
+    scheduleEntries, setScheduleEntries,
   } = useAppStore();
 
   const [hubTab, setHubTab] = useState<"studio" | "lt-designer" | "scene" | "props" | "settings">("studio");
@@ -57,10 +60,14 @@ export function DesignHub() {
 
       setStudioList(studioRes);
       setMedia(mediaRes);
-      if (ltRes.length) { 
-        setLtSavedTemplates(ltRes); 
-        setLtTemplate(ltRes.find(t => t.id === localStorage.getItem("activeLtTemplateId")) || ltRes[0]); 
-      }
+
+      // Handle LT templates loading with fallback to default
+      const savedTpls = ltRes.length ? ltRes : [useAppStore.getState().ltTemplate];
+      setLtSavedTemplates(savedTpls);
+      const activeId = localStorage.getItem("activeLtTemplateId");
+      const active = savedTpls.find(t => t.id === activeId) || savedTpls[0];
+      setLtTemplate(active);
+
       setPropItems(propsRes);
       setSavedScenes(scenesRes);
       if (settingsRes) setSettings(settingsRes);
@@ -72,6 +79,25 @@ export function DesignHub() {
     };
     loadAll();
   }, []);
+
+  const stageItem = useCallback(async (item: DisplayItem) => {
+    setStagedItem(item);
+    await invoke("stage_item", { item });
+  }, [setStagedItem]);
+
+  const sendLive = useCallback(async (item: DisplayItem) => {
+    await stageItem(item);
+    await invoke("go_live");
+    setLiveItem(item);
+  }, [stageItem, setLiveItem]);
+
+  const addToSchedule = useCallback(async (item: DisplayItem) => {
+    const entry = { id: stableId(), item };
+    const next = [...scheduleEntries, entry];
+    setScheduleEntries(next);
+    emit("schedule-sync", next);
+    setToast("Added to schedule");
+  }, [scheduleEntries, setScheduleEntries, setToast]);
 
   const handleNewPresentation = async () => {
     const pres: CustomPresentation = { id: stableId(), name: "Untitled Presentation", slides: [newDefaultSlide()] };
@@ -159,7 +185,14 @@ export function DesignHub() {
       <div className="flex-1 overflow-hidden">
         {/* Full-height fill tabs — no padding wrapper */}
         {hubTab === "lt-designer" && <LtDesignerTab onSetToast={setToast} onLoadMedia={async () => {}} />}
-        {hubTab === "scene" && <SceneComposerTab onSetToast={setToast} />}
+        {hubTab === "scene" && (
+          <SceneComposerTab
+            onSetToast={setToast}
+            onStage={stageItem}
+            onLive={sendLive}
+            onAddToSchedule={addToSchedule}
+          />
+        )}
         {/* Scrollable tabs — padded, overflow-y-auto */}
         {(hubTab === "studio" || hubTab === "props" || hubTab === "settings") && (
           <div className="h-full overflow-y-auto p-4 custom-scrollbar">

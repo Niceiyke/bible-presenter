@@ -344,6 +344,41 @@ export function SettingsTab({
       </div>
 
       <div className="border-t border-slate-800 pt-4">
+        <p className="text-xs text-slate-400 font-bold uppercase mb-3">Scripture Auto-Split</p>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[10px] text-slate-300 font-bold uppercase">Enable Auto-Split</span>
+            <span className="text-[9px] text-slate-600">Divide long verses into multiple slides</span>
+          </div>
+          <button
+            onClick={() => onUpdateSettings({ ...settings, auto_split_verses: !settings.auto_split_verses })}
+            className={`w-10 h-5 rounded-full relative transition-colors ${settings.auto_split_verses ? "bg-amber-500" : "bg-slate-700"}`}
+          >
+            <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${settings.auto_split_verses ? "left-6" : "left-1"}`} />
+          </button>
+        </div>
+
+        {settings.auto_split_verses && (
+          <>
+            <div className="flex justify-between items-center mb-1">
+              <span className="text-[10px] text-slate-500 uppercase font-bold">Split Threshold</span>
+              <span className="text-xs font-mono text-amber-500">{settings.verse_split_threshold} chars</span>
+            </div>
+            <input
+              type="range" min="100" max="500" step="10"
+              value={settings.verse_split_threshold}
+              onChange={(e) => onUpdateSettings({ ...settings, verse_split_threshold: parseInt(e.target.value) })}
+              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500 mb-1"
+            />
+            <div className="flex justify-between">
+              <span className="text-[9px] text-slate-600">Short slides</span>
+              <span className="text-[9px] text-slate-600">Long slides</span>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="border-t border-slate-800 pt-4">
         <p className="text-xs text-slate-400 font-bold uppercase mb-3">Bible Versions</p>
         <p className="text-[10px] text-slate-500 uppercase font-bold mb-2">Enable / Disable</p>
         <div className="flex flex-wrap gap-2 mb-4">

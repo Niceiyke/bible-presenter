@@ -588,10 +588,20 @@ export function LayerContentRenderer({
     case "Verse":
       return (
         <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center">
-          <p className={outputMode ? "font-serif text-5xl text-white leading-snug drop-shadow-2xl" : "text-xs font-serif line-clamp-3 mb-1 opacity-80"}
-             style={outputMode ? { fontSize: `${(settings?.font_size ?? 48) * scale}pt`, fontFamily: settings?.verse_font_family } : undefined}>
-            {item.data.text}
-          </p>
+          <div className="relative w-full flex flex-col items-center">
+            <p className={outputMode ? "font-serif text-5xl text-white leading-snug drop-shadow-2xl" : "text-xs font-serif line-clamp-3 mb-1 opacity-80"}
+               style={outputMode ? { fontSize: `${(settings?.font_size ?? 48) * scale}pt`, fontFamily: settings?.verse_font_family } : undefined}>
+              {item.data.text}
+            </p>
+            {outputMode && item.data.split_index !== undefined && item.data.total_splits !== undefined && (
+              <p 
+                className="absolute -bottom-6 right-0 font-black opacity-30 text-[8px] tracking-widest uppercase"
+                style={{ fontSize: `${10 * scale}pt` }}
+              >
+                Part {item.data.split_index + 1} / {item.data.total_splits}
+              </p>
+            )}
+          </div>
           {outputMode ? (
             <ReferenceTag book={item.data.book} chapter={item.data.chapter} verse={item.data.verse} version={item.data.version} settings={settings} scale={scale} />
           ) : (
@@ -819,25 +829,21 @@ export function LowerThirdOverlay({
         )}
         {data.kind === "FreeText" && (
           t.scrollEnabled ? (
-            // Two-span seamless loop: animate by exactly -50% (one span width) so the
-            // duplicate span picks up invisibly, giving a continuous ticker effect.
             <div style={{ overflow: "hidden", position: "relative" }}>
               <motion.div
-                className="flex whitespace-nowrap"
-                initial={{ x: t.scrollDirection === "rtl" ? "0%" : "-50%" }}
-                animate={{ x: t.scrollDirection === "rtl" ? "-50%" : "0%" }}
+                className="whitespace-nowrap inline-block"
+                style={{ minWidth: '100%' }}
+                initial={{ x: t.scrollDirection === "rtl" ? "100%" : "-100%" }}
+                animate={{ x: t.scrollDirection === "rtl" ? "-100%" : "100%" }}
                 transition={{
-                  duration: (11 - t.scrollSpeed) * 4,
+                  duration: (11 - t.scrollSpeed) * 5,
                   ease: "linear",
                   repeat: Infinity,
                   repeatType: "loop",
                 }}
                 onUpdate={(latest: any) => {
-                  // Fire onCycleComplete exactly once per cycle using a latch ref.
-                  // RTL: animation goes 0 → -50. Near -50 = cycle ending.
-                  // LTR: animation goes -50 → 0. Near 0 = cycle ending.
-                  const pct = parseFloat(latest.x);
-                  const nearEnd = t.scrollDirection === "rtl" ? pct < -49 : pct > -1;
+                  const xValue = parseFloat(latest.x);
+                  const nearEnd = t.scrollDirection === "rtl" ? xValue < -98 : xValue > 98;
                   if (nearEnd && !cycleCompleteFiredRef.current) {
                     cycleCompleteFiredRef.current = true;
                     onCycleComplete?.();
@@ -846,18 +852,13 @@ export function LowerThirdOverlay({
                   }
                 }}
               >
-                {/* Span repeated twice for seamless looping */}
-                {[0, 1].map((i) => (
-                  <span key={i} style={{
-                    ...buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase),
-                    paddingRight: t.scrollGap ?? 50,
-                    display: "inline-block",
-                    flexShrink: 0,
-                  }}>
-                    {substituteTokens(data.data.text)}
-                    {t.scrollSeparator && <span className="mx-2 opacity-50">{t.scrollSeparator}</span>}
-                  </span>
-                ))}
+                <span style={{
+                  ...buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase),
+                  display: "inline-block",
+                  flexShrink: 0,
+                }}>
+                  {substituteTokens(data.data.text)}
+                </span>
               </motion.div>
             </div>
           ) : (

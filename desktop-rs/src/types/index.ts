@@ -6,6 +6,8 @@ export interface Verse {
   verse: number;
   text: string;
   version: string;
+  split_index?: number;
+  total_splits?: number;
 }
 
 export type MediaFitMode = "contain" | "cover" | "fill";
@@ -328,6 +330,8 @@ export interface PresentationSettings {
   version_font_size?: number;
   version_color?: string;
   camera_resolution?: "360p" | "480p" | "720p" | "1080p";
+  auto_split_verses: boolean;
+  verse_split_threshold: number;
 }
 
 export interface ParsedSlide {
@@ -388,6 +392,8 @@ export const DEFAULT_SETTINGS: PresentationSettings = {
   reference_font_family: "Arial, sans-serif",
   disabled_bible_versions: [],
   camera_resolution: "720p",
+  auto_split_verses: true,
+  verse_split_threshold: 200,
 };
 
 export const THEMES: Record<string, { label: string; colors: ThemeColors }> = {

@@ -64,10 +64,12 @@ export function useAppInitialization() {
       setSongs(songsRes);
       setHymnLibrary(hymnLibraryRes);
 
-      if (ltRes.length) {
-        setLtSavedTemplates(ltRes);
-        setLtTemplate(ltRes.find(t => t.id === localStorage.getItem("activeLtTemplateId")) || ltRes[0]);
-      }
+      // Handle LT templates loading with fallback to default
+      const savedTpls = ltRes.length ? ltRes : [useAppStore.getState().ltTemplate];
+      setLtSavedTemplates(savedTpls);
+      const activeId = localStorage.getItem("activeLtTemplateId");
+      const active = savedTpls.find(t => t.id === activeId) || savedTpls[0];
+      setLtTemplate(active);
 
       if (settingsRes) setSettings(settingsRes);
 

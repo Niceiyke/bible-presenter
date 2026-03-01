@@ -40,6 +40,8 @@ export function OutputWindow() {
     is_blanked: false,
     font_size: 72,
     disabled_bible_versions: [],
+    auto_split_verses: true,
+    verse_split_threshold: 200,
   });
   const [appDataDir, setAppDataDir] = useState<string | null>(null);
   const [currentSlide, setCurrentSlide] = useState<{ data: ParsedSlide; id: string; index: number } | null>(null);
@@ -502,16 +504,26 @@ export function OutputWindow() {
                   transition={{ duration: 0.6, delay: 0.1 }}
                 >
                   {isTop && ReferenceTag}
-                  <h1
-                    className="leading-tight drop-shadow-2xl"
-                    style={{
-                      color: colors.verseText,
-                      fontSize: `${settings.font_size * windowScale}pt`,
-                      fontFamily: settings.verse_font_family ?? "Georgia, serif",
-                    }}
-                  >
-                    {liveItem.data.text}
-                  </h1>
+                  <div className="relative w-full flex flex-col items-center">
+                    <h1
+                      className="leading-tight drop-shadow-2xl"
+                      style={{
+                        color: colors.verseText,
+                        fontSize: `${settings.font_size * windowScale}pt`,
+                        fontFamily: settings.verse_font_family ?? "Georgia, serif",
+                      }}
+                    >
+                      {liveItem.data.text}
+                    </h1>
+                    {liveItem.data.split_index !== undefined && liveItem.data.total_splits !== undefined && (
+                      <p 
+                        className="absolute -bottom-10 right-0 font-black opacity-30 text-xs tracking-widest"
+                        style={{ color: colors.verseText, fontSize: `${12 * windowScale}pt` }}
+                      >
+                        PART {liveItem.data.split_index + 1} / {liveItem.data.total_splits}
+                      </p>
+                    )}
+                  </div>
                   {!isTop && ReferenceTag}
                 </motion.div>
               </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { AnimatePresence, motion } from "framer-motion";
@@ -24,6 +24,7 @@ import { TimersTab } from "./components/TimersTab";
 import { ScheduleTab } from "./components/ScheduleTab";
 import { StudioTab } from "./components/StudioTab";
 import { SceneComposerTab } from "./components/SceneComposerTab";
+import { ScenesTab } from "./components/ScenesTab";
 import { SettingsTab } from "./components/SettingsTab";
 import { PropsTab } from "./components/PropsTab";
 import { PreviewCard } from "./components/PreviewCard";
@@ -40,6 +41,8 @@ import type {
   PresentationSettings,
   Schedule, ScheduleEntry, PropItem, MediaItem, CustomPresentation
 } from "./types";
+
+const getVerseKey = (v: any) => `${v.book}-${v.chapter}-${v.verse}-${v.version}`;
 
 export default function App() {
   const {
@@ -62,6 +65,9 @@ export default function App() {
   const [editingPres, setEditingPres] = useState<CustomPresentation | null>(null);
   const [bottomDeckH, setBottomDeckH] = React.useState(() => Number(localStorage.getItem("pref_bottomDeckH") || 280));
   const [scheduleWidth, setScheduleWidth] = React.useState(() => Number(localStorage.getItem("pref_scheduleWidth") || 240));
+
+  // Memory of split verses so we don't have to re-split as often
+  const verseSplitsRef = useRef<Record<string, any[]>>({});
 
   // Initialization & Listeners
   useAppInitialization();
@@ -163,8 +169,26 @@ export default function App() {
   // ── Operators Handlers ─────────────────────────────────────────────────────
 
   const stageItem = useCallback(async (item: DisplayItem) => {
-    setStagedItem(item);
-    await invoke("stage_item", { item });
+    let finalItem = item;
+    
+    // Auto-split long verses
+    if (item.type === "Verse" && item.data.split_index === undefined && settings.auto_split_verses) {
+      const key = getVerseKey(item.data);
+      let splits = verseSplitsRef.current[key];
+      if (!splits) {
+        splits = await invoke("split_verse", { 
+          verse: item.data, 
+          threshold: settings.verse_split_threshold 
+        });
+        verseSplitsRef.current[key] = splits;
+      }
+      if (splits.length > 1) {
+        finalItem = { type: "Verse", data: splits[0] };
+      }
+    }
+
+    setStagedItem(finalItem);
+    await invoke("stage_item", { item: finalItem });
   }, [setStagedItem]);
 
   const goLive = useCallback(async () => {
@@ -203,7 +227,20 @@ export default function App() {
   }, [nextLiveItem, stageItem, liveItem, stagedItem, settings, setPreviousItem, ltTemplate, setLtVisible]);
 
   const getNextItem = useCallback((item: DisplayItem): DisplayItem | null => {
-    if (item.type === "Verse" && nextVerse) return { type: "Verse", data: nextVerse };
+    if (item.type === "Verse") {
+      const splitIdx = item.data.split_index;
+      const totalSplits = item.data.total_splits;
+
+      if (splitIdx !== undefined && totalSplits !== undefined && splitIdx + 1 < totalSplits) {
+        // Find split parts in cache
+        const key = getVerseKey(item.data);
+        const splits = verseSplitsRef.current[key];
+        if (splits && splits[splitIdx + 1]) {
+          return { type: "Verse", data: splits[splitIdx + 1] };
+        }
+      }
+      if (nextVerse) return { type: "Verse", data: nextVerse };
+    }
     if (item.type === "PresentationSlide") {
       const idx = item.data.slide_index + 1;
       if (idx < (item.data.slide_count || 0))
@@ -381,6 +418,9 @@ export default function App() {
         case "F3": setActiveTab("media"); break;
         case "F4": setActiveTab("presentations"); break;
         case "F5": invoke("toggle_design_window"); break;
+        case "F6": setActiveTab("scenes"); break;
+        case "F7": setActiveTab("scene-builder"); break;
+        case "F8": setActiveTab("props"); break;
         case "n": if (nextVerse) { const it: DisplayItem = { type: "Verse", data: nextVerse }; if (e.ctrlKey) sendLive(it); else stageItem(it); } break;
         case "ArrowRight": 
           if (liveItem?.type === "PresentationSlide") { 
@@ -395,6 +435,10 @@ export default function App() {
             } 
           }
           else if (liveItem?.type === "Song") {
+            const next = getNextItem(liveItem);
+            if (next) sendLive(next);
+          }
+          else if (liveItem?.type === "Verse") {
             const next = getNextItem(liveItem);
             if (next) sendLive(next);
           }
@@ -437,6 +481,15 @@ export default function App() {
                     }
                   });
                 }
+              }
+            }
+          }
+          else if (liveItem?.type === "Verse") {
+            if (liveItem.data.split_index !== undefined && liveItem.data.split_index > 0) {
+              const key = getVerseKey(liveItem.data);
+              const splits = verseSplitsRef.current[key];
+              if (splits && splits[liveItem.data.split_index - 1]) {
+                sendLive({ type: "Verse", data: splits[liveItem.data.split_index - 1] });
               }
             }
           }
@@ -520,6 +573,7 @@ export default function App() {
               { id: "songs", label: "Songs", icon: Mic },
               { id: "studio", label: "Studio", icon: Layers },
               { id: "scenes", label: "Scenes", icon: Layout },
+              { id: "scene-builder", label: "Scene Builder", icon: Layout },
               { id: "schedule", label: "Service", icon: CalendarDays },
             ] as const).map(({ id, label: lbl, icon: Icon }) => (
               <button key={id} onClick={() => setActiveTab(id)}
@@ -618,6 +672,13 @@ export default function App() {
               />
             )}
             {activeTab === "scenes" && (
+              <ScenesTab
+                onStage={stageItem}
+                onLive={sendLive}
+                onAddToSchedule={addToSchedule}
+              />
+            )}
+            {activeTab === "scene-builder" && (
               <SceneComposerTab
                 onSetToast={setToast}
                 onStage={stageItem}
