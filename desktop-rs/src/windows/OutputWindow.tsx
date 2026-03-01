@@ -8,7 +8,8 @@ import {
   getCameraBackgroundDeviceId,
   getVideoBackground,
   getTransitionVariants,
-  displayItemLabel
+  displayItemLabel,
+  getItemUid
 } from "../utils";
 import {
   SlideRenderer,
@@ -29,6 +30,7 @@ const OUTPUT_STUN: RTCConfiguration = { iceServers: [{ urls: "stun:stun.l.google
 
 export function OutputWindow() {
   const [liveItem, setLiveItem] = useState<DisplayItem | null>(null);
+  const [stagedItem, setStagedItem] = useState<DisplayItem | null>(null);
   const [lowerThird, setLowerThird] = useState<{ data: LowerThirdData; template: LowerThirdTemplate } | null>(null);
   const [propItems, setPropItems] = useState<PropItem[]>([]);
   const [settings, setSettings] = useState<PresentationSettings>({
@@ -40,7 +42,7 @@ export function OutputWindow() {
     disabled_bible_versions: [],
   });
   const [appDataDir, setAppDataDir] = useState<string | null>(null);
-  const [currentSlide, setCurrentSlide] = useState<ParsedSlide | null>(null);
+  const [currentSlide, setCurrentSlide] = useState<{ data: ParsedSlide; id: string; index: number } | null>(null);
   const outputZipsRef = useRef<Record<string, any>>({});
   const videoRef = useRef<HTMLVideoElement>(null);
   const [cameraMuted, setCameraMuted] = useState(false);
@@ -201,6 +203,10 @@ export function OutputWindow() {
       setSettings(event.payload as PresentationSettings);
     });
 
+    const unlistenStaged = listen("item-staged", (event: any) => {
+      setStagedItem(event.payload as DisplayItem | null);
+    });
+
     const unlistenLt = listen("lower-third-update", (event: any) => {
       if (event.payload) {
         setLowerThird({ data: event.payload.data as LowerThirdData, template: event.payload.template as LowerThirdTemplate });
@@ -241,6 +247,7 @@ export function OutputWindow() {
     return () => {
       unlistenTrans.then((f) => f());
       unlistenSettings.then((f) => f());
+      unlistenStaged.then((f) => f());
       unlistenLt.then((f) => f());
       unlistenMedia.then((f) => f());
       unlistenProps.then((f) => f());
@@ -292,6 +299,21 @@ export function OutputWindow() {
     }
   }, []);
 
+  // PPTX Pre-loading & Rendering Logic
+  useEffect(() => {
+    if (stagedItem?.type !== "PresentationSlide") return;
+    const { presentation_id, presentation_path } = stagedItem.data;
+    (async () => {
+      try {
+        if (!outputZipsRef.current[presentation_id]) {
+          outputZipsRef.current[presentation_id] = await loadPptxZip(presentation_path);
+        }
+      } catch (err) {
+        console.error("OutputWindow: pre-load failed", err);
+      }
+    })();
+  }, [stagedItem]);
+
   useEffect(() => {
     if (liveItem?.type !== "PresentationSlide") {
       setCurrentSlide(null);
@@ -307,7 +329,7 @@ export function OutputWindow() {
           outputZipsRef.current[presentation_id] = zip;
         }
         const slide = await parseSingleSlide(zip, slide_index);
-        setCurrentSlide(slide);
+        setCurrentSlide({ data: slide, id: presentation_id, index: slide_index });
       } catch (err) {
         console.error("OutputWindow: failed to render slide", err);
         setCurrentSlide(null);
@@ -464,7 +486,7 @@ export function OutputWindow() {
       <AnimatePresence mode="wait">
         {liveItem ? (
           <motion.div
-            key={displayItemLabel(liveItem)}
+            key={getItemUid(liveItem)}
             className="absolute inset-0 z-10"
             {...getTransitionVariants(
               settings.slide_transition ?? "fade",
@@ -495,8 +517,8 @@ export function OutputWindow() {
               </div>
             ) : liveItem.type === "PresentationSlide" ? (
               <div className="absolute inset-0">
-                {currentSlide ? (
-                  <SlideRenderer slide={currentSlide} scale={windowScale} />
+                {(currentSlide && currentSlide.id === liveItem.data.presentation_id && currentSlide.index === liveItem.data.slide_index) ? (
+                  <SlideRenderer slide={currentSlide.data} scale={windowScale} />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center">
                     <span className="font-serif text-2xl italic" style={{ color: colors.waitingText }}>
@@ -564,13 +586,15 @@ export function OutputWindow() {
             ) : liveItem.type === "Timer" ? (
               <TimerRenderer data={liveItem.data} />
             ) : liveItem.type === "Song" ? (
-              <SongSlideRenderer 
-                data={liveItem.data} 
-                scale={windowScale} 
-                fontSize={settings.font_size}
-                fontFamily={settings.verse_font_family}
-                color={colors.verseText}
-              />
+              liveItem.data.style === "FullSlide" ? (
+                <SongSlideRenderer 
+                  data={liveItem.data} 
+                  scale={windowScale} 
+                  fontSize={settings.font_size}
+                  fontFamily={settings.verse_font_family}
+                  color={colors.verseText}
+                />
+              ) : null
             ) : null}
           </motion.div>
         ) : (

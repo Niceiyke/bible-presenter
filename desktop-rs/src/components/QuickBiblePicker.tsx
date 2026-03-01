@@ -71,8 +71,16 @@ export function QuickBiblePicker({
       if (isDouble) {
         await onLive(item);
         cvInputRef.current?.blur();
+        setLockedBook(null);
+        setCvText("");
+        setBookQuery("");
       } else {
         await onStage(item);
+        setLockedBook(null);
+        setCvText("");
+        setBookQuery("");
+        // Return focus to book input after staging
+        setTimeout(() => bookInputRef.current?.focus(), 50);
       }
     } catch (err) {
       console.error("QuickBiblePicker:", err);

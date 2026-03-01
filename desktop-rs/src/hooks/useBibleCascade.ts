@@ -26,7 +26,10 @@ export function useBibleCascade() {
     invoke("get_books", { version: bibleVersion })
       .then((b: any) => {
         setBooks(b);
-        setSelectedBook((prev: string) => (b.includes(prev) ? prev : (b.length > 0 ? b[0] : "")));
+        setSelectedBook((prev: string) => {
+          if (prev && b.includes(prev)) return prev;
+          return b.length > 0 ? b[0] : "";
+        });
       })
       .catch((err: any) => setAudioError(`Failed to load books: ${err}`));
   }, [bibleVersion, isReady, setBooks, setSelectedBook, setAudioError]);
@@ -37,7 +40,9 @@ export function useBibleCascade() {
     invoke("get_chapters", { book: selectedBook, version: bibleVersion })
       .then((c: any) => {
         setChapters(c);
-        setSelectedChapter(c.length > 0 ? (c.includes(selectedChapter) ? selectedChapter : c[0]) : 0);
+        if (!c.includes(selectedChapter)) {
+          setSelectedChapter(c.length > 0 ? c[0] : 0);
+        }
       })
       .catch((err: any) => setAudioError(`Failed to load chapters: ${err}`));
   }, [selectedBook, bibleVersion, isReady, setChapters, setSelectedChapter, setAudioError, selectedChapter]);

@@ -220,35 +220,49 @@ export function CameraFeedRenderer({ deviceId, resolution = "720p" }: { deviceId
 
   useEffect(() => {
     let stream: MediaStream | null = null;
+    
+    const targetWidth = resolution === "1080p" ? 1920 : resolution === "720p" ? 1280 : resolution === "480p" ? 854 : 640;
+    const targetHeight = resolution === "1080p" ? 1080 : resolution === "720p" ? 720 : resolution === "480p" ? 480 : 360;
+    const minWidth = resolution === "1080p" ? 1280 : resolution === "720p" ? 640 : resolution === "480p" ? 640 : undefined;
+    const minHeight = resolution === "1080p" ? 720 : resolution === "720p" ? 480 : resolution === "480p" ? 360 : undefined;
+
     const constraints: MediaStreamConstraints = {
       video: {
         deviceId: { exact: deviceId },
-        width:
-          resolution === "1080p"
-            ? { ideal: 1920 }
-            : resolution === "720p"
-            ? { ideal: 1280 }
-            : resolution === "480p"
-            ? { ideal: 854 }
-            : { ideal: 640 },
-        height:
-          resolution === "1080p"
-            ? { ideal: 1080 }
-            : resolution === "720p"
-            ? { ideal: 720 }
-            : resolution === "480p"
-            ? { ideal: 480 }
-            : { ideal: 360 },
+        width: { ideal: targetWidth, min: minWidth },
+        height: { ideal: targetHeight, min: minHeight },
+        frameRate: { ideal: 30 },
       },
     };
+
+    console.log(`[CameraFeedRenderer] Requesting ${resolution} for ${deviceId}`, constraints.video);
 
     navigator.mediaDevices
       .getUserMedia(constraints)
       .then((s) => {
         stream = s;
         if (videoRef.current) videoRef.current.srcObject = s;
+        
+        const track = s.getVideoTracks()[0];
+        if (track) {
+          const settings = track.getSettings();
+          console.log(`[CameraFeedRenderer] Actual resolution: ${settings.width}x${settings.height} @ ${settings.frameRate}fps`);
+        }
       })
-      .catch((err) => console.error("CameraFeedRenderer: camera access failed", err));
+      .catch((err) => {
+        console.error("CameraFeedRenderer: camera access failed, trying fallback", err);
+        const fallbackConstraints: MediaStreamConstraints = {
+          video: {
+            deviceId: { exact: deviceId },
+            width: { ideal: targetWidth },
+            height: { ideal: targetHeight },
+          }
+        };
+        navigator.mediaDevices.getUserMedia(fallbackConstraints).then(s => {
+          stream = s;
+          if (videoRef.current) videoRef.current.srcObject = s;
+        }).catch(e => console.error("CameraFeedRenderer: fallback also failed", e));
+      });
     return () => {
       stream?.getTracks().forEach((t) => t.stop());
       if (videoRef.current) videoRef.current.srcObject = null;

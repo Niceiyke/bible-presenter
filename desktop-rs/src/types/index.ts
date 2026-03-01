@@ -276,6 +276,7 @@ export interface SongSlideData {
   lines: string[];
   slide_index: number;
   total_slides: number;
+  style?: SongStyle;
   font?: string;
   font_size?: number;
   font_weight?: string;

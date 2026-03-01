@@ -45,6 +45,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
         lines: item.lines,
         slide_index: flatIndex,
         total_slides: flat.length,
+        style: song.style,
         font: song.font,
         font_size: song.font_size,
         font_weight: song.font_weight,
