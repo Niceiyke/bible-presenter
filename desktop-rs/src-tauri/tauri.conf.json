@@ -74,7 +74,8 @@
       "models/whisper-base.bin",
       "bible_data/super_bible.db",
       "bible_data/all_versions_embeddings.npy",
-      "bible_data/verse_index.json"
+      "bible_data/verse_index.json",
+      "bible_data/hymns.json"
     ],
     "windows": {
       "nsis": {

@@ -37,6 +37,8 @@ export interface LowerThirdSlice {
   setLtPreviewBg: (v: "dark" | "green" | "checkered") => void;
   songs: Song[];
   setSongs: (v: Song[]) => void;
+  hymnLibrary: Song[];
+  setHymnLibrary: (v: Song[]) => void;
   songSearch: string;
   setSongSearch: (v: string) => void;
   editingSong: Song | null;
@@ -101,6 +103,8 @@ export const createLowerThirdSlice: StateCreator<AppStore, [], [], LowerThirdSli
   setLtPreviewBg: (v) => set({ ltPreviewBg: v }),
   songs: [],
   setSongs: (v) => set({ songs: v }),
+  hymnLibrary: [],
+  setHymnLibrary: (v) => set({ hymnLibrary: v }),
   songSearch: "",
   setSongSearch: (v) => set({ songSearch: v }),
   editingSong: null,
