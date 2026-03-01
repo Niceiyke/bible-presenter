@@ -12,7 +12,8 @@ import { useAppStore } from "./store";
 import { 
   displayItemLabel, 
   buildCustomSlideItem,
-  ltBuildLyricsPayload
+  ltBuildLyricsPayload,
+  getItemUid
 } from "./utils";
 import { BibleTab } from "./components/BibleTab";
 import { MediaTab } from "./components/MediaTab";
@@ -168,8 +169,27 @@ export default function App() {
 
   const goLive = useCallback(async () => {
     const current = liveItem;
+    const staged = stagedItem;
     await invoke("go_live");
     if (current) setPreviousItem(current);
+
+    // Auto-trigger lower third if staged song is set to LowerThird style
+    if (staged?.type === "Song" && staged.data.style === "LowerThird") {
+      const payload = {
+        kind: "Lyrics",
+        data: {
+          line1: staged.data.lines[0],
+          line2: staged.data.lines[1],
+          section_label: staged.data.section_label
+        }
+      };
+      invoke("show_lower_third", { data: payload, template: ltTemplate });
+      setLtVisible(true);
+      // Update store for shortcut sync
+      useAppStore.getState().setLtSongId(staged.data.song_id);
+      useAppStore.getState().setLtLineIndex(staged.data.slide_index);
+      useAppStore.getState().setLtMode("lyrics");
+    }
 
     // If bg logo is on, clear it
     if (settings.show_background_logo) {
@@ -180,7 +200,7 @@ export default function App() {
     if (nextLiveItem) {
       stageItem(nextLiveItem);
     }
-  }, [nextLiveItem, stageItem, liveItem, settings, setPreviousItem]);
+  }, [nextLiveItem, stageItem, liveItem, stagedItem, settings, setPreviousItem, ltTemplate, setLtVisible]);
 
   const getNextItem = useCallback((item: DisplayItem): DisplayItem | null => {
     if (item.type === "Verse" && nextVerse) return { type: "Verse", data: nextVerse };
@@ -233,6 +253,27 @@ export default function App() {
     await stageItem(item);
     await invoke("go_live");
     if (current) setPreviousItem(current);
+
+    // Auto-trigger lower third if song is set to LowerThird style
+    if (item.type === "Song" && item.data.style === "LowerThird") {
+      const payload = {
+        kind: "Lyrics",
+        data: {
+          line1: item.data.lines[0],
+          line2: item.data.lines[1],
+          section_label: item.data.section_label
+        }
+      };
+      invoke("show_lower_third", { data: payload, template: ltTemplate });
+      setLtVisible(true);
+      // Update store for shortcut sync
+      useAppStore.getState().setLtSongId(item.data.song_id);
+      useAppStore.getState().setLtLineIndex(item.data.slide_index);
+      useAppStore.getState().setLtMode("lyrics");
+    } else if (ltVisible && item.type !== "Song") {
+      // If we move away from songs, maybe hide LT? 
+      // Actually, usually users want manual control over hiding LTs.
+    }
 
     // If bg logo is on, clear it
     if (settings.show_background_logo) {
@@ -579,6 +620,9 @@ export default function App() {
             {activeTab === "scenes" && (
               <SceneComposerTab
                 onSetToast={setToast}
+                onStage={stageItem}
+                onLive={sendLive}
+                onAddToSchedule={addToSchedule}
               />
             )}
             {activeTab === "songs" && <SongsTab 
@@ -807,7 +851,7 @@ export default function App() {
           <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
             {scheduleEntries.map((e, i) => (
               <div key={e.id} onClick={() => stageItem(e.item)}
-                className={`group p-2.5 rounded-xl border cursor-pointer transition-all ${stagedItem && displayItemLabel(stagedItem) === displayItemLabel(e.item) ? "bg-amber-500/10 border-amber-500/40" : liveItem && displayItemLabel(liveItem) === displayItemLabel(e.item) ? "bg-red-900/20 border-red-900/40" : "bg-slate-950 border-slate-800 hover:border-slate-700"}`}>
+                className={`group p-2.5 rounded-xl border cursor-pointer transition-all ${stagedItem && getItemUid(stagedItem) === getItemUid(e.item) ? "bg-amber-500/10 border-amber-500/40" : liveItem && getItemUid(liveItem) === getItemUid(e.item) ? "bg-red-900/20 border-red-900/40" : "bg-slate-950 border-slate-800 hover:border-slate-700"}`}>
                 <div className="flex items-center gap-2">
                   <span className="text-[9px] font-black text-slate-700 w-4">{i + 1}</span>
                   <div className="flex-1 min-w-0">

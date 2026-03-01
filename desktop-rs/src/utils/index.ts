@@ -16,6 +16,35 @@ export function stableId(): string {
   return crypto.randomUUID();
 }
 
+export function getItemUid(item: DisplayItem | null): string {
+  if (!item) return "empty";
+  if (item.type === "Verse") {
+    return `verse-${item.data.book}-${item.data.chapter}-${item.data.verse}-${item.data.version}-${item.data.text.slice(0, 16)}`;
+  }
+  if (item.type === "PresentationSlide") {
+    return `pptx-${item.data.presentation_id}-${item.data.slide_index}`;
+  }
+  if (item.type === "CustomSlide") {
+    return `custom-${item.data.presentation_id}-${item.data.slide_index}`;
+  }
+  if (item.type === "Media") {
+    return `media-${item.data.id}`;
+  }
+  if (item.type === "CameraFeed") {
+    return `camera-${item.data.device_id}`;
+  }
+  if (item.type === "Scene") {
+    return `scene-${item.data.id}`;
+  }
+  if (item.type === "Timer") {
+    return `timer-${item.data.timer_type}-${item.data.started_at ?? "idle"}`;
+  }
+  if (item.type === "Song") {
+    return `song-${item.data.song_id}-${item.data.slide_index}`;
+  }
+  return "unknown";
+}
+
 export function displayItemLabel(item: DisplayItem): string {
   if (item.type === "Verse") {
     return `${item.data.book} ${item.data.chapter}:${item.data.verse}`;

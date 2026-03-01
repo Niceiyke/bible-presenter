@@ -355,8 +355,12 @@ pub struct PresentationSettings {
     /// Color for the version tag
     #[serde(default)]
     pub version_color: String,
+    /// Camera resolution for local camera feeds: "360p" | "480p" | "720p" | "1080p"
+    #[serde(default = "default_camera_resolution")]
+    pub camera_resolution: String,
 }
 
+fn default_camera_resolution() -> String { "720p".to_string() }
 fn default_version_font() -> String { "Arial, sans-serif".to_string() }
 fn default_version_size() -> f64 { 24.0 }
 
@@ -408,6 +412,7 @@ impl Default for PresentationSettings {
             version_font_family: default_version_font(),
             version_font_size: default_version_size(),
             version_color: String::new(),
+            camera_resolution: default_camera_resolution(),
         }
     }
 }

@@ -4,14 +4,17 @@ import { emit } from "@tauri-apps/api/event";
 import { useAppStore } from "../store";
 import { stableId, ltBuildLyricsPayload, describeLayerContent, relativizePath } from "../utils";
 import { SceneRenderer } from "./shared/Renderers";
-import { Eye, EyeOff, Layers, RefreshCw } from "lucide-react";
+import { Eye, EyeOff, Layers, RefreshCw, Zap, Play, Plus, Trash2 } from "lucide-react";
 import type { DisplayItem, LayerContent, LowerThirdData, SceneData, SceneLayer } from "../types";
 
 interface SceneComposerTabProps {
   onSetToast: (msg: string) => void;
+  onStage?: (item: DisplayItem) => void;
+  onLive?: (item: DisplayItem) => void;
+  onAddToSchedule?: (item: DisplayItem) => void;
 }
 
-export function SceneComposerTab({ onSetToast }: SceneComposerTabProps) {
+export function SceneComposerTab({ onSetToast, onStage, onLive, onAddToSchedule }: SceneComposerTabProps) {
   const {
     workingScene, setWorkingScene,
     activeLayerId, setActiveLayerId,
@@ -122,10 +125,39 @@ export function SceneComposerTab({ onSetToast }: SceneComposerTabProps) {
               <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Saved Scenes</p>
               <div className="space-y-1">
                 {savedScenes.map(sc => (
-                  <div key={sc.id} className="flex items-center gap-1 bg-slate-800/50 rounded px-2 py-1">
+                  <div key={sc.id} className="flex items-center gap-1 bg-slate-800/50 rounded px-2 py-1 group">
                     <span className="flex-1 text-[10px] text-slate-300 truncate">{sc.name}</span>
-                    <button onClick={() => { setWorkingScene(sc); setActiveLayerId(null); }} className="text-[8px] font-black uppercase px-1.5 py-0.5 bg-blue-700 hover:bg-blue-600 text-white rounded">LOAD</button>
-                    <button onClick={async () => { await invoke("delete_scene", { id: sc.id }); const list = await invoke<SceneData[]>("list_scenes"); setSavedScenes(list); emit("scenes-sync", list); }} className="text-[8px] font-black uppercase px-1.5 py-0.5 bg-red-900/50 hover:bg-red-600 text-red-300 hover:text-white rounded">DEL</button>
+                    <button 
+                      onClick={() => { setWorkingScene(sc); setActiveLayerId(null); }} 
+                      className="text-[8px] font-black uppercase px-1.5 py-0.5 bg-blue-700 hover:bg-blue-600 text-white rounded shrink-0"
+                      title="Load into Editor"
+                    >LOAD</button>
+                    {onStage && (
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); onStage({ type: "Scene", data: sc }); }} 
+                        className="p-1 bg-slate-700 hover:bg-slate-600 text-white rounded shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Stage Scene"
+                      ><Play size={10} fill="currentColor" /></button>
+                    )}
+                    {onAddToSchedule && (
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); onAddToSchedule({ type: "Scene", data: sc }); }} 
+                        className="p-1 bg-slate-700 hover:bg-slate-600 text-amber-500 rounded shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Add to Schedule"
+                      ><Plus size={10} /></button>
+                    )}
+                    {onLive && (
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); onLive({ type: "Scene", data: sc }); }} 
+                        className="p-1 bg-amber-500 hover:bg-amber-400 text-black rounded shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Go Live"
+                      ><Zap size={10} fill="currentColor" /></button>
+                    )}
+                    <button 
+                      onClick={async () => { if (!window.confirm("Delete scene?")) return; await invoke("delete_scene", { id: sc.id }); const list = await invoke<SceneData[]>("list_scenes"); setSavedScenes(list); emit("scenes-sync", list); }} 
+                      className="p-1 bg-red-900/50 hover:bg-red-600 text-red-300 hover:text-white rounded shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Delete Scene"
+                    ><Trash2 size={10} /></button>
                   </div>
                 ))}
               </div>
@@ -291,7 +323,40 @@ export function SceneComposerTab({ onSetToast }: SceneComposerTabProps) {
         </div>
         <div className="shrink-0 flex items-center gap-2">
           <input value={workingScene.name} onChange={(e) => setWorkingScene(s => ({ ...s, name: e.target.value }))} className="flex-1 min-w-0 bg-slate-950 text-slate-200 text-xs px-3 py-2 rounded-lg border border-slate-800" placeholder="Scene Name..." />
-          <button onClick={async () => { await invoke("save_scene", { scene: workingScene }); const list = await invoke<SceneData[]>("list_scenes"); setSavedScenes(list); emit("scenes-sync", list); onSetToast("Scene saved"); }} className="px-3 py-2 bg-green-700 hover:bg-green-600 text-white text-[10px] font-black uppercase rounded-lg">SAVE</button>
+          <div className="flex gap-1">
+            {onStage && (
+              <button 
+                onClick={() => onStage({ type: "Scene", data: workingScene })} 
+                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-white text-[10px] font-black uppercase rounded-lg border border-slate-700 transition-all flex items-center gap-1.5"
+                title="Stage current scene"
+              >
+                <Play size={11} fill="currentColor" /> STAGE
+              </button>
+            )}
+            {onAddToSchedule && (
+              <button 
+                onClick={() => onAddToSchedule({ type: "Scene", data: workingScene })} 
+                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-amber-500 text-[10px] font-black uppercase rounded-lg border border-slate-700 transition-all flex items-center gap-1.5"
+                title="Add to schedule"
+              >
+                <Plus size={12} /> QUEUE
+              </button>
+            )}
+            {onLive && (
+              <button 
+                onClick={() => onLive({ type: "Scene", data: workingScene })} 
+                className="px-3 py-2 bg-amber-500 hover:bg-amber-400 text-black text-[10px] font-black uppercase rounded-lg shadow-lg shadow-amber-500/20 transition-all flex items-center gap-1.5"
+                title="Go live now"
+              >
+                <Zap size={11} fill="currentColor" /> GO LIVE
+              </button>
+            )}
+            <button 
+              onClick={async () => { await invoke("save_scene", { scene: workingScene }); const list = await invoke<SceneData[]>("list_scenes"); setSavedScenes(list); emit("scenes-sync", list); onSetToast("Scene saved"); }} 
+              className="px-3 py-2 bg-green-700 hover:bg-green-600 text-white text-[10px] font-black uppercase rounded-lg"
+              title="Save scene"
+            >SAVE</button>
+          </div>
         </div>
       </div>
 

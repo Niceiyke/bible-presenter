@@ -1,6 +1,7 @@
 import React, { useRef, useState, useCallback, useEffect } from "react";
 import { emit } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Play, Pause, RotateCcw, Volume2, VolumeX, EyeOff, SkipBack, SkipForward,
 } from "lucide-react";
@@ -9,9 +10,12 @@ import {
   CameraFeedRenderer,
   SceneRenderer,
   SongSlideRenderer,
+  SlideRenderer,
 } from "./shared/Renderers";
 import { useAppStore } from "../store";
 import type { DisplayItem, MediaItem } from "../types";
+import { loadPptxZip, parseSingleSlide, type ParsedSlide } from "../pptxParser";
+import { getItemUid } from "../utils";
 
 function formatTime(s: number): string {
   if (!isFinite(s) || s < 0) return "0:00";
@@ -50,12 +54,28 @@ export function PreviewCard({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
+  const [pptxSlide, setPptxSlide] = useState<ParsedSlide | null>(null);
+  const previewZipsRef = useRef<Record<string, any>>({});
+
   // Reset playback state when item changes
   useEffect(() => {
     setPlaying(false);
     setCurrentTime(0);
     setDuration(0);
     setMuted(true);
+    setPptxSlide(null);
+  }, [item]);
+
+  useEffect(() => {
+    if (item?.type !== "PresentationSlide") return;
+    const { presentation_id, presentation_path, slide_index } = item.data;
+    (async () => {
+      try {
+        let zip = previewZipsRef.current[presentation_id];
+        if (!zip) { zip = await loadPptxZip(presentation_path); previewZipsRef.current[presentation_id] = zip; }
+        setPptxSlide(await parseSingleSlide(zip, slide_index));
+      } catch { setPptxSlide(null); }
+    })();
   }, [item]);
 
   // Callback ref — attaches DOM event listeners for local preview; cleans up on unmount/swap
@@ -158,7 +178,13 @@ export function PreviewCard({
         }`}
       >
         {item ? (
-          <div className="animate-in fade-in zoom-in-95 duration-300 w-full h-full flex flex-col items-center justify-center relative">
+          <motion.div 
+            key={getItemUid(item)}
+            className="w-full h-full flex flex-col items-center justify-center relative"
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.2 }}
+          >
             {item.type === "Verse" ? (
               <div className="flex flex-col items-center justify-center gap-3">
                 <p className="text-xl font-serif text-slate-300 leading-snug line-clamp-5">
@@ -169,13 +195,19 @@ export function PreviewCard({
                 </p>
               </div>
             ) : item.type === "PresentationSlide" ? (
-              <div className="flex flex-col items-center justify-center gap-3">
-                <div className="text-orange-400 text-xs font-black uppercase bg-orange-400/10 px-2 py-0.5 rounded">
-                  SLIDE {item.data.slide_index + 1} / {item.data.slide_count || "?"}
+              <div className="w-full h-full flex flex-col items-center justify-center">
+                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-1">
+                   <div className="text-orange-400 text-[9px] font-black uppercase bg-orange-400/20 px-2 py-0.5 rounded backdrop-blur-md border border-orange-400/30">
+                    SLIDE {item.data.slide_index + 1} / {item.data.slide_count || "?"}
+                  </div>
                 </div>
-                <p className="text-slate-400 text-xs font-bold truncate max-w-full">
-                  {item.data.presentation_name}
-                </p>
+                {pptxSlide ? (
+                  <div className="w-full" style={{ aspectRatio: "16/9" }}>
+                    <SlideRenderer slide={pptxSlide} scale={0.25} />
+                  </div>
+                ) : (
+                  <p className="text-slate-600 italic text-xs">Loading slide...</p>
+                )}
               </div>
             ) : item.type === "CustomSlide" ? (
               <div className="w-full" style={{ aspectRatio: "16/9" }}>
@@ -357,7 +389,7 @@ export function PreviewCard({
                 </div>
               )
             )}
-          </div>
+          </motion.div>
         ) : (
           <p className="text-slate-800 font-serif italic text-sm">{empty}</p>
         )}

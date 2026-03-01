@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -36,19 +36,53 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
 
   const [chapterVerses, setChapterVerses] = useState<Verse[]>([]);
   const [loadingChapter, setLoadingChapter] = useState(false);
+  const [activeChapter, setActiveChapter] = useState<{ book: string; chapter: number; version: string } | null>(null);
+  
+  // Ref to track if we are programmatically updating dropdowns to avoid loops
+  const isSyncingRef = useRef(false);
 
+  // Sync manual dropdowns TO activeChapter
+  useEffect(() => {
+    if (isSyncingRef.current) return;
+    if (selectedBook && selectedChapter) {
+      setActiveChapter({ book: selectedBook, chapter: selectedChapter, version: bibleVersion });
+    }
+  }, [selectedBook, selectedChapter, bibleVersion]);
+
+  // Sync stagedItem TO activeChapter AND dropdowns
   useEffect(() => {
     if (stagedItem?.type === "Verse") {
-      const { book, chapter, version } = stagedItem.data;
-      setLoadingChapter(true);
-      invoke("get_chapter", { book, chapter, version })
-        .then((vs: any) => {
-          setChapterVerses(vs);
-        })
-        .catch(console.error)
-        .finally(() => setLoadingChapter(false));
+      const { book, chapter, verse, version } = stagedItem.data;
+      
+      // Only sync to dropdowns if they actually changed to avoid triggering cascades unnecessarily
+      if (book !== selectedBook || chapter !== selectedChapter || verse !== selectedVerse) {
+        isSyncingRef.current = true;
+        setSelectedBook(book);
+        setSelectedChapter(chapter);
+        setSelectedVerse(verse);
+        // Release after a delay
+        setTimeout(() => { isSyncingRef.current = false; }, 100);
+      }
+      
+      setActiveChapter({ book, chapter, version });
     }
-  }, [stagedItem]);
+  }, [stagedItem, selectedBook, selectedChapter, selectedVerse]);
+
+  // Load verses when activeChapter changes
+  useEffect(() => {
+    if (!activeChapter) {
+      setChapterVerses([]);
+      return;
+    }
+    const { book, chapter, version } = activeChapter;
+    setLoadingChapter(true);
+    invoke("get_chapter", { book, chapter, version })
+      .then((vs: any) => {
+        setChapterVerses(vs);
+      })
+      .catch(console.error)
+      .finally(() => setLoadingChapter(false));
+  }, [activeChapter]);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -216,20 +250,20 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
         </button>
         {bibleOpen.chapterView && (
           <div className="flex-1 flex flex-col min-h-0">
-            {stagedItem?.type === "Verse" ? (
+            {activeChapter ? (
               <>
                 <div className="flex items-center justify-between mb-2 px-1">
                   <p className="text-[10px] font-black text-amber-500 uppercase">
-                    {stagedItem.data.book} {stagedItem.data.chapter} ({stagedItem.data.version})
+                    {activeChapter.book} {activeChapter.chapter} ({activeChapter.version})
                   </p>
                   {loadingChapter && <span className="text-[10px] text-slate-600 animate-pulse">Loading...</span>}
                 </div>
                 <div className="space-y-1 overflow-y-auto pr-1 custom-scrollbar max-h-[400px]">
                   {chapterVerses.map((v) => {
-                    const isStaged = stagedItem.type === "Verse" && stagedItem.data.verse === v.verse;
+                    const isStaged = stagedItem?.type === "Verse" && stagedItem.data.book === v.book && stagedItem.data.chapter === v.chapter && stagedItem.data.verse === v.verse;
                     return (
                       <div
-                        key={v.verse}
+                        key={`${v.book}-${v.chapter}-${v.verse}`}
                         className={`p-2 rounded border transition-all group relative cursor-pointer ${
                           isStaged 
                             ? "bg-amber-500/10 border-amber-500/50" 
