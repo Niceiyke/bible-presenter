@@ -7,6 +7,7 @@ use regex::{Regex, RegexSet};
 use ndarray::Array2;
 use ndarray_npy::ReadNpyExt;
 use std::fs::File;
+use hnsw_rs::prelude::*;
 
 pub mod media_schedule;
 pub use media_schedule::*;
@@ -28,19 +29,24 @@ pub struct Verse {
     pub total_splits: Option<usize>,
 }
 
+/// A lightweight version of Verse for memory-efficient caching.
+#[derive(Clone)]
+pub struct VerseMetadata {
+    pub book: String,
+    pub chapter: i32,
+    pub verse: i32,
+    pub version: String,
+}
+
 pub struct BibleStore {
     conn: Arc<Mutex<Connection>>,
     patterns: RegexSet,
     book_map: HashMap<String, String>,
     /// All verses from all embedded versions, stacked in EMBEDDED_VERSIONS order.
-    /// verse_cache[i] corresponds to embeddings row i.
-    verse_cache: Vec<Verse>,
-    /// Per-version offsets: version_offsets[i] = start row index for EMBEDDED_VERSIONS[i].
-    version_offsets: Vec<usize>,
-    /// Total verse count per version (all versions should be equal, but store per version for safety).
-    version_lengths: Vec<usize>,
-    /// Stacked L2-normalised embeddings for all versions, shape (N_total, 384).
-    embeddings: Option<Array2<f32>>,
+    /// verse_cache[i] corresponds to row i in the HNSW index.
+    verse_cache: Vec<VerseMetadata>,
+    /// HNSW index for fast semantic search (L2 distance on normalized embeddings).
+    hnsw_index: Option<Hnsw<f32, DistL2>>,
     /// Currently active version for display queries.
     active_version: Mutex<String>,
     /// All available versions found in the DB.
@@ -53,6 +59,24 @@ impl BibleStore {
 
         if let Err(e) = conn.execute("PRAGMA journal_mode=WAL", []) {
             eprintln!("Warning: Could not set WAL mode: {}", e);
+        }
+
+        // Initialize FTS5 virtual table for lightning-fast keyword search
+        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS super_bible_fts USING fts5(
+            title, 
+            text, 
+            version, 
+            content='super_bible', 
+            content_rowid='rowid'
+        )", [])?;
+        
+        // Populate FTS if it's empty (trigger sync)
+        let count_fts: i64 = conn.query_row("SELECT count(*) FROM super_bible_fts", [], |r| r.get(0))?;
+        if count_fts == 0 {
+            println!("BibleStore: Initializing FTS5 index...");
+            conn.execute("INSERT INTO super_bible_fts(rowid, title, text, version) 
+                         SELECT rowid, title, text, version FROM super_bible 
+                         WHERE language = 'EN' AND text IS NOT NULL AND text != ''", [])?;
         }
 
         // Discover which versions are in the DB
@@ -70,64 +94,65 @@ impl BibleStore {
         println!("BibleStore: Available versions: {:?}", available_versions);
 
         // Pre-load verse_cache for every embedded version (in EMBEDDED_VERSIONS order)
-        let mut verse_cache: Vec<Verse> = Vec::new();
-        let mut version_offsets: Vec<usize> = Vec::new();
-        let mut version_lengths: Vec<usize> = Vec::new();
-
+        let mut verse_cache: Vec<VerseMetadata> = Vec::new();
         for version in &available_versions {
-            let offset = verse_cache.len();
-            version_offsets.push(offset);
-
             let mut stmt = conn.prepare(
-                "SELECT title, chapter, verse, text FROM super_bible \
+                "SELECT title, chapter, verse FROM super_bible \
                  WHERE version = ?1 AND language = 'EN' AND text IS NOT NULL AND text != '' \
                  ORDER BY book, chapter, verse"
             )?;
             let rows = stmt.query_map(params![version], |row| {
-                Ok(Verse {
+                Ok(VerseMetadata {
                     book: row.get(0)?,
                     chapter: row.get(1)?,
                     verse: row.get(2)?,
-                    text: row.get(3)?,
                     version: version.to_string(),
-                    split_index: None,
-                    total_splits: None,
                 })
             })?;
-            let mut count = 0usize;
             for row in rows {
                 verse_cache.push(row?);
-                count += 1;
             }
-            version_lengths.push(count);
-            println!("BibleStore: Cached {} verses for {}", count, version);
         }
         println!("BibleStore: Total cached verses: {}", verse_cache.len());
 
-        // Load stacked embeddings
-        let embeddings = if let Some(path) = embeddings_path {
+        // Load stacked embeddings into HNSW index
+        let mut hnsw_index = None;
+        if let Some(path) = embeddings_path {
             match File::open(path) {
                 Ok(mut file) => match Array2::<f32>::read_npy(&mut file) {
                     Ok(arr) => {
                         println!(
-                            "BibleStore: Loaded stacked embeddings ({} rows, {} dims)",
+                            "BibleStore: Building HNSW index ({} rows, {} dims)",
                             arr.nrows(), arr.ncols()
                         );
-                        Some(arr)
+                        let max_nb_conn = 16;
+                        let max_layer = 16;
+                        let ef_construction = 200;
+                        let hnsw = Hnsw::new(max_nb_conn, arr.nrows(), max_layer, ef_construction, DistL2 {});
+                        
+                        // Insert embeddings in parallel (or just sequentially for safety in new)
+                        let mut data_to_insert = Vec::with_capacity(arr.nrows());
+                        for i in 0..arr.nrows() {
+                            let row = arr.row(i).to_vec();
+                            data_to_insert.push((row, i));
+                        }
+                        hnsw.parallel_insert(&data_to_insert);
+                        hnsw_index = Some(hnsw);
                     }
-                    Err(e) => {
-                        eprintln!("Warning: Failed to parse embeddings .npy: {}", e);
-                        None
-                    }
+                    Err(e) => eprintln!("Warning: Failed to parse embeddings .npy: {}", e),
                 },
-                Err(e) => {
-                    eprintln!("Warning: Could not open embeddings at {}: {}", path, e);
-                    None
-                }
+                Err(e) => eprintln!("Warning: Could not open embeddings at {}: {}", path, e),
             }
-        } else {
-            None
-        };
+        }
+
+        let default_version = EMBEDDED_VERSIONS
+            .iter()
+            .find(|&&v| available_versions.iter().any(|a| a == v))
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| available_versions.first().cloned().unwrap_or_else(|| "KJV".to_string()));
+
+        let mut book_map = HashMap::new();
+        // ... (rest of book_map initialization)
 
         let default_version = EMBEDDED_VERSIONS
             .iter()
@@ -219,9 +244,7 @@ impl BibleStore {
             patterns,
             book_map,
             verse_cache,
-            version_offsets,
-            version_lengths,
-            embeddings,
+            hnsw_index,
             active_version: Mutex::new(default_version),
             available_versions,
         })
@@ -260,19 +283,47 @@ impl BibleStore {
         (None, 0.0)
     }
 
-    pub fn detect_verse_by_ref(&self, text: &str) -> Option<Verse> {
-        let matches: Vec<_> = self.patterns.matches(text).into_iter().collect();
-        if matches.is_empty() { return None; }
-
-        let re = Regex::new(r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)[:\s]+(\d+)").ok()?;
-        if let Some(caps) = re.captures(text) {
-            let book = self.normalize_book(caps.get(1)?.as_str());
-            let chapter: i32 = caps.get(2)?.as_str().parse().ok()?;
-            let verse: i32 = caps.get(3)?.as_str().parse().ok()?;
-            let version = self.get_active_version();
-            return self.get_verse(&book, chapter, verse, &version).ok().flatten();
+    /// Detects if a string is a bible reference and returns the matching verses.
+    /// If it's a Book Chap:Verse, it returns 1 verse (from active version).
+    /// If it's a Book Chap, it returns the first 10 verses of that chapter.
+    pub fn detect_verses_by_ref(&self, text: &str) -> Vec<Verse> {
+        let text_lower = text.to_lowercase();
+        
+        // Try Book Chap:Verse
+        let re_full = Regex::new(r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)[:\s]+(\d+)").ok();
+        if let Some(re) = re_full {
+            if let Some(caps) = re.captures(&text_lower) {
+                let book = self.normalize_book(caps.get(1).map(|m| m.as_str()).unwrap_or(""));
+                if let Ok(chapter) = caps.get(2).map(|m| m.as_str()).unwrap_or("").parse::<i32>() {
+                    if let Ok(verse) = caps.get(3).map(|m| m.as_str()).unwrap_or("").parse::<i32>() {
+                        let version = self.get_active_version();
+                        if let Ok(Some(v)) = self.get_verse(&book, chapter, verse, &version) {
+                            return vec![v];
+                        }
+                    }
+                }
+            }
         }
-        None
+
+        // Try Book Chap
+        let re_chap = Regex::new(r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)").ok();
+        if let Some(re) = re_chap {
+            if let Some(caps) = re.captures(&text_lower) {
+                let book = self.normalize_book(caps.get(1).map(|m| m.as_str()).unwrap_or(""));
+                if let Ok(chapter) = caps.get(2).map(|m| m.as_str()).unwrap_or("").parse::<i32>() {
+                    let version = self.get_active_version();
+                    if let Ok(verses) = self.get_chapter_verses(&book, chapter, &version) {
+                        return verses.into_iter().take(20).collect();
+                    }
+                }
+            }
+        }
+        
+        Vec::new()
+    }
+
+    pub fn detect_verse_by_ref(&self, text: &str) -> Option<Verse> {
+        self.detect_verses_by_ref(text).into_iter().next()
     }
 
     /// Searches the full stacked embeddings matrix across all embedded versions.
@@ -358,132 +409,158 @@ impl BibleStore {
         Ok(None)
     }
 
-    /// Semantic search across ALL stacked versions, returns top-N unique (book,chapter,verse) results.
+    /// Semantic search across ALL stacked versions using HNSW index.
+    /// Returns top-N unique (book,chapter,verse) results.
+    /// Prefers the active version for the displayed text.
     pub fn search_top_n_semantic(&self, embedding: &[f32], top_n: usize) -> Vec<Verse> {
-        let embeddings = match self.embeddings.as_ref() {
-            Some(e) => e,
+        let hnsw = match self.hnsw_index.as_ref() {
+            Some(h) => h,
             None => return Vec::new(),
         };
-        let query = ndarray::ArrayView1::from(embedding);
-        let similarities = embeddings.dot(&query);
 
-        let mut scores: Vec<(f32, usize)> = similarities
-            .iter()
-            .enumerate()
-            .map(|(i, &s)| (s, i))
-            .collect();
-        scores.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-
+        // Search HNSW for top results (using slightly more than top_n to allow deduplication)
+        let search_results = hnsw.search(embedding, top_n * 2, 128);
+        
+        let active_version = self.get_active_version();
         let mut seen = std::collections::HashSet::new();
         let mut results = Vec::new();
-        for (score, idx) in scores {
-            if score < 0.35 || results.len() >= top_n {
+
+        for neighbor in search_results {
+            if results.len() >= top_n {
                 break;
             }
-            if let Some(verse) = self.verse_cache.get(idx) {
-                let key = (verse.book.clone(), verse.chapter, verse.verse);
+            let idx = neighbor.d_idx;
+            if let Some(matched) = self.verse_cache.get(idx) {
+                let key = (matched.book.clone(), matched.chapter, matched.verse);
                 if seen.insert(key) {
-                    results.push(verse.clone());
+                    // 1. Try to get this verse in the active version
+                    let mut verse = self.get_verse(&matched.book, matched.chapter, matched.verse, &active_version)
+                        .ok()
+                        .flatten();
+                    
+                    // 2. Fallback to original version found in search if active doesn't have it
+                    if verse.is_none() {
+                        verse = self.get_verse(&matched.book, matched.chapter, matched.verse, &matched.version)
+                            .ok()
+                            .flatten();
+                    }
+
+                    if let Some(v) = verse {
+                        results.push(v);
+                    }
                 }
             }
         }
         results
     }
 
-    /// Full-text keyword search across ALL versions, deduplicated by (book,chapter,verse).
+    /// Full-text keyword search across ALL versions using SQLite FTS5.
+    /// Deduplicated by (book,chapter,verse).
     pub fn search_manual_all_versions(&self, query: &str) -> anyhow::Result<Vec<Verse>> {
-        let query_lower = query.to_lowercase();
-        let stop: &[&str] = &[
-            "the", "and", "for", "that", "with", "this", "are", "was", "were",
-            "they", "them", "from", "have", "has", "not", "but", "his", "her",
-            "our", "your", "its", "who", "all", "one", "you", "him", "she",
-            "what", "will", "said", "when", "also", "into", "unto", "shall",
-            "thee", "thou", "thy",
-        ];
-        let query_words: Vec<&str> = query_lower
-            .split_whitespace()
-            .filter(|w| w.len() >= 2 && !stop.contains(w))
-            .collect();
-
-        if query_words.is_empty() {
+        if query.trim().is_empty() {
             return Ok(Vec::new());
         }
 
-        let mut scored: Vec<(usize, &Verse)> = self.verse_cache
-            .iter()
-            .filter_map(|verse| {
-                let verse_lower = verse.text.to_lowercase();
-                let score: usize = query_words
-                    .iter()
-                    .filter(|&&w| verse_lower.contains(w))
-                    .count();
-                if score > 0 { Some((score, verse)) } else { None }
-            })
-            .collect();
+        // Clean query for FTS5 (basic escape and allow prefix matching)
+        let cleaned_query = query
+            .split_whitespace()
+            .map(|w| format!("\"{}\"*", w.replace("\"", "")))
+            .collect::<Vec<_>>()
+            .join(" ");
 
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare_cached(
+            "SELECT title, text, version, chapter, verse FROM super_bible \
+             JOIN super_bible_fts ON super_bible.rowid = super_bible_fts.rowid \
+             WHERE super_bible_fts MATCH ?1 \
+             ORDER BY rank \
+             LIMIT 100"
+        )?;
 
+        let active_version = self.get_active_version();
         let mut seen = std::collections::HashSet::new();
         let mut results = Vec::new();
-        for (_, verse) in scored {
-            let key = (verse.book.clone(), verse.chapter, verse.verse);
-            if seen.insert(key) {
-                results.push(verse.clone());
-                if results.len() >= 10 { break; }
+
+        let rows = stmt.query_map(params![cleaned_query], |row| {
+            Ok(Verse {
+                book: row.get(0)?,
+                text: row.get(1)?,
+                version: row.get(2)?,
+                chapter: row.get(3)?,
+                verse: row.get(4)?,
+                split_index: None,
+                total_splits: None,
+            })
+        })?;
+
+        let mut matched_verses = Vec::new();
+        for row in rows {
+            matched_verses.push(row?);
+        }
+
+        // Pass 1: results in active version
+        for verse in &matched_verses {
+            if verse.version == active_version {
+                let key = (verse.book.clone(), verse.chapter, verse.verse);
+                if seen.insert(key) {
+                    results.push(verse.clone());
+                    if results.len() >= 20 { break; }
+                }
             }
         }
+
+        // Pass 2: Fill remaining with other versions
+        if results.len() < 20 {
+            for verse in &matched_verses {
+                let key = (verse.book.clone(), verse.chapter, verse.verse);
+                if seen.insert(key) {
+                    results.push(verse.clone());
+                    if results.len() >= 20 { break; }
+                }
+            }
+        }
+
         Ok(results)
     }
 
-    /// Full-text keyword search within the active version only.
+    /// Full-text keyword search within the active version only using SQLite FTS5.
     pub fn search_manual(&self, query: &str, version: &str) -> anyhow::Result<Vec<Verse>> {
-        let query_lower = query.to_lowercase();
-        let stop: &[&str] = &[
-            "the", "and", "for", "that", "with", "this", "are", "was", "were",
-            "they", "them", "from", "have", "has", "not", "but", "his", "her",
-            "our", "your", "its", "who", "all", "one", "you", "him", "she",
-            "what", "will", "said", "when", "also", "into", "unto", "shall",
-            "thee", "thou", "thy",
-        ];
-        let query_words: Vec<&str> = query_lower
-            .split_whitespace()
-            .filter(|w| w.len() >= 2 && !stop.contains(w))
-            .collect();
-
-        if query_words.is_empty() {
+        if query.trim().is_empty() {
             return Ok(Vec::new());
         }
 
-        // Find the slice of verse_cache for this version
-        let cache_slice = self.version_slice(version);
+        let cleaned_query = query
+            .split_whitespace()
+            .map(|w| format!("\"{}\"*", w.replace("\"", "")))
+            .collect::<Vec<_>>()
+            .join(" ");
 
-        let mut scored: Vec<(usize, &Verse)> = cache_slice
-            .iter()
-            .filter_map(|verse| {
-                let verse_lower = verse.text.to_lowercase();
-                let score: usize = query_words
-                    .iter()
-                    .filter(|&&w| verse_lower.contains(w))
-                    .count();
-                if score > 0 { Some((score, verse)) } else { None }
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare_cached(
+            "SELECT title, text, version, chapter, verse FROM super_bible \
+             JOIN super_bible_fts ON super_bible.rowid = super_bible_fts.rowid \
+             WHERE super_bible_fts MATCH ?1 AND super_bible_fts.version = ?2 \
+             ORDER BY rank \
+             LIMIT 20"
+        )?;
+
+        let rows = stmt.query_map(params![cleaned_query, version], |row| {
+            Ok(Verse {
+                book: row.get(0)?,
+                text: row.get(1)?,
+                version: row.get(2)?,
+                chapter: row.get(3)?,
+                verse: row.get(4)?,
+                split_index: None,
+                total_splits: None,
             })
-            .collect();
+        })?;
 
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
-        Ok(scored.into_iter().take(10).map(|(_, v)| v.clone()).collect())
-    }
-
-    /// Returns the verse_cache slice that belongs to `version`.
-    fn version_slice(&self, version: &str) -> &[Verse] {
-        let idx = self.available_versions.iter().position(|v| v == version);
-        match idx {
-            Some(i) if i < self.version_offsets.len() => {
-                let start = self.version_offsets[i];
-                let len = self.version_lengths[i];
-                &self.verse_cache[start..start + len]
-            }
-            _ => &[], // version not found; return empty
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
         }
+        Ok(results)
     }
 
     pub fn get_books(&self, version: &str) -> anyhow::Result<Vec<String>> {

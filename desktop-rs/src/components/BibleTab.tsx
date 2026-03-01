@@ -384,13 +384,13 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
         </>
       )}
 
-      {/* Keyword / semantic search — collapsible */}
+      {/* Keyword / reference / semantic search — collapsible */}
       <div className="flex flex-col min-h-0">
         <button
           onClick={() => setBibleOpen((p) => ({ ...p, keywordSearch: !p.keywordSearch }))}
           className="w-full flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 hover:text-slate-300 transition-colors"
         >
-          <span className="flex items-center gap-1.5"><Zap size={11} />Semantic Search</span>
+          <span className="flex items-center gap-1.5"><Zap size={11} />Bible Search</span>
           {bibleOpen.keywordSearch ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
         </button>
         {bibleOpen.keywordSearch && (
