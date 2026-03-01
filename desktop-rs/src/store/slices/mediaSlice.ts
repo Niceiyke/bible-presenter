@@ -1,7 +1,6 @@
 import { StateCreator } from "zustand";
 import { AppStore } from "../index";
-import { MediaItem, PresentationFile } from "../../types";
-import { ParsedSlide } from "../../pptxParser";
+import { MediaItem } from "../../types";
 
 export interface MediaSlice {
   media: MediaItem[];
@@ -18,16 +17,6 @@ export interface MediaSlice {
   setShowLogoPicker: (v: boolean) => void;
   showGlobalBgPicker: boolean;
   setShowGlobalBgPicker: (v: boolean) => void;
-  presentations: PresentationFile[];
-  setPresentations: (v: PresentationFile[]) => void;
-  selectedPresId: string | null;
-  setSelectedPresId: (v: string | null) => void;
-  loadedSlides: Record<string, ParsedSlide[]>;
-  setLoadedSlides: (v: Record<string, ParsedSlide[]>) => void;
-  libreOfficeAvailable: boolean;
-  setLibreOfficeAvailable: (v: boolean) => void;
-  pptxPngSlides: Record<string, string[]>;
-  setPptxPngSlides: (v: Record<string, string[]> | ((prev: Record<string, string[]>) => Record<string, string[]>)) => void;
 }
 
 export const createMediaSlice: StateCreator<AppStore, [], [], MediaSlice> = (set) => ({
@@ -45,14 +34,4 @@ export const createMediaSlice: StateCreator<AppStore, [], [], MediaSlice> = (set
   setShowLogoPicker: (v) => set({ showLogoPicker: v }),
   showGlobalBgPicker: false,
   setShowGlobalBgPicker: (v) => set({ showGlobalBgPicker: v }),
-  presentations: [],
-  setPresentations: (v) => set({ presentations: v }),
-  selectedPresId: null,
-  setSelectedPresId: (v) => set({ selectedPresId: v }),
-  loadedSlides: {},
-  setLoadedSlides: (v) => set({ loadedSlides: v }),
-  libreOfficeAvailable: false,
-  setLibreOfficeAvailable: (v) => set({ libreOfficeAvailable: v }),
-  pptxPngSlides: {},
-  setPptxPngSlides: (v) => set((s) => ({ pptxPngSlides: typeof v === "function" ? v(s.pptxPngSlides) : v })),
 });

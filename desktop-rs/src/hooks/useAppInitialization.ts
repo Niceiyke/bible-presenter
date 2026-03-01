@@ -4,15 +4,15 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppStore } from "../store";
 import { stableId } from "../utils";
-import type { 
-  MediaItem, PresentationFile, Song, LowerThirdTemplate, 
+import { 
+  MediaItem, Song, LowerThirdTemplate, 
   PresentationSettings, PropItem, SceneData, ServiceMeta, 
   DisplayItem 
 } from "../types";
 
 export function useAppInitialization() {
   const {
-    setLabel, setMedia, setPresentations, setStudioList, setStudioSlides,
+    setLabel, setMedia, setStudioList, setStudioSlides,
     setScheduleEntries, setSongs, setHymnLibrary, setLtSavedTemplates, 
     setLtTemplate, setSettings, setRemoteUrl, setRemotePin, 
     setTailscaleUrl, setAvailableVersions, setBibleVersion, 
@@ -39,12 +39,11 @@ export function useAppInitialization() {
       if (versionsRes.length === 0) return; // backend never became ready
 
       const [
-        mediaRes, presRes, studioRes, scheduleRes, songsRes, hymnLibraryRes,
+        mediaRes, studioRes, scheduleRes, songsRes, hymnLibraryRes,
         ltRes, settingsRes, remoteRes, propsRes,
         scenesRes, servicesRes
       ] = await Promise.all([
         invoke<MediaItem[]>("list_media").catch(() => []),
-        invoke<PresentationFile[]>("list_presentations").catch(() => []),
         invoke<any[]>("list_studio_presentations").catch(() => []),
         invoke<any>("load_schedule").catch(() => ({ items: [] })),
         invoke<Song[]>("list_songs").catch(() => []),
@@ -58,7 +57,6 @@ export function useAppInitialization() {
       ]);
 
       setMedia(mediaRes);
-      setPresentations(presRes);
       setStudioList(studioRes);
       setScheduleEntries(scheduleRes.items.map((e: any) => ({ id: e.id || stableId(), item: e.item ?? e })));
       setSongs(songsRes);

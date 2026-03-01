@@ -549,10 +549,20 @@ async fn search_semantic_query(
 }
 
 /// Read a file from disk and return its contents as a base64 string.
+/// Path is restricted to the application's local data directory for security.
 #[tauri::command]
-async fn read_file_base64(path: String) -> Result<String, String> {
+async fn read_file_base64(app: tauri::AppHandle, path: String) -> Result<String, String> {
     use base64::Engine as _;
-    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_local_data_dir()
+        .or_else(|_| app.path().app_data_dir())
+        .map_err(|e| e.to_string())?;
+    
+    let requested_path = std::path::PathBuf::from(&path);
+    if !requested_path.starts_with(data_dir) {
+        return Err("Access denied: path is outside of authorized data directory".to_string());
+    }
+
+    let bytes = std::fs::read(&requested_path).map_err(|e| e.to_string())?;
     Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
@@ -740,29 +750,6 @@ async fn toggle_design_window(app: AppHandle) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-#[tauri::command]
-async fn list_presentations(
-    state: State<'_, AppState>,
-) -> Result<Vec<store::PresentationFile>, String> {
-    state.media_schedule.list_presentations().map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn add_presentation(
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<store::PresentationFile, String> {
-    state.media_schedule.add_presentation(PathBuf::from(path)).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn delete_presentation(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), String> {
-    state.media_schedule.delete_presentation(id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1114,51 +1101,6 @@ async fn set_props(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// LibreOffice PPTX rendering
-// ---------------------------------------------------------------------------
-
-#[tauri::command]
-async fn check_libreoffice() -> bool {
-    std::process::Command::new("libreoffice")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-#[tauri::command]
-async fn convert_pptx_slides(
-    state: State<'_, AppState>,
-    path: String,
-    pres_id: String,
-) -> Result<Vec<String>, String> {
-    let cache_dir = state.media_schedule.get_pptx_cache_dir(&pres_id);
-    fs::create_dir_all(&cache_dir).map_err(|e| e.to_string())?;
-    let out = std::process::Command::new("libreoffice")
-        .args([
-            "--headless",
-            "--convert-to",
-            "png:impress_png_Export",
-            "--outdir",
-            cache_dir.to_str().unwrap_or(""),
-            &path,
-        ])
-        .output()
-        .map_err(|e| format!("Failed to run LibreOffice: {}", e))?;
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).to_string());
-    }
-    let mut slides: Vec<String> = fs::read_dir(&cache_dir)
-        .map_err(|e| e.to_string())?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map(|x| x == "png").unwrap_or(false))
-        .map(|e| e.path().to_string_lossy().to_string())
-        .collect();
-    slides.sort();
-    Ok(slides)
-}
-
 #[tauri::command]
 async fn get_hymn_library(app: AppHandle) -> Result<Vec<store::Song>, String> {
     let resolver = app.path();
@@ -1413,9 +1355,7 @@ fn main() {
             get_chapter,
             get_verse,
             get_next_verse,
-            list_presentations,
-            add_presentation,
-            delete_presentation,
+            read_file_base64,
             list_media,
             add_media,
             delete_media,
@@ -1456,8 +1396,6 @@ fn main() {
             delete_service,
             get_props,
             set_props,
-            check_libreoffice,
-            convert_pptx_slides,
             get_app_data_dir,
             get_hymn_library
         ])

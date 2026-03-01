@@ -21,21 +21,6 @@ export interface MediaItem {
   fit_mode?: MediaFitMode;
 }
 
-export interface PresentationFile {
-  id: string;
-  name: string;
-  path: string;
-  slide_count: number;
-}
-
-export interface PresentationSlideData {
-  presentation_id: string;
-  presentation_name: string;
-  presentation_path: string;
-  slide_index: number;
-  slide_count: number;
-}
-
 export interface SlideZone {
   text: string;
   fontSize: number;
@@ -225,7 +210,6 @@ export interface TimerData {
 export type DisplayItem =
   | { type: "Verse"; data: Verse }
   | { type: "Media"; data: MediaItem }
-  | { type: "PresentationSlide"; data: PresentationSlideData }
   | { type: "CustomSlide"; data: CustomSlideDisplayData }
   | { type: "CameraFeed"; data: CameraFeedData }
   | { type: "Scene"; data: SceneData }
@@ -311,7 +295,6 @@ export interface PresentationSettings {
   reference_position: "top" | "bottom";
   background: BackgroundSetting;
   bible_background?: BackgroundSetting;
-  presentation_background?: BackgroundSetting;
   media_background?: BackgroundSetting;
   logo_path?: string;
   background_logo_path?: string;
@@ -332,21 +315,6 @@ export interface PresentationSettings {
   camera_resolution?: "360p" | "480p" | "720p" | "1080p";
   auto_split_verses: boolean;
   verse_split_threshold: number;
-}
-
-export interface ParsedSlide {
-  backgroundColor?: string | null;
-  images: Array<{
-    dataUrl: string;
-    rect: { x: number; y: number; width: number; height: number };
-  }>;
-  textBoxes: Array<{
-    text: string;
-    color?: string | null;
-    fontSize?: number | null;
-    bold?: boolean;
-    rect: { x: number; y: number; width: number; height: number };
-  }>;
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
