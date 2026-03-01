@@ -463,6 +463,42 @@ async fn set_vad_threshold(state: State<'_, AppState>, threshold: f32) -> Result
 }
 
 #[tauri::command]
+fn split_verse(verse: store::Verse, threshold: Option<usize>) -> Vec<store::Verse> {
+    let limit = threshold.unwrap_or(200);
+    let text = verse.text.trim();
+    if text.len() <= limit {
+        return vec![verse];
+    }
+
+    let mut slides = Vec::new();
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut current_text = String::new();
+    
+    for word in words {
+        if !current_text.is_empty() && current_text.len() + word.len() + 1 > limit {
+            slides.push(current_text.trim().to_string());
+            current_text = String::new();
+        }
+        if !current_text.is_empty() {
+            current_text.push(' ');
+        }
+        current_text.push_str(word);
+    }
+    if !current_text.is_empty() {
+        slides.push(current_text.trim().to_string());
+    }
+
+    let total = slides.len();
+    slides.into_iter().enumerate().map(|(i, t)| {
+        let mut v = verse.clone();
+        v.text = t;
+        v.split_index = Some(i);
+        v.total_splits = Some(total);
+        v
+    }).collect()
+}
+
+#[tauri::command]
 async fn get_bible_versions(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     Ok(state.store.get_available_versions())
 }
@@ -1349,6 +1385,13 @@ fn main() {
             log_msg(app, "App state managed. Ready.");
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if window.label() == "main" {
+                    window.app_handle().exit(0);
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             start_session,
             stop_session,
@@ -1358,6 +1401,7 @@ fn main() {
             set_vad_threshold,
             get_bible_versions,
             set_bible_version,
+            split_verse,
             search_manual,
             search_semantic_query,
             read_file_base64,

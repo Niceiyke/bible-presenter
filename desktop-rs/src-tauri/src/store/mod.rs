@@ -22,6 +22,10 @@ pub struct Verse {
     pub verse: i32,
     pub text: String,
     pub version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub split_index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_splits: Option<usize>,
 }
 
 pub struct BibleStore {

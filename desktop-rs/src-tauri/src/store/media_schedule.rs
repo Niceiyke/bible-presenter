@@ -358,7 +358,16 @@ pub struct PresentationSettings {
     /// Camera resolution for local camera feeds: "360p" | "480p" | "720p" | "1080p"
     #[serde(default = "default_camera_resolution")]
     pub camera_resolution: String,
+    /// Automatically split long verses into multiple slides.
+    #[serde(default = "default_auto_split_verses")]
+    pub auto_split_verses: bool,
+    /// Character limit before splitting a verse (if auto_split is enabled).
+    #[serde(default = "default_verse_split_threshold")]
+    pub verse_split_threshold: usize,
 }
+
+fn default_auto_split_verses() -> bool { true }
+fn default_verse_split_threshold() -> usize { 200 }
 
 fn default_camera_resolution() -> String { "720p".to_string() }
 fn default_version_font() -> String { "Arial, sans-serif".to_string() }
@@ -413,6 +422,8 @@ impl Default for PresentationSettings {
             version_font_size: default_version_size(),
             version_color: String::new(),
             camera_resolution: default_camera_resolution(),
+            auto_split_verses: default_auto_split_verses(),
+            verse_split_threshold: default_verse_split_threshold(),
         }
     }
 }
