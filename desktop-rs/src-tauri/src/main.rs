@@ -530,12 +530,19 @@ async fn search_semantic_query(
     state: State<'_, AppState>,
     query: String,
 ) -> Result<Vec<store::Verse>, String> {
+    // 1. Try direct reference match first
+    let ref_results = state.store.detect_verses_by_ref(&query);
+    if !ref_results.is_empty() {
+        return Ok(ref_results);
+    }
+
+    // 2. Try semantic search
     // Clone the inner Arc while holding the lock briefly, then release before embed().
     let engine_opt: Option<Arc<engine::TranscriptionEngine>> = state.engine.lock().clone();
     if let Some(engine) = engine_opt {
         match engine.embed(&query) {
             Ok(embedding) => {
-                let results = state.store.search_top_n_semantic(&embedding, 10);
+                let results = state.store.search_top_n_semantic(&embedding, 20);
                 if !results.is_empty() {
                     return Ok(results);
                 }
@@ -545,6 +552,8 @@ async fn search_semantic_query(
             }
         }
     }
+
+    // 3. Fallback to improved keyword search
     state.store.search_manual_all_versions(&query).map_err(|e| e.to_string())
 }
 
