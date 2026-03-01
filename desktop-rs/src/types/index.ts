@@ -326,6 +326,7 @@ export interface PresentationSettings {
   version_font_family?: string;
   version_font_size?: number;
   version_color?: string;
+  camera_resolution?: "360p" | "480p" | "720p" | "1080p";
 }
 
 export interface ParsedSlide {
@@ -385,6 +386,7 @@ export const DEFAULT_SETTINGS: PresentationSettings = {
   reference_color: "",
   reference_font_family: "Arial, sans-serif",
   disabled_bible_versions: [],
+  camera_resolution: "720p",
 };
 
 export const THEMES: Record<string, { label: string; colors: ThemeColors }> = {

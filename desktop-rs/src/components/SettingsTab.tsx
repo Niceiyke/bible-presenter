@@ -218,6 +218,26 @@ export function SettingsTab({
       </div>
 
       <div>
+        <p className="text-xs text-slate-400 font-bold uppercase mb-3">Camera Resolution (Local)</p>
+        <div className="flex flex-wrap gap-2 mb-3">
+          {(["360p", "480p", "720p", "1080p"] as const).map((r) => (
+            <button
+              key={r}
+              onClick={() => onUpdateSettings({ ...settings, camera_resolution: r })}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                (settings.camera_resolution ?? "720p") === r
+                  ? "bg-amber-500 border-amber-500 text-black"
+                  : "bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500"
+              }`}
+            >
+              {r}
+            </button>
+          ))}
+        </div>
+        <p className="text-[10px] text-slate-600">Lower resolution reduces CPU usage and improves smoothness.</p>
+      </div>
+
+      <div>
         <p className="text-xs text-slate-400 font-bold uppercase mb-3">Corner Logo</p>
         <div className="flex flex-col gap-2">
           <button

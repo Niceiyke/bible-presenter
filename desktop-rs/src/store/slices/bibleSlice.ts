@@ -23,8 +23,8 @@ export interface BibleSlice {
   setSearchQuery: (v: string) => void;
   searchResults: Verse[];
   setSearchResults: (v: Verse[]) => void;
-  bibleOpen: { quickEntry: boolean; manualSelection: boolean; keywordSearch: boolean };
-  setBibleOpen: (v: { quickEntry: boolean; manualSelection: boolean; keywordSearch: boolean } | ((prev: { quickEntry: boolean; manualSelection: boolean; keywordSearch: boolean }) => { quickEntry: boolean; manualSelection: boolean; keywordSearch: boolean })) => void;
+  bibleOpen: { quickEntry: boolean; manualSelection: boolean; keywordSearch: boolean; chapterView: boolean };
+  setBibleOpen: (v: { quickEntry: boolean; manualSelection: boolean; keywordSearch: boolean; chapterView: boolean } | ((prev: { quickEntry: boolean; manualSelection: boolean; keywordSearch: boolean; chapterView: boolean }) => { quickEntry: boolean; manualSelection: boolean; keywordSearch: boolean; chapterView: boolean })) => void;
 }
 
 export const createBibleSlice: StateCreator<AppStore, [], [], BibleSlice> = (set) => ({
@@ -48,6 +48,6 @@ export const createBibleSlice: StateCreator<AppStore, [], [], BibleSlice> = (set
   setSearchQuery: (v) => set({ searchQuery: v }),
   searchResults: [],
   setSearchResults: (v) => set({ searchResults: v }),
-  bibleOpen: { quickEntry: true, manualSelection: true, keywordSearch: true },
+  bibleOpen: { quickEntry: true, manualSelection: true, keywordSearch: true, chapterView: true },
   setBibleOpen: (v) => set((s) => ({ bibleOpen: typeof v === "function" ? v(s.bibleOpen) : v })),
 });

@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { resolvePath } from "../../utils";
+import { useAppStore } from "../../store";
 import type {
   ParsedSlide,
   CustomSlide,
@@ -214,12 +215,35 @@ export function CustomSlideRenderer({
 
 // ─── Camera Feed Renderer ─────────────────────────────────────────────────────
 
-export function CameraFeedRenderer({ deviceId }: { deviceId: string }) {
+export function CameraFeedRenderer({ deviceId, resolution = "720p" }: { deviceId: string; resolution?: "360p" | "480p" | "720p" | "1080p" }) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     let stream: MediaStream | null = null;
-    navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } })
+    const constraints: MediaStreamConstraints = {
+      video: {
+        deviceId: { exact: deviceId },
+        width:
+          resolution === "1080p"
+            ? { ideal: 1920 }
+            : resolution === "720p"
+            ? { ideal: 1280 }
+            : resolution === "480p"
+            ? { ideal: 854 }
+            : { ideal: 640 },
+        height:
+          resolution === "1080p"
+            ? { ideal: 1080 }
+            : resolution === "720p"
+            ? { ideal: 720 }
+            : resolution === "480p"
+            ? { ideal: 480 }
+            : { ideal: 360 },
+      },
+    };
+
+    navigator.mediaDevices
+      .getUserMedia(constraints)
       .then((s) => {
         stream = s;
         if (videoRef.current) videoRef.current.srcObject = s;
@@ -229,7 +253,7 @@ export function CameraFeedRenderer({ deviceId }: { deviceId: string }) {
       stream?.getTracks().forEach((t) => t.stop());
       if (videoRef.current) videoRef.current.srcObject = null;
     };
-  }, [deviceId]);
+  }, [deviceId, resolution]);
 
   return <video ref={videoRef} className="w-full h-full object-cover" autoPlay muted playsInline />;
 }
@@ -540,7 +564,7 @@ export function LayerContentRenderer({
       );
     }
     if (src.type === "camera-local") {
-      return <CameraFeedRenderer deviceId={src.device_id} />;
+      return <CameraFeedRenderer deviceId={src.device_id} resolution={settings?.camera_resolution} />;
     }
     return null;
   }
@@ -586,7 +610,7 @@ export function LayerContentRenderer({
           </div>
         );
       }
-      return <CameraFeedRenderer deviceId={item.data.device_id} />;
+      return <CameraFeedRenderer deviceId={item.data.device_id} resolution={settings?.camera_resolution} />;
     case "CustomSlide":
       return <CustomSlideRenderer slide={item.data} scale={outputMode ? scale : 0.1} appDataDir={appDataDir} />;
     case "PresentationSlide":
@@ -972,7 +996,15 @@ export function PropsRenderer({ items, appDataDir = null }: { items: PropItem[];
   );
 }
 
-export function SmallItemPreview({ item, appDataDir = null }: { item: DisplayItem; appDataDir?: string | null }) {
+export function SmallItemPreview({
+  item,
+  appDataDir = null,
+  settings,
+}: {
+  item: DisplayItem;
+  appDataDir?: string | null;
+  settings?: PresentationSettings;
+}) {
   switch (item.type) {
     case "Verse":
       return (
@@ -998,7 +1030,7 @@ export function SmallItemPreview({ item, appDataDir = null }: { item: DisplayIte
           </div>
         );
       }
-      return <CameraFeedRenderer deviceId={item.data.device_id} />;
+      return <CameraFeedRenderer deviceId={item.data.device_id} resolution={settings?.camera_resolution} />;
     case "CustomSlide":
       return <CustomSlideRenderer slide={item.data} scale={0.1} appDataDir={appDataDir} />;
     case "PresentationSlide":
