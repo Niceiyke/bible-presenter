@@ -28,11 +28,13 @@
 /// 5. Mobile connect/disconnect are broadcast to all clients:
 ///    - {"type":"camera_source_connected",   "device_id":"...","device_name":"..."}
 ///    - {"type":"camera_source_disconnected","device_id":"..."}
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
+        ConnectInfo,
         State as AxumState,
     },
     response::{Html, IntoResponse},
@@ -66,7 +68,10 @@ pub async fn start(state: Arc<AppState>, port: u16) {
     match tokio::net::TcpListener::bind(addr).await {
         Ok(listener) => {
             println!("[remote] Listening on http://{}", addr);
-            if let Err(e) = axum::serve(listener, app).await {
+            if let Err(e) = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            ).await {
                 eprintln!("[remote] Server error: {}", e);
             }
         }
@@ -90,9 +95,10 @@ async fn serve_camera_html() -> impl IntoResponse {
 
 async fn ws_handler(
     ws: WebSocketUpgrade,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     AxumState(state): AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    ws.on_upgrade(move |socket| handle_socket(socket, state, peer_addr))
 }
 
 // ─── WebSocket session ────────────────────────────────────────────────────────
@@ -108,9 +114,10 @@ struct ClientInfo {
     is_mobile: bool,
 }
 
-async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
+async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: SocketAddr) {
     // ── 1. Auth handshake (extended to capture client identity) ───────────────
     let pin = state.remote_pin.lock().clone();
+    let is_local = peer_addr.ip().is_loopback();
     let auth_result: Result<Option<Option<ClientInfo>>, _> = tokio::time::timeout(
         tokio::time::Duration::from_secs(30),
         async {
@@ -136,9 +143,14 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                                 .to_string();
                             let is_mobile = client_type == "mobile";
 
+                            // Only loopback connections may claim to be a Tauri window.
+                            // This prevents a mobile client from hijacking the operator slot.
                             let key = match client_type {
-                                "window:main"   => "window:main".to_string(),
-                                "window:output" => format!("window:output:{}", uuid::Uuid::new_v4()),
+                                "window:main" if is_local  => "window:main".to_string(),
+                                "window:output" if is_local => format!("window:output:{}", uuid::Uuid::new_v4()),
+                                "window:main" | "window:output" => {
+                                    return Some(None); // reject window claims from non-local IPs
+                                }
                                 "mobile" if !device_id.is_empty() => {
                                     format!("mobile:{}", device_id)
                                 }
@@ -310,7 +322,7 @@ async fn route_or_handle(state: &Arc<AppState>, v: Value, raw: &str, from_key: &
     }
 
     // General remote-panel command dispatch.
-    handle_command(state, v).await;
+    handle_command(state, v, from_key).await;
 }
 
 /// Normalises shorthand target names to canonical client keys.
@@ -330,7 +342,7 @@ fn normalize_target(target: &str) -> String {
 
 // ─── Command dispatch ─────────────────────────────────────────────────────────
 
-async fn handle_command(state: &Arc<AppState>, v: Value) {
+async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
     let cmd = match v.get("cmd").and_then(|c| c.as_str()) {
         Some(c) => c,
         None => return,
@@ -341,13 +353,13 @@ async fn handle_command(state: &Arc<AppState>, v: Value) {
             let live = state.live_item.lock().clone();
             let lt = state.lower_third.lock().clone();
             let msg = json!({ "type": "state", "live_item": live, "lt": lt });
-            broadcast_str(state, msg.to_string());
+            send_to(state, from_key, msg.to_string());
         }
 
         "get_versions" => {
             let versions = state.store.get_available_versions();
             let msg = json!({ "type": "versions", "versions": versions });
-            broadcast_str(state, msg.to_string());
+            send_to(state, from_key, msg.to_string());
         }
 
         "get_books" => {
@@ -355,9 +367,9 @@ async fn handle_command(state: &Arc<AppState>, v: Value) {
             match state.store.get_books(&version) {
                 Ok(books) => {
                     let msg = json!({ "type": "books", "version": version, "books": books });
-                    broadcast_str(state, msg.to_string());
+                    send_to(state, from_key, msg.to_string());
                 }
-                Err(e) => send_error(state, &e.to_string()),
+                Err(e) => send_error_to(state, from_key, &e.to_string()),
             }
         }
 
@@ -367,9 +379,9 @@ async fn handle_command(state: &Arc<AppState>, v: Value) {
             match state.store.get_chapters(&book, &version) {
                 Ok(chapters) => {
                     let msg = json!({ "type": "chapters", "book": book, "version": version, "chapters": chapters });
-                    broadcast_str(state, msg.to_string());
+                    send_to(state, from_key, msg.to_string());
                 }
-                Err(e) => send_error(state, &e.to_string()),
+                Err(e) => send_error_to(state, from_key, &e.to_string()),
             }
         }
 
@@ -380,9 +392,9 @@ async fn handle_command(state: &Arc<AppState>, v: Value) {
             match state.store.get_verses_count(&book, chapter, &version) {
                 Ok(verses) => {
                     let msg = json!({ "type": "verses", "book": book, "chapter": chapter, "version": version, "verses": verses });
-                    broadcast_str(state, msg.to_string());
+                    send_to(state, from_key, msg.to_string());
                 }
-                Err(e) => send_error(state, &e.to_string()),
+                Err(e) => send_error_to(state, from_key, &e.to_string()),
             }
         }
 
@@ -394,10 +406,10 @@ async fn handle_command(state: &Arc<AppState>, v: Value) {
             match state.store.get_verse(&book, chapter, verse, &version) {
                 Ok(Some(vdata)) => {
                     let msg = json!({ "type": "verse_text", "verse": vdata });
-                    broadcast_str(state, msg.to_string());
+                    send_to(state, from_key, msg.to_string());
                 }
-                Ok(None) => send_error(state, "Verse not found"),
-                Err(e) => send_error(state, &e.to_string()),
+                Ok(None) => send_error_to(state, from_key, "Verse not found"),
+                Err(e) => send_error_to(state, from_key, &e.to_string()),
             }
         }
 
@@ -406,9 +418,9 @@ async fn handle_command(state: &Arc<AppState>, v: Value) {
             match state.store.search_manual_all_versions(&query) {
                 Ok(results) => {
                     let msg = json!({ "type": "search_results", "results": results });
-                    broadcast_str(state, msg.to_string());
+                    send_to(state, from_key, msg.to_string());
                 }
-                Err(e) => send_error(state, &e.to_string()),
+                Err(e) => send_error_to(state, from_key, &e.to_string()),
             }
         }
 
@@ -435,7 +447,7 @@ async fn handle_command(state: &Arc<AppState>, v: Value) {
                         let msg = json!({ "type": "state", "live_item": item, "lt": lt });
                         broadcast_str(state, msg.to_string());
                     }
-                    Err(e) => send_error(state, &format!("Invalid item: {}", e)),
+                    Err(e) => send_error_to(state, from_key, &format!("Invalid item: {}", e)),
                 }
             }
         }
@@ -444,9 +456,9 @@ async fn handle_command(state: &Arc<AppState>, v: Value) {
             match state.media_schedule.list_songs() {
                 Ok(songs) => {
                     let msg = json!({ "type": "songs", "songs": songs });
-                    broadcast_str(state, msg.to_string());
+                    send_to(state, from_key, msg.to_string());
                 }
-                Err(e) => send_error(state, &e.to_string()),
+                Err(e) => send_error_to(state, from_key, &e.to_string()),
             }
         }
 
@@ -467,7 +479,7 @@ async fn handle_command(state: &Arc<AppState>, v: Value) {
                     let msg = json!({ "type": "lt_update", "payload": payload });
                     broadcast_str(state, msg.to_string());
                 }
-                Err(e) => send_error(state, &format!("Invalid lower third data: {}", e)),
+                Err(e) => send_error_to(state, from_key, &format!("Invalid lower third data: {}", e)),
             }
         }
 
@@ -481,6 +493,17 @@ async fn handle_command(state: &Arc<AppState>, v: Value) {
 
             let msg = json!({ "type": "lt_update", "payload": null });
             broadcast_str(state, msg.to_string());
+        }
+
+        // Sent by window:main on auth_ok to recover from race condition where
+        // mobile connected before the operator WS was registered.
+        "request_all_offers" => {
+            let clients = state.signaling_clients.lock();
+            for (key, ch) in clients.iter() {
+                if key.starts_with("mobile:") {
+                    let _ = ch.send(json!({ "event": "request_offer" }).to_string());
+                }
+            }
         }
 
         _ => {
@@ -502,9 +525,18 @@ fn broadcast_str(state: &Arc<AppState>, msg: String) {
     let _ = state.broadcast_tx.send(msg);
 }
 
-fn send_error(state: &Arc<AppState>, message: &str) {
+/// Send a message to a single client by key. No-op if client is not connected.
+fn send_to(state: &Arc<AppState>, client_key: &str, msg: String) {
+    let clients = state.signaling_clients.lock();
+    if let Some(ch) = clients.get(client_key) {
+        let _ = ch.send(msg);
+    }
+}
+
+/// Send an error message back to the requesting client only (not broadcast).
+fn send_error_to(state: &Arc<AppState>, client_key: &str, message: &str) {
     let msg = json!({ "type": "error", "message": message }).to_string();
-    let _ = state.broadcast_tx.send(msg);
+    send_to(state, client_key, msg);
 }
 
 fn display_item_text(item: &store::DisplayItem) -> String {

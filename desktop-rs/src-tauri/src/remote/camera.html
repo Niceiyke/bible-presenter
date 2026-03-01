@@ -106,10 +106,10 @@
   <div class="title">Camera Sender</div>
   <p class="subtitle">Enter the 4-digit PIN shown in Bible Presenter to connect this device as a live camera source.</p>
   <div class="pin-row">
-    <input type="number" maxlength="1" id="p0" inputmode="numeric" min="0" max="9">
-    <input type="number" maxlength="1" id="p1" inputmode="numeric" min="0" max="9">
-    <input type="number" maxlength="1" id="p2" inputmode="numeric" min="0" max="9">
-    <input type="number" maxlength="1" id="p3" inputmode="numeric" min="0" max="9">
+    <input type="text" maxlength="1" id="p0" inputmode="numeric" pattern="[0-9]" autocomplete="off">
+    <input type="text" maxlength="1" id="p1" inputmode="numeric" pattern="[0-9]" autocomplete="off">
+    <input type="text" maxlength="1" id="p2" inputmode="numeric" pattern="[0-9]" autocomplete="off">
+    <input type="text" maxlength="1" id="p3" inputmode="numeric" pattern="[0-9]" autocomplete="off">
   </div>
   <p class="err-msg" id="pin-err"></p>
   <button class="btn btn-primary" id="pin-btn" onclick="doAuth()">Connect</button>
@@ -169,6 +169,7 @@ const STUN = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }], iceCandid
 // ── State ─────────────────────────────────────────────────────────────────────
 let ws          = null;
 let wakeLock    = null;
+let authFailed  = false;
 
 // Secure-context fallback for randomUUID
 const generateId = () => {
@@ -206,12 +207,15 @@ async function requestWakeLock() {
 
 async function sendTelemetry() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  
+
+  // getBattery is Chrome-only; skip telemetry entirely on unsupported browsers
+  if (typeof navigator.getBattery !== 'function') return;
+
   let batteryLevel = null;
   try {
     const battery = await navigator.getBattery();
     batteryLevel = Math.round(battery.level * 100);
-  } catch (e) {}
+  } catch (e) { return; }
 
   sendMsg({
     cmd: 'camera_telemetry',
@@ -227,7 +231,8 @@ const pinInputs = [0,1,2,3].map(i => document.getElementById(`p${i}`));
 
 pinInputs.forEach((inp, idx) => {
   inp.addEventListener('input', () => {
-    const val = inp.value.slice(-1);
+    // Keep only the last digit typed (handles paste of multiple chars)
+    const val = inp.value.replace(/\D/g, '').slice(-1);
     inp.value = val;
     if (val && idx < 3) pinInputs[idx + 1].focus();
   });
@@ -249,6 +254,7 @@ async function doAuth() {
     document.getElementById('pin-err').textContent = 'Enter all 4 digits.';
     return;
   }
+  authFailed = false;
   document.getElementById('pin-btn').disabled = true;
   document.getElementById('pin-err').textContent = '';
   connectWs(pin);
@@ -280,9 +286,16 @@ function connectWs(pin) {
       return;
     }
     if (msg.type === 'auth_fail') {
+      authFailed = true;
       document.getElementById('pin-err').textContent = 'Wrong PIN. Try again.';
       document.getElementById('pin-btn').disabled = false;
       ws.close();
+      return;
+    }
+
+    if (msg.event === 'request_offer') {
+      // Operator WS reconnected after us — re-send offer so it can answer
+      if (localStream) openPc().catch(console.error);
       return;
     }
 
@@ -332,12 +345,15 @@ function connectWs(pin) {
     if (telemetryInterval) { clearInterval(telemetryInterval); telemetryInterval = null; }
     if (wakeLock) { wakeLock.release(); wakeLock = null; }
     setStatus('disconnected');
-    setTimeout(() => {
-      if (ws.readyState === WebSocket.CLOSED) {
-        const pin = getPin();
-        if (pin.length === 4) connectWs(pin);
-      }
-    }, 3000);
+    if (!authFailed) {
+      setTimeout(() => {
+        if (ws.readyState === WebSocket.CLOSED) {
+          const pin = getPin();
+          if (pin.length === 4) connectWs(pin);
+        }
+      }, 3000);
+    }
+    authFailed = false;
   };
 }
 
@@ -371,20 +387,6 @@ async function startCamera() {
     const noCam = document.getElementById('no-cam');
     noCam.style.display = 'flex';
     setStatus('disconnected');
-  }
-}
-
-async function toggleTorch() {
-  if (!localStream) return;
-  const track = localStream.getVideoTracks()[0];
-  const caps = track.getCapabilities();
-  if (caps.torch) {
-    const settings = track.getSettings();
-    await track.applyConstraints({
-      advanced: [{ torch: !settings.torch }]
-    });
-  } else {
-    alert('Flash/Torch not supported on this camera.');
   }
 }
 
@@ -496,7 +498,8 @@ function saveName() {
   if (!val) return;
   deviceName = val;
   localStorage.setItem('cam_device_name', val);
-  if (pc) openPc().catch(console.error);
+  // Name is stored locally — takes effect on next reconnect.
+  // Do NOT re-open the PC here; dropping the live connection just to rename is disruptive.
 }
 
 function setStatus(s) {

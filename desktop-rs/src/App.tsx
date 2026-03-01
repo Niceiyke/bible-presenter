@@ -5,7 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { 
   BookOpen, CalendarDays, ChevronRight, Clock, EyeOff, Image as ImageIcon, 
-  Layers, Layout, Mic, Monitor, Presentation, Settings, X, Zap, AlertCircle
+  Layers, Layout, Mic, Monitor, Presentation, Settings, X, Zap, AlertCircle, Keyboard
 } from "lucide-react";
 
 import { useAppStore } from "./store";
@@ -27,6 +27,7 @@ import { SettingsTab } from "./components/SettingsTab";
 import { PropsTab } from "./components/PropsTab";
 import { PreviewCard } from "./components/PreviewCard";
 import { Toast } from "./components/Toast";
+import { ShortcutsModal } from "./components/ShortcutsModal";
 import { SlideEditor } from "./components/editors/SlideEditor";
 import { OutputWindow, StageWindow, DesignHub } from "./windows";
 import { stableId, newDefaultSlide } from "./utils";
@@ -55,6 +56,7 @@ export default function App() {
   } = useAppStore();
 
   const [outputVisible, setOutputVisible] = React.useState(false);
+  const [showShortcuts, setShowShortcuts] = React.useState(false);
   const [editingPres, setEditingPres] = useState<CustomPresentation | null>(null);
   const [bottomDeckH, setBottomDeckH] = React.useState(() => Number(localStorage.getItem("pref_bottomDeckH") || 280));
   const [scheduleWidth, setScheduleWidth] = React.useState(() => Number(localStorage.getItem("pref_scheduleWidth") || 240));
@@ -296,7 +298,11 @@ export default function App() {
         return;
       }
       switch (e.key) {
-        case "Escape": invoke("clear_live"); break;
+        case "?": setShowShortcuts(v => !v); break;
+        case "Escape": 
+          if (showShortcuts) { setShowShortcuts(false); return; }
+          invoke("clear_live"); 
+          break;
         case "Enter": if (stagedItem) goLive(); break;
         case "o": if (e.ctrlKey) { invoke("toggle_output_window"); setOutputVisible(v => !v); } break;
         case "b": if (e.ctrlKey) { e.preventDefault(); const nb = !settings.is_blanked; setSettings({ ...settings, is_blanked: nb }); setIsBlackout(nb); invoke("save_settings", { settings: { ...settings, is_blanked: nb } }); } break;
@@ -402,7 +408,7 @@ export default function App() {
       }
     };
     window.addEventListener("keydown", handleKD); return () => window.removeEventListener("keydown", handleKD);
-  }, [label, stagedItem, goLive, liveItem, studioSlides, nextVerse, ltVisible, ltFlatLines, ltLineIndex, ltTemplate, settings, bottomDeckOpen, setSettings, setIsBlackout, setActiveTab, setBottomDeckOpen, setBottomDeckMode, sendLive, stageItem, setLtVisible, ltLinesPerDisplay, ltMode, setLtLineIndex]);
+  }, [label, stagedItem, goLive, liveItem, studioSlides, nextVerse, ltVisible, ltFlatLines, ltLineIndex, ltTemplate, settings, bottomDeckOpen, setSettings, setIsBlackout, setActiveTab, setBottomDeckOpen, setBottomDeckMode, sendLive, stageItem, setLtVisible, ltLinesPerDisplay, ltMode, setLtLineIndex, showShortcuts, setShowShortcuts]);
 
   // ── Window Routing (after all hooks to satisfy React rules) ───────────────
   if (label === "output") return <OutputWindow />;
@@ -483,6 +489,7 @@ export default function App() {
             title="Toggle Output Window (Ctrl+O)"
           ><Monitor size={18} /></button>
           <button onClick={() => invoke("toggle_design_window")} className="p-2 text-slate-400 hover:text-purple-400 hover:bg-purple-500/10 rounded-lg transition-all" title="Design Hub"><Layout size={18} /></button>
+          <button onClick={() => setShowShortcuts(true)} className={`p-2 rounded-lg transition-all ${showShortcuts ? "bg-slate-800 text-amber-500" : "text-slate-400 hover:text-white hover:bg-slate-800"}`} title="Keyboard Shortcuts (?)"><Keyboard size={18} /></button>
           <button onClick={() => setActiveTab("settings")} className={`p-2 rounded-lg transition-all ${activeTab === "settings" ? "bg-slate-800 text-amber-500" : "text-slate-400 hover:text-white hover:bg-slate-800"}`}><Settings size={18} /></button>
         </div>
       </header>
@@ -806,6 +813,8 @@ export default function App() {
           }}
         />
       )}
+
+      <ShortcutsModal isOpen={showShortcuts} onClose={() => setShowShortcuts(false)} />
     </div>
   );
 }
