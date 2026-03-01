@@ -51,7 +51,6 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose 
         { key: "F1", desc: "Switch to Bible Tab" },
         { key: "F2", desc: "Switch to Songs Tab" },
         { key: "F3", desc: "Switch to Media Tab" },
-        { key: "F4", desc: "Switch to PPTX Tab" },
         { key: "F5", desc: "Toggle Design Window" },
         { key: "F6", desc: "Switch to Scenes Tab" },
         { key: "F7", desc: "Switch to Scene Builder" },

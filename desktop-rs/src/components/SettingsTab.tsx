@@ -523,15 +523,6 @@ export function SettingsTab({
           />
           <div className="border-t border-slate-800" />
           <BackgroundEditor
-            label="Presentations (PPTX)"
-            value={settings.presentation_background}
-            onChange={(bg) => onUpdateSettings({ ...settings, presentation_background: bg })}
-            mediaImages={media.filter((m) => m.media_type === "Image")}
-            onUploadMedia={onUploadMedia}
-            cameras={cameras}
-          />
-          <div className="border-t border-slate-800" />
-          <BackgroundEditor
             label="Media (Image / Video)"
             value={settings.media_background}
             onChange={(bg) => onUpdateSettings({ ...settings, media_background: bg })}

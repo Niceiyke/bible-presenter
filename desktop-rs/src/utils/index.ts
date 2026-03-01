@@ -21,9 +21,6 @@ export function getItemUid(item: DisplayItem | null): string {
   if (item.type === "Verse") {
     return `verse-${item.data.book}-${item.data.chapter}-${item.data.verse}-${item.data.version}-${item.data.text.slice(0, 16)}`;
   }
-  if (item.type === "PresentationSlide") {
-    return `pptx-${item.data.presentation_id}-${item.data.slide_index}`;
-  }
   if (item.type === "CustomSlide") {
     return `custom-${item.data.presentation_id}-${item.data.slide_index}`;
   }
@@ -49,9 +46,6 @@ export function displayItemLabel(item: DisplayItem): string {
   if (item.type === "Verse") {
     return `${item.data.book} ${item.data.chapter}:${item.data.verse}`;
   }
-  if (item.type === "PresentationSlide") {
-    return `${item.data.presentation_name} – Slide ${item.data.slide_index + 1}`;
-  }
   if (item.type === "CustomSlide") {
     return `${item.data.presentation_name} – Slide ${item.data.slide_index + 1}`;
   }
@@ -73,7 +67,6 @@ export function displayItemLabel(item: DisplayItem): string {
 export function describeDisplayItem(item: DisplayItem): string {
   if (item.type === "Verse") return `${item.data.book} ${item.data.chapter}:${item.data.verse}`;
   if (item.type === "Media") return item.data.name;
-  if (item.type === "PresentationSlide") return `${item.data.presentation_name} (S${item.data.slide_index + 1})`;
   if (item.type === "CustomSlide") return `${item.data.presentation_name} (S${item.data.slide_index + 1})`;
   if (item.type === "CameraFeed") return item.data.device_name ?? item.data.label;
   if (item.type === "Scene") return `Scene: ${item.data.name}`;
@@ -278,8 +271,8 @@ export function getCameraBackgroundDeviceId(
   let bg: BackgroundSetting | undefined;
   if (item?.type === "Verse") bg = settings.bible_background;
   else if (item?.type === "Media") bg = settings.media_background;
-  else if (item?.type === "PresentationSlide" || item?.type === "CustomSlide")
-    bg = settings.presentation_background;
+  else if (item?.type === "CustomSlide")
+    bg = settings.background;
   const effective = (bg && bg.type !== "None") ? bg : settings.background;
   if (effective?.type === "Camera") return effective.value;
   return null;
@@ -293,8 +286,8 @@ export function getVideoBackground(
   let bg: BackgroundSetting | undefined;
   if (item?.type === "Verse") bg = settings.bible_background;
   else if (item?.type === "Media") bg = settings.media_background;
-  else if (item?.type === "PresentationSlide" || item?.type === "CustomSlide")
-    bg = settings.presentation_background;
+  else if (item?.type === "CustomSlide")
+    bg = settings.background;
   const effective = (bg && bg.type !== "None") ? bg : settings.background;
   if (effective?.type === "Video" && effective.value.path) return effective.value;
   return null;
@@ -311,10 +304,6 @@ export function getEffectiveBackground(
   };
   if (item?.type === "Verse") {
     const s = pick(settings.bible_background);
-    if (s) return s;
-  }
-  if (item?.type === "PresentationSlide") {
-    const s = pick(settings.presentation_background);
     if (s) return s;
   }
   if (item?.type === "Media") {

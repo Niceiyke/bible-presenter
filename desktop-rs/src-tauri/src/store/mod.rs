@@ -90,6 +90,8 @@ impl BibleStore {
                     verse: row.get(2)?,
                     text: row.get(3)?,
                     version: version.to_string(),
+                    split_index: None,
+                    total_splits: None,
                 })
             })?;
             let mut count = 0usize;
@@ -326,6 +328,8 @@ impl BibleStore {
                     verse: row.get(2)?,
                     text: t,
                     version: version.to_string(),
+                    split_index: None,
+                    total_splits: None,
                 }))
             } else {
                 Ok(None) // skip verses with NULL text
@@ -534,6 +538,8 @@ impl BibleStore {
                 verse: row.get(2)?,
                 text: row.get(3)?,
                 version: version.to_string(),
+                split_index: None,
+                total_splits: None,
             })
         })?;
         let mut verses = Vec::new();

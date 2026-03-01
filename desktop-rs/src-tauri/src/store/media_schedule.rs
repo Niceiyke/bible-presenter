@@ -35,35 +35,6 @@ fn default_media_fit_mode() -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Presentation types
-// ---------------------------------------------------------------------------
-
-/// A .pptx file stored in the presentations directory.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct PresentationFile {
-    pub id: String,
-    pub name: String,
-    pub path: String,
-    /// Slide count as determined by the frontend after parsing; 0 = not yet known.
-    pub slide_count: u32,
-}
-
-/// Payload sent with a DisplayItem when a specific slide goes live.
-/// Carries everything the output window needs to render the slide without
-/// an extra Tauri round-trip.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct PresentationSlideData {
-    pub presentation_id: String,
-    pub presentation_name: String,
-    /// Absolute path to the .pptx file so the output window can load it directly.
-    pub presentation_path: String,
-    /// Zero-based slide index.
-    pub slide_index: u32,
-    /// Total slides in the presentation (for prev/next UX).
-    pub slide_count: u32,
-}
-
-// ---------------------------------------------------------------------------
 // Custom studio slide types
 // ---------------------------------------------------------------------------
 
@@ -195,7 +166,6 @@ pub struct SongSlideData {
 pub enum DisplayItem {
     Verse(Verse),
     Media(MediaItem),
-    PresentationSlide(PresentationSlideData),
     CustomSlide(CustomSlideData),
     CameraFeed(CameraFeedData),
     Scene(serde_json::Value),
@@ -208,9 +178,6 @@ impl DisplayItem {
         match self {
             DisplayItem::Verse(v) => format!("{} {}:{}", v.book, v.chapter, v.verse),
             DisplayItem::Media(m) => m.name.clone(),
-            DisplayItem::PresentationSlide(p) => {
-                format!("{} – slide {}", p.presentation_name, p.slide_index + 1)
-            }
             DisplayItem::CustomSlide(c) => {
                 format!("{} – slide {}", c.presentation_name, c.slide_index + 1)
             }
@@ -306,9 +273,6 @@ pub struct PresentationSettings {
     /// Per-content background override for Bible verse slides.
     #[serde(default)]
     pub bible_background: BackgroundSetting,
-    /// Per-content background override for PowerPoint/PPTX slides.
-    #[serde(default)]
-    pub presentation_background: BackgroundSetting,
     /// Per-content background override for media (image/video) items.
     #[serde(default)]
     pub media_background: BackgroundSetting,
@@ -404,7 +368,6 @@ impl Default for PresentationSettings {
             reference_position: "bottom".to_string(),
             background: BackgroundSetting::default(),
             bible_background: BackgroundSetting::default(),
-            presentation_background: BackgroundSetting::default(),
             media_background: BackgroundSetting::default(),
             logo_path: None,
             background_logo_path: None,
@@ -546,15 +509,12 @@ pub struct MediaScheduleStore {
     app_data_dir: PathBuf,
     media_dir: PathBuf,
     thumbnails_dir: PathBuf,
-    presentations_dir: PathBuf,
     studio_dir: PathBuf,
     songs_dir: PathBuf,
     scenes_dir: PathBuf,
     services_dir: PathBuf,
     /// Maps media ID -> absolute file path for O(1) lookups.
     media_cache: Mutex<HashMap<String, PathBuf>>,
-    /// Maps presentation ID -> absolute file path for O(1) lookups.
-    pres_cache: Mutex<HashMap<String, PathBuf>>,
 }
 
 fn classify_extension(ext: &str) -> Option<MediaItemType> {
@@ -605,10 +565,6 @@ impl MediaScheduleStore {
         if !thumbnails_dir.exists() {
             fs::create_dir_all(&thumbnails_dir)?;
         }
-        let presentations_dir = app_data_dir.join("presentations");
-        if !presentations_dir.exists() {
-            fs::create_dir_all(&presentations_dir)?;
-        }
         let studio_dir = app_data_dir.join("studio");
         if !studio_dir.exists() {
             fs::create_dir_all(&studio_dir)?;
@@ -625,17 +581,15 @@ impl MediaScheduleStore {
         if !services_dir.exists() {
             fs::create_dir_all(&services_dir)?;
         }
-        let mut store = Self {
+        let store = Self {
             app_data_dir,
             media_dir,
             thumbnails_dir,
-            presentations_dir,
             studio_dir,
             songs_dir,
             scenes_dir,
             services_dir,
             media_cache: Mutex::new(HashMap::new()),
-            pres_cache: Mutex::new(HashMap::new()),
         };
         let _ = store.refresh_caches();
         Ok(store)
@@ -658,31 +612,11 @@ impl MediaScheduleStore {
                 }
             }
         }
-        {
-            let mut cache = self.pres_cache.lock();
-            cache.clear();
-            if let Ok(entries) = fs::read_dir(&self.presentations_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_file() {
-                        let name = path.file_name().unwrap_or_default().to_string_lossy();
-                        if !name.starts_with('.') && !name.ends_with(".presid") && path.extension().and_then(|e| e.to_str()) == Some("pptx") {
-                            let id = self.get_or_create_pres_id(&path);
-                            cache.insert(id, path);
-                        }
-                    }
-                }
-            }
-        }
         Ok(())
     }
 
     pub fn get_media_dir(&self) -> PathBuf {
         self.media_dir.clone()
-    }
-
-    pub fn get_pptx_cache_dir(&self, pres_id: &str) -> PathBuf {
-        self.app_data_dir.join("pptx_cache").join(pres_id)
     }
 
     // -----------------------------------------------------------------------
@@ -883,132 +817,6 @@ impl MediaScheduleStore {
             Ok(())
         } else {
             Err(anyhow::anyhow!("Media item not found: {}", id))
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Presentations
-    // -----------------------------------------------------------------------
-
-    pub fn list_presentations(&self) -> Result<Vec<PresentationFile>> {
-        let _ = self.refresh_caches(); // Refresh so we pick up manual file additions
-        let mut items = Vec::new();
-        let cache = self.pres_cache.lock();
-
-        for (id, path) in cache.iter() {
-            let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-            items.push(PresentationFile {
-                id: id.clone(),
-                name,
-                path: path.to_string_lossy().to_string(),
-                slide_count: 0, // populated by the frontend after ZIP parsing
-            });
-        }
-
-        items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-        Ok(items)
-    }
-
-    pub fn add_presentation(&self, source_path: PathBuf) -> Result<PresentationFile> {
-        let original_name = source_path
-            .file_name()
-            .ok_or_else(|| anyhow::anyhow!("Invalid source path"))?
-            .to_string_lossy()
-            .to_string();
-
-        let ext = source_path
-            .extension()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_lowercase();
-
-        if ext != "pptx" {
-            return Err(anyhow::anyhow!("Only .pptx files are supported"));
-        }
-
-        let dest_path = self.unique_pres_dest_path(&original_name);
-        let dest_name = dest_path
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
-
-        fs::copy(&source_path, &dest_path)?;
-
-        let id = self.get_or_create_pres_id(&dest_path);
-        {
-            let mut cache = self.pres_cache.lock();
-            cache.insert(id.clone(), dest_path.clone());
-        }
-
-        Ok(PresentationFile {
-            id,
-            name: dest_name,
-            path: dest_path.to_string_lossy().to_string(),
-            slide_count: 0,
-        })
-    }
-
-    pub fn delete_presentation(&self, id: String) -> Result<()> {
-        let path = {
-            let mut cache = self.pres_cache.lock();
-            cache.remove(&id)
-        };
-
-        if let Some(path) = path {
-            let sidecar = path.with_extension(
-                format!(
-                    "{}.presid",
-                    path.extension().unwrap_or_default().to_string_lossy()
-                )
-            );
-            fs::remove_file(&path)?;
-            let _ = fs::remove_file(sidecar);
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Presentation not found: {}", id))
-        }
-    }
-
-    fn get_or_create_pres_id(&self, pres_path: &PathBuf) -> String {
-        let sidecar = pres_path.with_extension(
-            format!(
-                "{}.presid",
-                pres_path.extension().unwrap_or_default().to_string_lossy()
-            )
-        );
-        if let Ok(id) = fs::read_to_string(&sidecar) {
-            let id = id.trim().to_string();
-            if !id.is_empty() {
-                return id;
-            }
-        }
-        let id = Uuid::new_v4().to_string();
-        let _ = fs::write(&sidecar, &id);
-        id
-    }
-
-    fn unique_pres_dest_path(&self, name: &str) -> PathBuf {
-        let base = self.presentations_dir.join(name);
-        if !base.exists() {
-            return base;
-        }
-        let stem = base
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        let ext = base
-            .extension()
-            .map(|e| format!(".{}", e.to_string_lossy()))
-            .unwrap_or_default();
-        let mut counter = 2u32;
-        loop {
-            let candidate = self.presentations_dir.join(format!("{}_{}{}", stem, counter, ext));
-            if !candidate.exists() {
-                return candidate;
-            }
-            counter += 1;
         }
     }
 

@@ -10,11 +10,9 @@ import {
   CameraFeedRenderer,
   SceneRenderer,
   SongSlideRenderer,
-  SlideRenderer,
 } from "./shared/Renderers";
 import { useAppStore } from "../store";
 import type { DisplayItem, MediaItem } from "../types";
-import { loadPptxZip, parseSingleSlide, type ParsedSlide } from "../pptxParser";
 import { getItemUid } from "../utils";
 
 function formatTime(s: number): string {
@@ -54,28 +52,12 @@ export function PreviewCard({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
-  const [pptxSlide, setPptxSlide] = useState<ParsedSlide | null>(null);
-  const previewZipsRef = useRef<Record<string, any>>({});
-
   // Reset playback state when item changes
   useEffect(() => {
     setPlaying(false);
     setCurrentTime(0);
     setDuration(0);
     setMuted(true);
-    setPptxSlide(null);
-  }, [item]);
-
-  useEffect(() => {
-    if (item?.type !== "PresentationSlide") return;
-    const { presentation_id, presentation_path, slide_index } = item.data;
-    (async () => {
-      try {
-        let zip = previewZipsRef.current[presentation_id];
-        if (!zip) { zip = await loadPptxZip(presentation_path); previewZipsRef.current[presentation_id] = zip; }
-        setPptxSlide(await parseSingleSlide(zip, slide_index));
-      } catch { setPptxSlide(null); }
-    })();
   }, [item]);
 
   // Callback ref — attaches DOM event listeners for local preview; cleans up on unmount/swap
@@ -193,21 +175,6 @@ export function PreviewCard({
                 <p className="text-amber-500 font-bold uppercase tracking-widest text-sm shrink-0">
                   {item.data.book} {item.data.chapter}:{item.data.verse}
                 </p>
-              </div>
-            ) : item.type === "PresentationSlide" ? (
-              <div className="w-full h-full flex flex-col items-center justify-center">
-                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-1">
-                   <div className="text-orange-400 text-[9px] font-black uppercase bg-orange-400/20 px-2 py-0.5 rounded backdrop-blur-md border border-orange-400/30">
-                    SLIDE {item.data.slide_index + 1} / {item.data.slide_count || "?"}
-                  </div>
-                </div>
-                {pptxSlide ? (
-                  <div className="w-full" style={{ aspectRatio: "16/9" }}>
-                    <SlideRenderer slide={pptxSlide} scale={0.25} />
-                  </div>
-                ) : (
-                  <p className="text-slate-600 italic text-xs">Loading slide...</p>
-                )}
               </div>
             ) : item.type === "CustomSlide" ? (
               <div className="w-full" style={{ aspectRatio: "16/9" }}>

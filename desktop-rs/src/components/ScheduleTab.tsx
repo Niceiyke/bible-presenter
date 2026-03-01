@@ -214,10 +214,6 @@ export function ScheduleTab({ onSendItem, onPersist }: ScheduleTabProps) {
                       <p className="text-amber-500 text-[10px] font-bold uppercase truncate">{entry.item.data.book} {entry.item.data.chapter}:{entry.item.data.verse}</p>
                       <p className="text-slate-400 text-[10px] truncate">{entry.item.data.text}</p>
                     </>
-                  ) : entry.item.type === "PresentationSlide" ? (
-                    <p className="text-orange-400 text-[10px] font-bold uppercase truncate">
-                      PPTX: {entry.item.data.presentation_name} — Slide {entry.item.data.slide_index + 1}
-                    </p>
                   ) : entry.item.type === "CustomSlide" ? (
                     <p className="text-purple-400 text-[10px] font-bold uppercase truncate">
                       STUDIO: {entry.item.data.presentation_name} — Slide {entry.item.data.slide_index + 1}

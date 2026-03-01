@@ -4,7 +4,6 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { resolvePath } from "../../utils";
 import { useAppStore } from "../../store";
 import type {
-  ParsedSlide,
   CustomSlide,
   CustomSlideDisplayData,
   DisplayItem,
@@ -38,59 +37,6 @@ export function hexToRgba(hex: string, opacity: number): string {
   const g = parseInt(h.slice(2, 4), 16);
   const b = parseInt(h.slice(4, 6), 16);
   return `rgba(${r},${g},${b},${(opacity / 100).toFixed(2)})`;
-}
-
-// ─── Slide Renderer ───────────────────────────────────────────────────────────
-
-export function SlideRenderer({ slide, scale = 1 }: { slide: ParsedSlide; scale?: number }) {
-  const bgStyle: React.CSSProperties = slide.backgroundColor
-    ? { backgroundColor: slide.backgroundColor }
-    : { backgroundColor: "#1a1a2e" };
-
-  return (
-    <div className="w-full h-full relative overflow-hidden" style={bgStyle}>
-      {slide.images.map((img, i) => (
-        <img
-          key={i}
-          src={img.dataUrl}
-          className="absolute"
-          alt=""
-          style={{
-            zIndex: i,
-            left: `${img.rect.x}%`,
-            top: `${img.rect.y}%`,
-            width: `${img.rect.width}%`,
-            height: `${img.rect.height}%`,
-            objectFit: "contain",
-          }}
-        />
-      ))}
-      {slide.textBoxes.map((tb, i) => (
-        <div
-          key={i}
-          className="absolute flex items-center justify-center"
-          style={{
-            zIndex: slide.images.length + i,
-            left: `${tb.rect.x}%`,
-            top: `${tb.rect.y}%`,
-            width: `${tb.rect.width}%`,
-            height: `${tb.rect.height}%`,
-          }}
-        >
-          <p
-            className="text-center leading-tight drop-shadow-2xl whitespace-pre-wrap"
-            style={{
-              color: tb.color || "#ffffff",
-              fontSize: tb.fontSize ? `${tb.fontSize * scale}pt` : `${3 * scale}rem`,
-              fontWeight: tb.bold ? "bold" : "normal",
-            }}
-          >
-            {tb.text}
-          </p>
-        </div>
-      ))}
-    </div>
-  );
 }
 
 // ─── Custom Slide Renderer ───────────────────────────────────────────────────
@@ -1048,8 +994,6 @@ export function SmallItemPreview({
       return <CameraFeedRenderer deviceId={item.data.device_id} resolution={settings?.camera_resolution} />;
     case "CustomSlide":
       return <CustomSlideRenderer slide={item.data} scale={0.1} appDataDir={appDataDir} />;
-    case "PresentationSlide":
-      return <div className="w-full h-full bg-orange-900/20 flex items-center justify-center text-[10px] font-bold text-orange-500">PPTX SLIDE</div>;
     case "Scene":
       return <SceneRenderer scene={item.data} />;
     case "Timer":
@@ -1068,77 +1012,20 @@ export function SlideThumbnail({
   onLive,
   appDataDir = null,
 }: {
-  slide: ParsedSlide | CustomSlide;
+  slide: CustomSlide;
   index: number;
   onStage?: () => void;
   onLive?: () => void;
   appDataDir?: string | null;
 }) {
-  const isCustom = "header" in slide;
   const showOverlay = onStage || onLive;
   
-  if (isCustom) {
-    return (
-      <div
-        className="group relative aspect-video rounded overflow-hidden border border-slate-700 hover:border-amber-500/50 transition-all cursor-pointer"
-        onClick={onStage}
-      >
-        <CustomSlideRenderer slide={slide as CustomSlide} scale={0.1} appDataDir={appDataDir} />
-        <div className="absolute bottom-0 left-0 px-1 py-0.5 bg-black/50">
-          <span className="text-[7px] text-white/70">{index + 1}</span>
-        </div>
-        {showOverlay && (
-          <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-all flex flex-col items-center justify-center gap-1 p-1">
-            {onStage && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onStage(); }}
-                className="w-full bg-slate-600 hover:bg-slate-500 text-white text-[9px] font-bold py-1 rounded"
-              >
-                STAGE
-              </button>
-            )}
-            {onLive && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onLive(); }}
-                className="w-full bg-amber-500 hover:bg-amber-400 text-black text-[9px] font-bold py-1 rounded"
-              >
-                DISPLAY
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  const ps = slide as ParsedSlide;
-  const bgStyle: React.CSSProperties = ps.backgroundColor
-    ? { backgroundColor: ps.backgroundColor }
-    : { backgroundColor: "#1a1a2e" };
-
   return (
     <div
       className="group relative aspect-video rounded overflow-hidden border border-slate-700 hover:border-amber-500/50 transition-all cursor-pointer"
-      style={bgStyle}
       onClick={onStage}
     >
-      {ps.images?.[0] && (
-        <img src={ps.images[0].dataUrl} className="absolute inset-0 w-full h-full object-cover" alt="" />
-      )}
-      {ps.textBoxes?.[0] && (
-        <div className="absolute inset-0 flex items-center justify-center p-1">
-          <p
-            className="text-center font-bold leading-tight"
-            style={{
-              fontSize: "8px",
-              color: ps.textBoxes[0].color || "#ffffff",
-              textShadow: "0 1px 3px rgba(0,0,0,0.8)",
-            }}
-          >
-            {ps.textBoxes[0].text.slice(0, 60)}
-          </p>
-        </div>
-      )}
+      <CustomSlideRenderer slide={slide} scale={0.1} appDataDir={appDataDir} />
       <div className="absolute bottom-0 left-0 px-1 py-0.5 bg-black/50">
         <span className="text-[7px] text-white/70">{index + 1}</span>
       </div>

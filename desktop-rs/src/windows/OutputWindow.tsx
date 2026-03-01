@@ -12,7 +12,6 @@ import {
   getItemUid
 } from "../utils";
 import {
-  SlideRenderer,
   CustomSlideRenderer,
   SceneRenderer,
   CameraFeedRenderer,
@@ -22,8 +21,6 @@ import {
   PropsRenderer,
   type SceneLiveContext
 } from "../components/shared/Renderers";
-import { loadPptxZip, parseSingleSlide } from "../pptxParser";
-import type { ParsedSlide } from "../pptxParser";
 import { AnimatePresence, motion } from "framer-motion";
 
 const OUTPUT_STUN: RTCConfiguration = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
@@ -44,8 +41,6 @@ export function OutputWindow() {
     verse_split_threshold: 200,
   });
   const [appDataDir, setAppDataDir] = useState<string | null>(null);
-  const [currentSlide, setCurrentSlide] = useState<{ data: ParsedSlide; id: string; index: number } | null>(null);
-  const outputZipsRef = useRef<Record<string, any>>({});
   const videoRef = useRef<HTMLVideoElement>(null);
   const [cameraMuted, setCameraMuted] = useState(false);
 
@@ -301,44 +296,6 @@ export function OutputWindow() {
     }
   }, []);
 
-  // PPTX Pre-loading & Rendering Logic
-  useEffect(() => {
-    if (stagedItem?.type !== "PresentationSlide") return;
-    const { presentation_id, presentation_path } = stagedItem.data;
-    (async () => {
-      try {
-        if (!outputZipsRef.current[presentation_id]) {
-          outputZipsRef.current[presentation_id] = await loadPptxZip(presentation_path);
-        }
-      } catch (err) {
-        console.error("OutputWindow: pre-load failed", err);
-      }
-    })();
-  }, [stagedItem]);
-
-  useEffect(() => {
-    if (liveItem?.type !== "PresentationSlide") {
-      setCurrentSlide(null);
-      return;
-    }
-    const { presentation_id, presentation_path, slide_index } = liveItem.data;
-
-    (async () => {
-      try {
-        let zip = outputZipsRef.current[presentation_id];
-        if (!zip) {
-          zip = await loadPptxZip(presentation_path);
-          outputZipsRef.current[presentation_id] = zip;
-        }
-        const slide = await parseSingleSlide(zip, slide_index);
-        setCurrentSlide({ data: slide, id: presentation_id, index: slide_index });
-      } catch (err) {
-        console.error("OutputWindow: failed to render slide", err);
-        setCurrentSlide(null);
-      }
-    })();
-  }, [liveItem]);
-
   useEffect(() => {
     const isLanCamera = liveItem?.type === "CameraFeed" && liveItem.data.lan;
 
@@ -526,18 +483,6 @@ export function OutputWindow() {
                   </div>
                   {!isTop && ReferenceTag}
                 </motion.div>
-              </div>
-            ) : liveItem.type === "PresentationSlide" ? (
-              <div className="absolute inset-0">
-                {(currentSlide && currentSlide.id === liveItem.data.presentation_id && currentSlide.index === liveItem.data.slide_index) ? (
-                  <SlideRenderer slide={currentSlide.data} scale={windowScale} />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center">
-                    <span className="font-serif text-2xl italic" style={{ color: colors.waitingText }}>
-                      Loading slide...
-                    </span>
-                  </div>
-                )}
               </div>
             ) : liveItem.type === "CustomSlide" ? (
               <div className="absolute inset-0">

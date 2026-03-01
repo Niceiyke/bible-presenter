@@ -5,7 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { 
   BookOpen, CalendarDays, ChevronRight, Clock, EyeOff, Image as ImageIcon, 
-  Layers, Layout, Mic, Monitor, Presentation, Settings, X, Zap, AlertCircle, Keyboard
+  Layers, Layout, Mic, Monitor, Settings, X, Zap, AlertCircle, Keyboard
 } from "lucide-react";
 
 import { useAppStore } from "./store";
@@ -17,7 +17,6 @@ import {
 } from "./utils";
 import { BibleTab } from "./components/BibleTab";
 import { MediaTab } from "./components/MediaTab";
-import { PresentationsTab } from "./components/PresentationsTab";
 import { SongsTab } from "./components/SongsTab";
 import { LowerThirdTab } from "./components/LowerThirdTab";
 import { TimersTab } from "./components/TimersTab";
@@ -123,11 +122,6 @@ export default function App() {
   const nextLiveItem = useMemo((): DisplayItem | null => {
     if (!liveItem) return null;
     if (liveItem.type === "Verse" && nextVerse) return { type: "Verse", data: nextVerse };
-    if (liveItem.type === "PresentationSlide") {
-      const next = liveItem.data.slide_index + 1;
-      if (next < (liveItem.data.slide_count || 0))
-        return { type: "PresentationSlide", data: { ...liveItem.data, slide_index: next } };
-    }
     if (liveItem.type === "CustomSlide") {
       const slides = studioSlides[liveItem.data.presentation_id];
       const next = liveItem.data.slide_index + 1;
@@ -241,11 +235,6 @@ export default function App() {
       }
       if (nextVerse) return { type: "Verse", data: nextVerse };
     }
-    if (item.type === "PresentationSlide") {
-      const idx = item.data.slide_index + 1;
-      if (idx < (item.data.slide_count || 0))
-        return { type: "PresentationSlide", data: { ...item.data, slide_index: idx } };
-    }
     if (item.type === "CustomSlide") {
       const slides = studioSlides[item.data.presentation_id];
       const idx = item.data.slide_index + 1;
@@ -326,7 +315,7 @@ export default function App() {
         next.bible = [item, ...prev.bible.filter(h => displayItemLabel(h) !== lbl)].slice(0, 100);
       } else if (item.type === "Media") {
         next.media = [item, ...prev.media.filter(h => displayItemLabel(h) !== lbl)].slice(0, 50);
-      } else if (item.type === "PresentationSlide" || item.type === "CustomSlide") {
+      } else if (item.type === "CustomSlide") {
         next.presentation = [item, ...prev.presentation.filter(h => displayItemLabel(h) !== lbl)].slice(0, 50);
       }
       return next;
@@ -416,18 +405,13 @@ export default function App() {
         case "F1": setActiveTab("bible"); break;
         case "F2": setActiveTab("songs"); break;
         case "F3": setActiveTab("media"); break;
-        case "F4": setActiveTab("presentations"); break;
         case "F5": invoke("toggle_design_window"); break;
         case "F6": setActiveTab("scenes"); break;
         case "F7": setActiveTab("scene-builder"); break;
         case "F8": setActiveTab("props"); break;
         case "n": if (nextVerse) { const it: DisplayItem = { type: "Verse", data: nextVerse }; if (e.ctrlKey) sendLive(it); else stageItem(it); } break;
         case "ArrowRight": 
-          if (liveItem?.type === "PresentationSlide") { 
-            if (liveItem.data.slide_index < (liveItem.data.slide_count || 0) - 1) 
-              sendLive({ ...liveItem, data: { ...liveItem.data, slide_index: liveItem.data.slide_index + 1 } }); 
-          }
-          else if (liveItem?.type === "CustomSlide") { 
+          if (liveItem?.type === "CustomSlide") { 
             const slides = studioSlides[liveItem.data.presentation_id]; 
             if (slides && liveItem.data.slide_index < slides.length - 1) { 
               const ni = liveItem.data.slide_index + 1; 
@@ -444,11 +428,7 @@ export default function App() {
           }
           break;
         case "ArrowLeft":
-          if (liveItem?.type === "PresentationSlide") { 
-            if (liveItem.data.slide_index > 0) 
-              sendLive({ ...liveItem, data: { ...liveItem.data, slide_index: liveItem.data.slide_index - 1 } }); 
-          }
-          else if (liveItem?.type === "CustomSlide") { 
+          if (liveItem?.type === "CustomSlide") { 
             const slides = studioSlides[liveItem.data.presentation_id]; 
             if (slides && liveItem.data.slide_index > 0) { 
               const ni = liveItem.data.slide_index - 1; 
@@ -569,7 +549,6 @@ export default function App() {
             {([
               { id: "bible", label: "Bible", icon: BookOpen },
               { id: "media", label: "Media", icon: ImageIcon },
-              { id: "presentations", label: "PPTX", icon: Presentation },
               { id: "songs", label: "Songs", icon: Mic },
               { id: "studio", label: "Studio", icon: Layers },
               { id: "scenes", label: "Scenes", icon: Layout },
@@ -646,7 +625,6 @@ export default function App() {
                 onRemoveCameraSource={removeCameraSource} previewVideoMapRef={previewVideoMapRef} previewObserverMapRef={previewObserverMapRef}
               />
             )}
-            {activeTab === "presentations" && <PresentationsTab onStage={stageItem} onLive={sendLive} onAddToSchedule={addToSchedule} />}
             {activeTab === "studio" && (
               <StudioTab
                 onStage={stageItem}
@@ -826,11 +804,6 @@ export default function App() {
                       <div>
                         <p className="text-slate-400 text-xs leading-snug line-clamp-3 font-serif mb-1">{nextLiveItem.data.text}</p>
                         <p className="text-amber-500/60 text-[10px] font-bold uppercase tracking-wider">{nextLiveItem.data.book} {nextLiveItem.data.chapter}:{nextLiveItem.data.verse}</p>
-                      </div>
-                    ) : nextLiveItem.type === "PresentationSlide" ? (
-                      <div>
-                        <p className="text-orange-400 text-sm font-black">Slide {nextLiveItem.data.slide_index + 1}</p>
-                        <p className="text-slate-500 text-[10px] truncate max-w-full">{nextLiveItem.data.presentation_name}</p>
                       </div>
                     ) : nextLiveItem.type === "CustomSlide" ? (
                       <div>
