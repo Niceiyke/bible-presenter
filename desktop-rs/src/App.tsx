@@ -43,7 +43,8 @@ import type {
 export default function App() {
   const {
     label, liveItem, setLiveItem, stagedItem, setStagedItem, suggestedItem, setSuggestedItem,
-    suggestedConfidence, nextVerse, setNextVerse, verseHistory, setVerseHistory,
+    previousItem, setPreviousItem,
+    suggestedConfidence, nextVerse, setNextVerse, recentItems, setRecentItems,
     sidebarWidth, setSidebarWidth, isTranscriptionCollapsed, setIsTranscriptionCollapsed,
     bottomDeckOpen, setBottomDeckOpen, bottomDeckMode, setBottomDeckMode,
     settings, setSettings, activeTab, setActiveTab, toast, setToast,
@@ -166,12 +167,20 @@ export default function App() {
   }, [setStagedItem]);
 
   const goLive = useCallback(async () => {
+    const current = liveItem;
     await invoke("go_live");
+    if (current) setPreviousItem(current);
+
+    // If bg logo is on, clear it
+    if (settings.show_background_logo) {
+      updateSettings({ ...settings, show_background_logo: false });
+    }
+
     // After going live, if there's a next item, stage it automatically
     if (nextLiveItem) {
       stageItem(nextLiveItem);
     }
-  }, [nextLiveItem, stageItem]);
+  }, [nextLiveItem, stageItem, liveItem, settings, setPreviousItem]);
 
   const getNextItem = useCallback((item: DisplayItem): DisplayItem | null => {
     if (item.type === "Verse" && nextVerse) return { type: "Verse", data: nextVerse };
@@ -220,18 +229,37 @@ export default function App() {
 
   const sendLive = useCallback(async (item: DisplayItem) => {
     // We want to send THIS item live, then stage its successor
+    const current = liveItem;
     await stageItem(item);
     await invoke("go_live");
+    if (current) setPreviousItem(current);
+
+    // If bg logo is on, clear it
+    if (settings.show_background_logo) {
+      updateSettings({ ...settings, show_background_logo: false });
+    }
     
     const lbl = displayItemLabel(item);
-    setVerseHistory([item, ...verseHistory.filter(h => displayItemLabel(h) !== lbl)].slice(0, 10));
+    
+    // Categorical History
+    setRecentItems((prev) => {
+      const next = { ...prev };
+      if (item.type === "Verse" || item.type === "Song") {
+        next.bible = [item, ...prev.bible.filter(h => displayItemLabel(h) !== lbl)].slice(0, 100);
+      } else if (item.type === "Media") {
+        next.media = [item, ...prev.media.filter(h => displayItemLabel(h) !== lbl)].slice(0, 50);
+      } else if (item.type === "PresentationSlide" || item.type === "CustomSlide") {
+        next.presentation = [item, ...prev.presentation.filter(h => displayItemLabel(h) !== lbl)].slice(0, 50);
+      }
+      return next;
+    });
     
     // Calculate next item
     const next = getNextItem(item);
     if (next) {
       stageItem(next);
     }
-  }, [stageItem, verseHistory, setVerseHistory, getNextItem]);
+  }, [stageItem, recentItems, setRecentItems, getNextItem, liveItem, setPreviousItem, settings]);
 
   const addToSchedule = useCallback(async (item: DisplayItem) => {
     const entry: ScheduleEntry = { id: stableId(), item };
@@ -609,6 +637,15 @@ export default function App() {
               <button onClick={() => setBottomDeckOpen(!bottomDeckOpen)} className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${bottomDeckOpen ? "bg-purple-600 text-white" : "bg-slate-800 text-slate-500"}`}>TOOLS</button>
               <div className="h-4 w-px bg-slate-800 mx-1" />
               <button onClick={() => invoke("clear_live")} className="px-4 py-1.5 bg-red-900/40 hover:bg-red-600 text-red-200 text-[10px] font-black uppercase rounded-lg border border-red-900/50">CLEAR</button>
+              {previousItem && (
+                <button
+                  onClick={() => sendLive(previousItem)}
+                  className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 text-[10px] font-black uppercase rounded-lg border border-slate-700 flex items-center gap-1.5"
+                  title={`Go back to: ${displayItemLabel(previousItem)}`}
+                >
+                  <Clock size={12} /> Previous
+                </button>
+              )}
               <button onClick={goLive} disabled={!stagedItem} className="px-6 py-1.5 bg-amber-500 hover:bg-amber-400 text-black text-[10px] font-black uppercase rounded-lg shadow-lg shadow-amber-500/20 disabled:opacity-30">GO LIVE</button>
             </div>
           </div>

@@ -450,7 +450,7 @@ export function OutputWindow() {
 
       {cameraBgId && (
         <div className="absolute inset-0 z-0">
-          <CameraFeedRenderer deviceId={cameraBgId} />
+          <CameraFeedRenderer deviceId={cameraBgId} resolution={settings.camera_resolution} />
         </div>
       )}
       {settings.logo_path && (
@@ -514,7 +514,7 @@ export function OutputWindow() {
                 <div className="absolute inset-0" />
               ) : (
                 <div className="absolute inset-0" style={{ visibility: cameraMuted ? "hidden" : "visible" }}>
-                  <CameraFeedRenderer deviceId={liveItem.data.device_id} />
+                  <CameraFeedRenderer deviceId={liveItem.data.device_id} resolution={settings.camera_resolution} />
                 </div>
               )
             ) : liveItem.type === "Media" ? (

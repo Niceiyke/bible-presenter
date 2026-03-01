@@ -70,6 +70,7 @@ export function QuickBiblePicker({
       const item: DisplayItem = { type: "Verse", data: v };
       if (isDouble) {
         await onLive(item);
+        cvInputRef.current?.blur();
       } else {
         await onStage(item);
       }
@@ -91,6 +92,7 @@ export function QuickBiblePicker({
               <input
                 ref={cvInputRef}
                 value={cvText}
+                onFocus={() => setCvText("")}
                 onChange={(e) => setCvText(e.target.value)}
                 onKeyDown={handleCvKeyDown}
                 placeholder="3 16  or  3:16"
@@ -101,6 +103,7 @@ export function QuickBiblePicker({
             <input
               ref={bookInputRef}
               value={bookQuery}
+              onFocus={() => setBookQuery("")}
               onChange={(e) => setBookQuery(e.target.value)}
               onKeyDown={handleBookKeyDown}
               placeholder="Type a book name..."

@@ -554,6 +554,19 @@ async fn get_verses_count(
 }
 
 #[tauri::command]
+async fn get_chapter(
+    state: State<'_, AppState>,
+    book: String,
+    chapter: i32,
+    version: String,
+) -> Result<Vec<store::Verse>, String> {
+    state
+        .store
+        .get_chapter(&book, chapter, &version)
+        .map_err(|e: anyhow::Error| e.to_string())
+}
+
+#[tauri::command]
 async fn get_verse(
     state: State<'_, AppState>,
     book: String,
@@ -1329,6 +1342,7 @@ fn main() {
             get_books,
             get_chapters,
             get_verses_count,
+            get_chapter,
             get_verse,
             get_next_verse,
             list_presentations,

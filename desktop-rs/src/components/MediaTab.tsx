@@ -48,6 +48,7 @@ export function MediaTab({
 }: MediaTabProps) {
   const {
     media, setMedia,
+    settings,
     cameras, setCameras,
     enabledLocalCameras, setEnabledLocalCameras,
     mediaFilter, setMediaFilter,
@@ -395,7 +396,7 @@ export function MediaTab({
                           className="absolute top-1 left-1 z-10 text-[9px] bg-red-700/80 hover:bg-red-500 text-white w-4 h-4 flex items-center justify-center rounded font-bold transition-all leading-none"
                         >×</button>
                         {isOn ? (
-                          <CameraFeedRenderer deviceId={cam.deviceId} />
+                          <CameraFeedRenderer deviceId={cam.deviceId} resolution={settings.camera_resolution} />
                         ) : (
                           <button
                             onClick={() => setEnabledLocalCameras((prev) => new Set([...prev, cam.deviceId]))}

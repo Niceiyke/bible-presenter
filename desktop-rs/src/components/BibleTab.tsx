@@ -1,13 +1,13 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  BookOpen, ChevronUp, ChevronDown, Clock, Plus, Zap,
+  BookOpen, ChevronUp, ChevronDown, Clock, Plus, Zap, List,
 } from "lucide-react";
 import { useAppStore } from "../store";
 import { QuickBiblePicker } from "./QuickBiblePicker";
 import { displayItemLabel } from "../utils";
-import type { DisplayItem } from "../types";
+import type { DisplayItem, Verse } from "../types";
 
 interface BibleTabProps {
   onStage: (item: DisplayItem) => void;
@@ -27,9 +27,28 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
     searchQuery, setSearchQuery,
     searchResults, setSearchResults,
     bibleOpen, setBibleOpen,
-    verseHistory,
+    recentItems,
     historyOpen, setHistoryOpen,
+    stagedItem,
   } = useAppStore();
+
+  const [historyTab, setHistoryTab] = useState<"bible" | "media" | "presentation">("bible");
+
+  const [chapterVerses, setChapterVerses] = useState<Verse[]>([]);
+  const [loadingChapter, setLoadingChapter] = useState(false);
+
+  useEffect(() => {
+    if (stagedItem?.type === "Verse") {
+      const { book, chapter, version } = stagedItem.data;
+      setLoadingChapter(true);
+      invoke("get_chapter", { book, chapter, version })
+        .then((vs: any) => {
+          setChapterVerses(vs);
+        })
+        .catch(console.error)
+        .finally(() => setLoadingChapter(false));
+    }
+  }, [stagedItem]);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -186,8 +205,72 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
 
       <hr className="border-slate-800" />
 
-      {/* Verse History — collapsible */}
-      {verseHistory.length > 0 && (
+      {/* Chapter View — Active staged chapter */}
+      <div className="flex flex-col min-h-0">
+        <button
+          onClick={() => setBibleOpen((p: any) => ({ ...p, chapterView: !p.chapterView }))}
+          className="w-full flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 hover:text-slate-300 transition-colors"
+        >
+          <span className="flex items-center gap-1.5"><List size={11} />Chapter View</span>
+          {bibleOpen.chapterView ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+        </button>
+        {bibleOpen.chapterView && (
+          <div className="flex-1 flex flex-col min-h-0">
+            {stagedItem?.type === "Verse" ? (
+              <>
+                <div className="flex items-center justify-between mb-2 px-1">
+                  <p className="text-[10px] font-black text-amber-500 uppercase">
+                    {stagedItem.data.book} {stagedItem.data.chapter} ({stagedItem.data.version})
+                  </p>
+                  {loadingChapter && <span className="text-[10px] text-slate-600 animate-pulse">Loading...</span>}
+                </div>
+                <div className="space-y-1 overflow-y-auto pr-1 custom-scrollbar max-h-[400px]">
+                  {chapterVerses.map((v) => {
+                    const isStaged = stagedItem.type === "Verse" && stagedItem.data.verse === v.verse;
+                    return (
+                      <div
+                        key={v.verse}
+                        className={`p-2 rounded border transition-all group relative cursor-pointer ${
+                          isStaged 
+                            ? "bg-amber-500/10 border-amber-500/50" 
+                            : "bg-slate-800/40 border-transparent hover:border-slate-700"
+                        }`}
+                        onClick={() => onStage({ type: "Verse", data: v })}
+                      >
+                        <div className="flex gap-2">
+                          <span className={`text-[10px] font-black shrink-0 ${isStaged ? "text-amber-500" : "text-slate-600"}`}>
+                            {v.verse}
+                          </span>
+                          <p className={`text-[11px] leading-snug ${isStaged ? "text-slate-200" : "text-slate-400 group-hover:text-slate-300"}`}>
+                            {v.text}
+                          </p>
+                        </div>
+                        <div className="absolute right-1 bottom-1 opacity-0 group-hover:opacity-100 transition-all flex gap-1">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onLive({ type: "Verse", data: v }); }}
+                            className="bg-amber-500 hover:bg-amber-400 text-black text-[9px] font-black px-2 py-0.5 rounded shadow-lg"
+                          >
+                            GO LIVE
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            ) : (
+              <p className="text-slate-600 text-xs italic text-center py-8 px-4">
+                Select a verse to view its chapter here
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
+      <hr className="border-slate-800" />
+
+      {/* Recent Items — categorical collapsible */}
+      {(recentItems.bible.length > 0 || recentItems.media.length > 0 || recentItems.presentation.length > 0) && (
         <>
           <div>
             <button
@@ -195,7 +278,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
               className="w-full flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-widest mb-2 hover:text-slate-300 transition-colors"
             >
               <span className="flex items-center gap-1.5">
-                <Clock size={11} />Recent ({verseHistory.length})
+                <Clock size={11} />Recent
               </span>
               {historyOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
             </button>
@@ -206,39 +289,59 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                   animate={{ height: "auto", opacity: 1 }}
                   exit={{ height: 0, opacity: 0 }}
                   transition={{ duration: 0.2 }}
-                  className="overflow-hidden space-y-1"
+                  className="overflow-hidden flex flex-col gap-2"
                 >
-                  {verseHistory.map((item, i) => (
-                    <div
-                      key={i}
-                      className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-slate-800/40 border border-slate-800 group hover:border-slate-700 transition-all"
-                    >
-                      <div className="flex-1 min-w-0">
-                        {item.type === "Verse" ? (
-                          <p className="text-xs truncate">
-                            <span className="text-amber-500/80 font-bold">{item.data.book} {item.data.chapter}:{item.data.verse}</span>
-                            <span className="text-slate-600 ml-1 text-[10px]">{item.data.version}</span>
-                          </p>
-                        ) : (
-                          <p className="text-xs text-slate-400 truncate">{displayItemLabel(item)}</p>
-                        )}
-                      </div>
-                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all shrink-0">
-                        <button
-                          onClick={() => onStage(item)}
-                          className="text-[9px] font-bold px-1.5 py-0.5 bg-slate-700 hover:bg-slate-600 text-white rounded transition-all"
+                  <div className="flex gap-1 bg-slate-900/50 p-0.5 rounded-lg border border-slate-800 shrink-0">
+                    {(["bible", "media", "presentation"] as const).map((t) => (
+                      <button
+                        key={t}
+                        onClick={() => setHistoryTab(t)}
+                        className={`flex-1 py-1 rounded text-[9px] font-black uppercase transition-all ${
+                          historyTab === t ? "bg-slate-700 text-amber-500" : "text-slate-600 hover:text-slate-400"
+                        }`}
+                      >
+                        {t} ({recentItems[t].length})
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="space-y-1 overflow-y-auto max-h-[300px] pr-1 custom-scrollbar">
+                    {recentItems[historyTab].length === 0 ? (
+                      <p className="text-center py-4 text-[10px] text-slate-700 italic">No recent {historyTab} items</p>
+                    ) : (
+                      recentItems[historyTab].map((item, i) => (
+                        <div
+                          key={i}
+                          className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-slate-800/40 border border-slate-800 group hover:border-slate-700 transition-all"
                         >
-                          STAGE
-                        </button>
-                        <button
-                          onClick={() => onLive(item)}
-                          className="text-[9px] font-bold px-1.5 py-0.5 bg-amber-500 hover:bg-amber-400 text-black rounded transition-all"
-                        >
-                          GO
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                          <div className="flex-1 min-w-0">
+                            {item.type === "Verse" ? (
+                              <p className="text-xs truncate">
+                                <span className="text-amber-500/80 font-bold">{item.data.book} {item.data.chapter}:{item.data.verse}</span>
+                                <span className="text-slate-600 ml-1 text-[10px]">{item.data.version}</span>
+                              </p>
+                            ) : (
+                              <p className="text-xs text-slate-400 truncate">{displayItemLabel(item)}</p>
+                            )}
+                          </div>
+                          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all shrink-0">
+                            <button
+                              onClick={() => onStage(item)}
+                              className="text-[9px] font-bold px-1.5 py-0.5 bg-slate-700 hover:bg-slate-600 text-white rounded transition-all"
+                            >
+                              STAGE
+                            </button>
+                            <button
+                              onClick={() => onLive(item)}
+                              className="text-[9px] font-bold px-1.5 py-0.5 bg-amber-500 hover:bg-amber-400 text-black rounded transition-all"
+                            >
+                              GO
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>
