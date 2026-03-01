@@ -71,7 +71,7 @@ export default function App() {
   const {
     cameraSources, enableCameraPreview, disableCameraPreview, 
     removeCameraSource, previewVideoMapRef, previewObserverMapRef, setLiveCamera
-  } = useLanCamera(remotePin);
+  } = useLanCamera(remotePin, label);
 
   React.useEffect(() => {
     let activeDeviceIdA: string | null = null;
