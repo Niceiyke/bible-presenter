@@ -53,7 +53,7 @@ export default function App() {
     settings, setSettings, activeTab, setActiveTab, toast, setToast,
     ltVisible, setLtVisible, ltMode, ltLineIndex, setLtLineIndex, ltLinesPerDisplay, ltTemplate,
     ltSongId, scheduleEntries, setScheduleEntries, services,
-    activeServiceId, media, setMedia, pauseWhisper, transcript, sessionState, micLevel,
+    activeServiceId, media, setMedia, pauseWhisper, transcript, sessionState, setSessionState, micLevel,
     remoteUrl, remotePin, bibleVersion, topPanelPct, setTopPanelPct, stagePct, setStagePct, 
     studioList, setStudioList, studioSlides, setStudioSlides,
     setIsBlackout, songs, setPropItems, audioError, setAudioError, deviceError,
