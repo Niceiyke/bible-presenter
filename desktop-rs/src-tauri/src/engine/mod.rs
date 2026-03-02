@@ -79,7 +79,7 @@ impl TranscriptionEngine {
 
         let inputs = ort::inputs![
             "input_ids" => Tensor::from_array(([1usize, seq_len], input_ids))?,
-            "attention_mask" => Tensor::from_array(([1usize, seq_len], attention_mask))?,
+            "attention_mask" => Tensor::from_array(([1usize, seq_len], attention_mask.clone()))?,
             "token_type_ids" => Tensor::from_array(([1usize, seq_len], token_type_ids))?,
         ];
 

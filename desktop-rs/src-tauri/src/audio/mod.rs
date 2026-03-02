@@ -22,6 +22,13 @@ unsafe impl Sync for StreamHandle {}
 /// SAFETY: Vad is only accessed from within the audio callback thread.
 struct SendVad(Vad);
 unsafe impl Send for SendVad {}
+unsafe impl Sync for SendVad {}
+
+impl SendVad {
+    fn is_voice_segment(&mut self, chunk: &[i16]) -> Result<bool, webrtc_vad::VadError> {
+        self.0.is_voice_segment(chunk)
+    }
+}
 
 pub type AudioRb = HeapRb<f32>;
 
@@ -72,7 +79,7 @@ impl AudioEngine {
     pub fn start_capturing(
         &mut self,
         tx: mpsc::Sender<()>,
-        mut prod: impl Producer<Item = f32> + Send + 'static,
+        prod: impl Producer<Item = f32> + Send + 'static,
         error_tx: mpsc::Sender<String>,
         level_tx: Option<mpsc::Sender<f32>>,
     ) -> anyhow::Result<()> {
@@ -271,7 +278,7 @@ impl AudioEngine {
                             // WebRTC VAD needs 10ms (160 samples at 16kHz)
                             let mut processed_idx = 0;
                             for chunk in i16_samples.chunks_exact(160) {
-                                if let Ok(active) = vad.0.is_voice_segment(chunk) {
+                                if let Ok(active) = vad.is_voice_segment(chunk) {
                                     if active {
                                         is_speech = true;
                                         // We don't break here because we need to process all chunks to update residue properly
