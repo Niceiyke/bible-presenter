@@ -25,8 +25,8 @@ unsafe impl Send for SendVad {}
 unsafe impl Sync for SendVad {}
 
 impl SendVad {
-    fn is_voice_segment(&mut self, chunk: &[i16]) -> Result<bool, webrtc_vad::VadError> {
-        self.0.is_voice_segment(chunk)
+    fn is_voice_segment(&mut self, chunk: &[i16]) -> anyhow::Result<bool> {
+        self.0.is_voice_segment(chunk).map_err(|e| anyhow::anyhow!("{:?}", e))
     }
 }
 
