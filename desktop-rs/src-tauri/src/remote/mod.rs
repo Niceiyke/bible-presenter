@@ -129,19 +129,21 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
     let ip = peer_addr.ip();
 
     // ── Pre-auth Rate Limiting ────────────────────────────────────────────────
-    {
+    let is_throttled = {
         let throttles = state.auth_throttles.lock();
         if let Some((count, last_fail)) = throttles.get(&ip) {
-            if *count >= 5 && last_fail.elapsed() < std::time::Duration::from_secs(900) {
-                // Drop lock before await
-                drop(throttles);
-                let _ = socket.send(Message::Text(json!({
-                    "type": "error",
-                    "message": "Too many failed attempts. Try again in 15 minutes."
-                }).to_string())).await;
-                return;
-            }
+            *count >= 5 && last_fail.elapsed() < std::time::Duration::from_secs(900)
+        } else {
+            false
         }
+    };
+
+    if is_throttled {
+        let _ = socket.send(Message::Text(json!({
+            "type": "error",
+            "message": "Too many failed attempts. Try again in 15 minutes."
+        }).to_string())).await;
+        return;
     }
 
     let auth_result: Result<Option<Option<ClientInfo>>, _> = tokio::time::timeout(

@@ -4,7 +4,7 @@
 mod remote;
 
 use bible_presenter_lib::{audio, engine, store};
-use ringbuf::traits::{Consumer, Producer};
+use ringbuf::traits::{Consumer, Observer};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
