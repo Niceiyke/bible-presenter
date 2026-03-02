@@ -1,6 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use ringbuf::traits::Producer;
-use ringbuf::SharedRb;
+use ringbuf::{HeapRb, Rb, SharedRb};
+use ringbuf::traits::{Consumer, Producer};
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
@@ -18,7 +18,7 @@ struct StreamHandle(cpal::Stream);
 unsafe impl Send for StreamHandle {}
 unsafe impl Sync for StreamHandle {}
 
-pub type AudioRb = SharedRb<f32, Vec<std::mem::MaybeUninit<f32>>>;
+pub type AudioRb = HeapRb<f32>;
 
 pub struct AudioEngine {
     stream: Option<Arc<StreamHandle>>,
@@ -67,7 +67,7 @@ impl AudioEngine {
     pub fn start_capturing(
         &mut self,
         tx: mpsc::Sender<()>,
-        mut prod: ringbuf::Producer<f32, Arc<AudioRb>>,
+        mut prod: impl Producer<Item = f32> + Send + 'static,
         error_tx: mpsc::Sender<String>,
         level_tx: Option<mpsc::Sender<f32>>,
     ) -> anyhow::Result<()> {
@@ -168,7 +168,7 @@ impl AudioEngine {
         vad_threshold: f32,
         aec_flag: Arc<AtomicBool>,
         tx: mpsc::Sender<()>,
-        mut prod: ringbuf::Producer<f32, Arc<AudioRb>>,
+        mut prod: impl Producer<Item = f32> + Send + 'static,
         error_tx: mpsc::Sender<String>,
         level_tx: Option<mpsc::Sender<f32>>,
     ) -> anyhow::Result<cpal::Stream>
