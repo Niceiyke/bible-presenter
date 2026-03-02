@@ -79,7 +79,7 @@ impl AudioEngine {
     pub fn start_capturing(
         &mut self,
         tx: mpsc::Sender<()>,
-        prod: impl Producer<Item = f32> + Send + 'static,
+        mut prod: impl Producer<Item = f32> + Send + 'static,
         error_tx: mpsc::Sender<String>,
         level_tx: Option<mpsc::Sender<f32>>,
     ) -> anyhow::Result<()> {
@@ -180,7 +180,7 @@ impl AudioEngine {
         vad_threshold: f32,
         aec_flag: Arc<AtomicBool>,
         tx: mpsc::Sender<()>,
-        prod: impl Producer<Item = f32> + Send + 'static,
+        mut prod: impl Producer<Item = f32> + Send + 'static,
         error_tx: mpsc::Sender<String>,
         level_tx: Option<mpsc::Sender<f32>>,
     ) -> anyhow::Result<cpal::Stream>
