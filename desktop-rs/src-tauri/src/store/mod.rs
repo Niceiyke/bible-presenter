@@ -57,7 +57,7 @@ pub struct CachedVerse {
 
 pub struct BibleStore {
     conn: Arc<Mutex<Connection>>,
-    patterns: RegexSet,
+    _patterns: RegexSet,
     book_map: HashMap<String, String>,
     /// All books found in the DB, for indexing CachedVerse.
     books: Vec<String>,
@@ -313,7 +313,7 @@ impl BibleStore {
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
-            patterns,
+            _patterns: patterns,
             book_map,
             books,
             available_versions,

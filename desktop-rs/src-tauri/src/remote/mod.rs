@@ -130,9 +130,11 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
 
     // ── Pre-auth Rate Limiting ────────────────────────────────────────────────
     {
-        let mut throttles = state.auth_throttles.lock();
+        let throttles = state.auth_throttles.lock();
         if let Some((count, last_fail)) = throttles.get(&ip) {
             if *count >= 5 && last_fail.elapsed() < std::time::Duration::from_secs(900) {
+                // Drop lock before await
+                drop(throttles);
                 let _ = socket.send(Message::Text(json!({
                     "type": "error",
                     "message": "Too many failed attempts. Try again in 15 minutes."
