@@ -20,14 +20,17 @@ export function useAppInitialization() {
     setTranscript, setSuggestedItem, setSuggestedConfidence,
     setStagedItem, setMicLevel, setSessionState, setAudioError,
     appendTranscriptSegment, setVerseLockUntil, setManualOverrideUntil,
-    setStartupIssues,
+    setStartupIssues, setIsInitialized,
     bibleVersion, transcriptionWindowSec,
   } = useAppStore();
 
   useEffect(() => {
     const windowLabel = getCurrentWindow().label;
     setLabel(windowLabel);
-    if (windowLabel === "output") return;
+    if (windowLabel === "output") {
+      setIsInitialized(true);
+      return;
+    }
 
     const loadAll = async () => {
       // Probe backend readiness first — retry until get_bible_versions succeeds.
@@ -97,12 +100,17 @@ export function useAppInitialization() {
           setStartupIssues(status.issues);
         }
       }).catch(() => {});
+
+      setIsInitialized(true);
     };
 
     loadAll();
 
     // Listeners
     const unlistenTrans = listen("transcription-update", (ev: any) => {
+      // ── Ignore transcription updates until fully initialized ──────────────
+      if (!useAppStore.getState().isInitialized) return;
+
       const { text, detected_item, confidence, source, is_partial } = ev.payload;
 
       // ── Manual source: operator-triggered go_live, always apply ──────────

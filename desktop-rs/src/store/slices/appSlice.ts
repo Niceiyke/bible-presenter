@@ -27,6 +27,8 @@ export interface AppSlice {
   setStagePct: (v: number | ((prev: number) => number)) => void;
   appDataDir: string | null;
   setAppDataDir: (v: string | null) => void;
+  isInitialized: boolean;
+  setIsInitialized: (v: boolean) => void;
 }
 
 export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) => ({
@@ -54,4 +56,6 @@ export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) =>
   setStagePct: (v) => set((s) => ({ stagePct: typeof v === "function" ? v(s.stagePct) : v })),
   appDataDir: null,
   setAppDataDir: (v) => set({ appDataDir: v }),
+  isInitialized: false,
+  setIsInitialized: (v) => set({ isInitialized: v }),
 });

@@ -173,29 +173,41 @@ impl BibleStore {
                             // Get pointer to raw f32 data
                             let byte_slice = &m[data_offset..];
                             let f32_count = byte_slice.len() / 4;
-                            let f32_ptr = byte_slice.as_ptr() as *const f32;
-                            let f32_slice = unsafe { std::slice::from_raw_parts(f32_ptr, f32_count) };
                             
                             let n_rows = verse_cache.len();
                             let n_dims = 384;
                             
                             if f32_count < n_rows * n_dims {
-                                eprintln!("Warning: Embedding file size mismatch (found {}, expected {})", f32_count, n_rows * n_dims);
+                                eprintln!("CRITICAL: Embedding file size mismatch (found {}, expected at least {}). Semantic search disabled to prevent incorrect results.", f32_count, n_rows * n_dims);
                             } else {
                                 println!("BibleStore: Building HNSW index from MMap'd data ({} rows, {} dims)", n_rows, n_dims);
                                 
+                                // Safely handle alignment by copying to an aligned buffer or using unaligned reads.
+                                // ARM systems (Apple Silicon) will SIGBUS if we cast an unaligned byte slice to f32.
+                                let f32_data: Vec<f32> = if (byte_slice.as_ptr() as usize) % 4 == 0 {
+                                    unsafe { std::slice::from_raw_parts(byte_slice.as_ptr() as *const f32, n_rows * n_dims).to_vec() }
+                                } else {
+                                    let mut v = Vec::with_capacity(n_rows * n_dims);
+                                    unsafe {
+                                        for i in 0..(n_rows * n_dims) {
+                                            let ptr = byte_slice.as_ptr().add(i * 4);
+                                            v.push(std::ptr::read_unaligned(ptr as *const f32));
+                                        }
+                                    }
+                                    v
+                                };
+
                                 let max_nb_conn = 16;
                                 let max_layer = 16;
                                 let ef_construction = 200;
                                 let hnsw = Hnsw::new(max_nb_conn, n_rows, max_layer, ef_construction, DistL2 {});
                                 
                                 // Insert embeddings in parallel
-                                // hnsw_rs 0.3.x parallel_insert takes &[(&Vec<T>, usize)]
                                 let data_to_insert: Vec<(Vec<f32>, usize)> = (0..n_rows)
                                     .map(|i| {
                                         let start = i * n_dims;
                                         let end = start + n_dims;
-                                        (f32_slice[start..end].to_vec(), i)
+                                        (f32_data[start..end].to_vec(), i)
                                     })
                                     .collect();
                                 let insert_refs: Vec<(&Vec<f32>, usize)> = data_to_insert
