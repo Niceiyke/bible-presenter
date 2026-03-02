@@ -4,21 +4,23 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppStore } from "../store";
 import { stableId } from "../utils";
-import { 
-  MediaItem, Song, LowerThirdTemplate, 
-  PresentationSettings, PropItem, SceneData, ServiceMeta, 
-  DisplayItem 
+import {
+  MediaItem, Song, LowerThirdTemplate,
+  PresentationSettings, PropItem, SceneData, ServiceMeta,
+  DisplayItem, StartupStatus
 } from "../types";
 
 export function useAppInitialization() {
   const {
     setLabel, setMedia, setStudioList, setStudioSlides,
-    setScheduleEntries, setSongs, setHymnLibrary, setLtSavedTemplates, 
-    setLtTemplate, setSettings, setRemoteUrl, setRemotePin, 
-    setTailscaleUrl, setAvailableVersions, setBibleVersion, 
+    setScheduleEntries, setSongs, setHymnLibrary, setLtSavedTemplates,
+    setLtTemplate, setSettings, setRemoteUrl, setRemotePin,
+    setTailscaleUrl, setAvailableVersions, setBibleVersion,
     setPropItems, setSavedScenes, setServices, setLiveItem,
     setTranscript, setSuggestedItem, setSuggestedConfidence,
     setStagedItem, setMicLevel, setSessionState, setAudioError,
+    appendTranscriptSegment, setVerseLockUntil, setManualOverrideUntil,
+    setStartupIssues,
     bibleVersion, transcriptionWindowSec,
   } = useAppStore();
 
@@ -88,30 +90,110 @@ export function useAppInitialization() {
       invoke("get_current_item").then((v: any) => { if (v) setLiveItem(v); }).catch(() => {});
 
       invoke("set_transcription_window", { samples: Math.round(transcriptionWindowSec * 16000) }).catch(() => {});
+
+      // Check startup status and surface any missing-file issues to the operator
+      invoke<StartupStatus>("get_startup_status").then((status) => {
+        if (status.issues.length > 0) {
+          setStartupIssues(status.issues);
+        }
+      }).catch(() => {});
     };
 
     loadAll();
 
     // Listeners
     const unlistenTrans = listen("transcription-update", (ev: any) => {
-      const { text, detected_item, confidence, source } = ev.payload;
-      setTranscript(text);
+      const { text, detected_item, confidence, source, is_partial } = ev.payload;
+
+      // ── Manual source: operator-triggered go_live, always apply ──────────
       if (source === "manual") {
         setLiveItem(detected_item ?? null);
-      } else if (detected_item) {
-        setSuggestedItem(detected_item);
-        setSuggestedConfidence(confidence ?? 0);
+        return;
       }
+
+      // ── Always update the live text display ───────────────────────────────
+      if (text) setTranscript(text);
+
+      // ── Partial transcript: regex-only detection ──────────────────────────
+      // Only act if a COMPLETE explicit reference was found (confidence === 1.0).
+      // Never apply verse lock logic from a partial — just suggest.
+      if (is_partial) {
+        if (detected_item && confidence === 1.0) {
+          // Explicit reference found mid-utterance — suggest immediately.
+          // Do NOT check verse lock for explicit references on partials; the
+          // operator always sees it as a suggestion in the suggestion banner.
+          setSuggestedItem(detected_item);
+          setSuggestedConfidence(1.0);
+
+          // Auto-project explicit references immediately if enabled
+          const cfg = useAppStore.getState().transcriptionConfig;
+          const now = Date.now();
+          const overrideUntil = useAppStore.getState().manualOverrideUntil;
+          if (cfg.auto_project && !(overrideUntil && now < overrideUntil)) {
+            setLiveItem(detected_item);
+            setVerseLockUntil(now + cfg.verse_lock_secs * 1000);
+          }
+        }
+        return;
+      }
+
+      // ── Final transcript: full detection pipeline ─────────────────────────
+      if (!detected_item) return;
+
+      const cfg = useAppStore.getState().transcriptionConfig;
+      const now = Date.now();
+      const overrideUntil  = useAppStore.getState().manualOverrideUntil;
+      const lockUntil      = useAppStore.getState().verseLockUntil;
+      const withinOverride = overrideUntil != null && now < overrideUntil;
+      const withinLock     = lockUntil != null && now < lockUntil;
+
+      // Suppress entirely if operator recently made a manual selection
+      if (withinOverride) return;
+
+      // Always update the suggestion banner
+      setSuggestedItem(detected_item);
+      setSuggestedConfidence(confidence ?? 0);
+
+      if (!cfg.auto_project) return;
+
+      const isExplicit  = confidence === 1.0;
+      const threshold   = cfg.confidence_threshold ?? 0.55;
+      const highConfidence = (confidence ?? 0) >= 0.85;
+
+      // Decide whether to project:
+      // • Explicit reference  → always project (overrides lock)
+      // • High confidence     → project even within lock window
+      // • Normal confidence above threshold + outside lock window → project
+      const shouldProject =
+        isExplicit ||
+        highConfidence ||
+        (!withinLock && (confidence ?? 0) >= threshold);
+
+      if (shouldProject) {
+        setLiveItem(detected_item);
+        setVerseLockUntil(now + cfg.verse_lock_secs * 1000);
+      }
+
+      // Log to local session transcript for the operator transcript panel
+      appendTranscriptSegment({
+        text,
+        timestamp_ms: Date.now(),
+        is_final: true,
+        source: "auto",
+      });
     });
     
     const unlistenStaged = listen("item-staged", (ev: any) => setStagedItem(ev.payload as DisplayItem));
     const unlistenLevel = listen("audio-level", (ev: any) => setMicLevel(Math.min(1, Math.sqrt(ev.payload as number) / 0.35)));
     const unlistenSettings = listen("settings-changed", (ev: any) => setSettings(ev.payload as PresentationSettings));
     const unlistenStatus = listen("session-status", (ev: any) => {
-      const { status } = ev.payload as { status: string };
-      if (status === "running") setSessionState("running");
+      const { status, message } = ev.payload as { status: string; message: string };
+      if (status === "running") { setSessionState("running"); setAudioError(null); }
       else if (status === "loading") setSessionState("loading");
-      else setSessionState("idle");
+      else {
+        setSessionState("idle");
+        if (message) setAudioError(message);
+      }
     });
     const unlistenAudioErr = listen("audio-error", (ev: any) => setAudioError(ev.payload as string));
     const unlistenLtSync = listen<LowerThirdTemplate[]>("lower-third-template-sync", (ev) => {

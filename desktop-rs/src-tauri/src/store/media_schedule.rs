@@ -328,6 +328,9 @@ pub struct PresentationSettings {
     /// Character limit before splitting a verse (if auto_split is enabled).
     #[serde(default = "default_verse_split_threshold")]
     pub verse_split_threshold: usize,
+    /// Monitor name to send output to; None = auto (first secondary monitor).
+    #[serde(default)]
+    pub preferred_monitor: Option<String>,
 }
 
 fn default_auto_split_verses() -> bool { true }
@@ -1034,6 +1037,26 @@ impl MediaScheduleStore {
             fs::remove_file(path)?;
         }
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Props layer persistence
+    // -----------------------------------------------------------------------
+
+    pub fn save_props(&self, props: &[PropItem]) -> Result<()> {
+        let path = self.app_data_dir.join("props.json");
+        let json = serde_json::to_string_pretty(props)?;
+        fs::write(path, json)?;
+        Ok(())
+    }
+
+    pub fn load_props(&self) -> Result<Vec<PropItem>> {
+        let path = self.app_data_dir.join("props.json");
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let json = fs::read_to_string(path)?;
+        Ok(serde_json::from_str(&json).unwrap_or_default())
     }
 
     // -----------------------------------------------------------------------

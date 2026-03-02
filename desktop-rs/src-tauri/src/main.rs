@@ -5,13 +5,18 @@ mod remote;
 
 use bible_presenter_lib::{audio, engine, store};
 use parking_lot::Mutex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
+use engine::model_manager::{
+    self, detect_hardware, download_model, list_model_statuses, model_path_if_exists,
+    resolve_whisper_path, user_models_dir, DownloadProgress, HardwareInfo, ModelStatus,
+    TranscriptionConfig,
+};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 // ---------------------------------------------------------------------------
@@ -26,6 +31,18 @@ struct TranscriptionUpdate {
     confidence: f32,
     /// "auto" = from live transcription pipeline; "manual" = operator-triggered via go_live
     source: String,
+    /// true = partial transcript (live text display only, no verse projection)
+    /// false = final transcript (verse detection ran, suggestedItem may be set)
+    is_partial: bool,
+}
+
+/// A single segment of the session's full transcript log.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscriptSegment {
+    pub text: String,
+    pub timestamp_ms: u64,
+    pub is_final: bool,
+    pub source: String, // "deepgram" | "assemblyai" | "local"
 }
 
 /// Emitted on every session lifecycle change so the frontend can update its UI.
@@ -36,17 +53,19 @@ struct SessionStatus {
     message: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct MonitorInfo {
+    name: String,
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    is_primary: bool,
+}
+
 // ---------------------------------------------------------------------------
 // App state
 // ---------------------------------------------------------------------------
-
-/// Paths to AI model files, resolved at startup and stored for lazy loading.
-#[derive(Clone)]
-struct ModelPaths {
-    whisper: PathBuf,
-    embedding_model: PathBuf,
-    tokenizer: PathBuf,
-}
 
 pub struct AppState {
     audio: Arc<Mutex<audio::AudioEngine>>,
@@ -55,7 +74,18 @@ pub struct AppState {
     engine: Arc<Mutex<Option<Arc<engine::TranscriptionEngine>>>>,
     pub store: Arc<store::BibleStore>,
     pub media_schedule: Arc<store::MediaScheduleStore>,
-    model_paths: ModelPaths,
+    /// Persisted transcription configuration (active model filename, GPU toggle).
+    pub transcription_config: Arc<Mutex<TranscriptionConfig>>,
+    /// Resolved whisper model path — updated when user selects a downloaded model.
+    pub whisper_path: Arc<Mutex<Option<PathBuf>>>,
+    /// ONNX embedding model path (bundled, stays fixed).
+    pub embedding_model_path: PathBuf,
+    /// HuggingFace tokenizer path (bundled, stays fixed).
+    pub tokenizer_path: PathBuf,
+    /// App data directory — used by download commands to write into models/.
+    pub app_data_dir: PathBuf,
+    /// Set to true while a download is in progress; cancel signal for the task.
+    pub download_in_progress: Arc<AtomicBool>,
     /// C3: Prevents duplicate sessions if START LIVE is clicked twice.
     is_running: Arc<Mutex<bool>>,
     /// Current display items (what is staged and what is live).
@@ -85,6 +115,14 @@ pub struct AppState {
     pub props_layer: Arc<Mutex<Vec<store::PropItem>>>,
     /// Currently connected LAN camera clients: device_id → device_name.
     pub connected_cameras: Arc<tokio::sync::Mutex<HashMap<String, String>>>,
+    /// Full transcript log for the current service session.
+    pub session_transcript: Arc<Mutex<Vec<TranscriptSegment>>>,
+    /// Rolling last-3 final-segment context buffer used to improve semantic
+    /// verse detection by giving the embedding model more text context.
+    pub context_buffer: Arc<Mutex<Vec<String>>>,
+    /// Handle to the active cloud WebSocket stream (Deepgram / AssemblyAI).
+    /// None when local Whisper or REST cloud mode is active.
+    pub cloud_stream_handle: Arc<Mutex<Option<engine::cloud_stream::CloudStreamHandle>>>,
 }
 
 impl Clone for AppState {
@@ -94,7 +132,12 @@ impl Clone for AppState {
             engine: self.engine.clone(),
             store: self.store.clone(),
             media_schedule: self.media_schedule.clone(),
-            model_paths: self.model_paths.clone(),
+            transcription_config: self.transcription_config.clone(),
+            whisper_path: self.whisper_path.clone(),
+            embedding_model_path: self.embedding_model_path.clone(),
+            tokenizer_path: self.tokenizer_path.clone(),
+            app_data_dir: self.app_data_dir.clone(),
+            download_in_progress: self.download_in_progress.clone(),
             is_running: self.is_running.clone(),
             live_item: self.live_item.clone(),
             staged_item: self.staged_item.clone(),
@@ -108,6 +151,9 @@ impl Clone for AppState {
             transcription_paused: self.transcription_paused.clone(),
             props_layer: self.props_layer.clone(),
             connected_cameras: self.connected_cameras.clone(),
+            session_transcript: self.session_transcript.clone(),
+            context_buffer: self.context_buffer.clone(),
+            cloud_stream_handle: self.cloud_stream_handle.clone(),
         }
     }
 }
@@ -130,6 +176,58 @@ fn log_msg(app: &tauri::App, message: &str) {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn is_hallucination(text: &str) -> bool {
+    let lower = text.trim().to_lowercase();
+    if lower.is_empty() { return true; }
+    const GARBAGE: &[&str] = &[
+        "[blank_audio]", "[silence]", "[music]",
+        "[inaudible]", "(silence)", "[ silence ]",
+    ];
+    if GARBAGE.iter().any(|g| lower.contains(g)) { return true; }
+    
+    // Some common Whisper hallucinations
+    if lower == "thank you." || lower == "thank you" || lower.starts_with("subtitles by") || lower.contains("amara.org") {
+        return true;
+    }
+
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    let total_words = words.len();
+    if total_words >= 6 {
+        let mut word_counts = std::collections::HashMap::new();
+        for word in &words {
+            *word_counts.entry(*word).or_insert(0) += 1;
+        }
+        for count in word_counts.values() {
+            if *count > total_words / 2 {
+                return true;
+            }
+        }
+        
+        // Check for exact repeating phrases
+        for seq_len in 1..=4 {
+            if total_words >= seq_len * 3 {
+                let seq = &words[0..seq_len];
+                let mut all_match = true;
+                for i in 1..3 {
+                    if &words[i*seq_len..(i+1)*seq_len] != seq {
+                        all_match = false;
+                        break;
+                    }
+                }
+                if all_match {
+                    return true;
+                }
+            }
+        }
+    }
+    
+    false
+}
+
+// ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
 
@@ -144,9 +242,7 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
         *running = true;
     }
 
-    // ── C5: Lazy-load AI models on the first START LIVE click ─────────────
-    // Extract everything from `state` before any .await so we're not
-    // holding the Tauri State guard across an async boundary.
+    // ── Extract everything from `state` before any .await ─────────────────
     let engine_mutex = state.engine.clone();
     let audio = state.audio.clone();
     let store = state.store.clone();
@@ -155,40 +251,78 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
     let broadcast_tx = state.broadcast_tx.clone();
     let transcription_window = state.transcription_window.clone();
     let transcription_paused_task = state.transcription_paused.clone();
-    let whisper_path = state.model_paths.whisper.to_str().unwrap_or("").to_string();
-    let embedding_path = state
-        .model_paths
-        .embedding_model
-        .to_str()
-        .unwrap_or("")
-        .to_string();
-    let tokenizer_path = state
-        .model_paths
-        .tokenizer
-        .to_str()
-        .unwrap_or("")
-        .to_string();
+    let session_transcript_arc = state.session_transcript.clone();
+    let context_buffer_arc = state.context_buffer.clone();
+    let cloud_stream_handle_arc = state.cloud_stream_handle.clone();
+
+    // Clear previous session state
+    session_transcript_arc.lock().clear();
+    context_buffer_arc.lock().clear();
+
+    // Snapshot cloud config
+    let cloud_provider   = state.transcription_config.lock().cloud_provider.clone();
+    let cloud_api_key    = state.transcription_config.lock().cloud_api_key.clone();
+    let cloud_hostname   = state.transcription_config.lock().cloud_hostname.clone();
+    let cloud_model      = state.transcription_config.lock().cloud_model.clone();
+    let cloud_language   = state.transcription_config.lock().cloud_language.clone();
+    let whisper_path_opt = state.whisper_path.lock().clone();
+    let use_gpu          = state.transcription_config.lock().use_gpu;
+    let embedding_path   = state.embedding_model_path.to_str().unwrap_or("").to_string();
+    let tokenizer_path   = state.tokenizer_path.to_str().unwrap_or("").to_string();
     drop(state);
 
+    let use_cloud_stream = cloud_provider.as_deref()
+        .map(engine::cloud_stream::provider_supports_streaming)
+        .unwrap_or(false)
+        && cloud_api_key.as_ref().map_or(false, |k| !k.is_empty());
+
+    let use_cloud_rest = cloud_provider.is_some()
+        && cloud_api_key.as_ref().map_or(false, |k| !k.is_empty())
+        && !use_cloud_stream;
+
+    let use_cloud = use_cloud_stream || use_cloud_rest;
+
+    // Local mode requires a whisper model; cloud mode skips it
+    let whisper_str: Option<String> = if use_cloud {
+        None
+    } else {
+        match whisper_path_opt {
+            Some(p) => Some(p.to_str().unwrap_or("").to_string()),
+            None => {
+                *is_running.lock() = false;
+                let _ = app.emit("session-status", SessionStatus {
+                    status: "error".to_string(),
+                    message: "No Whisper model selected. Download one in Settings → Transcription Model.".to_string(),
+                });
+                return Err("No Whisper model selected.".to_string());
+            }
+        }
+    };
+
+    // ── Lazy-load AI models ───────────────────────────────────────────────
     let engine = { engine_mutex.lock().clone() };
     let engine = match engine {
         Some(e) => e,
         None => {
-            // First run: load models in a blocking thread so the async
-            // runtime is not stalled. Show a loading indicator in the UI.
-            let _ = app.emit(
-                "session-status",
-                SessionStatus {
-                    status: "loading".to_string(),
-                    message: "Loading AI models (first-time setup, ~10 s)...".to_string(),
-                },
-            );
+            let loading_msg = if use_cloud {
+                "Connecting to cloud transcription service...".to_string()
+            } else {
+                "Loading AI models (first-time setup, ~10 s)...".to_string()
+            };
+            let _ = app.emit("session-status", SessionStatus {
+                status: "loading".to_string(),
+                message: loading_msg,
+            });
 
+            let whisper_str_clone = whisper_str.clone();
             match tokio::task::spawn_blocking(move || {
-                engine::TranscriptionEngine::new(&whisper_path, &embedding_path, &tokenizer_path)
-            })
-            .await
-            {
+                engine::TranscriptionEngine::new(
+                    whisper_str_clone.as_deref(),
+                    &embedding_path,
+                    &tokenizer_path,
+                    use_gpu,
+                )
+            }).await {
                 Ok(Ok(e)) => {
                     let e = Arc::new(e);
                     *engine_mutex.lock() = Some(e.clone());
@@ -196,13 +330,10 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
                 }
                 Ok(Err(e)) => {
                     *is_running.lock() = false;
-                    let _ = app.emit(
-                        "session-status",
-                        SessionStatus {
-                            status: "error".to_string(),
-                            message: format!("AI models failed to load: {}", e),
-                        },
-                    );
+                    let _ = app.emit("session-status", SessionStatus {
+                        status: "error".to_string(),
+                        message: format!("AI models failed to load: {}", e),
+                    });
                     return Err(format!("AI models failed to load: {}", e));
                 }
                 Err(e) => {
@@ -213,20 +344,22 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
         }
     };
 
-    // ── C4: Error channel — audio device errors flow to the UI ────────────
+    // ── Audio capture ─────────────────────────────────────────────────────
     let (error_tx, mut error_rx) = tokio::sync::mpsc::channel::<String>(10);
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<f32>>(50);
+    let (tx, mut rx)             = tokio::sync::mpsc::channel::<()>(50);
     let (level_tx, mut level_rx) = tokio::sync::mpsc::channel::<f32>(50);
+
+    let rb = ringbuf::HeapRb::<f32>::new(48000 * 5);
+    let (prod, mut cons) = ringbuf::traits::Split::split(rb);
 
     {
         let mut audio_guard = audio.lock();
-        if let Err(e) = audio_guard.start_capturing(tx, error_tx, Some(level_tx)) {
+        if let Err(e) = audio_guard.start_capturing(tx, prod, error_tx, Some(level_tx)) {
             *is_running.lock() = false;
             return Err(e.to_string());
         }
     }
 
-    // C4: Dedicated task that forwards every audio error to the frontend
     let app_err = app.clone();
     tokio::spawn(async move {
         while let Some(msg) = error_rx.recv().await {
@@ -234,7 +367,6 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
         }
     });
 
-    // Forward mic energy levels to the frontend for the VU meter
     let app_level = app.clone();
     tokio::spawn(async move {
         while let Some(level) = level_rx.recv().await {
@@ -242,40 +374,240 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
         }
     });
 
-    let _ = app.emit(
-        "session-status",
-        SessionStatus {
-            status: "running".to_string(),
-            message: "Live session started".to_string(),
-        },
-    );
+    let _ = app.emit("session-status", SessionStatus {
+        status: "running".to_string(),
+        message: "Live session started".to_string(),
+    });
 
-    // ── Main processing loop ───────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════
+    // BRANCH A: WebSocket Streaming (Deepgram / AssemblyAI)
+    // ══════════════════════════════════════════════════════════════════════
+    if use_cloud_stream {
+        let provider  = cloud_provider.clone().unwrap();
+        let api_key   = cloud_api_key.clone().unwrap();
+        let hostname  = cloud_hostname.as_deref().map(str::to_string);
+        let model     = cloud_model.as_deref().map(str::to_string);
+        let language  = cloud_language.as_deref().map(str::to_string);
+
+        let stream_result = engine::cloud_stream::start_stream(
+            &provider,
+            &api_key,
+            hostname.as_deref(),
+            model.as_deref(),
+            language.as_deref(),
+        ).await;
+
+        match stream_result {
+            Err(e) => {
+                *is_running.lock() = false;
+                let _ = app.emit("session-status", SessionStatus {
+                    status: "error".to_string(),
+                    message: format!("Cloud stream failed to connect: {}", e),
+                });
+                return Err(format!("Cloud stream error: {}", e));
+            }
+            Ok((stream_handle, mut transcript_rx)) => {
+                // Store handle so stop_session can close the WS cleanly
+                *cloud_stream_handle_arc.lock() = Some(stream_handle);
+
+                let app_stream = app.clone();
+                let is_running_s = is_running.clone();
+                let store_s = store.clone();
+                let engine_s = engine.clone();
+                let session_transcript_s = session_transcript_arc.clone();
+                let context_buffer_s = context_buffer_arc.clone();
+                let broadcast_s = broadcast_tx.clone();
+                let provider_name = provider.clone();
+
+                // ── Audio pump: ring buffer → WS audio_tx ───────────────
+                let stream_handle_arc2 = cloud_stream_handle_arc.clone();
+                tokio::spawn(async move {
+                    // Track last-sent time to throttle how often we poll
+                    // the ring buffer (every ~100 ms = 1600 samples at 16 kHz).
+                    const CHUNK_SAMPLES: usize = 1600;
+                    let mut interval =
+                        tokio::time::interval(std::time::Duration::from_millis(100));
+
+                    while let Some(()) = rx.recv().await {
+                        interval.tick().await;
+
+                        let paused = transcription_paused_task.load(Ordering::Relaxed);
+                        let avail  = ringbuf::traits::Consumer::occupied_len(&cons);
+                        if avail == 0 || paused { continue; }
+
+                        let take = avail.min(CHUNK_SAMPLES * 4); // drain up to 400 ms
+                        let mut pcm = vec![0.0f32; take];
+                        let read = ringbuf::traits::Consumer::pop_slice(&mut cons, &mut pcm);
+                        pcm.truncate(read);
+
+                        let bytes: Vec<u8> = pcm
+                            .iter()
+                            .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+                            .flat_map(|s| s.to_le_bytes())
+                            .collect();
+
+                        let guard = stream_handle_arc2.lock();
+                        if let Some(ref h) = *guard {
+                            let _ = h.audio_tx.send(bytes);
+                        } else {
+                            break; // stream was stopped
+                        }
+                    }
+                });
+
+                // ── Transcript handler: StreamTranscript events → UI ─────
+                let session_start_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+
+                tokio::spawn(async move {
+                    while let Some(seg) = transcript_rx.recv().await {
+                        let text = seg.text.trim().to_string();
+                        if is_hallucination(&text) { continue; }
+
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+                        let timestamp_ms = now_ms.saturating_sub(session_start_ms);
+
+                        if seg.is_final {
+                            // ── Final segment ───────────────────────────
+                            // 1. Append to session transcript log
+                            session_transcript_s.lock().push(TranscriptSegment {
+                                text: text.clone(),
+                                timestamp_ms,
+                                is_final: true,
+                                source: provider_name.clone(),
+                            });
+
+                            // 2. Update rolling context buffer (last 3 finals)
+                            let combined = {
+                                let mut buf = context_buffer_s.lock();
+                                buf.push(text.clone());
+                                if buf.len() > 3 { buf.remove(0); }
+                                buf.join(" ")
+                            };
+
+                            // 3. Run verse detection (ONNX embed + hybrid) in
+                            //    blocking thread so we don't stall the async runtime
+                            let e_clone = engine_s.clone();
+                            let s_clone = store_s.clone();
+                            let combined_clone = combined.clone();
+                            let text_clone = text.clone();
+
+                            let result = tokio::task::spawn_blocking(move || {
+                                let embedding = e_clone.embed(&combined_clone).ok();
+                                let (verse, confidence) =
+                                    s_clone.detect_verse_hybrid(&combined_clone, embedding);
+                                (verse.map(store::DisplayItem::Verse), confidence, text_clone)
+                            }).await;
+
+                            if let Ok((item, confidence, raw_text)) = result {
+                                let _ = app_stream.emit("transcription-update", TranscriptionUpdate {
+                                    text: raw_text.clone(),
+                                    detected_item: item.clone(),
+                                    confidence,
+                                    source: "auto".to_string(),
+                                    is_partial: false,
+                                });
+                                let _ = broadcast_s.send(serde_json::json!({
+                                    "type": "transcription",
+                                    "text": raw_text,
+                                    "detected_item": item,
+                                    "confidence": confidence,
+                                    "source": "auto",
+                                    "is_partial": false
+                                }).to_string());
+                            }
+                        } else {
+                            // ── Partial segment ─────────────────────────
+                            // Run regex-only (cheap). Only emit a detected_item
+                            // if a COMPLETE reference (book + chapter + verse) found.
+                            let detected = store_s.detect_verse_by_ref(&text)
+                                .map(store::DisplayItem::Verse);
+
+                            let _ = app_stream.emit("transcription-update", TranscriptionUpdate {
+                                text: text.clone(),
+                                detected_item: detected.clone(),
+                                confidence: if detected.is_some() { 1.0 } else { 0.0 },
+                                source: "auto".to_string(),
+                                is_partial: true,
+                            });
+                        }
+                    }
+
+                    // Stream closed — clear handle and mark stopped if still running
+                    *cloud_stream_handle_arc.lock() = None;
+                    let was_running = {
+                        let mut r = is_running_s.lock();
+                        let prev = *r;
+                        *r = false;
+                        prev
+                    };
+                    if was_running {
+                        let _ = app_stream.emit("session-status", SessionStatus {
+                            status: "stopped".to_string(),
+                            message: "Session ended".to_string(),
+                        });
+                    }
+                });
+            }
+        }
+
+        return Ok(());
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // BRANCH B: Local Whisper OR REST cloud batch (OpenAI / Google)
+    // ══════════════════════════════════════════════════════════════════════
     let app_task = app.clone();
     let is_running_t = is_running.clone();
     let _live_item_t = live_item_arc.clone();
     let broadcast_tx_task = broadcast_tx.clone();
     let transcription_window_task = transcription_window.clone();
+    let cloud_provider_task = cloud_provider.clone();
+    let cloud_api_key_task = cloud_api_key.clone();
+    let cloud_language_task = cloud_language.clone();
+    let session_transcript_b = session_transcript_arc.clone();
+    let context_buffer_b = context_buffer_arc.clone();
+
+    let cloud_in_flight = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     tokio::spawn(async move {
-        let mut buffer = Vec::new();
-        const OVERLAP: usize = 4000; // 250 ms — fixed context for Whisper continuity
+        let mut buffer = Vec::with_capacity(48000 * 3);
+        const OVERLAP: usize = 4000;
+        let provider_name = cloud_provider_task.clone().unwrap_or_else(|| "local".to_string());
 
-        // Loop exits naturally when both senders are dropped (via stop_session
-        // calling audio.stop() which clears active_tx and active_error_tx)
-        while let Some(mut chunk) = rx.recv().await {
-            buffer.append(&mut chunk);
+        let session_start_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
 
-            // Read the current window size on every iteration so the slider
-            // takes effect within one audio cycle without restarting the session.
+        while let Some(()) = rx.recv().await {
+            let avail = ringbuf::traits::Consumer::occupied_len(&cons);
+            if avail > 0 {
+                let old_len = buffer.len();
+                buffer.resize(old_len + avail, 0.0);
+                let read = ringbuf::traits::Consumer::pop_slice(&mut cons, &mut buffer[old_len..]);
+                buffer.truncate(old_len + read);
+            }
+
             let window_size = *transcription_window_task.lock();
             let paused = transcription_paused_task.load(Ordering::Relaxed);
 
-            // When paused, drain the buffer to avoid memory buildup without running Whisper.
             if paused {
                 if buffer.len() > window_size {
-                    let keep = buffer.len().min(8000); // retain 500 ms for context on resume
+                    let keep = buffer.len().min(8000);
                     buffer.drain(0..buffer.len() - keep);
+                }
+                continue;
+            }
+
+            if cloud_in_flight.load(Ordering::Relaxed) {
+                if buffer.len() > window_size {
+                    buffer.drain(0..buffer.len() - window_size);
                 }
                 continue;
             }
@@ -284,58 +616,104 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
                 let b_clone = buffer.clone();
                 let e_clone = engine.clone();
                 let s_clone = store.clone();
+                let ctx_buf = context_buffer_b.clone();
+                let tx_log  = session_transcript_b.clone();
+                let p_name  = provider_name.clone();
 
                 let result: Option<(String, Option<store::DisplayItem>, f32)> =
-                    tokio::task::spawn_blocking(move || {
-                        let text = e_clone.transcribe(&b_clone).ok()?;
-                        let embedding = e_clone.embed(&text).ok();
-                        let (verse, confidence) = s_clone.detect_verse_hybrid(&text, embedding);
-                        Some((text, verse.map(store::DisplayItem::Verse), confidence))
-                    })
-                    .await
-                    .ok()
-                    .flatten();
+                    if let (Some(ref provider), Some(ref api_key)) =
+                        (&cloud_provider_task, &cloud_api_key_task)
+                    {
+                        cloud_in_flight.store(true, Ordering::Relaxed);
+                        let outcome = match engine::cloud::transcribe_cloud(
+                            &b_clone, provider, api_key,
+                        ).await {
+                            Ok(text) => tokio::task::spawn_blocking(move || {
+                                // Update context buffer
+                                let combined = {
+                                    let mut buf = ctx_buf.lock();
+                                    buf.push(text.clone());
+                                    if buf.len() > 3 { buf.remove(0); }
+                                    buf.join(" ")
+                                };
+                                let embedding = e_clone.embed(&combined).ok();
+                                let (verse, confidence) =
+                                    s_clone.detect_verse_hybrid(&combined, embedding);
+                                // Log to session transcript
+                                let now_ms = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64;
+                                tx_log.lock().push(TranscriptSegment {
+                                    text: text.clone(),
+                                    timestamp_ms: now_ms.saturating_sub(session_start_ms),
+                                    is_final: true,
+                                    source: p_name,
+                                });
+                                Some((text, verse.map(store::DisplayItem::Verse), confidence))
+                            }).await.ok().flatten(),
+                            Err(e) => { eprintln!("[cloud] {}", e); None }
+                        };
+                        cloud_in_flight.store(false, Ordering::Relaxed);
+                        outcome
+                    } else {
+                        let lang_opt = cloud_language_task.clone();
+                        tokio::task::spawn_blocking(move || {
+                            let text = e_clone.transcribe(&b_clone, lang_opt.as_deref()).ok()?;
+                            // Update context buffer
+                            let combined = {
+                                let mut buf = ctx_buf.lock();
+                                buf.push(text.clone());
+                                if buf.len() > 3 { buf.remove(0); }
+                                buf.join(" ")
+                            };
+                            let embedding = e_clone.embed(&combined).ok();
+                            let (verse, confidence) =
+                                s_clone.detect_verse_hybrid(&combined, embedding);
+                            // Log to session transcript
+                            let now_ms = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64;
+                            tx_log.lock().push(TranscriptSegment {
+                                text: text.clone(),
+                                timestamp_ms: now_ms.saturating_sub(session_start_ms),
+                                is_final: true,
+                                source: p_name,
+                            });
+                            Some((text, verse.map(store::DisplayItem::Verse), confidence))
+                        }).await.ok().flatten()
+                    };
 
                 if let Some((text, item, confidence)) = result {
-                    let lower = text.trim().to_lowercase();
-                    const GARBAGE: &[&str] = &[
-                        "[blank_audio]", "[silence]", "[music]",
-                        "[inaudible]", "(silence)", "[ silence ]",
-                    ];
-                    let is_garbage = lower.is_empty()
-                        || GARBAGE.iter().any(|g| lower.contains(g));
-                    if !is_garbage {
-                        let _ = app_task.emit(
-                            "transcription-update",
-                            TranscriptionUpdate {
-                                text: text.clone(),
-                                detected_item: item.clone(),
-                                confidence,
-                                source: "auto".to_string(),
-                            },
-                        );
-                        // Broadcast transcription to WS remote clients
-                        let _ = broadcast_tx_task.send(
-                            serde_json::json!({
-                                "type": "transcription",
-                                "text": text,
-                                "detected_item": item,
-                                "confidence": confidence,
-                                "source": "auto"
-                            })
-                            .to_string(),
-                        );
+                    if !is_hallucination(&text) {
+                        let _ = app_task.emit("transcription-update", TranscriptionUpdate {
+                            text: text.clone(),
+                            detected_item: item.clone(),
+                            confidence,
+                            source: "auto".to_string(),
+                            is_partial: false,
+                        });
+                        let _ = broadcast_tx_task.send(serde_json::json!({
+                            "type": "transcription",
+                            "text": text,
+                            "detected_item": item,
+                            "confidence": confidence,
+                            "source": "auto",
+                            "is_partial": false
+                        }).to_string());
                     }
                 }
 
-                let remaining = buffer.len().saturating_sub(OVERLAP);
-                buffer = buffer[remaining..].to_vec();
+                if cloud_provider_task.is_some() {
+                    buffer.clear();
+                } else {
+                    let remaining = buffer.len().saturating_sub(OVERLAP);
+                    buffer = buffer[remaining..].to_vec();
+                }
             }
         }
 
-        // C3: Session loop exited — clear the guard.
-        // Emit "stopped" only if stop_session hasn't already done it
-        // (i.e. the stream ended unexpectedly rather than by user action).
         let was_running = {
             let mut r = is_running_t.lock();
             let prev = *r;
@@ -343,13 +721,10 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
             prev
         };
         if was_running {
-            let _ = app_task.emit(
-                "session-status",
-                SessionStatus {
-                    status: "stopped".to_string(),
-                    message: "Session ended".to_string(),
-                },
-            );
+            let _ = app_task.emit("session-status", SessionStatus {
+                status: "stopped".to_string(),
+                message: "Session ended".to_string(),
+            });
         }
     });
 
@@ -361,16 +736,32 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
 /// the processing loop to exit on its next recv() call.
 #[tauri::command]
 async fn stop_session(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    // Close cloud WebSocket stream first (graceful FIN before dropping audio)
+    if let Some(handle) = state.cloud_stream_handle.lock().take() {
+        handle.stop();
+    }
     state.audio.lock().stop();
-    // Clear the guard immediately so START LIVE is available right away
     *state.is_running.lock() = false;
-    let _ = app.emit(
-        "session-status",
-        SessionStatus {
-            status: "stopped".to_string(),
-            message: "Session stopped".to_string(),
-        },
-    );
+
+    // Auto-save the session transcript to disk
+    let transcript = state.session_transcript.lock().clone();
+    if !transcript.is_empty() {
+        let transcripts_dir = state.app_data_dir.join("transcripts");
+        let _ = fs::create_dir_all(&transcripts_dir);
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let path = transcripts_dir.join(format!("{}.json", ts));
+        if let Ok(json) = serde_json::to_string_pretty(&transcript) {
+            let _ = fs::write(&path, json);
+        }
+    }
+
+    let _ = app.emit("session-status", SessionStatus {
+        status: "stopped".to_string(),
+        message: "Session stopped".to_string(),
+    });
     Ok(())
 }
 
@@ -380,6 +771,8 @@ async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) -> Res
         if window.is_visible().unwrap_or(false) {
             window.hide().map_err(|e: tauri::Error| e.to_string())?;
         } else {
+            // Use preferred_monitor from settings if set; fall back to first secondary.
+            let preferred = state.settings.lock().preferred_monitor.clone();
             let monitors = window
                 .available_monitors()
                 .map_err(|e: tauri::Error| e.to_string())?;
@@ -388,20 +781,22 @@ async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) -> Res
                     .primary_monitor()
                     .map_err(|e: tauri::Error| e.to_string())?
                 {
-                    for monitor in monitors {
-                        if monitor.name() != primary.name() {
-                            let pos = monitor.position();
-                            window
-                                .set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                                    x: pos.x,
-                                    y: pos.y,
-                                }))
-                                .map_err(|e: tauri::Error| e.to_string())?;
-                            window
-                                .set_fullscreen(true)
-                                .map_err(|e: tauri::Error| e.to_string())?;
-                            break;
-                        }
+                    let target = monitors.iter().find(|m| {
+                        preferred.as_deref().map_or(false, |p| {
+                            m.name().map_or(false, |n| n == p)
+                        })
+                    }).or_else(|| monitors.iter().find(|m| m.name() != primary.name()));
+                    if let Some(mon) = target {
+                        let pos = mon.position();
+                        window
+                            .set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                                x: pos.x,
+                                y: pos.y,
+                            }))
+                            .map_err(|e: tauri::Error| e.to_string())?;
+                        window
+                            .set_fullscreen(true)
+                            .map_err(|e: tauri::Error| e.to_string())?;
                     }
                 }
             }
@@ -414,9 +809,8 @@ async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) -> Res
             let current_settings = state.settings.lock().clone();
             let _ = app.emit("settings-changed", current_settings);
 
-            // Sync the current live item to the output window immediately on show,
-            // so it doesn't display "Waiting for projection..." if something was
-            // already live before the window was opened.
+            // Sync the current live item so the output window doesn't show
+            // "Waiting for projection..." when re-opened after being hidden.
             let live = state.live_item.lock().clone();
             if let Some(item) = live {
                 let _ = app.emit(
@@ -426,9 +820,22 @@ async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) -> Res
                         detected_item: Some(item),
                         confidence: 1.0,
                         source: "manual".to_string(),
+                        is_partial: false,
                     },
                 );
             }
+
+            // Sync lower third so it reappears if active when window was hidden.
+            let lt = state.lower_third.lock().clone();
+            let _ = app.emit("lower-third-update", lt);
+
+            // Sync props layer.
+            let props = state.props_layer.lock().clone();
+            let _ = app.emit("props-update", &props);
+
+            // Sync staged item.
+            let staged = state.staged_item.lock().clone();
+            let _ = app.emit("item-staged", staged.as_ref());
         }
     }
     Ok(())
@@ -565,13 +972,19 @@ async fn read_file_base64(app: tauri::AppHandle, path: String) -> Result<String,
     let data_dir = app.path().app_local_data_dir()
         .or_else(|_| app.path().app_data_dir())
         .map_err(|e| e.to_string())?;
-    
+
     let requested_path = std::path::PathBuf::from(&path);
-    if !requested_path.starts_with(data_dir) {
+
+    // Canonicalize to resolve .. and symlinks BEFORE the security check
+    let canonical = std::fs::canonicalize(&requested_path)
+        .map_err(|_| "Access denied: path could not be resolved".to_string())?;
+    let canonical_data_dir = std::fs::canonicalize(&data_dir).unwrap_or(data_dir);
+
+    if !canonical.starts_with(&canonical_data_dir) {
         return Err("Access denied: path is outside of authorized data directory".to_string());
     }
 
-    let bytes = std::fs::read(&requested_path).map_err(|e| e.to_string())?;
+    let bytes = std::fs::read(&canonical).map_err(|e| e.to_string())?;
     Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
@@ -669,6 +1082,13 @@ async fn go_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), Strin
     let staged = state.staged_item.lock().clone();
     if let Some(item) = staged {
         *state.live_item.lock() = Some(item.clone());
+        
+        let mut is_media = false;
+        if let store::DisplayItem::Media(ref m) = item {
+            if matches!(m.media_type, store::MediaItemType::Video) { is_media = true; }
+        }
+        state.audio.lock().media_playing.store(is_media, std::sync::atomic::Ordering::Relaxed);
+        
         let _ = app.emit(
             "transcription-update",
             TranscriptionUpdate {
@@ -676,6 +1096,7 @@ async fn go_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), Strin
                 detected_item: Some(item.clone()),
                 confidence: 1.0,
                 source: "manual".to_string(),
+                is_partial: false,
             },
         );
         // Broadcast to WS remote clients
@@ -689,6 +1110,7 @@ async fn go_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), Strin
 #[tauri::command]
 async fn clear_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     *state.live_item.lock() = None;
+    state.audio.lock().media_playing.store(false, std::sync::atomic::Ordering::Relaxed);
     let _ = app.emit(
         "transcription-update",
         TranscriptionUpdate {
@@ -696,6 +1118,7 @@ async fn clear_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), St
             detected_item: None,
             confidence: 1.0,
             source: "manual".to_string(),
+            is_partial: false,
         },
     );
     // Broadcast to WS remote clients
@@ -727,6 +1150,7 @@ async fn update_timer(
                 detected_item: Some(item),
                 confidence: 1.0,
                 source: "manual".to_string(),
+                is_partial: false,
             },
         );
     }
@@ -735,13 +1159,30 @@ async fn update_timer(
 
 /// Shows or hides the stage display window.
 #[tauri::command]
-async fn toggle_stage_window(app: AppHandle) -> Result<(), String> {
+async fn toggle_stage_window(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("stage") {
         if window.is_visible().unwrap_or(false) {
             window.hide().map_err(|e: tauri::Error| e.to_string())?;
         } else {
             window.show().map_err(|e: tauri::Error| e.to_string())?;
             window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
+
+            // Re-sync live and staged items so stage display is correct after re-open.
+            let live = state.live_item.lock().clone();
+            if let Some(item) = live {
+                let _ = app.emit(
+                    "transcription-update",
+                    TranscriptionUpdate {
+                        text: item.to_label(),
+                        detected_item: Some(item),
+                        confidence: 1.0,
+                        source: "manual".to_string(),
+                        is_partial: false,
+                    },
+                );
+            }
+            let staged = state.staged_item.lock().clone();
+            let _ = app.emit("item-staged", staged.as_ref());
         }
     }
     Ok(())
@@ -759,6 +1200,31 @@ async fn toggle_design_window(app: AppHandle) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[tauri::command]
+async fn get_available_monitors(app: AppHandle) -> Result<Vec<MonitorInfo>, String> {
+    let win = app.get_webview_window("main").ok_or("no main window")?;
+    let primary_name = win
+        .primary_monitor()
+        .map_err(|e: tauri::Error| e.to_string())?
+        .and_then(|m| m.name().map(|s| s.to_string()));
+    let monitors = win.available_monitors().map_err(|e: tauri::Error| e.to_string())?;
+    Ok(monitors
+        .into_iter()
+        .map(|m| {
+            let name = m.name().map(|s| s.to_string()).unwrap_or_default();
+            let is_primary = Some(&name) == primary_name.as_ref();
+            MonitorInfo {
+                name,
+                width: m.size().width,
+                height: m.size().height,
+                x: m.position().x,
+                y: m.position().y,
+                is_primary,
+            }
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -1096,7 +1562,17 @@ async fn delete_service(state: State<'_, AppState>, id: String) -> Result<(), St
 
 #[tauri::command]
 async fn get_props(state: State<'_, AppState>) -> Result<Vec<store::PropItem>, String> {
-    Ok(state.props_layer.lock().clone())
+    let current = state.props_layer.lock().clone();
+    if current.is_empty() {
+        // Try to load from disk (e.g. first call after restart)
+        if let Ok(loaded) = state.media_schedule.load_props() {
+            if !loaded.is_empty() {
+                *state.props_layer.lock() = loaded.clone();
+                return Ok(loaded);
+            }
+        }
+    }
+    Ok(current)
 }
 
 #[tauri::command]
@@ -1107,6 +1583,8 @@ async fn set_props(
 ) -> Result<(), String> {
     *state.props_layer.lock() = props.clone();
     let _ = app.emit("props-update", &props);
+    // Persist to disk so props survive app restarts
+    let _ = state.media_schedule.save_props(&props);
     Ok(())
 }
 
@@ -1139,6 +1617,354 @@ async fn get_app_data_dir(app: AppHandle) -> Result<String, String> {
     app.path().app_local_data_dir()
         .or_else(|_| app.path().app_data_dir())
         .map(|p| p.to_string_lossy().to_string())
+        .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Whisper Model Manager commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn list_whisper_models(state: State<'_, AppState>) -> Result<Vec<ModelStatus>, String> {
+    let config = state.transcription_config.lock().clone();
+    let hw = tokio::task::spawn_blocking(detect_hardware)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(list_model_statuses(&config, &state.app_data_dir, &hw.recommended_model))
+}
+
+#[tauri::command]
+async fn get_hardware_info() -> Result<HardwareInfo, String> {
+    tokio::task::spawn_blocking(detect_hardware)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn download_whisper_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    model_id: String,
+) -> Result<(), String> {
+    // Find the catalog entry
+    let info = model_manager::MODEL_CATALOG
+        .iter()
+        .find(|m| m.id == model_id)
+        .cloned()
+        .ok_or_else(|| format!("Unknown model id: {}", model_id))?;
+
+    // Mark download as in progress
+    if state
+        .download_in_progress
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err("A download is already in progress".to_string());
+    }
+
+    let cancel_flag = state.download_in_progress.clone();
+    let app_data_dir = state.app_data_dir.clone();
+    let app_clone = app.clone();
+
+    tokio::spawn(async move {
+        let result = download_model(&info, &app_data_dir, cancel_flag.clone(), move |progress| {
+            let _ = app_clone.emit("model-download-progress", &progress);
+        })
+        .await;
+
+        // Clear the flag when done (whether success or failure)
+        cancel_flag.store(false, Ordering::SeqCst);
+
+        if let Err(e) = result {
+            let _ = app.emit(
+                "model-download-progress",
+                DownloadProgress {
+                    model_id: info.id.to_string(),
+                    bytes_downloaded: 0,
+                    total_bytes: 0,
+                    percent: 0.0,
+                    done: true,
+                    error: Some(e.to_string()),
+                },
+            );
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn cancel_whisper_download(state: State<'_, AppState>) -> Result<(), String> {
+    state.download_in_progress.store(false, Ordering::SeqCst);
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_active_whisper_model(
+    state: State<'_, AppState>,
+    filename: String,
+) -> Result<(), String> {
+    // Validate the file exists in the user models dir
+    let path = model_path_if_exists(&state.app_data_dir, &filename)
+        .ok_or_else(|| format!("Model file not found: {}", filename))?;
+
+    {
+        let mut config = state.transcription_config.lock();
+        config.active_model = Some(filename);
+        config.save(&state.app_data_dir);
+    }
+    *state.whisper_path.lock() = Some(path);
+
+    // Unload engine so the next START LIVE picks up the new model
+    *state.engine.lock() = None;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_gpu_enabled(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    {
+        let mut config = state.transcription_config.lock();
+        config.use_gpu = enabled;
+        config.save(&state.app_data_dir);
+    }
+    // Unload engine so next START LIVE rebuilds with new GPU flag
+    *state.engine.lock() = None;
+    Ok(())
+}
+
+#[tauri::command]
+async fn delete_whisper_model(
+    state: State<'_, AppState>,
+    filename: String,
+) -> Result<(), String> {
+    // Reject if this is the currently active model
+    let active = state.transcription_config.lock().active_model.clone();
+    if active.as_deref() == Some(&filename) {
+        return Err("Cannot delete the active model. Select a different model first.".to_string());
+    }
+    model_manager::delete_model_file(&state.app_data_dir, &filename)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_transcription_config(state: State<'_, AppState>) -> Result<TranscriptionConfig, String> {
+    Ok(state.transcription_config.lock().clone())
+}
+
+#[tauri::command]
+async fn set_cloud_config(
+    state: State<'_, AppState>,
+    provider: Option<String>,
+    api_key: Option<String>,
+    hostname: Option<String>,
+    model: Option<String>,
+    language: Option<String>,
+    auto_project: Option<bool>,
+    verse_lock_secs: Option<u32>,
+    confidence_threshold: Option<f32>,
+) -> Result<(), String> {
+    let valid = matches!(
+        provider.as_deref(),
+        None | Some("deepgram") | Some("openai") | Some("assemblyai") | Some("google")
+    );
+    if !valid {
+        return Err(format!("Invalid cloud provider: {:?}", provider));
+    }
+
+    {
+        let mut config = state.transcription_config.lock();
+        config.cloud_provider = provider.clone();
+        if api_key.is_some() { config.cloud_api_key = api_key; }
+        config.cloud_hostname = hostname;
+        config.cloud_model    = model;
+        config.cloud_language = language;
+        if let Some(v) = auto_project        { config.auto_project         = v; }
+        if let Some(v) = verse_lock_secs     { config.verse_lock_secs      = v; }
+        if let Some(v) = confidence_threshold {
+            config.confidence_threshold = v.clamp(0.0, 1.0);
+        }
+        config.save(&state.app_data_dir);
+    }
+    // Propagate confidence threshold to BibleStore immediately
+    if let Some(v) = confidence_threshold {
+        state.store.set_confidence_threshold(v.clamp(0.0, 1.0));
+    }
+
+    *state.engine.lock() = None;
+
+    if provider.is_none() {
+        let filename = state.transcription_config.lock().active_model.clone();
+        let new_path = filename
+            .as_ref()
+            .and_then(|f| model_path_if_exists(&state.app_data_dir, f));
+        *state.whisper_path.lock() = new_path;
+    }
+
+    Ok(())
+}
+
+/// Startup health status for the frontend to display setup issues.
+#[derive(Serialize)]
+struct StartupStatus {
+    db_ok: bool,
+    embeddings_ok: bool,
+    onnx_model_ok: bool,
+    tokenizer_ok: bool,
+    whisper_model_ok: bool,
+    whisper_model_name: Option<String>,
+    db_path: String,
+    issues: Vec<String>,
+}
+
+#[tauri::command]
+async fn get_startup_status(
+    state: State<'_, AppState>,
+) -> Result<StartupStatus, String> {
+    let mut issues = Vec::new();
+
+    // Re-derive the resource path by probing the same candidates as setup
+    let resource_path = {
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                candidates.push(dir.to_path_buf());
+            }
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            candidates.push(cwd);
+        }
+        candidates.into_iter()
+            .find(|p| p.join("bible_data/super_bible.db").exists())
+            .unwrap_or_else(|| state.app_data_dir.clone())
+    };
+
+    let db_path = resource_path.join("bible_data/super_bible.db");
+    let emb_path = resource_path.join("bible_data/all_versions_embeddings.npy");
+    let db_ok = db_path.exists();
+    let emb_ok = emb_path.exists();
+    let onnx_ok = state.embedding_model_path.exists();
+    let tok_ok = state.tokenizer_path.exists();
+    let whisper = state.whisper_path.lock().clone();
+    let whisper_ok = whisper.as_ref().map_or(false, |p| p.exists());
+    let whisper_name = whisper.and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_string()));
+
+    if !db_ok { issues.push("Bible database not found. The app cannot display scripture.".to_string()); }
+    if !emb_ok { issues.push("Embeddings file missing. Auto-detection will be unavailable.".to_string()); }
+    if !onnx_ok { issues.push("ONNX embedding model missing. Semantic search disabled.".to_string()); }
+    if !tok_ok { issues.push("Tokenizer missing. Semantic search disabled.".to_string()); }
+    if !whisper_ok { issues.push("No Whisper model selected. Go to Settings \u{2192} Transcription Model.".to_string()); }
+
+    Ok(StartupStatus {
+        db_ok,
+        embeddings_ok: emb_ok,
+        onnx_model_ok: onnx_ok,
+        tokenizer_ok: tok_ok,
+        whisper_model_ok: whisper_ok,
+        whisper_model_name: whisper_name,
+        db_path: db_path.display().to_string(),
+        issues,
+    })
+}
+
+/// Returns the count of currently connected remote WebSocket clients.
+#[tauri::command]
+async fn get_remote_client_count(state: State<'_, AppState>) -> Result<u32, String> {
+    let count = state.signaling_clients.lock().len() as u32;
+    Ok(count)
+}
+
+/// Returns a list of saved transcript filenames (most recent first).
+#[tauri::command]
+async fn list_transcripts(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let dir = state.app_data_dir.join("transcripts");
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut files: Vec<String> = fs::read_dir(&dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path().extension().map(|x| x == "json").unwrap_or(false)
+        })
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    files.sort_by(|a, b| b.cmp(a)); // most recent first
+    Ok(files)
+}
+
+/// Sets the minimum cosine similarity threshold for semantic verse detection.
+/// Persists the value to transcription config on disk.
+#[tauri::command]
+async fn set_confidence_threshold(
+    state: State<'_, AppState>,
+    threshold: f32,
+) -> Result<(), String> {
+    let clamped = threshold.clamp(0.0, 1.0);
+    state.store.set_confidence_threshold(clamped);
+    {
+        let mut config = state.transcription_config.lock();
+        config.confidence_threshold = clamped;
+        config.save(&state.app_data_dir);
+    }
+    Ok(())
+}
+
+/// Returns the full session transcript log accumulated since the last START LIVE.
+#[tauri::command]
+async fn get_session_transcript(
+    state: State<'_, AppState>,
+) -> Result<Vec<TranscriptSegment>, String> {
+    Ok(state.session_transcript.lock().clone())
+}
+
+/// Clears the session transcript log (e.g. at the start of a new service).
+#[tauri::command]
+async fn clear_session_transcript(state: State<'_, AppState>) -> Result<(), String> {
+    state.session_transcript.lock().clear();
+    state.context_buffer.lock().clear();
+    Ok(())
+}
+
+/// Saves the session transcript to a file on disk.
+/// `format` is "txt" (default) or "json".
+#[tauri::command]
+async fn export_transcript(
+    state: State<'_, AppState>,
+    path: String,
+    format: Option<String>,
+) -> Result<(), String> {
+    let segments = state.session_transcript.lock().clone();
+    let fmt = format.as_deref().unwrap_or("txt");
+
+    let content = match fmt {
+        "json" => serde_json::to_string_pretty(&segments)
+            .map_err(|e| e.to_string())?,
+        _ => {
+            // Plain text: one paragraph per final segment with time prefix
+            segments
+                .iter()
+                .map(|s| {
+                    let secs = s.timestamp_ms / 1000;
+                    format!("[{:02}:{:02}] {}", secs / 60, secs % 60, s.text)
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    };
+
+    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn test_cloud_connection(
+    provider: String,
+    api_key: String,
+) -> Result<String, String> {
+    engine::cloud::test_connection(&provider, &api_key)
+        .await
+        .map(|_| "Connected".to_string())
         .map_err(|e| e.to_string())
 }
 
@@ -1192,28 +2018,17 @@ fn main() {
                 }
             };
 
-            // C5: Resolve model paths but do NOT load them — deferred to start_session
-            let model_paths = ModelPaths {
-                whisper: resource_path.join("models/whisper-base.bin"),
-                embedding_model: resource_path.join("models/all-minilm-l6-v2.onnx"),
-                tokenizer: resource_path.join("models/tokenizer.json"),
-            };
-
+            // Bundled embedding + tokenizer paths (stay fixed)
+            let embedding_model_path = resource_path.join("models/all-minilm-l6-v2.onnx");
+            let tokenizer_path = resource_path.join("models/tokenizer.json");
             for (label, path) in [
-                ("Whisper model", &model_paths.whisper),
-                ("ONNX model", &model_paths.embedding_model),
-                ("Tokenizer", &model_paths.tokenizer),
+                ("ONNX model", &embedding_model_path),
+                ("Tokenizer", &tokenizer_path),
             ] {
                 if path.exists() {
                     log_msg(app, &format!("{} found at {:?}", label, path));
                 } else {
-                    log_msg(
-                        app,
-                        &format!(
-                            "Warning: {} not found at {:?} — START LIVE will report an error",
-                            label, path
-                        ),
-                    );
+                    log_msg(app, &format!("Warning: {} not found at {:?}", label, path));
                 }
             }
 
@@ -1267,6 +2082,15 @@ fn main() {
                 .load_settings()
                 .unwrap_or_else(|_| store::PresentationSettings::default());
 
+            // Load transcription config and resolve initial whisper path
+            let transcription_config = TranscriptionConfig::load(&app_data_dir);
+            let _ = fs::create_dir_all(user_models_dir(&app_data_dir));
+            let initial_whisper = resolve_whisper_path(&transcription_config, &app_data_dir, &resource_path);
+            if let Some(ref p) = initial_whisper {
+                log_msg(app, &format!("Whisper model resolved: {:?}", p));
+            } else {
+                log_msg(app, "No Whisper model found — user must download one in Settings.");
+            }
             log_msg(
                 app,
                 "AI models will be loaded on the first START LIVE click (lazy load).",
@@ -1292,7 +2116,12 @@ fn main() {
                 engine: Arc::new(Mutex::new(None)), // loaded lazily in start_session
                 store,
                 media_schedule,
-                model_paths,
+                transcription_config: Arc::new(Mutex::new(transcription_config)),
+                whisper_path: Arc::new(Mutex::new(initial_whisper)),
+                embedding_model_path,
+                tokenizer_path,
+                app_data_dir,
+                download_in_progress: Arc::new(AtomicBool::new(false)),
                 is_running: Arc::new(Mutex::new(false)),
                 live_item: Arc::new(Mutex::new(None)),
                 staged_item: Arc::new(Mutex::new(None)),
@@ -1306,15 +2135,23 @@ fn main() {
                 transcription_paused: Arc::new(AtomicBool::new(false)),
                 props_layer: Arc::new(Mutex::new(Vec::new())),
                 connected_cameras: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+                session_transcript: Arc::new(Mutex::new(Vec::new())),
+                context_buffer: Arc::new(Mutex::new(Vec::new())),
+                cloud_stream_handle: Arc::new(Mutex::new(None)),
             };
 
             // Store app_handle so remote module can emit events to Tauri windows
             state.app_handle.set(app.handle().clone()).ok();
 
             // Start the LAN remote server in the background
+            // Port is configurable via BIBLE_PRESENTER_REMOTE_PORT env var
+            let remote_port: u16 = std::env::var("BIBLE_PRESENTER_REMOTE_PORT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(7420);
             let remote_state = Arc::new(state.clone());
             tauri::async_runtime::spawn(async move {
-                remote::start(remote_state, 7420).await;
+                remote::start(remote_state, remote_port).await;
             });
 
             app.manage(state);
@@ -1339,7 +2176,16 @@ fn main() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 if window.label() == "main" {
-                    window.app_handle().exit(0);
+                    // Graceful shutdown: stop audio + cloud streams before exit
+                    let app = window.app_handle();
+                    if let Some(state) = app.try_state::<AppState>() {
+                        if let Some(handle) = state.cloud_stream_handle.lock().take() {
+                            handle.stop();
+                        }
+                        state.audio.lock().stop();
+                        *state.is_running.lock() = false;
+                    }
+                    app.exit(0);
                 }
             }
         })
@@ -1364,7 +2210,6 @@ fn main() {
             get_chapter,
             get_verse,
             get_next_verse,
-            read_file_base64,
             list_media,
             add_media,
             delete_media,
@@ -1399,6 +2244,7 @@ fn main() {
             update_timer,
             toggle_stage_window,
             toggle_design_window,
+            get_available_monitors,
             list_services,
             save_service,
             load_service,
@@ -1406,7 +2252,24 @@ fn main() {
             get_props,
             set_props,
             get_app_data_dir,
-            get_hymn_library
+            get_hymn_library,
+            list_whisper_models,
+            get_hardware_info,
+            download_whisper_model,
+            cancel_whisper_download,
+            set_active_whisper_model,
+            set_gpu_enabled,
+            delete_whisper_model,
+            get_transcription_config,
+            set_cloud_config,
+            test_cloud_connection,
+            get_session_transcript,
+            clear_session_transcript,
+            export_transcript,
+            set_confidence_threshold,
+            get_startup_status,
+            get_remote_client_count,
+            list_transcripts
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

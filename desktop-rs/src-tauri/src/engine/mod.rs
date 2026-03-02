@@ -1,3 +1,7 @@
+pub mod cloud;
+pub mod cloud_stream;
+pub mod model_manager;
+
 use whisper_rs::{WhisperContext, WhisperContextParameters, FullParams, SamplingStrategy};
 use ort::session::Session;
 use ort::value::Tensor;
@@ -6,17 +10,25 @@ use parking_lot::Mutex;
 
 
 pub struct TranscriptionEngine {
-    whisper: WhisperContext,
+    whisper: Option<WhisperContext>,   // None when cloud provider is active
     embedding_session: Mutex<Session>,
     tokenizer: Tokenizer,
 }
 
 impl TranscriptionEngine {
-    pub fn new(whisper_path: &str, embedding_model_path: &str, tokenizer_path: &str) -> anyhow::Result<Self> {
-        let whisper = WhisperContext::new_with_params(
-            whisper_path,
-            WhisperContextParameters::default()
-        )?;
+    pub fn new(
+        whisper_path: Option<&str>,
+        embedding_model_path: &str,
+        tokenizer_path: &str,
+        use_gpu: bool,
+    ) -> anyhow::Result<Self> {
+        let whisper = if let Some(path) = whisper_path {
+            let mut params = WhisperContextParameters::default();
+            params.use_gpu(use_gpu);
+            Some(WhisperContext::new_with_params(path, params)?)
+        } else {
+            None
+        };
 
         let embedding_session = Session::builder()?
             .with_intra_threads(2)?
@@ -28,12 +40,21 @@ impl TranscriptionEngine {
         Ok(Self { whisper, embedding_session: Mutex::new(embedding_session), tokenizer })
     }
 
-    pub fn transcribe(&self, audio_data: &[f32]) -> anyhow::Result<String> {
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_n_threads(num_cpus::get() as i32);
-        params.set_language(Some("en"));
+    pub fn transcribe(&self, audio_data: &[f32], language: Option<&str>) -> anyhow::Result<String> {
+        let ctx = self.whisper.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No local Whisper model (cloud mode active)"))?;
 
-        let mut state = self.whisper.create_state()?;
+        let mut params = FullParams::new(SamplingStrategy::BeamSearch { beam_size: 5, patience: 0.1 });
+        params.set_n_threads(num_cpus::get() as i32);
+        params.set_language(Some(language.unwrap_or("en")));
+        
+        // Disable various prints to reduce console noise and minor CPU cycles
+        params.set_print_special(false);
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_timestamps(false);
+
+        let mut state = ctx.create_state()?;
         state.full(params, audio_data)?;
 
         let mut transcript = String::new();

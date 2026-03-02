@@ -315,6 +315,16 @@ export interface PresentationSettings {
   camera_resolution?: "360p" | "480p" | "720p" | "1080p";
   auto_split_verses: boolean;
   verse_split_threshold: number;
+  preferred_monitor?: string;
+}
+
+export interface MonitorInfo {
+  name: string;
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+  is_primary: boolean;
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -363,6 +373,17 @@ export const DEFAULT_SETTINGS: PresentationSettings = {
   auto_split_verses: true,
   verse_split_threshold: 200,
 };
+
+export interface StartupStatus {
+  db_ok: boolean;
+  embeddings_ok: boolean;
+  onnx_model_ok: boolean;
+  tokenizer_ok: boolean;
+  whisper_model_ok: boolean;
+  whisper_model_name: string | null;
+  db_path: string;
+  issues: string[];
+}
 
 export const THEMES: Record<string, { label: string; colors: ThemeColors }> = {
   dark: {

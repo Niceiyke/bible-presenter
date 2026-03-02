@@ -33,6 +33,8 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
   } = useAppStore();
 
   const [historyTab, setHistoryTab] = useState<"bible" | "media" | "presentation">("bible");
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   const [chapterVerses, setChapterVerses] = useState<Verse[]>([]);
   const [loadingChapter, setLoadingChapter] = useState(false);
@@ -87,11 +89,16 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
+    setIsSearching(true);
+    setSearchError(null);
     try {
       const results: any = await invoke("search_semantic_query", { query: searchQuery });
       setSearchResults(results);
     } catch (err) {
+      setSearchError("Search failed. Check that the app is fully loaded.");
       console.error("Search failed:", err);
+    } finally {
+      setIsSearching(false);
     }
   };
 
@@ -403,17 +410,24 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-amber-500"
               />
-              <button type="submit" className="bg-amber-500 hover:bg-amber-600 text-black font-bold px-3 py-2 rounded-lg text-sm transition-all">
-                Go
+              <button
+                type="submit"
+                disabled={isSearching}
+                className="bg-amber-500 hover:bg-amber-600 text-black font-bold px-3 py-2 rounded-lg text-sm transition-all disabled:opacity-50"
+              >
+                {isSearching ? "..." : "Go"}
               </button>
             </form>
+            {searchError && (
+              <p className="text-red-400 text-xs mb-2">{searchError}</p>
+            )}
 
             <div className="space-y-2 overflow-y-auto">
-              {searchResults.length === 0 && searchQuery && (
+              {!isSearching && searchResults.length === 0 && searchQuery && !searchError && (
                 <p className="text-slate-600 text-xs italic text-center pt-4">No results found</p>
               )}
-              {searchResults.map((v, i) => (
-                <div key={i} className="p-3 rounded-lg bg-slate-800/50 border border-transparent hover:border-slate-700 transition-all group">
+              {searchResults.map((v) => (
+                <div key={`${v.version}-${v.book}-${v.chapter}-${v.verse}`} className="p-3 rounded-lg bg-slate-800/50 border border-transparent hover:border-slate-700 transition-all group">
                   <p className="text-amber-500 text-xs font-bold mb-1 uppercase">{v.book} {v.chapter}:{v.verse} <span className="text-slate-500 font-normal normal-case">{v.version}</span></p>
                   <p className="text-slate-300 text-xs mb-2 line-clamp-2">{v.text}</p>
                   <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-all">

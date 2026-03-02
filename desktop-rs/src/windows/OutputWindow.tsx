@@ -51,6 +51,9 @@ export function OutputWindow() {
   const programPcsRef = useRef<Record<string, RTCPeerConnection | null>>({ A: null, B: null });
   const programDeviceId = useRef<string | null>(null);
   const outputWsRef = useRef<WebSocket | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const MAX_RECONNECT_ATTEMPTS = 15; // ~8.5 min of retrying
   const sceneCameraHandlersRef = useRef<Map<string, (msg: any) => void>>(new Map());
   const [windowScale, setWindowScale] = useState(1);
 
@@ -131,6 +134,8 @@ export function OutputWindow() {
     outputWsRef.current = ws;
 
     ws.onopen = () => {
+      if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
+      reconnectAttemptsRef.current = 0;
       ws.send(JSON.stringify({ cmd: "auth", pin, client_type: "window:output" }));
     };
 
@@ -163,31 +168,24 @@ export function OutputWindow() {
     };
 
     ws.onclose = () => {
-      setTimeout(() => { if (outputWsRef.current?.readyState === WebSocket.CLOSED) connectOutputWs(pin); }, 5000);
+      if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) return;
+      const delay = Math.min(30000, 1000 * Math.pow(2, reconnectAttemptsRef.current));
+      reconnectAttemptsRef.current++;
+      reconnectTimerRef.current = setTimeout(async () => {
+        if (!isMounted.current) return;
+        const info = await invoke("get_remote_info").catch(() => null) as any;
+        if (info?.pin && isMounted.current) connectOutputWs(info.pin);
+      }, delay);
     };
   }
 
+  const isMounted = useRef(true);
   useEffect(() => {
-    invoke("get_current_item")
-      .then((v: any) => { if (v) setLiveItem(v); })
-      .catch(() => {});
+    return () => { isMounted.current = false; };
+  }, []);
 
-    invoke("get_current_lower_third")
-      .then((lt: any) => { if (lt) setLowerThird(lt); })
-      .catch(() => {});
-
-    invoke("get_settings")
-      .then((s: any) => { if (s) setSettings(s); })
-      .catch(() => {});
-
-    invoke("get_remote_info")
-      .then((info: any) => { if (info?.pin) connectOutputWs(info.pin); })
-      .catch(() => {});
-
-    invoke<string>("get_app_data_dir")
-      .then(setAppDataDir)
-      .catch(() => {});
-
+  useEffect(() => {
+    // Attach ALL listeners first, before any async work, to avoid missing events
     const unlistenTrans = listen("transcription-update", (event: any) => {
       const { detected_item, source } = event.payload;
       if (source === "manual") {
@@ -239,9 +237,18 @@ export function OutputWindow() {
       setPropItems((event.payload as PropItem[]) ?? []);
     });
 
-    invoke<PropItem[]>("get_props").then(setPropItems).catch(() => {});
+    // Load initial state in parallel
+    Promise.all([
+      invoke("get_current_item").then((v: any) => { if (v) setLiveItem(v); }).catch(() => {}),
+      invoke("get_current_lower_third").then((lt: any) => { if (lt) setLowerThird(lt); }).catch(() => {}),
+      invoke("get_settings").then((s: any) => { if (s) setSettings(s); }).catch(() => {}),
+      invoke("get_remote_info").then((info: any) => { if (info?.pin) connectOutputWs(info.pin); }).catch(() => {}),
+      invoke<string>("get_app_data_dir").then(setAppDataDir).catch(() => {}),
+      invoke<PropItem[]>("get_props").then(setPropItems).catch(() => {}),
+    ]);
 
     return () => {
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       unlistenTrans.then((f) => f());
       unlistenSettings.then((f) => f());
       unlistenStaged.then((f) => f());
@@ -278,7 +285,9 @@ export function OutputWindow() {
     // Setup auto-hide timer (only if not infinite scrolling)
     if (t.autoHideSeconds > 0 && !(t.scrollEnabled && t.scrollCount === 0)) {
       autoHideTimer.current = setTimeout(() => {
-        invoke("hide_lower_third").catch(console.error);
+        if (isMounted.current) {
+          invoke("hide_lower_third").catch(console.error);
+        }
       }, t.autoHideSeconds * 1000);
     }
 
