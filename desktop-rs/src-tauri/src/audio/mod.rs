@@ -79,7 +79,7 @@ impl AudioEngine {
     pub fn start_capturing(
         &mut self,
         tx: mpsc::Sender<()>,
-        mut prod: impl Producer<Item = f32> + Send + 'static,
+        prod: impl Producer<Item = f32> + Send + 'static,
         error_tx: mpsc::Sender<String>,
         level_tx: Option<mpsc::Sender<f32>>,
     ) -> anyhow::Result<()> {

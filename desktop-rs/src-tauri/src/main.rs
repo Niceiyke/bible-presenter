@@ -4,6 +4,7 @@
 mod remote;
 
 use bible_presenter_lib::{audio, engine, store};
+use ringbuf::traits::{Consumer, Producer};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -445,12 +446,12 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
                         interval.tick().await;
 
                         let paused = transcription_paused_task.load(Ordering::Relaxed);
-                        let avail  = ringbuf::traits::Consumer::occupied_len(&cons);
+                        let avail  = cons.occupied_len();
                         if avail == 0 || paused { continue; }
 
                         let take = avail.min(CHUNK_SAMPLES * 4); // drain up to 400 ms
                         let mut pcm = vec![0.0f32; take];
-                        let read = ringbuf::traits::Consumer::pop_slice(&mut cons, &mut pcm);
+                        let read = cons.pop_slice(&mut pcm);
                         pcm.truncate(read);
 
                         let bytes: Vec<u8> = pcm
@@ -599,11 +600,11 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
             .as_millis() as u64;
 
         while let Some(()) = rx.recv().await {
-            let avail = ringbuf::traits::Consumer::occupied_len(&cons);
+            let avail = cons.occupied_len();
             if avail > 0 {
                 let old_len = buffer.len();
                 buffer.resize(old_len + avail, 0.0);
-                let read = ringbuf::traits::Consumer::pop_slice(&mut cons, &mut buffer[old_len..]);
+                let read = cons.pop_slice(&mut buffer[old_len..]);
                 buffer.truncate(old_len + read);
             }
 
