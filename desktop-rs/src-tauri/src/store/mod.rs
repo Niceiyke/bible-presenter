@@ -69,7 +69,7 @@ pub struct BibleStore {
     /// Memory-mapped embeddings file.
     _mmap: Option<Mmap>,
     /// HNSW index for fast semantic search (L2 distance on normalized embeddings).
-    hnsw_index: Option<Hnsw<f32, DistL2>>,
+    hnsw_index: Option<Hnsw<'static, f32, DistL2>>,
     /// Currently active version for display queries.
     active_version: Mutex<String>,
     /// Minimum cosine similarity score for a semantic match to be accepted (default 0.55).
@@ -409,7 +409,7 @@ impl BibleStore {
         // hnsw_rs DistL2 returns the *squared* L2 distance (no sqrt).
         // For L2-normalized unit vectors: cos_sim = 1 - d²/2.
         // Clamp to [0,1] — anti-correlated embeddings would give negative values.
-        let score = (1.0 - neighbor.distance / 2.0).clamp(0.0, 1.0);
+        let score = (1.0 - (neighbor.distance as f32) / 2.0).clamp(0.0, 1.0);
 
         let threshold = *self.confidence_threshold.lock();
         if score < threshold {

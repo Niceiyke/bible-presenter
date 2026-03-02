@@ -390,6 +390,7 @@ impl Default for PresentationSettings {
             camera_resolution: default_camera_resolution(),
             auto_split_verses: default_auto_split_verses(),
             verse_split_threshold: default_verse_split_threshold(),
+            preferred_monitor: None,
         }
     }
 }
