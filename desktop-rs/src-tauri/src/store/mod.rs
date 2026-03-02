@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::collections::HashMap;
 use parking_lot::Mutex;
+use once_cell::sync::Lazy;
 use regex::{Regex, RegexSet};
 use std::fs::File;
 use hnsw_rs::prelude::*;
@@ -10,6 +11,22 @@ use memmap2::Mmap;
 
 pub mod media_schedule;
 pub use media_schedule::*;
+
+const STOP_WORDS: &[&str] = &[
+    "the","a","an","and","or","but","in","on","at","to","for","of","with","by",
+    "from","is","was","are","were","be","been","have","has","had","do","does",
+    "did","will","would","could","should","may","might","shall","can","not","no",
+    "it","its","this","that","my","your","his","her","our","their","who","what",
+    "which","he","she","they","we","i","you","me","him","us","them",
+];
+
+static RE_FULL: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)[:\s]+(\d+)").unwrap()
+});
+
+static RE_CHAP: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)").unwrap()
+});
 
 /// Ordered list of versions embedded into all_versions_embeddings.npy.
 /// Must match the order used in scripts/generate_embeddings.py.
@@ -55,6 +72,8 @@ pub struct BibleStore {
     hnsw_index: Option<Hnsw<f32, DistL2>>,
     /// Currently active version for display queries.
     active_version: Mutex<String>,
+    /// Minimum cosine similarity score for a semantic match to be accepted (default 0.55).
+    confidence_threshold: Mutex<f32>,
 }
 
 impl BibleStore {
@@ -63,6 +82,16 @@ impl BibleStore {
 
         if let Err(e) = conn.execute("PRAGMA journal_mode=WAL", []) {
             eprintln!("Warning: Could not set WAL mode: {}", e);
+        }
+
+        // Schema versioning — bump CURRENT_SCHEMA_VERSION when the schema changes
+        const CURRENT_SCHEMA_VERSION: u32 = 1;
+        let schema_version: u32 = conn.query_row(
+            "PRAGMA user_version", [], |r| r.get(0)
+        ).unwrap_or(0);
+        if schema_version < CURRENT_SCHEMA_VERSION {
+            conn.execute_batch(&format!("PRAGMA user_version = {}", CURRENT_SCHEMA_VERSION))?;
+            println!("BibleStore: schema migrated to version {}", CURRENT_SCHEMA_VERSION);
         }
 
         // Initialize FTS5 virtual table for lightning-fast keyword search
@@ -161,6 +190,7 @@ impl BibleStore {
                                 let hnsw = Hnsw::new(max_nb_conn, n_rows, max_layer, ef_construction, DistL2 {});
                                 
                                 // Insert embeddings in parallel
+                                // hnsw_rs 0.3.x parallel_insert takes &[(&Vec<T>, usize)]
                                 let data_to_insert: Vec<(Vec<f32>, usize)> = (0..n_rows)
                                     .map(|i| {
                                         let start = i * n_dims;
@@ -168,8 +198,11 @@ impl BibleStore {
                                         (f32_slice[start..end].to_vec(), i)
                                     })
                                     .collect();
-                                
-                                hnsw.parallel_insert(&data_to_insert);
+                                let insert_refs: Vec<(&Vec<f32>, usize)> = data_to_insert
+                                    .iter()
+                                    .map(|(v, id)| (v, *id))
+                                    .collect();
+                                hnsw.parallel_insert(&insert_refs);
                                 hnsw_index = Some(hnsw);
                                 _mmap = Some(m);
                             }
@@ -276,6 +309,7 @@ impl BibleStore {
             _mmap,
             hnsw_index,
             active_version: Mutex::new(default_version),
+            confidence_threshold: Mutex::new(0.55),
         })
     }
 
@@ -290,6 +324,11 @@ impl BibleStore {
     pub fn set_active_version(&self, version: &str) {
         *self.active_version.lock() = version.to_string();
         println!("BibleStore: Active version set to {}", version);
+    }
+
+    pub fn set_confidence_threshold(&self, threshold: f32) {
+        *self.confidence_threshold.lock() = threshold.clamp(0.0, 1.0);
+        println!("BibleStore: Confidence threshold set to {}", threshold);
     }
 
     fn normalize_book(&self, raw: &str) -> String {
@@ -317,12 +356,11 @@ impl BibleStore {
     /// If it's a Book Chap, it returns the first 10 verses of that chapter.
     pub fn detect_verses_by_ref(&self, text: &str) -> Vec<Verse> {
         let text_lower = text.to_lowercase();
-        
+
         // Try Book Chap:Verse
-        let re_full = Regex::new(r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)[:\s]+(\d+)").ok();
-        if let Some(re) = re_full {
-            if let Some(caps) = re.captures(&text_lower) {
-                let book = self.normalize_book(caps.get(1).map(|m| m.as_str()).unwrap_or(""));
+        if let Some(caps) = RE_FULL.captures(&text_lower) {
+            let book = self.normalize_book(caps.get(1).map(|m| m.as_str()).unwrap_or(""));
+            if self.books.contains(&book) {
                 if let Ok(chapter) = caps.get(2).map(|m| m.as_str()).unwrap_or("").parse::<i32>() {
                     if let Ok(verse) = caps.get(3).map(|m| m.as_str()).unwrap_or("").parse::<i32>() {
                         let version = self.get_active_version();
@@ -335,10 +373,9 @@ impl BibleStore {
         }
 
         // Try Book Chap
-        let re_chap = Regex::new(r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)").ok();
-        if let Some(re) = re_chap {
-            if let Some(caps) = re.captures(&text_lower) {
-                let book = self.normalize_book(caps.get(1).map(|m| m.as_str()).unwrap_or(""));
+        if let Some(caps) = RE_CHAP.captures(&text_lower) {
+            let book = self.normalize_book(caps.get(1).map(|m| m.as_str()).unwrap_or(""));
+            if self.books.contains(&book) {
                 if let Ok(chapter) = caps.get(2).map(|m| m.as_str()).unwrap_or("").parse::<i32>() {
                     let version = self.get_active_version();
                     if let Ok(verses) = self.get_chapter_verses(&book, chapter, &version) {
@@ -347,7 +384,7 @@ impl BibleStore {
                 }
             }
         }
-        
+
         Vec::new()
     }
 
@@ -369,13 +406,17 @@ impl BibleStore {
         }
 
         let neighbor = &search_results[0];
-        let score = 1.0 - neighbor.distance; // Approximate similarity for DistL2
-        
-        if score < 0.45 {
+        // hnsw_rs DistL2 returns the *squared* L2 distance (no sqrt).
+        // For L2-normalized unit vectors: cos_sim = 1 - d²/2.
+        // Clamp to [0,1] — anti-correlated embeddings would give negative values.
+        let score = (1.0 - neighbor.distance / 2.0).clamp(0.0, 1.0);
+
+        let threshold = *self.confidence_threshold.lock();
+        if score < threshold {
             return (None, score);
         }
 
-        let idx = neighbor.d_idx;
+        let idx = neighbor.d_id;
         if let Some(matched) = self.verse_cache.get(idx) {
             let book = &self.books[matched.book_idx as usize];
             let version = &self.available_versions[matched.version_idx as usize];
@@ -458,7 +499,7 @@ impl BibleStore {
             if results.len() >= top_n {
                 break;
             }
-            let idx = neighbor.d_idx;
+            let idx = neighbor.d_id;
             if let Some(matched) = self.verse_cache.get(idx) {
                 let book = &self.books[matched.book_idx as usize];
                 let key = (matched.book_idx, matched.chapter, matched.verse);
@@ -492,10 +533,20 @@ impl BibleStore {
             return Ok(Vec::new());
         }
 
-        // Clean query for FTS5 (basic escape and allow prefix matching)
-        let cleaned_query = query
+        // Filter stop words, then build FTS5 query with prefix matching
+        let words: Vec<String> = query
             .split_whitespace()
-            .map(|w| format!("\"{}\"*", w.replace("\"", "")))
+            .map(|w| w.to_lowercase())
+            .filter(|w| !STOP_WORDS.contains(&w.as_str()))
+            .collect();
+
+        if words.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let cleaned_query = words
+            .iter()
+            .map(|w| format!("\"{}\"*", w.replace('"', "")))
             .collect::<Vec<_>>()
             .join(" ");
 
@@ -560,9 +611,19 @@ impl BibleStore {
             return Ok(Vec::new());
         }
 
-        let cleaned_query = query
+        let words: Vec<String> = query
             .split_whitespace()
-            .map(|w| format!("\"{}\"*", w.replace("\"", "")))
+            .map(|w| w.to_lowercase())
+            .filter(|w| !STOP_WORDS.contains(&w.as_str()))
+            .collect();
+
+        if words.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let cleaned_query = words
+            .iter()
+            .map(|w| format!("\"{}\"*", w.replace('"', "")))
             .collect::<Vec<_>>()
             .join(" ");
 
@@ -570,7 +631,7 @@ impl BibleStore {
         let mut stmt = conn.prepare_cached(
             "SELECT title, text, version, chapter, verse FROM super_bible \
              JOIN super_bible_fts ON super_bible.rowid = super_bible_fts.rowid \
-             WHERE super_bible_fts MATCH ?1 AND super_bible_fts.version = ?2 \
+             WHERE super_bible_fts MATCH ?1 AND super_bible.version = ?2 \
              ORDER BY rank \
              LIMIT 20"
         )?;

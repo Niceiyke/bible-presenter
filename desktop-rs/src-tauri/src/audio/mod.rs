@@ -1,9 +1,13 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use ringbuf::traits::Producer;
+use ringbuf::SharedRb;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use webrtc_vad::{Vad, VadMode};
 
 /// A thread-safe wrapper for cpal::Stream.
 ///
@@ -14,13 +18,16 @@ struct StreamHandle(cpal::Stream);
 unsafe impl Send for StreamHandle {}
 unsafe impl Sync for StreamHandle {}
 
+pub type AudioRb = SharedRb<f32, Vec<std::mem::MaybeUninit<f32>>>;
+
 pub struct AudioEngine {
     stream: Option<Arc<StreamHandle>>,
     selected_device_name: Option<String>,
-    active_tx: Option<mpsc::Sender<Vec<f32>>>,
+    active_tx: Option<mpsc::Sender<()>>,
     active_error_tx: Option<mpsc::Sender<String>>,
     active_level_tx: Option<mpsc::Sender<f32>>,
     vad_threshold: f32,
+    pub media_playing: Arc<AtomicBool>,
 }
 
 impl AudioEngine {
@@ -32,6 +39,7 @@ impl AudioEngine {
             active_error_tx: None,
             active_level_tx: None,
             vad_threshold: 0.002,
+            media_playing: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -53,22 +61,18 @@ impl AudioEngine {
 
     pub fn select_device(&mut self, device_name: &str) -> anyhow::Result<()> {
         self.selected_device_name = Some(device_name.to_string());
-
-        // Only restart if a session is already running (both channels present)
-        if let (Some(tx), Some(error_tx)) = (self.active_tx.clone(), self.active_error_tx.clone()) {
-            let level_tx = self.active_level_tx.clone();
-            self.stop();
-            self.start_capturing(tx, error_tx, level_tx)?;
-        }
         Ok(())
     }
 
     pub fn start_capturing(
         &mut self,
-        tx: mpsc::Sender<Vec<f32>>,
+        tx: mpsc::Sender<()>,
+        mut prod: ringbuf::Producer<f32, Arc<AudioRb>>,
         error_tx: mpsc::Sender<String>,
         level_tx: Option<mpsc::Sender<f32>>,
     ) -> anyhow::Result<()> {
+        // Stop any existing stream before starting a new one (prevents double-stream)
+        self.stop();
         self.active_tx = Some(tx.clone());
         self.active_error_tx = Some(error_tx.clone());
         self.active_level_tx = level_tx.clone();
@@ -79,7 +83,10 @@ impl AudioEngine {
             let mut devices = host.input_devices()?;
             devices
                 .find(|d| d.name().map(|n| n == *name).unwrap_or(false))
-                .ok_or_else(|| anyhow::anyhow!("Selected device '{}' not found", name))?
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Microphone '{}' not found. Reconnect it or choose a different device in Settings → Audio Device, then start the session again.",
+                    name
+                ))?
         } else {
             host.default_input_device()
                 .ok_or_else(|| anyhow::anyhow!("No input device available"))?
@@ -90,6 +97,8 @@ impl AudioEngine {
         let target_rate = 16000.0;
 
         let vad = self.vad_threshold;
+        let aec_flag = self.media_playing.clone();
+
         let build_result = match config.sample_format() {
             cpal::SampleFormat::F32 => self.build_stream::<f32>(
                 &device,
@@ -97,7 +106,9 @@ impl AudioEngine {
                 sample_rate,
                 target_rate,
                 vad,
+                aec_flag,
                 tx,
+                prod,
                 error_tx,
                 level_tx,
             ),
@@ -107,7 +118,9 @@ impl AudioEngine {
                 sample_rate,
                 target_rate,
                 vad,
+                aec_flag,
                 tx,
+                prod,
                 error_tx,
                 level_tx,
             ),
@@ -117,7 +130,9 @@ impl AudioEngine {
                 sample_rate,
                 target_rate,
                 vad,
+                aec_flag,
                 tx,
+                prod,
                 error_tx,
                 level_tx,
             ),
@@ -125,7 +140,10 @@ impl AudioEngine {
         };
         let stream = build_result.map_err(|e| {
             let msg = e.to_string();
-            if msg.contains("0x80070005") || msg.to_lowercase().contains("access denied") || msg.to_lowercase().contains("access is denied") {
+            if msg.contains("0x80070005")
+                || msg.to_lowercase().contains("access denied")
+                || msg.to_lowercase().contains("access is denied")
+            {
                 anyhow::anyhow!(
                     "Microphone access denied (0x80070005). \
                     Please enable microphone access in Windows Settings → \
@@ -148,7 +166,9 @@ impl AudioEngine {
         source_rate: f64,
         target_rate: f64,
         vad_threshold: f32,
-        tx: mpsc::Sender<Vec<f32>>,
+        aec_flag: Arc<AtomicBool>,
+        tx: mpsc::Sender<()>,
+        mut prod: ringbuf::Producer<f32, Arc<AudioRb>>,
         error_tx: mpsc::Sender<String>,
         level_tx: Option<mpsc::Sender<f32>>,
     ) -> anyhow::Result<cpal::Stream>
@@ -168,6 +188,19 @@ impl AudioEngine {
             SincFixedIn::<f32>::new(target_rate / source_rate, 2.0, params, 1024, channels)?;
 
         let mut input_buffer = vec![Vec::with_capacity(2048); channels];
+
+        // Clone error_tx for use inside the data callback (the original moves into the error callback)
+        let error_tx_inner = error_tx.clone();
+
+        // Advanced AI-Driven VAD
+        let mut vad = Vad::new();
+        vad.set_mode(VadMode::Aggressive);
+
+        // Auto-Gain Control State
+        let target_rms = 0.05f32; // ~ -26 dBFS target average
+        let mut current_gain = 1.0f32;
+        let attack = 0.01f32;
+        let release = 0.001f32;
 
         device
             .build_input_stream(
@@ -191,14 +224,70 @@ impl AudioEngine {
                                 *s /= channels as f32;
                             }
 
-                            let energy =
-                                mono.iter().map(|s| s * s).sum::<f32>() / mono.len() as f32;
-                            // Always emit energy for VU meter (before VAD gate)
+                            // 1. Software AEC (Ducking / Suppression)
+                            // If video or media is playing on the output, duck the mic to prevent echo loop.
+                            if aec_flag.load(Ordering::Relaxed) {
+                                for s in &mut mono {
+                                    *s *= 0.01; // heavy attenuation
+                                }
+                            }
+
+                            // 2. Auto-Gain Control (AGC)
+                            let mut rms = mono.iter().map(|s| s * s).sum::<f32>() / mono.len() as f32;
+                            rms = rms.sqrt().max(1e-5);
+                            let desired_gain = target_rms / rms;
+                            if desired_gain > current_gain {
+                                current_gain += attack * (desired_gain - current_gain);
+                            } else {
+                                current_gain += release * (desired_gain - current_gain);
+                            }
+                            current_gain = current_gain.clamp(0.1, 8.0);
+
+                            for s in &mut mono {
+                                *s *= current_gain;
+                                *s = s.clamp(-1.0, 1.0);
+                            }
+
+                            // VU meter logic (before VAD dropping)
+                            let energy = mono.iter().map(|s| s * s).sum::<f32>() / mono.len() as f32;
                             if let Some(ref ltx) = level_tx {
                                 let _ = ltx.try_send(energy);
                             }
-                            if energy > vad_threshold {
-                                let _ = tx.try_send(mono);
+
+                            // 3. WebRTC VAD + Fallback Energy Threshold
+                            let i16_samples: Vec<i16> = mono
+                                .iter()
+                                .map(|&s| (s * std::i16::MAX as f32).clamp(-32768.0, 32767.0) as i16)
+                                .collect();
+
+                            let mut is_speech = false;
+                            // WebRTC VAD needs 10ms (160 samples at 16kHz)
+                            for chunk in i16_samples.chunks(160) {
+                                if chunk.len() == 160 {
+                                    if let Ok(active) = vad.is_voice_segment(chunk) {
+                                        if active {
+                                            is_speech = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Pass chunks if AI VAD detects speech OR fallback energy check matches
+                            if is_speech || energy > vad_threshold {
+                                // 4. Lock-free ring buffer push
+                                let pushed = prod.push_slice(&mono);
+                                if pushed < mono.len() {
+                                    // Buffer is full — warn the operator; samples were dropped
+                                    let _ = error_tx_inner.try_send(
+                                        "WARNING: Audio ring buffer full; samples dropped. \
+                                         Consider reducing transcription window or upgrading CPU.".to_string()
+                                    );
+                                }
+                                if pushed > 0 {
+                                    // Non-blocking wake up the async processing loop
+                                    let _ = tx.try_send(());
+                                }
                             }
                         }
                         for chan in &mut input_buffer {
@@ -206,7 +295,6 @@ impl AudioEngine {
                         }
                     }
                 },
-                // C4: Forward audio device errors through the channel to the UI
                 move |err| {
                     let _ = error_tx.try_send(format!("Audio device error: {}", err));
                 },
@@ -216,10 +304,7 @@ impl AudioEngine {
     }
 
     pub fn stop(&mut self) {
-        // Drop the stream first (stops CPAL callbacks)
         self.stream = None;
-        // Drop all channel senders — this closes the channels, causing
-        // the receiving loops in start_session to exit cleanly via recv() -> None
         self.active_tx = None;
         self.active_error_tx = None;
         self.active_level_tx = None;

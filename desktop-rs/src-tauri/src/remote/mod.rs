@@ -39,7 +39,7 @@ use axum::{
     },
     response::{Html, IntoResponse},
     routing::get,
-    Router,
+    Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
@@ -58,6 +58,7 @@ const CAMERA_HTML: &str = include_str!("camera.html");
 
 pub async fn start(state: Arc<AppState>, port: u16) {
     let app = Router::new()
+        .route("/health", get(health_handler))
         .route("/",      get(serve_remote_html))
         .route("/camera", get(serve_camera_html))
         .route("/ws",    get(ws_handler))
@@ -82,6 +83,13 @@ pub async fn start(state: Arc<AppState>, port: u16) {
 }
 
 // ─── HTTP handlers ─────────────────────────────────────────────────────────────
+
+async fn health_handler() -> impl IntoResponse {
+    Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION")
+    }))
+}
 
 async fn serve_remote_html() -> impl IntoResponse {
     Html(REMOTE_HTML)

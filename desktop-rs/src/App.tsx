@@ -46,7 +46,7 @@ const getVerseKey = (v: any) => `${v.book}-${v.chapter}-${v.verse}-${v.version}`
 export default function App() {
   const {
     label, liveItem, setLiveItem, stagedItem, setStagedItem, suggestedItem, setSuggestedItem,
-    previousItem, setPreviousItem,
+    previousItem, setPreviousItem, setManualOverrideUntil,
     suggestedConfidence, nextVerse, setNextVerse, recentItems, setRecentItems,
     sidebarWidth, setSidebarWidth, isTranscriptionCollapsed, setIsTranscriptionCollapsed,
     bottomDeckOpen, setBottomDeckOpen, bottomDeckMode, setBottomDeckMode,
@@ -56,7 +56,8 @@ export default function App() {
     activeServiceId, media, setMedia, pauseWhisper, transcript, sessionState, micLevel,
     remoteUrl, remotePin, bibleVersion, topPanelPct, setTopPanelPct, stagePct, setStagePct, 
     studioList, setStudioList, studioSlides, setStudioSlides,
-    setIsBlackout, songs, setPropItems, audioError, setAudioError, deviceError
+    setIsBlackout, songs, setPropItems, audioError, setAudioError, deviceError,
+    startupIssues, setStartupIssues,
   } = useAppStore();
 
   const [outputVisible, setOutputVisible] = React.useState(false);
@@ -190,6 +191,8 @@ export default function App() {
     const staged = stagedItem;
     await invoke("go_live");
     if (current) setPreviousItem(current);
+    // Operator explicitly chose this item — suppress auto-detection for 30 s
+    setManualOverrideUntil(Date.now() + 30_000);
 
     // Auto-trigger lower third if staged song is set to LowerThird style
     if (staged?.type === "Song" && staged.data.style === "LowerThird") {
@@ -279,6 +282,8 @@ export default function App() {
     await stageItem(item);
     await invoke("go_live");
     if (current) setPreviousItem(current);
+    // Operator explicitly chose this item — suppress auto-detection for 30 s
+    setManualOverrideUntil(Date.now() + 30_000);
 
     // Auto-trigger lower third if song is set to LowerThird style
     if (item.type === "Song" && item.data.style === "LowerThird") {
@@ -577,6 +582,30 @@ export default function App() {
             <X size={14} /> Clear
           </button>
           <div className="h-8 w-px bg-slate-800 mx-2" />
+          <button
+            onClick={async () => {
+              if (sessionState === "idle") {
+                setSessionState("loading");
+                await invoke("start_session").catch((e: any) => {
+                  setAudioError(typeof e === "string" ? e : "Failed to start session");
+                  setSessionState("idle");
+                });
+              } else {
+                await invoke("stop_session").catch(() => {});
+              }
+            }}
+            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${
+              sessionState === "running"
+                ? "bg-red-700/60 hover:bg-red-600 text-red-300"
+                : sessionState === "loading"
+                ? "bg-amber-700/40 text-amber-400 cursor-wait"
+                : "bg-green-700/40 hover:bg-green-600 text-green-300"
+            }`}
+            disabled={sessionState === "loading"}
+            title={sessionState === "running" ? "Stop live transcription" : "Start live transcription"}
+          >
+            {sessionState === "running" ? "Stop" : sessionState === "loading" ? "Loading…" : "Start"}
+          </button>
           <div className="flex flex-col items-end gap-0.5">
             <div className="flex items-center gap-2 px-3 py-1 bg-slate-950 rounded-full border border-slate-800">
               <div className="w-24 h-1.5 bg-slate-800 rounded-full overflow-hidden flex">
@@ -604,6 +633,18 @@ export default function App() {
             <span>{audioError || deviceError}</span>
           </div>
           <button onClick={() => setAudioError(null)}><X size={14} /></button>
+        </div>
+      )}
+
+      {/* Startup Issues Banner */}
+      {startupIssues.length > 0 && (
+        <div className="bg-amber-900/90 border-b border-amber-600 px-4 py-2 flex items-start gap-2 text-sm text-amber-200 z-50">
+          <AlertCircle size={14} className="mt-0.5 shrink-0 text-amber-400" />
+          <div className="flex-1">
+            <span className="font-bold text-amber-300">Setup Issues: </span>
+            {startupIssues.join(" | ")}
+          </div>
+          <button onClick={() => setStartupIssues([])} className="text-amber-400 hover:text-white shrink-0"><X size={14} /></button>
         </div>
       )}
 
