@@ -90,15 +90,21 @@ impl TranscriptionEngine {
         // shape is [batch=1, seq_len, hidden_dim]
         let dim = shape[2] as usize;
 
-        // Mean pooling over the sequence dimension
+        // Mean pooling over the sequence dimension, respecting the attention mask
         let mut mean = vec![0.0f32; dim];
+        let mut non_padding_tokens = 0.0f32;
         for s in 0..seq_len {
-            for d in 0..dim {
-                mean[d] += data[s * dim + d];
+            if attention_mask[s] == 1 {
+                non_padding_tokens += 1.0;
+                for d in 0..dim {
+                    mean[d] += data[s * dim + d];
+                }
             }
         }
-        for d in 0..dim {
-            mean[d] /= seq_len as f32;
+        if non_padding_tokens > 0.0 {
+            for d in 0..dim {
+                mean[d] /= non_padding_tokens;
+            }
         }
 
         // L2 Normalization for Cosine Similarity

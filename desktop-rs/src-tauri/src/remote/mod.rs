@@ -126,6 +126,22 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
     // ── 1. Auth handshake (extended to capture client identity) ───────────────
     let pin = state.remote_pin.lock().clone();
     let is_local = peer_addr.ip().is_loopback();
+    let ip = peer_addr.ip();
+
+    // ── Pre-auth Rate Limiting ────────────────────────────────────────────────
+    {
+        let mut throttles = state.auth_throttles.lock();
+        if let Some((count, last_fail)) = throttles.get(&ip) {
+            if *count >= 5 && last_fail.elapsed() < std::time::Duration::from_secs(900) {
+                let _ = socket.send(Message::Text(json!({
+                    "type": "error",
+                    "message": "Too many failed attempts. Try again in 15 minutes."
+                }).to_string())).await;
+                return;
+            }
+        }
+    }
+
     let auth_result: Result<Option<Option<ClientInfo>>, _> = tokio::time::timeout(
         tokio::time::Duration::from_secs(30),
         async {
@@ -135,6 +151,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
                         if v.get("cmd").and_then(|c| c.as_str()) == Some("auth") {
                             let provided = v.get("pin").and_then(|p| p.as_str()).unwrap_or("");
                             if provided != pin.as_str() {
+                                // Tarpit: wait 2s before signaling failure to slow down automated brute force
+                                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                                 return Some(None); // wrong PIN — signal auth fail
                             }
 
@@ -178,10 +196,19 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
 
     let info = match auth_result {
         Ok(Some(Some(info))) => {
+            // Success: clear throttle
+            state.auth_throttles.lock().remove(&ip);
             let _ = socket.send(Message::Text(json!({"type":"auth_ok"}).to_string())).await;
             info
         }
         Ok(Some(None)) => {
+            // Failure: update throttle
+            {
+                let mut throttles = state.auth_throttles.lock();
+                let entry = throttles.entry(ip).or_insert((0, std::time::Instant::now()));
+                entry.0 += 1;
+                entry.1 = std::time::Instant::now();
+            }
             let _ = socket.send(Message::Text(json!({"type":"auth_fail"}).to_string())).await;
             return;
         }

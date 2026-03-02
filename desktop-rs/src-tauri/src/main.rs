@@ -123,6 +123,8 @@ pub struct AppState {
     /// Handle to the active cloud WebSocket stream (Deepgram / AssemblyAI).
     /// None when local Whisper or REST cloud mode is active.
     pub cloud_stream_handle: Arc<Mutex<Option<engine::cloud_stream::CloudStreamHandle>>>,
+    /// IP-based auth throttling to prevent PIN brute-force.
+    pub auth_throttles: Arc<Mutex<HashMap<std::net::IpAddr, (u8, std::time::Instant)>>>,
 }
 
 impl Clone for AppState {
@@ -154,6 +156,7 @@ impl Clone for AppState {
             session_transcript: self.session_transcript.clone(),
             context_buffer: self.context_buffer.clone(),
             cloud_stream_handle: self.cloud_stream_handle.clone(),
+            auth_throttles: self.auth_throttles.clone(),
         }
     }
 }
@@ -196,9 +199,15 @@ fn is_hallucination(text: &str) -> bool {
     let words: Vec<&str> = lower.split_whitespace().collect();
     let total_words = words.len();
     if total_words >= 6 {
+        // Whitelist common religious repetitions that are NOT hallucinations
+        const RELIGIOUS_WHITELIST: &[&str] = &["amen", "hallelujah", "holy", "jesus", "lord"];
+        
         let mut word_counts = std::collections::HashMap::new();
         for word in &words {
-            *word_counts.entry(*word).or_insert(0) += 1;
+            let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
+            if !RELIGIOUS_WHITELIST.contains(&clean) {
+                *word_counts.entry(clean).or_insert(0) += 1;
+            }
         }
         for count in word_counts.values() {
             if *count > total_words / 2 {
@@ -218,7 +227,11 @@ fn is_hallucination(text: &str) -> bool {
                     }
                 }
                 if all_match {
-                    return true;
+                    // Only filter if not a whitelisted word
+                    let first_word = seq[0].trim_matches(|c: char| !c.is_alphanumeric());
+                    if !RELIGIOUS_WHITELIST.contains(&first_word) {
+                        return true;
+                    }
                 }
             }
         }
@@ -2138,6 +2151,7 @@ fn main() {
                 session_transcript: Arc::new(Mutex::new(Vec::new())),
                 context_buffer: Arc::new(Mutex::new(Vec::new())),
                 cloud_stream_handle: Arc::new(Mutex::new(None)),
+                auth_throttles: Arc::new(Mutex::new(HashMap::new())),
             };
 
             // Store app_handle so remote module can emit events to Tauri windows

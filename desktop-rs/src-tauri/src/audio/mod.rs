@@ -1,6 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use ringbuf::{HeapRb, Rb, SharedRb};
-use ringbuf::traits::{Consumer, Producer};
+use ringbuf::HeapRb;
+use ringbuf::traits::Producer;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
@@ -17,6 +17,11 @@ use webrtc_vad::{Vad, VadMode};
 struct StreamHandle(cpal::Stream);
 unsafe impl Send for StreamHandle {}
 unsafe impl Sync for StreamHandle {}
+
+/// Wrapper to make Vad Send. 
+/// SAFETY: Vad is only accessed from within the audio callback thread.
+struct SendVad(Vad);
+unsafe impl Send for SendVad {}
 
 pub type AudioRb = HeapRb<f32>;
 
@@ -168,7 +173,7 @@ impl AudioEngine {
         vad_threshold: f32,
         aec_flag: Arc<AtomicBool>,
         tx: mpsc::Sender<()>,
-        mut prod: impl Producer<Item = f32> + Send + 'static,
+        prod: impl Producer<Item = f32> + Send + 'static,
         error_tx: mpsc::Sender<String>,
         level_tx: Option<mpsc::Sender<f32>>,
     ) -> anyhow::Result<cpal::Stream>
@@ -193,14 +198,18 @@ impl AudioEngine {
         let error_tx_inner = error_tx.clone();
 
         // Advanced AI-Driven VAD
-        let mut vad = Vad::new();
-        vad.set_mode(VadMode::Aggressive);
+        let mut vad_raw = Vad::new();
+        vad_raw.set_mode(VadMode::Aggressive);
+        let mut vad = SendVad(vad_raw);
 
         // Auto-Gain Control State
         let target_rms = 0.05f32; // ~ -26 dBFS target average
         let mut current_gain = 1.0f32;
         let attack = 0.01f32;
         let release = 0.001f32;
+
+        // Residue buffer for VAD to prevent sample loss
+        let mut residue_i16: Vec<i16> = Vec::with_capacity(160);
 
         device
             .build_input_stream(
@@ -255,23 +264,24 @@ impl AudioEngine {
                             }
 
                             // 3. WebRTC VAD + Fallback Energy Threshold
-                            let i16_samples: Vec<i16> = mono
-                                .iter()
-                                .map(|&s| (s * std::i16::MAX as f32).clamp(-32768.0, 32767.0) as i16)
-                                .collect();
+                            let mut i16_samples: Vec<i16> = residue_i16.clone();
+                            i16_samples.extend(mono.iter().map(|&s| (s * std::i16::MAX as f32).clamp(-32768.0, 32767.0) as i16));
 
                             let mut is_speech = false;
                             // WebRTC VAD needs 10ms (160 samples at 16kHz)
-                            for chunk in i16_samples.chunks(160) {
-                                if chunk.len() == 160 {
-                                    if let Ok(active) = vad.is_voice_segment(chunk) {
-                                        if active {
-                                            is_speech = true;
-                                            break;
-                                        }
+                            let mut processed_idx = 0;
+                            for chunk in i16_samples.chunks_exact(160) {
+                                if let Ok(active) = vad.0.is_voice_segment(chunk) {
+                                    if active {
+                                        is_speech = true;
+                                        // We don't break here because we need to process all chunks to update residue properly
                                     }
                                 }
+                                processed_idx += 160;
                             }
+                            
+                            // Store the remainder in residue_i16
+                            residue_i16 = i16_samples[processed_idx..].to_vec();
 
                             // Pass chunks if AI VAD detects speech OR fallback energy check matches
                             if is_speech || energy > vad_threshold {

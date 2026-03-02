@@ -739,23 +739,38 @@ impl MediaScheduleStore {
             .to_string_lossy()
             .to_string();
 
-        let ext = source_path
+        let ext_str = source_path
             .extension()
             .unwrap_or_default()
             .to_string_lossy()
             .to_lowercase();
 
-        let media_type = classify_extension(ext.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Unsupported media type: .{}", ext))?;
+        let media_type = classify_extension(ext_str.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Unsupported media type: .{}", ext_str))?;
 
-        let dest_path = self.unique_dest_path(&original_name);
-        let dest_name = dest_path
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
+        let stem = source_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        let dot_ext = source_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
 
-        fs::copy(&source_path, &dest_path)?;
+        let mut dest_path = self.media_dir.join(&original_name);
+        let mut dest_name = original_name.clone();
+        let mut counter = 2u32;
+
+        // Atomically "reserve" the destination path using create_new(true)
+        let mut dest_file = loop {
+            match fs::OpenOptions::new().write(true).create_new(true).open(&dest_path) {
+                Ok(f) => break f,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    dest_name = format!("{}_{}{}", stem, counter, dot_ext);
+                    dest_path = self.media_dir.join(&dest_name);
+                    counter += 1;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        };
+
+        // Copy source content into the reserved destination file
+        let mut source_file = fs::File::open(&source_path)?;
+        std::io::copy(&mut source_file, &mut dest_file)?;
 
         let id = self.get_or_create_id(&dest_path);
         {
@@ -771,31 +786,6 @@ impl MediaScheduleStore {
             thumbnail_path: None,
             fit_mode: default_media_fit_mode(),
         })
-    }
-
-    /// Returns a path in `media_dir` that does not yet exist.
-    fn unique_dest_path(&self, name: &str) -> PathBuf {
-        let base = self.media_dir.join(name);
-        if !base.exists() {
-            return base;
-        }
-        let stem = base
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        let ext = base
-            .extension()
-            .map(|e| format!(".{}", e.to_string_lossy()))
-            .unwrap_or_default();
-        let mut counter = 2u32;
-        loop {
-            let candidate = self.media_dir.join(format!("{}_{}{}", stem, counter, ext));
-            if !candidate.exists() {
-                return candidate;
-            }
-            counter += 1;
-        }
     }
 
     pub fn delete_media(&self, id: String) -> Result<()> {
