@@ -240,7 +240,7 @@ export function OutputWindow() {
     });
 
     const unlistenMedia = listen("media-control", (event: any) => {
-      const { action } = event.payload as { action: string };
+      const { action, volume } = event.payload as { action: string; volume?: number };
       console.log("OutputWindow: received media-control", action);
 
       if (action === "video-play-pause") {
@@ -256,6 +256,10 @@ export function OutputWindow() {
       } else if (action === "video-mute-toggle") {
         if (videoRef.current) {
           videoRef.current.muted = !videoRef.current.muted;
+        }
+      } else if (action === "video-volume") {
+        if (videoRef.current && volume !== undefined) {
+          videoRef.current.volume = volume;
         }
       } else if (action === "camera-mute-toggle") {
         setCameraMuted((m) => !m);

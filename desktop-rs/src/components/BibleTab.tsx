@@ -426,9 +426,22 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
               {!isSearching && searchResults.length === 0 && searchQuery && !searchError && (
                 <p className="text-slate-600 text-xs italic text-center pt-4">No results found</p>
               )}
-              {searchResults.map((v) => (
+              {searchResults.map((v: any) => (
                 <div key={`${v.version}-${v.book}-${v.chapter}-${v.verse}`} className="p-3 rounded-lg bg-slate-800/50 border border-transparent hover:border-slate-700 transition-all group">
-                  <p className="text-amber-500 text-xs font-bold mb-1 uppercase">{v.book} {v.chapter}:{v.verse} <span className="text-slate-500 font-normal normal-case">{v.version}</span></p>
+                  <div className="flex justify-between items-start mb-1">
+                    <p className="text-amber-500 text-xs font-bold uppercase">{v.book} {v.chapter}:{v.verse} <span className="text-slate-500 font-normal normal-case">{v.version}</span></p>
+                    {v.score !== undefined && (
+                      <div className="flex items-center gap-1">
+                        <div className="w-12 h-1 bg-slate-700 rounded-full overflow-hidden">
+                          <div 
+                            className={`h-full transition-all ${v.score > 0.8 ? "bg-emerald-500" : v.score > 0.6 ? "bg-amber-500" : "bg-red-500"}`}
+                            style={{ width: `${v.score * 100}%` }}
+                          />
+                        </div>
+                        <span className="text-[8px] font-mono text-slate-500">{Math.round(v.score * 100)}%</span>
+                      </div>
+                    )}
+                  </div>
                   <p className="text-slate-300 text-xs mb-2 line-clamp-2">{v.text}</p>
                   <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-all">
                     <button onClick={() => onStage({ type: "Verse", data: v })} className="flex-1 bg-slate-600 hover:bg-slate-500 text-white text-[10px] font-bold py-1 rounded transition-all">STAGE</button>

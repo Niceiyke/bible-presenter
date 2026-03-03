@@ -140,6 +140,8 @@ export interface LowerThirdTemplate {
   textOutline: boolean; textOutlineColor: string; textOutlineWidth: number;
   boxShadow: boolean; boxShadowColor: string; boxShadowBlur: number;
   animation: "fade" | "slide-up" | "slide-left" | "none";
+  entryAnimation?: "fade" | "slide-up" | "slide-left" | "slide-right" | "blur-in" | "typewriter" | "none";
+  exitAnimation?: "fade" | "slide-up" | "slide-left" | "slide-right" | "blur-out" | "none";
   animationDuration: number;
   exitDuration: number;
   variant: "classic" | "modern" | "banner";
@@ -321,6 +323,9 @@ export interface PresentationSettings {
   remote_port: number;
   ndi_enabled: boolean;
   preferred_monitor?: string;
+  custom_theme_colors?: Partial<ThemeColors>;
+  highlight_divine_words?: boolean;
+  highlight_color?: string;
 }
 
 export interface MonitorInfo {

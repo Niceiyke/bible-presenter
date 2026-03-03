@@ -1,6 +1,7 @@
 import React from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Settings, Edit2, Trash2, Repeat, Zap } from "lucide-react";
+import { Settings, Edit2, Trash2, Repeat, Zap, GripVertical, Undo2, Redo2 } from "lucide-react";
+import { Reorder } from "framer-motion";
 import { useAppStore } from "../store";
 import { stableId } from "../utils";
 import type { DisplayItem, MediaItem, Schedule } from "../types";
@@ -8,11 +9,14 @@ import type { DisplayItem, MediaItem, Schedule } from "../types";
 interface ScheduleTabProps {
   onSendItem: (item: DisplayItem, idx: number) => void;
   onPersist: () => void;
+  stageItem: (item: DisplayItem) => void;
 }
 
-export function ScheduleTab({ onSendItem, onPersist }: ScheduleTabProps) {
+export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabProps) {
   const {
     scheduleEntries, setScheduleEntries,
+    pushScheduleState, undoSchedule, redoSchedule,
+    pastScheduleStates, futureScheduleStates,
     activeScheduleIdx, setActiveScheduleIdx,
     services, setServices,
     activeServiceId, setActiveServiceId,
@@ -25,7 +29,7 @@ export function ScheduleTab({ onSendItem, onPersist }: ScheduleTabProps) {
     onSendItem(item, idx);
     if (!isSchedulePersistent) {
       const next = scheduleEntries.filter((e) => e.id !== entryId);
-      setScheduleEntries(next);
+      pushScheduleState(next);
       setActiveScheduleIdx(null);
       onPersist();
     } else {
@@ -49,7 +53,18 @@ export function ScheduleTab({ onSendItem, onPersist }: ScheduleTabProps) {
 
   const removeFromSchedule = async (id: string) => {
     const next = scheduleEntries.filter((e) => e.id !== id);
+    pushScheduleState(next);
+    onPersist();
+  };
+
+  const handleReorder = (next: typeof scheduleEntries) => {
     setScheduleEntries(next);
+    // Don't push state on every drag step, maybe on drag end? 
+    // For now, simple push works but might be noisy.
+  };
+
+  const handleReorderEnd = () => {
+    pushScheduleState(scheduleEntries);
     onPersist();
   };
 
@@ -169,6 +184,25 @@ export function ScheduleTab({ onSendItem, onPersist }: ScheduleTabProps) {
             {isSchedulePersistent ? <Repeat size={9} /> : <Zap size={9} />}
             {isSchedulePersistent ? "LOOP" : "ONCE"}
           </button>
+          
+          <div className="h-3 w-px bg-slate-800 mx-1" />
+          
+          <button
+            onClick={undoSchedule}
+            disabled={pastScheduleStates.length === 0}
+            className="p-1 text-slate-500 hover:text-slate-300 disabled:opacity-30"
+            title="Undo"
+          >
+            <Undo2 size={12} />
+          </button>
+          <button
+            onClick={redoSchedule}
+            disabled={futureScheduleStates.length === 0}
+            className="p-1 text-slate-500 hover:text-slate-300 disabled:opacity-30"
+            title="Redo"
+          >
+            <Redo2 size={12} />
+          </button>
         </div>
         {scheduleEntries.length > 0 && (
           <div className="flex gap-1">
@@ -193,22 +227,27 @@ export function ScheduleTab({ onSendItem, onPersist }: ScheduleTabProps) {
       {scheduleEntries.length === 0 ? (
         <p className="text-slate-700 text-xs italic text-center pt-8">Schedule is empty. Add verses or media with + QUEUE.</p>
       ) : (
-        <div className="flex flex-col gap-1.5">
+        <Reorder.Group axis="y" values={scheduleEntries} onReorder={handleReorder} className="flex flex-col gap-1.5">
           {scheduleEntries.map((entry, idx) => {
             const isActive = activeScheduleIdx === idx;
             return (
-              <div
+              <Reorder.Item
                 key={entry.id}
-                className={`flex items-center gap-2 p-2.5 rounded-lg border transition-all group ${
+                value={entry}
+                onDragEnd={handleReorderEnd}
+                className={`flex items-center gap-2 p-2.5 rounded-lg border transition-all group cursor-default select-none ${
                   isActive
                     ? "bg-amber-500/10 border-amber-500/40"
                     : "bg-slate-800/40 border-slate-700/40 hover:bg-slate-800 hover:border-slate-700"
                 }`}
               >
+                <div className="cursor-grab active:cursor-grabbing p-1 -ml-1 text-slate-600 hover:text-slate-400 transition-colors">
+                  <GripVertical size={14} />
+                </div>
                 <div className={`w-5 h-5 flex items-center justify-center rounded text-[9px] font-black shrink-0 ${isActive ? "bg-amber-500 text-black" : "bg-slate-700 text-slate-400"}`}>
                   {idx + 1}
                 </div>
-                <div className="flex-1 min-w-0">
+                <div className="flex-1 min-w-0" onClick={() => stageItem(entry.item)}>
                   {entry.item.type === "Verse" ? (
                     <>
                       <p className="text-amber-500 text-[10px] font-bold uppercase truncate">{entry.item.data.book} {entry.item.data.chapter}:{entry.item.data.verse}</p>
@@ -234,10 +273,10 @@ export function ScheduleTab({ onSendItem, onPersist }: ScheduleTabProps) {
                   <button onClick={() => sendAndMaybeRemove(entry.item, idx, entry.id)} className="p-1 bg-amber-500 hover:bg-amber-400 text-black rounded text-[10px] font-bold">▶</button>
                   <button onClick={() => removeFromSchedule(entry.id)} className="p-1 bg-red-900/50 text-red-400 rounded hover:bg-red-900 hover:text-white">✕</button>
                 </div>
-              </div>
+              </Reorder.Item>
             );
           })}
-        </div>
+        </Reorder.Group>
       )}
     </div>
   );

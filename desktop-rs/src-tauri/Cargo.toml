@@ -1,6 +1,6 @@
 [package]
 name = "bible-presenter-rs"
-version = "1.1.0"
+version = "1.2.0"
 description = "A professional, real-time Bible projection tool for churches."
 authors = ["Bible Presenter Team"]
 edition = "2021"
@@ -53,3 +53,10 @@ crate-type = ["rlib"]
 [[bin]]
 name = "bible-presenter"
 path = "src/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+opt-level = "s" # Optimize for size
+strip = true    # Automatically strip symbols from the binary

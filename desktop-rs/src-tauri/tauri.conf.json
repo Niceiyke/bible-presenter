@@ -1,6 +1,6 @@
 {
   "productName": "Bible Presenter RS",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "identifier": "com.biblepresenter.rs",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -54,7 +54,7 @@
       "csp": "default-src 'self'; connect-src 'self' asset: http://asset.localhost https://asset.localhost; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost https://asset.localhost data:; media-src 'self' asset: http://asset.localhost https://asset.localhost;",
       "assetProtocol": {
         "enable": true,
-        "scope": ["**"]
+        "scope": ["$APPDATA/**", "$RESOURCE/**", "C:/Users/**", "D:/**", "E:/**"]
       }
     }
   },
@@ -81,6 +81,7 @@
         "languages": [
           "English"
         ],
+        "compression": "lzma",
         "installMode": "currentUser"
       },
       "wix": {

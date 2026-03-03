@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Plus, Trash2, Save, X, ChevronLeft, ChevronRight, Type, Image as ImageIcon, Copy, Square, Undo2, Redo2, AlignCenter, AlignJustify, AlignLeft, AlignRight, ArrowUp, ArrowDown, MoveUp, MoveDown, BookOpen, Lock, Unlock } from "lucide-react";
 import { CustomSlideRenderer } from "../shared/Renderers";
+import { TiptapEditor } from "./TiptapEditor";
 import { MediaPickerModal } from "../MediaPickerModal";
 import { BiblePickerModal } from "../BiblePickerModal";
 import { newDefaultSlide, newTitleSlide, newBlankSlide, stableId, relativizePath } from "../../utils";
@@ -693,12 +694,13 @@ export function SlideEditor({ initialPres, mediaImages, onClose }: SlideEditorPr
                 {/* Text Content */}
                 {activeElement.kind === "text" && (
                   <div className="flex flex-col gap-3 pt-3 border-t border-slate-800">
-                    <textarea
-                      value={activeElement.content}
-                      onChange={e => updateElement(activeElement.id, { content: e.target.value })}
-                      rows={4}
-                      className="bg-slate-950 border border-slate-700 rounded p-2 text-sm text-white resize-none"
-                      placeholder="Enter text..."
+                    <TiptapEditor
+                      content={activeElement.content}
+                      onChange={html => updateElement(activeElement.id, { content: html })}
+                      fontFamily={activeElement.font_family}
+                      fontSize={activeElement.font_size}
+                      color={activeElement.color}
+                      textAlign={activeElement.align}
                     />
                     
                     <div className="flex flex-col gap-2">

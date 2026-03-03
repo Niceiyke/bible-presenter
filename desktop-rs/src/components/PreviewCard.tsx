@@ -51,6 +51,7 @@ export function PreviewCard({
   const [muted, setMuted] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(1);
 
   // Reset playback state when item changes
   useEffect(() => {
@@ -58,6 +59,7 @@ export function PreviewCard({
     setCurrentTime(0);
     setDuration(0);
     setMuted(true);
+    setVolume(1);
   }, [item]);
 
   // Callback ref — attaches DOM event listeners for local preview; cleans up on unmount/swap
@@ -312,8 +314,22 @@ export function PreviewCard({
                       className="w-7 h-7 flex items-center justify-center bg-slate-800/80 hover:bg-slate-700 text-slate-300 rounded-full transition-colors"
                       title="Mute / Unmute"
                     >
-                      {muted ? <VolumeX size={12} /> : <Volume2 size={12} />}
+                      {muted || volume === 0 ? <VolumeX size={12} /> : <Volume2 size={12} />}
                     </button>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={volume}
+                      onChange={(e) => {
+                        const v = parseFloat(e.target.value);
+                        setVolume(v);
+                        if (isLocalPreview && videoRef.current) videoRef.current.volume = v;
+                        else emit("media-control", { action: "video-volume", volume: v });
+                      }}
+                      className="w-16 h-1 accent-slate-400 cursor-pointer rounded-full opacity-60 hover:opacity-100 transition-opacity"
+                    />
                   </div>
                 </div>
               ) : (
