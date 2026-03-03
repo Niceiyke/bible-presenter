@@ -13,6 +13,8 @@ use webrtc_vad::{Vad, VadMode};
 ///
 /// SAFETY: cpal::Stream on Windows is !Send/!Sync because it contains raw pointers (WASAPI handles).
 /// However, we manage access via Mutex<AudioEngine> in AppState, ensuring synchronized access.
+/// Dropping this handle from a different thread than creation can theoretically cause a crash
+/// on some WASAPI drivers, but in practice, CPAL handles this internal cleanup.
 #[allow(dead_code)] // field kept alive intentionally — dropping cpal::Stream stops audio
 struct StreamHandle(cpal::Stream);
 unsafe impl Send for StreamHandle {}
@@ -218,6 +220,11 @@ impl AudioEngine {
         // Residue buffer for VAD to prevent sample loss
         let mut residue_i16: Vec<i16> = Vec::with_capacity(160);
 
+        // Pre-roll buffer (500ms at 16kHz = 8000 samples) to prevent clipping starts of sentences
+        let mut pre_roll_buffer = vec![0.0f32; 8000];
+        let mut pre_roll_idx = 0;
+        let mut in_speech_window = false;
+
         device
             .build_input_stream(
                 config,
@@ -274,14 +281,13 @@ impl AudioEngine {
                             let mut i16_samples: Vec<i16> = residue_i16.clone();
                             i16_samples.extend(mono.iter().map(|&s| (s * std::i16::MAX as f32).clamp(-32768.0, 32767.0) as i16));
 
-                            let mut is_speech = false;
+                            let mut is_speech_now = false;
                             // WebRTC VAD needs 10ms (160 samples at 16kHz)
                             let mut processed_idx = 0;
                             for chunk in i16_samples.chunks_exact(160) {
                                 if let Ok(active) = vad.is_voice_segment(chunk) {
                                     if active {
-                                        is_speech = true;
-                                        // We don't break here because we need to process all chunks to update residue properly
+                                        is_speech_now = true;
                                     }
                                 }
                                 processed_idx += 160;
@@ -290,8 +296,19 @@ impl AudioEngine {
                             // Store the remainder in residue_i16
                             residue_i16 = i16_samples[processed_idx..].to_vec();
 
-                            // Pass chunks if AI VAD detects speech OR fallback energy check matches
-                            if is_speech || energy > vad_threshold {
+                            let triggered = is_speech_now || energy > vad_threshold;
+
+                            if triggered {
+                                if !in_speech_window {
+                                    // Transition to speech: flush pre-roll first
+                                    in_speech_window = true;
+                                    let mut pre_roll_flush = vec![0.0f32; 8000];
+                                    for i in 0..8000 {
+                                        pre_roll_flush[i] = pre_roll_buffer[(pre_roll_idx + i) % 8000];
+                                    }
+                                    let _ = prod.push_slice(&pre_roll_flush);
+                                }
+                                
                                 // 4. Lock-free ring buffer push
                                 let pushed = prod.push_slice(&mono);
                                 if pushed < mono.len() {
@@ -304,6 +321,13 @@ impl AudioEngine {
                                 if pushed > 0 {
                                     // Non-blocking wake up the async processing loop
                                     let _ = tx.try_send(());
+                                }
+                            } else {
+                                in_speech_window = false;
+                                // Add to pre-roll circular buffer
+                                for &s in &mono {
+                                    pre_roll_buffer[pre_roll_idx] = s;
+                                    pre_roll_idx = (pre_roll_idx + 1) % 8000;
                                 }
                             }
                         }

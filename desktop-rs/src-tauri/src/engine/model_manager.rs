@@ -153,7 +153,10 @@ impl TranscriptionConfig {
     pub fn save(&self, app_data: &Path) {
         let path = app_data.join("transcription_config.json");
         if let Ok(json) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(path, json);
+            let tmp_path = path.with_extension("tmp");
+            if std::fs::write(&tmp_path, json).is_ok() {
+                let _ = std::fs::rename(tmp_path, path);
+            }
         }
     }
 }

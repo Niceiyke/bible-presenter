@@ -53,6 +53,7 @@ use crate::AppState;
 
 const REMOTE_HTML: &str = include_str!("remote.html");
 const CAMERA_HTML: &str = include_str!("camera.html");
+const OUTPUT_HTML: &str = include_str!("output.html");
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
@@ -61,6 +62,7 @@ pub async fn start(state: Arc<AppState>, port: u16) {
         .route("/health", get(health_handler))
         .route("/",      get(serve_remote_html))
         .route("/camera", get(serve_camera_html))
+        .route("/output", get(serve_output_html))
         .route("/ws",    get(ws_handler))
         .layer(CorsLayer::permissive())
         .with_state(state);
@@ -99,6 +101,10 @@ async fn serve_camera_html() -> impl IntoResponse {
     Html(CAMERA_HTML)
 }
 
+async fn serve_output_html() -> impl IntoResponse {
+    Html(OUTPUT_HTML)
+}
+
 // ─── WebSocket upgrade ────────────────────────────────────────────────────────
 
 async fn ws_handler(
@@ -132,7 +138,10 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
     let is_throttled = {
         let throttles = state.auth_throttles.lock();
         if let Some((count, last_fail)) = throttles.get(&ip) {
-            *count >= 5 && last_fail.elapsed() < std::time::Duration::from_secs(900)
+            // Strict lockout: 10 failed attempts = 24 hour block.
+            // Minor throttling: 5 failed attempts = 15 minute block.
+            (*count >= 10 && last_fail.elapsed() < std::time::Duration::from_secs(86400)) ||
+            (*count >= 5  && last_fail.elapsed() < std::time::Duration::from_secs(900))
         } else {
             false
         }
@@ -141,7 +150,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
     if is_throttled {
         let _ = socket.send(Message::Text(json!({
             "type": "error",
-            "message": "Too many failed attempts. Try again in 15 minutes."
+            "message": "Too many failed attempts. Security lockout active."
         }).to_string())).await;
         return;
     }
