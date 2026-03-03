@@ -230,6 +230,9 @@ export function useAppInitialization() {
       const { id, slides } = ev.payload;
       setStudioSlides({ ...useAppStore.getState().studioSlides, [id]: slides });
     });
+    const unlistenLog = listen<any>("system-log", (ev) => {
+      useAppStore.getState().addLog(ev.payload);
+    });
 
     const decayInterval = setInterval(() => setMicLevel((prev) => (prev > 0.01 ? prev * 0.85 : 0)), 50);
 
@@ -245,6 +248,7 @@ export function useAppInitialization() {
       unlistenSongsSync.then(f => f());
       unlistenStudioSync.then(f => f());
       unlistenStudioSlidesSync.then(f => f());
+      unlistenLog.then(f => f());
       clearInterval(decayInterval);
     };
   }, []);

@@ -30,6 +30,8 @@ import { PreviewCard } from "./components/PreviewCard";
 import { Toast } from "./components/Toast";
 import { ShortcutsModal } from "./components/ShortcutsModal";
 import { SlideEditor } from "./components/editors/SlideEditor";
+import { LogViewer } from "./components/LogViewer";
+import { MusicPlayer } from "./components/MusicPlayer";
 import { OutputWindow, StageWindow, DesignHub } from "./windows";
 import { stableId, newDefaultSlide } from "./utils";
 import { useLanCamera } from "./hooks/useLanCamera";
@@ -57,7 +59,7 @@ export default function App() {
     remoteUrl, remotePin, bibleVersion, topPanelPct, setTopPanelPct, stagePct, setStagePct, 
     studioList, setStudioList, studioSlides, setStudioSlides,
     setIsBlackout, songs, setPropItems, audioError, setAudioError, deviceError,
-    startupIssues, setStartupIssues,
+    startupIssues, setStartupIssues, isLogOpen, setIsLogOpen
   } = useAppStore();
 
   const [outputVisible, setOutputVisible] = React.useState(false);
@@ -71,6 +73,40 @@ export default function App() {
 
   // Initialization & Listeners
   useAppInitialization();
+
+  // Recovery Save effect
+  useEffect(() => {
+    if (activeServiceId && scheduleEntries.length > 0) {
+      const timer = setTimeout(() => {
+        invoke("save_recovery", { 
+          data: { 
+            activeServiceId, 
+            scheduleEntries, 
+            lastUpdate: Date.now() 
+          } 
+        }).catch(console.error);
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [scheduleEntries, activeServiceId]);
+
+  // Recovery Check on Mount
+  useEffect(() => {
+    const checkRecovery = async () => {
+      const data = await invoke<any>("load_recovery").catch(() => null);
+      if (data && data.scheduleEntries?.length > 0) {
+        const timeStr = new Date(data.lastUpdate).toLocaleTimeString();
+        if (window.confirm(`An unsaved session from ${timeStr} was found. Would you like to restore it?`)) {
+          setScheduleEntries(data.scheduleEntries);
+          setActiveServiceId(data.activeServiceId);
+          setToast("Session restored successfully");
+        }
+        await invoke("clear_recovery").catch(() => {});
+      }
+    };
+    // Wait a bit for initialization to settle
+    setTimeout(checkRecovery, 1500);
+  }, []);
 
   // Bible selection logic (cascade loading)
   useBibleCascade();
@@ -626,6 +662,7 @@ export default function App() {
             title="Toggle Output Window (Ctrl+O)"
           ><Monitor size={18} /></button>
           <button onClick={() => invoke("toggle_design_window")} className="p-2 text-slate-400 hover:text-purple-400 hover:bg-purple-500/10 rounded-lg transition-all" title="Design Hub"><Layout size={18} /></button>
+          <button onClick={() => setIsLogOpen(!isLogOpen)} className={`p-2 rounded-lg transition-all ${isLogOpen ? "bg-slate-800 text-amber-500" : "text-slate-400 hover:text-white hover:bg-slate-800"}`} title="System Logs"><Repeat size={18} className="rotate-90" /></button>
           <button onClick={() => setShowShortcuts(true)} className={`p-2 rounded-lg transition-all ${showShortcuts ? "bg-slate-800 text-amber-500" : "text-slate-400 hover:text-white hover:bg-slate-800"}`} title="Keyboard Shortcuts (?)"><Keyboard size={18} /></button>
           <button onClick={() => setActiveTab("settings")} className={`p-2 rounded-lg transition-all ${activeTab === "settings" ? "bg-slate-800 text-amber-500" : "text-slate-400 hover:text-white hover:bg-slate-800"}`}><Settings size={18} /></button>
         </div>
@@ -717,7 +754,7 @@ export default function App() {
               onAddToSchedule={addToSchedule}
               onOpenLyricsMode={(id) => { setActiveTab("lower-third"); useAppStore.getState().setLtSongId(id); useAppStore.getState().setLtMode("lyrics"); }} 
             />}
-            {activeTab === "schedule" && <ScheduleTab onSendItem={sendLive} onPersist={persistSchedule} />}
+            {activeTab === "schedule" && <ScheduleTab onSendItem={sendLive} onPersist={persistSchedule} stageItem={stageItem} />}
             {activeTab === "settings" && <SettingsTab onUpdateSettings={updateSettings} onUpdateTranscriptionWindow={updateTranscriptionWindow} onUpdateVadThreshold={updateVadThreshold} onUploadMedia={handleFileUpload} />}
             {activeTab === "lower-third" && <LowerThirdTab onSetToast={setToast} onLoadMedia={handleFileUpload} />}
             {activeTab === "props" && <PropsTab onUpdateProps={updateProps} />}
@@ -977,6 +1014,8 @@ export default function App() {
       )}
 
       <ShortcutsModal isOpen={showShortcuts} onClose={() => setShowShortcuts(false)} />
+      <MusicPlayer />
+      <LogViewer />
     </div>
   );
 }

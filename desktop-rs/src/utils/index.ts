@@ -225,6 +225,10 @@ export function computeOutputBackground(
   settings: PresentationSettings,
   colors: ThemeColors
 ): React.CSSProperties {
+  const effectiveColors = settings.custom_theme_colors 
+    ? { ...colors, ...settings.custom_theme_colors } 
+    : colors;
+
   if (settings.background.type === "Color") {
     return { backgroundColor: settings.background.value };
   }
@@ -243,10 +247,12 @@ export function computeOutputBackground(
   if (settings.background.type === "Video") {
     return {};
   }
-  return { backgroundColor: colors.background };
+  return { backgroundColor: effectiveColors.background };
 }
 
 export function computePreviewBackground(settings: PresentationSettings, themeColor: string): React.CSSProperties {
+  const color = settings.custom_theme_colors?.background || themeColor;
+
   if (settings.background.type === "Color") {
     return { backgroundColor: settings.background.value };
   }
@@ -261,7 +267,7 @@ export function computePreviewBackground(settings: PresentationSettings, themeCo
       };
     }
   }
-  return { backgroundColor: themeColor };
+  return { backgroundColor: color };
 }
 
 export function getCameraBackgroundDeviceId(

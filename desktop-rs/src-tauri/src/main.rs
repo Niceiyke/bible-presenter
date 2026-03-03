@@ -169,17 +169,53 @@ impl Clone for AppState {
 // Logging helper
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Serialize)]
+struct SystemLog {
+    level: String,
+    message: String,
+    timestamp: u64,
+}
+
 fn log_msg(app: &tauri::App, message: &str) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let log = SystemLog {
+        level: "info".to_string(),
+        message: message.to_string(),
+        timestamp,
+    };
+
+    let _ = app.emit("system-log", &log);
+
     if let Ok(path) = app.path().app_log_dir() {
         if !path.exists() {
             let _ = std::fs::create_dir_all(&path);
         }
         let log_file = path.join("app.log");
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_file) {
-            let _ = writeln!(file, "{}", message);
+            let _ = writeln!(file, "[{}] {}", timestamp, message);
         }
     }
     println!("{}", message);
+}
+
+fn log_msg_handle(handle: &tauri::AppHandle, message: &str, level: &str) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let log = SystemLog {
+        level: level.to_string(),
+        message: message.to_string(),
+        timestamp,
+    };
+
+    let _ = handle.emit("system-log", &log);
+    println!("[{}] {}: {}", timestamp, level.to_uppercase(), message);
 }
 
 // ---------------------------------------------------------------------------
@@ -1114,6 +1150,35 @@ async fn stage_item(
 }
 
 #[tauri::command]
+async fn save_recovery(state: State<'_, AppState>, data: serde_json::Value) -> Result<(), String> {
+    let path = state.app_data_dir.join("recovery.json");
+    if let Ok(json) = serde_json::to_string_pretty(&data) {
+        let _ = atomic_write(&path, json);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn load_recovery(state: State<'_, AppState>) -> Result<Option<serde_json::Value>, String> {
+    let path = state.app_data_dir.join("recovery.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let json = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let data: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    Ok(Some(data))
+}
+
+#[tauri::command]
+async fn clear_recovery(state: State<'_, AppState>) -> Result<(), String> {
+    let path = state.app_data_dir.join("recovery.json");
+    if path.exists() {
+        let _ = fs::remove_file(path);
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn go_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let staged = state.staged_item.lock().clone();
     if let Some(item) = staged {
@@ -1299,6 +1364,11 @@ async fn update_media_metadata(
     category: Option<String>,
 ) -> Result<(), String> {
     state.media_schedule.update_media_metadata(&id, description, tags, category).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn check_media_existence(path: String) -> Result<bool, String> {
+    Ok(std::path::Path::new(&path).exists())
 }
 
 #[tauri::command]
@@ -2301,6 +2371,7 @@ fn main() {
             update_media_metadata,
             bulk_delete_media,
             bulk_update_media,
+            check_media_existence,
             save_schedule,
             load_schedule,
             stage_item,
@@ -2356,7 +2427,10 @@ fn main() {
             set_confidence_threshold,
             get_startup_status,
             get_remote_client_count,
-            list_transcripts
+            list_transcripts,
+            save_recovery,
+            load_recovery,
+            clear_recovery
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

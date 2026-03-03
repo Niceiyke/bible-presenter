@@ -10,6 +10,7 @@ import { createTimerSlice, TimerSlice } from "./slices/timerSlice";
 import { createSceneSlice, SceneSlice } from "./slices/sceneSlice";
 import { createSessionSlice, SessionSlice } from "./slices/sessionSlice";
 import { createModelSlice, ModelSlice } from "./slices/modelSlice";
+import { createLogSlice, LogSlice } from "./slices/logSlice";
 
 export type AppStore = AppSlice &
   LiveSlice &
@@ -21,7 +22,8 @@ export type AppStore = AppSlice &
   TimerSlice &
   SceneSlice &
   SessionSlice &
-  ModelSlice;
+  ModelSlice &
+  LogSlice;
 
 export const useAppStore = create<AppStore>()((...a) => ({
   ...createAppSlice(...a),
@@ -35,4 +37,5 @@ export const useAppStore = create<AppStore>()((...a) => ({
   ...createSceneSlice(...a),
   ...createSessionSlice(...a),
   ...createModelSlice(...a),
+  ...createLogSlice(...a),
 }));

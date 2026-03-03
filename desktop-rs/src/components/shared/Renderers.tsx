@@ -97,23 +97,41 @@ export function CustomSlideRenderer({
 
           if (el.kind === "text") {
             const vAlign = el.v_align === "middle" ? "center" : el.v_align === "bottom" ? "flex-end" : "flex-start";
+            const isHtml = el.content.trim().startsWith("<");
+            
             return (
               <div key={el.id} style={{ ...elStyle, display: "flex", flexDirection: "column", justifyContent: vAlign }}>
-                <p style={{
-                  fontFamily: el.font_family ?? "Arial",
-                  fontSize: `${(el.font_size ?? 32) * scale}pt`,
-                  color: el.color ?? "#ffffff",
-                  fontWeight: el.bold ? "bold" : "normal",
-                  fontStyle: el.italic ? "italic" : "normal",
-                  textAlign: (el.align ?? "left") as React.CSSProperties["textAlign"],
-                  textShadow: el.shadow === false ? "none" : `0 2px 8px ${el.shadow_color || "rgba(0,0,0,0.6)"}`,
-                  whiteSpace: "pre-wrap",
-                  lineHeight: 1.3,
-                  margin: 0,
-                  width: "100%",
-                }}>
-                  {el.content}
-                </p>
+                {isHtml ? (
+                  <div 
+                    className="tiptap-rendered-content"
+                    style={{
+                      fontFamily: el.font_family ?? "Arial",
+                      fontSize: `${(el.font_size ?? 32) * scale}pt`,
+                      color: el.color ?? "#ffffff",
+                      textAlign: (el.align ?? "left") as React.CSSProperties["textAlign"],
+                      textShadow: el.shadow === false ? "none" : `0 2px 8px ${el.shadow_color || "rgba(0,0,0,0.6)"}`,
+                      lineHeight: 1.3,
+                      width: "100%",
+                    }}
+                    dangerouslySetInnerHTML={{ __html: el.content }}
+                  />
+                ) : (
+                  <p style={{
+                    fontFamily: el.font_family ?? "Arial",
+                    fontSize: `${(el.font_size ?? 32) * scale}pt`,
+                    color: el.color ?? "#ffffff",
+                    fontWeight: el.bold ? "bold" : "normal",
+                    fontStyle: el.italic ? "italic" : "normal",
+                    textAlign: (el.align ?? "left") as React.CSSProperties["textAlign"],
+                    textShadow: el.shadow === false ? "none" : `0 2px 8px ${el.shadow_color || "rgba(0,0,0,0.6)"}`,
+                    whiteSpace: "pre-wrap",
+                    lineHeight: 1.3,
+                    margin: 0,
+                    width: "100%",
+                  }}>
+                    {el.content}
+                  </p>
+                )}
               </div>
             );
           } else if (el.kind === "image") {
@@ -532,13 +550,33 @@ export function LayerContentRenderer({
   const { item } = content as { kind: "item"; item: any };
   switch (item.type) {
     case "Verse":
+      const applyDynamicStyling = (text: string) => {
+        if (!settings?.highlight_divine_words) return text;
+        const color = settings.highlight_color || "#ef4444";
+        // Simple regex to find quoted text (assumed to be spoken by Christ in many Bible versions)
+        // or specific divine names if we wanted to expand.
+        // This is a basic implementation that can be refined with specific word lists.
+        return text.replace(/"([^"]*)"/g, `<span style="color: ${color}">"$1"</span>`);
+      };
+
+      const displayText = item.data.text;
+      const isHtml = settings?.highlight_divine_words && displayText.includes('"');
+
       return (
         <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center">
           <div className="relative w-full flex flex-col items-center">
-            <p className={outputMode ? "font-serif text-5xl text-white leading-snug drop-shadow-2xl" : "text-xs font-serif line-clamp-3 mb-1 opacity-80"}
-               style={outputMode ? { fontSize: `${(settings?.font_size ?? 48) * scale}pt`, fontFamily: settings?.verse_font_family } : undefined}>
-              {item.data.text}
-            </p>
+            {isHtml && outputMode ? (
+              <div 
+                className={outputMode ? "font-serif text-5xl text-white leading-snug drop-shadow-2xl" : "text-xs font-serif line-clamp-3 mb-1 opacity-80"}
+                style={outputMode ? { fontSize: `${(settings?.font_size ?? 48) * scale}pt`, fontFamily: settings?.verse_font_family } : undefined}
+                dangerouslySetInnerHTML={{ __html: applyDynamicStyling(displayText) }}
+              />
+            ) : (
+              <p className={outputMode ? "font-serif text-5xl text-white leading-snug drop-shadow-2xl" : "text-xs font-serif line-clamp-3 mb-1 opacity-80"}
+                 style={outputMode ? { fontSize: `${(settings?.font_size ?? 48) * scale}pt`, fontFamily: settings?.verse_font_family } : undefined}>
+                {displayText}
+              </p>
+            )}
             {outputMode && item.data.split_index !== undefined && item.data.total_splits !== undefined && (
               <p 
                 className="absolute -bottom-6 right-0 font-black opacity-30 text-[8px] tracking-widest uppercase"
@@ -656,18 +694,35 @@ export function LowerThirdOverlay({
     } : {})
   });
 
-  const getVariants = () => {
-    switch (t.animation) {
-      case "fade":
-        return { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 } };
-      case "slide-up":
-        return { initial: { opacity: 0, y: 100 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: 100 } };
-      case "slide-left":
-        return { initial: { opacity: 0, x: 100 }, animate: { opacity: 1, x: 0 }, exit: { opacity: 0, x: 100 } };
-      default:
-        return { initial: { opacity: 1 }, animate: { opacity: 1 }, exit: { opacity: 1 } };
-    }
-  };
+    const getVariants = () => {
+      const entry = t.entryAnimation || t.animation;
+      const exit = t.exitAnimation || t.animation;
+  
+      const variants: any = {
+        initial: { opacity: 1, x: 0, y: 0, filter: "blur(0px)" },
+        animate: { opacity: 1, x: 0, y: 0, filter: "blur(0px)" },
+        exit: { opacity: 1, x: 0, y: 0, filter: "blur(0px)" }
+      };
+  
+      // Entry
+      if (entry === "fade") variants.initial = { opacity: 0 };
+      else if (entry === "slide-up") variants.initial = { opacity: 0, y: 40 };
+      else if (entry === "slide-left") variants.initial = { opacity: 0, x: 60 };
+      else if (entry === "slide-right") variants.initial = { opacity: 0, x: -60 };
+      else if (entry === "blur-in") variants.initial = { opacity: 0, filter: "blur(20px)", scale: 0.95 };
+      else if (entry === "none") variants.initial = { opacity: 1 };
+  
+      // Exit
+      if (exit === "fade") variants.exit = { opacity: 0 };
+      else if (exit === "slide-up") variants.exit = { opacity: 0, y: 40 };
+      else if (exit === "slide-left") variants.exit = { opacity: 0, x: 60 };
+      else if (exit === "slide-right") variants.exit = { opacity: 0, x: -60 };
+      else if (exit === "blur-out") variants.exit = { opacity: 0, filter: "blur(20px)", scale: 0.95 };
+      else if (exit === "none") variants.exit = { opacity: 1 };
+  
+      return variants;
+    };
+  
 
   const variants = getVariants();
   
@@ -707,7 +762,12 @@ export function LowerThirdOverlay({
       initial={variants.initial}
       animate={variants.animate}
       exit={{ ...variants.exit, transition: { duration: t.exitDuration ?? 0.2 } }}
-      transition={{ duration: t.animationDuration || 0.5, ease: "easeOut" }}
+      transition={{ 
+        duration: t.animationDuration || 0.5, 
+        ease: "easeOut",
+        scale: { type: "spring", stiffness: 300, damping: 20 },
+        filter: { duration: (t.animationDuration || 0.5) * 1.5 }
+      }}
     >
       <div style={containerStyle}>
         {data.kind === "Nameplate" && (
