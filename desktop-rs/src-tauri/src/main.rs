@@ -2273,7 +2273,7 @@ fn main() {
                 is_running: Arc::new(Mutex::new(false)),
                 live_item: Arc::new(Mutex::new(None)),
                 staged_item: Arc::new(Mutex::new(None)),
-                settings: Arc::new(Mutex::new(initial_settings)),
+                settings: Arc::new(Mutex::new(initial_settings.clone())),
                 lower_third: Arc::new(Mutex::new(None)),
                 broadcast_tx,
                 app_handle: Arc::new(OnceLock::new()),
