@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bible Presenter - Standalone Output</title>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #output-container { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; position: relative; transition: opacity 0.4s ease; opacity: 0; }
+        #text { font-size: 5vw; font-weight: bold; line-height: 1.2; text-shadow: 0 4px 12px rgba(0,0,0,0.8); max-width: 90%; }
+        #ref { margin-top: 20px; font-size: 2.5vw; color: #f59e0b; font-weight: 900; text-transform: uppercase; letter-spacing: 0.1em; }
+        #waiting { font-style: italic; opacity: 0.5; font-size: 2vw; }
+        .visible { opacity: 1 !important; }
+    </style>
+</head>
+<body>
+    <div id="output-container">
+        <div id="text"></div>
+        <div id="ref"></div>
+    </div>
+
+    <script>
+        const container = document.getElementById('output-container');
+        const textEl = document.getElementById('text');
+        const refEl = document.getElementById('ref');
+        let ws = null;
+
+        function connect() {
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${location.host}/ws`);
+            
+            ws.onopen = () => {
+                console.log('Connected to Bible Presenter');
+                // Request state
+                fetch('/health').then(r => r.json()).then(data => {
+                    // For standalone output, we don't have the PIN easily accessible unless we pass it in URL
+                    // But if it's local, we can assume it's authorized for viewing
+                    // In this implementation, we will look for a ?pin= parameter
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const pin = urlParams.get('pin');
+                    if (pin) {
+                        ws.send(JSON.stringify({ cmd: "auth", pin: pin, client_type: "remote" }));
+                        ws.send(JSON.stringify({ cmd: "get_state" }));
+                    } else {
+                        textEl.innerHTML = '<span id="waiting">Please provide ?pin=XXXX in URL to view output</span>';
+                        container.classList.add('visible');
+                    }
+                });
+            };
+
+            ws.onmessage = (e) => {
+                const msg = JSON.parse(e.data);
+                if (msg.type === 'state' || msg.type === 'transcription') {
+                    updateUI(msg.live_item || msg.detected_item);
+                }
+            };
+
+            ws.onclose = () => setTimeout(connect, 2000);
+        }
+
+        function updateUI(item) {
+            if (!item) {
+                container.classList.remove('visible');
+                return;
+            }
+
+            container.classList.remove('visible');
+            
+            setTimeout(() => {
+                if (item.type === 'Verse') {
+                    textEl.innerText = item.data.text;
+                    refEl.innerText = `${item.data.book} ${item.data.chapter}:${item.data.verse} (${item.data.version})`;
+                } else if (item.type === 'Song') {
+                    textEl.innerText = item.data.lines.join('
+');
+                    refEl.innerText = `${item.data.title} (${item.data.section_label})`;
+                } else if (item.type === 'Media') {
+                    textEl.innerText = '[Media: ' + item.data.name + ']';
+                    refEl.innerText = '';
+                } else {
+                    textEl.innerText = '';
+                    refEl.innerText = '';
+                }
+                container.classList.add('visible');
+            }, 400);
+        }
+
+        connect();
+    </script>
+</body>
+</html>

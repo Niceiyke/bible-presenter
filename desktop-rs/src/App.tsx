@@ -613,6 +613,12 @@ export default function App() {
               </div>
               <span className={`text-[8px] font-black uppercase ${sessionState === "running" ? "text-green-500" : "text-slate-600"}`}>{sessionState}</span>
             </div>
+            {settings.ndi_enabled && (
+              <div className="px-2 py-0.5 bg-teal-500/10 border border-teal-500/30 rounded flex items-center gap-1.5 animate-pulse">
+                <span className="w-1 h-1 rounded-full bg-teal-500" />
+                <span className="text-[8px] font-black text-teal-500 uppercase tracking-widest">NDI</span>
+              </div>
+            )}
           </div>
           <button
             onClick={() => { invoke("toggle_output_window"); setOutputVisible(v => !v); }}

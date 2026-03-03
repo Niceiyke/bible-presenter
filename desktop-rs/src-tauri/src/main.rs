@@ -126,6 +126,8 @@ pub struct AppState {
     pub cloud_stream_handle: Arc<Mutex<Option<engine::cloud_stream::CloudStreamHandle>>>,
     /// IP-based auth throttling to prevent PIN brute-force.
     pub auth_throttles: Arc<Mutex<HashMap<std::net::IpAddr, (u8, std::time::Instant)>>>,
+    /// NDI Streaming Manager.
+    pub ndi_manager: Arc<ndi::NdiManager>,
 }
 
 impl Clone for AppState {
@@ -158,6 +160,7 @@ impl Clone for AppState {
             context_buffer: self.context_buffer.clone(),
             cloud_stream_handle: self.cloud_stream_handle.clone(),
             auth_throttles: self.auth_throttles.clone(),
+            ndi_manager: self.ndi_manager.clone(),
         }
     }
 }
@@ -722,8 +725,15 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
                 if cloud_provider_task.is_some() {
                     buffer.clear();
                 } else {
-                    let remaining = buffer.len().saturating_sub(OVERLAP);
-                    buffer = buffer[remaining..].to_vec();
+                    // Backpressure: if transcription is slower than audio duration,
+                    // the buffer will grow. Cap it to prevent exponential CPU load.
+                    if buffer.len() > window_size * 2 {
+                        let to_drain = buffer.len() - (window_size + OVERLAP);
+                        buffer.drain(0..to_drain);
+                    } else {
+                        let remaining = buffer.len().saturating_sub(OVERLAP);
+                        buffer = buffer[remaining..].to_vec();
+                    }
                 }
             }
         }
@@ -768,7 +778,7 @@ async fn stop_session(app: AppHandle, state: State<'_, AppState>) -> Result<(), 
             .as_secs();
         let path = transcripts_dir.join(format!("{}.json", ts));
         if let Ok(json) = serde_json::to_string_pretty(&transcript) {
-            let _ = fs::write(&path, json);
+            let _ = atomic_write(&path, json);
         }
     }
 
@@ -863,6 +873,18 @@ async fn get_audio_devices(
     audio
         .list_devices()
         .map_err(|e: anyhow::Error| e.to_string())
+}
+
+#[tauri::command]
+async fn toggle_ndi(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let mut config = state.ndi_manager.config.lock();
+    config.enabled = enabled;
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_ndi_config(state: State<'_, AppState>) -> Result<ndi::NdiConfig, String> {
+    Ok(state.ndi_manager.config.lock().clone())
 }
 
 #[tauri::command]
@@ -1269,6 +1291,36 @@ async fn set_media_fit(
 }
 
 #[tauri::command]
+async fn update_media_metadata(
+    state: State<'_, AppState>,
+    id: String,
+    description: Option<String>,
+    tags: Vec<String>,
+    category: Option<String>,
+) -> Result<(), String> {
+    state.media_schedule.update_media_metadata(&id, description, tags, category).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn bulk_delete_media(
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+) -> Result<(), String> {
+    state.media_schedule.bulk_delete_media(ids).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn bulk_update_media(
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+    tags_to_add: Vec<String>,
+    tags_to_remove: Vec<String>,
+    category: Option<String>,
+) -> Result<(), String> {
+    state.media_schedule.bulk_update_media(ids, tags_to_add, tags_to_remove, category).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn save_schedule(
     state: State<'_, AppState>,
     schedule: store::Schedule,
@@ -1464,7 +1516,8 @@ async fn load_lt_templates(
 struct RemoteInfo {
     url: String,
     pin: String,
-    /// Some("http://100.x.x.x:7420") when Tailscale is running; None otherwise.
+    port: u16,
+    /// Some("http://100.x.x.x:port") when Tailscale is running; None otherwise.
     tailscale_url: Option<String>,
 }
 
@@ -1494,6 +1547,7 @@ async fn get_current_lower_third(
 
 #[tauri::command]
 async fn get_remote_info(state: State<'_, AppState>) -> Result<RemoteInfo, String> {
+    let port = state.settings.lock().remote_port;
     let lan_ip = local_ip_address::local_ip()
         .map(|ip| ip.to_string())
         .unwrap_or_else(|_| "localhost".to_string());
@@ -1503,11 +1557,12 @@ async fn get_remote_info(state: State<'_, AppState>) -> Result<RemoteInfo, Strin
         .await
         .ok()
         .flatten()
-        .map(|ip| format!("http://{}:7420", ip));
+        .map(|ip| format!("http://{}:{}", ip, port));
 
     Ok(RemoteInfo {
-        url: format!("http://{}:7420", lan_ip),
+        url: format!("http://{}:{}", lan_ip, port),
         pin: state.remote_pin.lock().clone(),
+        port,
         tailscale_url,
     })
 }
@@ -1533,7 +1588,7 @@ async fn set_transcription_paused(
 
 #[tauri::command]
 async fn regenerate_remote_pin(state: State<'_, AppState>) -> Result<String, String> {
-    let new_pin = format!("{:04}", rand::random::<u16>() % 10000);
+    let new_pin = format!("{:06}", rand::random::<u32>() % 1000000);
     *state.remote_pin.lock() = new_pin.clone();
     // Persist so the new PIN survives the next restart
     if let Some(handle) = state.app_handle.get() {
@@ -1986,6 +2041,14 @@ async fn test_cloud_connection(
 // Entry point
 // ---------------------------------------------------------------------------
 
+/// Writes to a temporary file and then renames it to prevent corruption.
+fn atomic_write(path: &PathBuf, content: String) -> std::io::Result<()> {
+    let tmp_path = path.with_extension("tmp");
+    fs::write(&tmp_path, content)?;
+    fs::rename(tmp_path, path)?;
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -2117,10 +2180,10 @@ fn main() {
             let remote_pin = std::fs::read_to_string(&pin_file)
                 .ok()
                 .map(|s| s.trim().to_string())
-                .filter(|s| s.len() == 4 && s.chars().all(|c| c.is_ascii_digit()))
+                .filter(|s| s.len() == 6 && s.chars().all(|c| c.is_ascii_digit()))
                 .unwrap_or_else(|| {
-                    let pin = format!("{:04}", rand::random::<u16>() % 10000);
-                    let _ = std::fs::write(&pin_file, &pin);
+                    let pin = format!("{:06}", rand::random::<u32>() % 1000000);
+                    let _ = atomic_write(&pin_file, pin.clone());
                     pin
                 });
             log_msg(app, &format!("Remote PIN: {}", remote_pin));
@@ -2153,17 +2216,21 @@ fn main() {
                 context_buffer: Arc::new(Mutex::new(Vec::new())),
                 cloud_stream_handle: Arc::new(Mutex::new(None)),
                 auth_throttles: Arc::new(Mutex::new(HashMap::new())),
+                ndi_manager: Arc::new(ndi::NdiManager::new()),
             };
+
+            // Sync NDI state from persisted settings
+            {
+                let mut ndi_config = state.ndi_manager.config.lock();
+                ndi_config.enabled = initial_settings.ndi_enabled;
+            }
 
             // Store app_handle so remote module can emit events to Tauri windows
             state.app_handle.set(app.handle().clone()).ok();
 
             // Start the LAN remote server in the background
             // Port is configurable via BIBLE_PRESENTER_REMOTE_PORT env var
-            let remote_port: u16 = std::env::var("BIBLE_PRESENTER_REMOTE_PORT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(7420);
+            let remote_port = initial_settings.remote_port;
             let remote_state = Arc::new(state.clone());
             tauri::async_runtime::spawn(async move {
                 remote::start(remote_state, remote_port).await;
@@ -2210,6 +2277,8 @@ fn main() {
             toggle_output_window,
             get_audio_devices,
             set_audio_device,
+            toggle_ndi,
+            get_ndi_config,
             set_vad_threshold,
             get_bible_versions,
             set_bible_version,
@@ -2229,6 +2298,9 @@ fn main() {
             add_media,
             delete_media,
             set_media_fit,
+            update_media_metadata,
+            bulk_delete_media,
+            bulk_update_media,
             save_schedule,
             load_schedule,
             stage_item,

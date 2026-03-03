@@ -28,6 +28,12 @@ pub struct MediaItem {
     /// How the media fills the output frame: "contain" | "cover" | "fill"
     #[serde(default = "default_media_fit_mode")]
     pub fit_mode: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
 }
 
 fn default_media_fit_mode() -> String {
@@ -328,11 +334,18 @@ pub struct PresentationSettings {
     /// Character limit before splitting a verse (if auto_split is enabled).
     #[serde(default = "default_verse_split_threshold")]
     pub verse_split_threshold: usize,
+    /// Port for the LAN remote control / WebRTC server.
+    #[serde(default = "default_remote_port")]
+    pub remote_port: u16,
+    /// Whether NDI streaming is enabled on startup.
+    #[serde(default)]
+    pub ndi_enabled: bool,
     /// Monitor name to send output to; None = auto (first secondary monitor).
     #[serde(default)]
     pub preferred_monitor: Option<String>,
 }
 
+fn default_remote_port() -> u16 { 7420 }
 fn default_auto_split_verses() -> bool { true }
 fn default_verse_split_threshold() -> usize { 200 }
 
@@ -390,6 +403,8 @@ impl Default for PresentationSettings {
             camera_resolution: default_camera_resolution(),
             auto_split_verses: default_auto_split_verses(),
             verse_split_threshold: default_verse_split_threshold(),
+            remote_port: default_remote_port(),
+            ndi_enabled: false,
             preferred_monitor: None,
         }
     }
@@ -646,6 +661,7 @@ impl MediaScheduleStore {
             } else {
                 None
             };
+            let (description, tags, category) = self.read_media_metadata(path);
 
             items.push(MediaItem {
                 id: id.clone(),
@@ -654,6 +670,9 @@ impl MediaScheduleStore {
                 media_type,
                 thumbnail_path,
                 fit_mode,
+                tags,
+                description,
+                category,
             });
         }
 
@@ -710,12 +729,65 @@ impl MediaScheduleStore {
         ))
     }
 
+    fn description_sidecar(media_path: &PathBuf) -> PathBuf {
+        media_path.with_extension(format!(
+            "{}.description",
+            media_path.extension().unwrap_or_default().to_string_lossy()
+        ))
+    }
+
+    fn tags_sidecar(media_path: &PathBuf) -> PathBuf {
+        media_path.with_extension(format!(
+            "{}.tags",
+            media_path.extension().unwrap_or_default().to_string_lossy()
+        ))
+    }
+
+    fn category_sidecar(media_path: &PathBuf) -> PathBuf {
+        media_path.with_extension(format!(
+            "{}.category",
+            media_path.extension().unwrap_or_default().to_string_lossy()
+        ))
+    }
+
     fn read_fit_mode(& self, media_path: &PathBuf) -> String {
         fs::read_to_string(Self::fit_sidecar(media_path))
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| matches!(s.as_str(), "contain" | "cover" | "fill"))
             .unwrap_or_else(default_media_fit_mode)
+    }
+
+    fn read_media_metadata(&self, media_path: &PathBuf) -> (Option<String>, Vec<String>, Option<String>) {
+        let description = fs::read_to_string(Self::description_sidecar(media_path)).ok();
+        let tags = fs::read_to_string(Self::tags_sidecar(media_path))
+            .ok()
+            .map(|s| s.split(',').filter(|s| !s.trim().is_empty()).map(|s| s.trim().to_string()).collect())
+            .unwrap_or_default();
+        let category = fs::read_to_string(Self::category_sidecar(media_path)).ok();
+        (description, tags, category)
+    }
+
+    fn write_media_metadata(&self, media_path: &PathBuf, description: &Option<String>, tags: &[String], category: &Option<String>) -> Result<()> {
+        if let Some(desc) = description {
+            fs::write(Self::description_sidecar(media_path), desc)?;
+        } else {
+            let _ = fs::remove_file(Self::description_sidecar(media_path));
+        }
+
+        let tags_str = tags.join(",");
+        if !tags_str.is_empty() {
+            fs::write(Self::tags_sidecar(media_path), tags_str)?;
+        } else {
+            let _ = fs::remove_file(Self::tags_sidecar(media_path));
+        }
+
+        if let Some(cat) = category {
+            fs::write(Self::category_sidecar(media_path), cat)?;
+        } else {
+            let _ = fs::remove_file(Self::category_sidecar(media_path));
+        }
+        Ok(())
     }
 
     pub fn set_media_fit(&self, id: &str, fit_mode: &str) -> Result<()> {
@@ -726,6 +798,21 @@ impl MediaScheduleStore {
 
         if let Some(path) = path {
             fs::write(Self::fit_sidecar(&path), fit_mode)?;
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Media item not found: {}", id))
+        }
+    }
+
+    pub fn update_media_metadata(&self, id: &str, description: Option<String>, tags: Vec<String>, category: Option<String>) -> Result<()> {
+        let path = {
+            let cache = self.media_cache.lock();
+            cache.get(id).cloned()
+        };
+
+        if let Some(path) = path {
+            self.write_media_metadata(&path, &description, &tags, &category)?;
+            // No need to refresh caches as the changes are to sidecar files, not the core media files
             Ok(())
         } else {
             Err(anyhow::anyhow!("Media item not found: {}", id))
@@ -770,9 +857,15 @@ impl MediaScheduleStore {
 
         // Copy source content into the reserved destination file
         let mut source_file = fs::File::open(&source_path)?;
-        std::io::copy(&mut source_file, &mut dest_file)?;
+        if let Err(e) = std::io::copy(&mut source_file, &mut dest_file) {
+            let _ = fs::remove_file(&dest_path);
+            return Err(e.into());
+        }
 
         let id = self.get_or_create_id(&dest_path);
+        // Write initial empty metadata
+        self.write_media_metadata(&dest_path, &None, &[], &None)?;
+
         {
             let mut cache = self.media_cache.lock();
             cache.insert(id.clone(), dest_path.clone());
@@ -785,6 +878,9 @@ impl MediaScheduleStore {
             media_type,
             thumbnail_path: None,
             fit_mode: default_media_fit_mode(),
+            tags: Vec::new(),
+            description: None,
+            category: None,
         })
     }
 
@@ -803,15 +899,71 @@ impl MediaScheduleStore {
             );
             let fit_sidecar = Self::fit_sidecar(&path);
             let thumb_path = self.thumbnails_dir.join(format!("{}.jpg", id));
+            let desc_sidecar = Self::description_sidecar(&path);
+            let tags_sidecar = Self::tags_sidecar(&path);
+            let category_sidecar = Self::category_sidecar(&path);
 
             fs::remove_file(&path)?;
             let _ = fs::remove_file(id_sidecar);
             let _ = fs::remove_file(fit_sidecar);
             let _ = fs::remove_file(thumb_path);
+            let _ = fs::remove_file(desc_sidecar);
+            let _ = fs::remove_file(tags_sidecar);
+            let _ = fs::remove_file(category_sidecar);
             Ok(())
         } else {
             Err(anyhow::anyhow!("Media item not found: {}", id))
         }
+    }
+
+    pub fn bulk_delete_media(&self, ids: Vec<String>) -> Result<()> {
+        let mut cache = self.media_cache.lock();
+        for id in ids {
+            if let Some(path) = cache.remove(&id) {
+                let id_sidecar = path.with_extension(
+                    format!(
+                        "{}.mediaid",
+                        path.extension().unwrap_or_default().to_string_lossy()
+                    )
+                );
+                let fit_sidecar = Self::fit_sidecar(&path);
+                let thumb_path = self.thumbnails_dir.join(format!("{}.jpg", id));
+                let desc_sidecar = Self::description_sidecar(&path);
+                let tags_sidecar = Self::tags_sidecar(&path);
+                let category_sidecar = Self::category_sidecar(&path);
+
+                let _ = fs::remove_file(&path);
+                let _ = fs::remove_file(id_sidecar);
+                let _ = fs::remove_file(fit_sidecar);
+                let _ = fs::remove_file(thumb_path);
+                let _ = fs::remove_file(desc_sidecar);
+                let _ = fs::remove_file(tags_sidecar);
+                let _ = fs::remove_file(category_sidecar);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn bulk_update_media(&self, ids: Vec<String>, tags_to_add: Vec<String>, tags_to_remove: Vec<String>, category: Option<String>) -> Result<()> {
+        let cache = self.media_cache.lock();
+        for id in ids {
+            if let Some(path) = cache.get(&id) {
+                // Read current metadata to preserve description
+                let (current_description, mut current_tags, _) = self.read_media_metadata(path);
+
+                // Update tags
+                for tag in tags_to_add.iter() {
+                    if !current_tags.contains(tag) {
+                        current_tags.push(tag.clone());
+                    }
+                }
+                current_tags.retain(|tag| !tags_to_remove.contains(tag));
+
+                // Write back updated metadata, preserving existing description and applying new category
+                self.write_media_metadata(path, &current_description, &current_tags, &category)?;
+            }
+        }
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -831,7 +983,14 @@ impl MediaScheduleStore {
     pub fn save_settings(&self, settings: &PresentationSettings) -> Result<()> {
         let path = self.app_data_dir.join("settings.json");
         let json = serde_json::to_string_pretty(settings)?;
-        fs::write(path, json)?;
+        self.atomic_write(&path, json)?;
+        Ok(())
+    }
+
+    fn atomic_write(&self, path: &std::path::PathBuf, content: String) -> Result<()> {
+        let tmp_path = path.with_extension("tmp");
+        fs::write(&tmp_path, content)?;
+        fs::rename(tmp_path, path)?;
         Ok(())
     }
 
@@ -842,7 +1001,7 @@ impl MediaScheduleStore {
     pub fn save_schedule(&self, schedule: Schedule) -> Result<()> {
         let path = self.app_data_dir.join("schedule.json");
         let json = serde_json::to_string_pretty(&schedule)?;
-        fs::write(path, json)?;
+        self.atomic_write(&path, json)?;
         Ok(())
     }
 
@@ -896,7 +1055,7 @@ impl MediaScheduleStore {
     pub fn save_service(&self, schedule: &Schedule) -> Result<()> {
         let path = self.services_dir.join(format!("{}.json", schedule.id));
         let json = serde_json::to_string_pretty(schedule)?;
-        fs::write(path, json)?;
+        self.atomic_write(&path, json)?;
         Ok(())
     }
 
@@ -968,7 +1127,7 @@ impl MediaScheduleStore {
     pub fn save_studio_presentation(&self, presentation: &CustomPresentation) -> Result<()> {
         let path = self.studio_dir.join(format!("{}.json", presentation.id));
         let json = serde_json::to_string_pretty(presentation)?;
-        fs::write(path, json)?;
+        self.atomic_write(&path, json)?;
         Ok(())
     }
 
@@ -1018,7 +1177,7 @@ impl MediaScheduleStore {
         }
         let path = self.songs_dir.join(format!("{}.json", song.id));
         let json = serde_json::to_string_pretty(&song)?;
-        fs::write(path, json)?;
+        self.atomic_write(&path, json)?;
         Ok(song)
     }
 
@@ -1037,7 +1196,7 @@ impl MediaScheduleStore {
     pub fn save_props(&self, props: &[PropItem]) -> Result<()> {
         let path = self.app_data_dir.join("props.json");
         let json = serde_json::to_string_pretty(props)?;
-        fs::write(path, json)?;
+        self.atomic_write(&path, json)?;
         Ok(())
     }
 
@@ -1057,7 +1216,7 @@ impl MediaScheduleStore {
     pub fn save_lt_templates(&self, templates: &serde_json::Value) -> Result<()> {
         let path = self.app_data_dir.join("lt_templates.json");
         let json = serde_json::to_string_pretty(templates)?;
-        fs::write(path, json)?;
+        self.atomic_write(&path, json)?;
         Ok(())
     }
 
@@ -1110,7 +1269,7 @@ impl MediaScheduleStore {
             .ok_or_else(|| anyhow::anyhow!("Scene JSON missing 'id' field"))?;
         let path = self.scenes_dir.join(format!("{}.json", id));
         let json = serde_json::to_string_pretty(data)?;
-        fs::write(path, json)?;
+        self.atomic_write(&path, json)?;
         Ok(())
     }
 

@@ -19,6 +19,9 @@ export interface MediaItem {
   media_type: MediaItemType;
   thumbnail_path?: string;
   fit_mode?: MediaFitMode;
+  tags: string[];
+  description?: string;
+  category?: string;
 }
 
 export interface SlideZone {
@@ -315,6 +318,8 @@ export interface PresentationSettings {
   camera_resolution?: "360p" | "480p" | "720p" | "1080p";
   auto_split_verses: boolean;
   verse_split_threshold: number;
+  remote_port: number;
+  ndi_enabled: boolean;
   preferred_monitor?: string;
 }
 
@@ -372,6 +377,8 @@ export const DEFAULT_SETTINGS: PresentationSettings = {
   camera_resolution: "720p",
   auto_split_verses: true,
   verse_split_threshold: 200,
+  remote_port: 7420,
+  ndi_enabled: false,
 };
 
 export interface StartupStatus {

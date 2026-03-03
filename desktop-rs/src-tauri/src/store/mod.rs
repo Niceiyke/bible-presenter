@@ -669,7 +669,7 @@ impl BibleStore {
 
     pub fn get_books(&self, version: &str) -> anyhow::Result<Vec<String>> {
         let conn = self.conn.lock();
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT DISTINCT title FROM super_bible WHERE version = ?1 AND language = 'EN' ORDER BY book"
         )?;
         let rows = stmt.query_map(params![version], |row| row.get(0))?;
@@ -682,7 +682,7 @@ impl BibleStore {
 
     pub fn get_chapters(&self, book: &str, version: &str) -> anyhow::Result<Vec<i32>> {
         let conn = self.conn.lock();
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT DISTINCT chapter FROM super_bible WHERE title = ?1 AND version = ?2 ORDER BY chapter"
         )?;
         let rows = stmt.query_map(params![book, version], |row| row.get(0))?;
@@ -695,7 +695,7 @@ impl BibleStore {
 
     pub fn get_verses_count(&self, book: &str, chapter: i32, version: &str) -> anyhow::Result<Vec<i32>> {
         let conn = self.conn.lock();
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT verse FROM super_bible WHERE title = ?1 AND chapter = ?2 AND version = ?3 ORDER BY verse"
         )?;
         let rows = stmt.query_map(params![book, chapter, version], |row| row.get(0))?;
@@ -708,7 +708,7 @@ impl BibleStore {
 
     pub fn get_chapter_verses(&self, book: &str, chapter: i32, version: &str) -> anyhow::Result<Vec<Verse>> {
         let conn = self.conn.lock();
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT title, chapter, verse, text FROM super_bible \
              WHERE title = ?1 AND chapter = ?2 AND version = ?3 ORDER BY verse"
         )?;

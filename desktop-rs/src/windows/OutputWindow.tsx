@@ -56,6 +56,22 @@ export function OutputWindow() {
   const MAX_RECONNECT_ATTEMPTS = 15; // ~8.5 min of retrying
   const sceneCameraHandlersRef = useRef<Map<string, (msg: any) => void>>(new Map());
   const [windowScale, setWindowScale] = useState(1);
+  const [showCursor, setShowCursor] = useState(true);
+  const cursorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isMounted = useRef(true);
+
+  useEffect(() => {
+    const handleMouseMove = () => {
+      setShowCursor(true);
+      if (cursorTimerRef.current) clearTimeout(cursorTimerRef.current);
+      cursorTimerRef.current = setTimeout(() => setShowCursor(false), 3000);
+    };
+    window.addEventListener("mousemove", handleMouseMove);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      if (cursorTimerRef.current) clearTimeout(cursorTimerRef.current);
+    };
+  }, []);
 
   // Calculate font scale based on current window height relative to 1080p reference
   useEffect(() => {
@@ -73,20 +89,34 @@ export function OutputWindow() {
     }
   }
 
-  function closeProgramPc() {
-    if (programDeviceId.current) {
-      sendOutputWs({ cmd: "camera_disconnect_program", device_id: programDeviceId.current });
+  const closeProgramPc = useCallback((slot: 'A' | 'B' = 'A') => {
+    const pc = programPcsRef.current[slot];
+    if (pc) {
+      console.log(`[WebRTC] Closing peer connection in slot ${slot}`);
+      pc.ontrack = null;
+      pc.onicecandidate = null;
+      pc.oniceconnectionstatechange = null;
+      pc.close();
+      programPcsRef.current[slot] = null;
     }
-    programDeviceId.current = null;
-  }
+    
+    if (slot === 'A') {
+        if (programVideoRef.current) programVideoRef.current.srcObject = null;
+        setHubRelayStreamA(null);
+        if (programDeviceId.current && !programDeviceId.current.startsWith("hub_relay_")) {
+          sendOutputWs({ cmd: "camera_disconnect_program", device_id: programDeviceId.current });
+          programDeviceId.current = null;
+        }
+    } else {
+        setHubRelayStreamB(null);
+    }
+  }, []);
 
   async function handleProgramOffer(msg: { device_id: string; sdp: string }) {
     const { device_id, sdp } = msg;
     const slot = device_id === "hub_relay_b" ? 'B' : 'A';
     
-    if (programPcsRef.current[slot]) {
-        programPcsRef.current[slot]!.close();
-    }
+    closeProgramPc(slot);
 
     const pc = new RTCPeerConnection(OUTPUT_STUN);
     programPcsRef.current[slot] = pc;
@@ -110,13 +140,9 @@ export function OutputWindow() {
     };
 
     pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
-        if (slot === 'A') {
-          if (programVideoRef.current) programVideoRef.current.srcObject = null;
-          setHubRelayStreamA(null);
-        } else {
-          setHubRelayStreamB(null);
-        }
+      console.log(`[WebRTC] ICE state (${slot}): ${pc.iceConnectionState}`);
+      if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected" || pc.iceConnectionState === "closed") {
+        closeProgramPc(slot);
       }
     };
 
@@ -126,11 +152,11 @@ export function OutputWindow() {
     sendOutputWs({ cmd: "camera_answer", device_id, target, sdp: answer.sdp });
   }
 
-  function connectOutputWs(pin: string) {
+  function connectOutputWs(pin: string, port: number = 7420) {
     const host = window.location.hostname === 'localhost' || window.location.hostname === 'tauri.localhost' || !window.location.hostname
       ? '127.0.0.1' 
       : window.location.hostname;
-    const ws = new WebSocket(`ws://${host}:7420/ws`);
+    const ws = new WebSocket(`ws://${host}:${port}/ws`);
     outputWsRef.current = ws;
 
     ws.onopen = () => {
@@ -174,15 +200,18 @@ export function OutputWindow() {
       reconnectTimerRef.current = setTimeout(async () => {
         if (!isMounted.current) return;
         const info = await invoke("get_remote_info").catch(() => null) as any;
-        if (info?.pin && isMounted.current) connectOutputWs(info.pin);
+        if (info?.pin && isMounted.current) connectOutputWs(info.pin, info.port);
       }, delay);
     };
   }
 
-  const isMounted = useRef(true);
   useEffect(() => {
-    return () => { isMounted.current = false; };
-  }, []);
+    return () => {
+      isMounted.current = false;
+      closeProgramPc('A');
+      closeProgramPc('B');
+    };
+  }, [closeProgramPc]);
 
   useEffect(() => {
     // Attach ALL listeners first, before any async work, to avoid missing events
@@ -242,7 +271,7 @@ export function OutputWindow() {
       invoke("get_current_item").then((v: any) => { if (v) setLiveItem(v); }).catch(() => {}),
       invoke("get_current_lower_third").then((lt: any) => { if (lt) setLowerThird(lt); }).catch(() => {}),
       invoke("get_settings").then((s: any) => { if (s) setSettings(s); }).catch(() => {}),
-      invoke("get_remote_info").then((info: any) => { if (info?.pin) connectOutputWs(info.pin); }).catch(() => {}),
+      invoke("get_remote_info").then((info: any) => { if (info?.pin) connectOutputWs(info.pin, info.port); }).catch(() => {}),
       invoke<string>("get_app_data_dir").then(setAppDataDir).catch(() => {}),
       invoke<PropItem[]>("get_props").then(setPropItems).catch(() => {}),
     ]);
@@ -381,7 +410,7 @@ export function OutputWindow() {
 
   return (
     <div
-      className="h-screen w-screen overflow-hidden relative cursor-none"
+      className={`h-screen w-screen overflow-hidden relative ${showCursor ? 'cursor-default' : 'cursor-none'}`}
       style={
         cameraBgId || isLanCameraLive || videoBg
           ? { color: colors.verseText }

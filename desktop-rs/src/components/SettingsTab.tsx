@@ -780,7 +780,7 @@ export function SettingsTab({
             <p className="text-[10px] text-slate-500 uppercase font-bold mb-1.5">PIN</p>
             <div className="flex items-center gap-3">
               <div className="flex gap-2">
-                {(remotePin || "----").split("").map((digit, i) => (
+                {(remotePin || "------").split("").map((digit, i) => (
                   <span
                     key={i}
                     className="w-10 h-12 flex items-center justify-center bg-slate-900 border border-slate-700 rounded-lg text-2xl font-black text-white font-mono"
@@ -802,6 +802,62 @@ export function SettingsTab({
                 className="px-3 py-2 text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700 rounded-lg transition-colors"
               >↺ New</button>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="border-t border-slate-800 pt-5">
+        <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4">NDI & Standalone Output</h2>
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[10px] text-slate-300 font-bold uppercase">Enable NDI Stream</p>
+              <p className="text-[9px] text-slate-600 mt-0.5">Broadcast output over local network</p>
+            </div>
+            <button
+              onClick={() => {
+                const nextEnabled = !settings.ndi_enabled;
+                onUpdateSettings({ ...settings, ndi_enabled: nextEnabled });
+                invoke("toggle_ndi", { enabled: nextEnabled }).catch(() => {});
+              }}
+              className={`px-3 py-1.5 text-[10px] font-black uppercase rounded-lg transition-all border ${
+                settings.ndi_enabled 
+                  ? "bg-teal-600 border-teal-500 text-white" 
+                  : "bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500"
+              }`}
+            >
+              {settings.ndi_enabled ? "NDI ACTIVE" : "NDI OFF"}
+            </button>
+          </div>
+
+          <div>
+            <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">Remote Server Port</p>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                value={settings.remote_port}
+                onChange={(e) => onUpdateSettings({ ...settings, remote_port: parseInt(e.target.value) || 7420 })}
+                className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-amber-400 font-mono"
+              />
+              <p className="text-[9px] text-slate-600 w-24">Requires restart to take effect</p>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">OBS / Browser Source URL</p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-indigo-400 font-mono truncate">
+                {remoteUrl ? `${remoteUrl}/output?pin=${remotePin}` : `http://localhost:${settings.remote_port}/output?pin=${remotePin}`}
+              </code>
+              <button
+                onClick={() => { 
+                  const url = remoteUrl ? `${remoteUrl}/output?pin=${remotePin}` : `http://localhost:${settings.remote_port}/output?pin=${remotePin}`;
+                  navigator.clipboard.writeText(url); 
+                }}
+                className="px-3 py-2 text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition-colors"
+              >Copy</button>
+            </div>
+            <p className="text-[9px] text-slate-600 mt-1">Use this URL in OBS "Browser Source" for a transparent overlay.</p>
           </div>
         </div>
       </div>
