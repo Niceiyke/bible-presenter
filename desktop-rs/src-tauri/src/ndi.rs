@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use parking_lot::Mutex;
 use serde::{Serialize, Deserialize};
-use tauri::AppHandle;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct NdiConfig {
