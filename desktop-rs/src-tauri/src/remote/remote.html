@@ -144,6 +144,16 @@
   .song-item{padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:.1s;font-size:.85rem}
   .song-item:hover,.song-item.selected{border-color:var(--amber);background:rgba(245,158,11,.07)}
   .song-author{font-size:.7rem;color:var(--muted);margin-top:2px}
+  /* Media items */
+  .media-item { padding: 8px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: .1s; font-size: .85rem; display: flex; align-items: center; gap: 8px; }
+  .media-item:hover, .media-item.selected { border-color: var(--amber); background: rgba(245,158,11,.07); }
+  .media-item img, .media-item video { width: 48px; height: 48px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
+  .media-item-info { flex-grow: 1; }
+  .media-item-name { font-weight: 600; }
+  .media-item-meta { font-size: .7rem; color: var(--muted); }
+  /* Timer */
+  .timer-display { font-size: 2rem; font-weight: 700; text-align: center; color: var(--text); padding: 20px 0; }
+  .timer-name { font-size: 1rem; color: var(--muted); text-align: center; margin-bottom: 10px; }
 </style>
 </head>
 <body>
@@ -170,7 +180,10 @@
   <div class="tab-bar">
     <button class="active" data-tab="bible">Bible</button>
     <button data-tab="lyrics">Lyrics</button>
+    <button data-tab="media">Media</button>
+    <button data-tab="timer">Timer</button>
     <button data-tab="lt">Lower Third</button>
+    <button data-tab="control">Control</button>
   </div>
 
   <!-- Bible Tab -->
@@ -195,7 +208,10 @@
         <div class="verse-ref" id="nav-ref"></div>
         <div id="nav-text"></div>
       </div>
-      <button class="btn btn-live" id="nav-go-live" disabled>Go Live</button>
+      <div class="btn-row">
+        <button class="btn" id="nav-stage">Stage</button>
+        <button class="btn btn-live" id="nav-go-live" disabled>Go Live</button>
+      </div>
     </div>
 
     <!-- Search -->
@@ -210,7 +226,10 @@
         <div class="verse-ref" id="search-ref"></div>
         <div id="search-text"></div>
       </div>
-      <button class="btn btn-live" id="search-go-live" disabled>Go Live</button>
+      <div class="btn-row">
+        <button class="btn btn-live" id="search-go-live" disabled>Go Live</button>
+        <button class="btn" id="search-stage" disabled>Stage</button>
+      </div>
     </div>
   </div>
 
@@ -238,11 +257,35 @@
       </div>
       <div class="btn-row">
         <button class="btn btn-live" id="lyric-show">Show</button>
+        <button class="btn" id="lyric-stage">Stage</button>
         <button class="btn btn-danger" id="lyric-hide">Hide</button>
       </div>
       <div class="row">
         <span class="toggle-label">LT status:</span>
         <span class="lt-status-badge" id="lt-badge">Hidden</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Media Tab -->
+  <div class="tab-panel" id="tab-media">
+    <div class="card">
+      <div class="card-label">Media</div>
+      <input type="search" id="media-search" placeholder="Search media…">
+      <div class="result-list" id="media-list"></div>
+    </div>
+  </div>
+
+  <!-- Timer Tab -->
+  <div class="tab-panel" id="tab-timer">
+    <div class="card">
+      <div class="card-label">Live Timer</div>
+      <p class="timer-name" id="timer-name">No timer live</p>
+      <div class="timer-display" id="timer-countdown">--:--</div>
+      <div class="btn-row">
+        <button class="btn btn-live" id="timer-start-btn" disabled>Start</button>
+        <button class="btn btn-danger" id="timer-stop-btn" disabled>Stop</button>
+        <button class="btn" id="timer-reset-btn" disabled>Reset</button>
       </div>
     </div>
   </div>
@@ -298,6 +341,15 @@
       </div>
     </div>
   </div>
+
+  <!-- Control Tab -->
+  <div class="tab-panel" id="tab-control">
+    <div class="card">
+      <div class="card-label">Live Output Control</div>
+      <button class="btn btn-danger" id="clear-live-btn">Clear Live</button>
+      <button class="btn" id="toggle-blank-btn">Toggle Blank Output</button>
+    </div>
+  </div>
 </div>
 
 <!-- Status Bar -->
@@ -330,8 +382,17 @@ let ltLineIdx = 0;
 let linesMode = 1;
 let ltShowing = false;
 
+let mediaItems = [];
+let selectedMediaItem = null;
+
+let liveItem = null; // To track the currently live item, for timer control
+let currentTimer = null; // Store timer data if liveItem is a timer
+let timerIntervalId = null;
+
 let ltMode = 'nameplate';
 let scrollMode = 'Static';
+let isOutputBlanked = false;
+let fullSettings = null; // To store the full settings object
 
 const defaultTemplate = {
   bgType: 'gradient',
@@ -413,6 +474,8 @@ function handleMsg(msg) {
       send({ cmd: 'get_state' });
       send({ cmd: 'get_versions' });
       send({ cmd: 'get_songs' });
+      send({ cmd: 'get_media' }); // Fetch initial media items
+      send({ cmd: 'get_settings_full' }); // Fetch initial full settings
       break;
 
     case 'auth_fail':
@@ -422,6 +485,13 @@ function handleMsg(msg) {
       break;
 
     case 'state':
+      liveItem = msg.live_item;
+      if (liveItem && liveItem.type === 'Timer') {
+        currentTimer = liveItem.data;
+      } else {
+        currentTimer = null;
+      }
+      updateTimerDisplay();
       if (msg.lt) updateLtBadges(true);
       else updateLtBadges(false);
       break;
@@ -440,6 +510,21 @@ function handleMsg(msg) {
       if (!currentVersion && versions.length) currentVersion = versions[0];
       renderVersionPills();
       loadBooks();
+      break;
+
+    case 'settings_update': // New case for settings updates
+      if (typeof msg.settings.is_blanked === 'boolean') {
+        isOutputBlanked = msg.settings.is_blanked;
+        renderBlankButton();
+      }
+      break;
+
+    case 'settings_full': // New case for full settings
+      fullSettings = msg.settings;
+      if (typeof fullSettings.is_blanked === 'boolean') {
+        isOutputBlanked = fullSettings.is_blanked;
+        renderBlankButton();
+      }
       break;
 
     case 'books':
@@ -472,11 +557,94 @@ function handleMsg(msg) {
       renderSongList();
       break;
 
+    case 'media_list': // New case for media items
+      mediaItems = msg.media_items || [];
+      selectedMediaItem = null;
+      renderMediaList();
+      break;
+
     case 'error':
       console.warn('Server error:', msg.message);
       break;
   }
 }
+
+// ─── Control Tab Functions ────────────────────────────────────────────────────
+function renderBlankButton() {
+  const btn = document.getElementById('toggle-blank-btn');
+  if (btn) {
+    btn.textContent = isOutputBlanked ? 'Unblank Output' : 'Blank Output';
+    btn.classList.toggle('btn-danger', isOutputBlanked);
+    btn.classList.toggle('btn', !isOutputBlanked);
+  }
+}
+
+document.getElementById('clear-live-btn').addEventListener('click', () => {
+  send({ cmd: 'clear_live' });
+  isOutputBlanked = false; // Assume unblanked after clearing live
+  renderBlankButton();
+});
+
+document.getElementById('toggle-blank-btn').addEventListener('click', () => {
+  send({ cmd: 'blank_output' });
+});
+
+// ─── Timer Functions ──────────────────────────────────────────────────────────
+function updateTimerDisplay() {
+  const timerNameEl = document.getElementById('timer-name');
+  const countdownEl = document.getElementById('timer-countdown');
+  const startBtn = document.getElementById('timer-start-btn');
+  const stopBtn = document.getElementById('timer-stop-btn');
+  const resetBtn = document.getElementById('timer-reset-btn');
+
+  if (timerIntervalId) {
+    clearInterval(timerIntervalId);
+    timerIntervalId = null;
+  }
+
+  if (currentTimer) {
+    timerNameEl.textContent = currentTimer.name || 'Untitled Timer';
+    startBtn.disabled = currentTimer.started_at !== null;
+    stopBtn.disabled = currentTimer.started_at === null;
+    resetBtn.disabled = false;
+
+    // Start countdown if timer is running
+    if (currentTimer.started_at !== null) {
+      timerIntervalId = setInterval(() => {
+        const elapsed_ms = Date.now() - currentTimer.started_at;
+        let remaining_secs = Math.max(0, currentTimer.duration_secs - Math.floor(elapsed_ms / 1000));
+        const minutes = Math.floor(remaining_secs / 60);
+        const seconds = remaining_secs % 60;
+        countdownEl.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+      }, 1000);
+    } else {
+      // If not started, just show total duration
+      const minutes = Math.floor(currentTimer.duration_secs / 60);
+      const seconds = currentTimer.duration_secs % 60;
+      countdownEl.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+
+  } else {
+    timerNameEl.textContent = 'No timer live';
+    countdownEl.textContent = '--:--';
+    startBtn.disabled = true;
+    stopBtn.disabled = true;
+    resetBtn.disabled = true;
+  }
+}
+
+document.getElementById('timer-start-btn').addEventListener('click', () => {
+  if (currentTimer) send({ cmd: 'start_live_timer' });
+});
+
+document.getElementById('timer-stop-btn').addEventListener('click', () => {
+  if (currentTimer) send({ cmd: 'stop_live_timer' });
+});
+
+document.getElementById('timer-reset-btn').addEventListener('click', () => {
+  if (currentTimer) send({ cmd: 'reset_live_timer' });
+});
+
 
 // ─── UI helpers ───────────────────────────────────────────────────────────────
 function setConnStatus(ok, label) {
@@ -670,17 +838,24 @@ function showNavPreview(v) {
   document.getElementById('nav-ref').textContent = `${v.book} ${v.chapter}:${v.verse} (${v.version})`;
   document.getElementById('nav-text').textContent = v.text;
   document.getElementById('nav-go-live').disabled = false;
+  document.getElementById('nav-stage').disabled = false;
 }
 
 function hideNavPreview() {
   navVerseData = null;
   document.getElementById('nav-preview').style.display = 'none';
   document.getElementById('nav-go-live').disabled = true;
+  document.getElementById('nav-stage').disabled = true;
 }
 
 document.getElementById('nav-go-live').addEventListener('click', () => {
   if (!navVerseData) return;
   send({ cmd: 'go_live', item: { type: 'Verse', data: navVerseData } });
+});
+
+document.getElementById('nav-stage').addEventListener('click', () => {
+  if (!navVerseData) return;
+  send({ cmd: 'stage_item', item: { type: 'Verse', data: navVerseData } });
 });
 
 // ─── Search ───────────────────────────────────────────────────────────────────
@@ -726,12 +901,19 @@ function selectSearchResult(i) {
   document.getElementById('search-ref').textContent = `${v.book} ${v.chapter}:${v.verse} (${v.version})`;
   document.getElementById('search-text').textContent = v.text;
   document.getElementById('search-go-live').disabled = false;
+  document.getElementById('search-stage').disabled = false;
 }
 
 document.getElementById('search-go-live').addEventListener('click', () => {
   if (selectedSearchIdx < 0) return;
   const v = searchResults[selectedSearchIdx];
   send({ cmd: 'go_live', item: { type: 'Verse', data: v } });
+});
+
+document.getElementById('search-stage').addEventListener('click', () => {
+  if (selectedSearchIdx < 0) return;
+  const v = searchResults[selectedSearchIdx];
+  send({ cmd: 'stage_item', item: { type: 'Verse', data: v } });
 });
 
 // ─── Songs ────────────────────────────────────────────────────────────────────
@@ -814,9 +996,105 @@ document.getElementById('lyric-show').addEventListener('click', () => {
   send({ cmd: 'show_lt', data, template: defaultTemplate });
 });
 
+document.getElementById('lyric-stage').addEventListener('click', () => {
+  if (!selectedSong || !flatLines.length) return;
+  const idx = Math.min(ltLineIdx, flatLines.length - 1);
+  const l = flatLines[idx];
+  const l2 = linesMode === 2 && flatLines[idx + 1] ? flatLines[idx + 1] : null;
+  const item = {
+    type: 'Lyrics',
+    data: {
+      kind: 'Lyrics',
+      line1: l.text,
+      line2: l2 ? l2.text : null,
+      section_label: l.sectionLabel || null,
+    },
+    config: {
+      style: 'FullSlide', // Assuming FullSlide for staged lyrics
+      template: defaultTemplate,
+    },
+  };
+  send({ cmd: 'stage_item', item });
+});
+
 document.getElementById('lyric-hide').addEventListener('click', () => {
   send({ cmd: 'hide_lt' });
 });
+
+// ─── Media functions ──────────────────────────────────────────────────────────
+document.getElementById('media-search').addEventListener('input', function() {
+  renderMediaList(this.value);
+});
+
+function renderMediaList(filter) {
+  const c = document.getElementById('media-list');
+  c.innerHTML = '';
+  const q = (filter || '').toLowerCase();
+  const filtered = mediaItems.filter(m => m.name.toLowerCase().includes(q) || (m.category || '').toLowerCase().includes(q) || (m.tags || []).some(t => t.toLowerCase().includes(q)));
+
+  if (!filtered.length) {
+    c.innerHTML = '<div class="text-muted" style="padding:8px">No media found</div>';
+    return;
+  }
+  filtered.forEach(m => {
+    const el = document.createElement('div');
+    el.className = 'media-item' + (selectedMediaItem && selectedMediaItem.id === m.id ? ' selected' : '');
+    let mediaPreview = '';
+    // Use tauri://localhost/ for local file access
+    const thumbPath = `tauri://localhost/${m.thumbnail_path || m.path}`;
+    const fullPath = `tauri://localhost/${m.path}`;
+
+    if (m.media_type === 'Image') {
+      mediaPreview = `<img src="${thumbPath}" alt="${m.name}">`;
+    } else if (m.media_type === 'Video') {
+      mediaPreview = `<video src="${fullPath}" muted preload="metadata" style="max-width: 100%; max-height: 100%;"></video>`;
+    }
+
+    el.innerHTML = `
+      ${mediaPreview}
+      <div class="media-item-info">
+        <div class="media-item-name">${m.name}</div>
+        ${m.category ? `<div class="media-item-meta">Category: ${m.category}</div>` : ''}
+        ${m.tags && m.tags.length > 0 ? `<div class="media-item-meta">Tags: ${m.tags.join(', ')}</div>` : ''}
+      </div>
+      <div class="btn-row" style="flex-shrink:0;">
+        <button class="btn" onclick="stageMediaItem('${m.id}')">Stage</button>
+        <button class="btn btn-live" onclick="goLiveMediaItem('${m.id}')">Live</button>
+      </div>
+    `;
+    el.onclick = (e) => {
+        // Prevent click on buttons from selecting the item
+        if (e.target.tagName !== 'BUTTON') {
+            selectMediaItem(m.id);
+        }
+    };
+    c.appendChild(el);
+  });
+}
+
+function selectMediaItem(id) {
+    selectedMediaItem = mediaItems.find(m => m.id === id) || null;
+    document.querySelectorAll('#media-list .media-item').forEach(el => {
+        // More robust check for selected state based on actual item ID
+        const itemId = el.querySelector('.media-item-name')?.dataset.id || ''; // Assuming data-id can be added for robustness
+        el.classList.toggle('selected', selectedMediaItem && selectedMediaItem.id === itemId);
+    });
+}
+
+function stageMediaItem(id) {
+    const item = mediaItems.find(m => m.id === id);
+    if (item) {
+        send({ cmd: 'stage_item', item: { type: item.media_type, data: item } });
+    }
+}
+
+function goLiveMediaItem(id) {
+    const item = mediaItems.find(m => m.id === id);
+    if (item) {
+        send({ cmd: 'go_live', item: { type: item.media_type, data: item } });
+    }
+}
+
 
 // ─── Lower Third tab ─────────────────────────────────────────────────────────
 function setLtMode(mode) {

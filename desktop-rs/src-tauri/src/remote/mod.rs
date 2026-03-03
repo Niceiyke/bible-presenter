@@ -45,6 +45,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
+use chrono::Utc;
 
 use bible_presenter_lib::store;
 use crate::AppState;
@@ -493,6 +494,24 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
             }
         }
 
+        "stage_item" => {
+            if let Some(item_val) = v.get("item") {
+                match serde_json::from_value::<store::DisplayItem>(item_val.clone()) {
+                    Ok(item) => {
+                        *state.staged_item.lock() = Some(item.clone());
+                        if let Some(handle) = state.app_handle.get() {
+                            use tauri::Emitter;
+                            let _ = handle.emit("item-staged", &item);
+                        }
+                        // Optionally broadcast staged item to other remotes if needed
+                        // let msg = json!({ "type": "state", "staged_item": item });
+                        // broadcast_str(state, msg.to_string());
+                    }
+                    Err(e) => send_error_to(state, from_key, &format!("Invalid item: {}", e)),
+                }
+            }
+        }
+
         "get_songs" => {
             match state.media_schedule.list_songs() {
                 Ok(songs) => {
@@ -501,6 +520,22 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
                 }
                 Err(e) => send_error_to(state, from_key, &e.to_string()),
             }
+        }
+
+        "get_media" => {
+            match state.media_schedule.list_media() {
+                Ok(media_items) => {
+                    let msg = json!({ "type": "media_list", "media_items": media_items });
+                    send_to(state, from_key, msg.to_string());
+                }
+                Err(e) => send_error_to(state, from_key, &e.to_string()),
+            }
+        }
+
+        "get_settings_full" => {
+            let settings = state.settings.lock().clone();
+            let msg = json!({ "type": "settings_full", "settings": settings });
+            send_to(state, from_key, msg.to_string());
         }
 
         "show_lt" => {
@@ -534,6 +569,63 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
 
             let msg = json!({ "type": "lt_update", "payload": null });
             broadcast_str(state, msg.to_string());
+        }
+
+        "clear_live" => {
+            *state.live_item.lock() = None;
+            state.audio.lock().media_playing.store(false, std::sync::atomic::Ordering::Relaxed);
+            if let Some(handle) = state.app_handle.get() {
+                use tauri::Emitter;
+                let _ = handle.emit("transcription-update", json!({
+                    "text": "",
+                    "detected_item": null,
+                    "confidence": 1.0,
+                    "source": "manual",
+                    "is_partial": false,
+                }));
+                let _ = handle.emit("lower-third-update", Option::<Value>::None); // Also clear LT if active
+            }
+            let msg = json!({ "type": "state", "live_item": null, "lt": null });
+            broadcast_str(state, msg.to_string());
+        }
+
+        "blank_output" => {
+            let current_settings = state.settings.lock().clone();
+            let mut new_settings = current_settings.clone();
+            new_settings.is_blanked = !current_settings.is_blanked;
+
+            match state.media_schedule.save_settings(&new_settings) {
+                Ok(_) => {
+                    *state.settings.lock() = new_settings.clone();
+                    if let Some(handle) = state.app_handle.get() {
+                        use tauri::Emitter;
+                        let _ = handle.emit("settings-changed", new_settings.clone());
+                    }
+                    let msg = json!({ "type": "settings_update", "settings": new_settings.is_blanked });
+                    broadcast_str(state, msg.to_string());
+                }
+                Err(e) => send_error_to(state, from_key, &format!("Failed to save settings: {}", e)),
+            }
+        }
+
+        "start_live_timer" => {
+            if let Some(handle) = state.app_handle.get() {
+                let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+                let _ = crate::update_timer(handle.clone(), state.clone(), Some(now_ms)).await;
+            }
+        }
+
+        "stop_live_timer" => {
+            if let Some(handle) = state.app_handle.get() {
+                let _ = crate::update_timer(handle.clone(), state.clone(), None).await;
+            }
+        }
+
+        "reset_live_timer" => {
+            if let Some(handle) = state.app_handle.get() {
+                // To reset, we stop and then immediately restart with None, effectively clearing started_at
+                let _ = crate::update_timer(handle.clone(), state.clone(), None).await;
+            }
         }
 
         // Sent by window:main on auth_ok to recover from race condition where
