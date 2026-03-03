@@ -3,7 +3,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { Upload, Trash2, Tag, BookOpen, X, Check } from "lucide-react";
 import { useAppStore } from "../store";
 import { CameraFeedRenderer } from "./shared/Renderers";
-import type { DisplayItem, CameraSource, MediaFitMode } from "../types";
+import type { DisplayItem, CameraSource, MediaFitMode, MediaItem } from "../types";
 import { EditMediaModal } from "./EditMediaModal";
 
 interface MediaTabProps {

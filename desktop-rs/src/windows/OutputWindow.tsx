@@ -39,6 +39,8 @@ export function OutputWindow() {
     disabled_bible_versions: [],
     auto_split_verses: true,
     verse_split_threshold: 200,
+    remote_port: 8080,
+    ndi_enabled: true,
   });
   const [appDataDir, setAppDataDir] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);

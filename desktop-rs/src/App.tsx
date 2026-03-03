@@ -5,7 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { 
   BookOpen, CalendarDays, ChevronRight, Clock, EyeOff, Image as ImageIcon, 
-  Layers, Layout, Mic, Monitor, Settings, X, Zap, AlertCircle, Keyboard
+  Layers, Layout, Mic, Monitor, Settings, X, Zap, AlertCircle, Keyboard, Repeat
 } from "lucide-react";
 
 import { useAppStore } from "./store";
@@ -55,7 +55,7 @@ export default function App() {
     settings, setSettings, activeTab, setActiveTab, toast, setToast,
     ltVisible, setLtVisible, ltMode, ltLineIndex, setLtLineIndex, ltLinesPerDisplay, ltTemplate,
     ltSongId, scheduleEntries, setScheduleEntries, services,
-    activeServiceId, media, setMedia, pauseWhisper, transcript, sessionState, setSessionState, micLevel,
+    activeServiceId, setActiveServiceId, media, setMedia, pauseWhisper, transcript, sessionState, setSessionState, micLevel,
     remoteUrl, remotePin, bibleVersion, topPanelPct, setTopPanelPct, stagePct, setStagePct, 
     studioList, setStudioList, studioSlides, setStudioSlides,
     setIsBlackout, songs, setPropItems, audioError, setAudioError, deviceError,
