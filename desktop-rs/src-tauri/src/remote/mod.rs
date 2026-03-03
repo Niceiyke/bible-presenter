@@ -502,6 +502,7 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
                         if let Some(handle) = state.app_handle.get() {
                             use tauri::Emitter;
                             let _ = handle.emit("item-staged", &item);
+                            let _ = handle.emit("stage-update", Some(&item));
                         }
                         // Optionally broadcast staged item to other remotes if needed
                         // let msg = json!({ "type": "state", "staged_item": item });
@@ -583,9 +584,10 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
                     "source": "manual",
                     "is_partial": false,
                 }));
-                let _ = handle.emit("lower-third-update", Option::<Value>::None); // Also clear LT if active
+                let _ = handle.emit("stage-update", Option::<store::DisplayItem>::None);
             }
-            let msg = json!({ "type": "state", "live_item": null, "lt": null });
+            let lt = state.lower_third.lock().clone();
+            let msg = json!({ "type": "state", "live_item": null, "lt": lt });
             broadcast_str(state, msg.to_string());
         }
 
@@ -609,22 +611,81 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
         }
 
         "start_live_timer" => {
-            if let Some(handle) = state.app_handle.get() {
+            let mut live = state.live_item.lock();
+            if let Some(store::DisplayItem::Timer(ref mut t)) = *live {
                 let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
-                let _ = crate::update_timer(handle.clone(), state.clone(), Some(now_ms)).await;
+                t.started_at = Some(now_ms);
+                let item = live.clone().unwrap();
+                drop(live);
+                
+                if let Some(handle) = state.app_handle.get() {
+                    use tauri::Emitter;
+                    let _ = handle.emit(
+                        "transcription-update",
+                        json!({
+                            "text": display_item_text(&item),
+                            "detected_item": item.clone(),
+                            "confidence": 1.0,
+                            "source": "manual",
+                            "is_partial": false,
+                        })
+                    );
+                }
+                let lt = state.lower_third.lock().clone();
+                let msg = json!({ "type": "state", "live_item": item, "lt": lt });
+                broadcast_str(state, msg.to_string());
             }
         }
 
         "stop_live_timer" => {
-            if let Some(handle) = state.app_handle.get() {
-                let _ = crate::update_timer(handle.clone(), state.clone(), None).await;
+            let mut live = state.live_item.lock();
+            if let Some(store::DisplayItem::Timer(ref mut t)) = *live {
+                t.started_at = None;
+                let item = live.clone().unwrap();
+                drop(live);
+                
+                if let Some(handle) = state.app_handle.get() {
+                    use tauri::Emitter;
+                    let _ = handle.emit(
+                        "transcription-update",
+                        json!({
+                            "text": display_item_text(&item),
+                            "detected_item": item.clone(),
+                            "confidence": 1.0,
+                            "source": "manual",
+                            "is_partial": false,
+                        })
+                    );
+                }
+                let lt = state.lower_third.lock().clone();
+                let msg = json!({ "type": "state", "live_item": item, "lt": lt });
+                broadcast_str(state, msg.to_string());
             }
         }
 
         "reset_live_timer" => {
-            if let Some(handle) = state.app_handle.get() {
-                // To reset, we stop and then immediately restart with None, effectively clearing started_at
-                let _ = crate::update_timer(handle.clone(), state.clone(), None).await;
+            let mut live = state.live_item.lock();
+            if let Some(store::DisplayItem::Timer(ref mut t)) = *live {
+                t.started_at = None;
+                let item = live.clone().unwrap();
+                drop(live);
+                
+                if let Some(handle) = state.app_handle.get() {
+                    use tauri::Emitter;
+                    let _ = handle.emit(
+                        "transcription-update",
+                        json!({
+                            "text": display_item_text(&item),
+                            "detected_item": item.clone(),
+                            "confidence": 1.0,
+                            "source": "manual",
+                            "is_partial": false,
+                        })
+                    );
+                }
+                let lt = state.lower_third.lock().clone();
+                let msg = json!({ "type": "state", "live_item": item, "lt": lt });
+                broadcast_str(state, msg.to_string());
             }
         }
 
