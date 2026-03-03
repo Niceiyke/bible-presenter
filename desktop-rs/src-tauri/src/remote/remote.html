@@ -513,8 +513,8 @@ function handleMsg(msg) {
       break;
 
     case 'settings_update': // New case for settings updates
-      if (typeof msg.settings.is_blanked === 'boolean') {
-        isOutputBlanked = msg.settings.is_blanked;
+      if (typeof msg.settings === 'boolean') {
+        isOutputBlanked = msg.settings;
         renderBlankButton();
       }
       break;
@@ -1053,7 +1053,7 @@ function renderMediaList(filter) {
     el.innerHTML = `
       ${mediaPreview}
       <div class="media-item-info">
-        <div class="media-item-name">${m.name}</div>
+        <div class="media-item-name" data-id="${m.id}">${m.name}</div>
         ${m.category ? `<div class="media-item-meta">Category: ${m.category}</div>` : ''}
         ${m.tags && m.tags.length > 0 ? `<div class="media-item-meta">Tags: ${m.tags.join(', ')}</div>` : ''}
       </div>
