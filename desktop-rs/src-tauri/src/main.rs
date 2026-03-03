@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod remote;
+mod ndi;
 
 use bible_presenter_lib::{audio, engine, store};
 use ringbuf::traits::{Consumer, Observer};
