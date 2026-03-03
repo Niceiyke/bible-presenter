@@ -12,6 +12,13 @@ export interface MediaSlice {
       tags: string[],
       category: string | undefined
     ) => Promise<void>;
+    bulkDeleteMedia: (ids: string[]) => Promise<void>;
+    bulkUpdateMedia: (
+      ids: string[],
+      tagsToAdd: string[],
+      tagsToRemove: string[],
+      category: string | undefined
+    ) => Promise<void>;
   cameras: MediaDeviceInfo[];
   setCameras: (v: MediaDeviceInfo[]) => void;
   enabledLocalCameras: Set<string>;
