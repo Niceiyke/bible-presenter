@@ -175,6 +175,11 @@ impl BibleStore {
         // Pre-load verse_cache for every version (in specific order to match embeddings)
         let mut verse_cache: Vec<CachedVerse> = Vec::new();
         for (v_idx, version) in available_versions.iter().enumerate() {
+            // Only include versions that are actually in the semantic embeddings file
+            if !EMBEDDED_VERSIONS.contains(&version.as_str()) {
+                continue;
+            }
+
             let mut stmt = conn.prepare(
                 "SELECT title, chapter, verse FROM super_bible \
                  WHERE version = ?1 AND language = 'EN' AND text IS NOT NULL AND text != '' \

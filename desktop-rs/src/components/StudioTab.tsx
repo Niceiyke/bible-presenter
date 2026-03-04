@@ -104,16 +104,19 @@ export function StudioTab({ onStage, onLive, onOpenEditor, onNewPresentation }: 
             {expandedStudioPresId === pres.id && studioSlides[pres.id] && (
               <div className="p-3 bg-black/20 border-t border-slate-800">
                 <div className="grid grid-cols-2 gap-2">
-                  {studioSlides[pres.id].map((slide, idx) => (
-                    <SlideThumbnail
-                      key={slide.id}
-                      slide={slide}
-                      index={idx}
-                      onStage={onStage ? (() => onStage(buildCustomSlideItem(pres, studioSlides[pres.id], idx))) : (() => {})}
-                      onLive={onLive ? (() => onLive(buildCustomSlideItem(pres, studioSlides[pres.id], idx))) : (() => {})}
-                      appDataDir={appDataDir}
-                    />
-                  ))}
+                  {studioSlides[pres.id].map((slide, idx) => {
+                    const displayItem = buildCustomSlideItem(pres, studioSlides[pres.id], idx);
+                    return (
+                      <SlideThumbnail
+                        key={slide.id}
+                        slide={slide}
+                        index={idx}
+                        onStage={onStage ? (() => onStage(displayItem)) : undefined}
+                        onLive={onLive ? (() => onLive(displayItem)) : undefined}
+                        appDataDir={appDataDir}
+                      />
+                    );
+                  })}
                 </div>
               </div>
             )}

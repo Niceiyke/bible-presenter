@@ -304,6 +304,7 @@ export interface PresentationSettings {
   media_background?: BackgroundSetting;
   logo_path?: string;
   background_logo_path?: string;
+  background_logo_fit?: MediaFitMode;
   show_background_logo?: boolean;
   is_blanked: boolean;
   font_size: number;

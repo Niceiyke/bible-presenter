@@ -805,6 +805,7 @@ async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) -> Res
                     }
                 }
             }
+            let _ = window.set_ignore_cursor_events(true);
             window.show().map_err(|e: tauri::Error| e.to_string())?;
             window
                 .set_focus()

@@ -58,22 +58,7 @@ export function OutputWindow() {
   const MAX_RECONNECT_ATTEMPTS = 15; // ~8.5 min of retrying
   const sceneCameraHandlersRef = useRef<Map<string, (msg: any) => void>>(new Map());
   const [windowScale, setWindowScale] = useState(1);
-  const [showCursor, setShowCursor] = useState(true);
-  const cursorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMounted = useRef(true);
-
-  useEffect(() => {
-    const handleMouseMove = () => {
-      setShowCursor(true);
-      if (cursorTimerRef.current) clearTimeout(cursorTimerRef.current);
-      cursorTimerRef.current = setTimeout(() => setShowCursor(false), 3000);
-    };
-    window.addEventListener("mousemove", handleMouseMove);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      if (cursorTimerRef.current) clearTimeout(cursorTimerRef.current);
-    };
-  }, []);
 
   // Calculate font scale based on current window height relative to 1080p reference
   useEffect(() => {
@@ -416,7 +401,7 @@ export function OutputWindow() {
 
   return (
     <div
-      className={`h-screen w-screen overflow-hidden relative ${showCursor ? 'cursor-default' : 'cursor-none'}`}
+      className="h-screen w-screen overflow-hidden relative cursor-none"
       style={
         cameraBgId || isLanCameraLive || videoBg
           ? { color: colors.verseText }
@@ -429,7 +414,8 @@ export function OutputWindow() {
           {settings.background_logo_path.toLowerCase().match(/\.(mp4|webm|mov|mkv|avi)$/) ? (
             <video
               src={convertFileSrc(settings.background_logo_path)}
-              className="w-full h-full object-cover"
+              className="w-full h-full"
+              style={{ objectFit: settings.background_logo_fit ?? "cover" }}
               autoPlay
               loop
               muted
@@ -437,7 +423,8 @@ export function OutputWindow() {
           ) : (
             <img
               src={convertFileSrc(settings.background_logo_path)}
-              className="w-full h-full object-cover"
+              className="w-full h-full"
+              style={{ objectFit: settings.background_logo_fit ?? "cover" }}
               alt="Background Logo"
             />
           )}
