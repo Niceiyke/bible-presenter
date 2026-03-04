@@ -70,16 +70,16 @@ pub async fn start(state: Arc<AppState>, port: u16) {
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
     match tokio::net::TcpListener::bind(addr).await {
         Ok(listener) => {
-            println!("[remote] Listening on http://{}", addr);
+            state.log(&format!("[remote] Listening on http://{}", addr));
             if let Err(e) = axum::serve(
                 listener,
                 app.into_make_service_with_connect_info::<SocketAddr>(),
             ).await {
-                eprintln!("[remote] Server error: {}", e);
+                state.log(&format!("[remote] Server error: {}", e));
             }
         }
         Err(e) => {
-            eprintln!("[remote] Failed to bind port {}: {}", port, e);
+            state.log(&format!("[remote] Failed to bind port {}: {}", port, e));
         }
     }
 }

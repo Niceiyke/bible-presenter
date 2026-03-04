@@ -5,6 +5,7 @@ mod remote;
 mod ndi;
 
 use bible_presenter_lib::{audio, engine, store};
+use store::{log_msg, SystemLog};
 use ringbuf::traits::{Consumer, Observer};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -167,60 +168,6 @@ impl Clone for AppState {
 }
 
 // ---------------------------------------------------------------------------
-// Logging helper
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Serialize)]
-struct SystemLog {
-    level: String,
-    message: String,
-    timestamp: u64,
-}
-
-fn log_msg<M: Manager<tauri::Wry> + Emitter<tauri::Wry>>(manager: &M, message: &str) {
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    let log = SystemLog {
-        level: "info".to_string(),
-        message: message.to_string(),
-        timestamp,
-    };
-
-    let _ = manager.emit("system-log", &log);
-
-    if let Ok(path) = manager.path().app_log_dir() {
-        if !path.exists() {
-            let _ = std::fs::create_dir_all(&path);
-        }
-        let log_file = path.join("app.log");
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_file) {
-            let _ = writeln!(file, "[{}] {}", timestamp, message);
-        }
-    }
-    println!("{}", message);
-}
-
-#[allow(dead_code)]
-fn log_msg_handle(handle: &tauri::AppHandle, message: &str, level: &str) {
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    let log = SystemLog {
-        level: level.to_string(),
-        message: message.to_string(),
-        timestamp,
-    };
-
-    let _ = handle.emit("system-log", &log);
-    println!("[{}] {}: {}", timestamp, level.to_uppercase(), message);
-}
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -283,6 +230,14 @@ fn is_hallucination(text: &str) -> bool {
 }
 
 impl AppState {
+    pub fn log(&self, message: &str) {
+        if let Some(app) = self.app_handle.get() {
+            log_msg(app, message);
+        } else {
+            println!("{}", message);
+        }
+    }
+
     pub async fn get_or_init_engine(&self, app: &tauri::AppHandle) -> Result<Arc<engine::TranscriptionEngine>, String> {
         let engine = { self.engine.lock().clone() };
         if let Some(e) = engine {
@@ -700,7 +655,7 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
                                 });
                                 Some((text, verse.map(store::DisplayItem::Verse), confidence))
                             }).await.ok().flatten(),
-                            Err(e) => { eprintln!("[cloud] {}", e); None }
+                            Err(e) => { log_msg(&app, &format!("[cloud] {}", e)); None }
                         };
                         cloud_in_flight.store(false, Ordering::Relaxed);
                         outcome
@@ -979,10 +934,11 @@ async fn get_bible_versions(state: State<'_, AppState>) -> Result<Vec<String>, S
 
 #[tauri::command]
 async fn set_bible_version(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     version: String,
 ) -> Result<(), String> {
-    state.store.set_active_version(&version);
+    state.store.set_active_version(&app, &version);
     Ok(())
 }
 
@@ -1027,7 +983,7 @@ async fn search_semantic_query(
             match engine.embed(&query) {
                 Ok(embedding) => {
                     log_msg(&app, "Embedding generated. Searching HNSW index...");
-                    let results = state.store.search_top_n_semantic(&embedding, 20);
+                    let results = state.store.search_top_n_semantic(&app, &embedding, 20);
                     if !results.is_empty() {
                         log_msg(&app, &format!("Semantic search for '{}' returned {} results.", query, results.len()));
                         return Ok(SearchResponse {
@@ -1040,13 +996,11 @@ async fn search_semantic_query(
                 }
                 Err(e) => {
                     log_msg(&app, &format!("Embedding error: {}", e));
-                    eprintln!("Embedding error, falling back to keyword search: {}", e);
                 }
             }
         }
         Err(e) => {
             log_msg(&app, &format!("Failed to lazy-load engine for semantic search: {}", e));
-            eprintln!("Failed to lazy-load engine for semantic search: {}", e);
         }
     }
 
@@ -2061,11 +2015,12 @@ async fn list_transcripts(state: State<'_, AppState>) -> Result<Vec<String>, Str
 /// Persists the value to transcription config on disk.
 #[tauri::command]
 async fn set_confidence_threshold(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     threshold: f32,
 ) -> Result<(), String> {
     let clamped = threshold.clamp(0.0, 1.0);
-    state.store.set_confidence_threshold(clamped);
+    state.store.set_confidence_threshold(&app, clamped);
     {
         let mut config = state.transcription_config.lock();
         config.confidence_threshold = clamped;
