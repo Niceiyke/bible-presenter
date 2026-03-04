@@ -319,6 +319,12 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
     let cloud_model = state.transcription_config.lock().cloud_model.clone();
     let cloud_language = state.transcription_config.lock().cloud_language.clone();
 
+    let use_cloud_stream = cloud_provider
+        .as_deref()
+        .map(engine::cloud_stream::provider_supports_streaming)
+        .unwrap_or(false)
+        && cloud_api_key.as_ref().map_or(false, |k| !k.is_empty());
+
     // ── Lazy-load AI models ───────────────────────────────────────────────
     let engine = match state.get_or_init_engine(&app).await {
         Ok(e) => e,
@@ -1593,10 +1599,12 @@ async fn get_remote_info(state: State<'_, AppState>) -> Result<RemoteInfo, Strin
 
     // Collect all local IPv4 addresses (excluding loopback)
     let mut lan_urls: Vec<(String, String)> = Vec::new();
-    if let Ok(ifas) = local_ip_address::list_af_inet_netifas() {
+    if let Ok(ifas) = local_ip_address::list_afinet_netifas() {
         for (name, ip) in ifas {
-            if ip.is_ipv4() && !ip.is_loopback() {
-                lan_urls.push((name, format!("http://{}:{}", ip, port)));
+            if let std::net::IpAddr::V4(ipv4) = ip {
+                if !ipv4.is_loopback() {
+                    lan_urls.push((name, format!("http://{}:{}", ipv4, port)));
+                }
             }
         }
     }
