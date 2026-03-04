@@ -1023,8 +1023,10 @@ async fn search_semantic_query(
     // 2. Try semantic search
     match state.get_or_init_engine(&app).await {
         Ok(engine) => {
+            log_msg(&app, &format!("Generating embedding for query: '{}'...", query));
             match engine.embed(&query) {
                 Ok(embedding) => {
+                    log_msg(&app, "Embedding generated. Searching HNSW index...");
                     let results = state.store.search_top_n_semantic(&embedding, 20);
                     if !results.is_empty() {
                         log_msg(&app, &format!("Semantic search for '{}' returned {} results.", query, results.len()));
@@ -1037,7 +1039,7 @@ async fn search_semantic_query(
                     }
                 }
                 Err(e) => {
-                    log_msg(&app, &format!("Embedding error, falling back to keyword search: {}", e));
+                    log_msg(&app, &format!("Embedding error: {}", e));
                     eprintln!("Embedding error, falling back to keyword search: {}", e);
                 }
             }
