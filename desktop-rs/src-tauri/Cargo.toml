@@ -1,6 +1,6 @@
 [package]
 name = "bible-presenter-rs"
-version = "1.2.5"
+version = "1.2.6"
 description = "A professional, real-time Bible projection tool for churches."
 authors = ["Bible Presenter Team"]
 edition = "2021"
