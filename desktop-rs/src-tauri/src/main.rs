@@ -203,6 +203,7 @@ fn log_msg(app: &tauri::App, message: &str) {
     println!("{}", message);
 }
 
+#[allow(dead_code)]
 fn log_msg_handle(handle: &tauri::AppHandle, message: &str, level: &str) {
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

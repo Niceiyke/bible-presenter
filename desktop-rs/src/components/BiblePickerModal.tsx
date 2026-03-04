@@ -16,13 +16,17 @@ export function BiblePickerModal({ onSelect, onClose }: BiblePickerModalProps) {
   const [searchResults, setSearchResults] = useState<Verse[]>([]);
   const [searchMode, setSearchMode] = useState<"quick" | "semantic">("quick");
 
+  const [searchError, setSearchError] = useState<string | null>(null);
+
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
+    setSearchError(null);
     try {
       const results: any = await invoke("search_semantic_query", { query: searchQuery });
       setSearchResults(results);
-    } catch (err) {
+    } catch (err: any) {
+      setSearchError(`Search failed: ${err.message || err || "Unknown error"}`);
       console.error("Search failed:", err);
     }
   };
@@ -88,19 +92,24 @@ export function BiblePickerModal({ onSelect, onClose }: BiblePickerModalProps) {
               }}
             />
           ) : (
-            <form onSubmit={handleSearch} className="flex gap-2">
-              <input
-                autoFocus
-                type="text"
-                placeholder="Search by topic or reference..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
-              />
-              <button type="submit" className="bg-amber-500 hover:bg-amber-400 text-black font-bold px-4 py-2 rounded-lg text-xs transition-all">
-                SEARCH
-              </button>
-            </form>
+            <>
+              <form onSubmit={handleSearch} className="flex gap-2">
+                <input
+                  autoFocus
+                  type="text"
+                  placeholder="Search by topic or reference..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                />
+                <button type="submit" className="bg-amber-500 hover:bg-amber-400 text-black font-bold px-4 py-2 rounded-lg text-xs transition-all">
+                  SEARCH
+                </button>
+              </form>
+              {searchError && (
+                <p className="text-red-400 text-[10px] mb-2 px-1">{searchError}</p>
+              )}
+            </>
           )}
         </div>
 

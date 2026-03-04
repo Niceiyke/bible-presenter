@@ -564,10 +564,10 @@ impl BibleStore {
 
         let conn = self.conn.lock();
         let mut stmt = conn.prepare_cached(
-            "SELECT title, text, version, chapter, verse FROM super_bible \
-             JOIN super_bible_fts ON super_bible.rowid = super_bible_fts.rowid \
-             WHERE super_bible_fts MATCH ?1 \
-             ORDER BY rank \
+            "SELECT b.title, b.text, b.version, b.chapter, b.verse FROM super_bible b \
+             JOIN super_bible_fts f ON b.rowid = f.rowid \
+             WHERE f.super_bible_fts MATCH ?1 \
+             ORDER BY f.rank \
              LIMIT 100"
         )?;
 
@@ -576,9 +576,10 @@ impl BibleStore {
         let mut results = Vec::new();
 
         let rows = stmt.query_map(params![cleaned_query], |row| {
+            let text: Option<String> = row.get(1)?;
             Ok(Verse {
                 book: row.get(0)?,
-                text: row.get(1)?,
+                text: text.unwrap_or_default(),
                 version: row.get(2)?,
                 chapter: row.get(3)?,
                 verse: row.get(4)?,
@@ -589,7 +590,9 @@ impl BibleStore {
 
         let mut matched_verses = Vec::new();
         for row in rows {
-            matched_verses.push(row?);
+            if let Ok(v) = row {
+                matched_verses.push(v);
+            }
         }
 
         // Pass 1: results in active version
@@ -641,17 +644,18 @@ impl BibleStore {
 
         let conn = self.conn.lock();
         let mut stmt = conn.prepare_cached(
-            "SELECT title, text, version, chapter, verse FROM super_bible \
-             JOIN super_bible_fts ON super_bible.rowid = super_bible_fts.rowid \
-             WHERE super_bible_fts MATCH ?1 AND super_bible.version = ?2 \
-             ORDER BY rank \
+            "SELECT b.title, b.text, b.version, b.chapter, b.verse FROM super_bible b \
+             JOIN super_bible_fts f ON b.rowid = f.rowid \
+             WHERE f.super_bible_fts MATCH ?1 AND b.version = ?2 \
+             ORDER BY f.rank \
              LIMIT 20"
         )?;
 
         let rows = stmt.query_map(params![cleaned_query, version], |row| {
+            let text: Option<String> = row.get(1)?;
             Ok(Verse {
                 book: row.get(0)?,
-                text: row.get(1)?,
+                text: text.unwrap_or_default(),
                 version: row.get(2)?,
                 chapter: row.get(3)?,
                 verse: row.get(4)?,
@@ -662,7 +666,9 @@ impl BibleStore {
 
         let mut results = Vec::new();
         for row in rows {
-            results.push(row?);
+            if let Ok(v) = row {
+                results.push(v);
+            }
         }
         Ok(results)
     }
