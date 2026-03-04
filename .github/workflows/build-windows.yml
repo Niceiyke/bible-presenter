@@ -59,9 +59,6 @@ jobs:
           curl -L "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx" \
             -o "desktop-rs/src-tauri/models/all-minilm-l6-v2.onnx"
 
-          echo "Downloading Whisper base model..."
-          curl -L "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" \
-            -o "desktop-rs/src-tauri/models/whisper-base.bin"
 
           # ── Bible database (public repo) ────────────────────────────────
           echo "Downloading super_bible.db (~59 MB)..."
@@ -89,7 +86,6 @@ jobs:
 
           for f in \
             "desktop-rs/src-tauri/models/all-minilm-l6-v2.onnx" \
-            "desktop-rs/src-tauri/models/whisper-base.bin" \
             "desktop-rs/src-tauri/models/tokenizer.json" \
             "desktop-rs/src-tauri/bible_data/super_bible.db" \
             "desktop-rs/src-tauri/bible_data/all_versions_embeddings.npy" \
