@@ -26,10 +26,12 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
     selectedVerse, setSelectedVerse,
     searchQuery, setSearchQuery,
     searchResults, setSearchResults,
+    searchMethod, setSearchMethod,
     bibleOpen, setBibleOpen,
     recentItems,
     historyOpen, setHistoryOpen,
     stagedItem,
+    liveItem,
   } = useAppStore();
 
   const [historyTab, setHistoryTab] = useState<"bible" | "media" | "presentation">("bible");
@@ -51,17 +53,17 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
     }
   }, [selectedBook, selectedChapter, bibleVersion]);
 
-  const lastSyncedStagedId = useRef<string | null>(null);
+  const lastSyncedLiveId = useRef<string | null>(null);
 
-  // Sync stagedItem TO activeChapter AND dropdowns
+  // Sync liveItem TO activeChapter AND dropdowns
   useEffect(() => {
-    if (stagedItem?.type === "Verse") {
-      const { book, chapter, verse, version } = stagedItem.data;
-      const stagedId = `${book}-${chapter}-${verse}-${version}`;
+    if (liveItem?.type === "Verse") {
+      const { book, chapter, verse, version } = liveItem.data;
+      const liveId = `${book}-${chapter}-${verse}-${version}`;
       
-      // Only sync if the staged item has actually changed
-      if (stagedId !== lastSyncedStagedId.current) {
-        lastSyncedStagedId.current = stagedId;
+      // Only sync if the live item has actually changed
+      if (liveId !== lastSyncedLiveId.current) {
+        lastSyncedLiveId.current = liveId;
         
         // Only sync to dropdowns if they actually differ to avoid triggering cascades unnecessarily
         if (book !== selectedBook || chapter !== selectedChapter || verse !== selectedVerse) {
@@ -75,11 +77,11 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
         
         setActiveChapter({ book, chapter, version });
       }
-    } else if (!stagedItem) {
-      lastSyncedStagedId.current = null;
+    } else if (!liveItem) {
+      lastSyncedLiveId.current = null;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stagedItem]);
+  }, [liveItem]);
 
   // Load verses when activeChapter changes
   useEffect(() => {
@@ -103,11 +105,14 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
     setIsSearching(true);
     setSearchError(null);
     try {
-      const results: any = await invoke("search_semantic_query", { query: searchQuery });
-      setSearchResults(results);
+      const response: any = await invoke("search_semantic_query", { query: searchQuery });
+      setSearchResults(response.results);
+      setSearchMethod(response.method);
     } catch (err: any) {
       setSearchError(`Search failed: ${err.message || err || "Unknown error"}`);
       console.error("Search failed:", err);
+      setSearchResults([]);
+      setSearchMethod("");
     } finally {
       setIsSearching(false);
     }
@@ -283,31 +288,40 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                                      stagedItem.data.chapter === v.chapter && 
                                      stagedItem.data.verse === v.verse &&
                                      stagedItem.data.version === v.version;
+                    const isLive = liveItem?.type === "Verse" && 
+                                   liveItem.data.book === v.book && 
+                                   liveItem.data.chapter === v.chapter && 
+                                   liveItem.data.verse === v.verse &&
+                                   liveItem.data.version === v.version;
                     return (
                       <div
                         key={`${v.book}-${v.chapter}-${v.verse}`}
                         className={`p-2 rounded border transition-all group relative cursor-pointer ${
                           isStaged 
                             ? "bg-amber-500/10 border-amber-500/50" 
+                            : isLive
+                            ? "bg-red-500/10 border-red-500/50"
                             : "bg-slate-800/40 border-transparent hover:border-slate-700"
                         }`}
                         onClick={() => onStage({ type: "Verse", data: v })}
                       >
                         <div className="flex gap-2">
-                          <span className={`text-[10px] font-black shrink-0 ${isStaged ? "text-amber-500" : "text-slate-600"}`}>
+                          <span className={`text-[10px] font-black shrink-0 ${isStaged ? "text-amber-500" : isLive ? "text-red-500" : "text-slate-600"}`}>
                             {v.verse}
                           </span>
-                          <p className={`text-[11px] leading-snug ${isStaged ? "text-slate-200" : "text-slate-400 group-hover:text-slate-300"}`}>
+                          <p className={`text-[11px] leading-snug ${isStaged ? "text-slate-200" : isLive ? "text-white font-medium" : "text-slate-400 group-hover:text-slate-300"}`}>
                             {v.text}
                           </p>
                         </div>
                         <div className="absolute right-1 bottom-1 opacity-0 group-hover:opacity-100 transition-all flex gap-1">
-                          <button
-                            onClick={(e) => { e.stopPropagation(); onLive({ type: "Verse", data: v }); }}
-                            className="bg-amber-500 hover:bg-amber-400 text-black text-[9px] font-black px-2 py-0.5 rounded shadow-lg"
-                          >
-                            GO LIVE
-                          </button>
+                          {!isLive && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); onLive({ type: "Verse", data: v }); }}
+                              className="bg-amber-500 hover:bg-amber-400 text-black text-[9px] font-black px-2 py-0.5 rounded shadow-lg"
+                            >
+                              GO LIVE
+                            </button>
+                          )}
                         </div>
                       </div>
                     );
@@ -440,6 +454,22 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
             <div className="space-y-2 overflow-y-auto">
               {!isSearching && searchResults.length === 0 && searchQuery && !searchError && (
                 <p className="text-slate-600 text-xs italic text-center pt-4">No results found</p>
+              )}
+              {searchResults.length > 0 && searchMethod && (
+                <div className="flex items-center gap-2 mb-2 px-1">
+                  <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase tracking-widest ${
+                    searchMethod === "semantic" ? "bg-blue-500/20 text-blue-400 border border-blue-500/30" :
+                    searchMethod === "reference" ? "bg-amber-500/20 text-amber-400 border border-amber-500/30" :
+                    "bg-slate-700/50 text-slate-400 border border-slate-600/30"
+                  }`}>
+                    {searchMethod === "semantic" ? "Semantic Match" :
+                     searchMethod === "reference" ? "Reference Match" :
+                     "Keyword Match"}
+                  </span>
+                  <span className="text-[9px] text-slate-600 font-bold uppercase tracking-tighter">
+                    {searchResults.length} results
+                  </span>
+                </div>
               )}
               {searchResults.map((v: any) => (
                 <div key={`${v.version}-${v.book}-${v.chapter}-${v.verse}`} className="p-3 rounded-lg bg-slate-800/50 border border-transparent hover:border-slate-700 transition-all group">

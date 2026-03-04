@@ -1005,16 +1005,25 @@ async fn search_manual(
         .map_err(|e: anyhow::Error| e.to_string())
 }
 
+#[derive(Serialize)]
+pub struct SearchResponse {
+    pub results: Vec<store::Verse>,
+    pub method: String,
+}
+
 /// Semantic search across all versions using ONNX embedding; falls back to keyword search.
 #[tauri::command]
 async fn search_semantic_query(
     state: State<'_, AppState>,
     query: String,
-) -> Result<Vec<store::Verse>, String> {
+) -> Result<SearchResponse, String> {
     // 1. Try direct reference match first
     let ref_results = state.store.detect_verses_by_ref(&query);
     if !ref_results.is_empty() {
-        return Ok(ref_results);
+        return Ok(SearchResponse {
+            results: ref_results,
+            method: "reference".to_string(),
+        });
     }
 
     // 2. Try semantic search
@@ -1025,7 +1034,10 @@ async fn search_semantic_query(
             Ok(embedding) => {
                 let results = state.store.search_top_n_semantic(&embedding, 20);
                 if !results.is_empty() {
-                    return Ok(results);
+                    return Ok(SearchResponse {
+                        results,
+                        method: "semantic".to_string(),
+                    });
                 }
             }
             Err(e) => {
@@ -1035,7 +1047,14 @@ async fn search_semantic_query(
     }
 
     // 3. Fallback to improved keyword search
-    state.store.search_manual_all_versions(&query).map_err(|e| e.to_string())
+    let results = state.store
+        .search_manual_all_versions(&query)
+        .map_err(|e| e.to_string())?;
+
+    Ok(SearchResponse {
+        results,
+        method: "keyword".to_string(),
+    })
 }
 
 /// Read a file from disk and return its contents as a base64 string.

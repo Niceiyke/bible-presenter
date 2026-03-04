@@ -76,11 +76,9 @@ export function QuickBiblePicker({
         setBookQuery("");
       } else {
         await onStage(item);
-        setLockedBook(null);
-        setCvText("");
-        setBookQuery("");
-        // Return focus to book input after staging
-        setTimeout(() => bookInputRef.current?.focus(), 50);
+        // Do not clear inputs or focus on single enter (stage)
+        // This allows double-enter to work and keeps the current context
+        cvInputRef.current?.select();
       }
     } catch (err) {
       console.error("QuickBiblePicker:", err);

@@ -43,6 +43,8 @@ pub struct Verse {
     pub split_index: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_splits: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score: Option<f32>,
 }
 
 /// A compact version of Verse for memory-efficient caching.
@@ -512,6 +514,8 @@ impl BibleStore {
                 break;
             }
             let idx = neighbor.d_id;
+            let score = (1.0 - (neighbor.distance as f32) / 2.0).clamp(0.0, 1.0);
+
             if let Some(matched) = self.verse_cache.get(idx) {
                 let book = &self.books[matched.book_idx as usize];
                 let key = (matched.book_idx, matched.chapter, matched.verse);
@@ -529,7 +533,8 @@ impl BibleStore {
                             .flatten();
                     }
 
-                    if let Some(v) = verse {
+                    if let Some(mut v) = verse {
+                        v.score = Some(score);
                         results.push(v);
                     }
                 }
@@ -558,15 +563,23 @@ impl BibleStore {
 
         let cleaned_query = words
             .iter()
-            .map(|w| format!("\"{}\"*", w.replace('"', "")))
+            .map(|w| {
+                let sanitized = w.chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+                if sanitized.is_empty() { String::new() } else { format!("\"{}\"*", sanitized) }
+            })
+            .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join(" ");
+
+        if cleaned_query.is_empty() {
+            return Ok(Vec::new());
+        }
 
         let conn = self.conn.lock();
         let mut stmt = conn.prepare_cached(
             "SELECT b.title, b.text, b.version, b.chapter, b.verse FROM super_bible b \
              JOIN super_bible_fts f ON b.rowid = f.rowid \
-             WHERE f.super_bible_fts MATCH ?1 \
+             WHERE f MATCH ?1 \
              ORDER BY f.rank \
              LIMIT 100"
         )?;
@@ -617,6 +630,38 @@ impl BibleStore {
             }
         }
 
+        // Pass 3: Fallback to LIKE search if FTS found nothing or too little
+        if results.len() < 5 {
+            let like_pattern = format!("%{}%", query.trim().replace(' ', "%"));
+            let mut stmt_like = conn.prepare_cached(
+                "SELECT title, text, version, chapter, verse FROM super_bible \
+                 WHERE text LIKE ?1 \
+                 ORDER BY (CASE WHEN version = ?2 THEN 0 ELSE 1 END), rowid \
+                 LIMIT 50"
+            )?;
+            let like_rows = stmt_like.query_map(params![like_pattern, active_version], |row| {
+                let text: Option<String> = row.get(1)?;
+                Ok(Verse {
+                    book: row.get(0)?,
+                    text: text.unwrap_or_default(),
+                    version: row.get(2)?,
+                    chapter: row.get(3)?,
+                    verse: row.get(4)?,
+                    split_index: None,
+                    total_splits: None,
+                })
+            })?;
+            for row in like_rows {
+                if let Ok(v) = row {
+                    let key = (v.book.clone(), v.chapter, v.verse);
+                    if seen.insert(key) {
+                        results.push(v);
+                        if results.len() >= 20 { break; }
+                    }
+                }
+            }
+        }
+
         Ok(results)
     }
 
@@ -638,17 +683,25 @@ impl BibleStore {
 
         let cleaned_query = words
             .iter()
-            .map(|w| format!("\"{}\"*", w.replace('"', "")))
+            .map(|w| {
+                let sanitized = w.chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+                if sanitized.is_empty() { String::new() } else { format!("\"{}\"*", sanitized) }
+            })
+            .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join(" ");
+
+        if cleaned_query.is_empty() {
+            return Ok(Vec::new());
+        }
 
         let conn = self.conn.lock();
         let mut stmt = conn.prepare_cached(
             "SELECT b.title, b.text, b.version, b.chapter, b.verse FROM super_bible b \
              JOIN super_bible_fts f ON b.rowid = f.rowid \
-             WHERE f.super_bible_fts MATCH ?1 AND b.version = ?2 \
+             WHERE f MATCH ?1 AND b.version = ?2 \
              ORDER BY f.rank \
-             LIMIT 20"
+             LIMIT 50"
         )?;
 
         let rows = stmt.query_map(params![cleaned_query, version], |row| {
@@ -670,6 +723,34 @@ impl BibleStore {
                 results.push(v);
             }
         }
+
+        // Fallback to LIKE if FTS fails
+        if results.is_empty() {
+            let like_pattern = format!("%{}%", query.trim().replace(' ', "%"));
+            let mut stmt_like = conn.prepare_cached(
+                "SELECT title, text, version, chapter, verse FROM super_bible \
+                 WHERE text LIKE ?1 AND version = ?2 \
+                 ORDER BY rowid LIMIT 50"
+            )?;
+            let like_rows = stmt_like.query_map(params![like_pattern, version], |row| {
+                let text: Option<String> = row.get(1)?;
+                Ok(Verse {
+                    book: row.get(0)?,
+                    text: text.unwrap_or_default(),
+                    version: row.get(2)?,
+                    chapter: row.get(3)?,
+                    verse: row.get(4)?,
+                    split_index: None,
+                    total_splits: None,
+                })
+            })?;
+            for row in like_rows {
+                if let Ok(v) = row {
+                    results.push(v);
+                }
+            }
+        }
+
         Ok(results)
     }
 
