@@ -424,6 +424,16 @@ export default function App() {
     } else setNextVerse(null);
   }, [liveItem, bibleVersion, setNextVerse]);
 
+  // Auto-dismiss suggested item (AI peel) after 5 seconds
+  useEffect(() => {
+    if (suggestedItem) {
+      const t = setTimeout(() => {
+        setSuggestedItem(null);
+      }, 5000);
+      return () => clearTimeout(t);
+    }
+  }, [suggestedItem, setSuggestedItem]);
+
   // ── Keyboard shortcuts ─────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -710,7 +720,8 @@ export default function App() {
                 onLoadMedia={handleFileUpload} onDeleteMedia={handleDeleteMedia}
                 onSetAsLogo={(path) => updateSettings({ ...settings, logo_path: path })}
                 onSetAsBackgroundLogo={(path) => {
-                  updateSettings({ ...settings, background_logo_path: path, show_background_logo: true });
+                  const fit = media.find(m => m.path === path)?.fit_mode ?? "cover";
+                  updateSettings({ ...settings, background_logo_path: path, background_logo_fit: fit, show_background_logo: true });
                   setToast("Background logo set & activated");
                 }}
                 remoteUrl={remoteUrl} remotePin={remotePin}
@@ -1023,7 +1034,6 @@ export default function App() {
       )}
 
       <ShortcutsModal isOpen={showShortcuts} onClose={() => setShowShortcuts(false)} />
-      <MusicPlayer />
       <LogViewer />
     </div>
   );
