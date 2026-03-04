@@ -282,6 +282,51 @@ fn is_hallucination(text: &str) -> bool {
     false
 }
 
+impl AppState {
+    pub async fn get_or_init_engine(&self, app: &tauri::AppHandle) -> Result<Arc<engine::TranscriptionEngine>, String> {
+        let engine = { self.engine.lock().clone() };
+        if let Some(e) = engine {
+            return Ok(e);
+        }
+
+        let whisper_path_opt = self.whisper_path.lock().clone();
+        let use_gpu = self.transcription_config.lock().use_gpu;
+        let embedding_path = self.embedding_model_path.to_str().unwrap_or("").to_string();
+        let tokenizer_path = self.tokenizer_path.to_str().unwrap_or("").to_string();
+
+        let whisper_str: Option<String> = whisper_path_opt.map(|p| p.to_str().unwrap_or("").to_string());
+        let engine_mutex = self.engine.clone();
+
+        log_msg(app, "Lazy-loading AI engine for semantic search...");
+
+        match tokio::task::spawn_blocking(move || {
+            engine::TranscriptionEngine::new(
+                whisper_str.as_deref(),
+                &embedding_path,
+                &tokenizer_path,
+                use_gpu,
+            )
+        })
+        .await
+        {
+            Ok(Ok(e)) => {
+                let e = Arc::new(e);
+                *engine_mutex.lock() = Some(e.clone());
+                log_msg(app, "AI engine loaded successfully.");
+                Ok(e)
+            }
+            Ok(Err(e)) => {
+                log_msg(app, &format!("AI engine failed to load: {}", e));
+                Err(format!("AI models failed to load: {}", e))
+            }
+            Err(e) => {
+                log_msg(app, &format!("AI engine loading task panicked: {}", e));
+                Err(format!("Model loading task panicked: {}", e))
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
@@ -315,18 +360,15 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
     context_buffer_arc.lock().clear();
 
     // Snapshot cloud config
-    let cloud_provider   = state.transcription_config.lock().cloud_provider.clone();
-    let cloud_api_key    = state.transcription_config.lock().cloud_api_key.clone();
-    let cloud_hostname   = state.transcription_config.lock().cloud_hostname.clone();
-    let cloud_model      = state.transcription_config.lock().cloud_model.clone();
-    let cloud_language   = state.transcription_config.lock().cloud_language.clone();
-    let whisper_path_opt = state.whisper_path.lock().clone();
-    let use_gpu          = state.transcription_config.lock().use_gpu;
-    let embedding_path   = state.embedding_model_path.to_str().unwrap_or("").to_string();
-    let tokenizer_path   = state.tokenizer_path.to_str().unwrap_or("").to_string();
+    let cloud_provider = state.transcription_config.lock().cloud_provider.clone();
+    let cloud_api_key = state.transcription_config.lock().cloud_api_key.clone();
+    let cloud_hostname = state.transcription_config.lock().cloud_hostname.clone();
+    let cloud_model = state.transcription_config.lock().cloud_model.clone();
+    let cloud_language = state.transcription_config.lock().cloud_language.clone();
     drop(state);
 
-    let use_cloud_stream = cloud_provider.as_deref()
+    let use_cloud_stream = cloud_provider
+        .as_deref()
         .map(engine::cloud_stream::provider_supports_streaming)
         .unwrap_or(false)
         && cloud_api_key.as_ref().map_or(false, |k| !k.is_empty());
@@ -337,65 +379,19 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
 
     let use_cloud = use_cloud_stream || use_cloud_rest;
 
-    // Local mode requires a whisper model; cloud mode skips it
-    let whisper_str: Option<String> = if use_cloud {
-        None
-    } else {
-        match whisper_path_opt {
-            Some(p) => Some(p.to_str().unwrap_or("").to_string()),
-            None => {
-                *is_running.lock() = false;
-                let _ = app.emit("session-status", SessionStatus {
-                    status: "error".to_string(),
-                    message: "No Whisper model selected. Download one in Settings → Transcription Model.".to_string(),
-                });
-                return Err("No Whisper model selected.".to_string());
-            }
-        }
-    };
-
     // ── Lazy-load AI models ───────────────────────────────────────────────
-    let engine = { engine_mutex.lock().clone() };
-    let engine = match engine {
-        Some(e) => e,
-        None => {
-            let loading_msg = if use_cloud {
-                "Connecting to cloud transcription service...".to_string()
-            } else {
-                "Loading AI models (first-time setup, ~10 s)...".to_string()
-            };
-            let _ = app.emit("session-status", SessionStatus {
-                status: "loading".to_string(),
-                message: loading_msg,
-            });
-
-            let whisper_str_clone = whisper_str.clone();
-            match tokio::task::spawn_blocking(move || {
-                engine::TranscriptionEngine::new(
-                    whisper_str_clone.as_deref(),
-                    &embedding_path,
-                    &tokenizer_path,
-                    use_gpu,
-                )
-            }).await {
-                Ok(Ok(e)) => {
-                    let e = Arc::new(e);
-                    *engine_mutex.lock() = Some(e.clone());
-                    e
-                }
-                Ok(Err(e)) => {
-                    *is_running.lock() = false;
-                    let _ = app.emit("session-status", SessionStatus {
-                        status: "error".to_string(),
-                        message: format!("AI models failed to load: {}", e),
-                    });
-                    return Err(format!("AI models failed to load: {}", e));
-                }
-                Err(e) => {
-                    *is_running.lock() = false;
-                    return Err(format!("Model loading task panicked: {}", e));
-                }
-            }
+    let engine = match state.get_or_init_engine(&app).await {
+        Ok(e) => e,
+        Err(e) => {
+            *is_running.lock() = false;
+            let _ = app.emit(
+                "session-status",
+                SessionStatus {
+                    status: "error".to_string(),
+                    message: format!("AI models failed to load: {}", e),
+                },
+            );
+            return Err(e);
         }
     };
 
@@ -1014,6 +1010,7 @@ pub struct SearchResponse {
 /// Semantic search across all versions using ONNX embedding; falls back to keyword search.
 #[tauri::command]
 async fn search_semantic_query(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     query: String,
 ) -> Result<SearchResponse, String> {
@@ -1027,22 +1024,30 @@ async fn search_semantic_query(
     }
 
     // 2. Try semantic search
-    // Clone the inner Arc while holding the lock briefly, then release before embed().
-    let engine_opt: Option<Arc<engine::TranscriptionEngine>> = state.engine.lock().clone();
-    if let Some(engine) = engine_opt {
-        match engine.embed(&query) {
-            Ok(embedding) => {
-                let results = state.store.search_top_n_semantic(&embedding, 20);
-                if !results.is_empty() {
-                    return Ok(SearchResponse {
-                        results,
-                        method: "semantic".to_string(),
-                    });
+    match state.get_or_init_engine(&app).await {
+        Ok(engine) => {
+            match engine.embed(&query) {
+                Ok(embedding) => {
+                    let results = state.store.search_top_n_semantic(&embedding, 20);
+                    if !results.is_empty() {
+                        log_msg(&app, &format!("Semantic search for '{}' returned {} results.", query, results.len()));
+                        return Ok(SearchResponse {
+                            results,
+                            method: "semantic".to_string(),
+                        });
+                    } else {
+                        log_msg(&app, &format!("Semantic search for '{}' returned no matches. Falling back to keyword search...", query));
+                    }
+                }
+                Err(e) => {
+                    log_msg(&app, &format!("Embedding error, falling back to keyword search: {}", e));
+                    eprintln!("Embedding error, falling back to keyword search: {}", e);
                 }
             }
-            Err(e) => {
-                eprintln!("Embedding error, falling back to keyword search: {}", e);
-            }
+        }
+        Err(e) => {
+            log_msg(&app, &format!("Failed to lazy-load engine for semantic search: {}", e));
+            eprintln!("Failed to lazy-load engine for semantic search: {}", e);
         }
     }
 
@@ -2217,7 +2222,11 @@ fn main() {
 
             let store = match store::BibleStore::new(db_path_str, embeddings_path_str) {
                 Ok(s) => {
-                    log_msg(app, "Bible Store loaded successfully.");
+                    if s.is_embeddings_loaded() {
+                        log_msg(app, "Bible Store: Semantic search index loaded.");
+                    } else {
+                        log_msg(app, "Bible Store: Embeddings not found. Semantic search disabled (falling back to keyword).");
+                    }
                     Arc::new(s)
                 }
                 Err(e) => {
