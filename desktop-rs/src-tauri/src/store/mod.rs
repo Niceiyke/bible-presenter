@@ -81,7 +81,7 @@ pub struct BibleStore {
 }
 
 impl BibleStore {
-    pub fn new(db_path: &str, embeddings_path: Option<&str>) -> anyhow::Result<Self> {
+    pub fn new(app: &tauri::AppHandle, db_path: &str, embeddings_path: Option<&str>) -> anyhow::Result<Self> {
         let conn = Connection::open(db_path)?;
 
         if let Err(e) = conn.execute("PRAGMA journal_mode=WAL", []) {
@@ -182,7 +182,14 @@ impl BibleStore {
                             let n_dims = 384;
                             
                             if f32_count < n_rows * n_dims {
-                                eprintln!("CRITICAL: Embedding file size mismatch (found {}, expected at least {}). Semantic search disabled to prevent incorrect results.", f32_count, n_rows * n_dims);
+                                let msg = format!("CRITICAL: Embedding file size mismatch (found {} floats, expected {}). Semantic search disabled.", f32_count, n_rows * n_dims);
+                                eprintln!("{}", msg);
+                                // Emit a raw event since we don't have log_msg here
+                                let _ = app.emit("system-log", serde_json::json!({
+                                    "level": "error",
+                                    "message": msg,
+                                    "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
+                                }));
                             } else {
                                 println!("BibleStore: Building HNSW index from MMap'd data ({} rows, {} dims)", n_rows, n_dims);
                                 

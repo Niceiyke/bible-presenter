@@ -2217,12 +2217,12 @@ fn main() {
                 .ok_or_else(|| format!("Bible DB path contains non-UTF-8 characters: {:?}", db_path))?;
             let embeddings_path_str = embeddings_path.to_str();
 
-            let store = match store::BibleStore::new(db_path_str, embeddings_path_str) {
+            let store = match store::BibleStore::new(app.handle(), db_path_str, embeddings_path_str) {
                 Ok(s) => {
                     if s.is_embeddings_loaded() {
                         log_msg(app, "Bible Store: Semantic search index loaded.");
                     } else {
-                        log_msg(app, "Bible Store: Embeddings not found. Semantic search disabled (falling back to keyword).");
+                        log_msg(app, "Bible Store: Embeddings not found or mismatched. Semantic search disabled.");
                     }
                     Arc::new(s)
                 }
