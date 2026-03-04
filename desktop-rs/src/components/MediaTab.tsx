@@ -454,7 +454,7 @@ export function MediaTab({
             {cameraSources.size === 0 ? (
               <div className="text-center py-6 text-slate-600 text-xs">
                 <p className="mb-2">No LAN cameras connected.</p>
-                <p className="text-[9px]">Share <span className="text-amber-400 font-mono">{remoteUrl || "http://…"}/camera</span> with a phone and enter PIN <span className="text-amber-400 font-mono">{remotePin || "––––"}</span>.</p>
+                <p className="text-[9px]">Share <span className="text-amber-400 font-mono">{remoteUrl || "http://…"}/camera</span> with a phone and enter PIN <span className="text-amber-400 font-mono">{remotePin || "––––––"}</span>.</p>
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-2">

@@ -168,6 +168,8 @@
     <input class="pin-digit" type="text" inputmode="numeric" maxlength="1" autocomplete="off">
     <input class="pin-digit" type="text" inputmode="numeric" maxlength="1" autocomplete="off">
     <input class="pin-digit" type="text" inputmode="numeric" maxlength="1" autocomplete="off">
+    <input class="pin-digit" type="text" inputmode="numeric" maxlength="1" autocomplete="off">
+    <input class="pin-digit" type="text" inputmode="numeric" maxlength="1" autocomplete="off">
   </div>
   <div class="pin-err" id="pin-err"></div>
   <button class="btn-primary" id="pin-submit">Connect</button>
@@ -681,8 +683,8 @@ const pinDigits = document.querySelectorAll('.pin-digit');
 pinDigits.forEach((inp, i) => {
   inp.addEventListener('input', () => {
     inp.value = inp.value.replace(/\D/g, '');
-    if (inp.value && i < 3) pinDigits[i + 1].focus();
-    if (i === 3 && inp.value) submitPin();
+    if (inp.value && i < 5) pinDigits[i + 1].focus();
+    if (i === 5 && inp.value) submitPin();
   });
   inp.addEventListener('keydown', (e) => {
     if (e.key === 'Backspace' && !inp.value && i > 0) pinDigits[i - 1].focus();
@@ -690,9 +692,9 @@ pinDigits.forEach((inp, i) => {
   });
   inp.addEventListener('paste', (e) => {
     const text = (e.clipboardData || window.clipboardData).getData('text').replace(/\D/g, '');
-    if (text.length >= 4) {
-      [...text.slice(0,4)].forEach((ch, j) => { pinDigits[j].value = ch; });
-      pinDigits[3].focus();
+    if (text.length >= 6) {
+      [...text.slice(0,6)].forEach((ch, j) => { pinDigits[j].value = ch; });
+      pinDigits[5].focus();
       e.preventDefault();
       submitPin();
     }
@@ -710,7 +712,7 @@ function clearPin() {
 
 function submitPin() {
   const pin = getPinValue();
-  if (pin.length < 4) { document.getElementById('pin-err').textContent = 'Enter all 4 digits.'; return; }
+  if (pin.length < 6) { document.getElementById('pin-err').textContent = 'Enter all 6 digits.'; return; }
   document.getElementById('pin-err').textContent = '';
   sessionStorage.setItem('bp_pin', pin);
   sendAuth(pin);
