@@ -8,6 +8,7 @@ export interface Verse {
   version: string;
   split_index?: number;
   total_splits?: number;
+  score?: number;
 }
 
 export type MediaFitMode = "contain" | "cover" | "fill";

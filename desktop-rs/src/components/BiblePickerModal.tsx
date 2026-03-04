@@ -23,8 +23,8 @@ export function BiblePickerModal({ onSelect, onClose }: BiblePickerModalProps) {
     if (!searchQuery.trim()) return;
     setSearchError(null);
     try {
-      const results: any = await invoke("search_semantic_query", { query: searchQuery });
-      setSearchResults(results);
+      const response: any = await invoke("search_semantic_query", { query: searchQuery });
+      setSearchResults(response.results);
     } catch (err: any) {
       setSearchError(`Search failed: ${err.message || err || "Unknown error"}`);
       console.error("Search failed:", err);
