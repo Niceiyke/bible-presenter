@@ -465,6 +465,7 @@ impl BibleStore {
                     version: version.to_string(),
                     split_index: None,
                     total_splits: None,
+                    score: None,
                 }))
             } else {
                 Ok(None) // skip verses with NULL text
@@ -598,6 +599,7 @@ impl BibleStore {
                 verse: row.get(4)?,
                 split_index: None,
                 total_splits: None,
+                score: None,
             })
         })?;
 
@@ -649,6 +651,7 @@ impl BibleStore {
                     verse: row.get(4)?,
                     split_index: None,
                     total_splits: None,
+                    score: None,
                 })
             })?;
             for row in like_rows {
@@ -714,6 +717,7 @@ impl BibleStore {
                 verse: row.get(4)?,
                 split_index: None,
                 total_splits: None,
+                score: None,
             })
         })?;
 
@@ -742,6 +746,7 @@ impl BibleStore {
                     verse: row.get(4)?,
                     split_index: None,
                     total_splits: None,
+                    score: None,
                 })
             })?;
             for row in like_rows {
@@ -808,6 +813,7 @@ impl BibleStore {
                 version: version.to_string(),
                 split_index: None,
                 total_splits: None,
+                score: None,
             })
         })?;
         let mut verses = Vec::new();
