@@ -66,7 +66,7 @@ def generate(db_path: str, out_dir: str) -> None:
             """
             SELECT title, chapter, verse, text
             FROM super_bible
-            WHERE version = ? AND language = 'EN'
+            WHERE version = ? AND language = 'EN' AND text IS NOT NULL AND text != ''
             ORDER BY book, chapter, verse
             """,
             (version,),

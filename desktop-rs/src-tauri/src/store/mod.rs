@@ -76,6 +76,8 @@ pub struct BibleStore {
     active_version: Mutex<String>,
     /// Minimum cosine similarity score for a semantic match to be accepted (default 0.55).
     confidence_threshold: Mutex<f32>,
+    /// Whether semantic search index (HNSW) was successfully loaded.
+    embeddings_loaded: bool,
 }
 
 impl BibleStore {
@@ -313,6 +315,8 @@ impl BibleStore {
             r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)",
         ])?;
 
+        let embeddings_loaded = hnsw_index.is_some();
+
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             _patterns: patterns,
@@ -324,7 +328,12 @@ impl BibleStore {
             hnsw_index,
             active_version: Mutex::new(default_version),
             confidence_threshold: Mutex::new(0.55),
+            embeddings_loaded,
         })
+    }
+
+    pub fn is_embeddings_loaded(&self) -> bool {
+        self.embeddings_loaded
     }
 
     pub fn get_available_versions(&self) -> Vec<String> {
