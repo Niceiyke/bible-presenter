@@ -3,14 +3,14 @@
 Generate stacked sentence-transformer embeddings for multiple Bible versions.
 
 Usage:
-    pip install sentence-transformers numpy
+    pip install sentence-transformers numpy usearch
     python scripts/generate_embeddings.py \
         --db path/to/super_bible.db \
         --out src-tauri/bible_data/
 
 This produces:
-    all_versions_embeddings.npy  — float32 array (N_total_verses, 384), L2-normalized
-    verse_index.json             — list of {book, chapter, verse, version} matching each row
+    all_versions_embeddings.usearch  — Usearch HNSW index for fast MMap on desktop
+    verse_index.json                 — list of {book, chapter, verse, version} matching each row
 
 The row order is: all verses of VERSION_1 (sorted by book/chapter/verse),
 then all of VERSION_2, etc. This matches exactly how BibleStore loads
@@ -39,8 +39,16 @@ def generate(db_path: str, out_dir: str) -> None:
         print("  pip install sentence-transformers")
         sys.exit(1)
 
-    print("Loading model all-MiniLM-L6-v2 ...")
-    model = SentenceTransformer("all-MiniLM-L6-v2")
+    try:
+        from usearch.index import Index
+    except ImportError:
+        print("ERROR: usearch not installed.")
+        print("  pip install usearch")
+        sys.exit(1)
+
+    model_name = "BAAI/bge-small-en-v1.5"
+    print(f"Loading model {model_name} ...")
+    model = SentenceTransformer(model_name)
 
     conn = sqlite3.connect(db_path)
 
@@ -101,11 +109,15 @@ def generate(db_path: str, out_dir: str) -> None:
     stacked = np.vstack(all_embeddings)  # (N_total, 384)
     print(f"\nStacked matrix shape: {stacked.shape}")
 
-    npy_path = out / "all_versions_embeddings.npy"
+    usearch_path = out / "all_versions_embeddings.usearch"
     idx_path = out / "verse_index.json"
 
-    np.save(str(npy_path), stacked)
-    print(f"Saved embeddings → {npy_path}")
+    print("Building USearch Index...")
+    index = Index(ndim=384, metric="cos", dtype="f32")
+    index.add(np.arange(len(stacked)), stacked)
+    
+    print(f"Saving USearch Index → {usearch_path}")
+    index.save(str(usearch_path))
 
     with open(idx_path, "w") as f:
         json.dump(verse_index, f, separators=(",", ":"))
@@ -116,7 +128,7 @@ def generate(db_path: str, out_dir: str) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate stacked Bible embeddings")
+    parser = argparse.ArgumentParser(description="Generate stacked Bible embeddings using USearch")
     parser.add_argument(
         "--db",
         default="src-tauri/bible_data/super_bible.db",

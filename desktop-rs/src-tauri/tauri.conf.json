@@ -70,9 +70,9 @@
     ],
     "resources": [
       "models/tokenizer.json",
-      "models/all-minilm-l6-v2.onnx",
+      "models/bge-small-en-v1.5.onnx",
       "bible_data/super_bible.db",
-      "bible_data/all_versions_embeddings.npy",
+      "bible_data/all_versions_embeddings.usearch",
       "bible_data/verse_index.json",
       "bible_data/hymns.json"
     ],

@@ -7,7 +7,7 @@ use once_cell::sync::Lazy;
 use regex::{Regex, RegexSet};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use hnsw_rs::prelude::*;
+use usearch::Index;
 use memmap2::Mmap;
 use tauri::{Emitter, Manager};
 
@@ -101,12 +101,10 @@ pub struct BibleStore {
     /// All available versions found in the DB, for indexing CachedVerse.
     available_versions: Vec<String>,
     /// All verses from all embedded versions, stacked in EMBEDDED_VERSIONS order.
-    /// verse_cache[i] corresponds to row i in the HNSW index.
+    /// verse_cache[i] corresponds to row i in the USearch index.
     verse_cache: Vec<CachedVerse>,
-    /// Memory-mapped embeddings file.
-    _mmap: Option<Mmap>,
-    /// HNSW index for fast semantic search (L2 distance on normalized embeddings).
-    hnsw_index: Option<Hnsw<'static, f32, DistL2>>,
+    /// Usearch index for fast semantic search (Cosine distance on normalized embeddings).
+    usearch_index: Option<Index>,
     /// Currently active version for display queries.
     active_version: Mutex<String>,
     /// Minimum cosine similarity score for a semantic match to be accepted (default 0.55).
@@ -201,73 +199,30 @@ impl BibleStore {
         }
         log_msg(app, &format!("BibleStore: Total cached verses: {}", verse_cache.len()));
 
-        // Load stacked embeddings into HNSW index (Memory-Mapped)
-        let mut hnsw_index = None;
-        let mut _mmap = None;
+        // Load stacked embeddings into Usearch index
+        let mut usearch_index = None;
         if let Some(path) = embeddings_path {
-            match File::open(path) {
-                Ok(file) => {
-                    match unsafe { Mmap::map(&file) } {
-                        Ok(m) => {
-                            // Simple NPY header parsing to find data offset
-                            let header_len_raw = &m[8..10];
-                            let header_len = u16::from_le_bytes([header_len_raw[0], header_len_raw[1]]) as usize;
-                            let data_offset = 10 + header_len;
-                            
-                            // Get pointer to raw f32 data
-                            let byte_slice = &m[data_offset..];
-                            let f32_count = byte_slice.len() / 4;
-                            
-                            let n_rows = verse_cache.len();
-                            let n_dims = 384;
-                            
-                            if f32_count < n_rows * n_dims {
-                                let msg = format!("CRITICAL: Embedding file size mismatch (found {} floats, expected {}). Semantic search disabled.", f32_count, n_rows * n_dims);
-                                log_msg(app, &msg);
-                            } else {
-                                log_msg(app, &format!("BibleStore: Building HNSW index from MMap'd data ({} rows, {} dims)", n_rows, n_dims));
-                                
-                                // Safely handle alignment by copying to an aligned buffer or using unaligned reads.
-                                // ARM systems (Apple Silicon) will SIGBUS if we cast an unaligned byte slice to f32.
-                                let f32_data: Vec<f32> = if (byte_slice.as_ptr() as usize) % 4 == 0 {
-                                    unsafe { std::slice::from_raw_parts(byte_slice.as_ptr() as *const f32, n_rows * n_dims).to_vec() }
-                                } else {
-                                    let mut v = Vec::with_capacity(n_rows * n_dims);
-                                    unsafe {
-                                        for i in 0..(n_rows * n_dims) {
-                                            let ptr = byte_slice.as_ptr().add(i * 4);
-                                            v.push(std::ptr::read_unaligned(ptr as *const f32));
-                                        }
-                                    }
-                                    v
-                                };
-
-                                let max_nb_conn = 16;
-                                let max_layer = 16;
-                                let ef_construction = 200;
-                                let hnsw = Hnsw::new(max_nb_conn, n_rows, max_layer, ef_construction, DistL2 {});
-                                
-                                // Insert embeddings in parallel
-                                let data_to_insert: Vec<(Vec<f32>, usize)> = (0..n_rows)
-                                    .map(|i| {
-                                        let start = i * n_dims;
-                                        let end = start + n_dims;
-                                        (f32_data[start..end].to_vec(), i)
-                                    })
-                                    .collect();
-                                let insert_refs: Vec<(&Vec<f32>, usize)> = data_to_insert
-                                    .iter()
-                                    .map(|(v, id)| (v, *id))
-                                    .collect();
-                                hnsw.parallel_insert(&insert_refs);
-                                hnsw_index = Some(hnsw);
-                                _mmap = Some(m);
+            if std::path::Path::new(path).exists() {
+                log_msg(app, &format!("BibleStore: Loading USearch index from {}", path));
+                let mut options = usearch::IndexOptions::default();
+                options.dimensions = 384;
+                options.metric = usearch::MetricKind::Cos;
+                options.quantization = usearch::ScalarKind::F32;
+                match usearch::Index::new(&options) {
+                    Ok(idx) => {
+                        if let Err(e) = idx.view(path) {
+                            log_msg(app, &format!("Warning: Failed to view USearch index: {}", e));
+                        } else {
+                            if idx.size() != verse_cache.len() {
+                                log_msg(app, &format!("Warning: USearch index size ({}) does not match verse_cache ({})", idx.size(), verse_cache.len()));
                             }
+                            usearch_index = Some(idx);
                         }
-                        Err(e) => log_msg(app, &format!("Warning: Failed to MMap embeddings: {}", e)),
-                    }
-                },
-                Err(e) => log_msg(app, &format!("Warning: Could not open embeddings at {}: {}", path, e)),
+                    },
+                    Err(e) => log_msg(app, &format!("Warning: Failed to create USearch index: {}", e)),
+                }
+            } else {
+                log_msg(app, &format!("Warning: USearch index not found at {}", path));
             }
         }
 
@@ -356,7 +311,7 @@ impl BibleStore {
             r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)",
         ])?;
 
-        let embeddings_loaded = hnsw_index.is_some();
+        let embeddings_loaded = usearch_index.is_some();
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -365,8 +320,7 @@ impl BibleStore {
             books,
             available_versions,
             verse_cache,
-            _mmap,
-            hnsw_index,
+            usearch_index,
             active_version: Mutex::new(default_version),
             confidence_threshold: Mutex::new(0.55),
             embeddings_loaded,
@@ -460,28 +414,30 @@ impl BibleStore {
     /// Searches the full stacked embeddings matrix across all embedded versions.
     /// Returns `(Option<Verse>, score)` — the best match and its cosine similarity score.
     fn search_semantic_stacked(&self, embedding: &[f32]) -> (Option<Verse>, f32) {
-        let hnsw = match self.hnsw_index.as_ref() {
-            Some(h) => h,
+        let index = match self.usearch_index.as_ref() {
+            Some(i) => i,
             None => return (None, 0.0),
         };
 
-        let search_results = hnsw.search(embedding, 1, 128);
-        if search_results.is_empty() {
+        let matches = match index.search(embedding, 1) {
+            Ok(m) => m,
+            Err(_) => return (None, 0.0),
+        };
+
+        if matches.keys.is_empty() {
             return (None, 0.0);
         }
 
-        let neighbor = &search_results[0];
-        // hnsw_rs DistL2 returns the *squared* L2 distance (no sqrt).
-        // For L2-normalized unit vectors: cos_sim = 1 - d²/2.
-        // Clamp to [0,1] — anti-correlated embeddings would give negative values.
-        let score = (1.0 - (neighbor.distance as f32) / 2.0).clamp(0.0, 1.0);
+        let distance = matches.distances[0];
+        // Usearch cos metric gives Cosine Distance (0 = identical, 2 = opposite).
+        let score = (1.0 - distance).clamp(0.0, 1.0);
 
         let threshold = *self.confidence_threshold.lock();
         if score < threshold {
             return (None, score);
         }
 
-        let idx = neighbor.d_id;
+        let idx = matches.keys[0] as usize;
         if let Some(matched) = self.verse_cache.get(idx) {
             let book = &self.books[matched.book_idx as usize];
             let version = &self.available_versions[matched.version_idx as usize];
@@ -549,28 +505,35 @@ impl BibleStore {
     /// Returns top-N unique (book,chapter,verse) results.
     /// Prefers the active version for the displayed text.
     pub fn search_top_n_semantic(&self, app: &tauri::AppHandle, embedding: &[f32], top_n: usize) -> Vec<Verse> {
-        let hnsw = match self.hnsw_index.as_ref() {
-            Some(h) => h,
+        let index = match self.usearch_index.as_ref() {
+            Some(i) => i,
             None => {
-                log_msg(app, "BibleStore: search_top_n_semantic failed: HNSW index not loaded.");
+                log_msg(app, "BibleStore: search_top_n_semantic failed: USearch index not loaded.");
                 return Vec::new();
             }
         };
 
-        // Search HNSW for top results (using slightly more than top_n to allow deduplication)
-        let search_results = hnsw.search(embedding, top_n * 2, 128);
-        log_msg(app, &format!("BibleStore: HNSW search returned {} raw results.", search_results.len()));
+        // Search USearch for top results (using slightly more than top_n to allow deduplication)
+        let matches = match index.search(embedding, top_n * 2) {
+            Ok(m) => m,
+            Err(e) => {
+                log_msg(app, &format!("BibleStore: USearch search failed: {}", e));
+                return Vec::new();
+            }
+        };
+        log_msg(app, &format!("BibleStore: USearch search returned {} raw results.", matches.keys.len()));
         
         let active_version = self.get_active_version();
         let mut seen = std::collections::HashSet::new();
         let mut results = Vec::new();
 
-        for (i, neighbor) in search_results.iter().enumerate() {
+        for i in 0..matches.keys.len() {
             if results.len() >= top_n {
                 break;
             }
-            let idx = neighbor.d_id;
-            let score = (1.0 - (neighbor.distance as f32) / 2.0).clamp(0.0, 1.0);
+            let idx = matches.keys[i] as usize;
+            let distance = matches.distances[i];
+            let score = (1.0 - distance).clamp(0.0, 1.0);
 
             if let Some(matched) = self.verse_cache.get(idx) {
                 let book = &self.books[matched.book_idx as usize];

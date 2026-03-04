@@ -956,7 +956,7 @@ pub struct SearchResponse {
     pub method: String,
 }
 
-/// Semantic search across all versions using ONNX embedding; falls back to keyword search.
+/// Hybrid search across all versions using ONNX embedding + keyword search with RRF.
 #[tauri::command]
 async fn search_semantic_query(
     app: tauri::AppHandle,
@@ -972,42 +972,65 @@ async fn search_semantic_query(
         });
     }
 
-    // 2. Try semantic search
+    // 2. Hybrid Search (Semantic + FTS5 Keyword)
+    let fts_results = state.store.search_manual_all_versions(&query).unwrap_or_default();
+    let mut semantic_results = Vec::new();
+
     match state.get_or_init_engine(&app).await {
         Ok(engine) => {
             log_msg(&app, &format!("Generating embedding for query: '{}'...", query));
             match engine.embed(&query) {
                 Ok(embedding) => {
-                    log_msg(&app, "Embedding generated. Searching HNSW index...");
-                    let results = state.store.search_top_n_semantic(&app, &embedding, 20);
-                    if !results.is_empty() {
-                        log_msg(&app, &format!("Semantic search for '{}' returned {} results.", query, results.len()));
-                        return Ok(SearchResponse {
-                            results,
-                            method: "semantic".to_string(),
-                        });
-                    } else {
-                        log_msg(&app, &format!("Semantic search for '{}' returned no matches. Falling back to keyword search...", query));
-                    }
+                    log_msg(&app, "Embedding generated. Searching USearch index...");
+                    // Get a bit more for semantic to ensure good fusion overlap
+                    semantic_results = state.store.search_top_n_semantic(&app, &embedding, 50);
                 }
-                Err(e) => {
-                    log_msg(&app, &format!("Embedding error: {}", e));
-                }
+                Err(e) => log_msg(&app, &format!("Embedding error: {}", e)),
             }
         }
-        Err(e) => {
-            log_msg(&app, &format!("Failed to lazy-load engine for semantic search: {}", e));
+        Err(e) => log_msg(&app, &format!("Failed to lazy-load engine for semantic search: {}", e)),
+    }
+
+    if semantic_results.is_empty() && fts_results.is_empty() {
+        return Ok(SearchResponse {
+            results: Vec::new(),
+            method: "hybrid".to_string(),
+        });
+    }
+
+    // Merging via Reciprocal Rank Fusion (RRF)
+    let mut rrf_scores: std::collections::HashMap<(String, i32, i32), (f32, store::Verse)> = std::collections::HashMap::new();
+    let k = 60.0;
+
+    for (rank, verse) in fts_results.into_iter().enumerate() {
+        let key = (verse.book.clone(), verse.chapter, verse.verse);
+        let score = 1.0 / (k + rank as f32 + 1.0);
+        rrf_scores.insert(key, (score, verse));
+    }
+
+    for (rank, verse) in semantic_results.into_iter().enumerate() {
+        let key = (verse.book.clone(), verse.chapter, verse.verse);
+        let score = 1.0 / (k + rank as f32 + 1.0);
+        
+        let entry = rrf_scores.entry(key).or_insert((0.0, verse.clone()));
+        entry.0 += score;
+        
+        // Preserve semantic score if available, otherwise it stays as the one from FTS
+        if entry.1.score.is_none() || (verse.score.is_some() && verse.score > entry.1.score) {
+             entry.1.score = verse.score; 
         }
     }
 
-    // 3. Fallback to improved keyword search
-    let results = state.store
-        .search_manual_all_versions(&query)
-        .map_err(|e| e.to_string())?;
+    let mut final_results: Vec<(f32, store::Verse)> = rrf_scores.into_values().collect();
+    // Sort by RRF score descending
+    final_results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Map back to Verses and take top 20
+    let results: Vec<store::Verse> = final_results.into_iter().take(20).map(|(_, v)| v).collect();
 
     Ok(SearchResponse {
         results,
-        method: "keyword".to_string(),
+        method: "hybrid".to_string(),
     })
 }
 
@@ -1972,7 +1995,7 @@ async fn get_startup_status(
     };
 
     let db_path = resource_path.join("bible_data/super_bible.db");
-    let emb_path = resource_path.join("bible_data/all_versions_embeddings.npy");
+    let emb_path = resource_path.join("bible_data/all_versions_embeddings.usearch");
     let db_ok = db_path.exists();
     let emb_ok = emb_path.exists();
     let onnx_ok = state.embedding_model_path.exists();
@@ -2160,7 +2183,7 @@ fn main() {
             };
 
             // Bundled embedding + tokenizer paths (stay fixed)
-            let embedding_model_path = resource_path.join("models/all-minilm-l6-v2.onnx");
+            let embedding_model_path = resource_path.join("models/bge-small-en-v1.5.onnx");
             let tokenizer_path = resource_path.join("models/tokenizer.json");
             for (label, path) in [
                 ("ONNX model", &embedding_model_path),
@@ -2174,7 +2197,7 @@ fn main() {
             }
 
             let db_path = resource_path.join("bible_data/super_bible.db");
-            let embeddings_path = resource_path.join("bible_data/all_versions_embeddings.npy");
+            let embeddings_path = resource_path.join("bible_data/all_versions_embeddings.usearch");
 
             log_msg(app, &format!("Looking for DB at: {:?}", db_path));
             if !db_path.exists() {

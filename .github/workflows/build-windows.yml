@@ -56,8 +56,8 @@ jobs:
 
           # ── AI models (public HuggingFace) ────────────────────────────────
           echo "Downloading ONNX embedding model..."
-          curl -L "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx" \
-            -o "desktop-rs/src-tauri/models/all-minilm-l6-v2.onnx"
+          curl -L "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model.onnx" \
+            -o "desktop-rs/src-tauri/models/bge-small-en-v1.5.onnx"
 
 
           # ── Bible database (public repo) ────────────────────────────────
@@ -66,10 +66,10 @@ jobs:
             -o "desktop-rs/src-tauri/bible_data/super_bible.db"
 
           # ── Stacked embeddings (Google Drive) ──────────────────────────
-          echo "Downloading all_versions_embeddings.npy from Google Drive..."
+          echo "Downloading all_versions_embeddings.usearch from Google Drive..."
           pip install -q gdown
           gdown "https://drive.google.com/uc?id=18rQG5jnZQoM2v1l2EV71VWyTp38lEe5f" \
-            -O "desktop-rs/src-tauri/bible_data/all_versions_embeddings.npy"
+            -O "desktop-rs/src-tauri/bible_data/all_versions_embeddings.usearch"
 
           # ── verse_index.json (committed in repo) ────────────────────────
           if [ -f "desktop-rs/src-tauri/bible_data/verse_index.json" ]; then
@@ -85,10 +85,10 @@ jobs:
           ls -lh desktop-rs/src-tauri/bible_data/
 
           for f in \
-            "desktop-rs/src-tauri/models/all-minilm-l6-v2.onnx" \
+            "desktop-rs/src-tauri/models/bge-small-en-v1.5.onnx" \
             "desktop-rs/src-tauri/models/tokenizer.json" \
             "desktop-rs/src-tauri/bible_data/super_bible.db" \
-            "desktop-rs/src-tauri/bible_data/all_versions_embeddings.npy" \
+            "desktop-rs/src-tauri/bible_data/all_versions_embeddings.usearch" \
             "desktop-rs/src-tauri/bible_data/verse_index.json"; do
             if [ ! -f "$f" ]; then
               echo "CRITICAL: $f missing!"
@@ -97,44 +97,23 @@ jobs:
             echo "OK: $f ($(du -h "$f" | cut -f1))"
           done
 
-      - name: install numpy for validation
-        run: pip install -q numpy
-
-      - name: validate embeddings file
+      - name: validate usearch index
         shell: python
         run: |
-          import numpy as np, sys
-          path = 'desktop-rs/src-tauri/bible_data/all_versions_embeddings.npy'
-
-          # 1. Magic bytes — a Google Drive error page would fail here
-          with open(path, 'rb') as f:
-              magic = f.read(6)
-          if magic != b'\x93NUMPY':
-              print('CRITICAL: Not a valid .npy file. Magic bytes: ' + repr(magic))
-              print('This usually means Google Drive returned an HTML error page.')
+          import sys, os
+          path = 'desktop-rs/src-tauri/bible_data/all_versions_embeddings.usearch'
+          
+          if not os.path.exists(path):
+              print('CRITICAL: USearch index not found at ' + path)
               sys.exit(1)
-          print('Magic bytes OK: ' + repr(magic))
-
-          # 2. Shape and dtype
-          arr = np.load(path)
-          print('Shape : ' + str(arr.shape))
-          print('Dtype : ' + str(arr.dtype))
-
-          if arr.ndim != 2:
-              print('CRITICAL: Expected 2-D array, got ' + str(arr.ndim) + '-D')
+          
+          size_bytes = os.path.getsize(path)
+          print('Size of index: ' + str(size_bytes / (1024*1024)) + ' MB')
+          if size_bytes < 1000000: # at least 1MB
+              print('CRITICAL: USearch index too small, download likely failed.')
               sys.exit(1)
-          if arr.shape[1] != 384:
-              print('CRITICAL: Expected 384 embedding dims, got ' + str(arr.shape[1]))
-              sys.exit(1)
-          if arr.dtype != np.float32:
-              print('CRITICAL: Expected float32 dtype, got ' + str(arr.dtype))
-              sys.exit(1)
-          if arr.shape[0] < 1000:
-              print('CRITICAL: Only ' + str(arr.shape[0]) + ' rows - download likely truncated')
-              sys.exit(1)
-
-          print('PASSED: ' + str(arr.shape[0]) + ' verse vectors x 384 dims, dtype=float32')
-
+          
+          print('PASSED: USearch index validated.')
       - name: build and publish release
         uses: tauri-apps/tauri-action@v0
         env:
