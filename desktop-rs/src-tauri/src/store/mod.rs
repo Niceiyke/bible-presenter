@@ -136,7 +136,7 @@ impl BibleStore {
         available_versions.sort_by_key(|v| {
             EMBEDDED_VERSIONS.iter().position(|e| *e == v.as_str()).unwrap_or(usize::MAX)
         });
-        println!("BibleStore: Available versions: {:?}", available_versions);
+        log_msg(app, &format!("BibleStore: Available versions: {:?}", available_versions));
 
         // Pre-load verse_cache for every version (in specific order to match embeddings)
         let mut verse_cache: Vec<CachedVerse> = Vec::new();
@@ -160,7 +160,7 @@ impl BibleStore {
                 verse_cache.push(row?);
             }
         }
-        println!("BibleStore: Total cached verses: {}", verse_cache.len());
+        log_msg(app, &format!("BibleStore: Total cached verses: {}", verse_cache.len()));
 
         // Load stacked embeddings into HNSW index (Memory-Mapped)
         let mut hnsw_index = None;
@@ -517,17 +517,21 @@ impl BibleStore {
     pub fn search_top_n_semantic(&self, embedding: &[f32], top_n: usize) -> Vec<Verse> {
         let hnsw = match self.hnsw_index.as_ref() {
             Some(h) => h,
-            None => return Vec::new(),
+            None => {
+                println!("BibleStore: search_top_n_semantic failed: HNSW index not loaded.");
+                return Vec::new();
+            }
         };
 
         // Search HNSW for top results (using slightly more than top_n to allow deduplication)
         let search_results = hnsw.search(embedding, top_n * 2, 128);
+        println!("BibleStore: HNSW search returned {} raw results.", search_results.len());
         
         let active_version = self.get_active_version();
         let mut seen = std::collections::HashSet::new();
         let mut results = Vec::new();
 
-        for neighbor in search_results {
+        for (i, neighbor) in search_results.iter().enumerate() {
             if results.len() >= top_n {
                 break;
             }
@@ -554,10 +558,15 @@ impl BibleStore {
                     if let Some(mut v) = verse {
                         v.score = Some(score);
                         results.push(v);
+                    } else {
+                        println!("BibleStore: Result {} (idx {}) failed to find verse in DB: {} {}:{}", i, idx, book, matched.chapter, matched.verse);
                     }
                 }
+            } else {
+                println!("BibleStore: Result {} (idx {}) not found in verse_cache.", i, idx);
             }
         }
+        println!("BibleStore: search_top_n_semantic returning {} final results.", results.len());
         results
     }
 
