@@ -584,7 +584,7 @@ export default function App() {
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 bg-amber-500 rounded-lg flex items-center justify-center text-black font-black text-xl shadow-lg shadow-amber-500/20">BP</div>
-            <span className="font-black text-xs uppercase tracking-widest text-slate-400">Presenter <span className="text-amber-500/60">RS</span></span>
+            <span className="font-black text-xs uppercase tracking-widest text-slate-400 hidden xl:inline">Presenter <span className="text-amber-500/60">RS</span></span>
           </div>
           <nav className="flex gap-1 overflow-x-auto">
             {([
@@ -604,67 +604,76 @@ export default function App() {
           </nav>
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => {
-              invoke("clear_live").catch(console.error);
-              invoke("hide_lower_third").catch(console.error);
-              setLiveItem(null);
-              setLtVisible(false);
-            }}
-            className="px-3 py-1.5 bg-red-900/30 hover:bg-red-600 text-red-400 hover:text-white rounded-lg text-[10px] font-black uppercase transition-all flex items-center gap-2 border border-red-900/50"
-            title="Clear Output (Shift+C)"
-          >
-            <X size={14} /> Clear
-          </button>
-          <div className="h-8 w-px bg-slate-800 mx-2" />
-          <button
-            onClick={async () => {
-              if (sessionState === "idle") {
-                setSessionState("loading");
-                await invoke("start_session").catch((e: any) => {
-                  setAudioError(typeof e === "string" ? e : "Failed to start session");
-                  setSessionState("idle");
-                });
-              } else {
-                await invoke("stop_session").catch(() => {});
-              }
-            }}
-            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${
-              sessionState === "running"
-                ? "bg-red-700/60 hover:bg-red-600 text-red-300"
-                : sessionState === "loading"
-                ? "bg-amber-700/40 text-amber-400 cursor-wait"
-                : "bg-green-700/40 hover:bg-green-600 text-green-300"
-            }`}
-            disabled={sessionState === "loading"}
-            title={sessionState === "running" ? "Stop live transcription" : "Start live transcription"}
-          >
-            {sessionState === "running" ? "Stop" : sessionState === "loading" ? "Loading…" : "Start"}
-          </button>
-          <div className="flex flex-col items-end gap-0.5">
-            <div className="flex items-center gap-2 px-3 py-1 bg-slate-950 rounded-full border border-slate-800">
-              <div className="w-24 h-1.5 bg-slate-800 rounded-full overflow-hidden flex">
+        <div className="flex items-center gap-3">
+          {/* Live & Mic Controls */}
+          <div className="flex items-center gap-2 bg-slate-950 px-2 py-1.5 rounded-xl border border-slate-800/60 shadow-inner hidden md:flex">
+            <button
+              onClick={() => {
+                invoke("clear_live").catch(console.error);
+                invoke("hide_lower_third").catch(console.error);
+                setLiveItem(null);
+                setLtVisible(false);
+              }}
+              className="px-2.5 py-1 hover:bg-red-900/30 text-slate-400 hover:text-red-400 rounded transition-all flex items-center gap-1.5"
+              title="Clear Output (Shift+C)"
+            >
+              <X size={14} /> <span className="text-[10px] font-black uppercase tracking-wider hidden xl:inline">Clear</span>
+            </button>
+            <div className="w-px h-4 bg-slate-800" />
+            <button
+              onClick={async () => {
+                if (sessionState === "idle") {
+                  setSessionState("loading");
+                  await invoke("start_session").catch((e: any) => {
+                    setAudioError(typeof e === "string" ? e : "Failed to start session");
+                    setSessionState("idle");
+                  });
+                } else {
+                  await invoke("stop_session").catch(() => {});
+                }
+              }}
+              className={`px-2.5 py-1 rounded transition-all flex items-center gap-1.5 ${
+                sessionState === "running"
+                  ? "bg-red-700/20 hover:bg-red-700/40 text-red-400"
+                  : sessionState === "loading"
+                  ? "text-amber-400 cursor-wait"
+                  : "hover:bg-green-700/20 text-slate-400 hover:text-green-400"
+              }`}
+              disabled={sessionState === "loading"}
+              title={sessionState === "running" ? "Stop live transcription" : "Start live transcription"}
+            >
+              <Mic size={14} className={sessionState === "running" ? "animate-pulse" : ""} />
+              <span className="text-[10px] font-black uppercase tracking-wider hidden xl:inline">
+                {sessionState === "running" ? "Stop" : sessionState === "loading" ? "Wait" : "Live"}
+              </span>
+            </button>
+            <div className="flex items-center gap-2 px-2 border-l border-slate-800/50 pl-3 ml-1">
+              <div className="w-12 xl:w-20 h-1.5 bg-slate-900 rounded-full overflow-hidden flex">
                 <motion.div className="h-full bg-gradient-to-r from-green-500 via-yellow-500 to-red-500" animate={{ width: `${micLevel * 100}%` }} transition={{ type: "spring", bounce: 0, duration: 0.1 }} />
               </div>
-              <span className={`text-[8px] font-black uppercase ${sessionState === "running" ? "text-green-500" : "text-slate-600"}`}>{sessionState}</span>
             </div>
-            {settings.ndi_enabled && (
-              <div className="px-2 py-0.5 bg-teal-500/10 border border-teal-500/30 rounded flex items-center gap-1.5 animate-pulse">
-                <span className="w-1 h-1 rounded-full bg-teal-500" />
-                <span className="text-[8px] font-black text-teal-500 uppercase tracking-widest">NDI</span>
-              </div>
-            )}
           </div>
-          <button
-            onClick={() => { invoke("toggle_output_window"); setOutputVisible(v => !v); }}
-            className={`p-2 rounded-lg transition-all ${outputVisible ? "bg-green-500/20 text-green-400 ring-1 ring-green-500/40" : "text-slate-400 hover:text-green-400 hover:bg-green-500/10"}`}
-            title="Toggle Output Window (Ctrl+O)"
-          ><Monitor size={18} /></button>
-          <button onClick={() => invoke("toggle_design_window")} className="p-2 text-slate-400 hover:text-purple-400 hover:bg-purple-500/10 rounded-lg transition-all" title="Design Hub"><Layout size={18} /></button>
-          <button onClick={() => setIsLogOpen(!isLogOpen)} className={`p-2 rounded-lg transition-all ${isLogOpen ? "bg-slate-800 text-amber-500" : "text-slate-400 hover:text-white hover:bg-slate-800"}`} title="System Logs"><Repeat size={18} className="rotate-90" /></button>
-          <button onClick={() => setShowShortcuts(true)} className={`p-2 rounded-lg transition-all ${showShortcuts ? "bg-slate-800 text-amber-500" : "text-slate-400 hover:text-white hover:bg-slate-800"}`} title="Keyboard Shortcuts (?)"><Keyboard size={18} /></button>
-          <button onClick={() => setActiveTab("settings")} className={`p-2 rounded-lg transition-all ${activeTab === "settings" ? "bg-slate-800 text-amber-500" : "text-slate-400 hover:text-white hover:bg-slate-800"}`}><Settings size={18} /></button>
+
+          {settings.ndi_enabled && (
+            <div className="px-2 py-0.5 bg-teal-500/10 border border-teal-500/30 rounded flex items-center gap-1.5 animate-pulse hidden xl:flex">
+              <span className="w-1.5 h-1.5 rounded-full bg-teal-500" />
+              <span className="text-[9px] font-black text-teal-500 uppercase tracking-widest">NDI</span>
+            </div>
+          )}
+
+          {/* System Icons Block */}
+          <div className="flex items-center gap-1 bg-slate-950 px-1.5 py-1.5 rounded-xl border border-slate-800/60 shadow-inner">
+            <button
+              onClick={() => { invoke("toggle_output_window"); setOutputVisible(v => !v); }}
+              className={`p-1.5 rounded-lg transition-all ${outputVisible ? "bg-green-500/20 text-green-400" : "text-slate-400 hover:text-green-400 hover:bg-slate-800"}`}
+              title="Toggle Output Window (Ctrl+O)"
+            ><Monitor size={16} /></button>
+            <button onClick={() => invoke("toggle_design_window")} className="p-1.5 text-slate-400 hover:text-purple-400 hover:bg-slate-800 rounded-lg transition-all" title="Design Hub"><Layout size={16} /></button>
+            <div className="w-px h-4 bg-slate-800 mx-1 hidden sm:block" />
+            <button onClick={() => setIsLogOpen(!isLogOpen)} className={`p-1.5 rounded-lg transition-all hidden sm:block ${isLogOpen ? "bg-slate-800 text-amber-500" : "text-slate-400 hover:text-white hover:bg-slate-800"}`} title="System Logs"><Repeat size={16} className="rotate-90" /></button>
+            <button onClick={() => setShowShortcuts(true)} className={`p-1.5 rounded-lg transition-all hidden sm:block ${showShortcuts ? "bg-slate-800 text-amber-500" : "text-slate-400 hover:text-white hover:bg-slate-800"}`} title="Keyboard Shortcuts (?)"><Keyboard size={16} /></button>
+            <button onClick={() => setActiveTab("settings")} className={`p-1.5 rounded-lg transition-all ${activeTab === "settings" ? "bg-slate-800 text-amber-500" : "text-slate-400 hover:text-white hover:bg-slate-800"}`} title="Settings"><Settings size={16} /></button>
+          </div>
         </div>
       </header>
 

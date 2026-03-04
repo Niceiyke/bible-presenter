@@ -51,24 +51,35 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
     }
   }, [selectedBook, selectedChapter, bibleVersion]);
 
+  const lastSyncedStagedId = useRef<string | null>(null);
+
   // Sync stagedItem TO activeChapter AND dropdowns
   useEffect(() => {
     if (stagedItem?.type === "Verse") {
       const { book, chapter, verse, version } = stagedItem.data;
+      const stagedId = `${book}-${chapter}-${verse}-${version}`;
       
-      // Only sync to dropdowns if they actually changed to avoid triggering cascades unnecessarily
-      if (book !== selectedBook || chapter !== selectedChapter || verse !== selectedVerse) {
-        isSyncingRef.current = true;
-        setSelectedBook(book);
-        setSelectedChapter(chapter);
-        setSelectedVerse(verse);
-        // Release after a delay
-        setTimeout(() => { isSyncingRef.current = false; }, 100);
+      // Only sync if the staged item has actually changed
+      if (stagedId !== lastSyncedStagedId.current) {
+        lastSyncedStagedId.current = stagedId;
+        
+        // Only sync to dropdowns if they actually differ to avoid triggering cascades unnecessarily
+        if (book !== selectedBook || chapter !== selectedChapter || verse !== selectedVerse) {
+          isSyncingRef.current = true;
+          setSelectedBook(book);
+          setSelectedChapter(chapter);
+          setSelectedVerse(verse);
+          // Release after a delay
+          setTimeout(() => { isSyncingRef.current = false; }, 100);
+        }
+        
+        setActiveChapter({ book, chapter, version });
       }
-      
-      setActiveChapter({ book, chapter, version });
+    } else if (!stagedItem) {
+      lastSyncedStagedId.current = null;
     }
-  }, [stagedItem, selectedBook, selectedChapter, selectedVerse]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stagedItem]);
 
   // Load verses when activeChapter changes
   useEffect(() => {
@@ -94,8 +105,8 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
     try {
       const results: any = await invoke("search_semantic_query", { query: searchQuery });
       setSearchResults(results);
-    } catch (err) {
-      setSearchError("Search failed. Check that the app is fully loaded.");
+    } catch (err: any) {
+      setSearchError(`Search failed: ${err.message || err || "Unknown error"}`);
       console.error("Search failed:", err);
     } finally {
       setIsSearching(false);
@@ -267,7 +278,11 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                 </div>
                 <div className="space-y-1 overflow-y-auto pr-1 custom-scrollbar max-h-[400px]">
                   {chapterVerses.map((v) => {
-                    const isStaged = stagedItem?.type === "Verse" && stagedItem.data.book === v.book && stagedItem.data.chapter === v.chapter && stagedItem.data.verse === v.verse;
+                    const isStaged = stagedItem?.type === "Verse" && 
+                                     stagedItem.data.book === v.book && 
+                                     stagedItem.data.chapter === v.chapter && 
+                                     stagedItem.data.verse === v.verse &&
+                                     stagedItem.data.version === v.version;
                     return (
                       <div
                         key={`${v.book}-${v.chapter}-${v.verse}`}
