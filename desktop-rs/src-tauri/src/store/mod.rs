@@ -5,13 +5,47 @@ use std::collections::HashMap;
 use parking_lot::Mutex;
 use once_cell::sync::Lazy;
 use regex::{Regex, RegexSet};
-use std::fs::File;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use hnsw_rs::prelude::*;
 use memmap2::Mmap;
 use tauri::{Emitter, Manager};
 
 pub mod media_schedule;
 pub use media_schedule::*;
+
+#[derive(Clone, Serialize)]
+pub struct SystemLog {
+    pub level: String,
+    pub message: String,
+    pub timestamp: u64,
+}
+
+pub fn log_msg<M: Manager<tauri::Wry> + Emitter<tauri::Wry>>(manager: &M, message: &str) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let log = SystemLog {
+        level: "info".to_string(),
+        message: message.to_string(),
+        timestamp,
+    };
+
+    let _ = manager.emit("system-log", &log);
+
+    if let Ok(path) = manager.path().app_log_dir() {
+        if !path.exists() {
+            let _ = std::fs::create_dir_all(&path);
+        }
+        let log_file = path.join("app.log");
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_file) {
+            let _ = writeln!(file, "[{}] {}", timestamp, message);
+        }
+    }
+    println!("{}", message);
+}
 
 const STOP_WORDS: &[&str] = &[
     "the","a","an","and","or","but","in","on","at","to","for","of","with","by",
@@ -86,7 +120,7 @@ impl BibleStore {
         let conn = Connection::open(db_path)?;
 
         if let Err(e) = conn.execute("PRAGMA journal_mode=WAL", []) {
-            eprintln!("Warning: Could not set WAL mode: {}", e);
+            log_msg(app, &format!("Warning: Could not set WAL mode: {}", e));
         }
 
         // Schema versioning — bump CURRENT_SCHEMA_VERSION when the schema changes
@@ -96,7 +130,7 @@ impl BibleStore {
         ).unwrap_or(0);
         if schema_version < CURRENT_SCHEMA_VERSION {
             conn.execute_batch(&format!("PRAGMA user_version = {}", CURRENT_SCHEMA_VERSION))?;
-            println!("BibleStore: schema migrated to version {}", CURRENT_SCHEMA_VERSION);
+            log_msg(app, &format!("BibleStore: schema migrated to version {}", CURRENT_SCHEMA_VERSION));
         }
 
         // Initialize FTS5 virtual table for lightning-fast keyword search
@@ -111,7 +145,7 @@ impl BibleStore {
         // Populate FTS if it's empty (trigger sync)
         let count_fts: i64 = conn.query_row("SELECT count(*) FROM super_bible_fts", [], |r| r.get(0))?;
         if count_fts == 0 {
-            println!("BibleStore: Initializing FTS5 index...");
+            log_msg(app, "BibleStore: Initializing FTS5 index...");
             conn.execute("INSERT INTO super_bible_fts(rowid, title, text, version) 
                          SELECT rowid, title, text, version FROM super_bible 
                          WHERE language = 'EN' AND text IS NOT NULL AND text != ''", [])?;
@@ -184,15 +218,9 @@ impl BibleStore {
                             
                             if f32_count < n_rows * n_dims {
                                 let msg = format!("CRITICAL: Embedding file size mismatch (found {} floats, expected {}). Semantic search disabled.", f32_count, n_rows * n_dims);
-                                eprintln!("{}", msg);
-                                // Emit a raw event since we don't have log_msg here
-                                let _ = app.emit("system-log", serde_json::json!({
-                                    "level": "error",
-                                    "message": msg,
-                                    "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
-                                }));
+                                log_msg(app, &msg);
                             } else {
-                                println!("BibleStore: Building HNSW index from MMap'd data ({} rows, {} dims)", n_rows, n_dims);
+                                log_msg(app, &format!("BibleStore: Building HNSW index from MMap'd data ({} rows, {} dims)", n_rows, n_dims));
                                 
                                 // Safely handle alignment by copying to an aligned buffer or using unaligned reads.
                                 // ARM systems (Apple Silicon) will SIGBUS if we cast an unaligned byte slice to f32.
@@ -231,10 +259,10 @@ impl BibleStore {
                                 _mmap = Some(m);
                             }
                         }
-                        Err(e) => eprintln!("Warning: Failed to MMap embeddings: {}", e),
+                        Err(e) => log_msg(app, &format!("Warning: Failed to MMap embeddings: {}", e)),
                     }
                 },
-                Err(e) => eprintln!("Warning: Could not open embeddings at {}: {}", path, e),
+                Err(e) => log_msg(app, &format!("Warning: Could not open embeddings at {}: {}", path, e)),
             }
         }
 
@@ -352,14 +380,15 @@ impl BibleStore {
         self.active_version.lock().clone()
     }
 
-    pub fn set_active_version(&self, version: &str) {
+    pub fn set_active_version(&self, app: &tauri::AppHandle, version: &str) {
         *self.active_version.lock() = version.to_string();
-        println!("BibleStore: Active version set to {}", version);
+        log_msg(app, &format!("BibleStore: Active version set to {}", version));
     }
 
-    pub fn set_confidence_threshold(&self, threshold: f32) {
-        *self.confidence_threshold.lock() = threshold.clamp(0.0, 1.0);
-        println!("BibleStore: Confidence threshold set to {}", threshold);
+    pub fn set_confidence_threshold(&self, app: &tauri::AppHandle, threshold: f32) {
+        let clamped = threshold.clamp(0.0, 1.0);
+        *self.confidence_threshold.lock() = clamped;
+        log_msg(app, &format!("BibleStore: Confidence threshold set to {}", clamped));
     }
 
     fn normalize_book(&self, raw: &str) -> String {
@@ -514,18 +543,18 @@ impl BibleStore {
     /// Semantic search across ALL stacked versions using HNSW index.
     /// Returns top-N unique (book,chapter,verse) results.
     /// Prefers the active version for the displayed text.
-    pub fn search_top_n_semantic(&self, embedding: &[f32], top_n: usize) -> Vec<Verse> {
+    pub fn search_top_n_semantic(&self, app: &tauri::AppHandle, embedding: &[f32], top_n: usize) -> Vec<Verse> {
         let hnsw = match self.hnsw_index.as_ref() {
             Some(h) => h,
             None => {
-                println!("BibleStore: search_top_n_semantic failed: HNSW index not loaded.");
+                log_msg(app, "BibleStore: search_top_n_semantic failed: HNSW index not loaded.");
                 return Vec::new();
             }
         };
 
         // Search HNSW for top results (using slightly more than top_n to allow deduplication)
         let search_results = hnsw.search(embedding, top_n * 2, 128);
-        println!("BibleStore: HNSW search returned {} raw results.", search_results.len());
+        log_msg(app, &format!("BibleStore: HNSW search returned {} raw results.", search_results.len()));
         
         let active_version = self.get_active_version();
         let mut seen = std::collections::HashSet::new();
@@ -559,14 +588,14 @@ impl BibleStore {
                         v.score = Some(score);
                         results.push(v);
                     } else {
-                        println!("BibleStore: Result {} (idx {}) failed to find verse in DB: {} {}:{}", i, idx, book, matched.chapter, matched.verse);
+                        log_msg(app, &format!("BibleStore: Result {} (idx {}) failed to find verse in DB: {} {}:{}", i, idx, book, matched.chapter, matched.verse));
                     }
                 }
             } else {
-                println!("BibleStore: Result {} (idx {}) not found in verse_cache.", i, idx);
+                log_msg(app, &format!("BibleStore: Result {} (idx {}) not found in verse_cache.", i, idx));
             }
         }
-        println!("BibleStore: search_top_n_semantic returning {} final results.", results.len());
+        log_msg(app, &format!("BibleStore: search_top_n_semantic returning {} final results.", results.len()));
         results
     }
 
