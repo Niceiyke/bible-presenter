@@ -580,8 +580,8 @@ impl BibleStore {
         let mut stmt = conn.prepare_cached(
             "SELECT b.title, b.text, b.version, b.chapter, b.verse FROM super_bible b \
              JOIN super_bible_fts f ON b.rowid = f.rowid \
-             WHERE f MATCH ?1 \
-             ORDER BY f.rank \
+             WHERE super_bible_fts MATCH ?1 \
+             ORDER BY rank \
              LIMIT 100"
         )?;
 
@@ -702,8 +702,8 @@ impl BibleStore {
         let mut stmt = conn.prepare_cached(
             "SELECT b.title, b.text, b.version, b.chapter, b.verse FROM super_bible b \
              JOIN super_bible_fts f ON b.rowid = f.rowid \
-             WHERE f MATCH ?1 AND b.version = ?2 \
-             ORDER BY f.rank \
+             WHERE super_bible_fts MATCH ?1 AND b.version = ?2 \
+             ORDER BY rank \
              LIMIT 50"
         )?;
 
