@@ -8,6 +8,7 @@ use regex::{Regex, RegexSet};
 use std::fs::File;
 use hnsw_rs::prelude::*;
 use memmap2::Mmap;
+use tauri::{Emitter, Manager};
 
 pub mod media_schedule;
 pub use media_schedule::*;
