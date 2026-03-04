@@ -42,7 +42,7 @@
                         ws.send(JSON.stringify({ cmd: "auth", pin: pin, client_type: "remote" }));
                         ws.send(JSON.stringify({ cmd: "get_state" }));
                     } else {
-                        textEl.innerHTML = '<span id="waiting">Please provide ?pin=XXXX in URL to view output</span>';
+                        textEl.innerHTML = '<span id="waiting">Please provide ?pin=XXXXXX in URL to view output</span>';
                         container.classList.add('visible');
                     }
                 });

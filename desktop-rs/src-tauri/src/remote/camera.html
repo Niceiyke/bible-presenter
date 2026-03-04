@@ -139,12 +139,14 @@
 <div id="pin-screen">
   <div class="logo">📷</div>
   <div class="title">Camera Sender</div>
-  <p class="subtitle">Enter the 4-digit PIN shown in Bible Presenter to connect this device as a live camera source.</p>
+  <p class="subtitle">Enter the 6-digit PIN shown in Bible Presenter to connect this device as a live camera source.</p>
   <div class="pin-row">
     <input type="text" maxlength="1" id="p0" inputmode="numeric" pattern="[0-9]" autocomplete="off">
     <input type="text" maxlength="1" id="p1" inputmode="numeric" pattern="[0-9]" autocomplete="off">
     <input type="text" maxlength="1" id="p2" inputmode="numeric" pattern="[0-9]" autocomplete="off">
     <input type="text" maxlength="1" id="p3" inputmode="numeric" pattern="[0-9]" autocomplete="off">
+    <input type="text" maxlength="1" id="p4" inputmode="numeric" pattern="[0-9]" autocomplete="off">
+    <input type="text" maxlength="1" id="p5" inputmode="numeric" pattern="[0-9]" autocomplete="off">
   </div>
   <p class="err-msg" id="pin-err"></p>
   <button class="btn btn-primary" id="pin-btn" onclick="doAuth()">Connect</button>
@@ -272,13 +274,13 @@ async function sendTelemetry() {
 }
 
 // ── PIN screen ────────────────────────────────────────────────────────────────
-const pinInputs = [0,1,2,3].map(i => document.getElementById(`p${i}`));
+const pinInputs = [0,1,2,3,4,5].map(i => document.getElementById(`p${i}`));
 
 pinInputs.forEach((inp, idx) => {
   inp.addEventListener('input', () => {
     const val = inp.value.replace(/\D/g, '').slice(-1);
     inp.value = val;
-    if (val && idx < 3) pinInputs[idx + 1].focus();
+    if (val && idx < 5) pinInputs[idx + 1].focus();
   });
   inp.addEventListener('keydown', (e) => {
     if (e.key === 'Backspace' && !inp.value && idx > 0) pinInputs[idx - 1].focus();
@@ -290,7 +292,7 @@ function getPin() { return pinInputs.map(i => i.value).join(''); }
 
 async function doAuth() {
   const pin = getPin();
-  if (pin.length < 4) { document.getElementById('pin-err').textContent = 'Enter all 4 digits.'; return; }
+  if (pin.length < 6) { document.getElementById('pin-err').textContent = 'Enter all 6 digits.'; return; }
   authFailed = false;
   document.getElementById('pin-btn').disabled = true;
   document.getElementById('pin-err').textContent = '';
@@ -361,7 +363,7 @@ function connectWs(pin) {
     if (wakeLock) { wakeLock.release(); wakeLock = null; }
     setStatus('disconnected');
     if (!authFailed) {
-      setTimeout(() => { if (ws.readyState === WebSocket.CLOSED) { const pin = getPin(); if (pin.length === 4) connectWs(pin); } }, 3000);
+      setTimeout(() => { if (ws.readyState === WebSocket.CLOSED) { const pin = getPin(); if (pin.length === 6) connectWs(pin); } }, 3000);
     }
     authFailed = false;
   };

@@ -15,6 +15,7 @@ export function useAppInitialization() {
     setLabel, setMedia, setStudioList, setStudioSlides,
     setScheduleEntries, setSongs, setHymnLibrary, setLtSavedTemplates,
     setLtTemplate, setSettings, setRemoteUrl, setRemotePin,
+    setLanUrls,
     setTailscaleUrl, setAvailableVersions, setBibleVersion,
     setPropItems, setSavedScenes, setServices, setLiveItem,
     setTranscript, setSuggestedItem, setSuggestedConfidence,
@@ -78,6 +79,7 @@ export function useAppInitialization() {
 
       if (remoteRes) {
         setRemoteUrl(remoteRes.url);
+        setLanUrls(remoteRes.lan_urls || []);
         setRemotePin(remoteRes.pin);
         setTailscaleUrl(remoteRes.tailscale_url);
       }

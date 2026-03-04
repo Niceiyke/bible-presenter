@@ -102,7 +102,7 @@ pub struct AppState {
     pub broadcast_tx: tokio::sync::broadcast::Sender<String>,
     /// Tauri AppHandle stored after setup so the remote module can emit events.
     pub app_handle: Arc<OnceLock<tauri::AppHandle>>,
-    /// 4-digit PIN displayed in Settings tab; required for WS auth. Mutable so it can be regenerated.
+    /// 6-digit PIN displayed in Settings tab; required for WS auth. Mutable so it can be regenerated.
     pub remote_pin: Arc<Mutex<String>>,
     /// Audio window fed to Whisper per inference call, in samples at 16 kHz.
     /// 8000 = 0.5 s (most responsive, highest CPU); 48000 = 3 s (lowest CPU, most latency).
@@ -1564,6 +1564,7 @@ async fn load_lt_templates(
 #[derive(serde::Serialize)]
 struct RemoteInfo {
     url: String,
+    lan_urls: Vec<(String, String)>,
     pin: String,
     port: u16,
     /// Some("http://100.x.x.x:port") when Tailscale is running; None otherwise.
@@ -1601,6 +1602,17 @@ async fn get_remote_info(state: State<'_, AppState>) -> Result<RemoteInfo, Strin
         .map(|ip| ip.to_string())
         .unwrap_or_else(|_| "localhost".to_string());
 
+    // Collect all local IPv4 addresses (excluding loopback)
+    let mut lan_urls = Vec::new();
+    if let Ok(ifas) = local_ip_address::list_af_inet_netifas() {
+        for (name, ip) in ifas {
+            if ip.is_ipv4() && !ip.is_loopback() {
+                lan_urls.push((name, format!("http://{}:{}", ip, port)));
+            }
+        }
+    }
+    lan_urls.sort_by(|a, b| a.0.cmp(&b.0));
+
     // Run tailscale CLI in a blocking thread so we don't stall the async runtime
     let tailscale_url = tokio::task::spawn_blocking(get_tailscale_ip)
         .await
@@ -1608,8 +1620,11 @@ async fn get_remote_info(state: State<'_, AppState>) -> Result<RemoteInfo, Strin
         .flatten()
         .map(|ip| format!("http://{}:{}", ip, port));
 
+    let primary_url = format!("http://{}:{}", lan_ip, port);
+
     Ok(RemoteInfo {
-        url: format!("http://{}:{}", lan_ip, port),
+        url: primary_url,
+        lan_urls,
         pin: state.remote_pin.lock().clone(),
         port,
         tailscale_url,

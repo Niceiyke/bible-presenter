@@ -33,6 +33,8 @@ export interface SessionSlice {
   setMicLevel: (v: number | ((prev: number) => number)) => void;
   remoteUrl: string;
   setRemoteUrl: (v: string) => void;
+  lanUrls: [string, string][];
+  setLanUrls: (v: [string, string][]) => void;
   remotePin: string;
   setRemotePin: (v: string) => void;
   tailscaleUrl: string | null;
@@ -81,6 +83,8 @@ export const createSessionSlice: StateCreator<AppStore, [], [], SessionSlice> = 
   setMicLevel: (v) => set((s) => ({ micLevel: typeof v === "function" ? v(s.micLevel) : v })),
   remoteUrl: "",
   setRemoteUrl: (v) => set({ remoteUrl: v }),
+  lanUrls: [],
+  setLanUrls: (v) => set({ lanUrls: v }),
   remotePin: "",
   setRemotePin: (v) => set({ remotePin: v }),
   tailscaleUrl: null,

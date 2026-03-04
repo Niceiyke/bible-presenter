@@ -32,6 +32,7 @@ export function SettingsTab({
     vadThreshold,
     setVadThreshold,
     remoteUrl,
+    lanUrls,
     remotePin, setRemotePin,
     tailscaleUrl,
     showLogoPicker, setShowLogoPicker,
@@ -832,15 +833,34 @@ export function SettingsTab({
           </div>
 
           <div>
-            <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">LAN URL</p>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-amber-400 font-mono truncate">
-                {remoteUrl || "http://localhost:7420"}
-              </code>
-              <button
-                onClick={() => { navigator.clipboard.writeText(remoteUrl || "http://localhost:7420"); }}
-                className="px-3 py-2 text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition-colors"
-              >Copy</button>
+            <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">LAN URLs</p>
+            <div className="flex flex-col gap-2">
+              {lanUrls && lanUrls.length > 0 ? (
+                lanUrls.map(([name, url]) => (
+                  <div key={url} className="flex items-center gap-2">
+                    <span className="text-[9px] font-bold text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded uppercase min-w-[40px] text-center">
+                      {name}
+                    </span>
+                    <code className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-amber-400 font-mono truncate">
+                      {url}
+                    </code>
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(url); }}
+                      className="px-3 py-2 text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition-colors"
+                    >Copy</button>
+                  </div>
+                ))
+              ) : (
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-amber-400 font-mono truncate">
+                    {remoteUrl || "http://localhost:7420"}
+                  </code>
+                  <button
+                    onClick={() => { navigator.clipboard.writeText(remoteUrl || "http://localhost:7420"); }}
+                    className="px-3 py-2 text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition-colors"
+                  >Copy</button>
+                </div>
+              )}
             </div>
           </div>
 
