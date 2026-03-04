@@ -177,7 +177,7 @@ struct SystemLog {
     timestamp: u64,
 }
 
-fn log_msg(app: &tauri::App, message: &str) {
+fn log_msg<M: Manager<tauri::Wry> + Emitter<tauri::Wry>>(manager: &M, message: &str) {
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -189,9 +189,9 @@ fn log_msg(app: &tauri::App, message: &str) {
         timestamp,
     };
 
-    let _ = app.emit("system-log", &log);
+    let _ = manager.emit("system-log", &log);
 
-    if let Ok(path) = app.path().app_log_dir() {
+    if let Ok(path) = manager.path().app_log_dir() {
         if !path.exists() {
             let _ = std::fs::create_dir_all(&path);
         }
@@ -343,7 +343,6 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
     }
 
     // ── Extract everything from `state` before any .await ─────────────────
-    let engine_mutex = state.engine.clone();
     let audio = state.audio.clone();
     let store = state.store.clone();
     let is_running = state.is_running.clone();
@@ -365,7 +364,6 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
     let cloud_hostname = state.transcription_config.lock().cloud_hostname.clone();
     let cloud_model = state.transcription_config.lock().cloud_model.clone();
     let cloud_language = state.transcription_config.lock().cloud_language.clone();
-    drop(state);
 
     let use_cloud_stream = cloud_provider
         .as_deref()
@@ -376,8 +374,6 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
     let use_cloud_rest = cloud_provider.is_some()
         && cloud_api_key.as_ref().map_or(false, |k| !k.is_empty())
         && !use_cloud_stream;
-
-    let use_cloud = use_cloud_stream || use_cloud_rest;
 
     // ── Lazy-load AI models ───────────────────────────────────────────────
     let engine = match state.get_or_init_engine(&app).await {
@@ -394,6 +390,7 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
             return Err(e);
         }
     };
+    drop(state);
 
     // ── Audio capture ─────────────────────────────────────────────────────
     let (error_tx, mut error_rx) = tokio::sync::mpsc::channel::<String>(10);
