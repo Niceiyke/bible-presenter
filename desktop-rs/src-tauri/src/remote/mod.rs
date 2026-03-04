@@ -65,7 +65,7 @@ pub async fn start(state: Arc<AppState>, port: u16) {
         .route("/output", get(serve_output_html))
         .route("/ws",    get(ws_handler))
         .layer(CorsLayer::permissive())
-        .with_state(state);
+        .with_state(state.clone());
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
     match tokio::net::TcpListener::bind(addr).await {

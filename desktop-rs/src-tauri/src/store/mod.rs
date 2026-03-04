@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use parking_lot::Mutex;
 use once_cell::sync::Lazy;
 use regex::{Regex, RegexSet};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::Write;
 use hnsw_rs::prelude::*;
 use memmap2::Mmap;
