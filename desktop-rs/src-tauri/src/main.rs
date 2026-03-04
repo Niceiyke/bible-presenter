@@ -5,13 +5,12 @@ mod remote;
 mod ndi;
 
 use bible_presenter_lib::{audio, engine, store};
-use store::{log_msg, SystemLog};
+use store::log_msg;
 use ringbuf::traits::{Consumer, Observer};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -319,16 +318,6 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
     let cloud_hostname = state.transcription_config.lock().cloud_hostname.clone();
     let cloud_model = state.transcription_config.lock().cloud_model.clone();
     let cloud_language = state.transcription_config.lock().cloud_language.clone();
-
-    let use_cloud_stream = cloud_provider
-        .as_deref()
-        .map(engine::cloud_stream::provider_supports_streaming)
-        .unwrap_or(false)
-        && cloud_api_key.as_ref().map_or(false, |k| !k.is_empty());
-
-    let use_cloud_rest = cloud_provider.is_some()
-        && cloud_api_key.as_ref().map_or(false, |k| !k.is_empty())
-        && !use_cloud_stream;
 
     // ── Lazy-load AI models ───────────────────────────────────────────────
     let engine = match state.get_or_init_engine(&app).await {
@@ -1603,7 +1592,7 @@ async fn get_remote_info(state: State<'_, AppState>) -> Result<RemoteInfo, Strin
         .unwrap_or_else(|_| "localhost".to_string());
 
     // Collect all local IPv4 addresses (excluding loopback)
-    let mut lan_urls = Vec::new();
+    let mut lan_urls: Vec<(String, String)> = Vec::new();
     if let Ok(ifas) = local_ip_address::list_af_inet_netifas() {
         for (name, ip) in ifas {
             if ip.is_ipv4() && !ip.is_loopback() {
@@ -1611,7 +1600,7 @@ async fn get_remote_info(state: State<'_, AppState>) -> Result<RemoteInfo, Strin
             }
         }
     }
-    lan_urls.sort_by(|a, b| a.0.cmp(&b.0));
+    lan_urls.sort_by(|a: &(String, String), b: &(String, String)| a.0.cmp(&b.0));
 
     // Run tailscale CLI in a blocking thread so we don't stall the async runtime
     let tailscale_url = tokio::task::spawn_blocking(get_tailscale_ip)
@@ -1887,6 +1876,7 @@ async fn get_transcription_config(state: State<'_, AppState>) -> Result<Transcri
 
 #[tauri::command]
 async fn set_cloud_config(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     provider: Option<String>,
     api_key: Option<String>,
@@ -1921,7 +1911,7 @@ async fn set_cloud_config(
     }
     // Propagate confidence threshold to BibleStore immediately
     if let Some(v) = confidence_threshold {
-        state.store.set_confidence_threshold(v.clamp(0.0, 1.0));
+        state.store.set_confidence_threshold(&app, v.clamp(0.0, 1.0));
     }
 
     *state.engine.lock() = None;
