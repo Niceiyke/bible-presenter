@@ -128,8 +128,8 @@ jobs:
           CMAKE_MSVC_RUNTIME_LIBRARY: "MultiThreadedDLL"
         with:
           projectPath: desktop-rs
-          tagName: v__VERSION__
-          releaseName: "Bible Presenter v__VERSION__"
+          tagName: ${{ github.event_name == 'workflow_dispatch' && format('v__VERSION__-manual-{0}', github.run_number) || 'v__VERSION__' }}
+          releaseName: ${{ github.event_name == 'workflow_dispatch' && format('Bible Presenter v__VERSION__ (Manual Build {0})', github.run_number) || 'Bible Presenter v__VERSION__' }}
           releaseBody: "See the assets below to download this version."
           releaseDraft: false
           prerelease: false
