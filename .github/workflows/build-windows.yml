@@ -52,6 +52,7 @@ jobs:
         run: |
           set -e
           mkdir -p desktop-rs/src-tauri/models
+          mkdir -p desktop-rs/src-tauri/models/reranker
           mkdir -p desktop-rs/src-tauri/bible_data
 
           # ── AI models (public HuggingFace) ────────────────────────────────
@@ -59,6 +60,11 @@ jobs:
           curl -L "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model.onnx" \
             -o "desktop-rs/src-tauri/models/bge-small-en-v1.5.onnx"
 
+          echo "Downloading Reranker model..."
+          curl -L "https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2/resolve/main/onnx/model.onnx" \
+            -o "desktop-rs/src-tauri/models/reranker/model.onnx"
+          curl -L "https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2/resolve/main/tokenizer.json" \
+            -o "desktop-rs/src-tauri/models/reranker/tokenizer.json"
 
           # ── Bible database (public repo) ────────────────────────────────
           echo "Downloading super_bible.db (~59 MB)..."
@@ -68,11 +74,14 @@ jobs:
           # ── Verify required files ───────────────────────────────────
           echo "Verifying files..."
           ls -lh desktop-rs/src-tauri/models/
+          ls -lh desktop-rs/src-tauri/models/reranker/
           ls -lh desktop-rs/src-tauri/bible_data/
 
           for f in \
             "desktop-rs/src-tauri/models/bge-small-en-v1.5.onnx" \
             "desktop-rs/src-tauri/models/tokenizer.json" \
+            "desktop-rs/src-tauri/models/reranker/model.onnx" \
+            "desktop-rs/src-tauri/models/reranker/tokenizer.json" \
             "desktop-rs/src-tauri/bible_data/super_bible.db" \
             "desktop-rs/src-tauri/bible_data/hymns.json"; do
             if [ ! -f "$f" ]; then

@@ -13,6 +13,8 @@ pub struct TranscriptionEngine {
     whisper: Option<WhisperContext>,   // None when cloud provider is active
     embedding_session: Mutex<Session>,
     tokenizer: Tokenizer,
+    reranker_session: Mutex<Session>,
+    reranker_tokenizer: Tokenizer,
 }
 
 impl TranscriptionEngine {
@@ -20,6 +22,8 @@ impl TranscriptionEngine {
         whisper_path: Option<&str>,
         embedding_model_path: &str,
         tokenizer_path: &str,
+        reranker_model_path: &str,
+        reranker_tokenizer_path: &str,
         use_gpu: bool,
     ) -> anyhow::Result<Self> {
         let whisper = if let Some(path) = whisper_path {
@@ -37,7 +41,20 @@ impl TranscriptionEngine {
         let tokenizer = Tokenizer::from_file(tokenizer_path)
             .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
 
-        Ok(Self { whisper, embedding_session: Mutex::new(embedding_session), tokenizer })
+        let reranker_session = Session::builder()?
+            .with_intra_threads(4)?
+            .commit_from_file(reranker_model_path)?;
+
+        let reranker_tokenizer = Tokenizer::from_file(reranker_tokenizer_path)
+            .map_err(|e| anyhow::anyhow!("Failed to load reranker tokenizer: {}", e))?;
+
+        Ok(Self { 
+            whisper, 
+            embedding_session: Mutex::new(embedding_session), 
+            tokenizer,
+            reranker_session: Mutex::new(reranker_session),
+            reranker_tokenizer,
+        })
     }
 
     pub fn transcribe(&self, audio_data: &[f32], language: Option<&str>) -> anyhow::Result<String> {
@@ -116,5 +133,34 @@ impl TranscriptionEngine {
         }
 
         Ok(mean)
+    }
+
+    /// Rerank candidates using Cross-Encoder model.
+    /// Returns a vector of scores corresponding to each passage.
+    pub fn rerank(&self, query: &str, passages: &[String]) -> anyhow::Result<Vec<f32>> {
+        let mut scores = Vec::with_capacity(passages.len());
+        let mut session = self.reranker_session.lock();
+
+        for passage in passages {
+            let encoding = self.reranker_tokenizer.encode((query.to_string(), passage.to_string()), true)
+                .map_err(|e| anyhow::anyhow!("Reranker tokenization error: {}", e))?;
+
+            let input_ids: Vec<i64> = encoding.get_ids().iter().map(|&id| id as i64).collect();
+            let attention_mask: Vec<i64> = encoding.get_attention_mask().iter().map(|&m| m as i64).collect();
+            let token_type_ids: Vec<i64> = encoding.get_type_ids().iter().map(|&i| i as i64).collect();
+            let seq_len = input_ids.len();
+
+            let inputs = ort::inputs![
+                "input_ids" => Tensor::from_array(([1usize, seq_len], input_ids))?,
+                "attention_mask" => Tensor::from_array(([1usize, seq_len], attention_mask))?,
+                "token_type_ids" => Tensor::from_array(([1usize, seq_len], token_type_ids))?,
+            ];
+
+            let outputs = session.run(inputs)?;
+            let (_shape, data) = outputs["logits"].try_extract_tensor::<f32>()?;
+            scores.push(data[0]);
+        }
+
+        Ok(scores)
     }
 }

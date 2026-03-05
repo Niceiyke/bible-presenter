@@ -21,7 +21,7 @@ whisper-rs = "0.12.0"
 cpal = "0.15.3"      
 rusqlite = { version = "0.31.0", features = ["bundled-full"] }
 rubato = "0.14"      # High-quality resampling
-tokenizers = "0.19"
+tokenizers = "0.21"
 ort = "2.0.0-rc.11"
 ndarray = "0.15"     # Tensor manipulation
 usearch = "=2.23.0"

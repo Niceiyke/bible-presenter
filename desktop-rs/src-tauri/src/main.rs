@@ -221,6 +221,10 @@ pub struct AppState {
     pub embedding_model_path: PathBuf,
     /// HuggingFace tokenizer path (bundled, stays fixed).
     pub tokenizer_path: PathBuf,
+    /// Cross-Encoder reranker model path (bundled, stays fixed).
+    pub reranker_model_path: PathBuf,
+    /// Reranker tokenizer path (bundled, stays fixed).
+    pub reranker_tokenizer_path: PathBuf,
     /// App data directory — used by download commands to write into models/.
     pub app_data_dir: PathBuf,
     /// Set to true while a download is in progress; cancel signal for the task.
@@ -279,6 +283,8 @@ impl Clone for AppState {
             whisper_path: self.whisper_path.clone(),
             embedding_model_path: self.embedding_model_path.clone(),
             tokenizer_path: self.tokenizer_path.clone(),
+            reranker_model_path: self.reranker_model_path.clone(),
+            reranker_tokenizer_path: self.reranker_tokenizer_path.clone(),
             app_data_dir: self.app_data_dir.clone(),
             download_in_progress: self.download_in_progress.clone(),
             is_running: self.is_running.clone(),
@@ -384,6 +390,8 @@ impl AppState {
         let use_gpu = self.transcription_config.lock().use_gpu;
         let embedding_path = self.embedding_model_path.to_str().unwrap_or("").to_string();
         let tokenizer_path = self.tokenizer_path.to_str().unwrap_or("").to_string();
+        let reranker_model_path = self.reranker_model_path.to_str().unwrap_or("").to_string();
+        let reranker_tokenizer_path = self.reranker_tokenizer_path.to_str().unwrap_or("").to_string();
 
         let whisper_str: Option<String> = whisper_path_opt.map(|p| p.to_str().unwrap_or("").to_string());
         let engine_mutex = self.engine.clone();
@@ -395,6 +403,8 @@ impl AppState {
                 whisper_str.as_deref(),
                 &embedding_path,
                 &tokenizer_path,
+                &reranker_model_path,
+                &reranker_tokenizer_path,
                 use_gpu,
             )
         })
@@ -1158,12 +1168,29 @@ async fn search_semantic_query(
         }
     }
 
-    let mut final_results: Vec<(f32, store::Verse)> = rrf_scores.into_values().collect();
-    // Sort by RRF score descending
-    final_results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    // Map back to Verses and take top 50 for reranking
+    let mut candidates: Vec<store::Verse> = final_results.into_iter().take(50).map(|(_, v)| v).collect();
 
-    // Map back to Verses and take top 20
-    let results: Vec<store::Verse> = final_results.into_iter().take(20).map(|(_, v)| v).collect();
+    // 3. Precision Reranking (Cross-Encoder)
+    if !candidates.is_empty() {
+        if let Ok(engine) = state.get_or_init_engine(&app).await {
+            log_msg(&app, &format!("Reranking {} candidates...", candidates.len()));
+            let passages: Vec<String> = candidates.iter().map(|v| v.text.clone()).collect();
+            match engine.rerank(&query, &passages) {
+                Ok(scores) => {
+                    for (i, score) in scores.into_iter().enumerate() {
+                        candidates[i].score = Some(score);
+                    }
+                    // Sort by reranker score descending
+                    candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+                    log_msg(&app, "Reranking complete.");
+                }
+                Err(e) => log_msg(&app, &format!("Reranking error: {}", e)),
+            }
+        }
+    }
+
+    let results: Vec<store::Verse> = candidates.into_iter().take(20).collect();
 
     Ok(SearchResponse {
         results,
@@ -2103,6 +2130,7 @@ struct StartupStatus {
     embeddings_ok: bool,
     onnx_model_ok: bool,
     tokenizer_ok: bool,
+    reranker_ok: bool,
     whisper_model_ok: bool,
     whisper_model_name: Option<String>,
     db_path: String,
@@ -2139,6 +2167,7 @@ async fn get_startup_status(
     let vidx_ok = vidx_path.is_some();
     let onnx_ok = state.embedding_model_path.exists();
     let tok_ok = state.tokenizer_path.exists();
+    let rerank_ok = state.reranker_model_path.exists() && state.reranker_tokenizer_path.exists();
     let whisper = state.whisper_path.lock().clone();
     let whisper_ok = whisper.as_ref().map_or(false, |p| p.exists());
     let whisper_name = whisper.and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_string()));
@@ -2148,6 +2177,7 @@ async fn get_startup_status(
     if !vidx_ok { issues.push("Verse index missing. Semantic search might be limited.".to_string()); }
     if !onnx_ok { issues.push("ONNX embedding model missing. Semantic search disabled.".to_string()); }
     if !tok_ok { issues.push("Tokenizer missing. Semantic search disabled.".to_string()); }
+    if !rerank_ok { issues.push("Reranker model missing. Precision search will be limited.".to_string()); }
     if !whisper_ok { issues.push("No Whisper model selected. Go to Settings \u{2192} Transcription Model.".to_string()); }
 
     Ok(StartupStatus {
@@ -2155,6 +2185,7 @@ async fn get_startup_status(
         embeddings_ok: emb_ok,
         onnx_model_ok: onnx_ok,
         tokenizer_ok: tok_ok,
+        reranker_ok: rerank_ok,
         whisper_model_ok: whisper_ok,
         whisper_model_name: whisper_name,
         db_path: db_path.display().to_string(),
@@ -2337,9 +2368,14 @@ fn main() {
             // Bundled embedding + tokenizer paths (stay fixed)
             let embedding_model_path = resource_path.join("models/bge-small-en-v1.5.onnx");
             let tokenizer_path = resource_path.join("models/tokenizer.json");
+            let reranker_model_path = resource_path.join("models/reranker/model.onnx");
+            let reranker_tokenizer_path = resource_path.join("models/reranker/tokenizer.json");
+
             for (label, path) in [
                 ("ONNX model", &embedding_model_path),
                 ("Tokenizer", &tokenizer_path),
+                ("Reranker model", &reranker_model_path),
+                ("Reranker Tokenizer", &reranker_tokenizer_path),
             ] {
                 if path.exists() {
                     log_msg(app, &format!("{} found at {:?}", label, path));
@@ -2429,6 +2465,8 @@ fn main() {
                 whisper_path: Arc::new(Mutex::new(initial_whisper)),
                 embedding_model_path,
                 tokenizer_path,
+                reranker_model_path,
+                reranker_tokenizer_path,
                 app_data_dir,
                 download_in_progress: Arc::new(AtomicBool::new(false)),
                 is_running: Arc::new(Mutex::new(false)),
