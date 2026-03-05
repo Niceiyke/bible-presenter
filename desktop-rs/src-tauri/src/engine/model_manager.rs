@@ -429,7 +429,7 @@ where
 
     let mut stream = response.bytes_stream();
     while let Some(chunk_result) = stream.next().await {
-        if cancel_flag.load(Ordering::Relaxed) {
+        if !cancel_flag.load(Ordering::Relaxed) {
             let _ = std::fs::remove_file(&tmp_path);
             anyhow::bail!("Download cancelled");
         }
@@ -642,7 +642,7 @@ where
 
     let mut stream = response.bytes_stream();
     while let Some(chunk_result) = stream.next().await {
-        if cancel_flag.load(Ordering::Relaxed) {
+        if !cancel_flag.load(Ordering::Relaxed) {
             let _ = std::fs::remove_file(&tmp_path);
             anyhow::bail!("Download cancelled");
         }
