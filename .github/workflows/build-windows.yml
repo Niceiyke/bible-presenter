@@ -27,7 +27,7 @@ jobs:
 
   build:
     needs: check-version
-    if: needs.check-version.outputs.tag_exists == 'false'
+    if: needs.check-version.outputs.tag_exists == 'false' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     permissions:
       contents: write
