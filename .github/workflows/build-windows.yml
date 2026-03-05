@@ -65,21 +65,7 @@ jobs:
           curl -L "https://raw.githubusercontent.com/alshival/super_bible/main/SUPER_BIBLE/super_bible.db" \
             -o "desktop-rs/src-tauri/bible_data/super_bible.db"
 
-          # ── Stacked embeddings (Google Drive) ──────────────────────────
-          echo "Downloading all_versions_embeddings.usearch from Google Drive..."
-          pip install -q gdown
-          gdown "https://drive.google.com/uc?id=18rQG5jnZQoM2v1l2EV71VWyTp38lEe5f" \
-            -O "desktop-rs/src-tauri/bible_data/all_versions_embeddings.usearch"
-
-          # ── verse_index.json (committed in repo) ────────────────────────
-          if [ -f "desktop-rs/src-tauri/bible_data/verse_index.json" ]; then
-            echo "verse_index.json found in repo."
-          else
-            echo "CRITICAL: verse_index.json missing! Commit it to the repo first."
-            exit 1
-          fi
-
-          # ── Verify all required files ───────────────────────────────────
+          # ── Verify required files ───────────────────────────────────
           echo "Verifying files..."
           ls -lh desktop-rs/src-tauri/models/
           ls -lh desktop-rs/src-tauri/bible_data/
@@ -88,8 +74,7 @@ jobs:
             "desktop-rs/src-tauri/models/bge-small-en-v1.5.onnx" \
             "desktop-rs/src-tauri/models/tokenizer.json" \
             "desktop-rs/src-tauri/bible_data/super_bible.db" \
-            "desktop-rs/src-tauri/bible_data/all_versions_embeddings.usearch" \
-            "desktop-rs/src-tauri/bible_data/verse_index.json"; do
+            "desktop-rs/src-tauri/bible_data/hymns.json"; do
             if [ ! -f "$f" ]; then
               echo "CRITICAL: $f missing!"
               exit 1
@@ -97,23 +82,6 @@ jobs:
             echo "OK: $f ($(du -h "$f" | cut -f1))"
           done
 
-      - name: validate usearch index
-        shell: python
-        run: |
-          import sys, os
-          path = 'desktop-rs/src-tauri/bible_data/all_versions_embeddings.usearch'
-          
-          if not os.path.exists(path):
-              print('CRITICAL: USearch index not found at ' + path)
-              sys.exit(1)
-          
-          size_bytes = os.path.getsize(path)
-          print('Size of index: ' + str(size_bytes / (1024*1024)) + ' MB')
-          if size_bytes < 1000000: # at least 1MB
-              print('CRITICAL: USearch index too small, download likely failed.')
-              sys.exit(1)
-          
-          print('PASSED: USearch index validated.')
       - name: build and publish release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -130,6 +98,6 @@ jobs:
           projectPath: desktop-rs
           tagName: ${{ github.event_name == 'workflow_dispatch' && format('v__VERSION__-manual-{0}', github.run_number) || 'v__VERSION__' }}
           releaseName: ${{ github.event_name == 'workflow_dispatch' && format('Bible Presenter v__VERSION__ (Manual Build {0})', github.run_number) || 'Bible Presenter v__VERSION__' }}
-          releaseBody: "See the assets below to download this version."
+          releaseBody: "See the assets below to download this version. Note: Semantic Search artifacts are now optional downloads available in App Settings."
           releaseDraft: false
           prerelease: false
