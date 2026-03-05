@@ -408,6 +408,7 @@ where
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(3600))
+        .user_agent("bible-presenter")
         .build()
         .context("Failed to build HTTP client")?;
 
@@ -472,81 +473,19 @@ where
 pub async fn download_semantic_index<F>(
     app_data: &Path,
     cancel_flag: Arc<AtomicBool>,
-    mut progress_cb: F,
+    progress_cb: F,
 ) -> anyhow::Result<PathBuf>
 where
     F: FnMut(DownloadProgress) + Send + 'static,
 {
-    let data_dir = user_data_dir(app_data);
-    std::fs::create_dir_all(&data_dir)
-        .with_context(|| format!("Cannot create data dir {:?}", data_dir))?;
-
-    let url = SEMANTIC_INDEX_URL;
-    let filename = SEMANTIC_INDEX_FILENAME;
-    let tmp_path = data_dir.join(format!("{}.tmp", filename));
-    let final_path = data_dir.join(filename);
-
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(3600))
-        .build()
-        .context("Failed to build HTTP client")?;
-
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .with_context(|| format!("GET {} failed", url))?;
-
-    if !response.status().is_success() {
-        anyhow::bail!("HTTP {} for {}", response.status(), url);
-    }
-
-    let total_bytes = response.content_length().unwrap_or(0);
-    let mut bytes_downloaded: u64 = 0;
-    let mut file =
-        std::fs::File::create(&tmp_path).with_context(|| format!("Cannot create {:?}", tmp_path))?;
-
-    let mut stream = response.bytes_stream();
-    while let Some(chunk_result) = stream.next().await {
-        if cancel_flag.load(Ordering::Relaxed) {
-            let _ = std::fs::remove_file(&tmp_path);
-            anyhow::bail!("Download cancelled");
-        }
-        let chunk = chunk_result.context("Stream error")?;
-        use std::io::Write;
-        file.write_all(&chunk).context("Write error")?;
-        bytes_downloaded += chunk.len() as u64;
-
-        let percent = if total_bytes > 0 {
-            (bytes_downloaded as f32 / total_bytes as f32) * 100.0
-        } else {
-            0.0
-        };
-        progress_cb(DownloadProgress {
-            model_id: "semantic_index".to_string(),
-            bytes_downloaded,
-            total_bytes,
-            percent,
-            done: false,
-            error: None,
-        });
-    }
-
-    // Atomic rename
-    drop(file);
-    std::fs::rename(&tmp_path, &final_path)
-        .with_context(|| format!("Cannot rename {:?} → {:?}", tmp_path, final_path))?;
-
-    progress_cb(DownloadProgress {
-        model_id: "semantic_index".to_string(),
-        bytes_downloaded,
-        total_bytes,
-        percent: 100.0,
-        done: true,
-        error: None,
-    });
-
-    Ok(final_path)
+    download_file(
+        SEMANTIC_INDEX_URL,
+        SEMANTIC_INDEX_FILENAME,
+        "semantic_index",
+        &user_data_dir(app_data),
+        cancel_flag,
+        progress_cb,
+    ).await
 }
 
 pub async fn download_verse_index<F>(
@@ -663,11 +602,12 @@ pub async fn download_file<F>(
     model_id: &str,
     target_dir: &Path,
     cancel_flag: Arc<AtomicBool>,
-    mut progress_cb: F,
+    progress_cb: F,
 ) -> anyhow::Result<PathBuf>
 where
     F: FnMut(DownloadProgress) + Send + 'static,
 {
+    let mut progress_cb = progress_cb;
     std::fs::create_dir_all(target_dir)
         .with_context(|| format!("Cannot create dir {:?}", target_dir))?;
 
@@ -681,6 +621,7 @@ where
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(3600))
+        .user_agent("bible-presenter")
         .build()
         .context("Failed to build HTTP client")?;
 
