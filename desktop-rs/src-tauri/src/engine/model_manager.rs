@@ -54,7 +54,7 @@ const HF_BASE_URL: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/";
 
 // Semantic search index metadata
-pub const SEMANTIC_INDEX_URL: &str = "https://github.com/Niceiyke/bible-presenter/releases/download/embeddings_usearch_1.0.0/all_versions_embeddings.usearch";
+pub const SEMANTIC_INDEX_URL: &str = "https://drive.google.com/uc?export=download&id=1drtPCQNW4rcqfpiDV-6V-RD2l8MEcMVT";
 pub const SEMANTIC_INDEX_FILENAME: &str = "all_versions_embeddings.usearch";
 pub const SEMANTIC_INDEX_SIZE_MB: u32 = 300;
 
