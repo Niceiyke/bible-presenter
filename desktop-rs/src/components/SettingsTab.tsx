@@ -7,7 +7,7 @@ import { BackgroundEditor } from "./BackgroundEditor";
 import { MediaPickerModal } from "./MediaPickerModal";
 import { computePreviewBackground, relativizePath } from "../utils";
 import { THEMES, FONTS } from "../types";
-import type { PresentationSettings, BackgroundSetting, MonitorInfo } from "../types";
+import type { PresentationSettings, BackgroundSetting, MonitorInfo, StartupStatus } from "../types";
 import type { ModelStatus, DownloadProgress, HardwareInfo, TranscriptionConfig } from "../store/slices/modelSlice";
 
 interface SettingsTabProps {
