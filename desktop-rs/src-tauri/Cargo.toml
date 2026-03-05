@@ -24,7 +24,7 @@ rubato = "0.14"      # High-quality resampling
 tokenizers = "0.19"
 ort = "2.0.0-rc.11"
 ndarray = "0.15"     # Tensor manipulation
-usearch = "2.24.0"
+usearch = "=2.23.0"
 memmap2 = "0.9"
 anyhow = "1.0"        
 parking_lot = "0.12" 
