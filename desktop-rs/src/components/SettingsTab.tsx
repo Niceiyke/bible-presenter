@@ -125,6 +125,7 @@ export function SettingsTab({
   useEffect(() => {
     const unlisten = listen<DownloadProgress>("download-progress", (e) => {
       const p = e.payload;
+      console.log("Download progress:", p);
       setDownloadProgress(p.model_id, p.done ? null : p);
       if (p.done && !p.error) {
         if (p.model_id === "semantic_index") {
@@ -150,11 +151,19 @@ export function SettingsTab({
   };
 
   const handleDownloadSemanticIndex = () => {
-    invoke("download_semantic_index_cmd").catch((e: any) => console.error(e));
+    console.log("Downloading Semantic Index...");
+    invoke("download_semantic_index_cmd").catch((e: any) => {
+      console.error(e);
+      alert("Failed to start download: " + e);
+    });
   };
 
   const handleDownloadVerseIndex = () => {
-    invoke("download_verse_index_cmd").catch((e: any) => console.error(e));
+    console.log("Downloading Verse Index...");
+    invoke("download_verse_index_cmd").catch((e: any) => {
+      console.error(e);
+      alert("Failed to start download: " + e);
+    });
   };
 
   const handleSelect = (filename: string) => {
@@ -251,11 +260,19 @@ export function SettingsTab({
   }, []);
 
   const handleDownloadBibleDb = () => {
-    invoke("download_bible_db_cmd").catch((e: any) => console.error(e));
+    console.log("Downloading Bible DB...");
+    invoke("download_bible_db_cmd").catch((e: any) => {
+      console.error(e);
+      alert("Failed to start download: " + e);
+    });
   };
 
   const handleDownloadCoreModels = () => {
-    invoke("download_core_search_models_cmd").catch((e: any) => console.error(e));
+    console.log("Downloading Core Models...");
+    invoke("download_core_search_models_cmd").catch((e: any) => {
+      console.error(e);
+      alert("Failed to start download: " + e);
+    });
   };
 
   return (
