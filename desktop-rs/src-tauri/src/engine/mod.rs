@@ -158,7 +158,11 @@ impl TranscriptionEngine {
 
             let outputs = session.run(inputs)?;
             let (_shape, data) = outputs["logits"].try_extract_tensor::<f32>()?;
-            scores.push(data[0]);
+            
+            // Apply Sigmoid to convert raw logit to probability (0.0 to 1.0)
+            let logit = data[0];
+            let score = 1.0 / (1.0 + (-logit).exp());
+            scores.push(score);
         }
 
         Ok(scores)
