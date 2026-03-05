@@ -34,21 +34,25 @@ export function useAppInitialization() {
     }
 
     const loadAll = async () => {
-      // Probe backend readiness first — retry until get_bible_versions succeeds.
-      // During tauri dev backend restarts the state may not be managed yet, so
-      // we wait rather than letting the cascade see an unmanaged-state error.
-      let versionsRes: string[] = [];
-      for (let attempt = 0; attempt < 10 && versionsRes.length === 0; attempt++) {
-        versionsRes = await invoke<string[]>("get_bible_versions").catch(() => []);
-        if (versionsRes.length === 0) await new Promise(r => setTimeout(r, 600));
+      // Probe backend readiness first — retry until get_startup_status succeeds.
+      let ready = false;
+      for (let attempt = 0; attempt < 15; attempt++) {
+        try {
+          await invoke("get_startup_status");
+          ready = true;
+          break;
+        } catch (e) {
+          await new Promise(r => setTimeout(r, 1000));
+        }
       }
-      if (versionsRes.length === 0) return; // backend never became ready
+      if (!ready) return;
 
       const [
-        mediaRes, studioRes, scheduleRes, songsRes, hymnLibraryRes,
+        versionsRes, mediaRes, studioRes, scheduleRes, songsRes, hymnLibraryRes,
         ltRes, settingsRes, remoteRes, propsRes,
         scenesRes, servicesRes
       ] = await Promise.all([
+        invoke<string[]>("get_bible_versions").catch(() => []),
         invoke<MediaItem[]>("list_media").catch(() => []),
         invoke<any[]>("list_studio_presentations").catch(() => []),
         invoke<any>("load_schedule").catch(() => ({ items: [] })),
@@ -86,7 +90,7 @@ export function useAppInitialization() {
 
       // Setting availableVersions is what unblocks useBibleCascade — do it last.
       setAvailableVersions(versionsRes);
-      setBibleVersion(localStorage.getItem("pref_bibleVersion") || versionsRes[0]);
+      setBibleVersion(localStorage.getItem("pref_bibleVersion") || (versionsRes.length > 0 ? versionsRes[0] : ""));
 
       setPropItems(propsRes);
       setSavedScenes(scenesRes);

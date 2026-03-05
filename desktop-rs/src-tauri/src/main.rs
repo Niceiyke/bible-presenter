@@ -118,11 +118,97 @@ async fn download_semantic_index_cmd(state: State<'_, AppState>) -> Result<(), S
 }
 
 #[tauri::command]
+async fn download_bible_db_cmd(state: State<'_, AppState>) -> Result<(), String> {
+    if state.download_in_progress.load(Ordering::Relaxed) {
+        return Err("Another download is already in progress.".into());
+    }
+    state.download_in_progress.store(true, Ordering::SeqCst);
+    let app_data = state.app_data_dir.clone();
+    let cancel_flag = state.download_in_progress.clone();
+    let app_handle = state.app_handle.get().unwrap().clone();
+
+    tokio::spawn(async move {
+        let res = engine::model_manager::download_bible_db(
+            &app_data,
+            cancel_flag.clone(),
+            {
+                let app_handle = app_handle.clone();
+                move |progress| {
+                    let _ = app_handle.emit("download-progress", progress);
+                }
+            },
+        ).await;
+
+        cancel_flag.store(false, Ordering::SeqCst);
+        match res {
+            Ok(path) => {
+                log_msg(&app_handle, &format!("Bible database downloaded to {:?}", path));
+                let _ = app_handle.emit("bible-db-ready", path.to_string_lossy());
+            }
+            Err(e) => {
+                log_msg(&app_handle, &format!("Bible database download failed: {}", e));
+                let _ = app_handle.emit("download-error", e.to_string());
+            }
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+async fn download_core_search_models_cmd(state: State<'_, AppState>) -> Result<(), String> {
+    if state.download_in_progress.load(Ordering::Relaxed) {
+        return Err("Another download is already in progress.".into());
+    }
+    state.download_in_progress.store(true, Ordering::SeqCst);
+    let app_data = state.app_data_dir.clone();
+    let cancel_flag = state.download_in_progress.clone();
+    let app_handle = state.app_handle.get().unwrap().clone();
+
+    tokio::spawn(async move {
+        let tasks = vec![
+            (engine::model_manager::BGE_MODEL_URL, engine::model_manager::BGE_MODEL_FILENAME, "bge_model"),
+            (engine::model_manager::BGE_TOKENIZER_URL, engine::model_manager::BGE_TOKENIZER_FILENAME, "bge_tokenizer"),
+            (engine::model_manager::RERANKER_MODEL_URL, engine::model_manager::RERANKER_MODEL_FILENAME, "reranker_model"),
+            (engine::model_manager::RERANKER_TOKENIZER_URL, engine::model_manager::RERANKER_TOKENIZER_FILENAME, "reranker_tokenizer"),
+        ];
+
+        let models_dir = engine::model_manager::user_models_dir(&app_data);
+
+        for (url, filename, id) in tasks {
+            let res = engine::model_manager::download_file(
+                url,
+                filename,
+                id,
+                &models_dir,
+                cancel_flag.clone(),
+                {
+                    let app_handle = app_handle.clone();
+                    move |progress| {
+                        let _ = app_handle.emit("download-progress", progress);
+                    }
+                },
+            ).await;
+
+            if let Err(e) = res {
+                log_msg(&app_handle, &format!("Core model download failed ({}): {}", id, e));
+                let _ = app_handle.emit("download-error", e.to_string());
+                cancel_flag.store(false, Ordering::SeqCst);
+                return;
+            }
+        }
+
+        cancel_flag.store(false, Ordering::SeqCst);
+        log_msg(&app_handle, "All core search models downloaded successfully.");
+        let _ = app_handle.emit("core-models-ready", true);
+    });
+    Ok(())
+}
+
+#[tauri::command]
 async fn download_verse_index_cmd(state: State<'_, AppState>) -> Result<(), String> {
     if state.download_in_progress.load(Ordering::Relaxed) {
         return Err("Another download is already in progress.".into());
     }
-
     state.download_in_progress.store(true, Ordering::SeqCst);
     let app_data = state.app_data_dir.clone();
     let cancel_flag = state.download_in_progress.clone();
@@ -138,11 +224,9 @@ async fn download_verse_index_cmd(state: State<'_, AppState>) -> Result<(), Stri
                     let _ = app_handle.emit("download-progress", progress);
                 }
             },
-        )
-        .await;
+        ).await;
 
         cancel_flag.store(false, Ordering::SeqCst);
-
         match res {
             Ok(path) => {
                 log_msg(&app_handle, &format!("Verse index downloaded to {:?}", path));
@@ -154,7 +238,6 @@ async fn download_verse_index_cmd(state: State<'_, AppState>) -> Result<(), Stri
             }
         }
     });
-
     Ok(())
 }
 
@@ -1168,6 +1251,10 @@ async fn search_semantic_query(
         }
     }
 
+    let mut final_results: Vec<(f32, store::Verse)> = rrf_scores.into_values().collect();
+    // Sort by RRF score descending
+    final_results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
     // Map back to Verses and take top 50 for reranking
     let mut candidates: Vec<store::Verse> = final_results.into_iter().take(50).map(|(_, v)| v).collect();
 
@@ -2155,24 +2242,26 @@ async fn get_startup_status(
             candidates.push(cwd);
         }
         candidates.into_iter()
-            .find(|p| p.join("bible_data/super_bible.db").exists())
+            .find(|p| p.join("bible_data/hymns.json").exists()) // Using hymns as anchor since it's still bundled
             .unwrap_or_else(|| state.app_data_dir.clone())
     };
 
-    let db_path = resource_path.join("bible_data/super_bible.db");
+    let db_path = engine::model_manager::bible_db_path(&state.app_data_dir, &resource_path);
     let emb_path = engine::model_manager::semantic_index_path(&state.app_data_dir, &resource_path);
     let vidx_path = engine::model_manager::verse_index_path(&state.app_data_dir, &resource_path);
+    
     let db_ok = db_path.exists();
     let emb_ok = emb_path.is_some();
     let vidx_ok = vidx_path.is_some();
     let onnx_ok = state.embedding_model_path.exists();
     let tok_ok = state.tokenizer_path.exists();
     let rerank_ok = state.reranker_model_path.exists() && state.reranker_tokenizer_path.exists();
+    
     let whisper = state.whisper_path.lock().clone();
     let whisper_ok = whisper.as_ref().map_or(false, |p| p.exists());
     let whisper_name = whisper.and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_string()));
 
-    if !db_ok { issues.push("Bible database not found. The app cannot display scripture.".to_string()); }
+    if !db_ok { issues.push("Bible database not found. Please download it in Settings.".to_string()); }
     if !emb_ok { issues.push("Embeddings file missing. Auto-detection will be unavailable.".to_string()); }
     if !vidx_ok { issues.push("Verse index missing. Semantic search might be limited.".to_string()); }
     if !onnx_ok { issues.push("ONNX embedding model missing. Semantic search disabled.".to_string()); }
@@ -2365,55 +2454,47 @@ fn main() {
                 fs::create_dir_all(&app_data_dir).map_err(|e| format!("Cannot create data dir {:?}: {}", app_data_dir, e))?;
             }
 
-            // Bundled embedding + tokenizer paths (stay fixed)
-            let embedding_model_path = resource_path.join("models/bge-small-en-v1.5.onnx");
-            let tokenizer_path = resource_path.join("models/tokenizer.json");
-            let reranker_model_path = resource_path.join("models/reranker/model.onnx");
-            let reranker_tokenizer_path = resource_path.join("models/reranker/tokenizer.json");
+            // Asset paths: prioritize App Data folder (downloaded), fallback to Resources
+            let embedding_model_path = engine::model_manager::bge_model_path(&app_data_dir, &resource_path);
+            let tokenizer_path = engine::model_manager::bge_tokenizer_path(&app_data_dir, &resource_path);
+            let reranker_model_path = engine::model_manager::reranker_model_path(&app_data_dir, &resource_path);
+            let reranker_tokenizer_path = engine::model_manager::reranker_tokenizer_path(&app_data_dir, &resource_path);
+            let db_path = engine::model_manager::bible_db_path(&app_data_dir, &resource_path);
+            let embeddings_path = engine::model_manager::semantic_index_path(&app_data_dir, &resource_path);
 
             for (label, path) in [
                 ("ONNX model", &embedding_model_path),
                 ("Tokenizer", &tokenizer_path),
                 ("Reranker model", &reranker_model_path),
                 ("Reranker Tokenizer", &reranker_tokenizer_path),
+                ("Bible Database", &db_path),
             ] {
                 if path.exists() {
                     log_msg(app, &format!("{} found at {:?}", label, path));
                 } else {
-                    log_msg(app, &format!("Warning: {} not found at {:?}", label, path));
+                    log_msg(app, &format!("{} not found at {:?}", label, path));
                 }
-            }
-
-            let db_path = resource_path.join("bible_data/super_bible.db");
-            let embeddings_path = engine::model_manager::semantic_index_path(&app_data_dir, &resource_path);
-
-            log_msg(app, &format!("Looking for DB at: {:?}", db_path));
-            if !db_path.exists() {
-                log_msg(
-                    app,
-                    &format!("CRITICAL: Bible Database missing at {:?}", db_path),
-                );
             }
 
             let db_path_str = db_path.to_str()
                 .ok_or_else(|| format!("Bible DB path contains non-UTF-8 characters: {:?}", db_path))?;
             let embeddings_path_str = embeddings_path.as_ref().and_then(|p| p.to_str());
 
+            // Initialize BibleStore. It handles missing DB internally (empty store).
             let store = match store::BibleStore::new(app.handle(), db_path_str, embeddings_path_str) {
                 Ok(s) => {
                     if s.is_embeddings_loaded() {
                         log_msg(app, "Bible Store: Semantic search index loaded.");
-                    } else {
-                        log_msg(app, "Bible Store: Embeddings not found or mismatched. Semantic search disabled.");
                     }
                     Arc::new(s)
                 }
                 Err(e) => {
-                    log_msg(
-                        app,
-                        &format!("CRITICAL: Failed to connect to Bible Database: {}", e),
-                    );
-                    return Err(format!("Database error: {}", e).into());
+                    // If DB doesn't exist, BibleStore::new might fail if it tries to open it.
+                    // We need to ensure BibleStore::new is resilient or we handle it here.
+                    log_msg(app, &format!("Warning: Could not connect to Bible Database: {}. (Expected if not yet downloaded)", e));
+                    // We still need a Store object, so we'll try to create one even if DB is missing
+                    // Note: You might need to adjust BibleStore::new to be more resilient.
+                    Arc::new(store::BibleStore::new_empty(app.handle()))
                 }
             };
 
@@ -2622,6 +2703,8 @@ fn main() {
             download_semantic_index_cmd,
             get_verse_index_status,
             download_verse_index_cmd,
+            download_bible_db_cmd,
+            download_core_search_models_cmd,
             get_transcription_config,
             set_cloud_config,
             test_cloud_connection,

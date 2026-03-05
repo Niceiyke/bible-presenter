@@ -63,6 +63,20 @@ pub const VERSE_INDEX_URL: &str = "https://github.com/Niceiyke/bible-presenter/r
 pub const VERSE_INDEX_FILENAME: &str = "verse_index.json";
 pub const VERSE_INDEX_SIZE_MB: u32 = 11;
 
+// Core Search Assets (Previously bundled)
+pub const BGE_MODEL_URL: &str = "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model.onnx";
+pub const BGE_MODEL_FILENAME: &str = "bge-small-en-v1.5.onnx";
+pub const BGE_TOKENIZER_URL: &str = "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/tokenizer.json";
+pub const BGE_TOKENIZER_FILENAME: &str = "tokenizer.json";
+
+pub const RERANKER_MODEL_URL: &str = "https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2/resolve/main/onnx/model.onnx";
+pub const RERANKER_MODEL_FILENAME: &str = "reranker/model.onnx";
+pub const RERANKER_TOKENIZER_URL: &str = "https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2/resolve/main/tokenizer.json";
+pub const RERANKER_TOKENIZER_FILENAME: &str = "reranker/tokenizer.json";
+
+pub const BIBLE_DB_URL: &str = "https://raw.githubusercontent.com/alshival/super_bible/main/SUPER_BIBLE/super_bible.db";
+pub const BIBLE_DB_FILENAME: &str = "super_bible.db";
+
 // ---------------------------------------------------------------------------
 // Runtime types (serialized to frontend)
 // ---------------------------------------------------------------------------
@@ -263,31 +277,49 @@ pub fn model_path_if_exists(app_data: &Path, filename: &str) -> Option<PathBuf> 
 }
 
 pub fn semantic_index_path(app_data: &Path, resource_path: &Path) -> Option<PathBuf> {
-    // 1. Check user data dir first (for downloaded version)
     let user_path = user_data_dir(app_data).join(SEMANTIC_INDEX_FILENAME);
-    if user_path.exists() {
-        return Some(user_path);
-    }
-    // 2. Fallback to resource path (for bundled version - though we want to stop bundling it)
+    if user_path.exists() { return Some(user_path); }
     let bundled = resource_path.join(format!("bible_data/{}", SEMANTIC_INDEX_FILENAME));
-    if bundled.exists() {
-        return Some(bundled);
-    }
+    if bundled.exists() { return Some(bundled); }
     None
 }
 
 pub fn verse_index_path(app_data: &Path, resource_path: &Path) -> Option<PathBuf> {
-    // 1. Check user data dir first (for downloaded version)
     let user_path = user_data_dir(app_data).join(VERSE_INDEX_FILENAME);
-    if user_path.exists() {
-        return Some(user_path);
-    }
-    // 2. Fallback to resource path
+    if user_path.exists() { return Some(user_path); }
     let bundled = resource_path.join(format!("bible_data/{}", VERSE_INDEX_FILENAME));
-    if bundled.exists() {
-        return Some(bundled);
-    }
+    if bundled.exists() { return Some(bundled); }
     None
+}
+
+pub fn bible_db_path(app_data: &Path, resource_path: &Path) -> PathBuf {
+    let user_path = user_data_dir(app_data).join(BIBLE_DB_FILENAME);
+    if user_path.exists() { return user_path; }
+    resource_path.join(format!("bible_data/{}", BIBLE_DB_FILENAME))
+}
+
+pub fn bge_model_path(app_data: &Path, resource_path: &Path) -> PathBuf {
+    let user_path = user_models_dir(app_data).join(BGE_MODEL_FILENAME);
+    if user_path.exists() { return user_path; }
+    resource_path.join(format!("models/{}", BGE_MODEL_FILENAME))
+}
+
+pub fn bge_tokenizer_path(app_data: &Path, resource_path: &Path) -> PathBuf {
+    let user_path = user_models_dir(app_data).join(BGE_TOKENIZER_FILENAME);
+    if user_path.exists() { return user_path; }
+    resource_path.join(format!("models/{}", BGE_TOKENIZER_FILENAME))
+}
+
+pub fn reranker_model_path(app_data: &Path, resource_path: &Path) -> PathBuf {
+    let user_path = user_models_dir(app_data).join(RERANKER_MODEL_FILENAME);
+    if user_path.exists() { return user_path; }
+    resource_path.join(format!("models/{}", RERANKER_MODEL_FILENAME))
+}
+
+pub fn reranker_tokenizer_path(app_data: &Path, resource_path: &Path) -> PathBuf {
+    let user_path = user_models_dir(app_data).join(RERANKER_TOKENIZER_FILENAME);
+    if user_path.exists() { return user_path; }
+    resource_path.join(format!("models/{}", RERANKER_TOKENIZER_FILENAME))
 }
 
 /// Resolve the whisper model path.
@@ -525,14 +557,127 @@ pub async fn download_verse_index<F>(
 where
     F: FnMut(DownloadProgress) + Send + 'static,
 {
-    let data_dir = user_data_dir(app_data);
-    std::fs::create_dir_all(&data_dir)
-        .with_context(|| format!("Cannot create data dir {:?}", data_dir))?;
+    download_file(
+        VERSE_INDEX_URL,
+        VERSE_INDEX_FILENAME,
+        "verse_index",
+        &user_data_dir(app_data),
+        cancel_flag,
+        progress_cb,
+    ).await
+}
 
-    let url = VERSE_INDEX_URL;
-    let filename = VERSE_INDEX_FILENAME;
-    let tmp_path = data_dir.join(format!("{}.tmp", filename));
-    let final_path = data_dir.join(filename);
+pub async fn download_bible_db<F>(
+    app_data: &Path,
+    cancel_flag: Arc<AtomicBool>,
+    progress_cb: F,
+) -> anyhow::Result<PathBuf>
+where
+    F: FnMut(DownloadProgress) + Send + 'static,
+{
+    download_file(
+        BIBLE_DB_URL,
+        BIBLE_DB_FILENAME,
+        "bible_db",
+        &user_data_dir(app_data),
+        cancel_flag,
+        progress_cb,
+    ).await
+}
+
+pub async fn download_bge_model<F>(
+    app_data: &Path,
+    cancel_flag: Arc<AtomicBool>,
+    progress_cb: F,
+) -> anyhow::Result<PathBuf>
+where
+    F: FnMut(DownloadProgress) + Send + 'static,
+{
+    download_file(
+        BGE_MODEL_URL,
+        BGE_MODEL_FILENAME,
+        "bge_model",
+        &user_models_dir(app_data),
+        cancel_flag,
+        progress_cb,
+    ).await
+}
+
+pub async fn download_bge_tokenizer<F>(
+    app_data: &Path,
+    cancel_flag: Arc<AtomicBool>,
+    progress_cb: F,
+) -> anyhow::Result<PathBuf>
+where
+    F: FnMut(DownloadProgress) + Send + 'static,
+{
+    download_file(
+        BGE_TOKENIZER_URL,
+        BGE_TOKENIZER_FILENAME,
+        "bge_tokenizer",
+        &user_models_dir(app_data),
+        cancel_flag,
+        progress_cb,
+    ).await
+}
+
+pub async fn download_reranker_model<F>(
+    app_data: &Path,
+    cancel_flag: Arc<AtomicBool>,
+    progress_cb: F,
+) -> anyhow::Result<PathBuf>
+where
+    F: FnMut(DownloadProgress) + Send + 'static,
+{
+    download_file(
+        RERANKER_MODEL_URL,
+        RERANKER_MODEL_FILENAME,
+        "reranker_model",
+        &user_models_dir(app_data),
+        cancel_flag,
+        progress_cb,
+    ).await
+}
+
+pub async fn download_reranker_tokenizer<F>(
+    app_data: &Path,
+    cancel_flag: Arc<AtomicBool>,
+    progress_cb: F,
+) -> anyhow::Result<PathBuf>
+where
+    F: FnMut(DownloadProgress) + Send + 'static,
+{
+    download_file(
+        RERANKER_TOKENIZER_URL,
+        RERANKER_TOKENIZER_FILENAME,
+        "reranker_tokenizer",
+        &user_models_dir(app_data),
+        cancel_flag,
+        progress_cb,
+    ).await
+}
+
+pub async fn download_file<F>(
+    url: &str,
+    filename: &str,
+    model_id: &str,
+    target_dir: &Path,
+    cancel_flag: Arc<AtomicBool>,
+    mut progress_cb: F,
+) -> anyhow::Result<PathBuf>
+where
+    F: FnMut(DownloadProgress) + Send + 'static,
+{
+    std::fs::create_dir_all(target_dir)
+        .with_context(|| format!("Cannot create dir {:?}", target_dir))?;
+
+    let tmp_path = target_dir.join(format!("{}.tmp", filename.replace("/", "_")));
+    let final_path = target_dir.join(filename);
+    
+    // Ensure parent dir exists for names like "reranker/model.onnx"
+    if let Some(parent) = final_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(3600))
@@ -571,7 +716,7 @@ where
             0.0
         };
         progress_cb(DownloadProgress {
-            model_id: "verse_index".to_string(),
+            model_id: model_id.to_string(),
             bytes_downloaded,
             total_bytes,
             percent,
@@ -580,13 +725,12 @@ where
         });
     }
 
-    // Atomic rename
     drop(file);
     std::fs::rename(&tmp_path, &final_path)
         .with_context(|| format!("Cannot rename {:?} → {:?}", tmp_path, final_path))?;
 
     progress_cb(DownloadProgress {
-        model_id: "verse_index".to_string(),
+        model_id: model_id.to_string(),
         bytes_downloaded,
         total_bytes,
         percent: 100.0,

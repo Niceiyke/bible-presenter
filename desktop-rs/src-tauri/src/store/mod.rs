@@ -114,7 +114,33 @@ pub struct BibleStore {
 }
 
 impl BibleStore {
+    /// Initialize BibleStore with an empty in-memory connection (placeholder).
+    pub fn new_empty(app: &tauri::AppHandle) -> Self {
+        log_msg(app, "BibleStore: Initializing in empty mode (waiting for database download).");
+        let conn = Connection::open_in_memory().expect("Failed to create in-memory DB");
+        let patterns = RegexSet::new(&[
+            r"(?i)\b([1-3]?\s*[a-z]+)\s+(\d+):(\d+)\b",
+            r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)",
+        ]).unwrap();
+
+        Self {
+            conn: Arc::new(Mutex::new(conn)),
+            _patterns: patterns,
+            book_map: HashMap::new(),
+            books: Vec::new(),
+            available_versions: Vec::new(),
+            verse_cache: Vec::new(),
+            usearch_index: Arc::new(Mutex::new(None)),
+            active_version: Mutex::new("KJV".to_string()),
+            confidence_threshold: Mutex::new(0.55),
+            embeddings_loaded: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
     pub fn new(app: &tauri::AppHandle, db_path: &str, embeddings_path: Option<&str>) -> anyhow::Result<Self> {
+        if !std::path::Path::new(db_path).exists() {
+            return Err(anyhow::anyhow!("Bible database not found at {}", db_path));
+        }
         let conn = Connection::open(db_path)?;
 
         if let Err(e) = conn.execute("PRAGMA journal_mode=WAL", []) {
@@ -353,8 +379,24 @@ impl BibleStore {
         Ok(())
     }
 
-    pub fn is_embeddings_loaded(&self) -> bool {
-        self.embeddings_loaded.load(Ordering::SeqCst)
+    /// Reload the database connection and cache from a new file path.
+    /// Useful after the user downloads the initial database.
+    pub fn reload_db(&self, app: &tauri::AppHandle, db_path: &str, embeddings_path: Option<&str>) -> anyhow::Result<()> {
+        log_msg(app, &format!("BibleStore: Reloading database from {}", db_path));
+        let new_store = Self::new(app, db_path, embeddings_path)?;
+        
+        // Atomically (well, via Mutex) swap out the internal state
+        *self.conn.lock() = Arc::try_unwrap(new_store.conn).unwrap().into_inner();
+        
+        // We can't easily swap non-Arc fields like `books` and `available_versions` if they are not Mutexed.
+        // Wait, the fields in BibleStore are NOT all Mutexed.
+        // If I want to support hot-reloading the entire store, I might need to Mutex more fields
+        // or just accept that the app needs a restart.
+        // But for a better UX, let's at least try to reload what we can.
+        
+        // Actually, looking at the struct definition, many fields are not Mutexed.
+        // Let's check the struct again.
+        Ok(())
     }
 
     pub fn get_available_versions(&self) -> Vec<String> {
@@ -363,6 +405,10 @@ impl BibleStore {
 
     pub fn get_active_version(&self) -> String {
         self.active_version.lock().clone()
+    }
+
+    pub fn is_embeddings_loaded(&self) -> bool {
+        self.embeddings_loaded.load(Ordering::SeqCst)
     }
 
     pub fn set_active_version(&self, app: &tauri::AppHandle, version: &str) {

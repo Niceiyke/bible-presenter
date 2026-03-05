@@ -69,11 +69,6 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "models/tokenizer.json",
-      "models/bge-small-en-v1.5.onnx",
-      "models/reranker/model.onnx",
-      "models/reranker/tokenizer.json",
-      "bible_data/super_bible.db",
       "bible_data/hymns.json"
     ],
     "windows": {
