@@ -58,6 +58,11 @@ pub const SEMANTIC_INDEX_URL: &str = "https://github.com/Niceiyke/bible-presente
 pub const SEMANTIC_INDEX_FILENAME: &str = "all_versions_embeddings.usearch";
 pub const SEMANTIC_INDEX_SIZE_MB: u32 = 300;
 
+// Verse index metadata
+pub const VERSE_INDEX_URL: &str = "https://github.com/Niceiyke/bible-presenter/releases/download/embeddings_usearch_1.0.0/verse_index.json";
+pub const VERSE_INDEX_FILENAME: &str = "verse_index.json";
+pub const VERSE_INDEX_SIZE_MB: u32 = 11;
+
 // ---------------------------------------------------------------------------
 // Runtime types (serialized to frontend)
 // ---------------------------------------------------------------------------
@@ -265,6 +270,20 @@ pub fn semantic_index_path(app_data: &Path, resource_path: &Path) -> Option<Path
     }
     // 2. Fallback to resource path (for bundled version - though we want to stop bundling it)
     let bundled = resource_path.join(format!("bible_data/{}", SEMANTIC_INDEX_FILENAME));
+    if bundled.exists() {
+        return Some(bundled);
+    }
+    None
+}
+
+pub fn verse_index_path(app_data: &Path, resource_path: &Path) -> Option<PathBuf> {
+    // 1. Check user data dir first (for downloaded version)
+    let user_path = user_data_dir(app_data).join(VERSE_INDEX_FILENAME);
+    if user_path.exists() {
+        return Some(user_path);
+    }
+    // 2. Fallback to resource path
+    let bundled = resource_path.join(format!("bible_data/{}", VERSE_INDEX_FILENAME));
     if bundled.exists() {
         return Some(bundled);
     }
@@ -488,6 +507,86 @@ where
 
     progress_cb(DownloadProgress {
         model_id: "semantic_index".to_string(),
+        bytes_downloaded,
+        total_bytes,
+        percent: 100.0,
+        done: true,
+        error: None,
+    });
+
+    Ok(final_path)
+}
+
+pub async fn download_verse_index<F>(
+    app_data: &Path,
+    cancel_flag: Arc<AtomicBool>,
+    mut progress_cb: F,
+) -> anyhow::Result<PathBuf>
+where
+    F: FnMut(DownloadProgress) + Send + 'static,
+{
+    let data_dir = user_data_dir(app_data);
+    std::fs::create_dir_all(&data_dir)
+        .with_context(|| format!("Cannot create data dir {:?}", data_dir))?;
+
+    let url = VERSE_INDEX_URL;
+    let filename = VERSE_INDEX_FILENAME;
+    let tmp_path = data_dir.join(format!("{}.tmp", filename));
+    let final_path = data_dir.join(filename);
+
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(3600))
+        .build()
+        .context("Failed to build HTTP client")?;
+
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("GET {} failed", url))?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("HTTP {} for {}", response.status(), url);
+    }
+
+    let total_bytes = response.content_length().unwrap_or(0);
+    let mut bytes_downloaded: u64 = 0;
+    let mut file =
+        std::fs::File::create(&tmp_path).with_context(|| format!("Cannot create {:?}", tmp_path))?;
+
+    let mut stream = response.bytes_stream();
+    while let Some(chunk_result) = stream.next().await {
+        if cancel_flag.load(Ordering::Relaxed) {
+            let _ = std::fs::remove_file(&tmp_path);
+            anyhow::bail!("Download cancelled");
+        }
+        let chunk = chunk_result.context("Stream error")?;
+        use std::io::Write;
+        file.write_all(&chunk).context("Write error")?;
+        bytes_downloaded += chunk.len() as u64;
+
+        let percent = if total_bytes > 0 {
+            (bytes_downloaded as f32 / total_bytes as f32) * 100.0
+        } else {
+            0.0
+        };
+        progress_cb(DownloadProgress {
+            model_id: "verse_index".to_string(),
+            bytes_downloaded,
+            total_bytes,
+            percent,
+            done: false,
+            error: None,
+        });
+    }
+
+    // Atomic rename
+    drop(file);
+    std::fs::rename(&tmp_path, &final_path)
+        .with_context(|| format!("Cannot rename {:?} → {:?}", tmp_path, final_path))?;
+
+    progress_cb(DownloadProgress {
+        model_id: "verse_index".to_string(),
         bytes_downloaded,
         total_bytes,
         percent: 100.0,

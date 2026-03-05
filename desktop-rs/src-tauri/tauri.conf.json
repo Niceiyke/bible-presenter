@@ -72,7 +72,6 @@
       "models/tokenizer.json",
       "models/bge-small-en-v1.5.onnx",
       "bible_data/super_bible.db",
-      "bible_data/verse_index.json",
       "bible_data/hymns.json"
     ],
     "windows": {

@@ -17,7 +17,7 @@ use std::sync::{Arc, OnceLock};
 use engine::model_manager::{
     self, detect_hardware, download_model, list_model_statuses, model_path_if_exists,
     resolve_whisper_path, user_models_dir, DownloadProgress, HardwareInfo, ModelStatus,
-    TranscriptionConfig, SEMANTIC_INDEX_SIZE_MB,
+    TranscriptionConfig, SEMANTIC_INDEX_SIZE_MB, VERSE_INDEX_SIZE_MB,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -27,6 +27,13 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Clone, Serialize, Deserialize)]
 struct SemanticIndexStatus {
+    downloaded: bool,
+    path: Option<String>,
+    size_mb: u32,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct VerseIndexStatus {
     downloaded: bool,
     path: Option<String>,
     size_mb: u32,
@@ -44,6 +51,21 @@ async fn get_semantic_index_status(state: State<'_, AppState>) -> Result<Semanti
         downloaded,
         path: path.map(|p| p.to_string_lossy().to_string()),
         size_mb: SEMANTIC_INDEX_SIZE_MB,
+    })
+}
+
+#[tauri::command]
+async fn get_verse_index_status(state: State<'_, AppState>) -> Result<VerseIndexStatus, String> {
+    let app_handle = state.app_handle.get().expect("App handle not set");
+    let resource_path = app_handle.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
+    
+    let path = engine::model_manager::verse_index_path(&state.app_data_dir, &resource_path);
+    let downloaded = path.is_some();
+    
+    Ok(VerseIndexStatus {
+        downloaded,
+        path: path.map(|p| p.to_string_lossy().to_string()),
+        size_mb: VERSE_INDEX_SIZE_MB,
     })
 }
 
@@ -87,6 +109,47 @@ async fn download_semantic_index_cmd(state: State<'_, AppState>) -> Result<(), S
             }
             Err(e) => {
                 log_msg(&app_handle, &format!("Semantic index download failed: {}", e));
+                let _ = app_handle.emit("download-error", e.to_string());
+            }
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn download_verse_index_cmd(state: State<'_, AppState>) -> Result<(), String> {
+    if state.download_in_progress.load(Ordering::Relaxed) {
+        return Err("Another download is already in progress.".into());
+    }
+
+    state.download_in_progress.store(true, Ordering::SeqCst);
+    let app_data = state.app_data_dir.clone();
+    let cancel_flag = state.download_in_progress.clone();
+    let app_handle = state.app_handle.get().unwrap().clone();
+
+    tokio::spawn(async move {
+        let res = engine::model_manager::download_verse_index(
+            &app_data,
+            cancel_flag.clone(),
+            {
+                let app_handle = app_handle.clone();
+                move |progress| {
+                    let _ = app_handle.emit("download-progress", progress);
+                }
+            },
+        )
+        .await;
+
+        cancel_flag.store(false, Ordering::SeqCst);
+
+        match res {
+            Ok(path) => {
+                log_msg(&app_handle, &format!("Verse index downloaded to {:?}", path));
+                let _ = app_handle.emit("verse-index-ready", path.to_string_lossy());
+            }
+            Err(e) => {
+                log_msg(&app_handle, &format!("Verse index download failed: {}", e));
                 let _ = app_handle.emit("download-error", e.to_string());
             }
         }
@@ -2070,8 +2133,10 @@ async fn get_startup_status(
 
     let db_path = resource_path.join("bible_data/super_bible.db");
     let emb_path = engine::model_manager::semantic_index_path(&state.app_data_dir, &resource_path);
+    let vidx_path = engine::model_manager::verse_index_path(&state.app_data_dir, &resource_path);
     let db_ok = db_path.exists();
     let emb_ok = emb_path.is_some();
+    let vidx_ok = vidx_path.is_some();
     let onnx_ok = state.embedding_model_path.exists();
     let tok_ok = state.tokenizer_path.exists();
     let whisper = state.whisper_path.lock().clone();
@@ -2080,6 +2145,7 @@ async fn get_startup_status(
 
     if !db_ok { issues.push("Bible database not found. The app cannot display scripture.".to_string()); }
     if !emb_ok { issues.push("Embeddings file missing. Auto-detection will be unavailable.".to_string()); }
+    if !vidx_ok { issues.push("Verse index missing. Semantic search might be limited.".to_string()); }
     if !onnx_ok { issues.push("ONNX embedding model missing. Semantic search disabled.".to_string()); }
     if !tok_ok { issues.push("Tokenizer missing. Semantic search disabled.".to_string()); }
     if !whisper_ok { issues.push("No Whisper model selected. Go to Settings \u{2192} Transcription Model.".to_string()); }
@@ -2516,6 +2582,8 @@ fn main() {
             delete_whisper_model,
             get_semantic_index_status,
             download_semantic_index_cmd,
+            get_verse_index_status,
+            download_verse_index_cmd,
             get_transcription_config,
             set_cloud_config,
             test_cloud_connection,

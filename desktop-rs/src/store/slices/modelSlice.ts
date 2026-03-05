@@ -55,12 +55,21 @@ export interface SemanticIndexStatus {
   size_mb: number;
 }
 
+export interface VerseIndexStatus {
+  downloaded: boolean;
+  path: string | null;
+  size_mb: number;
+}
+
 export interface ModelSlice {
   whisperModels: ModelStatus[];
   setWhisperModels: (v: ModelStatus[]) => void;
 
   semanticIndexStatus: SemanticIndexStatus | null;
   setSemanticIndexStatus: (v: SemanticIndexStatus | null) => void;
+
+  verseIndexStatus: VerseIndexStatus | null;
+  setVerseIndexStatus: (v: VerseIndexStatus | null) => void;
 
   downloadProgress: Record<string, DownloadProgress>;
   setDownloadProgress: (model_id: string, p: DownloadProgress | null) => void;
@@ -78,6 +87,9 @@ export const createModelSlice: StateCreator<AppStore, [], [], ModelSlice> = (set
 
   semanticIndexStatus: null,
   setSemanticIndexStatus: (v) => set({ semanticIndexStatus: v }),
+
+  verseIndexStatus: null,
+  setVerseIndexStatus: (v) => set({ verseIndexStatus: v }),
 
   downloadProgress: {},
   setDownloadProgress: (model_id, p) =>
