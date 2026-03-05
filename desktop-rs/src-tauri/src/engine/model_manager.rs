@@ -63,18 +63,18 @@ pub const VERSE_INDEX_URL: &str = "https://github.com/Niceiyke/bible-presenter/r
 pub const VERSE_INDEX_FILENAME: &str = "verse_index.json";
 pub const VERSE_INDEX_SIZE_MB: u32 = 11;
 
-// Core Search Assets (Previously bundled)
-pub const BGE_MODEL_URL: &str = "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model.onnx";
+// Core Search Assets mirrored on Google Drive
+pub const BGE_MODEL_URL: &str = "https://drive.google.com/uc?export=download&id=1iuzlgf9nHdE1Eiw_aO9SXfLFIL51nJeL";
 pub const BGE_MODEL_FILENAME: &str = "bge-small-en-v1.5.onnx";
-pub const BGE_TOKENIZER_URL: &str = "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/tokenizer.json";
+pub const BGE_TOKENIZER_URL: &str = "https://drive.google.com/uc?export=download&id=1yu_w6MwN2wwFgTDfn4EkyUZnChBBJgvF";
 pub const BGE_TOKENIZER_FILENAME: &str = "tokenizer.json";
 
-pub const RERANKER_MODEL_URL: &str = "https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2/resolve/main/onnx/model.onnx";
+pub const RERANKER_MODEL_URL: &str = "https://drive.google.com/uc?export=download&id=1DYPAJEz2VxAEa2huzKdTvfyKrAUXwt9M";
 pub const RERANKER_MODEL_FILENAME: &str = "reranker/model.onnx";
-pub const RERANKER_TOKENIZER_URL: &str = "https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2/resolve/main/tokenizer.json";
+pub const RERANKER_TOKENIZER_URL: &str = "https://drive.google.com/uc?export=download&id=1HVZKo4SBgCDALdIhmvjmCjzQXBlpsJ5T";
 pub const RERANKER_TOKENIZER_FILENAME: &str = "reranker/tokenizer.json";
 
-pub const BIBLE_DB_URL: &str = "https://raw.githubusercontent.com/alshival/super_bible/main/SUPER_BIBLE/super_bible.db";
+pub const BIBLE_DB_URL: &str = "https://drive.google.com/uc?export=download&id=1oqkczt3IqMMVtOxVTzOc0Mgfjryeicr8";
 pub const BIBLE_DB_FILENAME: &str = "super_bible.db";
 
 // ---------------------------------------------------------------------------
