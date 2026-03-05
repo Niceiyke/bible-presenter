@@ -458,11 +458,12 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
               {searchResults.length > 0 && searchMethod && (
                 <div className="flex items-center gap-2 mb-2 px-1">
                   <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase tracking-widest ${
-                    searchMethod === "semantic" ? "bg-blue-500/20 text-blue-400 border border-blue-500/30" :
+                    (searchMethod === "semantic" || searchMethod === "hybrid") ? "bg-blue-500/20 text-blue-400 border border-blue-500/30" :
                     searchMethod === "reference" ? "bg-amber-500/20 text-amber-400 border border-amber-500/30" :
                     "bg-slate-700/50 text-slate-400 border border-slate-600/30"
                   }`}>
                     {searchMethod === "semantic" ? "Semantic Match" :
+                     searchMethod === "hybrid" ? "Hybrid Match" :
                      searchMethod === "reference" ? "Reference Match" :
                      "Keyword Match"}
                   </span>

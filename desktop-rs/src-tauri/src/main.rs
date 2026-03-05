@@ -40,9 +40,8 @@ struct VerseIndexStatus {
 }
 
 #[tauri::command]
-async fn get_semantic_index_status(state: State<'_, AppState>) -> Result<SemanticIndexStatus, String> {
-    let app_handle = state.app_handle.get().expect("App handle not set");
-    let resource_path = app_handle.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
+async fn get_semantic_index_status(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<SemanticIndexStatus, String> {
+    let resource_path = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
     
     let path = engine::model_manager::semantic_index_path(&state.app_data_dir, &resource_path);
     let downloaded = path.is_some();
@@ -55,9 +54,8 @@ async fn get_semantic_index_status(state: State<'_, AppState>) -> Result<Semanti
 }
 
 #[tauri::command]
-async fn get_verse_index_status(state: State<'_, AppState>) -> Result<VerseIndexStatus, String> {
-    let app_handle = state.app_handle.get().expect("App handle not set");
-    let resource_path = app_handle.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
+async fn get_verse_index_status(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<VerseIndexStatus, String> {
+    let resource_path = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
     
     let path = engine::model_manager::verse_index_path(&state.app_data_dir, &resource_path);
     let downloaded = path.is_some();
@@ -70,7 +68,8 @@ async fn get_verse_index_status(state: State<'_, AppState>) -> Result<VerseIndex
 }
 
 #[tauri::command]
-async fn download_semantic_index_cmd(state: State<'_, AppState>) -> Result<(), String> {
+async fn download_semantic_index_cmd(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    log_msg(&app, "Command received: download_semantic_index_cmd");
     if state.download_in_progress.load(Ordering::Relaxed) {
         return Err("Another download is already in progress.".into());
     }
@@ -78,7 +77,7 @@ async fn download_semantic_index_cmd(state: State<'_, AppState>) -> Result<(), S
     state.download_in_progress.store(true, Ordering::SeqCst);
     let app_data = state.app_data_dir.clone();
     let cancel_flag = state.download_in_progress.clone();
-    let app_handle = state.app_handle.get().unwrap().clone();
+    let app_handle = app.clone();
     let store = state.store.clone();
 
     tokio::spawn(async move {
@@ -118,14 +117,15 @@ async fn download_semantic_index_cmd(state: State<'_, AppState>) -> Result<(), S
 }
 
 #[tauri::command]
-async fn download_bible_db_cmd(state: State<'_, AppState>) -> Result<(), String> {
+async fn download_bible_db_cmd(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    log_msg(&app, "Command received: download_bible_db_cmd");
     if state.download_in_progress.load(Ordering::Relaxed) {
         return Err("Another download is already in progress.".into());
     }
     state.download_in_progress.store(true, Ordering::SeqCst);
     let app_data = state.app_data_dir.clone();
     let cancel_flag = state.download_in_progress.clone();
-    let app_handle = state.app_handle.get().unwrap().clone();
+    let app_handle = app.clone();
 
     tokio::spawn(async move {
         let res = engine::model_manager::download_bible_db(
@@ -155,14 +155,15 @@ async fn download_bible_db_cmd(state: State<'_, AppState>) -> Result<(), String>
 }
 
 #[tauri::command]
-async fn download_core_search_models_cmd(state: State<'_, AppState>) -> Result<(), String> {
+async fn download_core_search_models_cmd(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    log_msg(&app, "Command received: download_core_search_models_cmd");
     if state.download_in_progress.load(Ordering::Relaxed) {
         return Err("Another download is already in progress.".into());
     }
     state.download_in_progress.store(true, Ordering::SeqCst);
     let app_data = state.app_data_dir.clone();
     let cancel_flag = state.download_in_progress.clone();
-    let app_handle = state.app_handle.get().unwrap().clone();
+    let app_handle = app.clone();
 
     tokio::spawn(async move {
         let tasks = vec![
@@ -205,14 +206,15 @@ async fn download_core_search_models_cmd(state: State<'_, AppState>) -> Result<(
 }
 
 #[tauri::command]
-async fn download_verse_index_cmd(state: State<'_, AppState>) -> Result<(), String> {
+async fn download_verse_index_cmd(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    log_msg(&app, "Command received: download_verse_index_cmd");
     if state.download_in_progress.load(Ordering::Relaxed) {
         return Err("Another download is already in progress.".into());
     }
     state.download_in_progress.store(true, Ordering::SeqCst);
     let app_data = state.app_data_dir.clone();
     let cancel_flag = state.download_in_progress.clone();
-    let app_handle = state.app_handle.get().unwrap().clone();
+    let app_handle = app.clone();
 
     tokio::spawn(async move {
         let res = engine::model_manager::download_verse_index(
@@ -2226,25 +2228,13 @@ struct StartupStatus {
 
 #[tauri::command]
 async fn get_startup_status(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<StartupStatus, String> {
     let mut issues = Vec::new();
 
     // Re-derive the resource path by probing the same candidates as setup
-    let resource_path = {
-        let mut candidates: Vec<PathBuf> = Vec::new();
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                candidates.push(dir.to_path_buf());
-            }
-        }
-        if let Ok(cwd) = std::env::current_dir() {
-            candidates.push(cwd);
-        }
-        candidates.into_iter()
-            .find(|p| p.join("bible_data/hymns.json").exists()) // Using hymns as anchor since it's still bundled
-            .unwrap_or_else(|| state.app_data_dir.clone())
-    };
+    let resource_path = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     let db_path = engine::model_manager::bible_db_path(&state.app_data_dir, &resource_path);
     let emb_path = engine::model_manager::semantic_index_path(&state.app_data_dir, &resource_path);
