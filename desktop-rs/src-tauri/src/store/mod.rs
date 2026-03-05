@@ -1,14 +1,14 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::HashMap;
 use parking_lot::Mutex;
 use once_cell::sync::Lazy;
 use regex::{Regex, RegexSet};
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::Write;
 use usearch::Index;
-use memmap2::Mmap;
 use tauri::{Emitter, Manager};
 
 pub mod media_schedule;
@@ -104,13 +104,13 @@ pub struct BibleStore {
     /// verse_cache[i] corresponds to row i in the USearch index.
     verse_cache: Vec<CachedVerse>,
     /// Usearch index for fast semantic search (Cosine distance on normalized embeddings).
-    usearch_index: Option<Index>,
+    usearch_index: Arc<Mutex<Option<Index>>>,
     /// Currently active version for display queries.
     active_version: Mutex<String>,
     /// Minimum cosine similarity score for a semantic match to be accepted (default 0.55).
     confidence_threshold: Mutex<f32>,
     /// Whether semantic search index (HNSW) was successfully loaded.
-    embeddings_loaded: bool,
+    embeddings_loaded: Arc<AtomicBool>,
 }
 
 impl BibleStore {
@@ -320,15 +320,41 @@ impl BibleStore {
             books,
             available_versions,
             verse_cache,
-            usearch_index,
+            usearch_index: Arc::new(Mutex::new(usearch_index)),
             active_version: Mutex::new(default_version),
             confidence_threshold: Mutex::new(0.55),
-            embeddings_loaded,
+            embeddings_loaded: Arc::new(AtomicBool::new(embeddings_loaded)),
         })
     }
 
+    pub fn reload_embeddings(&self, app: &tauri::AppHandle, path: &str) -> anyhow::Result<()> {
+        if !std::path::Path::new(path).exists() {
+            anyhow::bail!("Embeddings file not found at {}", path);
+        }
+
+        log_msg(app, &format!("BibleStore: Reloading USearch index from {}", path));
+        let mut options = usearch::IndexOptions::default();
+        options.dimensions = 384;
+        options.metric = usearch::MetricKind::Cos;
+        options.quantization = usearch::ScalarKind::F32;
+
+        let idx = usearch::Index::new(&options).map_err(|e| anyhow::anyhow!("Failed to create USearch index: {}", e))?;
+        idx.view(path).map_err(|e| anyhow::anyhow!("Failed to view USearch index: {}", e))?;
+
+        if idx.size() != self.verse_cache.len() {
+            log_msg(app, &format!("Warning: Reloaded USearch index size ({}) does not match verse_cache ({})", idx.size(), self.verse_cache.len()));
+        }
+
+        let mut index_lock = self.usearch_index.lock();
+        *index_lock = Some(idx);
+        self.embeddings_loaded.store(true, Ordering::SeqCst);
+        
+        log_msg(app, "BibleStore: Semantic search index reloaded successfully.");
+        Ok(())
+    }
+
     pub fn is_embeddings_loaded(&self) -> bool {
-        self.embeddings_loaded
+        self.embeddings_loaded.load(Ordering::SeqCst)
     }
 
     pub fn get_available_versions(&self) -> Vec<String> {
@@ -414,7 +440,8 @@ impl BibleStore {
     /// Searches the full stacked embeddings matrix across all embedded versions.
     /// Returns `(Option<Verse>, score)` — the best match and its cosine similarity score.
     fn search_semantic_stacked(&self, embedding: &[f32]) -> (Option<Verse>, f32) {
-        let index = match self.usearch_index.as_ref() {
+        let lock = self.usearch_index.lock();
+        let index = match lock.as_ref() {
             Some(i) => i,
             None => return (None, 0.0),
         };
@@ -505,7 +532,8 @@ impl BibleStore {
     /// Returns top-N unique (book,chapter,verse) results.
     /// Prefers the active version for the displayed text.
     pub fn search_top_n_semantic(&self, app: &tauri::AppHandle, embedding: &[f32], top_n: usize) -> Vec<Verse> {
-        let index = match self.usearch_index.as_ref() {
+        let lock = self.usearch_index.lock();
+        let index = match lock.as_ref() {
             Some(i) => i,
             None => {
                 log_msg(app, "BibleStore: search_top_n_semantic failed: USearch index not loaded.");

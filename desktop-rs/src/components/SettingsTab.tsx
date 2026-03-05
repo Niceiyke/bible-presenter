@@ -108,6 +108,7 @@ export function SettingsTab({
     downloadProgress, setDownloadProgress,
     hardwareInfo, setHardwareInfo,
     transcriptionConfig, setTranscriptionConfig,
+    semanticIndexStatus, setSemanticIndexStatus,
   } = useAppStore();
 
   // Load model manager data on mount
@@ -115,15 +116,20 @@ export function SettingsTab({
     invoke<ModelStatus[]>("list_whisper_models").then(setWhisperModels).catch(() => {});
     invoke<HardwareInfo>("get_hardware_info").then(setHardwareInfo).catch(() => {});
     invoke<TranscriptionConfig>("get_transcription_config").then(setTranscriptionConfig).catch(() => {});
+    invoke<any>("get_semantic_index_status").then(setSemanticIndexStatus).catch(() => {});
   }, []);
 
   // Listen for download progress events
   useEffect(() => {
-    const unlisten = listen<DownloadProgress>("model-download-progress", (e) => {
+    const unlisten = listen<DownloadProgress>("download-progress", (e) => {
       const p = e.payload;
       setDownloadProgress(p.model_id, p.done ? null : p);
       if (p.done && !p.error) {
-        invoke<ModelStatus[]>("list_whisper_models").then(setWhisperModels).catch(() => {});
+        if (p.model_id === "semantic_index") {
+          invoke<any>("get_semantic_index_status").then(setSemanticIndexStatus).catch(() => {});
+        } else {
+          invoke<ModelStatus[]>("list_whisper_models").then(setWhisperModels).catch(() => {});
+        }
       }
     });
     return () => { unlisten.then((fn) => fn()); };
@@ -131,6 +137,10 @@ export function SettingsTab({
 
   const handleDownload = (model_id: string) => {
     invoke("download_whisper_model", { model_id }).catch((e: any) => console.error(e));
+  };
+
+  const handleDownloadSemanticIndex = () => {
+    invoke("download_semantic_index_cmd").catch((e: any) => console.error(e));
   };
 
   const handleSelect = (filename: string) => {
@@ -1199,6 +1209,74 @@ export function SettingsTab({
                   " for transcription. No local Whisper model is required."}
               </p>
             </>
+          )}
+        </div>
+
+        {/* ── Semantic Index Manager ─────────────────────────────── */}
+        <div className="mb-4 p-3 rounded-lg bg-slate-900/60 border border-slate-700/50">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <p className="text-[10px] text-slate-400 font-bold uppercase">Semantic Search Index</p>
+              <p className="text-[9px] text-slate-600 mt-0.5">Required for smart verse suggestions & context search</p>
+            </div>
+            {semanticIndexStatus?.downloaded ? (
+              <span className="text-[9px] font-black uppercase bg-emerald-900 text-emerald-400 border border-emerald-700 rounded px-1.5 py-0.5">
+                Installed
+              </span>
+            ) : (
+              <span className="text-[9px] font-black uppercase bg-slate-800 text-slate-500 border border-slate-700 rounded px-1.5 py-0.5">
+                Missing
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between gap-4 mt-3">
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-slate-300">
+                AI Semantic Embeddings
+              </span>
+              <span className="text-[10px] text-slate-500">
+                Size: {semanticIndexStatus?.size_mb || 300} MB
+              </span>
+            </div>
+
+            {downloadProgress["semantic_index"] ? (
+              <button
+                disabled
+                className="px-3 py-1.5 text-[10px] font-bold uppercase bg-blue-900/50 text-blue-300 border border-blue-800 rounded transition-colors"
+              >
+                Downloading...
+              </button>
+            ) : semanticIndexStatus?.downloaded ? (
+              <div className="text-[10px] text-slate-500 italic"> Ready to use </div>
+            ) : (
+              <button
+                onClick={handleDownloadSemanticIndex}
+                className="px-3 py-1.5 text-[10px] font-bold uppercase bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors shadow-lg shadow-blue-900/20"
+              >
+                Download Index
+              </button>
+            )}
+          </div>
+
+          {downloadProgress["semantic_index"] && (
+            <div className="mt-3">
+              <div className="flex justify-between items-center mb-1">
+                <span className="text-[10px] text-slate-400">
+                  {Math.round(downloadProgress["semantic_index"].bytes_downloaded / 1024 / 1024)} /
+                  {Math.round(downloadProgress["semantic_index"].total_bytes / 1024 / 1024)} MB
+                </span>
+                <span className="text-[10px] text-slate-400 font-mono">
+                  {downloadProgress["semantic_index"].percent.toFixed(1)}%
+                </span>
+              </div>
+              <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-blue-500 rounded-full transition-all"
+                  style={{ width: `${downloadProgress["semantic_index"].percent}%` }}
+                />
+              </div>
+            </div>
           )}
         </div>
 

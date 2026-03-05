@@ -17,9 +17,83 @@ use std::sync::{Arc, OnceLock};
 use engine::model_manager::{
     self, detect_hardware, download_model, list_model_statuses, model_path_if_exists,
     resolve_whisper_path, user_models_dir, DownloadProgress, HardwareInfo, ModelStatus,
-    TranscriptionConfig,
+    TranscriptionConfig, SEMANTIC_INDEX_SIZE_MB,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
+
+// ---------------------------------------------------------------------------
+// Semantic Index management
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Serialize, Deserialize)]
+struct SemanticIndexStatus {
+    downloaded: bool,
+    path: Option<String>,
+    size_mb: u32,
+}
+
+#[tauri::command]
+async fn get_semantic_index_status(state: State<'_, AppState>) -> Result<SemanticIndexStatus, String> {
+    let app_handle = state.app_handle.get().expect("App handle not set");
+    let resource_path = app_handle.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
+    
+    let path = engine::model_manager::semantic_index_path(&state.app_data_dir, &resource_path);
+    let downloaded = path.is_some();
+    
+    Ok(SemanticIndexStatus {
+        downloaded,
+        path: path.map(|p| p.to_string_lossy().to_string()),
+        size_mb: SEMANTIC_INDEX_SIZE_MB,
+    })
+}
+
+#[tauri::command]
+async fn download_semantic_index_cmd(state: State<'_, AppState>) -> Result<(), String> {
+    if state.download_in_progress.load(Ordering::Relaxed) {
+        return Err("Another download is already in progress.".into());
+    }
+
+    state.download_in_progress.store(true, Ordering::SeqCst);
+    let app_data = state.app_data_dir.clone();
+    let cancel_flag = state.download_in_progress.clone();
+    let app_handle = state.app_handle.get().unwrap().clone();
+    let store = state.store.clone();
+
+    tokio::spawn(async move {
+        let res = engine::model_manager::download_semantic_index(
+            &app_data,
+            cancel_flag.clone(),
+            {
+                let app_handle = app_handle.clone();
+                move |progress| {
+                    let _ = app_handle.emit("download-progress", progress);
+                }
+            },
+        )
+        .await;
+
+        cancel_flag.store(false, Ordering::SeqCst);
+
+        match res {
+            Ok(path) => {
+                log_msg(&app_handle, &format!("Semantic index downloaded to {:?}", path));
+                let _ = app_handle.emit("semantic-index-ready", path.to_string_lossy());
+                
+                // Try to reload it in BibleStore if possible
+                let path_str = path.to_str().unwrap_or("");
+                if let Err(e) = store.reload_embeddings(&app_handle, path_str) {
+                    log_msg(&app_handle, &format!("Failed to load semantic index after download: {}", e));
+                }
+            }
+            Err(e) => {
+                log_msg(&app_handle, &format!("Semantic index download failed: {}", e));
+                let _ = app_handle.emit("download-error", e.to_string());
+            }
+        }
+    });
+
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // Shared event payloads
@@ -1822,7 +1896,7 @@ async fn download_whisper_model(
 
     tokio::spawn(async move {
         let result = download_model(&info, &app_data_dir, cancel_flag.clone(), move |progress| {
-            let _ = app_clone.emit("model-download-progress", &progress);
+            let _ = app_clone.emit("download-progress", &progress);
         })
         .await;
 
@@ -1831,7 +1905,7 @@ async fn download_whisper_model(
 
         if let Err(e) = result {
             let _ = app.emit(
-                "model-download-progress",
+                "download-progress",
                 DownloadProgress {
                     model_id: info.id.to_string(),
                     bytes_downloaded: 0,
@@ -1995,9 +2069,9 @@ async fn get_startup_status(
     };
 
     let db_path = resource_path.join("bible_data/super_bible.db");
-    let emb_path = resource_path.join("bible_data/all_versions_embeddings.usearch");
+    let emb_path = engine::model_manager::semantic_index_path(&state.app_data_dir, &resource_path);
     let db_ok = db_path.exists();
-    let emb_ok = emb_path.exists();
+    let emb_ok = emb_path.is_some();
     let onnx_ok = state.embedding_model_path.exists();
     let tok_ok = state.tokenizer_path.exists();
     let whisper = state.whisper_path.lock().clone();
@@ -2182,6 +2256,18 @@ fn main() {
                 }
             };
 
+            // Use app_local_data_dir (C:\Users\{user}\AppData\Local\...) rather than
+            // app_data_dir (Roaming), which on corporate systems is often redirected to a
+            // network share that may be inaccessible or slow.
+            let app_data_dir = app.path()
+                .app_local_data_dir()
+                .or_else(|_| app.path().app_data_dir())
+                .map_err(|e| e.to_string())?;
+            log_msg(app, &format!("User data dir: {:?}", app_data_dir));
+            if !app_data_dir.exists() {
+                fs::create_dir_all(&app_data_dir).map_err(|e| format!("Cannot create data dir {:?}: {}", app_data_dir, e))?;
+            }
+
             // Bundled embedding + tokenizer paths (stay fixed)
             let embedding_model_path = resource_path.join("models/bge-small-en-v1.5.onnx");
             let tokenizer_path = resource_path.join("models/tokenizer.json");
@@ -2197,7 +2283,7 @@ fn main() {
             }
 
             let db_path = resource_path.join("bible_data/super_bible.db");
-            let embeddings_path = resource_path.join("bible_data/all_versions_embeddings.usearch");
+            let embeddings_path = engine::model_manager::semantic_index_path(&app_data_dir, &resource_path);
 
             log_msg(app, &format!("Looking for DB at: {:?}", db_path));
             if !db_path.exists() {
@@ -2209,7 +2295,7 @@ fn main() {
 
             let db_path_str = db_path.to_str()
                 .ok_or_else(|| format!("Bible DB path contains non-UTF-8 characters: {:?}", db_path))?;
-            let embeddings_path_str = embeddings_path.to_str();
+            let embeddings_path_str = embeddings_path.as_ref().and_then(|p| p.to_str());
 
             let store = match store::BibleStore::new(app.handle(), db_path_str, embeddings_path_str) {
                 Ok(s) => {
@@ -2232,17 +2318,6 @@ fn main() {
             let audio = Arc::new(Mutex::new(audio::AudioEngine::new()));
             log_msg(app, "Audio Engine initialized.");
 
-            // Use app_local_data_dir (C:\Users\{user}\AppData\Local\...) rather than
-            // app_data_dir (Roaming), which on corporate systems is often redirected to a
-            // network share that may be inaccessible or slow.
-            let app_data_dir = app.path()
-                .app_local_data_dir()
-                .or_else(|_| app.path().app_data_dir())
-                .map_err(|e| e.to_string())?;
-            log_msg(app, &format!("User data dir: {:?}", app_data_dir));
-            if !app_data_dir.exists() {
-                fs::create_dir_all(&app_data_dir).map_err(|e| format!("Cannot create data dir {:?}: {}", app_data_dir, e))?;
-            }
             let media_schedule = Arc::new(store::MediaScheduleStore::new(app_data_dir.clone()).map_err(|e| e.to_string())?);
             log_msg(app, "Media Schedule Store initialized.");
 
@@ -2439,6 +2514,8 @@ fn main() {
             set_active_whisper_model,
             set_gpu_enabled,
             delete_whisper_model,
+            get_semantic_index_status,
+            download_semantic_index_cmd,
             get_transcription_config,
             set_cloud_config,
             test_cloud_connection,

@@ -49,9 +49,18 @@ export interface TranscriptionConfig {
   confidence_threshold: number;
 }
 
+export interface SemanticIndexStatus {
+  downloaded: boolean;
+  path: string | null;
+  size_mb: number;
+}
+
 export interface ModelSlice {
   whisperModels: ModelStatus[];
   setWhisperModels: (v: ModelStatus[]) => void;
+
+  semanticIndexStatus: SemanticIndexStatus | null;
+  setSemanticIndexStatus: (v: SemanticIndexStatus | null) => void;
 
   downloadProgress: Record<string, DownloadProgress>;
   setDownloadProgress: (model_id: string, p: DownloadProgress | null) => void;
@@ -66,6 +75,9 @@ export interface ModelSlice {
 export const createModelSlice: StateCreator<AppStore, [], [], ModelSlice> = (set) => ({
   whisperModels: [],
   setWhisperModels: (v) => set({ whisperModels: v }),
+
+  semanticIndexStatus: null,
+  setSemanticIndexStatus: (v) => set({ semanticIndexStatus: v }),
 
   downloadProgress: {},
   setDownloadProgress: (model_id, p) =>
