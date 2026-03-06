@@ -93,7 +93,7 @@ To run the app locally you also need the files in place:
 
 ```bash
 # Download wordlyte_bible.db (59 MB)
-curl -L "https://raw.githubusercontent.com/alshival/wordlyte_bible/main/SUPER_BIBLE/wordlyte_bible.db" \
+curl -L "https://raw.githubusercontent.com/alshival/wordlyte_bible/main/WORDLYTE_BIBLE/wordlyte_bible.db" \
   -o desktop-rs/src-tauri/bible_data/wordlyte_bible.db
 
 # Place all_versions_embeddings.npy (from Colab download)
