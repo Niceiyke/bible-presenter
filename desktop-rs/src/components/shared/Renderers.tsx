@@ -396,7 +396,7 @@ export function SceneRenderer({
             opacity: layer.opacity,
             zIndex: i,
             outline: (!outputMode && activeLayerId === layer.id) ? "2px solid #3b82f6" : "none",
-            cursor: outputMode ? undefined : "pointer",
+            cursor: outputMode ? "none" : "pointer",
             overflow: "hidden",
           }}
         >

@@ -60,6 +60,14 @@ export function OutputWindow() {
   const [windowScale, setWindowScale] = useState(1);
   const isMounted = useRef(true);
 
+  // Hide cursor on the entire window
+  useEffect(() => {
+    document.body.style.cursor = 'none';
+    return () => {
+      document.body.style.cursor = 'default';
+    };
+  }, []);
+
   // Calculate font scale based on current window height relative to 1080p reference
   useEffect(() => {
     const updateScale = () => {
@@ -361,7 +369,7 @@ export function OutputWindow() {
   }, [videoBg?.path]);
 
   if (settings.is_blanked) {
-    return <div className="h-screen w-screen bg-black" />;
+    return <div className="h-screen w-screen bg-black cursor-none" />;
   }
 
   const { colors } = THEMES[settings.theme] ?? THEMES.dark;

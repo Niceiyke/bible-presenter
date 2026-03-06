@@ -54,13 +54,13 @@ const HF_BASE_URL: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/";
 
 // Bible Data bundle (Database + Index)
-pub const BIBLE_DATA_ZIP_URL: &str = "https://github.com/Niceiyke/bible-presenter/releases/download/embeddings_usearch_1.0.0/bible_data.zip";
+pub const BIBLE_DATA_ZIP_URL: &str = "https://github.com/Niceiyke/bible-presenter/releases/download/v1.0-models/bible_data.zip";
 pub const BIBLE_DB_FILENAME: &str = "wordlyte_bible.db";
 pub const SEMANTIC_INDEX_FILENAME: &str = "all_versions_embeddings.usearch";
 pub const VERSE_INDEX_FILENAME: &str = "verse_index.json";
 
 // AI Models bundle (BGE + Reranker)
-pub const MODELS_ZIP_URL: &str = "https://github.com/Niceiyke/bible-presenter/releases/download/embeddings_usearch_1.0.0/models.zip";
+pub const MODELS_ZIP_URL: &str = "https://github.com/Niceiyke/bible-presenter/releases/download/v1.0-models/models.zip";
 pub const BGE_MODEL_FILENAME: &str = "bge-small-en-v1.5.onnx";
 pub const BGE_TOKENIZER_FILENAME: &str = "tokenizer.json";
 pub const RERANKER_MODEL_FILENAME: &str = "reranker/model.onnx";
