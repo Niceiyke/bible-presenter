@@ -5,7 +5,7 @@ Generate stacked sentence-transformer embeddings for multiple Bible versions.
 Usage:
     pip install sentence-transformers numpy usearch
     python scripts/generate_embeddings.py \
-        --db path/to/super_bible.db \
+        --db path/to/wordlyte_bible.db \
         --out src-tauri/bible_data/
 
 This produces:
@@ -56,7 +56,7 @@ def generate(db_path: str, out_dir: str) -> None:
     available = {
         row[0]
         for row in conn.execute(
-            "SELECT DISTINCT version FROM super_bible WHERE language = 'EN'"
+            "SELECT DISTINCT version FROM wordlyte_bible WHERE language = 'EN'"
         )
     }
     versions_to_use = [v for v in VERSIONS if v in available]
@@ -73,7 +73,7 @@ def generate(db_path: str, out_dir: str) -> None:
         rows = conn.execute(
             """
             SELECT title, chapter, verse, text
-            FROM super_bible
+            FROM wordlyte_bible
             WHERE version = ? AND language = 'EN' AND text IS NOT NULL AND text != ''
             ORDER BY book, chapter, verse
             """,
@@ -131,8 +131,8 @@ def main():
     parser = argparse.ArgumentParser(description="Generate stacked Bible embeddings using USearch")
     parser.add_argument(
         "--db",
-        default="src-tauri/bible_data/super_bible.db",
-        help="Path to super_bible.db (default: src-tauri/bible_data/super_bible.db)",
+        default="src-tauri/bible_data/wordlyte_bible.db",
+        help="Path to wordlyte_bible.db (default: src-tauri/bible_data/wordlyte_bible.db)",
     )
     parser.add_argument(
         "--out",

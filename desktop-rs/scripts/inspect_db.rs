@@ -1,8 +1,8 @@
 use rusqlite::{Connection};
 
 fn main() -> anyhow::Result<()> {
-    let conn = Connection::open("src-tauri/bible_data/super_bible.db")?;
-    let mut stmt = conn.prepare("SELECT title, book, chapter, verse, text FROM super_bible WHERE version = 'KJV' LIMIT 5")?;
+    let conn = Connection::open("src-tauri/bible_data/wordlyte_bible.db")?;
+    let mut stmt = conn.prepare("SELECT title, book, chapter, verse, text FROM wordlyte_bible WHERE version = 'KJV' LIMIT 5")?;
     let rows = stmt.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,

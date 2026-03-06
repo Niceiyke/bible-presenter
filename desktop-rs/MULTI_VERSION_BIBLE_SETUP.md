@@ -11,7 +11,7 @@ for Bible Presenter RS. You only need to do this once.
 | `src-tauri/src/main.rs` | Added `get_bible_versions`, `set_bible_version` commands; all Bible commands now accept `version` |
 | `src-tauri/tauri.conf.json` | Updated bundled resources to new filenames |
 | `src/App.tsx` | Version pill selector UI; all invoke calls pass `version` |
-| `.github/workflows/build-windows.yml` | Downloads `super_bible.db` + `all_versions_embeddings.npy` at build time |
+| `.github/workflows/build-windows.yml` | Downloads `wordlyte_bible.db` + `all_versions_embeddings.npy` at build time |
 | `scripts/generate_embeddings.py` | CPU script (slow, use Colab instead) |
 | `scripts/generate_embeddings_colab.ipynb` | **Recommended**: GPU notebook for Colab |
 
@@ -21,7 +21,7 @@ These files are NOT in the repo and must be generated/downloaded:
 
 ```
 src-tauri/bible_data/
-  super_bible.db                 # ~59 MB  — downloaded by CI from alshival/super_bible
+  wordlyte_bible.db                 # ~59 MB  — downloaded by CI from alshival/wordlyte_bible
   all_versions_embeddings.npy    # ~287 MB — generated via Colab, uploaded to GitHub Release
   verse_index.json               # ~3 MB   — generated via Colab, committed to repo
 src-tauri/models/
@@ -42,7 +42,7 @@ This is a one-time step. It embeds all verses for 6 Bible versions (KJV, AMP, NI
 4. **Runtime → Run all**
 
 The notebook will:
-- Download `super_bible.db` directly from GitHub (~59 MB)
+- Download `wordlyte_bible.db` directly from GitHub (~59 MB)
 - Generate embeddings for all 6 versions (~5–10 minutes on GPU)
 - Auto-download two files to your computer:
   - `all_versions_embeddings.npy` (~287 MB)
@@ -92,9 +92,9 @@ Upload it as a GitHub Release asset:
 To run the app locally you also need the files in place:
 
 ```bash
-# Download super_bible.db (59 MB)
-curl -L "https://raw.githubusercontent.com/alshival/super_bible/main/SUPER_BIBLE/super_bible.db" \
-  -o desktop-rs/src-tauri/bible_data/super_bible.db
+# Download wordlyte_bible.db (59 MB)
+curl -L "https://raw.githubusercontent.com/alshival/wordlyte_bible/main/SUPER_BIBLE/wordlyte_bible.db" \
+  -o desktop-rs/src-tauri/bible_data/wordlyte_bible.db
 
 # Place all_versions_embeddings.npy (from Colab download)
 cp ~/Downloads/all_versions_embeddings.npy \
@@ -150,9 +150,9 @@ looked up in the active display version.
 
 ### Database Schema
 ```sql
--- super_bible table
+-- wordlyte_bible table
 SELECT title, chapter, verse, text
-FROM super_bible
+FROM wordlyte_bible
 WHERE version = 'KJV' AND language = 'EN'
 ORDER BY book, chapter, verse
 ```
@@ -162,12 +162,12 @@ ORDER BY book, chapter, verse
 ## Troubleshooting
 
 **App crashes at startup**
-- `super_bible.db` is missing from `src-tauri/bible_data/`
+- `wordlyte_bible.db` is missing from `src-tauri/bible_data/`
 - Run the curl command in Step 4
 
 **Version selector shows only "KJV"**
-- `super_bible.db` is present but may be the old single-version `bible.db`
-- Check: `sqlite3 bible_data/super_bible.db "SELECT DISTINCT version FROM super_bible LIMIT 5"`
+- `wordlyte_bible.db` is present but may be the old single-version `bible.db`
+- Check: `sqlite3 bible_data/wordlyte_bible.db "SELECT DISTINCT version FROM wordlyte_bible LIMIT 5"`
 
 **Semantic search not working**
 - `all_versions_embeddings.npy` is missing

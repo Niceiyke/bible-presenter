@@ -13,7 +13,7 @@ fn main() -> Result<()> {
 
     // 1. Remove OEB version
     println!("Removing OEB version...");
-    conn.execute("DELETE FROM super_bible WHERE version = 'OEB'", [])?;
+    conn.execute("DELETE FROM wordlyte_bible WHERE version = 'OEB'", [])?;
 
     // 2. Define Book Mapping (Updated for ebible codes)
     let mut book_map = HashMap::new();
@@ -42,7 +42,7 @@ fn main() -> Result<()> {
 
     // 3. Import WEB version
     println!("Starting import of WEB from {}...", web_vpl_path);
-    conn.execute("DELETE FROM super_bible WHERE version = 'WEB'", [])?;
+    conn.execute("DELETE FROM wordlyte_bible WHERE version = 'WEB'", [])?;
 
     let tx = conn.transaction()?;
     let mut count = 0;
@@ -55,7 +55,7 @@ fn main() -> Result<()> {
             if let Some(parsed) = parse_vpl_line(&line) {
                 if let Some((full_name, book_id)) = book_map.get(parsed.book.as_str()) {
                     tx.execute(
-                        "INSERT INTO super_bible (title, book, chapter, verse, text, version, language) 
+                        "INSERT INTO wordlyte_bible (title, book, chapter, verse, text, version, language) 
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                         params![full_name, book_id, parsed.chapter, parsed.verse, parsed.text, "WEB", "EN"],
                     )?;
@@ -68,7 +68,7 @@ fn main() -> Result<()> {
     println!("Imported {} verses for WEB.", count);
 
     // Final verification
-    let mut stmt = conn.prepare("SELECT version, count(*) FROM super_bible GROUP BY version")?;
+    let mut stmt = conn.prepare("SELECT version, count(*) FROM wordlyte_bible GROUP BY version")?;
     let rows = stmt.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
     })?;

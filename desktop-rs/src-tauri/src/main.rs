@@ -2321,7 +2321,7 @@ fn main() {
                     candidates.push(cwd);
                 }
 
-                let chosen = candidates.iter().find(|p| p.join("bible_data/super_bible.db").exists())
+                let chosen = candidates.iter().find(|p| p.join("bible_data/wordlyte_bible.db").exists())
                     .or_else(|| candidates.first())
                     .cloned();
 

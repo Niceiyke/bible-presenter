@@ -55,7 +55,7 @@ const HF_BASE_URL: &str =
 
 // Bible Data bundle (Database + Index)
 pub const BIBLE_DATA_ZIP_URL: &str = "https://github.com/Niceiyke/bible-presenter/releases/download/embeddings_usearch_1.0.0/bible_data.zip";
-pub const BIBLE_DB_FILENAME: &str = "super_bible.db";
+pub const BIBLE_DB_FILENAME: &str = "wordlyte_bible.db";
 pub const SEMANTIC_INDEX_FILENAME: &str = "all_versions_embeddings.usearch";
 pub const VERSE_INDEX_FILENAME: &str = "verse_index.json";
 

@@ -158,26 +158,26 @@ impl BibleStore {
         }
 
         // Initialize FTS5 virtual table for lightning-fast keyword search
-        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS super_bible_fts USING fts5(
+        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS wordlyte_bible_fts USING fts5(
             title, 
             text, 
             version, 
-            content='super_bible', 
+            content='wordlyte_bible', 
             content_rowid='rowid'
         )", [])?;
         
         // Populate FTS if it's empty (trigger sync)
-        let count_fts: i64 = conn.query_row("SELECT count(*) FROM super_bible_fts", [], |r| r.get(0))?;
+        let count_fts: i64 = conn.query_row("SELECT count(*) FROM wordlyte_bible_fts", [], |r| r.get(0))?;
         if count_fts == 0 {
             log_msg(app, "BibleStore: Initializing FTS5 index...");
-            conn.execute("INSERT INTO super_bible_fts(rowid, title, text, version) 
-                         SELECT rowid, title, text, version FROM super_bible 
+            conn.execute("INSERT INTO wordlyte_bible_fts(rowid, title, text, version) 
+                         SELECT rowid, title, text, version FROM wordlyte_bible 
                          WHERE language = 'EN' AND text IS NOT NULL AND text != ''", [])?;
         }
 
         // Discover all books across all versions
         let books: Vec<String> = {
-            let mut stmt = conn.prepare("SELECT DISTINCT title FROM super_bible ORDER BY title")?;
+            let mut stmt = conn.prepare("SELECT DISTINCT title FROM wordlyte_bible ORDER BY title")?;
             let rows = stmt.query_map([], |row| row.get(0))?;
             rows.filter_map(|r| r.ok()).collect()
         };
@@ -185,7 +185,7 @@ impl BibleStore {
         // Discover which versions are in the DB
         let mut available_versions: Vec<String> = {
             let mut stmt = conn.prepare(
-                "SELECT DISTINCT version FROM super_bible WHERE language = 'EN' ORDER BY version"
+                "SELECT DISTINCT version FROM wordlyte_bible WHERE language = 'EN' ORDER BY version"
             )?;
             let rows = stmt.query_map([], |row| row.get(0))?;
             rows.filter_map(|r| r.ok()).collect()
@@ -205,7 +205,7 @@ impl BibleStore {
             }
 
             let mut stmt = conn.prepare(
-                "SELECT title, chapter, verse FROM super_bible \
+                "SELECT title, chapter, verse FROM wordlyte_bible \
                  WHERE version = ?1 AND language = 'EN' AND text IS NOT NULL AND text != '' \
                  ORDER BY book, chapter, verse"
             )?;
@@ -530,7 +530,7 @@ impl BibleStore {
     pub fn get_verse(&self, book: &str, chapter: i32, verse: i32, version: &str) -> anyhow::Result<Option<Verse>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare_cached(
-            "SELECT title, chapter, verse, text FROM super_bible \
+            "SELECT title, chapter, verse, text FROM wordlyte_bible \
              WHERE title LIKE ?1 AND chapter = ?2 AND verse = ?3 AND version = ?4 LIMIT 1"
         )?;
         let mut rows = stmt.query(params![book, chapter, verse, version])?;
@@ -562,7 +562,7 @@ impl BibleStore {
         let first_verse_in_next_chapter: Option<i32> = {
             let conn = self.conn.lock();
             let mut stmt = conn.prepare_cached(
-                "SELECT MIN(verse) FROM super_bible WHERE title LIKE ?1 AND chapter = ?2 AND version = ?3"
+                "SELECT MIN(verse) FROM wordlyte_bible WHERE title LIKE ?1 AND chapter = ?2 AND version = ?3"
             )?;
             stmt.query_row(params![book, chapter + 1, version], |row| row.get(0))
                 .ok()
@@ -675,9 +675,9 @@ impl BibleStore {
 
         let conn = self.conn.lock();
         let mut stmt = conn.prepare_cached(
-            "SELECT b.title, b.text, b.version, b.chapter, b.verse FROM super_bible b \
-             JOIN super_bible_fts f ON b.rowid = f.rowid \
-             WHERE super_bible_fts MATCH ?1 \
+            "SELECT b.title, b.text, b.version, b.chapter, b.verse FROM wordlyte_bible b \
+             JOIN wordlyte_bible_fts f ON b.rowid = f.rowid \
+             WHERE wordlyte_bible_fts MATCH ?1 \
              ORDER BY rank \
              LIMIT 100"
         )?;
@@ -733,7 +733,7 @@ impl BibleStore {
         if results.len() < 5 {
             let like_pattern = format!("%{}%", query.trim().replace(' ', "%"));
             let mut stmt_like = conn.prepare_cached(
-                "SELECT title, text, version, chapter, verse FROM super_bible \
+                "SELECT title, text, version, chapter, verse FROM wordlyte_bible \
                  WHERE text LIKE ?1 \
                  ORDER BY (CASE WHEN version = ?2 THEN 0 ELSE 1 END), rowid \
                  LIMIT 50"
@@ -797,9 +797,9 @@ impl BibleStore {
 
         let conn = self.conn.lock();
         let mut stmt = conn.prepare_cached(
-            "SELECT b.title, b.text, b.version, b.chapter, b.verse FROM super_bible b \
-             JOIN super_bible_fts f ON b.rowid = f.rowid \
-             WHERE super_bible_fts MATCH ?1 AND b.version = ?2 \
+            "SELECT b.title, b.text, b.version, b.chapter, b.verse FROM wordlyte_bible b \
+             JOIN wordlyte_bible_fts f ON b.rowid = f.rowid \
+             WHERE wordlyte_bible_fts MATCH ?1 AND b.version = ?2 \
              ORDER BY rank \
              LIMIT 50"
         )?;
@@ -829,7 +829,7 @@ impl BibleStore {
         if results.is_empty() {
             let like_pattern = format!("%{}%", query.trim().replace(' ', "%"));
             let mut stmt_like = conn.prepare_cached(
-                "SELECT title, text, version, chapter, verse FROM super_bible \
+                "SELECT title, text, version, chapter, verse FROM wordlyte_bible \
                  WHERE text LIKE ?1 AND version = ?2 \
                  ORDER BY rowid LIMIT 50"
             )?;
@@ -859,7 +859,7 @@ impl BibleStore {
     pub fn get_books(&self, version: &str) -> anyhow::Result<Vec<String>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare_cached(
-            "SELECT DISTINCT title FROM super_bible WHERE version = ?1 AND language = 'EN' ORDER BY book"
+            "SELECT DISTINCT title FROM wordlyte_bible WHERE version = ?1 AND language = 'EN' ORDER BY book"
         )?;
         let rows = stmt.query_map(params![version], |row| row.get(0))?;
         let mut books = Vec::new();
@@ -872,7 +872,7 @@ impl BibleStore {
     pub fn get_chapters(&self, book: &str, version: &str) -> anyhow::Result<Vec<i32>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare_cached(
-            "SELECT DISTINCT chapter FROM super_bible WHERE title = ?1 AND version = ?2 ORDER BY chapter"
+            "SELECT DISTINCT chapter FROM wordlyte_bible WHERE title = ?1 AND version = ?2 ORDER BY chapter"
         )?;
         let rows = stmt.query_map(params![book, version], |row| row.get(0))?;
         let mut chapters = Vec::new();
@@ -885,7 +885,7 @@ impl BibleStore {
     pub fn get_verses_count(&self, book: &str, chapter: i32, version: &str) -> anyhow::Result<Vec<i32>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare_cached(
-            "SELECT verse FROM super_bible WHERE title = ?1 AND chapter = ?2 AND version = ?3 ORDER BY verse"
+            "SELECT verse FROM wordlyte_bible WHERE title = ?1 AND chapter = ?2 AND version = ?3 ORDER BY verse"
         )?;
         let rows = stmt.query_map(params![book, chapter, version], |row| row.get(0))?;
         let mut verses = Vec::new();
@@ -898,7 +898,7 @@ impl BibleStore {
     pub fn get_chapter_verses(&self, book: &str, chapter: i32, version: &str) -> anyhow::Result<Vec<Verse>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare_cached(
-            "SELECT title, chapter, verse, text FROM super_bible \
+            "SELECT title, chapter, verse, text FROM wordlyte_bible \
              WHERE title = ?1 AND chapter = ?2 AND version = ?3 ORDER BY verse"
         )?;
         let rows = stmt.query_map(params![book, chapter, version], |row| {
