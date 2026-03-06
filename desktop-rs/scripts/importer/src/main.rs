@@ -4,18 +4,37 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
+/// Wordlyte Bible Importer
+/// This script handles importing high-accuracy VPL files from ebible.org 
+/// into the unified Wordlyte SQLite database.
 fn main() -> Result<()> {
     let db_path = "../../src-tauri/bible_data/wordlyte_bible.db";
-    let web_vpl_path = "../../engwebp_vpl.txt";
+    
+    // Define the source files downloaded from ebible.org
+    let vpl_sources = [
+        ("KJV", "../../eng-kjv2006_vpl.txt"),
+        ("ASV", "../../eng-asv_vpl.txt"),
+        ("WEB", "../../engwebp_vpl.txt"),
+    ];
 
     println!("Connecting to database: {}", db_path);
     let mut conn = Connection::open(db_path).context("Failed to open database")?;
 
-    // 1. Remove OEB version
-    println!("Removing OEB version...");
-    conn.execute("DELETE FROM wordlyte_bible WHERE version = 'OEB'", [])?;
+    // Ensure the unified schema exists
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS wordlyte_bible (
+            title TEXT,
+            book INTEGER,
+            chapter INTEGER,
+            verse INTEGER,
+            text TEXT,
+            version TEXT,
+            language TEXT
+        )",
+        [],
+    )?;
 
-    // 2. Define Book Mapping (Updated for ebible codes)
+    // Full 66-book mapping (ebible.org 3-letter code -> [Full Name, ID])
     let mut book_map = HashMap::new();
     let books = [
         ("GEN", "Genesis", 1), ("EXO", "Exodus", 2), ("LEV", "Leviticus", 3), ("NUM", "Numbers", 4),
@@ -40,45 +59,39 @@ fn main() -> Result<()> {
         book_map.insert(code, (name, id));
     }
 
-    // 3. Import WEB version
-    println!("Starting import of WEB from {}...", web_vpl_path);
-    conn.execute("DELETE FROM wordlyte_bible WHERE version = 'WEB'", [])?;
+    for (version_id, path) in vpl_sources {
+        if !std::path::Path::new(path).exists() {
+            println!("Skipping {}, file not found at {}", version_id, path);
+            continue;
+        }
 
-    let tx = conn.transaction()?;
-    let mut count = 0;
-    {
-        let file = File::open(web_vpl_path).context("Could not open WEB VPL file")?;
-        let reader = BufReader::new(file);
+        println!("Importing {}...", version_id);
+        conn.execute("DELETE FROM wordlyte_bible WHERE version = ?1", params![version_id])?;
 
-        for line in reader.lines() {
-            let line = line?;
-            if let Some(parsed) = parse_vpl_line(&line) {
-                if let Some((full_name, book_id)) = book_map.get(parsed.book.as_str()) {
-                    tx.execute(
-                        "INSERT INTO wordlyte_bible (title, book, chapter, verse, text, version, language) 
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                        params![full_name, book_id, parsed.chapter, parsed.verse, parsed.text, "WEB", "EN"],
-                    )?;
-                    count += 1;
+        let tx = conn.transaction()?;
+        let mut count = 0;
+        {
+            let file = File::open(path)?;
+            let reader = BufReader::new(file);
+            for line in reader.lines() {
+                let line = line?;
+                if let Some(parsed) = parse_vpl_line(&line) {
+                    if let Some((full_name, book_id)) = book_map.get(parsed.book.as_str()) {
+                        tx.execute(
+                            "INSERT INTO wordlyte_bible (title, book, chapter, verse, text, version, language) 
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                            params![full_name, book_id, parsed.chapter, parsed.verse, parsed.text, version_id, "EN"],
+                        )?;
+                        count += 1;
+                    }
                 }
             }
         }
-    }
-    tx.commit()?;
-    println!("Imported {} verses for WEB.", count);
-
-    // Final verification
-    let mut stmt = conn.prepare("SELECT version, count(*) FROM wordlyte_bible GROUP BY version")?;
-    let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-    })?;
-
-    println!("--- Final Database Status ---");
-    for row in rows {
-        let (v, c) = row?;
-        println!("Version: {}, Count: {}", v, c);
+        tx.commit()?;
+        println!("Successfully imported {} verses for {}.", count, version_id);
     }
 
+    println!("Import process completed.");
     Ok(())
 }
 
@@ -90,6 +103,7 @@ struct ParsedVerse {
 }
 
 fn parse_vpl_line(line: &str) -> Option<ParsedVerse> {
+    // Standard VPL format: [BOOK] [CH]:[VS] [TEXT]
     let space_idx = line.find(' ')?;
     let book = &line[..space_idx];
     let remainder = &line[space_idx + 1..];
