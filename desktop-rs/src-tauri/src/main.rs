@@ -17,7 +17,7 @@ use std::sync::{Arc, OnceLock};
 use engine::model_manager::{
     self, detect_hardware, download_model, list_model_statuses, model_path_if_exists,
     resolve_whisper_path, user_models_dir, DownloadProgress, HardwareInfo, ModelStatus,
-    TranscriptionConfig, SEMANTIC_INDEX_SIZE_MB, VERSE_INDEX_SIZE_MB,
+    TranscriptionConfig,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -49,7 +49,7 @@ async fn get_semantic_index_status(app: tauri::AppHandle, state: State<'_, AppSt
     Ok(SemanticIndexStatus {
         downloaded,
         path: path.map(|p| p.to_string_lossy().to_string()),
-        size_mb: SEMANTIC_INDEX_SIZE_MB,
+        size_mb: 300,
     })
 }
 
@@ -63,57 +63,8 @@ async fn get_verse_index_status(app: tauri::AppHandle, state: State<'_, AppState
     Ok(VerseIndexStatus {
         downloaded,
         path: path.map(|p| p.to_string_lossy().to_string()),
-        size_mb: VERSE_INDEX_SIZE_MB,
+        size_mb: 11,
     })
-}
-
-#[tauri::command]
-async fn download_semantic_index_cmd(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    log_msg(&app, "Command received: download_semantic_index_cmd");
-    if state.download_in_progress.load(Ordering::Relaxed) {
-        return Err("Another download is already in progress.".into());
-    }
-
-    state.download_in_progress.store(true, Ordering::SeqCst);
-    let app_data = state.app_data_dir.clone();
-    let cancel_flag = state.download_in_progress.clone();
-    let app_handle = app.clone();
-    let store = state.store.clone();
-
-    tokio::spawn(async move {
-        let res = engine::model_manager::download_semantic_index(
-            &app_data,
-            cancel_flag.clone(),
-            {
-                let app_handle = app_handle.clone();
-                move |progress| {
-                    let _ = app_handle.emit("download-progress", progress);
-                }
-            },
-        )
-        .await;
-
-        cancel_flag.store(false, Ordering::SeqCst);
-
-        match res {
-            Ok(path) => {
-                log_msg(&app_handle, &format!("Semantic index downloaded to {:?}", path));
-                let _ = app_handle.emit("semantic-index-ready", path.to_string_lossy());
-                
-                // Try to reload it in BibleStore if possible
-                let path_str = path.to_str().unwrap_or("");
-                if let Err(e) = store.reload_embeddings(&app_handle, path_str) {
-                    log_msg(&app_handle, &format!("Failed to load semantic index after download: {}", e));
-                }
-            }
-            Err(e) => {
-                log_msg(&app_handle, &format!("Semantic index download failed: {}", e));
-                let _ = app_handle.emit("download-error", e.to_string());
-            }
-        }
-    });
-
-    Ok(())
 }
 
 #[tauri::command]
@@ -128,8 +79,10 @@ async fn download_bible_db_cmd(app: tauri::AppHandle, state: State<'_, AppState>
     let app_handle = app.clone();
 
     tokio::spawn(async move {
-        let res = engine::model_manager::download_bible_db(
-            &app_data,
+        let res = engine::model_manager::download_and_extract_zip(
+            engine::model_manager::BIBLE_DATA_ZIP_URL,
+            "bible_db",
+            &engine::model_manager::user_data_dir(&app_data),
             cancel_flag.clone(),
             {
                 let app_handle = app_handle.clone();
@@ -141,12 +94,13 @@ async fn download_bible_db_cmd(app: tauri::AppHandle, state: State<'_, AppState>
 
         cancel_flag.store(false, Ordering::SeqCst);
         match res {
-            Ok(path) => {
-                log_msg(&app_handle, &format!("Bible database downloaded to {:?}", path));
+            Ok(_) => {
+                log_msg(&app_handle, "Bible data ZIP downloaded and extracted successfully.");
+                let path = engine::model_manager::user_data_dir(&app_data).join(engine::model_manager::BIBLE_DB_FILENAME);
                 let _ = app_handle.emit("bible-db-ready", path.to_string_lossy());
             }
             Err(e) => {
-                log_msg(&app_handle, &format!("Bible database download failed: {}", e));
+                log_msg(&app_handle, &format!("Bible data ZIP download failed: {}", e));
                 let _ = app_handle.emit("download-error", e.to_string());
             }
         }
@@ -166,59 +120,10 @@ async fn download_core_search_models_cmd(app: tauri::AppHandle, state: State<'_,
     let app_handle = app.clone();
 
     tokio::spawn(async move {
-        let tasks = vec![
-            (engine::model_manager::BGE_MODEL_URL, engine::model_manager::BGE_MODEL_FILENAME, "bge_model"),
-            (engine::model_manager::BGE_TOKENIZER_URL, engine::model_manager::BGE_TOKENIZER_FILENAME, "bge_tokenizer"),
-            (engine::model_manager::RERANKER_MODEL_URL, engine::model_manager::RERANKER_MODEL_FILENAME, "reranker_model"),
-            (engine::model_manager::RERANKER_TOKENIZER_URL, engine::model_manager::RERANKER_TOKENIZER_FILENAME, "reranker_tokenizer"),
-        ];
-
-        let models_dir = engine::model_manager::user_models_dir(&app_data);
-
-        for (url, filename, id) in tasks {
-            let res = engine::model_manager::download_file(
-                url,
-                filename,
-                id,
-                &models_dir,
-                cancel_flag.clone(),
-                {
-                    let app_handle = app_handle.clone();
-                    move |progress| {
-                        let _ = app_handle.emit("download-progress", progress);
-                    }
-                },
-            ).await;
-
-            if let Err(e) = res {
-                log_msg(&app_handle, &format!("Core model download failed ({}): {}", id, e));
-                let _ = app_handle.emit("download-error", e.to_string());
-                cancel_flag.store(false, Ordering::SeqCst);
-                return;
-            }
-        }
-
-        cancel_flag.store(false, Ordering::SeqCst);
-        log_msg(&app_handle, "All core search models downloaded successfully.");
-        let _ = app_handle.emit("core-models-ready", true);
-    });
-    Ok(())
-}
-
-#[tauri::command]
-async fn download_verse_index_cmd(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    log_msg(&app, "Command received: download_verse_index_cmd");
-    if state.download_in_progress.load(Ordering::Relaxed) {
-        return Err("Another download is already in progress.".into());
-    }
-    state.download_in_progress.store(true, Ordering::SeqCst);
-    let app_data = state.app_data_dir.clone();
-    let cancel_flag = state.download_in_progress.clone();
-    let app_handle = app.clone();
-
-    tokio::spawn(async move {
-        let res = engine::model_manager::download_verse_index(
-            &app_data,
+        let res = engine::model_manager::download_and_extract_zip(
+            engine::model_manager::MODELS_ZIP_URL,
+            "core_models",
+            &engine::model_manager::user_models_dir(&app_data),
             cancel_flag.clone(),
             {
                 let app_handle = app_handle.clone();
@@ -230,12 +135,12 @@ async fn download_verse_index_cmd(app: tauri::AppHandle, state: State<'_, AppSta
 
         cancel_flag.store(false, Ordering::SeqCst);
         match res {
-            Ok(path) => {
-                log_msg(&app_handle, &format!("Verse index downloaded to {:?}", path));
-                let _ = app_handle.emit("verse-index-ready", path.to_string_lossy());
+            Ok(_) => {
+                log_msg(&app_handle, "Core search models ZIP downloaded and extracted successfully.");
+                let _ = app_handle.emit("core-models-ready", true);
             }
             Err(e) => {
-                log_msg(&app_handle, &format!("Verse index download failed: {}", e));
+                log_msg(&app_handle, &format!("Core models ZIP download failed: {}", e));
                 let _ = app_handle.emit("download-error", e.to_string());
             }
         }
@@ -2690,9 +2595,7 @@ fn main() {
             set_gpu_enabled,
             delete_whisper_model,
             get_semantic_index_status,
-            download_semantic_index_cmd,
             get_verse_index_status,
-            download_verse_index_cmd,
             download_bible_db_cmd,
             download_core_search_models_cmd,
             get_transcription_config,

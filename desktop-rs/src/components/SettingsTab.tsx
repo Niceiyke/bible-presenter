@@ -128,16 +128,15 @@ export function SettingsTab({
       console.log("Download progress:", p);
       setDownloadProgress(p.model_id, p.done ? null : p);
       if (p.done && !p.error) {
-        if (p.model_id === "semantic_index") {
+        if (p.model_id === "semantic_index" || p.model_id === "verse_index" || p.model_id === "bible_db") {
           invoke<any>("get_semantic_index_status").then(setSemanticIndexStatus).catch(() => {});
-        } else if (p.model_id === "verse_index") {
           invoke<any>("get_verse_index_status").then(setVerseIndexStatus).catch(() => {});
-        } else if (p.model_id === "bible_db") {
-          // Force a full refresh after DB download
-          window.location.reload();
-        } else if (p.model_id.includes("bge") || p.model_id.includes("reranker")) {
-          // Check if all core models are ready
+          if (p.model_id === "bible_db") {
+            window.location.reload();
+          }
+        } else if (p.model_id === "core_models") {
           invoke<any>("get_startup_status").then(() => {}).catch(() => {});
+          window.location.reload();
         } else {
           invoke<ModelStatus[]>("list_whisper_models").then(setWhisperModels).catch(() => {});
         }
@@ -285,41 +284,41 @@ export function SettingsTab({
         </h2>
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Bible Database Card */}
+          {/* Bible Database & Search Index Card */}
           <div className="p-3 rounded-lg bg-slate-800/50 border border-slate-700/50 flex flex-col gap-3">
             <div className="flex items-center justify-between">
-              <span className="text-[10px] text-slate-400 font-bold uppercase">Bible Database</span>
-              {startupStatus?.db_ok ? (
+              <span className="text-[10px] text-slate-400 font-bold uppercase">Bible Data & Index</span>
+              {startupStatus?.db_ok && semanticIndexStatus?.downloaded && verseIndexStatus?.downloaded ? (
                 <span className="text-[9px] font-black bg-emerald-900 text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-700">INSTALLED</span>
               ) : (
                 <span className="text-[9px] font-black bg-red-900/50 text-red-400 px-1.5 py-0.5 rounded border border-red-800/50 text-xs">MISSING</span>
               )}
             </div>
-            <p className="text-[10px] text-slate-500 leading-tight">Contains all Scripture texts (KJV, NIV, ESV, etc). Required for basic functionality.</p>
-            {downloadProgress["bible_db"] ? (
+            <p className="text-[10px] text-slate-500 leading-tight">Contains Scripture texts and the AI search index for context-aware verse discovery.</p>
+            {downloadProgress["bible_db"] || downloadProgress["semantic_index"] || downloadProgress["verse_index"] ? (
               <div className="space-y-1">
                 <div className="flex justify-between text-[9px] text-slate-400 font-mono">
-                  <span>{Math.round(downloadProgress["bible_db"].percent)}%</span>
-                  <span>{Math.round(downloadProgress["bible_db"].bytes_downloaded/1024/1024)}MB</span>
+                  <span>{Math.round((downloadProgress["bible_db"] || downloadProgress["semantic_index"] || downloadProgress["verse_index"]).percent)}%</span>
+                  <span>{Math.round((downloadProgress["bible_db"] || downloadProgress["semantic_index"] || downloadProgress["verse_index"]).bytes_downloaded/1024/1024)}MB</span>
                 </div>
                 <div className="h-1 bg-slate-700 rounded-full overflow-hidden">
-                  <div className="h-full bg-amber-500 transition-all" style={{ width: `${downloadProgress["bible_db"].percent}%` }} />
+                  <div className="h-full bg-amber-500 transition-all" style={{ width: `${(downloadProgress["bible_db"] || downloadProgress["semantic_index"] || downloadProgress["verse_index"]).percent}%` }} />
                 </div>
               </div>
-            ) : !startupStatus?.db_ok && (
+            ) : (!startupStatus?.db_ok || !semanticIndexStatus?.downloaded || !verseIndexStatus?.downloaded) && (
               <button
                 onClick={handleDownloadBibleDb}
                 className="mt-auto w-full py-2 bg-amber-600 hover:bg-amber-500 text-black text-[10px] font-black uppercase rounded-lg transition-all"
               >
-                Download Bible DB (~60MB)
+                Download Bible Data (~380MB)
               </button>
             )}
           </div>
 
-          {/* AI Search Models Card */}
+          {/* AI Neural Search Models Card */}
           <div className="p-3 rounded-lg bg-slate-800/50 border border-slate-700/50 flex flex-col gap-3">
             <div className="flex items-center justify-between">
-              <span className="text-[10px] text-slate-400 font-bold uppercase">Search Engine Models</span>
+              <span className="text-[10px] text-slate-400 font-bold uppercase">Neural Search Models</span>
               {startupStatus?.onnx_model_ok && startupStatus?.reranker_ok ? (
                 <span className="text-[9px] font-black bg-emerald-900 text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-700">INSTALLED</span>
               ) : (
@@ -328,14 +327,14 @@ export function SettingsTab({
             </div>
             <p className="text-[10px] text-slate-500 leading-tight">Required for high-precision semantic search and "Pastor Paraphrase" detection.</p>
             
-            {downloadProgress["bge_model"] || downloadProgress["reranker_model"] ? (
+            {downloadProgress["core_models"] ? (
               <div className="space-y-1">
                 <div className="flex justify-between text-[9px] text-slate-400 font-mono">
-                  <span>{downloadProgress["bge_model"] ? "Phase 1/2" : "Phase 2/2"}</span>
-                  <span>{Math.round((downloadProgress["bge_model"] || downloadProgress["reranker_model"]).percent)}%</span>
+                  <span>{Math.round(downloadProgress["core_models"].percent)}%</span>
+                  <span>{Math.round(downloadProgress["core_models"].bytes_downloaded/1024/1024)}MB</span>
                 </div>
                 <div className="h-1 bg-slate-700 rounded-full overflow-hidden">
-                  <div className="h-full bg-blue-500 transition-all" style={{ width: `${(downloadProgress["bge_model"] || downloadProgress["reranker_model"]).percent}%` }} />
+                  <div className="h-full bg-blue-500 transition-all" style={{ width: `${downloadProgress["core_models"].percent}%` }} />
                 </div>
               </div>
             ) : (!startupStatus?.onnx_model_ok || !startupStatus?.reranker_ok) && (
@@ -343,7 +342,7 @@ export function SettingsTab({
                 onClick={handleDownloadCoreModels}
                 className="mt-auto w-full py-2 bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-black uppercase rounded-lg transition-all"
               >
-                Download AI Models (~120MB)
+                Download AI Models (~130MB)
               </button>
             )}
           </div>
@@ -1326,142 +1325,6 @@ export function SettingsTab({
                   " for transcription. No local Whisper model is required."}
               </p>
             </>
-          )}
-        </div>
-
-        {/* ── Semantic Index Manager ─────────────────────────────── */}
-        <div className="mb-4 p-3 rounded-lg bg-slate-900/60 border border-slate-700/50">
-          <div className="flex items-center justify-between mb-2">
-            <div>
-              <p className="text-[10px] text-slate-400 font-bold uppercase">Semantic Search Index</p>
-              <p className="text-[9px] text-slate-600 mt-0.5">Required for smart verse suggestions & context search</p>
-            </div>
-            {semanticIndexStatus?.downloaded ? (
-              <span className="text-[9px] font-black uppercase bg-emerald-900 text-emerald-400 border border-emerald-700 rounded px-1.5 py-0.5">
-                Installed
-              </span>
-            ) : (
-              <span className="text-[9px] font-black uppercase bg-slate-800 text-slate-500 border border-slate-700 rounded px-1.5 py-0.5">
-                Missing
-              </span>
-            )}
-          </div>
-
-          <div className="flex items-center justify-between gap-4 mt-3">
-            <div className="flex flex-col gap-1">
-              <span className="text-xs text-slate-300">
-                AI Semantic Embeddings
-              </span>
-              <span className="text-[10px] text-slate-500">
-                Size: {semanticIndexStatus?.size_mb || 300} MB
-              </span>
-            </div>
-
-            {downloadProgress["semantic_index"] ? (
-              <button
-                disabled
-                className="px-3 py-1.5 text-[10px] font-bold uppercase bg-blue-900/50 text-blue-300 border border-blue-800 rounded transition-colors"
-              >
-                Downloading...
-              </button>
-            ) : semanticIndexStatus?.downloaded ? (
-              <div className="text-[10px] text-slate-500 italic"> Ready to use </div>
-            ) : (
-              <button
-                onClick={handleDownloadSemanticIndex}
-                className="px-3 py-1.5 text-[10px] font-bold uppercase bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors shadow-lg shadow-blue-900/20"
-              >
-                Download Index
-              </button>
-            )}
-          </div>
-
-          {downloadProgress["semantic_index"] && (
-            <div className="mt-3">
-              <div className="flex justify-between items-center mb-1">
-                <span className="text-[10px] text-slate-400">
-                  {Math.round(downloadProgress["semantic_index"].bytes_downloaded / 1024 / 1024)} /
-                  {Math.round(downloadProgress["semantic_index"].total_bytes / 1024 / 1024)} MB
-                </span>
-                <span className="text-[10px] text-slate-400 font-mono">
-                  {downloadProgress["semantic_index"].percent.toFixed(1)}%
-                </span>
-              </div>
-              <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-blue-500 rounded-full transition-all"
-                  style={{ width: `${downloadProgress["semantic_index"].percent}%` }}
-                />
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* ── Verse Index Manager ─────────────────────────────── */}
-        <div className="mb-4 p-3 rounded-lg bg-slate-900/60 border border-slate-700/50">
-          <div className="flex items-center justify-between mb-2">
-            <div>
-              <p className="text-[10px] text-slate-400 font-bold uppercase">Verse Mapping Index</p>
-              <p className="text-[9px] text-slate-600 mt-0.5">Reference mapping for multi-version semantic search</p>
-            </div>
-            {verseIndexStatus?.downloaded ? (
-              <span className="text-[9px] font-black uppercase bg-emerald-900 text-emerald-400 border border-emerald-700 rounded px-1.5 py-0.5">
-                Installed
-              </span>
-            ) : (
-              <span className="text-[9px] font-black uppercase bg-slate-800 text-slate-500 border border-slate-700 rounded px-1.5 py-0.5">
-                Missing
-              </span>
-            )}
-          </div>
-
-          <div className="flex items-center justify-between gap-4 mt-3">
-            <div className="flex flex-col gap-1">
-              <span className="text-xs text-slate-300">
-                Verse Index (JSON)
-              </span>
-              <span className="text-[10px] text-slate-500">
-                Size: {verseIndexStatus?.size_mb || 11} MB
-              </span>
-            </div>
-
-            {downloadProgress["verse_index"] ? (
-              <button
-                disabled
-                className="px-3 py-1.5 text-[10px] font-bold uppercase bg-blue-900/50 text-blue-300 border border-blue-800 rounded transition-colors"
-              >
-                Downloading...
-              </button>
-            ) : verseIndexStatus?.downloaded ? (
-              <div className="text-[10px] text-slate-500 italic"> Ready to use </div>
-            ) : (
-              <button
-                onClick={handleDownloadVerseIndex}
-                className="px-3 py-1.5 text-[10px] font-bold uppercase bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors shadow-lg shadow-blue-900/20"
-              >
-                Download Index
-              </button>
-            )}
-          </div>
-
-          {downloadProgress["verse_index"] && (
-            <div className="mt-3">
-              <div className="flex justify-between items-center mb-1">
-                <span className="text-[10px] text-slate-400">
-                  {Math.round(downloadProgress["verse_index"].bytes_downloaded / 1024 / 1024)} /
-                  {Math.round(downloadProgress["verse_index"].total_bytes / 1024 / 1024)} MB
-                </span>
-                <span className="text-[10px] text-slate-400 font-mono">
-                  {downloadProgress["verse_index"].percent.toFixed(1)}%
-                </span>
-              </div>
-              <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-blue-500 rounded-full transition-all"
-                  style={{ width: `${downloadProgress["verse_index"].percent}%` }}
-                />
-              </div>
-            </div>
           )}
         </div>
 

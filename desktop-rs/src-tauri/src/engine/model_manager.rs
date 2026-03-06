@@ -53,29 +53,18 @@ pub const MODEL_CATALOG: &[ModelInfo] = &[
 const HF_BASE_URL: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/";
 
-// Semantic search index metadata
-pub const SEMANTIC_INDEX_URL: &str = "https://drive.google.com/uc?export=download&id=1drtPCQNW4rcqfpiDV-6V-RD2l8MEcMVT";
-pub const SEMANTIC_INDEX_FILENAME: &str = "all_versions_embeddings.usearch";
-pub const SEMANTIC_INDEX_SIZE_MB: u32 = 300;
-
-// Verse index metadata
-pub const VERSE_INDEX_URL: &str = "https://github.com/Niceiyke/bible-presenter/releases/download/embeddings_usearch_1.0.0/verse_index.json";
-pub const VERSE_INDEX_FILENAME: &str = "verse_index.json";
-pub const VERSE_INDEX_SIZE_MB: u32 = 11;
-
-// Core Search Assets mirrored on Google Drive
-pub const BGE_MODEL_URL: &str = "https://drive.google.com/uc?export=download&id=1iuzlgf9nHdE1Eiw_aO9SXfLFIL51nJeL";
-pub const BGE_MODEL_FILENAME: &str = "bge-small-en-v1.5.onnx";
-pub const BGE_TOKENIZER_URL: &str = "https://drive.google.com/uc?export=download&id=1yu_w6MwN2wwFgTDfn4EkyUZnChBBJgvF";
-pub const BGE_TOKENIZER_FILENAME: &str = "tokenizer.json";
-
-pub const RERANKER_MODEL_URL: &str = "https://drive.google.com/uc?export=download&id=1DYPAJEz2VxAEa2huzKdTvfyKrAUXwt9M";
-pub const RERANKER_MODEL_FILENAME: &str = "reranker/model.onnx";
-pub const RERANKER_TOKENIZER_URL: &str = "https://drive.google.com/uc?export=download&id=1HVZKo4SBgCDALdIhmvjmCjzQXBlpsJ5T";
-pub const RERANKER_TOKENIZER_FILENAME: &str = "reranker/tokenizer.json";
-
-pub const BIBLE_DB_URL: &str = "https://drive.google.com/uc?export=download&id=1oqkczt3IqMMVtOxVTzOc0Mgfjryeicr8";
+// Bible Data bundle (Database + Index)
+pub const BIBLE_DATA_ZIP_URL: &str = "https://github.com/Niceiyke/bible-presenter/releases/download/embeddings_usearch_1.0.0/bible_data.zip";
 pub const BIBLE_DB_FILENAME: &str = "super_bible.db";
+pub const SEMANTIC_INDEX_FILENAME: &str = "all_versions_embeddings.usearch";
+pub const VERSE_INDEX_FILENAME: &str = "verse_index.json";
+
+// AI Models bundle (BGE + Reranker)
+pub const MODELS_ZIP_URL: &str = "https://github.com/Niceiyke/bible-presenter/releases/download/embeddings_usearch_1.0.0/models.zip";
+pub const BGE_MODEL_FILENAME: &str = "bge-small-en-v1.5.onnx";
+pub const BGE_TOKENIZER_FILENAME: &str = "tokenizer.json";
+pub const RERANKER_MODEL_FILENAME: &str = "reranker/model.onnx";
+pub const RERANKER_TOKENIZER_FILENAME: &str = "reranker/tokenizer.json";
 
 // ---------------------------------------------------------------------------
 // Runtime types (serialized to frontend)
@@ -470,132 +459,6 @@ where
     Ok(final_path)
 }
 
-pub async fn download_semantic_index<F>(
-    app_data: &Path,
-    cancel_flag: Arc<AtomicBool>,
-    progress_cb: F,
-) -> anyhow::Result<PathBuf>
-where
-    F: FnMut(DownloadProgress) + Send + 'static,
-{
-    download_file(
-        SEMANTIC_INDEX_URL,
-        SEMANTIC_INDEX_FILENAME,
-        "semantic_index",
-        &user_data_dir(app_data),
-        cancel_flag,
-        progress_cb,
-    ).await
-}
-
-pub async fn download_verse_index<F>(
-    app_data: &Path,
-    cancel_flag: Arc<AtomicBool>,
-    mut progress_cb: F,
-) -> anyhow::Result<PathBuf>
-where
-    F: FnMut(DownloadProgress) + Send + 'static,
-{
-    download_file(
-        VERSE_INDEX_URL,
-        VERSE_INDEX_FILENAME,
-        "verse_index",
-        &user_data_dir(app_data),
-        cancel_flag,
-        progress_cb,
-    ).await
-}
-
-pub async fn download_bible_db<F>(
-    app_data: &Path,
-    cancel_flag: Arc<AtomicBool>,
-    progress_cb: F,
-) -> anyhow::Result<PathBuf>
-where
-    F: FnMut(DownloadProgress) + Send + 'static,
-{
-    download_file(
-        BIBLE_DB_URL,
-        BIBLE_DB_FILENAME,
-        "bible_db",
-        &user_data_dir(app_data),
-        cancel_flag,
-        progress_cb,
-    ).await
-}
-
-pub async fn download_bge_model<F>(
-    app_data: &Path,
-    cancel_flag: Arc<AtomicBool>,
-    progress_cb: F,
-) -> anyhow::Result<PathBuf>
-where
-    F: FnMut(DownloadProgress) + Send + 'static,
-{
-    download_file(
-        BGE_MODEL_URL,
-        BGE_MODEL_FILENAME,
-        "bge_model",
-        &user_models_dir(app_data),
-        cancel_flag,
-        progress_cb,
-    ).await
-}
-
-pub async fn download_bge_tokenizer<F>(
-    app_data: &Path,
-    cancel_flag: Arc<AtomicBool>,
-    progress_cb: F,
-) -> anyhow::Result<PathBuf>
-where
-    F: FnMut(DownloadProgress) + Send + 'static,
-{
-    download_file(
-        BGE_TOKENIZER_URL,
-        BGE_TOKENIZER_FILENAME,
-        "bge_tokenizer",
-        &user_models_dir(app_data),
-        cancel_flag,
-        progress_cb,
-    ).await
-}
-
-pub async fn download_reranker_model<F>(
-    app_data: &Path,
-    cancel_flag: Arc<AtomicBool>,
-    progress_cb: F,
-) -> anyhow::Result<PathBuf>
-where
-    F: FnMut(DownloadProgress) + Send + 'static,
-{
-    download_file(
-        RERANKER_MODEL_URL,
-        RERANKER_MODEL_FILENAME,
-        "reranker_model",
-        &user_models_dir(app_data),
-        cancel_flag,
-        progress_cb,
-    ).await
-}
-
-pub async fn download_reranker_tokenizer<F>(
-    app_data: &Path,
-    cancel_flag: Arc<AtomicBool>,
-    progress_cb: F,
-) -> anyhow::Result<PathBuf>
-where
-    F: FnMut(DownloadProgress) + Send + 'static,
-{
-    download_file(
-        RERANKER_TOKENIZER_URL,
-        RERANKER_TOKENIZER_FILENAME,
-        "reranker_tokenizer",
-        &user_models_dir(app_data),
-        cancel_flag,
-        progress_cb,
-    ).await
-}
-
 pub async fn download_file<F>(
     url: &str,
     filename: &str,
@@ -625,7 +488,7 @@ where
         .build()
         .context("Failed to build HTTP client")?;
 
-    let response = client
+    let mut response = client
         .get(url)
         .send()
         .await
@@ -633,6 +496,58 @@ where
 
     if !response.status().is_success() {
         anyhow::bail!("HTTP {} for {}", response.status(), url);
+    }
+
+    // Google Drive bypass for large files
+    let content_type = response.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("").to_lowercase();
+    if content_type.contains("text/html") && url.contains("drive.google.com") {
+        let text = response.text().await?;
+        
+        let mut confirm = String::new();
+        if let Some(conf_start) = text.find("name=\"confirm\" value=\"") {
+            let cs = conf_start + 22;
+            if let Some(ce) = text[cs..].find('"') {
+                confirm = text[cs..cs+ce].to_string();
+            }
+        }
+        
+        let mut uuid = String::new();
+        if let Some(uuid_start) = text.find("name=\"uuid\" value=\"") {
+            let start = uuid_start + 19;
+            if let Some(end) = text[start..].find('"') {
+                uuid = text[start..start+end].to_string();
+            }
+        }
+
+        if !uuid.is_empty() || !confirm.is_empty() {
+            let mut id = url.split("id=").nth(1).unwrap_or("").split('&').next().unwrap_or("").to_string();
+            if id.is_empty() {
+                if let Some(id_start) = text.find("name=\"id\" value=\"") {
+                    let id_s = id_start + 17;
+                    if let Some(id_e) = text[id_s..].find('"') {
+                        id = text[id_s..id_s+id_e].to_string();
+                    }
+                }
+            }
+            
+            let bypass_url = if uuid.is_empty() {
+                format!("https://drive.usercontent.google.com/download?id={}&export=download&confirm={}", id, confirm)
+            } else {
+                format!("https://drive.usercontent.google.com/download?id={}&export=download&confirm={}&uuid={}", id, if confirm.is_empty() { "t" } else { &confirm }, uuid)
+            };
+            
+            response = client
+                .get(&bypass_url)
+                .send()
+                .await
+                .with_context(|| format!("GET bypass {} failed", bypass_url))?;
+                
+            if !response.status().is_success() {
+                anyhow::bail!("HTTP {} for bypass {}", response.status(), bypass_url);
+            }
+        } else {
+            anyhow::bail!("Received HTML page from Google Drive but could not find bypass tokens.");
+        }
     }
 
     let total_bytes = response.content_length().unwrap_or(0);
@@ -670,6 +585,94 @@ where
     std::fs::rename(&tmp_path, &final_path)
         .with_context(|| format!("Cannot rename {:?} → {:?}", tmp_path, final_path))?;
 
+    Ok(final_path)
+}
+
+pub async fn download_and_extract_zip<F>(
+    url: &str,
+    model_id: &str,
+    target_dir: &Path,
+    cancel_flag: Arc<AtomicBool>,
+    mut progress_cb: F,
+) -> anyhow::Result<()>
+where
+    F: FnMut(DownloadProgress) + Send + 'static,
+{
+    std::fs::create_dir_all(target_dir)
+        .with_context(|| format!("Cannot create dir {:?}", target_dir))?;
+
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(3600))
+        .user_agent("bible-presenter")
+        .build()
+        .context("Failed to build HTTP client")?;
+
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("GET {} failed", url))?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("HTTP {} for {}", response.status(), url);
+    }
+
+    let total_bytes = response.content_length().unwrap_or(0);
+    let mut bytes_downloaded: u64 = 0;
+    let mut data = if total_bytes > 0 {
+        Vec::with_capacity(total_bytes as usize)
+    } else {
+        Vec::new()
+    };
+
+    let mut stream = response.bytes_stream();
+    while let Some(chunk_result) = stream.next().await {
+        if !cancel_flag.load(Ordering::Relaxed) {
+            anyhow::bail!("Download cancelled");
+        }
+        let chunk = chunk_result.context("Stream error")?;
+        data.extend_from_slice(&chunk);
+        bytes_downloaded += chunk.len() as u64;
+
+        let percent = if total_bytes > 0 {
+            (bytes_downloaded as f32 / total_bytes as f32) * 100.0
+        } else {
+            0.0
+        };
+        progress_cb(DownloadProgress {
+            model_id: model_id.to_string(),
+            bytes_downloaded,
+            total_bytes,
+            percent,
+            done: false,
+            error: None,
+        });
+    }
+
+    // Extraction
+    let reader = std::io::Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(reader).context("Failed to parse zip archive")?;
+
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).context("Failed to get file from zip")?;
+        let outpath = match file.enclosed_name() {
+            Some(path) => target_dir.join(path),
+            None => continue,
+        };
+
+        if file.name().ends_with('/') {
+            std::fs::create_dir_all(&outpath).context("Failed to create dir")?;
+        } else {
+            if let Some(p) = outpath.parent() {
+                if !p.exists() {
+                    std::fs::create_dir_all(p).context("Failed to create parent dir")?;
+                }
+            }
+            let mut outfile = std::fs::File::create(&outpath).context("Failed to create output file")?;
+            std::io::copy(&mut file, &mut outfile).context("Failed to copy file contents")?;
+        }
+    }
+
     progress_cb(DownloadProgress {
         model_id: model_id.to_string(),
         bytes_downloaded,
@@ -679,5 +682,5 @@ where
         error: None,
     });
 
-    Ok(final_path)
+    Ok(())
 }
