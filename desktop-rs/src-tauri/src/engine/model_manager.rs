@@ -653,12 +653,37 @@ where
     let reader = std::io::Cursor::new(data);
     let mut archive = zip::ZipArchive::new(reader).context("Failed to parse zip archive")?;
 
+    let target_folder_name = target_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).context("Failed to get file from zip")?;
-        let outpath = match file.enclosed_name() {
-            Some(path) => target_dir.join(path),
-            None => continue,
-        };
+        let name = file.name();
+        
+        // Clean and split the path
+        let mut parts: Vec<&str> = name.split('/')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        // If the first component of the path matches the target directory name (or "models"/"bible_data"),
+        // we strip it to prevent nested directories like bible_data/bible_data/.
+        if !parts.is_empty() {
+            let first = parts[0];
+            if first == target_folder_name || first == "bible_data" || first == "models" {
+                parts.remove(0);
+            }
+        }
+
+        // If no parts left, it was just the redundant top-level directory entry
+        if parts.is_empty() {
+            continue;
+        }
+
+        let processed_path: PathBuf = parts.iter().collect();
+        let outpath = target_dir.join(processed_path);
 
         if file.name().ends_with('/') {
             std::fs::create_dir_all(&outpath).context("Failed to create dir")?;
