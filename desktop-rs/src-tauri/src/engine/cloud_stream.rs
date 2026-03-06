@@ -1,5 +1,4 @@
 use anyhow::Context;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::{connect_async_tls_with_config, tungstenite::Message};
@@ -64,7 +63,7 @@ pub async fn start_stream(
         "assemblyai" => {
             start_assemblyai(
                 api_key,
-                hostname.unwrap_or("api.assemblyai.com"),
+                hostname.unwrap_or("streaming.assemblyai.com"),
                 model,
                 language,
                 transcript_tx,
@@ -122,20 +121,31 @@ async fn start_deepgram(
     let mut shutdown_rx2 = shutdown_tx.subscribe();
 
     // ── Sender task: PCM chunks → WS binary frames ───────────────────────
+    // Also sends KeepAlive every 5 s to prevent NET-0001 timeout during silence.
     tokio::spawn(async move {
+        let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(5));
+        keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
                 _ = shutdown_rx.recv() => {
                     // Send the graceful close signal to Deepgram
                     let _ = ws_sink
-                        .send(Message::Text(r#"{"type":"CloseStream"}"#.to_string()))
+                        .send(Message::Text(r#"{"type":"CloseStream"}"#.to_string().into()))
                         .await;
                     let _ = ws_sink.close().await;
                     break;
                 }
                 Some(chunk) = audio_rx.recv() => {
-                    if ws_sink.send(Message::Binary(chunk)).await.is_err() {
+                    if ws_sink.send(Message::Binary(chunk.into())).await.is_err() {
                         break;
+                    }
+                }
+                _ = keepalive.tick() => {
+                    // Send KeepAlive if no audio has been sent recently
+                    if audio_rx.is_empty() {
+                        let _ = ws_sink
+                            .send(Message::Text(r#"{"type":"KeepAlive"}"#.to_string().into()))
+                            .await;
                     }
                 }
             }
@@ -209,65 +219,71 @@ fn parse_deepgram_message(
 }
 
 // ---------------------------------------------------------------------------
-// AssemblyAI real-time streaming
+// AssemblyAI real-time streaming (v3 API)
+//
+// Breaking changes from old v2:
+//   - URL: wss://streaming.assemblyai.com/v3/ws  (NOT api.assemblyai.com/v2/realtime/ws)
+//   - Auth: Authorization header on WS upgrade (NOT first JSON message)
+//   - Audio: raw binary PCM frames (NOT base64-wrapped JSON)
+//   - Terminate: {"type":"Terminate"}  (NOT {"terminate_session":true})
+//   - Message types: "Turn" with end_of_turn boolean  (NOT FinalTranscript/PartialTranscript)
 // ---------------------------------------------------------------------------
 
 async fn start_assemblyai(
     api_key: &str,
     hostname: &str,
     model: Option<&str>,
-    language: Option<&str>,
+    _language: Option<&str>,
     transcript_tx: mpsc::UnboundedSender<StreamTranscript>,
 ) -> anyhow::Result<CloudStreamHandle> {
-    let mut url = format!("wss://{}/v2/realtime/ws?sample_rate=16000", hostname);
-    if let Some(m) = model {
-        url.push_str(&format!("&speech_model={}", m));
-    }
-    if let Some(l) = language {
-        url.push_str(&format!("&language_code={}", l));
-    }
+    // v3 endpoint: streaming.assemblyai.com
+    let speech_model = model.unwrap_or("universal-streaming-english");
+    let url = format!(
+        "wss://{}/v3/ws?sample_rate=16000&speech_model={}",
+        hostname, speech_model
+    );
 
-    let (ws_stream, _) = connect_async_tls_with_config(url.as_str(), None, false, None)
+    let mut request =
+        tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
+            url.as_str(),
+        )
+        .context("Failed to build AssemblyAI WS request")?;
+
+    // v3 auth: Authorization header with raw API key (no "Token" or "Bearer" prefix)
+    request.headers_mut().insert(
+        "Authorization",
+        api_key
+            .parse()
+            .context("Invalid AssemblyAI API key for header")?,
+    );
+
+    let (ws_stream, _) = connect_async_tls_with_config(request, None, false, None)
         .await
         .context("Failed to connect to AssemblyAI WebSocket")?;
 
     let (mut ws_sink, mut ws_source) = ws_stream.split();
 
-    // AssemblyAI real-time authentication: send token as first JSON message
-    let mut auth_msg = serde_json::json!({ "token": api_key });
-    if let Some(m) = model {
-        auth_msg["speech_model"] = serde_json::json!(m);
-    }
-    if let Some(l) = language {
-        auth_msg["language_code"] = serde_json::json!(l);
-    }
-
-    ws_sink
-        .send(Message::Text(auth_msg.to_string()))
-        .await
-        .context("Failed to send AssemblyAI auth token")?;
-
     let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let (shutdown_tx, mut shutdown_rx) = broadcast::channel::<()>(4);
     let mut shutdown_rx2 = shutdown_tx.subscribe();
 
-    // ── Sender task: PCM chunks → base64-encoded JSON ────────────────────
+    // ── Sender task: PCM chunks → binary WS frames ───────────────────────
     tokio::spawn(async move {
         loop {
             tokio::select! {
                 _ = shutdown_rx.recv() => {
+                    // v3 terminate message
                     let _ = ws_sink
                         .send(Message::Text(
-                            r#"{"terminate_session":true}"#.to_string(),
+                            r#"{"type":"Terminate"}"#.to_string().into(),
                         ))
                         .await;
                     let _ = ws_sink.close().await;
                     break;
                 }
                 Some(chunk) = audio_rx.recv() => {
-                    let encoded = BASE64.encode(&chunk);
-                    let msg = serde_json::json!({ "audio_data": encoded }).to_string();
-                    if ws_sink.send(Message::Text(msg)).await.is_err() {
+                    // v3: send raw binary PCM frames (no base64 encoding)
+                    if ws_sink.send(Message::Binary(chunk.into())).await.is_err() {
                         break;
                     }
                 }
@@ -304,12 +320,16 @@ fn parse_assemblyai_message(
     v: &serde_json::Value,
     tx: &mpsc::UnboundedSender<StreamTranscript>,
 ) {
-    let msg_type = v["message_type"].as_str().unwrap_or("");
+    let msg_type = v["type"].as_str().unwrap_or("");
 
-    if msg_type == "FinalTranscript" || msg_type == "PartialTranscript" {
-        let is_final = msg_type == "FinalTranscript";
-        let text = v["text"].as_str().unwrap_or("").to_string();
-        let confidence = v["confidence"].as_f64().unwrap_or(0.0) as f32;
+    // v3 uses "Turn" for all transcript events
+    if msg_type == "Turn" {
+        // end_of_turn=true means this is a finalized utterance
+        let is_final = v["end_of_turn"].as_bool().unwrap_or(false);
+        let text = v["transcript"].as_str().unwrap_or("").to_string();
+
+        // v3 confidence is per-word; use end_of_turn_confidence if available
+        let confidence = v["end_of_turn_confidence"].as_f64().unwrap_or(0.8) as f32;
 
         if !text.is_empty() {
             let _ = tx.send(StreamTranscript {
@@ -319,4 +339,5 @@ fn parse_assemblyai_message(
             });
         }
     }
+    // "Termination" is the server's acknowledgement — nothing to emit
 }

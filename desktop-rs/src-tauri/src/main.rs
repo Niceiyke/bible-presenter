@@ -658,16 +658,30 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
             let provider_name = provider.clone();
             let is_running_pr = is_running.clone();
             let handle_arc_stop = state.preacher_cloud_stream_handle.clone();
+            let engine_ws = engine.clone();
+            let store_ws = store.clone();
+            let ctx_buf_ws = context_buffer.clone();
 
             tokio::spawn(async move {
                 while let Some(seg) = transcript_rx.recv().await {
                     let text = seg.text.trim().to_string();
                     if is_hallucination(&text) { continue; }
                     let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
-                    if seg.is_final {
+                    if seg.is_final && !text.is_empty() {
                         tx_log_pr.lock().push(TranscriptSegment { text: text.clone(), timestamp_ms: now_ms.saturating_sub(session_start_ms), is_final: true, source: provider_name.clone() });
-                        let _ = app_pr.emit("preacher-transcription-update", TranscriptionUpdate { text: text.clone(), detected_item: None, confidence: 1.0, source: provider_name.clone(), is_partial: false });
-                    } else {
+                        // Run verse detection on the final transcript
+                        let e = engine_ws.clone();
+                        let s = store_ws.clone();
+                        let ctx = ctx_buf_ws.clone();
+                        let t = text.clone();
+                        let (detected_item, confidence) = tokio::task::spawn_blocking(move || {
+                            let combined = { let mut buf = ctx.lock(); buf.push(t.clone()); if buf.len() > 3 { buf.remove(0); } buf.join(" ") };
+                            let embedding = e.embed(&combined).ok();
+                            let (verse, conf) = s.detect_verse_hybrid(&combined, embedding);
+                            (verse.map(store::DisplayItem::Verse), conf)
+                        }).await.unwrap_or((None, 0.0));
+                        let _ = app_pr.emit("preacher-transcription-update", TranscriptionUpdate { text: text.clone(), detected_item, confidence, source: provider_name.clone(), is_partial: false });
+                    } else if !seg.is_final {
                         let _ = app_pr.emit("preacher-transcription-update", TranscriptionUpdate { text: text.clone(), detected_item: None, confidence: 0.0, source: provider_name.clone(), is_partial: true });
                     }
                 }

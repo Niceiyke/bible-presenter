@@ -1322,7 +1322,7 @@ export function SettingsTab({
                         transcriptionConfig.cloud_provider === "deepgram"
                           ? "api.deepgram.com"
                           : transcriptionConfig.cloud_provider === "assemblyai"
-                          ? "api.assemblyai.com"
+                          ? "streaming.assemblyai.com"
                           : "hostname"
                       }
                       className="w-full bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-1.5 font-mono focus:outline-none focus:border-amber-500"
@@ -1338,6 +1338,7 @@ export function SettingsTab({
                         onChange={(e) => setCloudModelDraft(e.target.value)}
                         placeholder={
                           transcriptionConfig.cloud_provider === "deepgram" ? "nova-2" :
+                          transcriptionConfig.cloud_provider === "assemblyai" ? "universal-streaming-english" :
                           transcriptionConfig.cloud_provider === "openai" ? "whisper-1" : "model"
                         }
                         className="w-full bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-1.5 font-mono focus:outline-none focus:border-amber-500"

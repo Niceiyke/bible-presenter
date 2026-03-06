@@ -197,18 +197,46 @@ export function useAppInitialization() {
     });
 
     const unlistenPreacherTrans = listen("preacher-transcription-update", (ev: any) => {
-      const { text, is_partial, source } = ev.payload;
-      
-      // Update the main live text display for sermon feedback
+      const { text, detected_item, confidence, is_partial, source } = ev.payload;
+
+      // Update the main live text display
       if (text) setTranscript(text);
 
-      if (text && !is_partial) {
-        appendTranscriptSegment({
-          text,
-          timestamp_ms: Date.now(),
-          is_final: true,
-          source: source || "auto",
-        });
+      if (!is_partial) {
+        if (text) {
+          appendTranscriptSegment({
+            text,
+            timestamp_ms: Date.now(),
+            is_final: true,
+            source: source || "auto",
+          });
+        }
+
+        // Verse detection from the streaming pipeline — same logic as operator finals
+        if (detected_item) {
+          const cfg = useAppStore.getState().transcriptionConfig;
+          const now = Date.now();
+          const overrideUntil = useAppStore.getState().manualOverrideUntil;
+          const lockUntil     = useAppStore.getState().verseLockUntil;
+          const withinOverride = overrideUntil != null && now < overrideUntil;
+          const withinLock     = lockUntil != null && now < lockUntil;
+
+          if (!withinOverride) {
+            setSuggestedItem(detected_item);
+            setSuggestedConfidence(confidence ?? 0);
+
+            if (cfg.auto_project) {
+              const isExplicit     = confidence === 1.0;
+              const highConfidence = (confidence ?? 0) >= 0.85;
+              const threshold      = cfg.confidence_threshold ?? 0.55;
+              const shouldProject  = isExplicit || highConfidence || (!withinLock && (confidence ?? 0) >= threshold);
+              if (shouldProject) {
+                setLiveItem(detected_item);
+                setVerseLockUntil(now + cfg.verse_lock_secs * 1000);
+              }
+            }
+          }
+        }
       }
     });
     
