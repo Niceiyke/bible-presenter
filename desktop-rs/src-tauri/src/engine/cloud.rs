@@ -53,11 +53,14 @@ fn pcm_to_raw_i16(samples: &[f32]) -> Vec<u8> {
 // Provider functions
 // ---------------------------------------------------------------------------
 
-async fn transcribe_deepgram(samples: &[f32], api_key: &str) -> anyhow::Result<String> {
+async fn transcribe_deepgram(samples: &[f32], api_key: &str, model: Option<&str>) -> anyhow::Result<String> {
     let wav = pcm_to_wav(samples);
+    let model_str = model.unwrap_or("nova-2");
+    let url = format!("https://api.deepgram.com/v1/listen?model={}&language=en", model_str);
+    
     let client = Client::new();
     let resp = client
-        .post("https://api.deepgram.com/v1/listen?model=nova-2&language=en")
+        .post(url)
         .header("Authorization", format!("Token {}", api_key))
         .header("Content-Type", "audio/wav")
         .body(wav)
@@ -79,7 +82,7 @@ async fn transcribe_deepgram(samples: &[f32], api_key: &str) -> anyhow::Result<S
     Ok(transcript)
 }
 
-async fn transcribe_openai(samples: &[f32], api_key: &str) -> anyhow::Result<String> {
+async fn transcribe_openai(samples: &[f32], api_key: &str, model: Option<&str>) -> anyhow::Result<String> {
     let wav = pcm_to_wav(samples);
     let client = Client::new();
 
@@ -88,7 +91,7 @@ async fn transcribe_openai(samples: &[f32], api_key: &str) -> anyhow::Result<Str
         .mime_str("audio/wav")?;
     let form = reqwest::multipart::Form::new()
         .part("file", part)
-        .text("model", "whisper-1");
+        .text("model", model.unwrap_or("whisper-1").to_string());
 
     let resp = client
         .post("https://api.openai.com/v1/audio/transcriptions")
@@ -107,7 +110,7 @@ async fn transcribe_openai(samples: &[f32], api_key: &str) -> anyhow::Result<Str
     Ok(body["text"].as_str().unwrap_or("").to_string())
 }
 
-async fn transcribe_assemblyai(samples: &[f32], api_key: &str) -> anyhow::Result<String> {
+async fn transcribe_assemblyai(samples: &[f32], api_key: &str, model: Option<&str>) -> anyhow::Result<String> {
     let wav = pcm_to_wav(samples);
     let client = Client::new();
 
@@ -137,10 +140,17 @@ async fn transcribe_assemblyai(samples: &[f32], api_key: &str) -> anyhow::Result
         .to_string();
 
     // Step 2: Submit transcription
+    let mut payload = serde_json::json!({ "audio_url": audio_url });
+    if let Some(m) = model {
+        payload["speech_model"] = serde_json::json!(m);
+        // Newer accounts or restricted keys may require speech_models as a list
+        payload["speech_models"] = serde_json::json!([m]);
+    }
+
     let submit_resp = client
         .post("https://api.assemblyai.com/v2/transcript")
         .header("Authorization", api_key)
-        .json(&serde_json::json!({ "audio_url": audio_url }))
+        .json(&payload)
         .send()
         .await
         .context("AssemblyAI submit failed")?;
@@ -195,7 +205,7 @@ async fn transcribe_assemblyai(samples: &[f32], api_key: &str) -> anyhow::Result
     }
 }
 
-async fn transcribe_google(samples: &[f32], api_key: &str) -> anyhow::Result<String> {
+async fn transcribe_google(samples: &[f32], api_key: &str, _model: Option<&str>) -> anyhow::Result<String> {
     let raw = pcm_to_raw_i16(samples);
     let encoded = BASE64.encode(&raw);
 
@@ -246,12 +256,13 @@ pub async fn transcribe_cloud(
     samples: &[f32],
     provider: &str,
     api_key: &str,
+    model: Option<&str>,
 ) -> anyhow::Result<String> {
     match provider {
-        "deepgram" => transcribe_deepgram(samples, api_key).await,
-        "openai" => transcribe_openai(samples, api_key).await,
-        "assemblyai" => transcribe_assemblyai(samples, api_key).await,
-        "google" => transcribe_google(samples, api_key).await,
+        "deepgram" => transcribe_deepgram(samples, api_key, model).await,
+        "openai" => transcribe_openai(samples, api_key, model).await,
+        "assemblyai" => transcribe_assemblyai(samples, api_key, model).await,
+        "google" => transcribe_google(samples, api_key, model).await,
         _ => anyhow::bail!("Unknown cloud provider: {}", provider),
     }
 }
@@ -260,8 +271,8 @@ pub async fn transcribe_cloud(
 // Test helper — sends 1 s of silence; empty transcript is success
 // ---------------------------------------------------------------------------
 
-pub async fn test_connection(provider: &str, api_key: &str) -> anyhow::Result<()> {
+pub async fn test_connection(provider: &str, api_key: &str, model: Option<&str>) -> anyhow::Result<()> {
     let silence = vec![0.0f32; 16_000];
-    transcribe_cloud(&silence, provider, api_key).await?;
+    transcribe_cloud(&silence, provider, api_key, model).await?;
     Ok(())
 }

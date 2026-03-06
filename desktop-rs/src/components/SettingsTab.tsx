@@ -279,7 +279,7 @@ export function SettingsTab({
     if (!provider || !cloudKeyDraft) return;
     setTestStatus("testing");
     setTestMessage("");
-    invoke<string>("test_cloud_connection", { provider, apiKey: cloudKeyDraft })
+    invoke<string>("test_cloud_connection", { provider, apiKey: cloudKeyDraft, model: cloudModelDraft || null })
       .then((msg) => { setTestStatus("ok"); setTestMessage(msg); })
       .catch((e: any) => { setTestStatus("fail"); setTestMessage(String(e)); });
   };

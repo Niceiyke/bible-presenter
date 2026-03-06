@@ -526,6 +526,7 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
     let op_provider = cloud_provider.clone();
     let op_api_key = cloud_api_key.clone();
     let op_language = cloud_language.clone();
+    let op_model = cloud_model.clone();
     let trans_window_op = transcription_window.clone();
     let trans_paused_op = transcription_paused.clone();
     let tx_log_op = session_transcript.clone();
@@ -559,13 +560,14 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
                 let op_p = op_provider.clone();
                 let op_k = op_api_key.clone();
                 let op_l = op_language.clone();
+                let op_m = op_model.clone();
                 let app_op_inner = app_op.clone();
                 let p_name = provider_name.clone();
                 let tx_log = tx_log_op.clone();
 
                 tokio::spawn(async move {
                     let result: Option<(String, Option<store::DisplayItem>, f32)> = if is_cloud {
-                        if let Ok(text) = engine::cloud::transcribe_cloud(&b_clone, op_p.as_ref().unwrap(), op_k.as_ref().unwrap()).await {
+                        if let Ok(text) = engine::cloud::transcribe_cloud(&b_clone, op_p.as_ref().unwrap(), op_k.as_ref().unwrap(), op_m.as_deref()).await {
                             tokio::task::spawn_blocking(move || {
                                 let combined = { let mut buf = ctx_buf.lock(); buf.push(text.clone()); if buf.len() > 3 { buf.remove(0); } buf.join(" ") };
                                 let embedding = e_clone.embed(&combined).ok();
@@ -683,6 +685,7 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
         let pr_provider = cloud_provider.clone();
         let pr_api_key = cloud_api_key.clone();
         let pr_language = cloud_language.clone();
+        let pr_model = cloud_model.clone();
         let trans_window_pr = transcription_window.clone();
         let trans_paused_pr = transcription_paused.clone();
         let tx_log_pr = session_transcript.clone();
@@ -704,8 +707,9 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
                 if buffer.len() >= window_size {
                     let b_clone = buffer.clone();
                     let e_clone = engine_pr.clone();
+                    let pr_m = pr_model.clone();
                     let text_opt: Option<String> = if is_cloud {
-                        engine::cloud::transcribe_cloud(&b_clone, pr_provider.as_ref().unwrap(), pr_api_key.as_ref().unwrap()).await.ok()
+                        engine::cloud::transcribe_cloud(&b_clone, pr_provider.as_ref().unwrap(), pr_api_key.as_ref().unwrap(), pr_m.as_deref()).await.ok()
                     } else {
                         let lang_opt = pr_language.clone();
                         tokio::task::spawn_blocking(move || { e_clone.transcribe(&b_clone, lang_opt.as_deref()).ok() }).await.ok().flatten()
@@ -2194,8 +2198,9 @@ async fn export_transcript(
 async fn test_cloud_connection(
     provider: String,
     api_key: String,
+    model: Option<String>,
 ) -> Result<String, String> {
-    engine::cloud::test_connection(&provider, &api_key)
+    engine::cloud::test_connection(&provider, &api_key, model.as_deref())
         .await
         .map(|_| "Connected".to_string())
         .map_err(|e| e.to_string())

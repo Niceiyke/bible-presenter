@@ -65,6 +65,8 @@ pub async fn start_stream(
             start_assemblyai(
                 api_key,
                 hostname.unwrap_or("api.assemblyai.com"),
+                model,
+                language,
                 transcript_tx,
             )
             .await?
@@ -213,9 +215,17 @@ fn parse_deepgram_message(
 async fn start_assemblyai(
     api_key: &str,
     hostname: &str,
+    model: Option<&str>,
+    language: Option<&str>,
     transcript_tx: mpsc::UnboundedSender<StreamTranscript>,
 ) -> anyhow::Result<CloudStreamHandle> {
-    let url = format!("wss://{}/v2/realtime/ws?sample_rate=16000", hostname);
+    let mut url = format!("wss://{}/v2/realtime/ws?sample_rate=16000", hostname);
+    if let Some(m) = model {
+        url.push_str(&format!("&speech_model={}", m));
+    }
+    if let Some(l) = language {
+        url.push_str(&format!("&language_code={}", l));
+    }
 
     let (ws_stream, _) = connect_async_tls_with_config(url.as_str(), None, false, None)
         .await
@@ -224,10 +234,16 @@ async fn start_assemblyai(
     let (mut ws_sink, mut ws_source) = ws_stream.split();
 
     // AssemblyAI real-time authentication: send token as first JSON message
+    let mut auth_msg = serde_json::json!({ "token": api_key });
+    if let Some(m) = model {
+        auth_msg["speech_model"] = serde_json::json!(m);
+    }
+    if let Some(l) = language {
+        auth_msg["language_code"] = serde_json::json!(l);
+    }
+
     ws_sink
-        .send(Message::Text(
-            serde_json::json!({ "token": api_key }).to_string(),
-        ))
+        .send(Message::Text(auth_msg.to_string()))
         .await
         .context("Failed to send AssemblyAI auth token")?;
 
