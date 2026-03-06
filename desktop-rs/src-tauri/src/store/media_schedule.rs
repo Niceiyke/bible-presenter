@@ -289,6 +289,9 @@ pub struct PresentationSettings {
     /// Whether the background logo is currently active.
     #[serde(default)]
     pub show_background_logo: bool,
+    /// How the background logo should fit the screen: "contain" | "cover" | "fill"
+    #[serde(default = "default_fit_mode")]
+    pub background_logo_fit: String,
     /// Whether the output screen is currently blanked (black).
     #[serde(default)]
     pub is_blanked: bool,
@@ -343,11 +346,30 @@ pub struct PresentationSettings {
     /// Monitor name to send output to; None = auto (first secondary monitor).
     #[serde(default)]
     pub preferred_monitor: Option<String>,
+    /// Whether to highlight divine words (e.g. Jesus' words in red).
+    #[serde(default = "default_highlight_divine_words")]
+    pub highlight_divine_words: bool,
+    /// Hex color for the divine word highlight.
+    #[serde(default = "default_highlight_color")]
+    pub highlight_color: String,
+    /// Custom theme color overrides.
+    pub custom_theme_colors: Option<ThemeColors>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThemeColors {
+    pub primary: String,
+    pub secondary: String,
+    pub accent: String,
+    pub text: String,
 }
 
 fn default_remote_port() -> u16 { 7420 }
 fn default_auto_split_verses() -> bool { true }
 fn default_verse_split_threshold() -> usize { 200 }
+fn default_fit_mode() -> String { "contain".to_string() }
+fn default_highlight_divine_words() -> bool { false }
+fn default_highlight_color() -> String { "#ef4444".to_string() }
 
 fn default_camera_resolution() -> String { "720p".to_string() }
 fn default_version_font() -> String { "Arial, sans-serif".to_string() }
@@ -388,6 +410,7 @@ impl Default for PresentationSettings {
             logo_path: None,
             background_logo_path: None,
             show_background_logo: false,
+            background_logo_fit: default_fit_mode(),
             is_blanked: false,
             font_size: default_font_size(),
             slide_transition: default_transition(),
@@ -406,6 +429,9 @@ impl Default for PresentationSettings {
             remote_port: default_remote_port(),
             ndi_enabled: false,
             preferred_monitor: None,
+            highlight_divine_words: default_highlight_divine_words(),
+            highlight_color: default_highlight_color(),
+            custom_theme_colors: None,
         }
     }
 }

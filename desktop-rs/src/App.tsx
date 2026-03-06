@@ -158,7 +158,17 @@ export default function App() {
   // ── Next item after what's currently live ──────────────────────────────────
   const nextLiveItem = useMemo((): DisplayItem | null => {
     if (!liveItem) return null;
-    if (liveItem.type === "Verse" && nextVerse) return { type: "Verse", data: nextVerse };
+    if (liveItem.type === "Verse") {
+      const data = liveItem.data;
+      if (data.split_index !== undefined && data.total_splits !== undefined && data.split_index + 1 < data.total_splits) {
+        const key = getVerseKey(data);
+        const splits = verseSplitsRef.current[key];
+        if (splits && splits[data.split_index + 1]) {
+          return { type: "Verse", data: splits[data.split_index + 1] };
+        }
+      }
+      if (nextVerse) return { type: "Verse", data: nextVerse };
+    }
     if (liveItem.type === "CustomSlide") {
       const slides = studioSlides[liveItem.data.presentation_id];
       const next = liveItem.data.slide_index + 1;
