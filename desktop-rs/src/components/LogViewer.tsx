@@ -1,18 +1,29 @@
 import React, { useState } from "react";
-import { X, Trash2, Search, Filter } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { X, Trash2, Search, Filter, Copy, Check } from "lucide-react";
 import { useAppStore } from "../store";
 
 export function LogViewer() {
   const { logs, clearLogs, isLogOpen, setIsLogOpen } = useAppStore();
   const [filter, setFilter] = useState("");
   const [levelFilter, setLevelFilter] = useState<string>("all");
+  const [copied, setCopied] = useState(false);
 
   const filteredLogs = logs.filter(log => {
     const matchesText = log.message.toLowerCase().includes(filter.toLowerCase());
     const matchesLevel = levelFilter === "all" || log.level === levelFilter;
     return matchesText && matchesLevel;
   });
+
+  const handleCopyAll = () => {
+    const text = filteredLogs.map(log => {
+      const time = new Date(log.timestamp * 1000).toLocaleTimeString([], { hour12: false });
+      return `${time} [${log.level.toUpperCase()}] ${log.message}`;
+    }).join("\n");
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
 
   if (!isLogOpen) return null;
 
@@ -51,6 +62,14 @@ export function LogViewer() {
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={handleCopyAll}
+            className="flex items-center gap-1.5 px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition-all text-[9px] font-bold uppercase border border-slate-700"
+            title="Copy all visible logs to clipboard"
+          >
+            {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+            {copied ? "Copied!" : "Copy All"}
+          </button>
+          <button
             onClick={clearLogs}
             className="flex items-center gap-1.5 px-2 py-1 bg-red-900/20 hover:bg-red-900/40 text-red-400 rounded transition-all text-[9px] font-bold uppercase border border-red-900/30"
           >
@@ -65,22 +84,22 @@ export function LogViewer() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-2 font-mono text-[10px] custom-scrollbar selection:bg-amber-500/30">
+      <div className="flex-1 overflow-y-auto p-2 font-mono text-[10px] custom-scrollbar selection:bg-amber-500/30 select-text">
         {filteredLogs.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-slate-800 italic">
+          <div className="h-full flex flex-col items-center justify-center text-slate-800 italic select-none">
             <p>No logs found matching your criteria</p>
           </div>
         ) : (
           <div className="space-y-0.5">
             {filteredLogs.map((log, i) => (
               <div key={i} className="flex gap-3 px-2 py-1 hover:bg-white/5 rounded transition-colors group">
-                <span className="text-slate-600 shrink-0 select-none">
+                <span className="text-slate-600 shrink-0">
                   {new Date(log.timestamp * 1000).toLocaleTimeString([], { hour12: false })}
                 </span>
-                <span className={`font-bold uppercase w-12 shrink-0 select-none ${
-                  log.level === 'error' ? 'text-red-500' : 
-                  log.level === 'warn' ? 'text-amber-500' : 
-                  log.level === 'debug' ? 'text-blue-500' : 
+                <span className={`font-bold uppercase w-12 shrink-0 ${
+                  log.level === 'error' ? 'text-red-500' :
+                  log.level === 'warn' ? 'text-amber-500' :
+                  log.level === 'debug' ? 'text-blue-500' :
                   'text-emerald-500'
                 }`}>
                   [{log.level}]

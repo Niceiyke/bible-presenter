@@ -1,7 +1,48 @@
 use anyhow::Context;
 use futures_util::{SinkExt, StreamExt};
+use tauri::{AppHandle, Emitter};
 use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::{connect_async_tls_with_config, tungstenite::Message};
+
+// ---------------------------------------------------------------------------
+// Logging helper — emits to the UI LogViewer as "debug" level
+// ---------------------------------------------------------------------------
+
+fn log<S: Into<String>>(app: &AppHandle, msg: S) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let _ = app.emit("system-log", serde_json::json!({
+        "level": "debug",
+        "message": msg.into(),
+        "timestamp": timestamp,
+    }));
+}
+
+fn log_err<S: Into<String>>(app: &AppHandle, msg: S) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let _ = app.emit("system-log", serde_json::json!({
+        "level": "error",
+        "message": msg.into(),
+        "timestamp": timestamp,
+    }));
+}
+
+fn log_warn<S: Into<String>>(app: &AppHandle, msg: S) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let _ = app.emit("system-log", serde_json::json!({
+        "level": "warn",
+        "message": msg.into(),
+        "timestamp": timestamp,
+    }));
+}
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -33,15 +74,13 @@ impl CloudStreamHandle {
 // ---------------------------------------------------------------------------
 
 /// Returns `true` for providers that have a streaming WebSocket API.
-/// `false` means the caller should fall back to batch REST (cloud.rs).
 pub fn provider_supports_streaming(provider: &str) -> bool {
     matches!(provider, "deepgram" | "assemblyai")
 }
 
-/// Open a cloud WebSocket stream. Returns a `CloudStreamHandle` whose
-/// `audio_tx` the audio pipeline writes PCM i16 LE chunks into, and
-/// a `transcript_rx` the processing loop reads `StreamTranscript` events from.
+/// Open a cloud WebSocket stream.
 pub async fn start_stream(
+    app: &AppHandle,
     provider: &str,
     api_key: &str,
     hostname: Option<&str>,
@@ -52,6 +91,7 @@ pub async fn start_stream(
     let handle = match provider {
         "deepgram" => {
             start_deepgram(
+                app,
                 api_key,
                 hostname.unwrap_or("api.deepgram.com"),
                 model.unwrap_or("nova-2"),
@@ -62,6 +102,7 @@ pub async fn start_stream(
         }
         "assemblyai" => {
             start_assemblyai(
+                app,
                 api_key,
                 hostname.unwrap_or("streaming.assemblyai.com"),
                 model,
@@ -80,6 +121,7 @@ pub async fn start_stream(
 // ---------------------------------------------------------------------------
 
 async fn start_deepgram(
+    app: &AppHandle,
     api_key: &str,
     hostname: &str,
     model: &str,
@@ -99,6 +141,8 @@ async fn start_deepgram(
         hostname, model, language
     );
 
+    log(app, format!("[Deepgram] Connecting → {}", url));
+
     let mut request = tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
         url.as_str(),
     )
@@ -114,21 +158,27 @@ async fn start_deepgram(
         .await
         .context("Failed to connect to Deepgram WebSocket")?;
 
+    log(app, "[Deepgram] WebSocket connected");
+
     let (mut ws_sink, mut ws_source) = ws_stream.split();
 
     let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let (shutdown_tx, mut shutdown_rx) = broadcast::channel::<()>(4);
     let mut shutdown_rx2 = shutdown_tx.subscribe();
 
-    // ── Sender task: PCM chunks → WS binary frames ───────────────────────
-    // Also sends KeepAlive every 5 s to prevent NET-0001 timeout during silence.
+    let app_sender = app.clone();
+    let app_recv   = app.clone();
+
+    // ── Sender task ───────────────────────────────────────────────────────
     tokio::spawn(async move {
+        let mut chunk_count: u64 = 0;
         let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(5));
         keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        log(&app_sender, "[Deepgram] Audio pump started (16 kHz mono PCM → binary WS frames)");
         loop {
             tokio::select! {
                 _ = shutdown_rx.recv() => {
-                    // Send the graceful close signal to Deepgram
+                    log(&app_sender, "[Deepgram] Sending CloseStream and shutting down");
                     let _ = ws_sink
                         .send(Message::Text(r#"{"type":"CloseStream"}"#.to_string().into()))
                         .await;
@@ -136,13 +186,18 @@ async fn start_deepgram(
                     break;
                 }
                 Some(chunk) = audio_rx.recv() => {
+                    chunk_count += 1;
+                    if chunk_count % 50 == 0 {
+                        log(&app_sender, format!("[Deepgram] Audio pump: {} chunks sent", chunk_count));
+                    }
                     if ws_sink.send(Message::Binary(chunk.into())).await.is_err() {
+                        log_err(&app_sender, "[Deepgram] Audio send error — connection dropped");
                         break;
                     }
                 }
                 _ = keepalive.tick() => {
-                    // Send KeepAlive if no audio has been sent recently
                     if audio_rx.is_empty() {
+                        log(&app_sender, "[Deepgram] Sending KeepAlive (silence detected)");
                         let _ = ws_sink
                             .send(Message::Text(r#"{"type":"KeepAlive"}"#.to_string().into()))
                             .await;
@@ -152,22 +207,32 @@ async fn start_deepgram(
         }
     });
 
-    // ── Receiver task: WS messages → StreamTranscript events ─────────────
+    // ── Receiver task ─────────────────────────────────────────────────────
     tokio::spawn(async move {
+        log(&app_recv, "[Deepgram] Transcript listener started");
         loop {
             tokio::select! {
-                _ = shutdown_rx2.recv() => break,
+                _ = shutdown_rx2.recv() => {
+                    log(&app_recv, "[Deepgram] Transcript listener shutting down");
+                    break;
+                }
                 msg = ws_source.next() => {
                     match msg {
                         Some(Ok(Message::Text(text))) => {
-                            if let Ok(v) =
-                                serde_json::from_str::<serde_json::Value>(&text)
-                            {
-                                parse_deepgram_message(&v, &transcript_tx);
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                                parse_deepgram_message(&app_recv, &v, &transcript_tx);
+                            } else {
+                                log_warn(&app_recv, format!("[Deepgram] Non-JSON message: {}", &text[..text.len().min(120)]));
                             }
                         }
-                        // Connection closed or error — exit gracefully
-                        None | Some(Err(_)) => break,
+                        Some(Err(e)) => {
+                            log_err(&app_recv, format!("[Deepgram] WS error: {}", e));
+                            break;
+                        }
+                        None => {
+                            log(&app_recv, "[Deepgram] Server closed the connection");
+                            break;
+                        }
                         _ => {}
                     }
                 }
@@ -179,18 +244,15 @@ async fn start_deepgram(
 }
 
 fn parse_deepgram_message(
+    app: &AppHandle,
     v: &serde_json::Value,
     tx: &mpsc::UnboundedSender<StreamTranscript>,
 ) {
     let msg_type = v["type"].as_str().unwrap_or("");
 
     if msg_type == "Results" {
-        // `is_final` = segment is complete; `speech_final` = utterance boundary.
-        // We emit on `speech_final` for verse detection and on every `is_final=false`
-        // for the live text display.
         let is_final = v["is_final"].as_bool().unwrap_or(false)
             || v["speech_final"].as_bool().unwrap_or(false);
-
         let transcript = v["channel"]["alternatives"][0]["transcript"]
             .as_str()
             .unwrap_or("")
@@ -200,48 +262,45 @@ fn parse_deepgram_message(
             .unwrap_or(0.0) as f32;
 
         if !transcript.is_empty() {
-            let _ = tx.send(StreamTranscript {
-                text: transcript,
-                is_final,
-                confidence,
-            });
+            log(app, format!(
+                "[Deepgram] {} transcript: \"{}\" (conf={:.2})",
+                if is_final { "FINAL" } else { "partial" },
+                &transcript[..transcript.len().min(80)],
+                confidence
+            ));
+            let _ = tx.send(StreamTranscript { text: transcript, is_final, confidence });
         }
-    }
-    // UtteranceEnd event — emit an empty final so the frontend can flush
-    // any partial text that might be sitting unconfirmed.
-    else if msg_type == "UtteranceEnd" {
-        let _ = tx.send(StreamTranscript {
-            text: String::new(),
-            is_final: true,
-            confidence: 0.0,
-        });
+    } else if msg_type == "UtteranceEnd" {
+        log(app, "[Deepgram] UtteranceEnd — flushing partial");
+        let _ = tx.send(StreamTranscript { text: String::new(), is_final: true, confidence: 0.0 });
+    } else if msg_type == "Metadata" {
+        log(app, format!("[Deepgram] Metadata: request_id={}", v["request_id"].as_str().unwrap_or("?")));
+    } else if msg_type == "SpeechStarted" {
+        log(app, "[Deepgram] Speech started (VAD)");
+    } else if !msg_type.is_empty() {
+        log(app, format!("[Deepgram] Unknown message type: {}", msg_type));
     }
 }
 
 // ---------------------------------------------------------------------------
 // AssemblyAI real-time streaming (v3 API)
-//
-// Breaking changes from old v2:
-//   - URL: wss://streaming.assemblyai.com/v3/ws  (NOT api.assemblyai.com/v2/realtime/ws)
-//   - Auth: Authorization header on WS upgrade (NOT first JSON message)
-//   - Audio: raw binary PCM frames (NOT base64-wrapped JSON)
-//   - Terminate: {"type":"Terminate"}  (NOT {"terminate_session":true})
-//   - Message types: "Turn" with end_of_turn boolean  (NOT FinalTranscript/PartialTranscript)
 // ---------------------------------------------------------------------------
 
 async fn start_assemblyai(
+    app: &AppHandle,
     api_key: &str,
     hostname: &str,
     model: Option<&str>,
     _language: Option<&str>,
     transcript_tx: mpsc::UnboundedSender<StreamTranscript>,
 ) -> anyhow::Result<CloudStreamHandle> {
-    // v3 endpoint: streaming.assemblyai.com
     let speech_model = model.unwrap_or("universal-streaming-english");
     let url = format!(
         "wss://{}/v3/ws?sample_rate=16000&speech_model={}",
         hostname, speech_model
     );
+
+    log(app, format!("[AssemblyAI] Connecting → {} (model={})", url, speech_model));
 
     let mut request =
         tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
@@ -249,17 +308,20 @@ async fn start_assemblyai(
         )
         .context("Failed to build AssemblyAI WS request")?;
 
-    // v3 auth: Authorization header with raw API key (no "Token" or "Bearer" prefix)
+    // v3 auth: Authorization header with raw API key (no prefix)
     request.headers_mut().insert(
         "Authorization",
         api_key
             .parse()
             .context("Invalid AssemblyAI API key for header")?,
     );
+    log(app, "[AssemblyAI] Authorization header set (raw key, no prefix)");
 
     let (ws_stream, _) = connect_async_tls_with_config(request, None, false, None)
         .await
         .context("Failed to connect to AssemblyAI WebSocket")?;
+
+    log(app, "[AssemblyAI] WebSocket connected — waiting for Begin message");
 
     let (mut ws_sink, mut ws_source) = ws_stream.split();
 
@@ -267,23 +329,30 @@ async fn start_assemblyai(
     let (shutdown_tx, mut shutdown_rx) = broadcast::channel::<()>(4);
     let mut shutdown_rx2 = shutdown_tx.subscribe();
 
-    // ── Sender task: PCM chunks → binary WS frames ───────────────────────
+    let app_sender = app.clone();
+    let app_recv   = app.clone();
+
+    // ── Sender task ───────────────────────────────────────────────────────
     tokio::spawn(async move {
+        let mut chunk_count: u64 = 0;
+        log(&app_sender, "[AssemblyAI] Audio pump started (16 kHz mono PCM → binary WS frames)");
         loop {
             tokio::select! {
                 _ = shutdown_rx.recv() => {
-                    // v3 terminate message
+                    log(&app_sender, "[AssemblyAI] Sending Terminate and shutting down");
                     let _ = ws_sink
-                        .send(Message::Text(
-                            r#"{"type":"Terminate"}"#.to_string().into(),
-                        ))
+                        .send(Message::Text(r#"{"type":"Terminate"}"#.to_string().into()))
                         .await;
                     let _ = ws_sink.close().await;
                     break;
                 }
                 Some(chunk) = audio_rx.recv() => {
-                    // v3: send raw binary PCM frames (no base64 encoding)
+                    chunk_count += 1;
+                    if chunk_count % 50 == 0 {
+                        log(&app_sender, format!("[AssemblyAI] Audio pump: {} chunks sent", chunk_count));
+                    }
                     if ws_sink.send(Message::Binary(chunk.into())).await.is_err() {
+                        log_err(&app_sender, "[AssemblyAI] Audio send error — connection dropped");
                         break;
                     }
                 }
@@ -293,19 +362,30 @@ async fn start_assemblyai(
 
     // ── Receiver task ─────────────────────────────────────────────────────
     tokio::spawn(async move {
+        log(&app_recv, "[AssemblyAI] Transcript listener started");
         loop {
             tokio::select! {
-                _ = shutdown_rx2.recv() => break,
+                _ = shutdown_rx2.recv() => {
+                    log(&app_recv, "[AssemblyAI] Transcript listener shutting down");
+                    break;
+                }
                 msg = ws_source.next() => {
                     match msg {
                         Some(Ok(Message::Text(text))) => {
-                            if let Ok(v) =
-                                serde_json::from_str::<serde_json::Value>(&text)
-                            {
-                                parse_assemblyai_message(&v, &transcript_tx);
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                                parse_assemblyai_message(&app_recv, &v, &transcript_tx);
+                            } else {
+                                log_warn(&app_recv, format!("[AssemblyAI] Non-JSON: {}", &text[..text.len().min(120)]));
                             }
                         }
-                        None | Some(Err(_)) => break,
+                        Some(Err(e)) => {
+                            log_err(&app_recv, format!("[AssemblyAI] WS error: {}", e));
+                            break;
+                        }
+                        None => {
+                            log(&app_recv, "[AssemblyAI] Server closed the connection");
+                            break;
+                        }
                         _ => {}
                     }
                 }
@@ -317,27 +397,46 @@ async fn start_assemblyai(
 }
 
 fn parse_assemblyai_message(
+    app: &AppHandle,
     v: &serde_json::Value,
     tx: &mpsc::UnboundedSender<StreamTranscript>,
 ) {
     let msg_type = v["type"].as_str().unwrap_or("");
 
-    // v3 uses "Turn" for all transcript events
-    if msg_type == "Turn" {
-        // end_of_turn=true means this is a finalized utterance
-        let is_final = v["end_of_turn"].as_bool().unwrap_or(false);
-        let text = v["transcript"].as_str().unwrap_or("").to_string();
+    match msg_type {
+        "Begin" => {
+            log(app, format!(
+                "[AssemblyAI] Session began — id={}",
+                v["id"].as_str().unwrap_or("?")
+            ));
+        }
+        "Turn" => {
+            let is_final    = v["end_of_turn"].as_bool().unwrap_or(false);
+            let text        = v["transcript"].as_str().unwrap_or("").to_string();
+            let confidence  = v["end_of_turn_confidence"].as_f64().unwrap_or(0.8) as f32;
+            let turn_order  = v["turn_order"].as_u64().unwrap_or(0);
 
-        // v3 confidence is per-word; use end_of_turn_confidence if available
-        let confidence = v["end_of_turn_confidence"].as_f64().unwrap_or(0.8) as f32;
-
-        if !text.is_empty() {
-            let _ = tx.send(StreamTranscript {
-                text,
-                is_final,
-                confidence,
-            });
+            if !text.is_empty() {
+                log(app, format!(
+                    "[AssemblyAI] {} turn #{}: \"{}\" (eot_conf={:.2})",
+                    if is_final { "FINAL" } else { "partial" },
+                    turn_order,
+                    &text[..text.len().min(80)],
+                    confidence
+                ));
+                let _ = tx.send(StreamTranscript { text, is_final, confidence });
+            }
+        }
+        "Termination" => {
+            log(app, format!(
+                "[AssemblyAI] Session terminated — audio={:.1}s session={:.1}s",
+                v["audio_duration_seconds"].as_f64().unwrap_or(0.0),
+                v["session_duration_seconds"].as_f64().unwrap_or(0.0),
+            ));
+        }
+        "" => {} // ignore empty type
+        other => {
+            log_warn(app, format!("[AssemblyAI] Unknown message type: {} — {}", other, v));
         }
     }
-    // "Termination" is the server's acknowledgement — nothing to emit
 }

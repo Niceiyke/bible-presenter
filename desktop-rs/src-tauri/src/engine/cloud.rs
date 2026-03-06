@@ -139,12 +139,19 @@ async fn transcribe_assemblyai(samples: &[f32], api_key: &str, model: Option<&st
         .context("No upload_url in AssemblyAI response")?
         .to_string();
 
-    // Step 2: Submit transcription
+    // Step 2: Submit transcription.
+    // AssemblyAI REST batch API only accepts "speech_models" (list) — "speech_model"
+    // (singular) is deprecated and returns 400. Streaming-only model names
+    // (universal-streaming-*) are also rejected; only "universal-3-pro" and
+    // "universal-2" are valid here.
+    const ASSEMBLYAI_BATCH_MODELS: &[&str] = &["universal-3-pro", "universal-2"];
     let mut payload = serde_json::json!({ "audio_url": audio_url });
     if let Some(m) = model {
-        payload["speech_model"] = serde_json::json!(m);
-        // Newer accounts or restricted keys may require speech_models as a list
-        payload["speech_models"] = serde_json::json!([m]);
+        if ASSEMBLYAI_BATCH_MODELS.contains(&m) {
+            payload["speech_models"] = serde_json::json!([m]);
+        }
+        // streaming-only model names (e.g. universal-streaming-english) are silently
+        // ignored here; AssemblyAI will use its default batch model instead.
     }
 
     let submit_resp = client

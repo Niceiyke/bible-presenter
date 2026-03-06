@@ -635,9 +635,11 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
     if preacher_use_stream {
         let provider = cloud_provider.unwrap();
         let api_key = cloud_api_key.unwrap();
-        let stream_result = engine::cloud_stream::start_stream(&provider, &api_key, cloud_hostname.as_deref(), cloud_model.as_deref(), cloud_language.as_deref()).await;
+        log_msg(&app, &format!("[Session] Starting {} WebSocket stream (model={:?}, host={:?})", provider, cloud_model, cloud_hostname));
+        let stream_result = engine::cloud_stream::start_stream(&app, &provider, &api_key, cloud_hostname.as_deref(), cloud_model.as_deref(), cloud_language.as_deref()).await;
 
         if let Ok((stream_handle, mut transcript_rx)) = stream_result {
+            log_msg(&app, "[Session] Cloud WS stream connected — audio pump starting");
             *state.preacher_cloud_stream_handle.lock() = Some(stream_handle);
             let handle_arc = state.preacher_cloud_stream_handle.clone();
 
@@ -680,6 +682,11 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
                             let (verse, conf) = s.detect_verse_hybrid(&combined, embedding);
                             (verse.map(store::DisplayItem::Verse), conf)
                         }).await.unwrap_or((None, 0.0));
+                        if let Some(store::DisplayItem::Verse(ref v)) = detected_item {
+                            log_msg(&app_pr, &format!("[Session] Verse detected: {} {}:{} (conf={:.2})", v.book, v.chapter, v.verse, confidence));
+                        } else {
+                            log_msg(&app_pr, &format!("[Session] Final transcript — no verse match (conf={:.2}): \"{}\"", confidence, &text[..text.len().min(60)]));
+                        }
                         let _ = app_pr.emit("preacher-transcription-update", TranscriptionUpdate { text: text.clone(), detected_item, confidence, source: provider_name.clone(), is_partial: false });
                     } else if !seg.is_final {
                         let _ = app_pr.emit("preacher-transcription-update", TranscriptionUpdate { text: text.clone(), detected_item: None, confidence: 0.0, source: provider_name.clone(), is_partial: true });
@@ -689,8 +696,8 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
                 let mut r = is_running_pr.lock();
                 if *r { *r = false; let _ = app_pr.emit("session-status", SessionStatus { status: "stopped".to_string(), message: "Session ended".to_string() }); }
             });
-        } else {
-            // fallback gracefully or error
+        } else if let Err(e) = stream_result {
+            log_msg(&app, &format!("[Session] Cloud WS stream failed to connect: {}", e));
         }
     } else {
         // Preacher Local or Cloud REST
@@ -2210,14 +2217,18 @@ async fn export_transcript(
 
 #[tauri::command]
 async fn test_cloud_connection(
+    app: AppHandle,
     provider: String,
     api_key: String,
     model: Option<String>,
 ) -> Result<String, String> {
-    engine::cloud::test_connection(&provider, &api_key, model.as_deref())
-        .await
-        .map(|_| "Connected".to_string())
-        .map_err(|e| e.to_string())
+    log_msg(&app, &format!("[Test] Testing {} connection (model={:?})", provider, model));
+    let result = engine::cloud::test_connection(&provider, &api_key, model.as_deref()).await;
+    match &result {
+        Ok(_)  => log_msg(&app, &format!("[Test] {} connection OK", provider)),
+        Err(e) => log_msg(&app, &format!("[Test] {} connection FAILED: {}", provider, e)),
+    }
+    result.map(|_| "Connected".to_string()).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
