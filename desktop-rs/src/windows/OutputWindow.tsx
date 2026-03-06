@@ -210,7 +210,7 @@ export function OutputWindow() {
 
   useEffect(() => {
     // Attach ALL listeners first, before any async work, to avoid missing events
-    const unlistenTrans = listen("transcription-update", (event: any) => {
+    const unlistenTrans = listen("preacher-transcription-update", (event: any) => {
       const { detected_item, source } = event.payload;
       if (source === "manual") {
         setLiveItem(detected_item ?? null);

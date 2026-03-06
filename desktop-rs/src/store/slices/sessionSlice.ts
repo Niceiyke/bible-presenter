@@ -17,10 +17,14 @@ export interface SessionSlice {
   setTranscript: (v: string) => void;
   devices: [string, string][];
   setDevices: (v: [string, string][]) => void;
-  selectedDevice: string;
-  setSelectedDevice: (v: string) => void;
-  vadThreshold: number;
-  setVadThreshold: (v: number) => void;
+  operatorDevice: string;
+  setOperatorDevice: (v: string) => void;
+  preacherDevice: string;
+  setPreacherDevice: (v: string) => void;
+  operatorVadThreshold: number;
+  setOperatorVadThreshold: (v: number) => void;
+  preacherVadThreshold: number;
+  setPreacherVadThreshold: (v: number) => void;
   transcriptionWindowSec: number;
   setTranscriptionWindowSec: (v: number) => void;
   sessionState: "idle" | "loading" | "running";
@@ -29,8 +33,10 @@ export interface SessionSlice {
   setAudioError: (v: string | null) => void;
   deviceError: string | null;
   setDeviceError: (v: string | null) => void;
-  micLevel: number;
-  setMicLevel: (v: number | ((prev: number) => number)) => void;
+  operatorMicLevel: number;
+  setOperatorMicLevel: (v: number | ((prev: number) => number)) => void;
+  preacherMicLevel: number;
+  setPreacherMicLevel: (v: number | ((prev: number) => number)) => void;
   remoteUrl: string;
   setRemoteUrl: (v: string) => void;
   lanUrls: [string, string][];
@@ -67,10 +73,14 @@ export const createSessionSlice: StateCreator<AppStore, [], [], SessionSlice> = 
   setTranscript: (v) => set({ transcript: v }),
   devices: [],
   setDevices: (v) => set({ devices: v }),
-  selectedDevice: "",
-  setSelectedDevice: (v) => set({ selectedDevice: v }),
-  vadThreshold: parseFloat(localStorage.getItem("pref_vadThreshold") ?? "0.002"),
-  setVadThreshold: (v) => set({ vadThreshold: v }),
+  operatorDevice: "",
+  setOperatorDevice: (v) => set({ operatorDevice: v }),
+  preacherDevice: "",
+  setPreacherDevice: (v) => set({ preacherDevice: v }),
+  operatorVadThreshold: parseFloat(localStorage.getItem("pref_operatorVadThreshold") ?? "0.002"),
+  setOperatorVadThreshold: (v) => set({ operatorVadThreshold: v }),
+  preacherVadThreshold: parseFloat(localStorage.getItem("pref_preacherVadThreshold") ?? "0.002"),
+  setPreacherVadThreshold: (v) => set({ preacherVadThreshold: v }),
   transcriptionWindowSec: parseFloat(localStorage.getItem("pref_transcriptionWindowSec") ?? "1.0"),
   setTranscriptionWindowSec: (v) => set({ transcriptionWindowSec: v }),
   sessionState: "idle",
@@ -79,8 +89,10 @@ export const createSessionSlice: StateCreator<AppStore, [], [], SessionSlice> = 
   setAudioError: (v) => set({ audioError: v }),
   deviceError: null,
   setDeviceError: (v) => set({ deviceError: v }),
-  micLevel: 0,
-  setMicLevel: (v) => set((s) => ({ micLevel: typeof v === "function" ? v(s.micLevel) : v })),
+  operatorMicLevel: 0,
+  setOperatorMicLevel: (v) => set((s) => ({ operatorMicLevel: typeof v === "function" ? v(s.operatorMicLevel) : v })),
+  preacherMicLevel: 0,
+  setPreacherMicLevel: (v) => set((s) => ({ preacherMicLevel: typeof v === "function" ? v(s.preacherMicLevel) : v })),
   remoteUrl: "",
   setRemoteUrl: (v) => set({ remoteUrl: v }),
   lanUrls: [],

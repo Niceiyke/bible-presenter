@@ -19,7 +19,7 @@ export function useAppInitialization() {
     setTailscaleUrl, setAvailableVersions, setBibleVersion,
     setPropItems, setSavedScenes, setServices, setLiveItem,
     setTranscript, setSuggestedItem, setSuggestedConfidence,
-    setStagedItem, setMicLevel, setSessionState, setAudioError,
+    setStagedItem, setOperatorMicLevel, setPreacherMicLevel, setSessionState, setAudioError,
     appendTranscriptSegment, setVerseLockUntil, setManualOverrideUntil,
     setStartupIssues, setIsInitialized,
     bibleVersion, transcriptionWindowSec,
@@ -99,6 +99,8 @@ export function useAppInitialization() {
       invoke("get_current_item").then((v: any) => { if (v) setLiveItem(v); }).catch(() => {});
 
       invoke("set_transcription_window", { samples: Math.round(transcriptionWindowSec * 16000) }).catch(() => {});
+      invoke("set_operator_vad", { threshold: useAppStore.getState().operatorVadThreshold }).catch(() => {});
+      invoke("set_preacher_vad", { threshold: useAppStore.getState().preacherVadThreshold }).catch(() => {});
 
       // Check startup status and surface any missing-file issues to the operator
       invoke<StartupStatus>("get_startup_status").then((status) => {
@@ -113,7 +115,7 @@ export function useAppInitialization() {
     loadAll();
 
     // Listeners
-    const unlistenTrans = listen("transcription-update", (ev: any) => {
+    const unlistenTrans = listen("operator-transcription-update", (ev: any) => {
       // ── Ignore transcription updates until fully initialized ──────────────
       if (!useAppStore.getState().isInitialized) return;
 
@@ -187,18 +189,27 @@ export function useAppInitialization() {
         setLiveItem(detected_item);
         setVerseLockUntil(now + cfg.verse_lock_secs * 1000);
       }
+    });
 
-      // Log to local session transcript for the operator transcript panel
-      appendTranscriptSegment({
-        text,
-        timestamp_ms: Date.now(),
-        is_final: true,
-        source: "auto",
-      });
+    const unlistenPreacherTrans = listen("preacher-transcription-update", (ev: any) => {
+      const { text, is_partial, source } = ev.payload;
+      
+      // Update the main live text display for sermon feedback
+      if (text) setTranscript(text);
+
+      if (text && !is_partial) {
+        appendTranscriptSegment({
+          text,
+          timestamp_ms: Date.now(),
+          is_final: true,
+          source: source || "auto",
+        });
+      }
     });
     
     const unlistenStaged = listen("item-staged", (ev: any) => setStagedItem(ev.payload as DisplayItem));
-    const unlistenLevel = listen("audio-level", (ev: any) => setMicLevel(Math.min(1, Math.sqrt(ev.payload as number) / 0.35)));
+    const unlistenOperatorLevel = listen("operator-audio-level", (ev: any) => setOperatorMicLevel(Math.min(1, Math.sqrt(ev.payload as number) / 0.35)));
+    const unlistenPreacherLevel = listen("preacher-audio-level", (ev: any) => setPreacherMicLevel(Math.min(1, Math.sqrt(ev.payload as number) / 0.35)));
     const unlistenSettings = listen("settings-changed", (ev: any) => setSettings(ev.payload as PresentationSettings));
     const unlistenStatus = listen("session-status", (ev: any) => {
       const { status, message } = ev.payload as { status: string; message: string };
@@ -240,12 +251,17 @@ export function useAppInitialization() {
       useAppStore.getState().addLog(ev.payload);
     });
 
-    const decayInterval = setInterval(() => setMicLevel((prev) => (prev > 0.01 ? prev * 0.85 : 0)), 50);
+    const decayInterval = setInterval(() => {
+      setOperatorMicLevel((prev) => (prev > 0.01 ? prev * 0.85 : 0));
+      setPreacherMicLevel((prev) => (prev > 0.01 ? prev * 0.85 : 0));
+    }, 50);
 
     return () => {
       unlistenTrans.then(f => f()); 
+      unlistenPreacherTrans.then(f => f());
       unlistenStaged.then(f => f()); 
-      unlistenLevel.then(f => f()); 
+      unlistenOperatorLevel.then(f => f()); 
+      unlistenPreacherLevel.then(f => f());
       unlistenSettings.then(f => f());
       unlistenStatus.then(f => f());
       unlistenAudioErr.then(f => f());

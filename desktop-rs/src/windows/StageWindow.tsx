@@ -31,7 +31,7 @@ export function StageWindow() {
 
   useEffect(() => {
     const unlisten1 = listen<{ text: string; detected_item: DisplayItem | null; source: string }>(
-      "transcription-update",
+      "preacher-transcription-update",
       (ev) => {
         if (ev.payload.source === "manual" && ev.payload.detected_item) {
           setLiveItem(ev.payload.detected_item);

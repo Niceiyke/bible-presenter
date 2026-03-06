@@ -12,25 +12,24 @@ import type { ModelStatus, DownloadProgress, HardwareInfo, TranscriptionConfig }
 
 interface SettingsTabProps {
   onUpdateSettings: (s: PresentationSettings) => void;
-  onUpdateTranscriptionWindow: (sec: number) => void;
-  onUpdateVadThreshold: (val: number) => void;
   onUploadMedia: () => Promise<void>;
 }
 
 export function SettingsTab({
   onUpdateSettings,
-  onUpdateTranscriptionWindow,
-  onUpdateVadThreshold,
   onUploadMedia,
 }: SettingsTabProps) {
   const {
     settings,
-    media,
-    cameras,
+    devices, setDevices,
+    operatorDevice, setOperatorDevice,
+    preacherDevice, setPreacherDevice,
+    operatorVadThreshold, setOperatorVadThreshold,
+    preacherVadThreshold, setPreacherVadThreshold,
     transcriptionWindowSec,
     setTranscriptionWindowSec,
-    vadThreshold,
-    setVadThreshold,
+    media,
+    cameras,
     remoteUrl,
     lanUrls,
     remotePin, setRemotePin,
@@ -77,16 +76,40 @@ export function SettingsTab({
     }
   };
 
+  useEffect(() => {
+    invoke<[string, string][]>("get_audio_devices")
+      .then((res) => setDevices(res))
+      .catch((err) => console.error("Failed to fetch audio devices:", err));
+  }, []);
+
+  const handleUpdateOperatorDevice = (name: string) => {
+    setOperatorDevice(name);
+    localStorage.setItem("pref_operatorDevice", name);
+    invoke("set_operator_device", { device_name: name }).catch(console.error);
+  };
+
+  const handleUpdatePreacherDevice = (name: string) => {
+    setPreacherDevice(name);
+    localStorage.setItem("pref_preacherDevice", name);
+    invoke("set_preacher_device", { device_name: name }).catch(console.error);
+  };
+
+  const handleUpdateOperatorVad = (val: number) => {
+    setOperatorVadThreshold(val);
+    localStorage.setItem("pref_operatorVadThreshold", String(val));
+    invoke("set_operator_vad", { threshold: val }).catch(console.error);
+  };
+
+  const handleUpdatePreacherVad = (val: number) => {
+    setPreacherVadThreshold(val);
+    localStorage.setItem("pref_preacherVadThreshold", String(val));
+    invoke("set_preacher_vad", { threshold: val }).catch(console.error);
+  };
+
   const handleUpdateTranscriptionWindow = (sec: number) => {
     setTranscriptionWindowSec(sec);
     localStorage.setItem("pref_transcriptionWindowSec", String(sec));
-    onUpdateTranscriptionWindow(sec);
-  };
-
-  const handleUpdateVadThreshold = (val: number) => {
-    setVadThreshold(val);
-    localStorage.setItem("pref_vadThreshold", String(val));
-    onUpdateVadThreshold(val);
+    invoke("set_transcription_window", { samples: Math.round(sec * 16000) }).catch(console.error);
   };
 
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
@@ -221,6 +244,8 @@ export function SettingsTab({
       hostname: cloudHostnameDraft || null,
       model: cloudModelDraft || null,
       language: cloudLanguageDraft || null,
+      operator_mode: transcriptionConfig.operator_mode,
+      preacher_mode: transcriptionConfig.preacher_mode,
       auto_project: transcriptionConfig.auto_project,
       verse_lock_secs: transcriptionConfig.verse_lock_secs,
       confidence_threshold: transcriptionConfig.confidence_threshold,
@@ -235,6 +260,8 @@ export function SettingsTab({
       hostname: cloudHostnameDraft || null,
       model: cloudModelDraft || null,
       language: cloudLanguageDraft || null,
+      operator_mode: transcriptionConfig.operator_mode,
+      preacher_mode: transcriptionConfig.preacher_mode,
       auto_project: transcriptionConfig.auto_project,
       verse_lock_secs: transcriptionConfig.verse_lock_secs,
       confidence_threshold: transcriptionConfig.confidence_threshold,
@@ -423,37 +450,135 @@ export function SettingsTab({
         )}
       </div>
 
-      <div>
-        <div className="flex justify-between items-center mb-1">
-          <p className="text-xs text-slate-400 font-bold uppercase">Transcription Window</p>
-          <span className="text-xs font-mono text-amber-500">{transcriptionWindowSec.toFixed(1)}s samples</span>
-        </div>
-        <input
-          type="range" min="0.5" max="3.0" step="0.5"
-          value={transcriptionWindowSec}
-          onChange={(e) => handleUpdateTranscriptionWindow(parseFloat(e.target.value))}
-          className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
-        />
-        <div className="flex justify-between mt-1.5">
-          <span className="text-[10px] text-slate-600">0.5s — fast, high CPU</span>
-          <span className="text-[10px] text-slate-600">3.0s — slow, low CPU</span>
-        </div>
-      </div>
+      {/* ── Audio Sources ─────────────────────────────── */}
+      <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-xl">
+        <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+          Audio Input Sources
+        </h2>
 
-      <div>
-        <div className="flex justify-between items-center mb-1">
-          <p className="text-xs text-slate-400 font-bold uppercase">VAD Sensitivity</p>
-          <span className="text-xs font-mono text-amber-500">{(vadThreshold * 1000).toFixed(0)} units</span>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Operator Microphone */}
+          <div className="flex flex-col gap-3">
+            <p className="text-[10px] text-amber-500 font-bold uppercase">Operator Microphone (Director)</p>
+            <p className="text-[9px] text-slate-500 leading-tight">Controls Bible verse selection via local AI. Best with Push-to-Talk.</p>
+            
+            <select
+              value={operatorDevice}
+              onChange={(e) => handleUpdateOperatorDevice(e.target.value)}
+              className="w-full bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-2 cursor-pointer focus:outline-none focus:border-amber-500"
+            >
+              <option value="">System Default</option>
+              {devices.map(([label, value]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-slate-500 uppercase font-bold">Inference Mode</span>
+              <div className="flex gap-1">
+                {["local", "cloud"].map(m => (
+                  <button
+                    key={m}
+                    onClick={() => {
+                      const next = { ...transcriptionConfig, operator_mode: m };
+                      setTranscriptionConfig(next);
+                      invoke("set_cloud_config", next).catch(() => {});
+                    }}
+                    className={`px-2 py-1 text-[9px] font-black uppercase rounded border transition-all ${
+                      (transcriptionConfig.operator_mode ?? "local") === m
+                        ? "bg-amber-500 border-amber-500 text-black"
+                        : "bg-slate-800 border-slate-700 text-slate-500 hover:border-slate-600"
+                    }`}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <p className="text-[10px] text-slate-500 uppercase font-bold">VAD Sensitivity</p>
+                <span className="text-[10px] font-mono text-amber-500">{(operatorVadThreshold * 1000).toFixed(0)} units</span>
+              </div>
+              <input
+                type="range" min="0.0005" max="0.01" step="0.0005"
+                value={operatorVadThreshold}
+                onChange={(e) => handleUpdateOperatorVad(parseFloat(e.target.value))}
+                className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
+              />
+            </div>
+          </div>
+
+          {/* Preacher Microphone */}
+          <div className="flex flex-col gap-3">
+            <p className="text-[10px] text-blue-400 font-bold uppercase">Preacher Microphone (House)</p>
+            <p className="text-[9px] text-slate-500 leading-tight">Continuous sermon transcription. Best with Cloud (Deepgram/AssemblyAI).</p>
+            
+            <select
+              value={preacherDevice}
+              onChange={(e) => handleUpdatePreacherDevice(e.target.value)}
+              className="w-full bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-2 cursor-pointer focus:outline-none focus:border-blue-500"
+            >
+              <option value="">System Default</option>
+              {devices.map(([label, value]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-slate-500 uppercase font-bold">Inference Mode</span>
+              <div className="flex gap-1">
+                {["local", "cloud"].map(m => (
+                  <button
+                    key={m}
+                    onClick={() => {
+                      const next = { ...transcriptionConfig, preacher_mode: m };
+                      setTranscriptionConfig(next);
+                      invoke("set_cloud_config", next).catch(() => {});
+                    }}
+                    className={`px-2 py-1 text-[9px] font-black uppercase rounded border transition-all ${
+                      (transcriptionConfig.preacher_mode ?? "cloud") === m
+                        ? "bg-blue-500 border-blue-500 text-white"
+                        : "bg-slate-800 border-slate-700 text-slate-500 hover:border-slate-600"
+                    }`}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <p className="text-[10px] text-slate-500 uppercase font-bold">VAD Sensitivity</p>
+                <span className="text-[10px] font-mono text-blue-400">{(preacherVadThreshold * 1000).toFixed(0)} units</span>
+              </div>
+              <input
+                type="range" min="0.0005" max="0.01" step="0.0005"
+                value={preacherVadThreshold}
+                onChange={(e) => handleUpdatePreacherVad(parseFloat(e.target.value))}
+                className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+              />
+            </div>
+          </div>
         </div>
-        <input
-          type="range" min="0.0005" max="0.01" step="0.0005"
-          value={vadThreshold}
-          onChange={(e) => handleUpdateVadThreshold(parseFloat(e.target.value))}
-          className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
-        />
-        <div className="flex justify-between mt-1.5">
-          <span className="text-[10px] text-slate-600">More sensitive</span>
-          <span className="text-[10px] text-slate-600">Less sensitive (ignore noise)</span>
+
+        <div className="mt-6 pt-4 border-t border-slate-800">
+          <div className="flex justify-between items-center mb-1">
+            <p className="text-[10px] text-slate-400 font-bold uppercase">Transcription Resolution (Local)</p>
+            <span className="text-xs font-mono text-amber-500">{transcriptionWindowSec.toFixed(1)}s samples</span>
+          </div>
+          <input
+            type="range" min="0.5" max="3.0" step="0.5"
+            value={transcriptionWindowSec}
+            onChange={(e) => handleUpdateTranscriptionWindow(parseFloat(e.target.value))}
+            className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
+          />
+          <div className="flex justify-between mt-1">
+            <span className="text-[9px] text-slate-600">Fast (High CPU)</span>
+            <span className="text-[9px] text-slate-600">Delayed (Low CPU)</span>
+          </div>
         </div>
       </div>
 

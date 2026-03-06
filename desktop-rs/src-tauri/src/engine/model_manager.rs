@@ -123,6 +123,12 @@ pub struct TranscriptionConfig {
     /// BCP-47 language code (e.g. "en", "en-US"). None = provider default.
     #[serde(default)]
     pub cloud_language: Option<String>,
+    /// "local" or "cloud" mode for operator audio.
+    #[serde(default)]
+    pub operator_mode: Option<String>,
+    /// "local" or "cloud" mode for preacher audio.
+    #[serde(default)]
+    pub preacher_mode: Option<String>,
     /// When true, auto-project suggested verses without operator confirmation.
     #[serde(default)]
     pub auto_project: bool,
@@ -147,6 +153,8 @@ impl Default for TranscriptionConfig {
             cloud_hostname: None,
             cloud_model: None,
             cloud_language: None,
+            operator_mode: Some("local".to_string()),
+            preacher_mode: Some("cloud".to_string()),
             auto_project: false,
             verse_lock_secs: default_verse_lock_secs(),
             confidence_threshold: default_confidence_threshold(),

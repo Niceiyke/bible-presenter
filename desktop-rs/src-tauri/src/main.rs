@@ -197,7 +197,9 @@ struct MonitorInfo {
 // ---------------------------------------------------------------------------
 
 pub struct AppState {
-    audio: Arc<Mutex<audio::AudioEngine>>,
+    operator_audio: Arc<Mutex<audio::AudioEngine>>,
+    preacher_audio: Arc<Mutex<audio::AudioEngine>>,
+    operator_ptt_active: Arc<AtomicBool>,
     /// C5: Engine is None until the user first clicks START LIVE.
     /// Wrapped in Mutex so start_session can populate it after the fact.
     engine: Arc<Mutex<Option<Arc<engine::TranscriptionEngine>>>>,
@@ -255,7 +257,8 @@ pub struct AppState {
     pub context_buffer: Arc<Mutex<Vec<String>>>,
     /// Handle to the active cloud WebSocket stream (Deepgram / AssemblyAI).
     /// None when local Whisper or REST cloud mode is active.
-    pub cloud_stream_handle: Arc<Mutex<Option<engine::cloud_stream::CloudStreamHandle>>>,
+    pub operator_cloud_stream_handle: Arc<Mutex<Option<engine::cloud_stream::CloudStreamHandle>>>,
+    pub preacher_cloud_stream_handle: Arc<Mutex<Option<engine::cloud_stream::CloudStreamHandle>>>,
     /// IP-based auth throttling to prevent PIN brute-force.
     pub auth_throttles: Arc<Mutex<HashMap<std::net::IpAddr, (u8, std::time::Instant)>>>,
     /// NDI Streaming Manager.
@@ -265,7 +268,9 @@ pub struct AppState {
 impl Clone for AppState {
     fn clone(&self) -> Self {
         Self {
-            audio: self.audio.clone(),
+            operator_audio: self.operator_audio.clone(),
+            preacher_audio: self.preacher_audio.clone(),
+            operator_ptt_active: self.operator_ptt_active.clone(),
             engine: self.engine.clone(),
             store: self.store.clone(),
             media_schedule: self.media_schedule.clone(),
@@ -292,7 +297,8 @@ impl Clone for AppState {
             connected_cameras: self.connected_cameras.clone(),
             session_transcript: self.session_transcript.clone(),
             context_buffer: self.context_buffer.clone(),
-            cloud_stream_handle: self.cloud_stream_handle.clone(),
+            operator_cloud_stream_handle: self.operator_cloud_stream_handle.clone(),
+            preacher_cloud_stream_handle: self.preacher_cloud_stream_handle.clone(),
             auth_throttles: self.auth_throttles.clone(),
             ndi_manager: self.ndi_manager.clone(),
         }
@@ -424,7 +430,6 @@ impl AppState {
 
 #[tauri::command]
 async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    // ── C3: Guard — reject duplicate sessions ────────────────────────────
     {
         let mut running = state.is_running.lock();
         if *running {
@@ -433,418 +438,158 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
         *running = true;
     }
 
-    // ── Extract everything from `state` before any .await ─────────────────
-    let audio = state.audio.clone();
-    let store = state.store.clone();
     let is_running = state.is_running.clone();
-    let live_item_arc = state.live_item.clone();
+    let operator_audio = state.operator_audio.clone();
+    let preacher_audio = state.preacher_audio.clone();
+    let store = state.store.clone();
     let broadcast_tx = state.broadcast_tx.clone();
     let transcription_window = state.transcription_window.clone();
-    let transcription_paused_task = state.transcription_paused.clone();
-    let session_transcript_arc = state.session_transcript.clone();
-    let context_buffer_arc = state.context_buffer.clone();
-    let cloud_stream_handle_arc = state.cloud_stream_handle.clone();
+    let transcription_paused = state.transcription_paused.clone();
+    let session_transcript = state.session_transcript.clone();
+    let context_buffer = state.context_buffer.clone();
+    let operator_ptt_active = state.operator_ptt_active.clone();
 
-    // Clear previous session state
-    session_transcript_arc.lock().clear();
-    context_buffer_arc.lock().clear();
+    state.session_transcript.lock().clear();
+    state.context_buffer.lock().clear();
 
-    // Snapshot cloud config
-    let cloud_provider = state.transcription_config.lock().cloud_provider.clone();
-    let cloud_api_key = state.transcription_config.lock().cloud_api_key.clone();
-    let cloud_hostname = state.transcription_config.lock().cloud_hostname.clone();
-    let cloud_model = state.transcription_config.lock().cloud_model.clone();
-    let cloud_language = state.transcription_config.lock().cloud_language.clone();
+    let config = state.transcription_config.lock().clone();
+    let cloud_provider = config.cloud_provider.clone();
+    let cloud_api_key = config.cloud_api_key.clone();
+    let cloud_hostname = config.cloud_hostname.clone();
+    let cloud_model = config.cloud_model.clone();
+    let cloud_language = config.cloud_language.clone();
+    
+    let operator_mode = config.operator_mode.clone().unwrap_or_else(|| "local".to_string());
+    let preacher_mode = config.preacher_mode.clone().unwrap_or_else(|| "cloud".to_string());
 
-    let use_cloud_stream = cloud_provider
-        .as_deref()
-        .map(engine::cloud_stream::provider_supports_streaming)
-        .unwrap_or(false)
-        && cloud_api_key.as_ref().map_or(false, |k| !k.is_empty());
-
-    // ── Lazy-load AI models ───────────────────────────────────────────────
     let engine = match state.get_or_init_engine(&app).await {
         Ok(e) => e,
         Err(e) => {
             *is_running.lock() = false;
-            let _ = app.emit(
-                "session-status",
-                SessionStatus {
-                    status: "error".to_string(),
-                    message: format!("AI models failed to load: {}", e),
-                },
-            );
+            let _ = app.emit("session-status", SessionStatus { status: "error".to_string(), message: format!("AI models failed to load: {}", e) });
             return Err(e);
         }
     };
-    drop(state);
 
-    // ── Audio capture ─────────────────────────────────────────────────────
-    let (error_tx, mut error_rx) = tokio::sync::mpsc::channel::<String>(10);
-    let (tx, mut rx)             = tokio::sync::mpsc::channel::<()>(50);
-    let (level_tx, mut level_rx) = tokio::sync::mpsc::channel::<f32>(50);
+    let (op_error_tx, mut op_error_rx) = tokio::sync::mpsc::channel::<String>(10);
+    let (op_tx, mut op_rx) = tokio::sync::mpsc::channel::<()>(50);
+    let (op_level_tx, mut op_level_rx) = tokio::sync::mpsc::channel::<f32>(50);
+    let op_rb = ringbuf::HeapRb::<f32>::new(48000 * 5);
+    let (op_prod, mut op_cons) = ringbuf::traits::Split::split(op_rb);
 
-    let rb = ringbuf::HeapRb::<f32>::new(48000 * 5);
-    let (prod, mut cons) = ringbuf::traits::Split::split(rb);
+    if let Err(e) = operator_audio.lock().start_capturing(op_tx, op_prod, op_error_tx, Some(op_level_tx)) {
+        *is_running.lock() = false;
+        return Err(format!("Operator mic error: {}", e));
+    }
 
-    {
-        let mut audio_guard = audio.lock();
-        if let Err(e) = audio_guard.start_capturing(tx, prod, error_tx, Some(level_tx)) {
-            *is_running.lock() = false;
-            return Err(e.to_string());
-        }
+    let (pr_error_tx, mut pr_error_rx) = tokio::sync::mpsc::channel::<String>(10);
+    let (pr_tx, mut pr_rx) = tokio::sync::mpsc::channel::<()>(50);
+    let (pr_level_tx, mut pr_level_rx) = tokio::sync::mpsc::channel::<f32>(50);
+    let pr_rb = ringbuf::HeapRb::<f32>::new(48000 * 5);
+    let (pr_prod, mut pr_cons) = ringbuf::traits::Split::split(pr_rb);
+
+    if let Err(e) = preacher_audio.lock().start_capturing(pr_tx, pr_prod, pr_error_tx, Some(pr_level_tx)) {
+        operator_audio.lock().stop();
+        *is_running.lock() = false;
+        return Err(format!("Preacher mic error: {}", e));
     }
 
     let app_err = app.clone();
-    tokio::spawn(async move {
-        while let Some(msg) = error_rx.recv().await {
-            let _ = app_err.emit("audio-error", msg);
-        }
-    });
-
+    tokio::spawn(async move { while let Some(msg) = op_error_rx.recv().await { let _ = app_err.emit("audio-error", format!("Operator: {}", msg)); } });
+    let app_err2 = app.clone();
+    tokio::spawn(async move { while let Some(msg) = pr_error_rx.recv().await { let _ = app_err2.emit("audio-error", format!("Preacher: {}", msg)); } });
     let app_level = app.clone();
-    tokio::spawn(async move {
-        while let Some(level) = level_rx.recv().await {
-            let _ = app_level.emit("audio-level", level);
-        }
-    });
+    tokio::spawn(async move { while let Some(level) = op_level_rx.recv().await { let _ = app_level.emit("operator-audio-level", level); } });
+    let app_level2 = app.clone();
+    tokio::spawn(async move { while let Some(level) = pr_level_rx.recv().await { let _ = app_level2.emit("preacher-audio-level", level); } });
 
-    let _ = app.emit("session-status", SessionStatus {
-        status: "running".to_string(),
-        message: "Live session started".to_string(),
-    });
+    let _ = app.emit("session-status", SessionStatus { status: "running".to_string(), message: "Live session started".to_string() });
 
-    // ══════════════════════════════════════════════════════════════════════
-    // BRANCH A: WebSocket Streaming (Deepgram / AssemblyAI)
-    // ══════════════════════════════════════════════════════════════════════
-    if use_cloud_stream {
-        let provider  = cloud_provider.clone().unwrap();
-        let api_key   = cloud_api_key.clone().unwrap();
-        let hostname  = cloud_hostname.as_deref().map(str::to_string);
-        let model     = cloud_model.as_deref().map(str::to_string);
-        let language  = cloud_language.as_deref().map(str::to_string);
+    let session_start_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
 
-        let stream_result = engine::cloud_stream::start_stream(
-            &provider,
-            &api_key,
-            hostname.as_deref(),
-            model.as_deref(),
-            language.as_deref(),
-        ).await;
-
-        match stream_result {
-            Err(e) => {
-                *is_running.lock() = false;
-                let _ = app.emit("session-status", SessionStatus {
-                    status: "error".to_string(),
-                    message: format!("Cloud stream failed to connect: {}", e),
-                });
-                return Err(format!("Cloud stream error: {}", e));
-            }
-            Ok((stream_handle, mut transcript_rx)) => {
-                // Store handle so stop_session can close the WS cleanly
-                *cloud_stream_handle_arc.lock() = Some(stream_handle);
-
-                let app_stream = app.clone();
-                let is_running_s = is_running.clone();
-                let store_s = store.clone();
-                let engine_s = engine.clone();
-                let session_transcript_s = session_transcript_arc.clone();
-                let context_buffer_s = context_buffer_arc.clone();
-                let broadcast_s = broadcast_tx.clone();
-                let provider_name = provider.clone();
-
-                // ── Audio pump: ring buffer → WS audio_tx ───────────────
-                let stream_handle_arc2 = cloud_stream_handle_arc.clone();
-                tokio::spawn(async move {
-                    // Track last-sent time to throttle how often we poll
-                    // the ring buffer (every ~100 ms = 1600 samples at 16 kHz).
-                    const CHUNK_SAMPLES: usize = 1600;
-                    let mut interval =
-                        tokio::time::interval(std::time::Duration::from_millis(100));
-
-                    while let Some(()) = rx.recv().await {
-                        interval.tick().await;
-
-                        let paused = transcription_paused_task.load(Ordering::Relaxed);
-                        let avail  = cons.occupied_len();
-                        if avail == 0 || paused { continue; }
-
-                        let take = avail.min(CHUNK_SAMPLES * 4); // drain up to 400 ms
-                        let mut pcm = vec![0.0f32; take];
-                        let read = cons.pop_slice(&mut pcm);
-                        pcm.truncate(read);
-
-                        let bytes: Vec<u8> = pcm
-                            .iter()
-                            .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
-                            .flat_map(|s| s.to_le_bytes())
-                            .collect();
-
-                        let guard = stream_handle_arc2.lock();
-                        if let Some(ref h) = *guard {
-                            let _ = h.audio_tx.send(bytes);
-                        } else {
-                            break; // stream was stopped
-                        }
-                    }
-                });
-
-                // ── Transcript handler: StreamTranscript events → UI ─────
-                let session_start_ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64;
-
-                tokio::spawn(async move {
-                    while let Some(seg) = transcript_rx.recv().await {
-                        let text = seg.text.trim().to_string();
-                        if is_hallucination(&text) { continue; }
-
-                        let now_ms = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as u64;
-                        let timestamp_ms = now_ms.saturating_sub(session_start_ms);
-
-                        if seg.is_final {
-                            // ── Final segment ───────────────────────────
-                            // 1. Append to session transcript log
-                            session_transcript_s.lock().push(TranscriptSegment {
-                                text: text.clone(),
-                                timestamp_ms,
-                                is_final: true,
-                                source: provider_name.clone(),
-                            });
-
-                            // 2. Update rolling context buffer (last 3 finals)
-                            let combined = {
-                                let mut buf = context_buffer_s.lock();
-                                buf.push(text.clone());
-                                if buf.len() > 3 { buf.remove(0); }
-                                buf.join(" ")
-                            };
-
-                            // 3. Run verse detection (ONNX embed + hybrid) in
-                            //    blocking thread so we don't stall the async runtime
-                            let e_clone = engine_s.clone();
-                            let s_clone = store_s.clone();
-                            let combined_clone = combined.clone();
-                            let text_clone = text.clone();
-
-                            let result = tokio::task::spawn_blocking(move || {
-                                let embedding = e_clone.embed(&combined_clone).ok();
-                                let (verse, confidence) =
-                                    s_clone.detect_verse_hybrid(&combined_clone, embedding);
-                                (verse.map(store::DisplayItem::Verse), confidence, text_clone)
-                            }).await;
-
-                            if let Ok((item, confidence, raw_text)) = result {
-                                let _ = app_stream.emit("transcription-update", TranscriptionUpdate {
-                                    text: raw_text.clone(),
-                                    detected_item: item.clone(),
-                                    confidence,
-                                    source: "auto".to_string(),
-                                    is_partial: false,
-                                });
-                                let _ = broadcast_s.send(serde_json::json!({
-                                    "type": "transcription",
-                                    "text": raw_text,
-                                    "detected_item": item,
-                                    "confidence": confidence,
-                                    "source": "auto",
-                                    "is_partial": false
-                                }).to_string());
-                            }
-                        } else {
-                            // ── Partial segment ─────────────────────────
-                            // Run regex-only (cheap). Only emit a detected_item
-                            // if a COMPLETE reference (book + chapter + verse) found.
-                            let detected = store_s.detect_verse_by_ref(&text)
-                                .map(store::DisplayItem::Verse);
-
-                            let _ = app_stream.emit("transcription-update", TranscriptionUpdate {
-                                text: text.clone(),
-                                detected_item: detected.clone(),
-                                confidence: if detected.is_some() { 1.0 } else { 0.0 },
-                                source: "auto".to_string(),
-                                is_partial: true,
-                            });
-                        }
-                    }
-
-                    // Stream closed — clear handle and mark stopped if still running
-                    *cloud_stream_handle_arc.lock() = None;
-                    let was_running = {
-                        let mut r = is_running_s.lock();
-                        let prev = *r;
-                        *r = false;
-                        prev
-                    };
-                    if was_running {
-                        let _ = app_stream.emit("session-status", SessionStatus {
-                            status: "stopped".to_string(),
-                            message: "Session ended".to_string(),
-                        });
-                    }
-                });
-            }
-        }
-
-        return Ok(());
-    }
-
-    // ══════════════════════════════════════════════════════════════════════
-    // BRANCH B: Local Whisper OR REST cloud batch (OpenAI / Google)
-    // ══════════════════════════════════════════════════════════════════════
-    let app_task = app.clone();
-    let is_running_t = is_running.clone();
-    let _live_item_t = live_item_arc.clone();
-    let broadcast_tx_task = broadcast_tx.clone();
-    let transcription_window_task = transcription_window.clone();
-    let cloud_provider_task = cloud_provider.clone();
-    let cloud_api_key_task = cloud_api_key.clone();
-    let cloud_language_task = cloud_language.clone();
-    let session_transcript_b = session_transcript_arc.clone();
-    let context_buffer_b = context_buffer_arc.clone();
-
-    let cloud_in_flight = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // ── Operator Pipeline (Local or Cloud REST, PTT)
+    let app_op = app.clone();
+    let is_running_op = is_running.clone();
+    let engine_op = engine.clone();
+    let store_op = store.clone();
+    let ctx_buf_op = context_buffer.clone();
+    let op_provider = cloud_provider.clone();
+    let op_api_key = cloud_api_key.clone();
+    let op_language = cloud_language.clone();
+    let trans_window_op = transcription_window.clone();
+    let trans_paused_op = transcription_paused.clone();
 
     tokio::spawn(async move {
         let mut buffer = Vec::with_capacity(48000 * 3);
         const OVERLAP: usize = 4000;
-        let provider_name = cloud_provider_task.clone().unwrap_or_else(|| "local".to_string());
+        const MIN_SAMPLES: usize = 8000; // 0.5s
+        let is_cloud = operator_mode == "cloud" && op_provider.is_some() && op_api_key.is_some();
+        let provider_name = if is_cloud { op_provider.clone().unwrap() } else { "local".to_string() };
+        let mut was_ptt_active = false;
 
-        let session_start_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-
-        while let Some(()) = rx.recv().await {
-            let avail = cons.occupied_len();
+        while let Some(()) = op_rx.recv().await {
+            let avail = op_cons.occupied_len();
             if avail > 0 {
                 let old_len = buffer.len();
                 buffer.resize(old_len + avail, 0.0);
-                let read = cons.pop_slice(&mut buffer[old_len..]);
+                let read = op_cons.pop_slice(&mut buffer[old_len..]);
                 buffer.truncate(old_len + read);
             }
 
-            let window_size = *transcription_window_task.lock();
-            let paused = transcription_paused_task.load(Ordering::Relaxed);
+            let window_size = *trans_window_op.lock();
+            let is_ptt_active = operator_ptt_active.load(std::sync::atomic::Ordering::Relaxed);
+            let is_paused = trans_paused_op.load(std::sync::atomic::Ordering::Relaxed);
+            
+            // Trigger processing if:
+            // 1. PTT was just released AND we have enough audio
+            // 2. Buffer reached window size AND PTT is still active
+            let trigger_on_release = was_ptt_active && !is_ptt_active && buffer.len() >= MIN_SAMPLES;
+            let trigger_on_window = is_ptt_active && buffer.len() >= window_size;
 
-            if paused {
-                if buffer.len() > window_size {
-                    let keep = buffer.len().min(8000);
-                    buffer.drain(0..buffer.len() - keep);
-                }
-                continue;
-            }
-
-            if cloud_in_flight.load(Ordering::Relaxed) {
-                if buffer.len() > window_size {
-                    buffer.drain(0..buffer.len() - window_size);
-                }
-                continue;
-            }
-
-            if buffer.len() >= window_size {
+            if !is_paused && (trigger_on_release || trigger_on_window) {
                 let b_clone = buffer.clone();
-                let e_clone = engine.clone();
-                let s_clone = store.clone();
-                let ctx_buf = context_buffer_b.clone();
-                let tx_log  = session_transcript_b.clone();
-                let p_name  = provider_name.clone();
+                let e_clone = engine_op.clone();
+                let s_clone = store_op.clone();
+                let ctx_buf = ctx_buf_op.clone();
+                let op_p = op_provider.clone();
+                let op_k = op_api_key.clone();
+                let op_l = op_language.clone();
+                let app_op_inner = app_op.clone();
+                let p_name = provider_name.clone();
 
-                let result: Option<(String, Option<store::DisplayItem>, f32)> =
-                    if let (Some(ref provider), Some(ref api_key)) =
-                        (&cloud_provider_task, &cloud_api_key_task)
-                    {
-                        cloud_in_flight.store(true, Ordering::Relaxed);
-                        let outcome = match engine::cloud::transcribe_cloud(
-                            &b_clone, provider, api_key,
-                        ).await {
-                            Ok(text) => tokio::task::spawn_blocking(move || {
-                                // Update context buffer
-                                let combined = {
-                                    let mut buf = ctx_buf.lock();
-                                    buf.push(text.clone());
-                                    if buf.len() > 3 { buf.remove(0); }
-                                    buf.join(" ")
-                                };
+                tokio::spawn(async move {
+                    let result: Option<(String, Option<store::DisplayItem>, f32)> = if is_cloud {
+                        if let Ok(text) = engine::cloud::transcribe_cloud(&b_clone, op_p.as_ref().unwrap(), op_k.as_ref().unwrap()).await {
+                            tokio::task::spawn_blocking(move || {
+                                let combined = { let mut buf = ctx_buf.lock(); buf.push(text.clone()); if buf.len() > 3 { buf.remove(0); } buf.join(" ") };
                                 let embedding = e_clone.embed(&combined).ok();
-                                let (verse, confidence) =
-                                    s_clone.detect_verse_hybrid(&combined, embedding);
-                                // Log to session transcript
-                                let now_ms = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis() as u64;
-                                tx_log.lock().push(TranscriptSegment {
-                                    text: text.clone(),
-                                    timestamp_ms: now_ms.saturating_sub(session_start_ms),
-                                    is_final: true,
-                                    source: p_name,
-                                });
+                                let (verse, confidence) = s_clone.detect_verse_hybrid(&combined, embedding);
                                 Some((text, verse.map(store::DisplayItem::Verse), confidence))
-                            }).await.ok().flatten(),
-                            Err(e) => { log_msg(&app, &format!("[cloud] {}", e)); None }
-                        };
-                        cloud_in_flight.store(false, Ordering::Relaxed);
-                        outcome
+                            }).await.ok().flatten()
+                        } else { None }
                     } else {
-                        let lang_opt = cloud_language_task.clone();
                         tokio::task::spawn_blocking(move || {
-                            let text = e_clone.transcribe(&b_clone, lang_opt.as_deref()).ok()?;
-                            // Update context buffer
-                            let combined = {
-                                let mut buf = ctx_buf.lock();
-                                buf.push(text.clone());
-                                if buf.len() > 3 { buf.remove(0); }
-                                buf.join(" ")
-                            };
+                            let text = e_clone.transcribe(&b_clone, op_l.as_deref()).ok()?;
+                            let combined = { let mut buf = ctx_buf.lock(); buf.push(text.clone()); if buf.len() > 3 { buf.remove(0); } buf.join(" ") };
                             let embedding = e_clone.embed(&combined).ok();
-                            let (verse, confidence) =
-                                s_clone.detect_verse_hybrid(&combined, embedding);
-                            // Log to session transcript
-                            let now_ms = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis() as u64;
-                            tx_log.lock().push(TranscriptSegment {
-                                text: text.clone(),
-                                timestamp_ms: now_ms.saturating_sub(session_start_ms),
-                                is_final: true,
-                                source: p_name,
-                            });
+                            let (verse, confidence) = s_clone.detect_verse_hybrid(&combined, embedding);
                             Some((text, verse.map(store::DisplayItem::Verse), confidence))
                         }).await.ok().flatten()
                     };
 
-                if let Some((text, item, confidence)) = result {
-                    if !is_hallucination(&text) {
-                        let _ = app_task.emit("transcription-update", TranscriptionUpdate {
-                            text: text.clone(),
-                            detected_item: item.clone(),
-                            confidence,
-                            source: "auto".to_string(),
-                            is_partial: false,
-                        });
-                        let _ = broadcast_tx_task.send(serde_json::json!({
-                            "type": "transcription",
-                            "text": text,
-                            "detected_item": item,
-                            "confidence": confidence,
-                            "source": "auto",
-                            "is_partial": false
-                        }).to_string());
+                    if let Some((text, item, confidence)) = result {
+                        if !is_hallucination(&text) {
+                            let _ = app_op_inner.emit("operator-transcription-update", TranscriptionUpdate {
+                                text: text.clone(), detected_item: item, confidence, source: p_name, is_partial: false,
+                            });
+                        }
                     }
-                }
+                });
 
-                if cloud_provider_task.is_some() {
+                if trigger_on_release || is_cloud {
                     buffer.clear();
                 } else {
-                    // Backpressure: if transcription is slower than audio duration,
-                    // the buffer will grow. Cap it to prevent exponential CPU load.
+                    // Sliding window for continuous PTT hold
                     if buffer.len() > window_size * 2 {
                         let to_drain = buffer.len() - (window_size + OVERLAP);
                         buffer.drain(0..to_drain);
@@ -854,21 +599,128 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
                     }
                 }
             }
-        }
 
-        let was_running = {
-            let mut r = is_running_t.lock();
-            let prev = *r;
-            *r = false;
-            prev
-        };
-        if was_running {
-            let _ = app_task.emit("session-status", SessionStatus {
-                status: "stopped".to_string(),
-                message: "Session ended".to_string(),
-            });
+            if !is_ptt_active && !trigger_on_release {
+                // If not active and not just released, keep buffer small (pre-roll)
+                if buffer.len() > 8000 {
+                    buffer.drain(0..buffer.len() - 8000);
+                }
+            }
+
+            was_ptt_active = is_ptt_active;
         }
     });
+
+    // ── Preacher Pipeline (Cloud WS, Cloud REST, or Local)
+    let preacher_use_stream = preacher_mode == "cloud" && cloud_provider.as_deref().map(engine::cloud_stream::provider_supports_streaming).unwrap_or(false) && cloud_api_key.is_some();
+
+    if preacher_use_stream {
+        let provider = cloud_provider.unwrap();
+        let api_key = cloud_api_key.unwrap();
+        let stream_result = engine::cloud_stream::start_stream(&provider, &api_key, cloud_hostname.as_deref(), cloud_model.as_deref(), cloud_language.as_deref()).await;
+        
+        if let Ok((stream_handle, mut transcript_rx)) = stream_result {
+            *state.preacher_cloud_stream_handle.lock() = Some(stream_handle);
+            let handle_arc = state.preacher_cloud_stream_handle.clone();
+            
+            tokio::spawn(async move {
+                const CHUNK_SAMPLES: usize = 1600;
+                let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+                while let Some(()) = pr_rx.recv().await {
+                    interval.tick().await;
+                    let avail = pr_cons.occupied_len();
+                    if avail == 0 { continue; }
+                    let take = avail.min(CHUNK_SAMPLES * 4);
+                    let mut pcm = vec![0.0f32; take];
+                    let read = pr_cons.pop_slice(&mut pcm);
+                    pcm.truncate(read);
+                    let bytes: Vec<u8> = pcm.iter().map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16).flat_map(|s| s.to_le_bytes()).collect();
+                    if let Some(ref h) = *handle_arc.lock() { let _ = h.audio_tx.send(bytes); } else { break; }
+                }
+            });
+
+            let app_pr = app.clone();
+            let tx_log_pr = session_transcript.clone();
+            let provider_name = provider.clone();
+            let is_running_pr = is_running.clone();
+            let handle_arc_stop = state.preacher_cloud_stream_handle.clone();
+
+            tokio::spawn(async move {
+                while let Some(seg) = transcript_rx.recv().await {
+                    let text = seg.text.trim().to_string();
+                    if is_hallucination(&text) { continue; }
+                    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+                    if seg.is_final {
+                        tx_log_pr.lock().push(TranscriptSegment { text: text.clone(), timestamp_ms: now_ms.saturating_sub(session_start_ms), is_final: true, source: provider_name.clone() });
+                        let _ = app_pr.emit("preacher-transcription-update", TranscriptionUpdate { text: text.clone(), detected_item: None, confidence: 1.0, source: provider_name.clone(), is_partial: false });
+                    } else {
+                        let _ = app_pr.emit("preacher-transcription-update", TranscriptionUpdate { text: text.clone(), detected_item: None, confidence: 0.0, source: provider_name.clone(), is_partial: true });
+                    }
+                }
+                *handle_arc_stop.lock() = None;
+                let mut r = is_running_pr.lock();
+                if *r { *r = false; let _ = app_pr.emit("session-status", SessionStatus { status: "stopped".to_string(), message: "Session ended".to_string() }); }
+            });
+        } else {
+            // fallback gracefully or error
+        }
+    } else {
+        // Preacher Local or Cloud REST
+        let app_pr = app.clone();
+        let engine_pr = engine.clone();
+        let pr_provider = cloud_provider.clone();
+        let pr_api_key = cloud_api_key.clone();
+        let pr_language = cloud_language.clone();
+        let trans_window_pr = transcription_window.clone();
+        let trans_paused_pr = transcription_paused.clone();
+        let tx_log_pr = session_transcript.clone();
+
+        tokio::spawn(async move {
+            let mut buffer = Vec::with_capacity(48000 * 3);
+            const OVERLAP: usize = 4000;
+            let is_cloud = preacher_mode == "cloud" && pr_provider.is_some() && pr_api_key.is_some();
+            let provider_name = if is_cloud { pr_provider.clone().unwrap() } else { "local".to_string() };
+
+            while let Some(()) = pr_rx.recv().await {
+                let avail = pr_cons.occupied_len();
+                if avail > 0 {
+                    let old_len = buffer.len();
+                    buffer.resize(old_len + avail, 0.0);
+                    let read = pr_cons.pop_slice(&mut buffer[old_len..]);
+                    buffer.truncate(old_len + read);
+                }
+
+                let window_size = *trans_window_pr.lock();
+                let paused = trans_paused_pr.load(std::sync::atomic::Ordering::Relaxed);
+                if paused { if buffer.len() > window_size { let keep = buffer.len().min(8000); buffer.drain(0..buffer.len() - keep); } continue; }
+
+                if buffer.len() >= window_size {
+                    let b_clone = buffer.clone();
+                    let e_clone = engine_pr.clone();
+                    let text_opt: Option<String> = if is_cloud {
+                        engine::cloud::transcribe_cloud(&b_clone, pr_provider.as_ref().unwrap(), pr_api_key.as_ref().unwrap()).await.ok()
+                    } else {
+                        let lang_opt = pr_language.clone();
+                        tokio::task::spawn_blocking(move || { e_clone.transcribe(&b_clone, lang_opt.as_deref()).ok() }).await.ok().flatten()
+                    };
+
+                    if let Some(text) = text_opt {
+                        if !is_hallucination(&text) {
+                            let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+                            tx_log_pr.lock().push(TranscriptSegment { text: text.clone(), timestamp_ms: now_ms.saturating_sub(session_start_ms), is_final: true, source: provider_name.clone() });
+                            let _ = app_pr.emit("preacher-transcription-update", TranscriptionUpdate { text: text.clone(), detected_item: None, confidence: 1.0, source: provider_name.clone(), is_partial: false });
+                        }
+                    }
+
+                    if is_cloud { buffer.clear(); } else {
+                        if buffer.len() > window_size * 2 { let to_drain = buffer.len() - (window_size + OVERLAP); buffer.drain(0..to_drain); } else { let remaining = buffer.len().saturating_sub(OVERLAP); buffer = buffer[remaining..].to_vec(); }
+                    }
+                }
+            }
+            let mut r = is_running.lock();
+            if *r { *r = false; let _ = app_pr.emit("session-status", SessionStatus { status: "stopped".to_string(), message: "Session ended".to_string() }); }
+        });
+    }
 
     Ok(())
 }
@@ -879,10 +731,14 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
 #[tauri::command]
 async fn stop_session(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     // Close cloud WebSocket stream first (graceful FIN before dropping audio)
-    if let Some(handle) = state.cloud_stream_handle.lock().take() {
+    if let Some(handle) = state.operator_cloud_stream_handle.lock().take() {
         handle.stop();
     }
-    state.audio.lock().stop();
+    if let Some(handle) = state.preacher_cloud_stream_handle.lock().take() {
+        handle.stop();
+    }
+    state.operator_audio.lock().stop();
+state.preacher_audio.lock().stop();
     *state.is_running.lock() = false;
 
     // Auto-save the session transcript to disk
@@ -988,7 +844,7 @@ async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) -> Res
 async fn get_audio_devices(
     state: State<'_, AppState>,
 ) -> Result<Vec<(String, String)>, String> {
-    let audio = state.audio.lock();
+    let audio = state.operator_audio.lock();
     audio
         .list_devices()
         .map_err(|e: anyhow::Error| e.to_string())
@@ -1007,20 +863,44 @@ async fn get_ndi_config(state: State<'_, AppState>) -> Result<ndi::NdiConfig, St
 }
 
 #[tauri::command]
-async fn set_audio_device(
+async fn set_operator_device(
     state: State<'_, AppState>,
     device_name: String,
 ) -> Result<(), String> {
-    let mut audio = state.audio.lock();
+    let mut audio = state.operator_audio.lock();
     audio
         .select_device(&device_name)
         .map_err(|e: anyhow::Error| e.to_string())
 }
 
 #[tauri::command]
-async fn set_vad_threshold(state: State<'_, AppState>, threshold: f32) -> Result<(), String> {
-    let mut audio = state.audio.lock();
+async fn set_preacher_device(
+    state: State<'_, AppState>,
+    device_name: String,
+) -> Result<(), String> {
+    let mut audio = state.preacher_audio.lock();
+    audio
+        .select_device(&device_name)
+        .map_err(|e: anyhow::Error| e.to_string())
+}
+
+#[tauri::command]
+async fn set_operator_vad(state: State<'_, AppState>, threshold: f32) -> Result<(), String> {
+    let mut audio = state.operator_audio.lock();
     audio.set_vad_threshold(threshold);
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_preacher_vad(state: State<'_, AppState>, threshold: f32) -> Result<(), String> {
+    let mut audio = state.preacher_audio.lock();
+    audio.set_vad_threshold(threshold);
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_operator_ptt(state: State<'_, AppState>, active: bool) -> Result<(), String> {
+    state.operator_ptt_active.store(active, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
 
@@ -1344,7 +1224,8 @@ async fn go_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), Strin
         if let store::DisplayItem::Media(ref m) = item {
             if matches!(m.media_type, store::MediaItemType::Video) { is_media = true; }
         }
-        state.audio.lock().media_playing.store(is_media, std::sync::atomic::Ordering::Relaxed);
+        state.operator_audio.lock().media_playing.store(is_media, std::sync::atomic::Ordering::Relaxed);
+        state.preacher_audio.lock().media_playing.store(is_media, std::sync::atomic::Ordering::Relaxed);
         
         let _ = app.emit(
             "transcription-update",
@@ -1367,7 +1248,8 @@ async fn go_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), Strin
 #[tauri::command]
 async fn clear_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     *state.live_item.lock() = None;
-    state.audio.lock().media_playing.store(false, std::sync::atomic::Ordering::Relaxed);
+    state.operator_audio.lock().media_playing.store(false, std::sync::atomic::Ordering::Relaxed);
+    state.preacher_audio.lock().media_playing.store(false, std::sync::atomic::Ordering::Relaxed);
     let _ = app.emit(
         "transcription-update",
         TranscriptionUpdate {
@@ -2393,8 +2275,9 @@ fn main() {
                 }
             };
 
-            let audio = Arc::new(Mutex::new(audio::AudioEngine::new()));
-            log_msg(app, "Audio Engine initialized.");
+            let operator_audio = Arc::new(Mutex::new(audio::AudioEngine::new()));
+            let preacher_audio = Arc::new(Mutex::new(audio::AudioEngine::new()));
+            log_msg(app, "Audio Engines initialized.");
 
             let media_schedule = Arc::new(store::MediaScheduleStore::new(app_data_dir.clone()).map_err(|e| e.to_string())?);
             log_msg(app, "Media Schedule Store initialized.");
@@ -2433,7 +2316,9 @@ fn main() {
             log_msg(app, &format!("Remote PIN: {}", remote_pin));
 
             let state = AppState {
-                audio,
+                operator_audio,
+                preacher_audio,
+                operator_ptt_active: Arc::new(AtomicBool::new(false)),
                 engine: Arc::new(Mutex::new(None)), // loaded lazily in start_session
                 store,
                 media_schedule,
@@ -2460,7 +2345,8 @@ fn main() {
                 connected_cameras: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
                 session_transcript: Arc::new(Mutex::new(Vec::new())),
                 context_buffer: Arc::new(Mutex::new(Vec::new())),
-                cloud_stream_handle: Arc::new(Mutex::new(None)),
+                operator_cloud_stream_handle: Arc::new(Mutex::new(None)),
+                preacher_cloud_stream_handle: Arc::new(Mutex::new(None)),
                 auth_throttles: Arc::new(Mutex::new(HashMap::new())),
                 ndi_manager: Arc::new(ndi::NdiManager::new()),
             };
@@ -2507,10 +2393,14 @@ fn main() {
                     // Graceful shutdown: stop audio + cloud streams before exit
                     let app = window.app_handle();
                     if let Some(state) = app.try_state::<AppState>() {
-                        if let Some(handle) = state.cloud_stream_handle.lock().take() {
+                        if let Some(handle) = state.operator_cloud_stream_handle.lock().take() {
                             handle.stop();
                         }
-                        state.audio.lock().stop();
+                        if let Some(handle) = state.preacher_cloud_stream_handle.lock().take() {
+                            handle.stop();
+                        }
+                        state.operator_audio.lock().stop();
+state.preacher_audio.lock().stop();
                         *state.is_running.lock() = false;
                     }
                     app.exit(0);
@@ -2522,10 +2412,13 @@ fn main() {
             stop_session,
             toggle_output_window,
             get_audio_devices,
-            set_audio_device,
+            set_operator_device,
+            set_preacher_device,
             toggle_ndi,
             get_ndi_config,
-            set_vad_threshold,
+            set_operator_vad,
+            set_preacher_vad,
+            set_operator_ptt,
             get_bible_versions,
             set_bible_version,
             split_verse,

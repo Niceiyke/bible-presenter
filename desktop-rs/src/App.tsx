@@ -55,12 +55,47 @@ export default function App() {
     settings, setSettings, activeTab, setActiveTab, toast, setToast,
     ltVisible, setLtVisible, ltMode, ltLineIndex, setLtLineIndex, ltLinesPerDisplay, ltTemplate,
     ltSongId, scheduleEntries, setScheduleEntries, services,
-    activeServiceId, setActiveServiceId, media, setMedia, pauseWhisper, transcript, sessionState, setSessionState, micLevel,
+    activeServiceId, setActiveServiceId, media, setMedia, pauseWhisper, transcript, sessionState, setSessionState, 
+    operatorMicLevel, preacherMicLevel,
     remoteUrl, remotePin, bibleVersion, topPanelPct, setTopPanelPct, stagePct, setStagePct, 
     studioList, setStudioList, studioSlides, setStudioSlides,
     setIsBlackout, songs, setPropItems, audioError, setAudioError, deviceError,
     startupIssues, setStartupIssues, isLogOpen, setIsLogOpen
   } = useAppStore();
+
+  const [isPttActive, setIsPttActive] = useState(false);
+
+  // Handle Spacebar for Push-to-Talk
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === "Space" && !isPttActive && (e.target as HTMLElement).tagName !== "INPUT" && (e.target as HTMLElement).tagName !== "TEXTAREA") {
+        e.preventDefault();
+        setIsPttActive(true);
+        invoke("set_operator_ptt", { active: true }).catch(console.error);
+      }
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === "Space" && isPttActive) {
+        setIsPttActive(false);
+        invoke("set_operator_ptt", { active: false }).catch(console.error);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
+  }, [isPttActive]);
+
+  const handlePttDown = () => {
+    setIsPttActive(true);
+    invoke("set_operator_ptt", { active: true }).catch(console.error);
+  };
+  const handlePttUp = () => {
+    setIsPttActive(false);
+    invoke("set_operator_ptt", { active: false }).catch(console.error);
+  };
 
   const [outputVisible, setOutputVisible] = React.useState(false);
   const [showShortcuts, setShowShortcuts] = React.useState(false);
@@ -588,14 +623,6 @@ export default function App() {
     await invoke("set_props", { props: items });
   };
 
-  const updateTranscriptionWindow = (sec: number) => {
-    invoke("set_transcription_window", { samples: Math.round(sec * 16000) }).catch(() => {});
-  };
-
-  const updateVadThreshold = (val: number) => {
-    invoke("set_vad_threshold", { threshold: val }).catch(() => {});
-  };
-
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
@@ -667,9 +694,34 @@ export default function App() {
                 {sessionState === "running" ? "Stop" : sessionState === "loading" ? "Wait" : "Live"}
               </span>
             </button>
-            <div className="flex items-center gap-2 px-2 border-l border-slate-800/50 pl-3 ml-1">
-              <div className="w-12 xl:w-20 h-1.5 bg-slate-900 rounded-full overflow-hidden flex">
-                <motion.div className="h-full bg-gradient-to-r from-green-500 via-yellow-500 to-red-500" animate={{ width: `${micLevel * 100}%` }} transition={{ type: "spring", bounce: 0, duration: 0.1 }} />
+
+            {sessionState === "running" && (
+              <button
+                onMouseDown={handlePttDown}
+                onMouseUp={handlePttUp}
+                onMouseLeave={handlePttUp}
+                className={`px-3 py-1 rounded text-[10px] font-black uppercase transition-all shadow-lg ${
+                  isPttActive 
+                    ? "bg-amber-500 text-black scale-95 shadow-amber-500/20" 
+                    : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                }`}
+              >
+                PTT
+              </button>
+            )}
+
+            <div className="flex flex-col gap-1 px-2 border-l border-slate-800/50 pl-3 ml-1">
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] font-black text-amber-500 uppercase w-4">Op</span>
+                <div className="w-12 xl:w-20 h-1 bg-slate-900 rounded-full overflow-hidden flex">
+                  <motion.div className="h-full bg-amber-500" animate={{ width: `${operatorMicLevel * 100}%` }} transition={{ type: "spring", bounce: 0, duration: 0.1 }} />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] font-black text-blue-400 uppercase w-4">Pr</span>
+                <div className="w-12 xl:w-20 h-1 bg-slate-900 rounded-full overflow-hidden flex">
+                  <motion.div className="h-full bg-blue-400" animate={{ width: `${preacherMicLevel * 100}%` }} transition={{ type: "spring", bounce: 0, duration: 0.1 }} />
+                </div>
               </div>
             </div>
           </div>
@@ -785,7 +837,7 @@ export default function App() {
               onOpenLyricsMode={(id) => { setActiveTab("lower-third"); useAppStore.getState().setLtSongId(id); useAppStore.getState().setLtMode("lyrics"); }} 
             />}
             {activeTab === "schedule" && <ScheduleTab onSendItem={sendLive} onPersist={persistSchedule} stageItem={stageItem} />}
-            {activeTab === "settings" && <SettingsTab onUpdateSettings={updateSettings} onUpdateTranscriptionWindow={updateTranscriptionWindow} onUpdateVadThreshold={updateVadThreshold} onUploadMedia={handleFileUpload} />}
+            {activeTab === "settings" && <SettingsTab onUpdateSettings={updateSettings} onUploadMedia={handleFileUpload} />}
             {activeTab === "lower-third" && <LowerThirdTab onSetToast={setToast} onLoadMedia={handleFileUpload} />}
             {activeTab === "props" && <PropsTab onUpdateProps={updateProps} />}
           </div>

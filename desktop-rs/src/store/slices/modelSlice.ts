@@ -41,6 +41,10 @@ export interface TranscriptionConfig {
   cloud_model: string | null;
   /** BCP-47 language code (e.g. "en", "en-US"). null = provider default. */
   cloud_language: string | null;
+  /** Mode for operator audio transcription. */
+  operator_mode: string | null;
+  /** Mode for preacher audio transcription. */
+  preacher_mode: string | null;
   /** When true, auto-project suggested verses without operator confirmation. */
   auto_project: boolean;
   /** Seconds to hold a projected verse before allowing auto-replace. */
@@ -110,6 +114,7 @@ export const createModelSlice: StateCreator<AppStore, [], [], ModelSlice> = (set
     active_model: null, use_gpu: false,
     cloud_provider: null, cloud_api_key: null,
     cloud_hostname: null, cloud_model: null, cloud_language: null,
+    operator_mode: "local", preacher_mode: "cloud",
     auto_project: false, verse_lock_secs: 8, confidence_threshold: 0.55,
   },
   setTranscriptionConfig: (v) => set({ transcriptionConfig: v }),

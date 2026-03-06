@@ -573,7 +573,8 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
 
         "clear_live" => {
             *state.live_item.lock() = None;
-            state.audio.lock().media_playing.store(false, std::sync::atomic::Ordering::Relaxed);
+            state.operator_audio.lock().media_playing.store(false, std::sync::atomic::Ordering::Relaxed);
+            state.preacher_audio.lock().media_playing.store(false, std::sync::atomic::Ordering::Relaxed);
             if let Some(handle) = state.app_handle.get() {
                 use tauri::Emitter;
                 let _ = handle.emit("transcription-update", json!({

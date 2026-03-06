@@ -201,8 +201,6 @@ export function DesignHub() {
             {hubTab === "settings" && (
               <SettingsTab
                 onUpdateSettings={updateSettings}
-                onUpdateTranscriptionWindow={(sec) => invoke("set_transcription_window", { samples: Math.round(sec * 16000) })}
-                onUpdateVadThreshold={(val) => invoke("set_vad_threshold", { threshold: val })}
                 onUploadMedia={async () => {}}
               />
             )}
