@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bible Presenter - Standalone Output</title>
+    <title>Wordlyte - Standalone Output</title>
     <style>
         body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         #output-container { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; position: relative; transition: opacity 0.4s ease; opacity: 0; }
@@ -30,7 +30,7 @@
             ws = new WebSocket(`${protocol}//${location.host}/ws`);
             
             ws.onopen = () => {
-                console.log('Connected to Bible Presenter');
+                console.log('Connected to Wordlyte');
                 // Request state
                 fetch('/health').then(r => r.json()).then(data => {
                     // For standalone output, we don't have the PIN easily accessible unless we pass it in URL

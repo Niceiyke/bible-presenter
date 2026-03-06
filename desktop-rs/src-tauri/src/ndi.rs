@@ -15,7 +15,7 @@ impl Default for NdiConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            source_name: "Bible Presenter Output".to_string(),
+            source_name: "Wordlyte Output".to_string(),
             width: 1920,
             height: 1080,
             frame_rate: 30,

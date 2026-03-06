@@ -397,7 +397,7 @@ where
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(3600))
-        .user_agent("bible-presenter")
+        .user_agent("wordlyte")
         .build()
         .context("Failed to build HTTP client")?;
 
@@ -484,7 +484,7 @@ where
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(3600))
-        .user_agent("bible-presenter")
+        .user_agent("wordlyte")
         .build()
         .context("Failed to build HTTP client")?;
 
@@ -603,7 +603,7 @@ where
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(3600))
-        .user_agent("bible-presenter")
+        .user_agent("wordlyte")
         .build()
         .context("Failed to build HTTP client")?;
 

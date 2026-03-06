@@ -25,7 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
-VERSIONS = ["KJV", "AMP", "NIV", "ESV", "NKJV", "NASB"]
+VERSIONS = ["KJV", "ASV", "WEB", "AMP", "NIV", "NKJV"]
 
 
 def generate(db_path: str, out_dir: str) -> None:

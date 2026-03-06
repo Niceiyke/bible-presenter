@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Bible Presenter Remote</title>
+<title>Wordlyte Remote</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   :root{
@@ -161,7 +161,7 @@
 <!-- PIN Screen -->
 <div id="pin-screen">
   <div class="pin-logo">⛪</div>
-  <div class="pin-title">Bible Presenter Remote</div>
+  <div class="pin-title">Wordlyte Remote</div>
   <div class="pin-sub">Enter the PIN shown in the main app's Settings tab</div>
   <div class="pin-row">
     <input class="pin-digit" type="text" inputmode="numeric" maxlength="1" autocomplete="off">
@@ -652,7 +652,7 @@ document.getElementById('timer-reset-btn').addEventListener('click', () => {
 function setConnStatus(ok, label) {
   document.getElementById('conn-dot').className = 'status-dot' + (ok ? ' ok' : '');
   document.getElementById('conn-label').textContent = label ||
-    (ok ? 'Connected to Bible Presenter' : 'Connecting…');
+    (ok ? 'Connected to Wordlyte' : 'Connecting…');
 }
 
 function showMainScreen() {

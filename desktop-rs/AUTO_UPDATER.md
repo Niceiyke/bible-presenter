@@ -21,7 +21,7 @@ The app uses `tauri-plugin-updater` to check for updates on startup and install 
    ```
 2. Commit and push to `main`.
 3. CI (`tauri-apps/tauri-action@v0`) builds, signs, and publishes a GitHub Release tagged `v0.2.0` with:
-   - `Bible-Presenter-RS_0.2.0_x64-setup.exe` — NSIS installer
+   - `Wordlyte_0.2.0_x64-setup.exe` — NSIS installer
    - `latest.json` — update manifest consumed by running apps
 
 Running instances will show the update banner on their next launch.

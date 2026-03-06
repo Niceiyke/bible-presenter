@@ -1,10 +1,10 @@
-// Bible Presenter RS Main Entry Point
+// Wordlyte Main Entry Point
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod remote;
 mod ndi;
 
-use bible_presenter_lib::{audio, engine, store};
+use wordlyte_lib::{audio, engine, store};
 use store::log_msg;
 use ringbuf::traits::{Consumer, Observer};
 use parking_lot::Mutex;

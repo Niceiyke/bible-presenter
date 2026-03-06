@@ -1,8 +1,8 @@
 [package]
-name = "bible-presenter-rs"
+name = "wordlyte"
 version = "1.3.0"
-description = "A professional, real-time Bible projection tool for churches."
-authors = ["Bible Presenter Team"]
+description = "Wordlyte — A professional, real-time Bible projection tool for churches."
+authors = ["Wordlyte Team"]
 edition = "2021"
 
 [build-dependencies]
@@ -47,11 +47,11 @@ chrono = { version = "0.4", features = ["serde"] }
 zip = { version = "2.2.1", features = ["deflate"] }
 
 [lib]
-name = "bible_presenter_lib"
+name = "wordlyte_lib"
 crate-type = ["rlib"]
 
 [[bin]]
-name = "bible-presenter"
+name = "wordlyte"
 path = "src/main.rs"
 
 [profile.release]

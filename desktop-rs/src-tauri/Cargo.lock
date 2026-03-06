@@ -325,49 +325,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
-name = "bible-presenter-rs"
-version = "1.3.0"
-dependencies = [
- "anyhow",
- "axum",
- "base64 0.22.1",
- "chrono",
- "cpal",
- "futures-util",
- "image",
- "local-ip-address",
- "memmap2",
- "ndarray 0.15.6",
- "num_cpus",
- "once_cell",
- "ort",
- "parking_lot",
- "rand 0.8.5",
- "regex",
- "reqwest 0.12.28",
- "ringbuf",
- "rubato",
- "rusqlite",
- "serde",
- "serde_json",
- "sysinfo",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-fs",
- "tauri-plugin-shell",
- "tokenizers",
- "tokio",
- "tokio-tungstenite",
- "tower-http 0.5.2",
- "usearch",
- "uuid",
- "webrtc-vad",
- "whisper-rs",
- "zip",
-]
-
-[[package]]
 name = "bindgen"
 version = "0.69.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7542,6 +7499,49 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
+]
+
+[[package]]
+name = "wordlyte"
+version = "1.3.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "cpal",
+ "futures-util",
+ "image",
+ "local-ip-address",
+ "memmap2",
+ "ndarray 0.15.6",
+ "num_cpus",
+ "once_cell",
+ "ort",
+ "parking_lot",
+ "rand 0.8.5",
+ "regex",
+ "reqwest 0.12.28",
+ "ringbuf",
+ "rubato",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-fs",
+ "tauri-plugin-shell",
+ "tokenizers",
+ "tokio",
+ "tokio-tungstenite",
+ "tower-http 0.5.2",
+ "usearch",
+ "uuid",
+ "webrtc-vad",
+ "whisper-rs",
+ "zip",
 ]
 
 [[package]]

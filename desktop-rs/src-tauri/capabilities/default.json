@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capabilities for Bible Presenter",
+  "description": "Default capabilities for Wordlyte",
   "windows": ["main", "stage", "design"],
   "permissions": [
     "core:default",

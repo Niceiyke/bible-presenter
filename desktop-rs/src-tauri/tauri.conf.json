@@ -1,7 +1,7 @@
 {
-  "productName": "Bible Presenter RS",
+  "productName": "Wordlyte",
   "version": "1.3.0",
-  "identifier": "com.biblepresenter.rs",
+  "identifier": "io.wordlyte.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -11,13 +11,13 @@
   "app": {
     "windows": [
       {
-        "title": "Bible Presenter - Operator",
+        "title": "Wordlyte - Operator",
         "width": 1200,
         "height": 800,
         "label": "main"
       },
       {
-        "title": "Bible Presenter - Output",
+        "title": "Wordlyte - Output",
         "label": "output",
         "width": 1920,
         "height": 1080,
@@ -28,7 +28,7 @@
         "visible": false
       },
       {
-        "title": "Bible Presenter - Stage",
+        "title": "Wordlyte - Stage",
         "label": "stage",
         "width": 1280,
         "height": 720,
@@ -39,7 +39,7 @@
         "resizable": true
       },
       {
-        "title": "Bible Presenter - Design Hub",
+        "title": "Wordlyte - Design Hub",
         "label": "design",
         "width": 1440,
         "height": 900,

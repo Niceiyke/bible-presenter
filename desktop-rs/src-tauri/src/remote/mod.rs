@@ -46,7 +46,7 @@ use serde_json::{json, Value};
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
 
-use bible_presenter_lib::store;
+use wordlyte_lib::store;
 use crate::AppState;
 
 // ─── Embedded HTML assets ─────────────────────────────────────────────────────

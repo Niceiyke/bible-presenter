@@ -74,7 +74,7 @@ export function StageWindow() {
       <div className="flex items-center justify-between px-8 py-3 bg-slate-900 border-b border-slate-800 shrink-0">
         <span className="text-slate-500 text-sm font-bold uppercase tracking-widest">Stage Display</span>
         <span className="font-mono text-4xl font-black text-white tracking-widest">{clock}</span>
-        <span className="text-slate-500 text-sm font-bold uppercase tracking-widest">Bible Presenter</span>
+        <span className="text-slate-500 text-sm font-bold uppercase tracking-widest">Wordlyte</span>
       </div>
 
       <div className="flex-1 grid grid-cols-2 gap-0 overflow-hidden">

@@ -65,7 +65,7 @@ static RE_CHAP: Lazy<Regex> = Lazy::new(|| {
 
 /// Ordered list of versions embedded into all_versions_embeddings.npy.
 /// Must match the order used in scripts/generate_embeddings.py.
-pub const EMBEDDED_VERSIONS: &[&str] = &["KJV", "AMP", "NIV", "ESV", "NKJV", "NASB"];
+pub const EMBEDDED_VERSIONS: &[&str] = &["KJV", "ASV", "WEB", "AMP", "NIV", "NKJV"];
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Verse {
