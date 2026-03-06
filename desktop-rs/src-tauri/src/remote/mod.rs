@@ -474,14 +474,15 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
                         if let Some(handle) = state.app_handle.get() {
                             use tauri::Emitter;
                             let text = display_item_text(&item);
-                            let _ = handle.emit(
-                                "transcription-update",
-                                serde_json::json!({
-                                    "text": text,
-                                    "detected_item": item.clone(),
-                                    "source": "manual"
-                                }),
-                            );
+                            let update = serde_json::json!({
+                                "text": text,
+                                "detected_item": item.clone(),
+                                "confidence": 1.0,
+                                "source": "manual",
+                                "is_partial": false,
+                            });
+                            let _ = handle.emit("operator-transcription-update", &update);
+                            let _ = handle.emit("preacher-transcription-update", &update);
                         }
 
                         let lt = state.lower_third.lock().clone();
@@ -577,13 +578,15 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
             state.preacher_audio.lock().media_playing.store(false, std::sync::atomic::Ordering::Relaxed);
             if let Some(handle) = state.app_handle.get() {
                 use tauri::Emitter;
-                let _ = handle.emit("transcription-update", json!({
+                let clear_update = json!({
                     "text": "",
                     "detected_item": null,
                     "confidence": 1.0,
                     "source": "manual",
                     "is_partial": false,
-                }));
+                });
+                let _ = handle.emit("operator-transcription-update", &clear_update);
+                let _ = handle.emit("preacher-transcription-update", &clear_update);
                 let _ = handle.emit("stage-update", Option::<store::DisplayItem>::None);
             }
             let lt = state.lower_third.lock().clone();
@@ -620,16 +623,15 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
                 
                 if let Some(handle) = state.app_handle.get() {
                     use tauri::Emitter;
-                    let _ = handle.emit(
-                        "transcription-update",
-                        json!({
-                            "text": display_item_text(&item),
-                            "detected_item": item.clone(),
-                            "confidence": 1.0,
-                            "source": "manual",
-                            "is_partial": false,
-                        })
-                    );
+                    let update = json!({
+                        "text": display_item_text(&item),
+                        "detected_item": item.clone(),
+                        "confidence": 1.0,
+                        "source": "manual",
+                        "is_partial": false,
+                    });
+                    let _ = handle.emit("operator-transcription-update", &update);
+                    let _ = handle.emit("preacher-transcription-update", &update);
                 }
                 let lt = state.lower_third.lock().clone();
                 let msg = json!({ "type": "state", "live_item": item, "lt": lt });
@@ -643,19 +645,18 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
                 t.started_at = None;
                 let item = live.clone().unwrap();
                 drop(live);
-                
+
                 if let Some(handle) = state.app_handle.get() {
                     use tauri::Emitter;
-                    let _ = handle.emit(
-                        "transcription-update",
-                        json!({
-                            "text": display_item_text(&item),
-                            "detected_item": item.clone(),
-                            "confidence": 1.0,
-                            "source": "manual",
-                            "is_partial": false,
-                        })
-                    );
+                    let update = json!({
+                        "text": display_item_text(&item),
+                        "detected_item": item.clone(),
+                        "confidence": 1.0,
+                        "source": "manual",
+                        "is_partial": false,
+                    });
+                    let _ = handle.emit("operator-transcription-update", &update);
+                    let _ = handle.emit("preacher-transcription-update", &update);
                 }
                 let lt = state.lower_third.lock().clone();
                 let msg = json!({ "type": "state", "live_item": item, "lt": lt });
@@ -669,19 +670,18 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
                 t.started_at = None;
                 let item = live.clone().unwrap();
                 drop(live);
-                
+
                 if let Some(handle) = state.app_handle.get() {
                     use tauri::Emitter;
-                    let _ = handle.emit(
-                        "transcription-update",
-                        json!({
-                            "text": display_item_text(&item),
-                            "detected_item": item.clone(),
-                            "confidence": 1.0,
-                            "source": "manual",
-                            "is_partial": false,
-                        })
-                    );
+                    let update = json!({
+                        "text": display_item_text(&item),
+                        "detected_item": item.clone(),
+                        "confidence": 1.0,
+                        "source": "manual",
+                        "is_partial": false,
+                    });
+                    let _ = handle.emit("operator-transcription-update", &update);
+                    let _ = handle.emit("preacher-transcription-update", &update);
                 }
                 let lt = state.lower_third.lock().clone();
                 let msg = json!({ "type": "state", "live_item": item, "lt": lt });

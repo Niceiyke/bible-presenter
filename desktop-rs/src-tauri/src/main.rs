@@ -518,6 +518,7 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
     let op_language = cloud_language.clone();
     let trans_window_op = transcription_window.clone();
     let trans_paused_op = transcription_paused.clone();
+    let tx_log_op = session_transcript.clone();
 
     tokio::spawn(async move {
         let mut buffer = Vec::with_capacity(48000 * 3);
@@ -556,6 +557,7 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
                 let op_l = op_language.clone();
                 let app_op_inner = app_op.clone();
                 let p_name = provider_name.clone();
+                let tx_log = tx_log_op.clone();
 
                 tokio::spawn(async move {
                     let result: Option<(String, Option<store::DisplayItem>, f32)> = if is_cloud {
@@ -579,6 +581,16 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
 
                     if let Some((text, item, confidence)) = result {
                         if !is_hallucination(&text) {
+                            let now_ms = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64;
+                            tx_log.lock().push(TranscriptSegment {
+                                text: text.clone(),
+                                timestamp_ms: now_ms.saturating_sub(session_start_ms),
+                                is_final: true,
+                                source: p_name.clone(),
+                            });
                             let _ = app_op_inner.emit("operator-transcription-update", TranscriptionUpdate {
                                 text: text.clone(), detected_item: item, confidence, source: p_name, is_partial: false,
                             });
@@ -738,7 +750,7 @@ async fn stop_session(app: AppHandle, state: State<'_, AppState>) -> Result<(), 
         handle.stop();
     }
     state.operator_audio.lock().stop();
-state.preacher_audio.lock().stop();
+    state.preacher_audio.lock().stop();
     *state.is_running.lock() = false;
 
     // Auto-save the session transcript to disk
@@ -812,16 +824,15 @@ async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) -> Res
             // "Waiting for projection..." when re-opened after being hidden.
             let live = state.live_item.lock().clone();
             if let Some(item) = live {
-                let _ = app.emit(
-                    "transcription-update",
-                    TranscriptionUpdate {
-                        text: item.to_label(),
-                        detected_item: Some(item),
-                        confidence: 1.0,
-                        source: "manual".to_string(),
-                        is_partial: false,
-                    },
-                );
+                let update = TranscriptionUpdate {
+                    text: item.to_label(),
+                    detected_item: Some(item),
+                    confidence: 1.0,
+                    source: "manual".to_string(),
+                    is_partial: false,
+                };
+                let _ = app.emit("operator-transcription-update", &update);
+                let _ = app.emit("preacher-transcription-update", &update);
             }
 
             // Sync lower third so it reappears if active when window was hidden.
@@ -1227,16 +1238,15 @@ async fn go_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), Strin
         state.operator_audio.lock().media_playing.store(is_media, std::sync::atomic::Ordering::Relaxed);
         state.preacher_audio.lock().media_playing.store(is_media, std::sync::atomic::Ordering::Relaxed);
         
-        let _ = app.emit(
-            "transcription-update",
-            TranscriptionUpdate {
-                text: item.to_label(),
-                detected_item: Some(item.clone()),
-                confidence: 1.0,
-                source: "manual".to_string(),
-                is_partial: false,
-            },
-        );
+        let update = TranscriptionUpdate {
+            text: item.to_label(),
+            detected_item: Some(item.clone()),
+            confidence: 1.0,
+            source: "manual".to_string(),
+            is_partial: false,
+        };
+        let _ = app.emit("operator-transcription-update", &update);
+        let _ = app.emit("preacher-transcription-update", &update);
         // Broadcast to WS remote clients
         let _ = state.broadcast_tx.send(
             serde_json::json!({ "type": "state", "live_item": item }).to_string()
@@ -1250,16 +1260,15 @@ async fn clear_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), St
     *state.live_item.lock() = None;
     state.operator_audio.lock().media_playing.store(false, std::sync::atomic::Ordering::Relaxed);
     state.preacher_audio.lock().media_playing.store(false, std::sync::atomic::Ordering::Relaxed);
-    let _ = app.emit(
-        "transcription-update",
-        TranscriptionUpdate {
-            text: "".to_string(),
-            detected_item: None,
-            confidence: 1.0,
-            source: "manual".to_string(),
-            is_partial: false,
-        },
-    );
+    let update = TranscriptionUpdate {
+        text: "".to_string(),
+        detected_item: None,
+        confidence: 1.0,
+        source: "manual".to_string(),
+        is_partial: false,
+    };
+    let _ = app.emit("operator-transcription-update", &update);
+    let _ = app.emit("preacher-transcription-update", &update);
     // Broadcast to WS remote clients
     let _ = state.broadcast_tx.send(
         serde_json::json!({ "type": "state", "live_item": null }).to_string()
@@ -1282,16 +1291,15 @@ async fn update_timer(
         t.started_at = started_at;
         let item = live.clone().unwrap();
         drop(live);
-        let _ = app.emit(
-            "transcription-update",
-            TranscriptionUpdate {
-                text: item.to_label(),
-                detected_item: Some(item),
-                confidence: 1.0,
-                source: "manual".to_string(),
-                is_partial: false,
-            },
-        );
+        let update = TranscriptionUpdate {
+            text: item.to_label(),
+            detected_item: Some(item),
+            confidence: 1.0,
+            source: "manual".to_string(),
+            is_partial: false,
+        };
+        let _ = app.emit("operator-transcription-update", &update);
+        let _ = app.emit("preacher-transcription-update", &update);
     }
     Ok(())
 }
@@ -1309,16 +1317,15 @@ async fn toggle_stage_window(app: AppHandle, state: State<'_, AppState>) -> Resu
             // Re-sync live and staged items so stage display is correct after re-open.
             let live = state.live_item.lock().clone();
             if let Some(item) = live {
-                let _ = app.emit(
-                    "transcription-update",
-                    TranscriptionUpdate {
-                        text: item.to_label(),
-                        detected_item: Some(item),
-                        confidence: 1.0,
-                        source: "manual".to_string(),
-                        is_partial: false,
-                    },
-                );
+                let update = TranscriptionUpdate {
+                    text: item.to_label(),
+                    detected_item: Some(item),
+                    confidence: 1.0,
+                    source: "manual".to_string(),
+                    is_partial: false,
+                };
+                let _ = app.emit("operator-transcription-update", &update);
+                let _ = app.emit("preacher-transcription-update", &update);
             }
             let staged = state.staged_item.lock().clone();
             let _ = app.emit("item-staged", staged.as_ref());
@@ -2411,7 +2418,7 @@ fn main() {
                             handle.stop();
                         }
                         state.operator_audio.lock().stop();
-state.preacher_audio.lock().stop();
+                        state.preacher_audio.lock().stop();
                         *state.is_running.lock() = false;
                     }
                     app.exit(0);

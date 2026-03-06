@@ -101,6 +101,11 @@ export function useAppInitialization() {
       invoke("set_transcription_window", { samples: Math.round(transcriptionWindowSec * 16000) }).catch(() => {});
       invoke("set_operator_vad", { threshold: useAppStore.getState().operatorVadThreshold }).catch(() => {});
       invoke("set_preacher_vad", { threshold: useAppStore.getState().preacherVadThreshold }).catch(() => {});
+      
+      const opDev = useAppStore.getState().operatorDevice;
+      if (opDev) invoke("set_operator_device", { device_name: opDev }).catch(() => {});
+      const prDev = useAppStore.getState().preacherDevice;
+      if (prDev) invoke("set_preacher_device", { device_name: prDev }).catch(() => {});
 
       // Check startup status and surface any missing-file issues to the operator
       invoke<StartupStatus>("get_startup_status").then((status) => {
