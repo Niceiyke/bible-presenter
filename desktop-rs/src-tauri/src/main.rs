@@ -1840,6 +1840,7 @@ async fn download_whisper_model(
     state: State<'_, AppState>,
     model_id: String,
 ) -> Result<(), String> {
+    log_msg(&app, &format!("Command received: download_whisper_model id={}", model_id));
     // Find the catalog entry
     let info = model_manager::MODEL_CATALOG
         .iter()
@@ -1861,26 +1862,36 @@ async fn download_whisper_model(
     let app_clone = app.clone();
 
     tokio::spawn(async move {
-        let result = download_model(&info, &app_data_dir, cancel_flag.clone(), move |progress| {
-            let _ = app_clone.emit("download-progress", &progress);
+        log_msg(&app_clone, &format!("Starting download for model: {}", info.id));
+        let result = download_model(&info, &app_data_dir, cancel_flag.clone(), {
+            let app_clone = app_clone.clone();
+            move |progress| {
+                let _ = app_clone.emit("download-progress", &progress);
+            }
         })
         .await;
 
         // Clear the flag when done (whether success or failure)
         cancel_flag.store(false, Ordering::SeqCst);
 
-        if let Err(e) = result {
-            let _ = app.emit(
-                "download-progress",
-                DownloadProgress {
-                    model_id: info.id.to_string(),
-                    bytes_downloaded: 0,
-                    total_bytes: 0,
-                    percent: 0.0,
-                    done: true,
-                    error: Some(e.to_string()),
-                },
-            );
+        match result {
+            Ok(path) => {
+                log_msg(&app_clone, &format!("Whisper model {} downloaded successfully to {:?}", info.id, path));
+            }
+            Err(e) => {
+                log_msg(&app_clone, &format!("Whisper model {} download failed: {}", info.id, e));
+                let _ = app.emit(
+                    "download-progress",
+                    DownloadProgress {
+                        model_id: info.id.to_string(),
+                        bytes_downloaded: 0,
+                        total_bytes: 0,
+                        percent: 0.0,
+                        done: true,
+                        error: Some(e.to_string()),
+                    },
+                );
+            }
         }
     });
 

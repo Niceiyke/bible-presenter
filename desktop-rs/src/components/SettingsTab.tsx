@@ -149,7 +149,11 @@ export function SettingsTab({
     const unlisten = listen<DownloadProgress>("download-progress", (e) => {
       const p = e.payload;
       console.log("Download progress:", p);
-      setDownloadProgress(p.model_id, p.done ? null : p);
+      // Keep the progress entry if there's an error, so it can be displayed.
+      // If done and NO error, we set to null to hide the progress UI.
+      const nextProgress = (p.done && !p.error) ? null : p;
+      setDownloadProgress(p.model_id, nextProgress);
+      
       if (p.done && !p.error) {
         if (p.model_id === "semantic_index" || p.model_id === "verse_index" || p.model_id === "bible_db") {
           invoke<any>("get_semantic_index_status").then(setSemanticIndexStatus).catch(() => {});

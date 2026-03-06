@@ -405,7 +405,7 @@ where
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(3600))
-        .user_agent("wordlyte")
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .build()
         .context("Failed to build HTTP client")?;
 
@@ -492,7 +492,7 @@ where
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(3600))
-        .user_agent("wordlyte")
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .build()
         .context("Failed to build HTTP client")?;
 
@@ -611,7 +611,7 @@ where
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(3600))
-        .user_agent("wordlyte")
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .build()
         .context("Failed to build HTTP client")?;
 
