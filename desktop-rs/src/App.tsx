@@ -55,8 +55,8 @@ export default function App() {
     settings, setSettings, activeTab, setActiveTab, toast, setToast,
     ltVisible, setLtVisible, ltMode, ltLineIndex, setLtLineIndex, ltLinesPerDisplay, ltTemplate,
     ltSongId, scheduleEntries, setScheduleEntries, services,
-    activeServiceId, setActiveServiceId, media, setMedia, pauseWhisper, transcript, sessionState, setSessionState, 
-    operatorMicLevel, preacherMicLevel,
+    activeServiceId, setActiveServiceId, media, setMedia, pauseWhisper, transcript, sessionState, setSessionState,
+    operatorMicLevel, preacherMicLevel, operatorMuted, setOperatorMuted, preacherMuted, setPreacherMuted,
     remoteUrl, remotePin, bibleVersion, topPanelPct, setTopPanelPct, stagePct, setStagePct, 
     studioList, setStudioList, studioSlides, setStudioSlides,
     setIsBlackout, songs, setPropItems, audioError, setAudioError, deviceError,
@@ -95,6 +95,33 @@ export default function App() {
   const handlePttUp = () => {
     setIsPttActive(false);
     invoke("set_operator_ptt", { active: false }).catch(console.error);
+  };
+
+  const handleToggleOperatorMute = () => {
+    const next = !operatorMuted;
+    setOperatorMuted(next);
+    invoke("set_operator_muted", { muted: next }).catch(console.error);
+  };
+  const handleTogglePreacherMute = () => {
+    const next = !preacherMuted;
+    setPreacherMuted(next);
+    invoke("set_preacher_muted", { muted: next }).catch(console.error);
+  };
+
+  // Session elapsed timer
+  const [sessionSecs, setSessionSecs] = React.useState(0);
+  useEffect(() => {
+    if (sessionState !== "running") { setSessionSecs(0); return; }
+    const t = setInterval(() => setSessionSecs(s => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [sessionState]);
+  const fmtTime = (s: number) => {
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return h > 0
+      ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`
+      : `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
   };
 
   const [outputVisible, setOutputVisible] = React.useState(false);
@@ -652,8 +679,9 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Live & Mic Controls */}
-          <div className="flex items-center gap-2 bg-slate-950 px-2 py-1.5 rounded-xl border border-slate-800/60 shadow-inner hidden md:flex">
+          {/* Audio Control Panel — always visible */}
+          <div className="flex items-center gap-2 bg-slate-950 px-2 py-1.5 rounded-xl border border-slate-800/60 shadow-inner">
+            {/* Clear output */}
             <button
               onClick={() => {
                 invoke("clear_live").catch(console.error);
@@ -661,12 +689,15 @@ export default function App() {
                 setLiveItem(null);
                 setLtVisible(false);
               }}
-              className="px-2.5 py-1 hover:bg-red-900/30 text-slate-400 hover:text-red-400 rounded transition-all flex items-center gap-1.5"
+              className="px-2 py-1 hover:bg-red-900/30 text-slate-500 hover:text-red-400 rounded transition-all flex items-center gap-1"
               title="Clear Output (Shift+C)"
             >
-              <X size={14} /> <span className="text-[10px] font-black uppercase tracking-wider hidden xl:inline">Clear</span>
+              <X size={13} />
             </button>
-            <div className="w-px h-4 bg-slate-800" />
+
+            <div className="w-px h-5 bg-slate-800" />
+
+            {/* START / STOP button */}
             <button
               onClick={async () => {
                 if (sessionState === "idle") {
@@ -675,52 +706,87 @@ export default function App() {
                     setAudioError(typeof e === "string" ? e : "Failed to start session");
                     setSessionState("idle");
                   });
-                } else {
-                  await invoke("stop_session").catch(() => {});
+                } else if (sessionState === "running") {
+                  setSessionState("stopping");
+                  await invoke("stop_session").catch(() => { setSessionState("idle"); });
                 }
               }}
-              className={`px-2.5 py-1 rounded transition-all flex items-center gap-1.5 ${
-                sessionState === "running"
-                  ? "bg-red-700/20 hover:bg-red-700/40 text-red-400"
-                  : sessionState === "loading"
-                  ? "text-amber-400 cursor-wait"
-                  : "hover:bg-green-700/20 text-slate-400 hover:text-green-400"
-              }`}
-              disabled={sessionState === "loading"}
+              disabled={sessionState === "loading" || sessionState === "stopping"}
               title={sessionState === "running" ? "Stop live transcription" : "Start live transcription"}
+              className={`px-3 py-1 rounded-lg transition-all flex items-center gap-1.5 font-black text-[10px] uppercase tracking-wider ${
+                sessionState === "running"
+                  ? "bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-600/30"
+                  : sessionState === "loading"
+                  ? "bg-amber-600/40 text-amber-300 cursor-wait"
+                  : sessionState === "stopping"
+                  ? "bg-slate-700 text-slate-400 cursor-wait"
+                  : "bg-green-700/30 hover:bg-green-600/40 text-green-400 border border-green-700/40"
+              }`}
             >
-              <Mic size={14} className={sessionState === "running" ? "animate-pulse" : ""} />
-              <span className="text-[10px] font-black uppercase tracking-wider hidden xl:inline">
-                {sessionState === "running" ? "Stop" : sessionState === "loading" ? "Wait" : "Live"}
-              </span>
+              <Mic size={13} className={sessionState === "running" ? "animate-pulse" : ""} />
+              {sessionState === "running"
+                ? <><span>Stop</span><span className="font-mono font-normal text-red-200/80">{fmtTime(sessionSecs)}</span></>
+                : <span>{sessionState === "loading" ? "Starting…" : sessionState === "stopping" ? "Stopping…" : "Go Live"}</span>
+              }
             </button>
 
+            {/* PTT — only while running */}
             {sessionState === "running" && (
               <button
                 onMouseDown={handlePttDown}
                 onMouseUp={handlePttUp}
                 onMouseLeave={handlePttUp}
-                className={`px-3 py-1 rounded text-[10px] font-black uppercase transition-all shadow-lg ${
-                  isPttActive 
-                    ? "bg-amber-500 text-black scale-95 shadow-amber-500/20" 
+                className={`px-2.5 py-1 rounded text-[10px] font-black uppercase transition-all ${
+                  isPttActive
+                    ? "bg-amber-500 text-black scale-95"
                     : "bg-slate-800 text-slate-400 hover:bg-slate-700"
                 }`}
+                title="Push-to-Talk (hold Space)"
               >
                 PTT
               </button>
             )}
 
-            <div className="flex flex-col gap-1 px-2 border-l border-slate-800/50 pl-3 ml-1">
-              <div className="flex items-center gap-2">
-                <span className="text-[8px] font-black text-amber-500 uppercase w-4">Op</span>
-                <div className="w-12 xl:w-20 h-1 bg-slate-900 rounded-full overflow-hidden flex">
-                  <motion.div className="h-full bg-amber-500" animate={{ width: `${operatorMicLevel * 100}%` }} transition={{ type: "spring", bounce: 0, duration: 0.1 }} />
+            <div className="w-px h-5 bg-slate-800" />
+
+            {/* VU meters with inline mute toggles */}
+            <div className="flex flex-col gap-1">
+              {/* Operator row */}
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={handleToggleOperatorMute}
+                  title={operatorMuted ? "Unmute operator mic" : "Mute operator mic"}
+                  className={`text-[8px] font-black uppercase w-5 text-center rounded transition-all ${
+                    operatorMuted ? "text-red-400" : "text-amber-500 hover:text-amber-300"
+                  }`}
+                >
+                  {operatorMuted ? "✕" : "Op"}
+                </button>
+                <div className={`w-16 h-1.5 rounded-full overflow-hidden ${operatorMuted ? "bg-red-900/40" : "bg-slate-900"}`}>
+                  <motion.div
+                    className={`h-full ${operatorMuted ? "bg-red-700/50" : "bg-amber-500"}`}
+                    animate={{ width: operatorMuted ? "100%" : `${operatorMicLevel * 100}%` }}
+                    transition={{ type: "spring", bounce: 0, duration: 0.1 }}
+                  />
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="text-[8px] font-black text-blue-400 uppercase w-4">Pr</span>
-                <div className="w-12 xl:w-20 h-1 bg-slate-900 rounded-full overflow-hidden flex">
-                  <motion.div className="h-full bg-blue-400" animate={{ width: `${preacherMicLevel * 100}%` }} transition={{ type: "spring", bounce: 0, duration: 0.1 }} />
+              {/* Preacher row */}
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={handleTogglePreacherMute}
+                  title={preacherMuted ? "Unmute preacher mic" : "Mute preacher mic"}
+                  className={`text-[8px] font-black uppercase w-5 text-center rounded transition-all ${
+                    preacherMuted ? "text-red-400" : "text-blue-400 hover:text-blue-300"
+                  }`}
+                >
+                  {preacherMuted ? "✕" : "Pr"}
+                </button>
+                <div className={`w-16 h-1.5 rounded-full overflow-hidden ${preacherMuted ? "bg-red-900/40" : "bg-slate-900"}`}>
+                  <motion.div
+                    className={`h-full ${preacherMuted ? "bg-red-700/50" : "bg-blue-400"}`}
+                    animate={{ width: preacherMuted ? "100%" : `${preacherMicLevel * 100}%` }}
+                    transition={{ type: "spring", bounce: 0, duration: 0.1 }}
+                  />
                 </div>
               </div>
             </div>

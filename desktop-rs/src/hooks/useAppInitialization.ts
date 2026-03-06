@@ -248,9 +248,11 @@ export function useAppInitialization() {
       const { status, message } = ev.payload as { status: string; message: string };
       if (status === "running") { setSessionState("running"); setAudioError(null); }
       else if (status === "loading") setSessionState("loading");
+      else if (status === "stopping") setSessionState("stopping");
       else {
+        // "stopped" or "error"
         setSessionState("idle");
-        if (message) setAudioError(message);
+        if (status === "error" && message) setAudioError(message);
       }
     });
     const unlistenAudioErr = listen("audio-error", (ev: any) => setAudioError(ev.payload as string));

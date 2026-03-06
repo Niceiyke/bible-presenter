@@ -39,6 +39,7 @@ pub struct AudioEngine {
     session_level_tx: Option<mpsc::Sender<f32>>,
     vad_threshold: f32,
     pub media_playing: Arc<AtomicBool>,
+    pub is_muted: Arc<AtomicBool>,
 }
 
 impl AudioEngine {
@@ -51,6 +52,7 @@ impl AudioEngine {
             session_level_tx: None,
             vad_threshold: 0.002,
             media_playing: Arc::new(AtomicBool::new(false)),
+            is_muted: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -153,18 +155,19 @@ impl AudioEngine {
 
         let vad = self.vad_threshold;
         let aec_flag = self.media_playing.clone();
+        let mute_flag = self.is_muted.clone();
 
         let build_result = match config.sample_format() {
             cpal::SampleFormat::F32 => self.build_stream::<f32>(
-                &device, &config.into(), sample_rate, target_rate, vad, aec_flag,
+                &device, &config.into(), sample_rate, target_rate, vad, aec_flag, mute_flag,
                 audio_tx, error_tx, level_tx,
             ),
             cpal::SampleFormat::I16 => self.build_stream::<i16>(
-                &device, &config.into(), sample_rate, target_rate, vad, aec_flag,
+                &device, &config.into(), sample_rate, target_rate, vad, aec_flag, mute_flag,
                 audio_tx, error_tx, level_tx,
             ),
             cpal::SampleFormat::U16 => self.build_stream::<u16>(
-                &device, &config.into(), sample_rate, target_rate, vad, aec_flag,
+                &device, &config.into(), sample_rate, target_rate, vad, aec_flag, mute_flag,
                 audio_tx, error_tx, level_tx,
             ),
             _ => return Err(anyhow::anyhow!("Unsupported sample format")),
@@ -199,6 +202,7 @@ impl AudioEngine {
         target_rate: f64,
         vad_threshold: f32,
         aec_flag: Arc<AtomicBool>,
+        mute_flag: Arc<AtomicBool>,
         audio_tx: mpsc::Sender<Vec<f32>>,
         error_tx: mpsc::Sender<String>,
         level_tx: Option<mpsc::Sender<f32>>,
@@ -237,7 +241,8 @@ impl AudioEngine {
         // Residue buffer for VAD to prevent sample loss
         let mut residue_i16: Vec<i16> = Vec::with_capacity(160);
 
-        // Pre-roll buffer (500ms at 16kHz = 8000 samples) to prevent clipping starts of sentences
+        // Pre-roll buffer (500ms at 16kHz = 8000 samples) captures sentence starts without
+        // bloating chunk size, which would slow inference and fill the audio channel faster.
         let mut pre_roll_buffer = vec![0.0f32; 8000];
         let mut pre_roll_idx = 0;
         let mut in_speech_window = false;
@@ -268,7 +273,7 @@ impl AudioEngine {
                             // If video or media is playing on the output, duck the mic to prevent echo loop.
                             if aec_flag.load(Ordering::Relaxed) {
                                 for s in &mut mono {
-                                    *s *= 0.01; // heavy attenuation
+                                    *s *= 0.05; // slightly less heavy attenuation (5% instead of 1%)
                                 }
                             }
 
@@ -292,6 +297,14 @@ impl AudioEngine {
                             let energy = mono.iter().map(|s| s * s).sum::<f32>() / mono.len() as f32;
                             if let Some(ref ltx) = level_tx {
                                 let _ = ltx.try_send(energy);
+                            }
+
+                            // --- HARD MUTE CHECK ---
+                            // If muted, we zero out the buffer immediately AFTER the VU calculation
+                            // This keeps the meters alive for visual feedback but kills the audio for 
+                            // cloud, transcription, and processing.
+                            if mute_flag.load(Ordering::Relaxed) {
+                                for s in &mut mono { *s = 0.0; }
                             }
 
                             // 3. WebRTC VAD + Fallback Energy Threshold
@@ -330,8 +343,7 @@ impl AudioEngine {
 
                                 if audio_tx.try_send(chunk).is_err() {
                                     let _ = error_tx_inner.try_send(
-                                        "WARNING: Audio channel full; samples dropped. \
-                                         Consider reducing transcription window or upgrading CPU.".to_string()
+                                        "WARNING: Audio channel full; samples dropped.".to_string()
                                     );
                                 }
                             } else {

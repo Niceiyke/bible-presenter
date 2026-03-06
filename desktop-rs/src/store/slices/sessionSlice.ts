@@ -27,8 +27,8 @@ export interface SessionSlice {
   setPreacherVadThreshold: (v: number) => void;
   transcriptionWindowSec: number;
   setTranscriptionWindowSec: (v: number) => void;
-  sessionState: "idle" | "loading" | "running";
-  setSessionState: (v: "idle" | "loading" | "running") => void;
+  sessionState: "idle" | "loading" | "running" | "stopping";
+  setSessionState: (v: "idle" | "loading" | "running" | "stopping") => void;
   audioError: string | null;
   setAudioError: (v: string | null) => void;
   deviceError: string | null;
@@ -37,6 +37,10 @@ export interface SessionSlice {
   setOperatorMicLevel: (v: number | ((prev: number) => number)) => void;
   preacherMicLevel: number;
   setPreacherMicLevel: (v: number | ((prev: number) => number)) => void;
+  operatorMuted: boolean;
+  setOperatorMuted: (v: boolean) => void;
+  preacherMuted: boolean;
+  setPreacherMuted: (v: boolean) => void;
   remoteUrl: string;
   setRemoteUrl: (v: string) => void;
   lanUrls: [string, string][];
@@ -93,6 +97,10 @@ export const createSessionSlice: StateCreator<AppStore, [], [], SessionSlice> = 
   setOperatorMicLevel: (v) => set((s) => ({ operatorMicLevel: typeof v === "function" ? v(s.operatorMicLevel) : v })),
   preacherMicLevel: 0,
   setPreacherMicLevel: (v) => set((s) => ({ preacherMicLevel: typeof v === "function" ? v(s.preacherMicLevel) : v })),
+  operatorMuted: false,
+  setOperatorMuted: (v) => set({ operatorMuted: v }),
+  preacherMuted: false,
+  setPreacherMuted: (v) => set({ preacherMuted: v }),
   remoteUrl: "",
   setRemoteUrl: (v) => set({ remoteUrl: v }),
   lanUrls: [],

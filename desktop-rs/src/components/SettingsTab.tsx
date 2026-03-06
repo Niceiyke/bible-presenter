@@ -24,6 +24,8 @@ export function SettingsTab({
     devices, setDevices,
     operatorDevice, setOperatorDevice,
     preacherDevice, setPreacherDevice,
+    operatorMuted, setOperatorMuted,
+    preacherMuted, setPreacherMuted,
     operatorVadThreshold, setOperatorVadThreshold,
     preacherVadThreshold, setPreacherVadThreshold,
     transcriptionWindowSec,
@@ -92,6 +94,16 @@ export function SettingsTab({
     setPreacherDevice(name);
     localStorage.setItem("pref_preacherDevice", name);
     invoke("set_preacher_device", { deviceName: name }).catch(console.error);
+  };
+
+  const handleToggleOperatorMute = (val: boolean) => {
+    setOperatorMuted(val);
+    invoke("set_operator_muted", { muted: val }).catch(console.error);
+  };
+
+  const handleTogglePreacherMute = (val: boolean) => {
+    setPreacherMuted(val);
+    invoke("set_preacher_muted", { muted: val }).catch(console.error);
   };
 
   const handleUpdateOperatorVad = (val: number) => {
@@ -245,9 +257,9 @@ export function SettingsTab({
     invoke("set_cloud_config", {
       provider,
       apiKey: key || null,
-      hostname: cloudHostnameDraft || null,
-      model: cloudModelDraft || null,
-      language: cloudLanguageDraft || null,
+      hostname: cloudHostnameDraft.trim() || null,
+      model: cloudModelDraft.trim() || null,
+      language: cloudLanguageDraft.trim() || null,
       operatorMode: transcriptionConfig.operator_mode,
       preacherMode: transcriptionConfig.preacher_mode,
       autoProject: transcriptionConfig.auto_project,
@@ -261,9 +273,9 @@ export function SettingsTab({
   const handleSaveStreamingPrefs = () => {
     invoke("set_cloud_config", {
       provider: transcriptionConfig.cloud_provider,
-      hostname: cloudHostnameDraft || null,
-      model: cloudModelDraft || null,
-      language: cloudLanguageDraft || null,
+      hostname: cloudHostnameDraft.trim() || null,
+      model: cloudModelDraft.trim() || null,
+      language: cloudLanguageDraft.trim() || null,
       operatorMode: transcriptionConfig.operator_mode,
       preacherMode: transcriptionConfig.preacher_mode,
       autoProject: transcriptionConfig.auto_project,
@@ -279,7 +291,7 @@ export function SettingsTab({
     if (!provider || !cloudKeyDraft) return;
     setTestStatus("testing");
     setTestMessage("");
-    invoke<string>("test_cloud_connection", { provider, apiKey: cloudKeyDraft, model: cloudModelDraft || null })
+    invoke<string>("test_cloud_connection", { provider, apiKey: cloudKeyDraft, model: cloudModelDraft.trim() || null })
       .then((msg) => { setTestStatus("ok"); setTestMessage(msg); })
       .catch((e: any) => { setTestStatus("fail"); setTestMessage(String(e)); });
   };
@@ -316,7 +328,19 @@ export function SettingsTab({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Operator Microphone */}
           <div className="flex flex-col gap-3">
-            <p className="text-[10px] text-amber-500 font-bold uppercase">Operator Microphone (Director)</p>
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] text-amber-500 font-bold uppercase">Operator Microphone (Director)</p>
+              <button
+                onClick={() => handleToggleOperatorMute(!operatorMuted)}
+                className={`px-2 py-0.5 text-[9px] font-black uppercase rounded border transition-all ${
+                  operatorMuted
+                    ? "bg-red-600 border-red-500 text-white"
+                    : "bg-slate-800 border-slate-700 text-slate-500 hover:text-slate-300"
+                }`}
+              >
+                {operatorMuted ? "MUTED" : "MUTE"}
+              </button>
+            </div>
             <p className="text-[9px] text-slate-500 leading-tight">Controls Bible verse selection via local AI. Best with Push-to-Talk.</p>
             
             <select
@@ -369,7 +393,19 @@ export function SettingsTab({
 
           {/* Preacher Microphone */}
           <div className="flex flex-col gap-3">
-            <p className="text-[10px] text-blue-400 font-bold uppercase">Preacher Microphone (House)</p>
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] text-blue-400 font-bold uppercase">Preacher Microphone (House)</p>
+              <button
+                onClick={() => handleTogglePreacherMute(!preacherMuted)}
+                className={`px-2 py-0.5 text-[9px] font-black uppercase rounded border transition-all ${
+                  preacherMuted
+                    ? "bg-red-600 border-red-500 text-white"
+                    : "bg-slate-800 border-slate-700 text-slate-500 hover:text-slate-300"
+                }`}
+              >
+                {preacherMuted ? "MUTED" : "MUTE"}
+              </button>
+            </div>
             <p className="text-[9px] text-slate-500 leading-tight">Continuous sermon transcription. Best with Cloud (Deepgram/AssemblyAI).</p>
             
             <select
