@@ -1,6 +1,4 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use ringbuf::HeapRb;
-use ringbuf::traits::Producer;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
@@ -20,7 +18,7 @@ struct StreamHandle(cpal::Stream);
 unsafe impl Send for StreamHandle {}
 unsafe impl Sync for StreamHandle {}
 
-/// Wrapper to make Vad Send. 
+/// Wrapper to make Vad Send.
 /// SAFETY: Vad is only accessed from within the audio callback thread.
 struct SendVad(Vad);
 unsafe impl Send for SendVad {}
@@ -32,14 +30,13 @@ impl SendVad {
     }
 }
 
-pub type AudioRb = HeapRb<f32>;
-
 pub struct AudioEngine {
     stream: Option<Arc<StreamHandle>>,
     selected_device_name: Option<String>,
-    active_tx: Option<mpsc::Sender<()>>,
-    active_error_tx: Option<mpsc::Sender<String>>,
-    active_level_tx: Option<mpsc::Sender<f32>>,
+    /// Persistent across hot-swaps; set at session start, cleared at session end.
+    session_audio_tx: Option<mpsc::Sender<Vec<f32>>>,
+    session_error_tx: Option<mpsc::Sender<String>>,
+    session_level_tx: Option<mpsc::Sender<f32>>,
     vad_threshold: f32,
     pub media_playing: Arc<AtomicBool>,
 }
@@ -49,9 +46,9 @@ impl AudioEngine {
         Self {
             stream: None,
             selected_device_name: None,
-            active_tx: None,
-            active_error_tx: None,
-            active_level_tx: None,
+            session_audio_tx: None,
+            session_error_tx: None,
+            session_level_tx: None,
             vad_threshold: 0.002,
             media_playing: Arc::new(AtomicBool::new(false)),
         }
@@ -74,23 +71,67 @@ impl AudioEngine {
     }
 
     pub fn select_device(&mut self, device_name: &str) -> anyhow::Result<()> {
-        self.selected_device_name = Some(device_name.to_string());
+        self.selected_device_name = if device_name.is_empty() {
+            None
+        } else {
+            Some(device_name.to_string())
+        };
         Ok(())
     }
 
+    /// Returns the currently selected device name, or None if using system default.
+    pub fn selected_device(&self) -> Option<&str> {
+        self.selected_device_name.as_deref()
+    }
+
+    /// Returns true if there is an active session (audio_tx is set).
+    pub fn session_active(&self) -> bool {
+        self.session_audio_tx.is_some()
+    }
+
+    /// Start capturing audio, storing the senders for future hot-swaps.
     pub fn start_capturing(
         &mut self,
-        tx: mpsc::Sender<()>,
-        prod: impl Producer<Item = f32> + Send + 'static,
+        audio_tx: mpsc::Sender<Vec<f32>>,
         error_tx: mpsc::Sender<String>,
         level_tx: Option<mpsc::Sender<f32>>,
     ) -> anyhow::Result<()> {
         // Stop any existing stream before starting a new one (prevents double-stream)
         self.stop();
-        self.active_tx = Some(tx.clone());
-        self.active_error_tx = Some(error_tx.clone());
-        self.active_level_tx = level_tx.clone();
+        self.session_audio_tx = Some(audio_tx.clone());
+        self.session_error_tx = Some(error_tx.clone());
+        self.session_level_tx = level_tx.clone();
+        self.open_stream(audio_tx, error_tx, level_tx)
+    }
 
+    /// Hot-swap to a different audio device mid-session.
+    /// Drops the old CPAL stream and opens a new one using the same stored senders.
+    /// If no session is active, just updates the selected device name.
+    pub fn hot_swap_device(&mut self, device_name: &str) -> anyhow::Result<()> {
+        self.selected_device_name = if device_name.is_empty() {
+            None
+        } else {
+            Some(device_name.to_owned())
+        };
+
+        if let (Some(atx), Some(etx)) = (
+            self.session_audio_tx.clone(),
+            self.session_error_tx.clone(),
+        ) {
+            // Drop old CPAL stream only — keep senders so the processing task continues
+            self.stream = None;
+            self.open_stream(atx, etx, self.session_level_tx.clone())?;
+        }
+        Ok(())
+    }
+
+    /// Internal: open a CPAL stream using the given senders.
+    fn open_stream(
+        &mut self,
+        audio_tx: mpsc::Sender<Vec<f32>>,
+        error_tx: mpsc::Sender<String>,
+        level_tx: Option<mpsc::Sender<f32>>,
+    ) -> anyhow::Result<()> {
         let host = cpal::default_host();
 
         let device = if let Some(ref name) = self.selected_device_name {
@@ -115,43 +156,20 @@ impl AudioEngine {
 
         let build_result = match config.sample_format() {
             cpal::SampleFormat::F32 => self.build_stream::<f32>(
-                &device,
-                &config.into(),
-                sample_rate,
-                target_rate,
-                vad,
-                aec_flag,
-                tx,
-                prod,
-                error_tx,
-                level_tx,
+                &device, &config.into(), sample_rate, target_rate, vad, aec_flag,
+                audio_tx, error_tx, level_tx,
             ),
             cpal::SampleFormat::I16 => self.build_stream::<i16>(
-                &device,
-                &config.into(),
-                sample_rate,
-                target_rate,
-                vad,
-                aec_flag,
-                tx,
-                prod,
-                error_tx,
-                level_tx,
+                &device, &config.into(), sample_rate, target_rate, vad, aec_flag,
+                audio_tx, error_tx, level_tx,
             ),
             cpal::SampleFormat::U16 => self.build_stream::<u16>(
-                &device,
-                &config.into(),
-                sample_rate,
-                target_rate,
-                vad,
-                aec_flag,
-                tx,
-                prod,
-                error_tx,
-                level_tx,
+                &device, &config.into(), sample_rate, target_rate, vad, aec_flag,
+                audio_tx, error_tx, level_tx,
             ),
             _ => return Err(anyhow::anyhow!("Unsupported sample format")),
         };
+
         let stream = build_result.map_err(|e| {
             let msg = e.to_string();
             if msg.contains("0x80070005")
@@ -181,8 +199,7 @@ impl AudioEngine {
         target_rate: f64,
         vad_threshold: f32,
         aec_flag: Arc<AtomicBool>,
-        tx: mpsc::Sender<()>,
-        mut prod: impl Producer<Item = f32> + Send + 'static,
+        audio_tx: mpsc::Sender<Vec<f32>>,
         error_tx: mpsc::Sender<String>,
         level_tx: Option<mpsc::Sender<f32>>,
     ) -> anyhow::Result<cpal::Stream>
@@ -282,7 +299,6 @@ impl AudioEngine {
                             i16_samples.extend(mono.iter().map(|&s| (s * std::i16::MAX as f32).clamp(-32768.0, 32767.0) as i16));
 
                             let mut is_speech_now = false;
-                            // WebRTC VAD needs 10ms (160 samples at 16kHz)
                             let mut processed_idx = 0;
                             for chunk in i16_samples.chunks_exact(160) {
                                 if let Ok(active) = vad.is_voice_segment(chunk) {
@@ -292,35 +308,31 @@ impl AudioEngine {
                                 }
                                 processed_idx += 160;
                             }
-                            
+
                             // Store the remainder in residue_i16
                             residue_i16 = i16_samples[processed_idx..].to_vec();
 
                             let triggered = is_speech_now || energy > vad_threshold;
 
                             if triggered {
-                                if !in_speech_window {
-                                    // Transition to speech: flush pre-roll first
+                                let chunk = if !in_speech_window {
+                                    // Transition to speech: prepend pre-roll
                                     in_speech_window = true;
-                                    let mut pre_roll_flush = vec![0.0f32; 8000];
+                                    let mut c = Vec::with_capacity(8000 + mono.len());
                                     for i in 0..8000 {
-                                        pre_roll_flush[i] = pre_roll_buffer[(pre_roll_idx + i) % 8000];
+                                        c.push(pre_roll_buffer[(pre_roll_idx + i) % 8000]);
                                     }
-                                    let _ = prod.push_slice(&pre_roll_flush);
-                                }
-                                
-                                // 4. Lock-free ring buffer push
-                                let pushed = prod.push_slice(&mono);
-                                if pushed < mono.len() {
-                                    // Buffer is full — warn the operator; samples were dropped
+                                    c.extend_from_slice(&mono);
+                                    c
+                                } else {
+                                    mono.clone()
+                                };
+
+                                if audio_tx.try_send(chunk).is_err() {
                                     let _ = error_tx_inner.try_send(
-                                        "WARNING: Audio ring buffer full; samples dropped. \
+                                        "WARNING: Audio channel full; samples dropped. \
                                          Consider reducing transcription window or upgrading CPU.".to_string()
                                     );
-                                }
-                                if pushed > 0 {
-                                    // Non-blocking wake up the async processing loop
-                                    let _ = tx.try_send(());
                                 }
                             } else {
                                 in_speech_window = false;
@@ -346,8 +358,9 @@ impl AudioEngine {
 
     pub fn stop(&mut self) {
         self.stream = None;
-        self.active_tx = None;
-        self.active_error_tx = None;
-        self.active_level_tx = None;
+        // Dropping the senders signals the processing task's receiver to return None → task exits
+        self.session_audio_tx = None;
+        self.session_error_tx = None;
+        self.session_level_tx = None;
     }
 }

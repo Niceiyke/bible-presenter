@@ -103,9 +103,9 @@ export function useAppInitialization() {
       invoke("set_preacher_vad", { threshold: useAppStore.getState().preacherVadThreshold }).catch(() => {});
       
       const opDev = useAppStore.getState().operatorDevice;
-      if (opDev) invoke("set_operator_device", { device_name: opDev }).catch(() => {});
+      if (opDev) invoke("set_operator_device", { deviceName: opDev }).catch(() => {});
       const prDev = useAppStore.getState().preacherDevice;
-      if (prDev) invoke("set_preacher_device", { device_name: prDev }).catch(() => {});
+      if (prDev) invoke("set_preacher_device", { deviceName: prDev }).catch(() => {});
 
       // Check startup status and surface any missing-file issues to the operator
       invoke<StartupStatus>("get_startup_status").then((status) => {

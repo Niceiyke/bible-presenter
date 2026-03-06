@@ -6,7 +6,6 @@ mod ndi;
 
 use wordlyte_lib::{audio, engine, store};
 use store::log_msg;
-use ringbuf::traits::{Consumer, Observer};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -471,37 +470,48 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
         }
     };
 
+    let (op_audio_tx, mut op_audio_rx) = tokio::sync::mpsc::channel::<Vec<f32>>(128);
     let (op_error_tx, mut op_error_rx) = tokio::sync::mpsc::channel::<String>(10);
-    let (op_tx, mut op_rx) = tokio::sync::mpsc::channel::<()>(50);
     let (op_level_tx, mut op_level_rx) = tokio::sync::mpsc::channel::<f32>(50);
-    let op_rb = ringbuf::HeapRb::<f32>::new(48000 * 5);
-    let (op_prod, mut op_cons) = ringbuf::traits::Split::split(op_rb);
 
-    if let Err(e) = operator_audio.lock().start_capturing(op_tx, op_prod, op_error_tx, Some(op_level_tx)) {
+    if let Err(e) = operator_audio.lock().start_capturing(op_audio_tx, op_error_tx, Some(op_level_tx)) {
         *is_running.lock() = false;
         return Err(format!("Operator mic error: {}", e));
     }
 
-    let (pr_error_tx, mut pr_error_rx) = tokio::sync::mpsc::channel::<String>(10);
-    let (pr_tx, mut pr_rx) = tokio::sync::mpsc::channel::<()>(50);
-    let (pr_level_tx, mut pr_level_rx) = tokio::sync::mpsc::channel::<f32>(50);
-    let pr_rb = ringbuf::HeapRb::<f32>::new(48000 * 5);
-    let (pr_prod, mut pr_cons) = ringbuf::traits::Split::split(pr_rb);
+    // Only start preacher audio if it has a distinct, explicitly-named device.
+    // If both engines would use the same device (both None/default, or same name),
+    // skip starting a second CPAL stream — it would capture the same signal and
+    // light up both VU meters identically.
+    let op_dev = operator_audio.lock().selected_device().map(str::to_string);
+    let pr_dev = preacher_audio.lock().selected_device().map(str::to_string);
+    let preacher_active = pr_dev.is_some() && pr_dev != op_dev;
 
-    if let Err(e) = preacher_audio.lock().start_capturing(pr_tx, pr_prod, pr_error_tx, Some(pr_level_tx)) {
-        operator_audio.lock().stop();
-        *is_running.lock() = false;
-        return Err(format!("Preacher mic error: {}", e));
-    }
+    let pr_audio_rx_opt = if preacher_active {
+        let (pr_audio_tx, pr_audio_rx) = tokio::sync::mpsc::channel::<Vec<f32>>(128);
+        let (pr_error_tx, mut pr_error_rx) = tokio::sync::mpsc::channel::<String>(10);
+        let (pr_level_tx, mut pr_level_rx) = tokio::sync::mpsc::channel::<f32>(50);
+
+        if let Err(e) = preacher_audio.lock().start_capturing(pr_audio_tx, pr_error_tx, Some(pr_level_tx)) {
+            operator_audio.lock().stop();
+            *is_running.lock() = false;
+            return Err(format!("Preacher mic error: {}", e));
+        }
+
+        let app_err2 = app.clone();
+        tokio::spawn(async move { while let Some(msg) = pr_error_rx.recv().await { let _ = app_err2.emit("audio-error", format!("Preacher: {}", msg)); } });
+        let app_level2 = app.clone();
+        tokio::spawn(async move { while let Some(level) = pr_level_rx.recv().await { let _ = app_level2.emit("preacher-audio-level", level); } });
+
+        Some(pr_audio_rx)
+    } else {
+        None
+    };
 
     let app_err = app.clone();
     tokio::spawn(async move { while let Some(msg) = op_error_rx.recv().await { let _ = app_err.emit("audio-error", format!("Operator: {}", msg)); } });
-    let app_err2 = app.clone();
-    tokio::spawn(async move { while let Some(msg) = pr_error_rx.recv().await { let _ = app_err2.emit("audio-error", format!("Preacher: {}", msg)); } });
     let app_level = app.clone();
     tokio::spawn(async move { while let Some(level) = op_level_rx.recv().await { let _ = app_level.emit("operator-audio-level", level); } });
-    let app_level2 = app.clone();
-    tokio::spawn(async move { while let Some(level) = pr_level_rx.recv().await { let _ = app_level2.emit("preacher-audio-level", level); } });
 
     let _ = app.emit("session-status", SessionStatus { status: "running".to_string(), message: "Live session started".to_string() });
 
@@ -509,7 +519,7 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
 
     // ── Operator Pipeline (Local or Cloud REST, PTT)
     let app_op = app.clone();
-    let is_running_op = is_running.clone();
+    let _is_running_op = is_running.clone();
     let engine_op = engine.clone();
     let store_op = store.clone();
     let ctx_buf_op = context_buffer.clone();
@@ -528,14 +538,8 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
         let provider_name = if is_cloud { op_provider.clone().unwrap() } else { "local".to_string() };
         let mut was_ptt_active = false;
 
-        while let Some(()) = op_rx.recv().await {
-            let avail = op_cons.occupied_len();
-            if avail > 0 {
-                let old_len = buffer.len();
-                buffer.resize(old_len + avail, 0.0);
-                let read = op_cons.pop_slice(&mut buffer[old_len..]);
-                buffer.truncate(old_len + read);
-            }
+        while let Some(chunk) = op_audio_rx.recv().await {
+            buffer.extend_from_slice(&chunk);
 
             let window_size = *trans_window_op.lock();
             let is_ptt_active = operator_ptt_active.load(std::sync::atomic::Ordering::Relaxed);
@@ -630,26 +634,22 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
         let provider = cloud_provider.unwrap();
         let api_key = cloud_api_key.unwrap();
         let stream_result = engine::cloud_stream::start_stream(&provider, &api_key, cloud_hostname.as_deref(), cloud_model.as_deref(), cloud_language.as_deref()).await;
-        
+
         if let Ok((stream_handle, mut transcript_rx)) = stream_result {
             *state.preacher_cloud_stream_handle.lock() = Some(stream_handle);
             let handle_arc = state.preacher_cloud_stream_handle.clone();
-            
-            tokio::spawn(async move {
-                const CHUNK_SAMPLES: usize = 1600;
-                let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
-                while let Some(()) = pr_rx.recv().await {
-                    interval.tick().await;
-                    let avail = pr_cons.occupied_len();
-                    if avail == 0 { continue; }
-                    let take = avail.min(CHUNK_SAMPLES * 4);
-                    let mut pcm = vec![0.0f32; take];
-                    let read = pr_cons.pop_slice(&mut pcm);
-                    pcm.truncate(read);
-                    let bytes: Vec<u8> = pcm.iter().map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16).flat_map(|s| s.to_le_bytes()).collect();
-                    if let Some(ref h) = *handle_arc.lock() { let _ = h.audio_tx.send(bytes); } else { break; }
-                }
-            });
+
+            if let Some(mut pr_audio_rx) = pr_audio_rx_opt {
+                tokio::spawn(async move {
+                    while let Some(chunk) = pr_audio_rx.recv().await {
+                        let bytes: Vec<u8> = chunk.iter()
+                            .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+                            .flat_map(|s| s.to_le_bytes())
+                            .collect();
+                        if let Some(ref h) = *handle_arc.lock() { let _ = h.audio_tx.send(bytes); } else { break; }
+                    }
+                });
+            }
 
             let app_pr = app.clone();
             let tx_log_pr = session_transcript.clone();
@@ -687,20 +687,15 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
         let trans_paused_pr = transcription_paused.clone();
         let tx_log_pr = session_transcript.clone();
 
+        if let Some(mut pr_audio_rx) = pr_audio_rx_opt {
         tokio::spawn(async move {
             let mut buffer = Vec::with_capacity(48000 * 3);
             const OVERLAP: usize = 4000;
             let is_cloud = preacher_mode == "cloud" && pr_provider.is_some() && pr_api_key.is_some();
             let provider_name = if is_cloud { pr_provider.clone().unwrap() } else { "local".to_string() };
 
-            while let Some(()) = pr_rx.recv().await {
-                let avail = pr_cons.occupied_len();
-                if avail > 0 {
-                    let old_len = buffer.len();
-                    buffer.resize(old_len + avail, 0.0);
-                    let read = pr_cons.pop_slice(&mut buffer[old_len..]);
-                    buffer.truncate(old_len + read);
-                }
+            while let Some(chunk) = pr_audio_rx.recv().await {
+                buffer.extend_from_slice(&chunk);
 
                 let window_size = *trans_window_pr.lock();
                 let paused = trans_paused_pr.load(std::sync::atomic::Ordering::Relaxed);
@@ -732,6 +727,7 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
             let mut r = is_running.lock();
             if *r { *r = false; let _ = app_pr.emit("session-status", SessionStatus { status: "stopped".to_string(), message: "Session ended".to_string() }); }
         });
+        } // if let Some(pr_audio_rx)
     }
 
     Ok(())
@@ -878,21 +874,43 @@ async fn set_operator_device(
     state: State<'_, AppState>,
     device_name: String,
 ) -> Result<(), String> {
-    let mut audio = state.operator_audio.lock();
-    audio
-        .select_device(&device_name)
-        .map_err(|e: anyhow::Error| e.to_string())
+    if *state.is_running.lock() {
+        state.operator_audio.lock()
+            .hot_swap_device(&device_name)
+            .map_err(|e: anyhow::Error| e.to_string())
+    } else {
+        state.operator_audio.lock()
+            .select_device(&device_name)
+            .map_err(|e: anyhow::Error| e.to_string())
+    }
 }
 
 #[tauri::command]
 async fn set_preacher_device(
+    app: AppHandle,
     state: State<'_, AppState>,
     device_name: String,
 ) -> Result<(), String> {
-    let mut audio = state.preacher_audio.lock();
-    audio
-        .select_device(&device_name)
-        .map_err(|e: anyhow::Error| e.to_string())
+    let is_running = *state.is_running.lock();
+    let is_active = state.preacher_audio.lock().session_active();
+
+    if is_running && is_active {
+        // Hot-swap: preacher pipeline already running → swap to new device
+        state.preacher_audio.lock()
+            .hot_swap_device(&device_name)
+            .map_err(|e: anyhow::Error| e.to_string())
+    } else if is_running && !is_active {
+        // Preacher pipeline not started this session — takes effect on next session start
+        state.preacher_audio.lock()
+            .select_device(&device_name)
+            .map_err(|e: anyhow::Error| e.to_string())?;
+        let _ = app.emit("session-toast", "Preacher mic change takes effect on next session start");
+        Ok(())
+    } else {
+        state.preacher_audio.lock()
+            .select_device(&device_name)
+            .map_err(|e: anyhow::Error| e.to_string())
+    }
 }
 
 #[tauri::command]
@@ -1973,6 +1991,8 @@ async fn set_cloud_config(
     hostname: Option<String>,
     model: Option<String>,
     language: Option<String>,
+    operator_mode: Option<String>,
+    preacher_mode: Option<String>,
     auto_project: Option<bool>,
     verse_lock_secs: Option<u32>,
     confidence_threshold: Option<f32>,
@@ -1992,6 +2012,8 @@ async fn set_cloud_config(
         config.cloud_hostname = hostname;
         config.cloud_model    = model;
         config.cloud_language = language;
+        if let Some(v) = operator_mode       { config.operator_mode        = Some(v); }
+        if let Some(v) = preacher_mode       { config.preacher_mode        = Some(v); }
         if let Some(v) = auto_project        { config.auto_project         = v; }
         if let Some(v) = verse_lock_secs     { config.verse_lock_secs      = v; }
         if let Some(v) = confidence_threshold {

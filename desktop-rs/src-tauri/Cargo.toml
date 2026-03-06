@@ -41,7 +41,6 @@ futures-util = "0.3"
 reqwest  = { version = "0.12", features = ["json", "stream", "rustls-tls", "rustls-tls-native-roots", "multipart"], default-features = false }
 sysinfo  = { version = "0.30", default-features = false }
 webrtc-vad = "0.4.0"
-ringbuf = "0.4.8"
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"], default-features = false }
 chrono = { version = "0.4", features = ["serde"] }
 zip = { version = "2.2.1", features = ["deflate"] }

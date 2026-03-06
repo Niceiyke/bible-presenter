@@ -85,13 +85,13 @@ export function SettingsTab({
   const handleUpdateOperatorDevice = (name: string) => {
     setOperatorDevice(name);
     localStorage.setItem("pref_operatorDevice", name);
-    invoke("set_operator_device", { device_name: name }).catch(console.error);
+    invoke("set_operator_device", { deviceName: name }).catch(console.error);
   };
 
   const handleUpdatePreacherDevice = (name: string) => {
     setPreacherDevice(name);
     localStorage.setItem("pref_preacherDevice", name);
-    invoke("set_preacher_device", { device_name: name }).catch(console.error);
+    invoke("set_preacher_device", { deviceName: name }).catch(console.error);
   };
 
   const handleUpdateOperatorVad = (val: number) => {
@@ -173,7 +173,7 @@ export function SettingsTab({
   }, []);
 
   const handleDownload = (model_id: string) => {
-    invoke("download_whisper_model", { model_id }).catch((e: any) => console.error(e));
+    invoke("download_whisper_model", { modelId: model_id }).catch((e: any) => console.error(e));
   };
 
   const handleDownloadSemanticIndex = () => {
@@ -244,15 +244,15 @@ export function SettingsTab({
   const handleSaveCloud = (provider: string | null, key: string) => {
     invoke("set_cloud_config", {
       provider,
-      api_key: key || null,
+      apiKey: key || null,
       hostname: cloudHostnameDraft || null,
       model: cloudModelDraft || null,
       language: cloudLanguageDraft || null,
-      operator_mode: transcriptionConfig.operator_mode,
-      preacher_mode: transcriptionConfig.preacher_mode,
-      auto_project: transcriptionConfig.auto_project,
-      verse_lock_secs: transcriptionConfig.verse_lock_secs,
-      confidence_threshold: transcriptionConfig.confidence_threshold,
+      operatorMode: transcriptionConfig.operator_mode,
+      preacherMode: transcriptionConfig.preacher_mode,
+      autoProject: transcriptionConfig.auto_project,
+      verseLockSecs: transcriptionConfig.verse_lock_secs,
+      confidenceThreshold: transcriptionConfig.confidence_threshold,
     })
       .then(() => invoke<TranscriptionConfig>("get_transcription_config").then(setTranscriptionConfig))
       .catch((e: any) => console.error(e));
@@ -264,11 +264,11 @@ export function SettingsTab({
       hostname: cloudHostnameDraft || null,
       model: cloudModelDraft || null,
       language: cloudLanguageDraft || null,
-      operator_mode: transcriptionConfig.operator_mode,
-      preacher_mode: transcriptionConfig.preacher_mode,
-      auto_project: transcriptionConfig.auto_project,
-      verse_lock_secs: transcriptionConfig.verse_lock_secs,
-      confidence_threshold: transcriptionConfig.confidence_threshold,
+      operatorMode: transcriptionConfig.operator_mode,
+      preacherMode: transcriptionConfig.preacher_mode,
+      autoProject: transcriptionConfig.auto_project,
+      verseLockSecs: transcriptionConfig.verse_lock_secs,
+      confidenceThreshold: transcriptionConfig.confidence_threshold,
     })
       .then(() => invoke<TranscriptionConfig>("get_transcription_config").then(setTranscriptionConfig))
       .catch((e: any) => console.error(e));
@@ -279,7 +279,7 @@ export function SettingsTab({
     if (!provider || !cloudKeyDraft) return;
     setTestStatus("testing");
     setTestMessage("");
-    invoke<string>("test_cloud_connection", { provider, api_key: cloudKeyDraft })
+    invoke<string>("test_cloud_connection", { provider, apiKey: cloudKeyDraft })
       .then((msg) => { setTestStatus("ok"); setTestMessage(msg); })
       .catch((e: any) => { setTestStatus("fail"); setTestMessage(String(e)); });
   };
@@ -339,7 +339,7 @@ export function SettingsTab({
                     onClick={() => {
                       const next = { ...transcriptionConfig, operator_mode: m };
                       setTranscriptionConfig(next);
-                      invoke("set_cloud_config", next).catch(() => {});
+                      invoke("set_cloud_config", { operatorMode: m }).catch(() => {});
                     }}
                     className={`px-2 py-1 text-[9px] font-black uppercase rounded border transition-all ${
                       (transcriptionConfig.operator_mode ?? "local") === m
@@ -392,7 +392,7 @@ export function SettingsTab({
                     onClick={() => {
                       const next = { ...transcriptionConfig, preacher_mode: m };
                       setTranscriptionConfig(next);
-                      invoke("set_cloud_config", next).catch(() => {});
+                      invoke("set_cloud_config", { preacherMode: m }).catch(() => {});
                     }}
                     className={`px-2 py-1 text-[9px] font-black uppercase rounded border transition-all ${
                       (transcriptionConfig.preacher_mode ?? "cloud") === m
@@ -1380,9 +1380,9 @@ export function SettingsTab({
                       setTranscriptionConfig(next);
                       invoke("set_cloud_config", {
                         provider: next.cloud_provider,
-                        auto_project: next.auto_project,
-                        verse_lock_secs: next.verse_lock_secs,
-                        confidence_threshold: next.confidence_threshold,
+                        autoProject: next.auto_project,
+                        verseLockSecs: next.verse_lock_secs,
+                        confidenceThreshold: next.confidence_threshold,
                       }).catch(() => {});
                     }}
                     className={`w-10 h-5 rounded-full relative transition-colors ${transcriptionConfig.auto_project ? "bg-amber-500" : "bg-slate-700"}`}
@@ -1406,7 +1406,7 @@ export function SettingsTab({
                           const v = parseInt(e.target.value);
                           const next = { ...transcriptionConfig, verse_lock_secs: v };
                           setTranscriptionConfig(next);
-                          invoke("set_cloud_config", { provider: next.cloud_provider, verse_lock_secs: v }).catch(() => {});
+                          invoke("set_cloud_config", { provider: next.cloud_provider, verseLockSecs: v }).catch(() => {});
                         }}
                         className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
                       />
