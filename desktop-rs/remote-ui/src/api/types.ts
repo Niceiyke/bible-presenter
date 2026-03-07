@@ -83,12 +83,33 @@ export interface LtTemplate {
   [key: string]: unknown;
 }
 
+/** Saved Lower Third content preset (Nameplate or FreeText) */
+export interface LtPreset {
+  id: string;
+  label: string;
+  data: LowerThirdData;
+}
+
 // ─── API response shapes ──────────────────────────────────────────────────────
 
 export interface AppState {
   live_item: DisplayItem | null;
+  staged_item: DisplayItem | null;
   lt: unknown | null;
   is_blanked: boolean;
+}
+
+export interface RemoteOperator {
+  key: string;
+  name: string;
+  role: string;
+}
+
+export interface RemoteProposal {
+  operator_key: string;
+  operator_name: string;
+  item: DisplayItem;
+  staged_at_ms: number;
 }
 
 export interface RemoteInfo {
@@ -102,10 +123,13 @@ export interface RemoteInfo {
 export type WsEvent =
   | { type: 'auth_ok'; token: string }
   | { type: 'auth_fail' }
-  | { type: 'state'; live_item: DisplayItem | null; lt: unknown | null; is_blanked?: boolean }
+  | { type: 'state'; live_item: DisplayItem | null; staged_item?: DisplayItem | null; lt: unknown | null; is_blanked?: boolean; changed_by?: string; remote_proposals?: RemoteProposal[] }
+  | { type: 'staged'; staged_item: DisplayItem | null; changed_by?: string }
+  | { type: 'operators'; operators: RemoteOperator[] }
+  | { type: 'remote_proposals'; proposals: RemoteProposal[] }
   | { type: 'transcription'; text: string }
   | { type: 'lt_update'; payload: unknown | null }
-  | { type: 'settings_update'; is_blanked: boolean }
+  | { type: 'settings_update'; is_blanked: boolean; changed_by?: string }
   | { type: 'settings_full'; settings: { is_blanked: boolean; [key: string]: unknown } }
   | { type: 'verse_text'; verse: Verse; nav?: 'next' | 'prev' }
   | { type: 'search_results'; results: Verse[]; method?: string }
@@ -117,4 +141,5 @@ export type WsEvent =
   | { type: 'media_list'; media_items: MediaItem[] }
   | { type: 'schedule'; schedule: Schedule }
   | { type: 'lt_templates'; templates: LtTemplate[] }
+  | { type: 'lt_presets'; presets: LtPreset[] }
   | { type: 'error'; message: string };

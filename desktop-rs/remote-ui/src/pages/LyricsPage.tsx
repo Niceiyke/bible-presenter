@@ -1,8 +1,9 @@
 import { useRef } from 'react';
+import { ChevronLeft, ChevronRight, Search, Eye, EyeOff } from 'lucide-react';
 import { ws } from '../api/wsClient';
 import { useSongsStore } from '../stores/songsStore';
 import { useLiveStore } from '../stores/liveStore';
-import { Card, CardLabel, Btn, Pill, Input, Row } from '../components/ui';
+import { Card, CardLabel, Input, Segment } from '../components/ui';
 
 const DEFAULT_TEMPLATE = {
   bgType: 'gradient', bgColor: '#000000', bgOpacity: 0.85,
@@ -28,6 +29,7 @@ export function LyricsPage() {
 
   const line1 = flatLines[lineIdx];
   const line2 = linesMode === 2 ? flatLines[lineIdx + 1] : undefined;
+  const progress = flatLines.length > 0 ? (lineIdx / Math.max(flatLines.length - 1, 1)) * 100 : 0;
 
   function getTemplate() {
     if (selectedTemplateIdx !== null && ltTemplates[selectedTemplateIdx]) return ltTemplates[selectedTemplateIdx];
@@ -44,49 +46,97 @@ export function LyricsPage() {
   }
 
   return (
-    <div className="flex flex-col gap-3 p-3 overflow-y-auto flex-1">
-      {/* Song list */}
-      <Card>
-        <CardLabel>Song</CardLabel>
-        <Input
-          placeholder="Search songs…"
-          value={filter}
-          onChange={e => setFilter(e.target.value)}
-        />
-        <div className="flex flex-col gap-1 max-h-44 overflow-y-auto">
-          {filtered.length === 0 && (
-            <div className="text-xs py-2 text-center" style={{ color: 'var(--muted)' }}>No songs</div>
-          )}
-          {filtered.map(s => (
-            <div
-              key={s.id}
-              onClick={() => selectSong(s)}
-              className="px-3 py-2 rounded-lg cursor-pointer transition-all text-sm"
-              style={selectedSong?.id === s.id
-                ? { border: '1px solid var(--amber)', background: 'rgba(245,158,11,.07)' }
-                : { border: '1px solid var(--border)', background: 'var(--bg)' }}
-            >
-              <div style={{ color: 'var(--text)' }}>{s.title}</div>
-              {s.author && <div className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>{s.author}</div>}
+    <div className="flex flex-col h-full overflow-hidden">
+      {/* Song list — collapsible when song selected */}
+      {!selectedSong ? (
+        <div className="flex flex-col gap-3 p-4 overflow-y-auto flex-1">
+          <Card>
+            <CardLabel>Songs</CardLabel>
+            <div className="relative">
+              <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--muted)' }} />
+              <Input
+                placeholder="Search songs…"
+                value={filter}
+                onChange={e => setFilter(e.target.value)}
+                className="pl-10"
+              />
             </div>
-          ))}
+
+            <div className="flex flex-col gap-1.5">
+              {filtered.length === 0 && (
+                <p className="text-xs py-4 text-center" style={{ color: 'var(--muted)' }}>No songs found</p>
+              )}
+              {filtered.map(s => (
+                <button
+                  key={s.id}
+                  onClick={() => selectSong(s)}
+                  className="flex flex-col items-start px-4 py-3.5 rounded-2xl border text-left cursor-pointer transition-all active:scale-[0.98]"
+                  style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
+                >
+                  <span className="text-sm font-semibold" style={{ color: 'var(--text)' }}>{s.title}</span>
+                  {s.author && <span className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>{s.author}</span>}
+                  <span className="text-[10px] mt-1" style={{ color: 'var(--dim)' }}>
+                    {s.sections.length} section{s.sections.length !== 1 ? 's' : ''} · {s.sections.reduce((a, sec) => a + sec.lines.length, 0)} lines
+                  </span>
+                </button>
+              ))}
+            </div>
+          </Card>
         </div>
-      </Card>
-
-      {/* Lyric controls */}
-      {selectedSong && (
-        <Card>
-          <CardLabel>{selectedSong.title}</CardLabel>
-
-          <Row>
-            <Pill active={linesMode === 1} onClick={() => setLinesMode(1)}>1 Line</Pill>
-            <Pill active={linesMode === 2} onClick={() => setLinesMode(2)}>2 Lines</Pill>
-          </Row>
-
-          {/* Lyric display with swipe */}
+      ) : (
+        /* ── Lyric controller ─────────────────────────────────────── */
+        <div className="flex flex-col h-full">
+          {/* Song header */}
           <div
-            className="rounded-lg flex flex-col items-center justify-center text-center p-4 select-none cursor-pointer min-h-20"
-            style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
+            className="flex items-center gap-3 px-4 py-3 shrink-0"
+            style={{ borderBottom: '1px solid var(--border)' }}
+          >
+            <button
+              onClick={() => selectSong(null as unknown as typeof selectedSong)}
+              className="p-2 rounded-xl active:scale-90 transition-all cursor-pointer"
+              style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
+            >
+              <ChevronLeft size={18} style={{ color: 'var(--muted)' }} />
+            </button>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold truncate" style={{ color: 'var(--text)' }}>{selectedSong.title}</p>
+              {selectedSong.author && <p className="text-xs" style={{ color: 'var(--muted)' }}>{selectedSong.author}</p>}
+            </div>
+            {/* LT status pill */}
+            <span
+              className="shrink-0 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border"
+              style={ltShowing
+                ? { background: 'var(--green-dim)', color: 'var(--green)', borderColor: 'rgba(34,197,94,0.4)' }
+                : { background: 'transparent', color: 'var(--muted)', borderColor: 'var(--border)' }
+              }
+            >
+              {ltShowing ? '● Live' : 'Hidden'}
+            </span>
+          </div>
+
+          {/* Lines mode toggle */}
+          <div className="px-4 pt-3 shrink-0">
+            <Segment
+              options={[{ value: '1', label: '1 Line' }, { value: '2', label: '2 Lines' }]}
+              value={String(linesMode)}
+              onChange={v => setLinesMode(Number(v) as 1 | 2)}
+            />
+          </div>
+
+          {/* Progress bar */}
+          <div className="mx-4 mt-3 h-1 rounded-full overflow-hidden shrink-0" style={{ background: 'var(--surface)' }}>
+            <div
+              className="h-full rounded-full transition-all duration-300"
+              style={{ width: `${progress}%`, background: 'var(--amber)' }}
+            />
+          </div>
+          <p className="text-center text-[10px] mt-1 shrink-0" style={{ color: 'var(--muted)' }}>
+            {lineIdx + 1} / {flatLines.length}
+          </p>
+
+          {/* Lyric swipe area */}
+          <div
+            className="flex-1 flex flex-col items-center justify-center px-6 select-none"
             onTouchStart={e => { touchX.current = e.touches[0].clientX; touchY.current = e.touches[0].clientY; }}
             onTouchEnd={e => {
               const dx = e.changedTouches[0].clientX - touchX.current;
@@ -96,50 +146,65 @@ export function LyricsPage() {
             }}
           >
             {!line1 ? (
-              <span className="text-sm" style={{ color: 'var(--muted)' }}>No lines</span>
+              <p className="text-sm" style={{ color: 'var(--muted)' }}>No lines available</p>
             ) : (
-              <>
+              <div className="flex flex-col items-center gap-2 text-center">
                 {line1.sectionLabel && (
-                  <span className="text-[10px] font-bold tracking-widest uppercase block mb-1.5" style={{ color: 'var(--amber)' }}>
+                  <span
+                    className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest"
+                    style={{ background: 'var(--amber-dim)', color: 'var(--amber)', border: '1px solid rgba(245,158,11,0.3)' }}
+                  >
                     {line1.sectionLabel}
                   </span>
                 )}
-                <span className="text-lg font-bold leading-snug" style={{ color: 'var(--text)' }}>{line1.text}</span>
+                <p className="text-2xl font-bold leading-tight" style={{ color: 'var(--text)' }}>{line1.text}</p>
                 {line2 && (
-                  <span className="text-lg font-bold leading-snug mt-1 opacity-70" style={{ color: 'var(--text)' }}>
-                    {line2.text}
-                  </span>
+                  <p className="text-2xl font-bold leading-tight opacity-60" style={{ color: 'var(--text)' }}>{line2.text}</p>
                 )}
-              </>
+              </div>
             )}
-          </div>
-          <div className="text-[10px] text-center" style={{ color: 'var(--muted)' }}>
-            {lineIdx + 1} / {flatLines.length} · swipe to navigate
+            <p className="mt-4 text-[10px]" style={{ color: 'var(--dim)' }}>swipe ← → to navigate</p>
           </div>
 
-          <Row>
-            <Btn className="flex-1" onClick={prevLine} disabled={lineIdx === 0}>◀ Prev</Btn>
-            <Btn className="flex-1" onClick={nextLine} disabled={lineIdx >= flatLines.length - 1}>Next ▶</Btn>
-          </Row>
+          {/* Controls */}
+          <div className="flex flex-col gap-2 px-4 pb-4 shrink-0">
+            {/* Prev / Next */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={prevLine} disabled={lineIdx === 0}
+                className="flex items-center justify-center gap-2 py-4 rounded-2xl border font-bold transition-all active:scale-95 disabled:opacity-30 cursor-pointer"
+                style={{ background: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }}
+              >
+                <ChevronLeft size={20} /> Prev
+              </button>
+              <button
+                onClick={nextLine} disabled={lineIdx >= flatLines.length - 1}
+                className="flex items-center justify-center gap-2 py-4 rounded-2xl border font-bold transition-all active:scale-95 disabled:opacity-30 cursor-pointer"
+                style={{ background: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }}
+              >
+                Next <ChevronRight size={20} />
+              </button>
+            </div>
 
-          <Row>
-            <Btn variant="live" className="flex-1" onClick={showLt} disabled={!line1}>Show</Btn>
-            <Btn className="flex-1" onClick={() => line1 && ws.send({ cmd: 'stage_item', item: { type: 'Song', data: { kind: 'Lyrics', line1: line1.text } } })} disabled={!line1}>Stage</Btn>
-            <Btn variant="danger" className="flex-1" onClick={() => ws.send({ cmd: 'hide_lt' })}>Hide</Btn>
-          </Row>
-
-          <Row>
-            <span className="text-xs" style={{ color: 'var(--muted)' }}>LT Status:</span>
-            <span
-              className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border"
-              style={ltShowing
-                ? { background: 'rgba(34,197,94,.15)', color: 'var(--green)', borderColor: 'var(--green)' }
-                : { background: 'rgba(239,68,68,.15)', color: 'var(--red)', borderColor: 'var(--red)' }}
-            >
-              {ltShowing ? 'Showing' : 'Hidden'}
-            </span>
-          </Row>
-        </Card>
+            {/* Show / Hide LT */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={showLt} disabled={!line1}
+                className="flex items-center justify-center gap-2 py-4 rounded-2xl border font-black text-sm transition-all active:scale-95 disabled:opacity-30 cursor-pointer"
+                style={{ background: 'var(--amber)', borderColor: 'var(--amber)', color: '#000' }}
+              >
+                <Eye size={18} /> Show
+              </button>
+              <button
+                onClick={() => ws.send({ cmd: 'hide_lt' })}
+                className="flex items-center justify-center gap-2 py-4 rounded-2xl border font-black text-sm transition-all active:scale-95 cursor-pointer"
+                style={{ background: 'var(--red-dim)', borderColor: 'rgba(239,68,68,0.3)', color: 'var(--red)' }}
+              >
+                <EyeOff size={18} /> Hide
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -195,6 +195,22 @@ struct MonitorInfo {
 // App state
 // ---------------------------------------------------------------------------
 
+/// Metadata for a connected non-mobile WS remote client.
+#[derive(Debug, Clone)]
+pub struct OperatorMeta {
+    pub name: String,
+    pub role: String, // "operator" | "presenter" | "viewer"
+}
+
+/// An item staged by a remote operator, pending approval by the main desktop operator.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct RemoteProposal {
+    pub operator_key: String,
+    pub operator_name: String,
+    pub item: store::DisplayItem,
+    pub staged_at_ms: u64,
+}
+
 pub struct AppState {
     operator_audio: Arc<Mutex<audio::AudioEngine>>,
     preacher_audio: Arc<Mutex<audio::AudioEngine>>,
@@ -276,6 +292,11 @@ pub struct AppState {
     /// Session start timestamp (ms since epoch). Set by start_session and read
     /// by start_preacher_recording so relative timestamps stay consistent.
     pub session_start_ms: Arc<Mutex<u64>>,
+    /// Registry of connected non-mobile remote operators: client_key → OperatorMeta.
+    pub remote_operators: Arc<Mutex<HashMap<String, OperatorMeta>>>,
+    /// Pending staging proposals from remote operators: client_key → RemoteProposal.
+    /// Each remote operator has at most one active proposal; the main operator chooses which to send live.
+    pub remote_proposals: Arc<Mutex<HashMap<String, RemoteProposal>>>,
 }
 
 impl Clone for AppState {
@@ -321,6 +342,8 @@ impl Clone for AppState {
             operator_is_active: self.operator_is_active.clone(),
             preacher_is_active: self.preacher_is_active.clone(),
             session_start_ms: self.session_start_ms.clone(),
+            remote_operators: self.remote_operators.clone(),
+            remote_proposals: self.remote_proposals.clone(),
         }
     }
 }
@@ -1403,6 +1426,24 @@ async fn get_staged_item(
 }
 
 #[tauri::command]
+async fn get_remote_proposals(
+    state: State<'_, AppState>,
+) -> Result<Vec<RemoteProposal>, String> {
+    Ok(state.remote_proposals.lock().values().cloned().collect())
+}
+
+#[tauri::command]
+async fn dismiss_remote_proposal(
+    state: State<'_, AppState>,
+    operator_key: String,
+) -> Result<(), String> {
+    state.remote_proposals.lock().remove(&operator_key);
+    // Broadcast update to all clients and Tauri windows
+    remote::broadcast_remote_proposals(&state);
+    Ok(())
+}
+
+#[tauri::command]
 async fn stage_item(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1854,6 +1895,54 @@ async fn load_lt_templates(
         .media_schedule
         .load_lt_templates()
         .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Lower third presets
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn list_lt_presets(
+    state: State<'_, AppState>,
+) -> Result<Vec<store::LtPreset>, String> {
+    state.media_schedule.list_lt_presets().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn save_lt_preset(
+    state: State<'_, AppState>,
+    preset: store::LtPreset,
+) -> Result<Vec<store::LtPreset>, String> {
+    state.media_schedule.save_lt_preset(preset).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_lt_preset(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Vec<store::LtPreset>, String> {
+    state.media_schedule.delete_lt_preset(&id).map_err(|e| e.to_string())
+}
+
+/// Activate a saved preset by id, optionally overriding the LT style template.
+#[tauri::command]
+async fn show_lt_preset(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    template: Option<serde_json::Value>,
+) -> Result<(), String> {
+    let presets = state.media_schedule.list_lt_presets().map_err(|e| e.to_string())?;
+    let preset = presets.into_iter().find(|p| p.id == id)
+        .ok_or_else(|| format!("Preset '{}' not found", id))?;
+    let tpl = template.unwrap_or(serde_json::json!({}));
+    let payload = serde_json::json!({ "data": preset.data, "template": tpl });
+    *state.lower_third.lock() = Some(payload.clone());
+    let _ = app.emit("lower-third-update", Some(payload.clone()));
+    let _ = state.broadcast_tx.send(
+        serde_json::json!({ "type": "lt_update", "payload": payload }).to_string()
+    );
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -2638,6 +2727,8 @@ fn main() {
                 operator_is_active: Arc::new(AtomicBool::new(false)),
                 preacher_is_active: Arc::new(AtomicBool::new(false)),
                 session_start_ms: Arc::new(Mutex::new(0)),
+                remote_operators: Arc::new(Mutex::new(HashMap::new())),
+                remote_proposals: Arc::new(Mutex::new(HashMap::new())),
             };
 
             // Sync NDI state from persisted settings
@@ -2756,6 +2847,10 @@ fn main() {
             save_lt_templates,
             load_lt_templates,
             get_current_lower_third,
+            list_lt_presets,
+            save_lt_preset,
+            delete_lt_preset,
+            show_lt_preset,
             get_remote_info,
             regenerate_remote_pin,
             set_transcription_window,
@@ -2794,6 +2889,8 @@ fn main() {
             set_confidence_threshold,
             get_startup_status,
             get_remote_client_count,
+            get_remote_proposals,
+            dismiss_remote_proposal,
             list_transcripts,
             save_recovery,
             load_recovery,

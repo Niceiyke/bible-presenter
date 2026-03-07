@@ -36,7 +36,7 @@ export function useAppInitialization() {
     }
 
     const loadAll = async () => {
-      // Probe backend readiness first — retry until get_startup_status succeeds.
+      // ... existing probe logic ...
       let ready = false;
       for (let attempt = 0; attempt < 15; attempt++) {
         try {
@@ -52,7 +52,7 @@ export function useAppInitialization() {
       const [
         versionsRes, mediaRes, studioRes, scheduleRes, songsRes, hymnLibraryRes,
         ltRes, settingsRes, remoteRes, propsRes,
-        scenesRes, servicesRes
+        scenesRes, servicesRes, proposalsRes
       ] = await Promise.all([
         invoke<string[]>("get_bible_versions").catch(() => []),
         invoke<MediaItem[]>("list_media").catch(() => []),
@@ -66,6 +66,7 @@ export function useAppInitialization() {
         invoke<PropItem[]>("get_props").catch(() => []),
         invoke<SceneData[]>("list_scenes").catch(() => []),
         invoke<ServiceMeta[]>("list_services").catch(() => []),
+        invoke<any[]>("get_remote_proposals").catch(() => []),
       ]);
 
       setMedia(mediaRes);
@@ -73,6 +74,7 @@ export function useAppInitialization() {
       setScheduleEntries(scheduleRes.items.map((e: any) => ({ id: e.id || stableId(), item: e.item ?? e })));
       setSongs(songsRes);
       setHymnLibrary(hymnLibraryRes);
+      useAppStore.getState().setRemoteProposals(proposalsRes);
 
       // Handle LT templates loading with fallback to default
       const savedTpls = ltRes.length ? ltRes : [useAppStore.getState().ltTemplate];
@@ -141,7 +143,7 @@ export function useAppInitialization() {
           text,
           timestamp_ms: Date.now(),
           is_final: true,
-          source: source || "operator",
+          source: "operator",
         });
       }
 
@@ -185,6 +187,9 @@ export function useAppInitialization() {
     const unlistenPreacherTrans = listen("preacher-transcription-update", (ev: any) => {
       const { text, detected_item, confidence, is_partial, source } = ev.payload;
 
+      // Manual operator actions broadcast to both channels — ignore on preacher side
+      if (source === "manual") return;
+
       // Ignore partials entirely — only act on final transcripts
       if (is_partial) return;
 
@@ -193,7 +198,7 @@ export function useAppInitialization() {
           text,
           timestamp_ms: Date.now(),
           is_final: true,
-          source: source || "preacher",
+          source: "preacher",
         });
       }
 
@@ -270,6 +275,9 @@ export function useAppInitialization() {
       const { id, slides } = ev.payload;
       setStudioSlides({ ...useAppStore.getState().studioSlides, [id]: slides });
     });
+    const unlistenRemoteProposals = listen<any[]>("remote-proposals-update", (ev) => {
+      useAppStore.getState().setRemoteProposals(ev.payload);
+    });
     const unlistenLog = listen<any>("system-log", (ev) => {
       useAppStore.getState().addLog(ev.payload);
     });
@@ -295,6 +303,7 @@ export function useAppInitialization() {
       unlistenSongsSync.then(f => f());
       unlistenStudioSync.then(f => f());
       unlistenStudioSlidesSync.then(f => f());
+      unlistenRemoteProposals.then(f => f());
       unlistenLog.then(f => f());
       clearInterval(decayInterval);
     };

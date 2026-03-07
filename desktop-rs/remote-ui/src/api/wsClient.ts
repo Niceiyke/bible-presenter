@@ -28,7 +28,12 @@ class WsClient {
       const saved = sessionStorage.getItem('remote_token');
       if (saved) {
         this.token = saved;
-        this.send({ cmd: 'auth', pin: sessionStorage.getItem('remote_pin') ?? '' });
+        this.send({
+          cmd: 'auth',
+          pin: sessionStorage.getItem('remote_pin') ?? '',
+          name: sessionStorage.getItem('remote_name') ?? 'Remote',
+          role: sessionStorage.getItem('remote_role') ?? 'operator',
+        });
       }
     };
 
@@ -64,9 +69,16 @@ class WsClient {
     }
   }
 
-  auth(pin: string) {
+  auth(pin: string, name?: string, role?: string) {
     sessionStorage.setItem('remote_pin', pin);
-    this.send({ cmd: 'auth', pin });
+    if (name) sessionStorage.setItem('remote_name', name);
+    if (role) sessionStorage.setItem('remote_role', role);
+    this.send({
+      cmd: 'auth',
+      pin,
+      name: name ?? sessionStorage.getItem('remote_name') ?? 'Remote',
+      role: role ?? sessionStorage.getItem('remote_role') ?? 'operator',
+    });
   }
 
   get connected() {

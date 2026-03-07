@@ -115,6 +115,12 @@ export interface CameraSource {
   lastTelemetryAt?: number;
 }
 
+export interface LtPreset {
+  id: string;
+  label: string;
+  data: LowerThirdData;
+}
+
 export type LowerThirdData =
   | { kind: "Nameplate"; data: { name: string; title?: string } }
   | { kind: "Lyrics"; data: { line1: string; line2?: string; section_label?: string } }
@@ -225,6 +231,13 @@ export type DisplayItem =
 export interface ScheduleEntry {
   id: string;
   item: DisplayItem;
+}
+
+export interface RemoteProposal {
+  operator_key: string;
+  operator_name: string;
+  item: DisplayItem;
+  staged_at_ms: number;
 }
 
 export interface Schedule {
@@ -426,3 +439,10 @@ export const THEMES: Record<string, { label: string; colors: ThemeColors }> = {
     colors: { background: "#1e2a3a", verseText: "#cbd5e1", referenceText: "#94a3b8", waitingText: "#334155" },
   },
 };
+
+export interface RemoteProposal {
+  operator_key: string;
+  operator_name: string;
+  item: DisplayItem;
+  staged_at_ms: number;
+}

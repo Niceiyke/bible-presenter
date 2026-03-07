@@ -54,7 +54,7 @@ use axum::{
 };
 use serde::Deserialize;
 use wordlyte_lib::store;
-use crate::AppState;
+use crate::{AppState, RemoteProposal};
 
 // ─── Embedded assets ──────────────────────────────────────────────────────────
 
@@ -242,9 +242,10 @@ async fn api_get_state(
 ) -> Response {
     auth_guard!(state, headers);
     let live = state.live_item.lock().clone();
+    let staged = state.staged_item.lock().clone();
     let lt = state.lower_third.lock().clone();
     let is_blanked = state.settings.lock().is_blanked;
-    Json(json!({ "live_item": live, "lt": lt, "is_blanked": is_blanked })).into_response()
+    Json(json!({ "live_item": live, "staged_item": staged, "lt": lt, "is_blanked": is_blanked })).into_response()
 }
 
 async fn api_get_versions(
@@ -377,7 +378,7 @@ async fn api_go_live(
                 let _ = handle.emit("preacher-transcription-update", &update);
             }
             let lt = state.lower_third.lock().clone();
-            broadcast_str(&state, json!({ "type": "state", "live_item": item, "lt": lt }).to_string());
+            broadcast_str(&state, json!({ "type": "state", "live_item": item, "lt": lt, "changed_by": "Desktop" }).to_string());
             Json(json!({ "ok": true })).into_response()
         }
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))).into_response(),
@@ -588,6 +589,10 @@ struct ClientInfo {
     /// Human-readable name (mobile clients only)
     device_name: String,
     is_mobile: bool,
+    /// Display name provided by the client on connect (non-mobile only)
+    name: String,
+    /// Role: "operator" | "presenter" | "viewer"
+    role: String,
 }
 
 async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: SocketAddr) {
@@ -643,6 +648,15 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
                                 .unwrap_or(&device_id)
                                 .to_string();
                             let is_mobile = client_type == "mobile";
+                            let name = v.get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("Remote")
+                                .to_string();
+                            let role = v.get("role")
+                                .and_then(|r| r.as_str())
+                                .filter(|r| matches!(*r, "operator" | "presenter" | "viewer"))
+                                .unwrap_or("operator")
+                                .to_string();
 
                             // Only loopback connections may claim to be a Tauri window:main.
                             // This prevents a mobile client from hijacking the operator slot.
@@ -658,7 +672,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
                                 _ => format!("{}:{}", client_type, uuid::Uuid::new_v4()),
                             };
 
-                            return Some(Some(ClientInfo { key, device_id, device_name, is_mobile }));
+                            return Some(Some(ClientInfo { key, device_id, device_name, is_mobile, name, role }));
                         }
                         // Ignore non-auth messages silently
                     }
@@ -695,14 +709,25 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
         }
     };
 
-    let client_key = info.key.clone();
-    let device_id  = info.device_id.clone();
+    let client_key  = info.key.clone();
+    let device_id   = info.device_id.clone();
     let device_name = info.device_name.clone();
-    let is_mobile  = info.is_mobile;
+    let is_mobile   = info.is_mobile;
+    let client_name = info.name.clone();
+    let role        = info.role.clone();
 
     // ── 2. Register direct signaling channel ──────────────────────────────────
     let (direct_tx, mut direct_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     state.signaling_clients.lock().insert(client_key.clone(), direct_tx);
+
+    // ── 2b. Register non-mobile in operator registry and announce presence ────
+    if !is_mobile {
+        state.remote_operators.lock().insert(client_key.clone(), crate::OperatorMeta {
+            name: client_name.clone(),
+            role: role.clone(),
+        });
+        broadcast_operators_list(&state);
+    }
 
     // ── 3. Broadcast mobile connect event ─────────────────────────────────────
     if is_mobile && !device_id.is_empty() {
@@ -755,7 +780,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
     while let Some(Ok(msg)) = receiver.next().await {
         if let Message::Text(text) = msg {
             if let Ok(v) = serde_json::from_str::<Value>(&text) {
-                route_or_handle(&state, v, &text, &client_key).await;
+                route_or_handle(&state, v, &text, &client_key, &role).await;
             }
         }
     }
@@ -773,13 +798,26 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
         .to_string();
         let _ = state.broadcast_tx.send(msg);
     }
+
+    if !is_mobile {
+        state.remote_operators.lock().remove(&client_key);
+        broadcast_operators_list(&state);
+    }
+
+    // Remove any pending remote proposal from this client
+    {
+        let removed = state.remote_proposals.lock().remove(&client_key).is_some();
+        if removed {
+            broadcast_remote_proposals(&state);
+        }
+    }
 }
 
 // ─── Message routing ──────────────────────────────────────────────────────────
 
 /// Routes a WebSocket message either to a specific client (signaling relay) or
 /// to the general command handler (remote panel commands, state queries, etc.).
-async fn route_or_handle(state: &Arc<AppState>, v: Value, raw: &str, from_key: &str) {
+async fn route_or_handle(state: &Arc<AppState>, v: Value, raw: &str, from_key: &str, role: &str) {
     // If the message carries an explicit `target`, relay it.
     if let Some(target_raw) = v.get("target").and_then(|t| t.as_str()) {
         let target_key = normalize_target(target_raw);
@@ -833,7 +871,7 @@ async fn route_or_handle(state: &Arc<AppState>, v: Value, raw: &str, from_key: &
     }
 
     // General remote-panel command dispatch.
-    handle_command(state, v, from_key).await;
+    handle_command(state, v, from_key, role).await;
 }
 
 /// Normalises shorthand target names to canonical client keys.
@@ -847,7 +885,7 @@ fn normalize_target(target: &str) -> String {
 
 // ─── Command dispatch ─────────────────────────────────────────────────────────
 
-async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
+async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str, role: &str) {
     let cmd = match v.get("cmd").and_then(|c| c.as_str()) {
         Some(c) => c,
         None => return,
@@ -856,9 +894,24 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
     match cmd {
         "get_state" => {
             let live = state.live_item.lock().clone();
+            let staged = state.staged_item.lock().clone();
             let lt = state.lower_third.lock().clone();
-            let msg = json!({ "type": "state", "live_item": live, "lt": lt });
+            let is_blanked = state.settings.lock().is_blanked;
+            let proposals: Vec<Value> = state.remote_proposals.lock().values()
+                .map(|p| json!({ "operator_key": p.operator_key, "operator_name": p.operator_name, "item": p.item, "staged_at_ms": p.staged_at_ms }))
+                .collect();
+            let msg = json!({ "type": "state", "live_item": live, "staged_item": staged, "lt": lt, "is_blanked": is_blanked, "remote_proposals": proposals });
             send_to(state, from_key, msg.to_string());
+        }
+
+        "dismiss_remote_proposal" => {
+            if role == "viewer" {
+                send_error_to(state, from_key, "Viewers cannot dismiss proposals");
+                return;
+            }
+            let key = str_field(&v, "operator_key");
+            state.remote_proposals.lock().remove(&key);
+            broadcast_remote_proposals(state);
         }
 
         "get_versions" => {
@@ -930,28 +983,29 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
         }
 
         "go_live" => {
+            // Remote operators cannot send items live directly.
+            // Promote to a remote proposal so the main operator can approve it.
+            if role == "viewer" {
+                send_error_to(state, from_key, "Viewers cannot stage items");
+                return;
+            }
             if let Some(item_val) = v.get("item") {
                 match serde_json::from_value::<store::DisplayItem>(item_val.clone()) {
                     Ok(item) => {
-                        *state.live_item.lock() = Some(item.clone());
-
-                        if let Some(handle) = state.app_handle.get() {
-                            use tauri::Emitter;
-                            let text = display_item_text(&item);
-                            let update = serde_json::json!({
-                                "text": text,
-                                "detected_item": item.clone(),
-                                "confidence": 1.0,
-                                "source": "manual",
-                                "is_partial": false,
-                            });
-                            let _ = handle.emit("operator-transcription-update", &update);
-                            let _ = handle.emit("preacher-transcription-update", &update);
-                        }
-
-                        let lt = state.lower_third.lock().clone();
-                        let msg = json!({ "type": "state", "live_item": item, "lt": lt });
-                        broadcast_str(state, msg.to_string());
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+                        let proposal = RemoteProposal {
+                            operator_key: from_key.to_string(),
+                            operator_name: operator_name(state, from_key),
+                            item: item.clone(),
+                            staged_at_ms: now_ms,
+                        };
+                        state.remote_proposals.lock().insert(from_key.to_string(), proposal);
+                        broadcast_remote_proposals(state);
+                        // Acknowledge to the remote client that their item is staged
+                        send_to(state, from_key, json!({ "type": "staged", "staged_item": item }).to_string());
                     }
                     Err(e) => send_error_to(state, from_key, &format!("Invalid item: {}", e)),
                 }
@@ -959,18 +1013,41 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
         }
 
         "stage_item" => {
+            if role == "viewer" {
+                send_error_to(state, from_key, "Viewers cannot stage items");
+                return;
+            }
             if let Some(item_val) = v.get("item") {
                 match serde_json::from_value::<store::DisplayItem>(item_val.clone()) {
                     Ok(item) => {
-                        *state.staged_item.lock() = Some(item.clone());
-                        if let Some(handle) = state.app_handle.get() {
-                            use tauri::Emitter;
-                            let _ = handle.emit("item-staged", &item);
-                            let _ = handle.emit("stage-update", Some(&item));
+                        if from_key.starts_with("window:main") {
+                            // Desktop's own staging slot
+                            *state.staged_item.lock() = Some(item.clone());
+                            if let Some(handle) = state.app_handle.get() {
+                                use tauri::Emitter;
+                                let _ = handle.emit("item-staged", &item);
+                                let _ = handle.emit("stage-update", Some(&item));
+                            }
+                            let by = operator_name(state, from_key);
+                            let msg = json!({ "type": "staged", "staged_item": item, "changed_by": by });
+                            broadcast_str(state, msg.to_string());
+                        } else {
+                            // Remote operator proposal — goes into per-operator queue
+                            let now_ms = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64;
+                            let proposal = RemoteProposal {
+                                operator_key: from_key.to_string(),
+                                operator_name: operator_name(state, from_key),
+                                item: item.clone(),
+                                staged_at_ms: now_ms,
+                            };
+                            state.remote_proposals.lock().insert(from_key.to_string(), proposal);
+                            broadcast_remote_proposals(state);
+                            // Acknowledge to the remote client
+                            send_to(state, from_key, json!({ "type": "staged", "staged_item": item }).to_string());
                         }
-                        // Optionally broadcast staged item to other remotes if needed
-                        // let msg = json!({ "type": "state", "staged_item": item });
-                        // broadcast_str(state, msg.to_string());
                     }
                     Err(e) => send_error_to(state, from_key, &format!("Invalid item: {}", e)),
                 }
@@ -1004,6 +1081,10 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
         }
 
         "show_lt" => {
+            if role == "viewer" {
+                send_error_to(state, from_key, "Viewers cannot control the output");
+                return;
+            }
             let data_val = v.get("data").cloned().unwrap_or(Value::Null);
             let template = v.get("template").cloned().unwrap_or(Value::Object(Default::default()));
 
@@ -1025,6 +1106,10 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
         }
 
         "hide_lt" => {
+            if role == "viewer" {
+                send_error_to(state, from_key, "Viewers cannot control the output");
+                return;
+            }
             *state.lower_third.lock() = None;
 
             if let Some(handle) = state.app_handle.get() {
@@ -1037,6 +1122,10 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
         }
 
         "clear_live" => {
+            if role == "viewer" {
+                send_error_to(state, from_key, "Viewers cannot control the output");
+                return;
+            }
             *state.live_item.lock() = None;
             state.operator_audio.lock().media_playing.store(false, std::sync::atomic::Ordering::Relaxed);
             state.preacher_audio.lock().media_playing.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -1054,11 +1143,16 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
                 let _ = handle.emit("stage-update", Option::<store::DisplayItem>::None);
             }
             let lt = state.lower_third.lock().clone();
-            let msg = json!({ "type": "state", "live_item": null, "lt": lt });
+            let by = operator_name(state, from_key);
+            let msg = json!({ "type": "state", "live_item": null, "staged_item": null, "lt": lt, "changed_by": by });
             broadcast_str(state, msg.to_string());
         }
 
         "blank_output" => {
+            if role == "viewer" {
+                send_error_to(state, from_key, "Viewers cannot control the output");
+                return;
+            }
             let current_settings = state.settings.lock().clone();
             let mut new_settings = current_settings.clone();
             new_settings.is_blanked = !current_settings.is_blanked;
@@ -1070,7 +1164,8 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
                         use tauri::Emitter;
                         let _ = handle.emit("settings-changed", new_settings.clone());
                     }
-                    let msg = json!({ "type": "settings_update", "is_blanked": new_settings.is_blanked });
+                    let by = operator_name(state, from_key);
+                    let msg = json!({ "type": "settings_update", "is_blanked": new_settings.is_blanked, "changed_by": by });
                     broadcast_str(state, msg.to_string());
                 }
                 Err(e) => send_error_to(state, from_key, &format!("Failed to save settings: {}", e)),
@@ -1078,6 +1173,10 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
         }
 
         "start_live_timer" => {
+            if role == "viewer" {
+                send_error_to(state, from_key, "Viewers cannot control the output");
+                return;
+            }
             let mut live = state.live_item.lock();
             if let Some(store::DisplayItem::Timer(ref mut t)) = *live {
                 let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
@@ -1104,6 +1203,10 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
         }
 
         "stop_live_timer" => {
+            if role == "viewer" {
+                send_error_to(state, from_key, "Viewers cannot control the output");
+                return;
+            }
             let mut live = state.live_item.lock();
             if let Some(store::DisplayItem::Timer(ref mut t)) = *live {
                 t.started_at = None;
@@ -1129,6 +1232,10 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
         }
 
         "reset_live_timer" => {
+            if role == "viewer" {
+                send_error_to(state, from_key, "Viewers cannot control the output");
+                return;
+            }
             let mut live = state.live_item.lock();
             if let Some(store::DisplayItem::Timer(ref mut t)) = *live {
                 t.started_at = None;
@@ -1194,18 +1301,23 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
         }
 
         "search_hybrid" => {
+            // Spawn to avoid blocking the WS read loop during ONNX inference.
+            let state2 = Arc::clone(state);
+            let from = from_key.to_string();
             let query = str_field(&v, "query");
-            if let Some(handle) = state.app_handle.get() {
-                match state.search_bible(handle, &query).await {
-                    Ok(resp) => {
-                        let msg = json!({ "type": "search_results", "results": resp.results, "method": resp.method });
-                        send_to(state, from_key, msg.to_string());
+            tokio::spawn(async move {
+                if let Some(handle) = state2.app_handle.get() {
+                    match state2.search_bible(handle, &query).await {
+                        Ok(resp) => {
+                            let msg = json!({ "type": "search_results", "results": resp.results, "method": resp.method });
+                            send_to(&state2, &from, msg.to_string());
+                        }
+                        Err(e) => send_error_to(&state2, &from, &e.to_string()),
                     }
-                    Err(e) => send_error_to(state, from_key, &e.to_string()),
+                } else {
+                    send_error_to(&state2, &from, "App handle not initialized");
                 }
-            } else {
-                send_error_to(state, from_key, "App handle not initialized");
-            }
+            });
         }
 
         "get_lt_templates" => {
@@ -1213,6 +1325,79 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
                 Ok(templates) => {
                     let msg = json!({ "type": "lt_templates", "templates": templates });
                     send_to(state, from_key, msg.to_string());
+                }
+                Err(e) => send_error_to(state, from_key, &e.to_string()),
+            }
+        }
+
+        "get_lt_presets" => {
+            match state.media_schedule.list_lt_presets() {
+                Ok(presets) => {
+                    let msg = json!({ "type": "lt_presets", "presets": presets });
+                    send_to(state, from_key, msg.to_string());
+                }
+                Err(e) => send_error_to(state, from_key, &e.to_string()),
+            }
+        }
+
+        "save_lt_preset" => {
+            if role == "viewer" {
+                send_error_to(state, from_key, "Viewers cannot control the output");
+                return;
+            }
+            // { cmd: "save_lt_preset", preset: { id, label, data: { kind, data } } }
+            let preset_val = v.get("preset").cloned().unwrap_or(Value::Null);
+            match serde_json::from_value::<store::LtPreset>(preset_val) {
+                Ok(preset) => {
+                    match state.media_schedule.save_lt_preset(preset) {
+                        Ok(presets) => {
+                            let msg = json!({ "type": "lt_presets", "presets": presets });
+                            broadcast_str(state, msg.to_string());
+                        }
+                        Err(e) => send_error_to(state, from_key, &e.to_string()),
+                    }
+                }
+                Err(e) => send_error_to(state, from_key, &format!("Invalid preset: {}", e)),
+            }
+        }
+
+        "delete_lt_preset" => {
+            if role == "viewer" {
+                send_error_to(state, from_key, "Viewers cannot control the output");
+                return;
+            }
+            let id = str_field(&v, "id");
+            match state.media_schedule.delete_lt_preset(&id) {
+                Ok(presets) => {
+                    let msg = json!({ "type": "lt_presets", "presets": presets });
+                    broadcast_str(state, msg.to_string());
+                }
+                Err(e) => send_error_to(state, from_key, &e.to_string()),
+            }
+        }
+
+        "show_lt_preset" => {
+            if role == "viewer" {
+                send_error_to(state, from_key, "Viewers cannot control the output");
+                return;
+            }
+            // { cmd: "show_lt_preset", id: "...", template?: { ... } }
+            let id = str_field(&v, "id");
+            let template = v.get("template").cloned().unwrap_or(Value::Object(Default::default()));
+            match state.media_schedule.list_lt_presets() {
+                Ok(presets) => {
+                    if let Some(preset) = presets.into_iter().find(|p| p.id == id) {
+                        let payload = json!({ "data": preset.data, "template": template });
+                        *state.lower_third.lock() = Some(payload.clone());
+                        if let Some(handle) = state.app_handle.get() {
+                            use tauri::Emitter;
+                            let _ = handle.emit("lower-third-update", Some(payload.clone()));
+                        }
+                        let lt_msg = json!({ "type": "lt_update", "payload": payload });
+                        broadcast_str(state, lt_msg.to_string());
+                    } else {
+                        send_error_to(state, from_key, &format!("Preset '{}' not found", id));
+                    }
                 }
                 Err(e) => send_error_to(state, from_key, &e.to_string()),
             }
@@ -1244,12 +1429,12 @@ fn str_field(v: &Value, key: &str) -> String {
         .to_string()
 }
 
-fn broadcast_str(state: &Arc<AppState>, msg: String) {
+fn broadcast_str(state: &AppState, msg: String) {
     let _ = state.broadcast_tx.send(msg);
 }
 
 /// Send a message to a single client by key. No-op if client is not connected.
-fn send_to(state: &Arc<AppState>, client_key: &str, msg: String) {
+fn send_to(state: &AppState, client_key: &str, msg: String) {
     let clients = state.signaling_clients.lock();
     if let Some(ch) = clients.get(client_key) {
         let _ = ch.send(msg);
@@ -1257,11 +1442,51 @@ fn send_to(state: &Arc<AppState>, client_key: &str, msg: String) {
 }
 
 /// Send an error message back to the requesting client only (not broadcast).
-fn send_error_to(state: &Arc<AppState>, client_key: &str, message: &str) {
+fn send_error_to(state: &AppState, client_key: &str, message: &str) {
     let msg = json!({ "type": "error", "message": message }).to_string();
     send_to(state, client_key, msg);
 }
 
 fn display_item_text(item: &store::DisplayItem) -> String {
     item.to_label()
+}
+
+// ─── Multi-operator helpers ───────────────────────────────────────────────────
+
+/// Broadcast the current connected-operators list to all clients.
+fn broadcast_operators_list(state: &AppState) {
+    let ops: Vec<Value> = state
+        .remote_operators
+        .lock()
+        .iter()
+        .map(|(key, meta)| json!({ "key": key, "name": meta.name, "role": meta.role }))
+        .collect();
+    broadcast_str(state, json!({ "type": "operators", "operators": ops }).to_string());
+}
+
+/// Look up the display name of a client by key. Falls back to "Remote".
+fn operator_name(state: &AppState, client_key: &str) -> String {
+    state
+        .remote_operators
+        .lock()
+        .get(client_key)
+        .map(|m| m.name.clone())
+        .unwrap_or_else(|| "Remote".to_string())
+}
+
+/// Broadcast the current remote proposals list to all WS clients and to the Tauri desktop app.
+pub fn broadcast_remote_proposals(state: &AppState) {
+    let proposals: Vec<Value> = state.remote_proposals.lock().values()
+        .map(|p| json!({
+            "operator_key": p.operator_key,
+            "operator_name": p.operator_name,
+            "item": p.item,
+            "staged_at_ms": p.staged_at_ms,
+        }))
+        .collect();
+    broadcast_str(state, json!({ "type": "remote_proposals", "proposals": proposals }).to_string());
+    if let Some(handle) = state.app_handle.get() {
+        use tauri::Emitter;
+        let _ = handle.emit("remote-proposals-update", &proposals);
+    }
 }

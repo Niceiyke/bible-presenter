@@ -1,14 +1,204 @@
-import React, { useEffect, useRef, useMemo, useCallback } from "react";
+import React, { useEffect, useRef, useMemo, useCallback, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store";
 import { ltBuildLyricsPayload } from "../utils";
-import type { LowerThirdData } from "../types";
+import type { LowerThirdData, LtPreset } from "../types";
 
 interface LowerThirdTabProps {
   onLoadMedia: () => Promise<void>;
   onSetToast: (msg: string) => void;
 }
 
+// ── Preset panel ──────────────────────────────────────────────────────────────
+function PresetsPanel({ ltTemplate, onSetToast }: { ltTemplate: object; onSetToast: (msg: string) => void }) {
+  const [presets, setPresets] = useState<LtPreset[]>([]);
+  const [saveLabel, setSaveLabel] = useState("");
+  const [saveMode, setSaveMode] = useState<"nameplate" | "freetext">("nameplate");
+  const [saveNpName, setSaveNpName] = useState("");
+  const [saveNpTitle, setSaveNpTitle] = useState("");
+  const [saveFtText, setSaveFtText] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    invoke<LtPreset[]>("list_lt_presets")
+      .then(setPresets)
+      .catch(() => {});
+  }, []);
+
+  async function activatePreset(preset: LtPreset) {
+    try {
+      await invoke("show_lt_preset", { id: preset.id, template: ltTemplate });
+      onSetToast(`Showing: ${preset.label}`);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function deletePreset(id: string) {
+    try {
+      const updated = await invoke<LtPreset[]>("delete_lt_preset", { id });
+      setPresets(updated);
+      onSetToast("Preset deleted");
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function savePreset() {
+    if (!saveLabel.trim()) return;
+    let data: LtPreset["data"] | null = null;
+    if (saveMode === "nameplate") {
+      if (!saveNpName.trim()) return;
+      data = { kind: "Nameplate", data: { name: saveNpName.trim(), title: saveNpTitle.trim() || undefined } };
+    } else {
+      if (!saveFtText.trim()) return;
+      data = { kind: "FreeText", data: { text: saveFtText.trim() } };
+    }
+    const preset: LtPreset = { id: `preset-${Date.now()}`, label: saveLabel.trim(), data };
+    try {
+      const updated = await invoke<LtPreset[]>("save_lt_preset", { preset });
+      setPresets(updated);
+      setSaveLabel(""); setSaveNpName(""); setSaveNpTitle(""); setSaveFtText("");
+      setAddOpen(false);
+      onSetToast("Preset saved");
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5 border border-slate-700/60 rounded-xl overflow-hidden">
+      {/* Header */}
+      <button
+        className="flex items-center justify-between px-3 py-2 bg-slate-800/60 text-left"
+        onClick={() => setCollapsed(p => !p)}
+      >
+        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+          Saved Presets {presets.length > 0 ? `(${presets.length})` : ""}
+        </span>
+        <span className="text-slate-600 text-xs">{collapsed ? "▼" : "▲"}</span>
+      </button>
+
+      {!collapsed && (
+        <div className="flex flex-col gap-1.5 px-2 pb-2">
+          {presets.length === 0 && (
+            <p className="text-[10px] text-slate-600 italic py-1 px-1">No presets yet — add one below</p>
+          )}
+
+          {presets.map(p => {
+            const isNp = p.data.kind === "Nameplate";
+            const summary = isNp
+              ? `${(p.data as { kind: "Nameplate"; data: { name: string } }).data.name}`
+              : (p.data as { kind: "FreeText"; data: { text: string } }).data.text.slice(0, 35) + "…";
+            return (
+              <div
+                key={p.id}
+                className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5"
+              >
+                <span className={`shrink-0 text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${isNp ? "bg-blue-900/40 text-blue-400" : "bg-purple-900/40 text-purple-400"}`}>
+                  {isNp ? "NP" : "FT"}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[11px] font-bold text-slate-200 truncate">{p.label}</p>
+                  <p className="text-[9px] text-slate-500 truncate">{summary}</p>
+                </div>
+                <button
+                  onClick={() => activatePreset(p)}
+                  className="shrink-0 px-2 py-1 text-[9px] font-black bg-amber-600 hover:bg-amber-500 text-black rounded transition-all"
+                >
+                  SHOW
+                </button>
+                <button
+                  onClick={() => deletePreset(p.id)}
+                  className="shrink-0 text-[10px] text-red-500 hover:text-red-400 px-1 transition-colors"
+                  title="Delete preset"
+                >
+                  ✕
+                </button>
+              </div>
+            );
+          })}
+
+          {/* Add new */}
+          {!addOpen ? (
+            <button
+              onClick={() => setAddOpen(true)}
+              className="w-full text-[10px] font-bold text-slate-500 hover:text-slate-300 border border-dashed border-slate-700 rounded-lg py-1.5 transition-all"
+            >
+              + New Preset
+            </button>
+          ) : (
+            <div className="flex flex-col gap-1.5 bg-slate-900 border border-slate-700 rounded-xl p-2.5">
+              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">New Preset</p>
+
+              <div className="flex gap-1">
+                {(["nameplate", "freetext"] as const).map(m => (
+                  <button
+                    key={m}
+                    onClick={() => setSaveMode(m)}
+                    className={`flex-1 text-[9px] font-black py-1.5 rounded-md transition-all ${saveMode === m ? "bg-amber-600 text-black" : "bg-slate-800 text-slate-400"}`}
+                  >
+                    {m === "nameplate" ? "Nameplate" : "Free Text"}
+                  </button>
+                ))}
+              </div>
+
+              <input
+                className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 focus:outline-none focus:border-amber-500/50"
+                placeholder="Preset name…"
+                value={saveLabel}
+                onChange={e => setSaveLabel(e.target.value)}
+              />
+
+              {saveMode === "nameplate" ? (
+                <>
+                  <input
+                    className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 focus:outline-none focus:border-amber-500/50"
+                    placeholder="Name (required)"
+                    value={saveNpName}
+                    onChange={e => setSaveNpName(e.target.value)}
+                  />
+                  <input
+                    className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 focus:outline-none focus:border-amber-500/50"
+                    placeholder="Title / Role (optional)"
+                    value={saveNpTitle}
+                    onChange={e => setSaveNpTitle(e.target.value)}
+                  />
+                </>
+              ) : (
+                <textarea
+                  className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 resize-none h-16 focus:outline-none focus:border-amber-500/50"
+                  placeholder="Text to display…"
+                  value={saveFtText}
+                  onChange={e => setSaveFtText(e.target.value)}
+                />
+              )}
+
+              <div className="flex gap-1.5">
+                <button
+                  onClick={savePreset}
+                  disabled={!saveLabel.trim() || (saveMode === "nameplate" ? !saveNpName.trim() : !saveFtText.trim())}
+                  className="flex-1 py-1.5 text-[10px] font-black bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-black rounded-md transition-all"
+                >
+                  Save
+                </button>
+                <button
+                  onClick={() => { setAddOpen(false); setSaveLabel(""); setSaveNpName(""); setSaveNpTitle(""); setSaveFtText(""); }}
+                  className="px-3 text-[10px] font-bold bg-slate-800 text-slate-400 rounded-md"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
 export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
   const {
     activeTab,
@@ -118,9 +308,14 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
 
   return (
     <div className="flex flex-col gap-3 p-3">
+
+      {/* ── Saved presets (at top for quick access) ── */}
+      <PresetsPanel ltTemplate={ltTemplate} onSetToast={onSetToast} />
+
+      {/* ── Template selector ── */}
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center justify-between">
-          <span className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Template</span>
+          <span className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Style Template</span>
           <span className="text-[9px] text-purple-400/60 italic">Edit in Design Hub ↗</span>
         </div>
         <select
@@ -137,6 +332,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
         </select>
       </div>
 
+      {/* ── Mode tabs ── */}
       <div className="flex rounded-lg overflow-hidden border border-slate-700 shrink-0">
         {(["nameplate", "lyrics", "freetext"] as const).map((m) => (
           <button key={m} onClick={() => setLtMode(m)}
@@ -146,6 +342,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
         ))}
       </div>
 
+      {/* ── Nameplate ── */}
       {ltMode === "nameplate" && (
         <div className="flex flex-col gap-2">
           <input
@@ -162,7 +359,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
           />
           <div className="flex items-center gap-2 mt-1">
             <span className="text-[10px] text-slate-400 uppercase font-bold">Auto-hide after:</span>
-            <input 
+            <input
               type="number" min={0} max={60}
               className="w-12 bg-slate-800 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700 text-center focus:outline-none focus:border-amber-500"
               value={ltTemplate.autoHideSeconds || 0}
@@ -174,6 +371,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
         </div>
       )}
 
+      {/* ── Free text ── */}
       {ltMode === "freetext" && (
         <div className="flex flex-col gap-2">
           <textarea
@@ -210,7 +408,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
           {ltTemplate.scrollEnabled && (
             <div className="flex items-center gap-2 mt-1">
               <span className="text-[10px] text-slate-400 uppercase font-bold">Repeats:</span>
-              <input 
+              <input
                 type="number" min={0} max={50}
                 className="w-12 bg-slate-800 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700 text-center focus:outline-none focus:border-amber-500"
                 value={ltTemplate.scrollCount || 0}
@@ -222,6 +420,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
         </div>
       )}
 
+      {/* ── Lyrics ── */}
       {ltMode === "lyrics" && (
         <div className="flex flex-col gap-3">
           <div className="flex gap-2 items-center">
@@ -233,7 +432,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
               <option value="">— Select a song —</option>
               {songs.map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
             </select>
-            <button 
+            <button
               onClick={() => {
                 if (ltSongId === "quick-lyrics") {
                   setLtSongId(null);
@@ -260,12 +459,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
                 placeholder="Paste lyrics here..."
                 onChange={(e) => {
                   const lines = e.target.value.split("\n").filter(l => l.trim());
-                  const quickSong = {
-                    id: "quick-lyrics",
-                    title: "Quick Lyrics",
-                    sections: [{ label: "QUICK", lines }],
-                    arrangement: ["QUICK"]
-                  };
+                  const quickSong = { id: "quick-lyrics", title: "Quick Lyrics", sections: [{ label: "QUICK", lines }], arrangement: ["QUICK"] };
                   setSongs([...songs.filter(s => s.id !== "quick-lyrics"), quickSong as any]);
                 }}
               />
@@ -284,7 +478,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
             </div>
             <div className="flex items-center gap-1">
               <span className="text-[10px] text-slate-400 uppercase font-bold ml-1">Auto-hide:</span>
-              <input 
+              <input
                 type="number" min={0} max={60}
                 className="w-10 bg-slate-800 text-slate-200 text-xs rounded px-1 py-1 border border-slate-700 text-center focus:outline-none focus:border-amber-500"
                 value={ltTemplate.autoHideSeconds || 0}
@@ -338,17 +532,18 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
         </div>
       )}
 
+      {/* ── Actions ── */}
       <div className="flex flex-col gap-2 pt-1">
         {ltMode === "lyrics" && (
           <div className="flex gap-2">
-            <button
-              onClick={() => ltAdvance(-1)}
-              className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-lg transition-all"
-            >◀ PREV</button>
-            <button
-              onClick={() => ltAdvance(1)}
-              className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-lg transition-all"
-            >NEXT ▶</button>
+            <button onClick={() => ltAdvance(-1)}
+              className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-lg transition-all">
+              ◀ PREV
+            </button>
+            <button onClick={() => ltAdvance(1)}
+              className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-lg transition-all">
+              NEXT ▶
+            </button>
           </div>
         )}
         <button

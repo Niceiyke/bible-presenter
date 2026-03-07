@@ -1,14 +1,16 @@
 import { create } from 'zustand';
 
-type Role = 'operator' | 'presenter' | 'viewer';
+export type Role = 'operator' | 'presenter' | 'viewer';
 
 interface AuthState {
   authed: boolean;
   token: string | null;
+  name: string;
   role: Role;
   connStatus: 'connecting' | 'connected' | 'disconnected';
   connLabel: string;
   setAuthed: (token: string) => void;
+  setName: (name: string) => void;
   setRole: (role: Role) => void;
   setStatus: (s: AuthState['connStatus'], label?: string) => void;
   logout: () => void;
@@ -17,7 +19,8 @@ interface AuthState {
 export const useAuthStore = create<AuthState>((set) => ({
   authed: false,
   token: null,
-  role: 'operator',
+  name: sessionStorage.getItem('remote_name') ?? '',
+  role: (sessionStorage.getItem('remote_role') as Role) ?? 'operator',
   connStatus: 'connecting',
   connLabel: 'Connecting…',
 
@@ -25,7 +28,14 @@ export const useAuthStore = create<AuthState>((set) => ({
     sessionStorage.setItem('remote_token', token);
     set({ authed: true, token, connStatus: 'connected', connLabel: 'Connected' });
   },
-  setRole: (role) => set({ role }),
+  setName: (name) => {
+    sessionStorage.setItem('remote_name', name);
+    set({ name });
+  },
+  setRole: (role) => {
+    sessionStorage.setItem('remote_role', role);
+    set({ role });
+  },
   setStatus: (connStatus, label) =>
     set({ connStatus, connLabel: label ?? (connStatus === 'connected' ? 'Connected' : 'Connecting…') }),
   logout: () => {

@@ -31,6 +31,7 @@ import { Toast } from "./components/Toast";
 import { ShortcutsModal } from "./components/ShortcutsModal";
 import { SlideEditor } from "./components/editors/SlideEditor";
 import { LogViewer } from "./components/LogViewer";
+import { RemoteProposals } from "./components/RemoteProposals";
 import { MusicPlayer } from "./components/MusicPlayer";
 import { OutputWindow, StageWindow, DesignHub } from "./windows";
 import { stableId, newDefaultSlide } from "./utils";
@@ -49,22 +50,28 @@ function TranscriptLog({ segments }: { segments: { text: string; timestamp_ms: n
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [segments.length]);
   return (
-    <div className="flex-1 overflow-y-auto custom-scrollbar space-y-1 text-sm font-light">
-      {segments.length === 0 && (
-        <span className="text-slate-800 italic">Listening for sermon audio...</span>
-      )}
-      {segments.map((seg, i) => {
-        const isPreacher = seg.source === "preacher" || seg.source === "deepgram" || seg.source === "assemblyai";
-        return (
-          <div key={i} className="flex gap-2 items-start">
-            <span className={`shrink-0 text-[9px] font-black uppercase tracking-wider mt-0.5 ${isPreacher ? "text-amber-500" : "text-blue-400"}`}>
-              {isPreacher ? "PST" : "OPR"}
-            </span>
-            <span className="text-slate-300 leading-snug">{seg.text}</span>
-          </div>
-        );
-      })}
-      <div ref={bottomRef} />
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+      <div className="flex items-center justify-between mb-2 shrink-0">
+        <span className="text-[9px] font-black uppercase tracking-widest text-slate-600">Transcript Log</span>
+        <span className="text-[9px] text-slate-700">{segments.length} segments</span>
+      </div>
+      <div className="flex-1 overflow-y-auto custom-scrollbar space-y-1 text-sm font-light">
+        {segments.length === 0 && (
+          <span className="text-slate-700 italic text-xs">No transcription yet — start a session to begin.</span>
+        )}
+        {segments.map((seg, i) => {
+          const isPreacher = seg.source === "preacher";
+          return (
+            <div key={i} className="flex gap-2 items-start">
+              <span className={`shrink-0 text-[9px] font-black uppercase tracking-wider mt-0.5 ${isPreacher ? "text-amber-500" : "text-blue-400"}`}>
+                {isPreacher ? "PST" : "OPR"}
+              </span>
+              <span className="text-slate-300 leading-snug">{seg.text}</span>
+            </div>
+          );
+        })}
+        <div ref={bottomRef} />
+      </div>
     </div>
   );
 }
@@ -1176,6 +1183,7 @@ export default function App() {
           }}
         />
         <aside className="bg-slate-900/20 border-l border-slate-900 flex flex-col overflow-hidden shrink-0" style={{ width: scheduleWidth }}>
+          <RemoteProposals />
           <div className="p-4 border-b border-slate-900 flex items-center justify-between shrink-0">
             <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-2"><CalendarDays size={14} className="text-amber-500" /> Service Setlist</h2>
             <button onClick={persistSchedule} className="text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded transition-colors">SAVE</button>

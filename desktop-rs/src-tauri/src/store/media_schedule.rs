@@ -499,6 +499,16 @@ pub enum LowerThirdData {
     FreeText(LowerThirdFreeText),
 }
 
+/// A saved Lower Third content item (nameplate or free text) that can be
+/// recalled instantly from both the desktop operator UI and the remote.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LtPreset {
+    pub id: String,
+    /// Human-readable label shown in the preset list.
+    pub label: String,
+    pub data: LowerThirdData,
+}
+
 // ---------------------------------------------------------------------------
 // Schedule
 // ---------------------------------------------------------------------------
@@ -1254,6 +1264,40 @@ impl MediaScheduleStore {
         } else {
             Ok(serde_json::json!([]))
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Lower third presets (saved content items — Nameplate / FreeText)
+    // -----------------------------------------------------------------------
+
+    pub fn list_lt_presets(&self) -> Result<Vec<LtPreset>> {
+        let path = self.app_data_dir.join("lt_presets.json");
+        if path.exists() {
+            let json = fs::read_to_string(path)?;
+            Ok(serde_json::from_str(&json).unwrap_or_default())
+        } else {
+            Ok(vec![])
+        }
+    }
+
+    pub fn save_lt_preset(&self, preset: LtPreset) -> Result<Vec<LtPreset>> {
+        let mut presets = self.list_lt_presets()?;
+        if let Some(existing) = presets.iter_mut().find(|p| p.id == preset.id) {
+            *existing = preset;
+        } else {
+            presets.push(preset);
+        }
+        let path = self.app_data_dir.join("lt_presets.json");
+        self.atomic_write(&path, serde_json::to_string_pretty(&presets)?)?;
+        Ok(presets)
+    }
+
+    pub fn delete_lt_preset(&self, id: &str) -> Result<Vec<LtPreset>> {
+        let mut presets = self.list_lt_presets()?;
+        presets.retain(|p| p.id != id);
+        let path = self.app_data_dir.join("lt_presets.json");
+        self.atomic_write(&path, serde_json::to_string_pretty(&presets)?)?;
+        Ok(presets)
     }
 
     // -----------------------------------------------------------------------
