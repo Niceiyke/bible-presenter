@@ -132,33 +132,19 @@ export function useAppInitialization() {
         return;
       }
 
-      // ── Always update the live text display ───────────────────────────────
-      if (text) setTranscript(text);
+      // Ignore partials — only act on final transcripts
+      if (is_partial) return;
 
-      // ── Partial transcript: regex-only detection ──────────────────────────
-      // Only act if a COMPLETE explicit reference was found (confidence === 1.0).
-      // Never apply verse lock logic from a partial — just suggest.
-      if (is_partial) {
-        if (detected_item && confidence === 1.0) {
-          // Explicit reference found mid-utterance — suggest immediately.
-          // Do NOT check verse lock for explicit references on partials; the
-          // operator always sees it as a suggestion in the suggestion banner.
-          setSuggestedItem(detected_item);
-          setSuggestedConfidence(1.0);
-
-          // Auto-project explicit references immediately if enabled
-          const cfg = useAppStore.getState().transcriptionConfig;
-          const now = Date.now();
-          const overrideUntil = useAppStore.getState().manualOverrideUntil;
-          if (cfg.auto_project && !(overrideUntil && now < overrideUntil)) {
-            setLiveItem(detected_item);
-            setVerseLockUntil(now + cfg.verse_lock_secs * 1000);
-          }
-        }
-        return;
+      // ── Final transcript: commit to log ────────────────────────────────────
+      if (text) {
+        appendTranscriptSegment({
+          text,
+          timestamp_ms: Date.now(),
+          is_final: true,
+          source: source || "operator",
+        });
       }
 
-      // ── Final transcript: full detection pipeline ─────────────────────────
       if (!detected_item) return;
 
       const cfg = useAppStore.getState().transcriptionConfig;
@@ -199,41 +185,39 @@ export function useAppInitialization() {
     const unlistenPreacherTrans = listen("preacher-transcription-update", (ev: any) => {
       const { text, detected_item, confidence, is_partial, source } = ev.payload;
 
-      // Update the main live text display
-      if (text) setTranscript(text);
+      // Ignore partials entirely — only act on final transcripts
+      if (is_partial) return;
 
-      if (!is_partial) {
-        if (text) {
-          appendTranscriptSegment({
-            text,
-            timestamp_ms: Date.now(),
-            is_final: true,
-            source: source || "auto",
-          });
-        }
+      if (text) {
+        appendTranscriptSegment({
+          text,
+          timestamp_ms: Date.now(),
+          is_final: true,
+          source: source || "preacher",
+        });
+      }
 
-        // Verse detection from the streaming pipeline — same logic as operator finals
-        if (detected_item) {
-          const cfg = useAppStore.getState().transcriptionConfig;
-          const now = Date.now();
-          const overrideUntil = useAppStore.getState().manualOverrideUntil;
-          const lockUntil     = useAppStore.getState().verseLockUntil;
-          const withinOverride = overrideUntil != null && now < overrideUntil;
-          const withinLock     = lockUntil != null && now < lockUntil;
+      // Verse detection from the streaming pipeline — same logic as operator finals
+      if (detected_item) {
+        const cfg = useAppStore.getState().transcriptionConfig;
+        const now = Date.now();
+        const overrideUntil = useAppStore.getState().manualOverrideUntil;
+        const lockUntil     = useAppStore.getState().verseLockUntil;
+        const withinOverride = overrideUntil != null && now < overrideUntil;
+        const withinLock     = lockUntil != null && now < lockUntil;
 
-          if (!withinOverride) {
-            setSuggestedItem(detected_item);
-            setSuggestedConfidence(confidence ?? 0);
+        if (!withinOverride) {
+          setSuggestedItem(detected_item);
+          setSuggestedConfidence(confidence ?? 0);
 
-            if (cfg.auto_project) {
-              const isExplicit     = confidence === 1.0;
-              const highConfidence = (confidence ?? 0) >= 0.85;
-              const threshold      = cfg.confidence_threshold ?? 0.55;
-              const shouldProject  = isExplicit || highConfidence || (!withinLock && (confidence ?? 0) >= threshold);
-              if (shouldProject) {
-                setLiveItem(detected_item);
-                setVerseLockUntil(now + cfg.verse_lock_secs * 1000);
-              }
+          if (cfg.auto_project) {
+            const isExplicit     = confidence === 1.0;
+            const highConfidence = (confidence ?? 0) >= 0.85;
+            const threshold      = cfg.confidence_threshold ?? 0.55;
+            const shouldProject  = isExplicit || highConfidence || (!withinLock && (confidence ?? 0) >= threshold);
+            if (shouldProject) {
+              setLiveItem(detected_item);
+              setVerseLockUntil(now + cfg.verse_lock_secs * 1000);
             }
           }
         }

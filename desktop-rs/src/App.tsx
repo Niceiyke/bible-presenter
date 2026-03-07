@@ -45,6 +45,30 @@ import type {
 
 const getVerseKey = (v: any) => `${v.book}-${v.chapter}-${v.verse}-${v.version}`;
 
+function TranscriptLog({ segments }: { segments: { text: string; timestamp_ms: number; source: string }[] }) {
+  const bottomRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [segments.length]);
+  return (
+    <div className="flex-1 overflow-y-auto custom-scrollbar space-y-1 text-sm font-light">
+      {segments.length === 0 && (
+        <span className="text-slate-800 italic">Listening for sermon audio...</span>
+      )}
+      {segments.map((seg, i) => {
+        const isPreacher = seg.source === "preacher" || seg.source === "deepgram" || seg.source === "assemblyai";
+        return (
+          <div key={i} className="flex gap-2 items-start">
+            <span className={`shrink-0 text-[9px] font-black uppercase tracking-wider mt-0.5 ${isPreacher ? "text-amber-500" : "text-blue-400"}`}>
+              {isPreacher ? "PST" : "OPR"}
+            </span>
+            <span className="text-slate-300 leading-snug">{seg.text}</span>
+          </div>
+        );
+      })}
+      <div ref={bottomRef} />
+    </div>
+  );
+}
+
 export default function App() {
   const {
     label, liveItem, setLiveItem, stagedItem, setStagedItem, suggestedItem, setSuggestedItem,
@@ -55,7 +79,7 @@ export default function App() {
     settings, setSettings, activeTab, setActiveTab, toast, setToast,
     ltVisible, setLtVisible, ltMode, ltLineIndex, setLtLineIndex, ltLinesPerDisplay, ltTemplate,
     ltSongId, scheduleEntries, setScheduleEntries, services,
-    activeServiceId, setActiveServiceId, media, setMedia, pauseWhisper, transcript, sessionState, setSessionState,
+    activeServiceId, setActiveServiceId, media, setMedia, pauseWhisper, transcript, sessionTranscript, sessionState, setSessionState,
     operatorMicLevel, preacherMicLevel, operatorMuted, setOperatorMuted, preacherMuted, setPreacherMuted,
     remoteUrl, remotePin, bibleVersion, topPanelPct, setTopPanelPct, stagePct, setStagePct, 
     studioList, setStudioList, studioSlides, setStudioSlides,
@@ -967,7 +991,7 @@ export default function App() {
 
           {!isTranscriptionCollapsed && (
             <section className="bg-slate-950 p-5 flex flex-col overflow-hidden border-b border-slate-900 relative" style={{ height: `${topPanelPct}%` }}>
-              <div className="flex-1 overflow-y-auto text-xl font-light text-slate-400 custom-scrollbar">{transcript || <span className="text-slate-800 italic">Listening for sermon audio...</span>}</div>
+              <TranscriptLog segments={sessionTranscript} />
               <AnimatePresence>
                 {suggestedItem && (
                   <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="mt-4 bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between">

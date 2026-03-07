@@ -539,183 +539,185 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
 
     let session_start_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
 
-    // ── Operator Pipeline (Local or Cloud REST, PTT)
-    let app_op = app.clone();
-    let _is_running_op = is_running.clone();
-    let engine_op = engine.clone();
-    let store_op = store.clone();
-    let ctx_buf_op = context_buffer.clone();
-    let op_provider = cloud_provider.clone();
-    let op_api_key = cloud_api_key.clone();
-    let op_language = cloud_language.clone();
-    let op_model = cloud_rest_model.clone(); // operator always uses REST model
-    let trans_window_op = transcription_window.clone();
-    let trans_paused_op = transcription_paused.clone();
-    let op_muted_pipeline = operator_muted.clone();
-    let tx_log_op = session_transcript.clone();
-    let semaphore_op = inference_semaphore.clone();
+    // ── Operator Pipeline (PTT voice search — Local Whisper or Cloud REST)
+    // The operator mic is for on-demand scripture lookup by voice (press-to-talk),
+    // not continuous transcription. Fires only on PTT release or window-full while held.
+    {
+        let app_op = app.clone();
+        let engine_op = engine.clone();
+        let store_op = store.clone();
+        let ctx_buf_op = context_buffer.clone();
+        let op_provider = cloud_provider.clone();
+        let op_api_key = cloud_api_key.clone();
+        let op_language = cloud_language.clone();
+        let op_model = cloud_rest_model.clone();
+        let trans_window_op = transcription_window.clone();
+        let trans_paused_op = transcription_paused.clone();
+        let op_muted_pipeline = operator_muted.clone();
+        let tx_log_op = session_transcript.clone();
+        let semaphore_op = inference_semaphore.clone();
 
-    tokio::spawn(async move {
-        let mut buffer = Vec::with_capacity(48000 * 3);
-        const OVERLAP: usize = 4000;
-        const MIN_SAMPLES: usize = 8000; // 0.5s
-        let is_cloud = operator_mode == "cloud" && op_provider.is_some() && op_api_key.is_some();
-        let provider_name = if is_cloud { op_provider.clone().unwrap() } else { "local".to_string() };
-        let mut was_ptt_active = false;
-        let mut first_chunk = true;
+        tokio::spawn(async move {
+            let mut buffer = Vec::with_capacity(48000 * 3);
+            const OVERLAP: usize = 4000;
+            const MIN_SAMPLES: usize = 8000; // 0.5s
+            let is_cloud = operator_mode == "cloud" && op_provider.is_some() && op_api_key.is_some();
+            let provider_name = if is_cloud { op_provider.clone().unwrap() } else { "local".to_string() };
+            let mut was_ptt_active = false;
+            let mut first_chunk = true;
 
-        while let Some(chunk) = op_audio_rx.recv().await {
-            if first_chunk {
-                log_msg(&app_op, &format!("[Operator] First audio chunk received — VAD active, pipeline running ({})", provider_name));
-                first_chunk = false;
-            }
-            let window_size = *trans_window_op.lock();
-            let is_ptt_active = operator_ptt_active.load(std::sync::atomic::Ordering::Relaxed);
-            let is_paused = trans_paused_op.load(std::sync::atomic::Ordering::Relaxed);
-            let is_muted = op_muted_pipeline.load(std::sync::atomic::Ordering::Relaxed);
+            while let Some(chunk) = op_audio_rx.recv().await {
+                if first_chunk {
+                    log_msg(&app_op, &format!("[Operator] PTT pipeline ready ({})", provider_name));
+                    first_chunk = false;
+                }
+                let window_size = *trans_window_op.lock();
+                let is_ptt_active = operator_ptt_active.load(std::sync::atomic::Ordering::Relaxed);
+                let is_paused = trans_paused_op.load(std::sync::atomic::Ordering::Relaxed);
+                let is_muted = op_muted_pipeline.load(std::sync::atomic::Ordering::Relaxed);
 
-            if is_muted {
-                buffer.clear();
-                was_ptt_active = false;
-                continue;
-            }
+                if is_muted {
+                    buffer.clear();
+                    was_ptt_active = false;
+                    continue;
+                }
 
-            buffer.extend_from_slice(&chunk);
+                buffer.extend_from_slice(&chunk);
 
-            // Trigger processing if:
-            // 1. PTT was just released AND we have enough audio
-            // 2. Buffer reached window size AND PTT is still active
-            let trigger_on_release = was_ptt_active && !is_ptt_active && buffer.len() >= MIN_SAMPLES;
-            let trigger_on_window = is_ptt_active && buffer.len() >= window_size;
+                // Trigger on PTT release (speak then release) or window-full while held
+                let trigger_on_release = was_ptt_active && !is_ptt_active && buffer.len() >= MIN_SAMPLES;
+                let trigger_on_window = is_ptt_active && buffer.len() >= window_size;
 
-            if !is_paused && (trigger_on_release || trigger_on_window) {
-                let buf_samples = buffer.len();
-                let buf_ms = buf_samples * 1000 / 16000;
-                let trigger_reason = if trigger_on_release { "PTT released" } else { "window full" };
+                if !is_paused && (trigger_on_release || trigger_on_window) {
+                    let buf_samples = buffer.len();
+                    let buf_ms = buf_samples * 1000 / 16000;
+                    let trigger_reason = if trigger_on_release { "PTT released" } else { "window full" };
 
-                // For local Whisper: enforce single-flight inference.
-                // If inference is already running, discard this window to prevent CPU pileup.
-                // Cloud REST is remote so we allow concurrent calls there.
-                let maybe_permit = if !is_cloud {
-                    match Arc::clone(&semaphore_op).try_acquire_owned() {
-                        Ok(p) => Some(p),
-                        Err(_) => {
-                            log_msg(&app_op, &format!("[Operator] Inference busy — window dropped ({} samples / {}ms)", buf_samples, buf_ms));
-                            buffer.clear();
-                            was_ptt_active = is_ptt_active;
-                            continue;
+                    let maybe_permit = if !is_cloud {
+                        match Arc::clone(&semaphore_op).try_acquire_owned() {
+                            Ok(p) => Some(p),
+                            Err(_) => {
+                                log_msg(&app_op, &format!("[Operator] Inference busy — window dropped ({} samples / {}ms)", buf_samples, buf_ms));
+                                buffer.clear();
+                                was_ptt_active = is_ptt_active;
+                                continue;
+                            }
                         }
-                    }
-                } else {
-                    None
-                };
+                    } else {
+                        None
+                    };
 
-                log_msg(&app_op, &format!("[Operator] Transcription triggered: {} — {} samples ({}ms) via {}", trigger_reason, buf_samples, buf_ms, provider_name));
+                    log_msg(&app_op, &format!("[Operator] Voice search triggered: {} — {}ms via {}", trigger_reason, buf_ms, provider_name));
 
-                let b_clone = buffer.clone();
-                let e_clone = engine_op.clone();
-                let s_clone = store_op.clone();
-                let ctx_buf = ctx_buf_op.clone();
-                let op_p = op_provider.clone();
-                let op_k = op_api_key.clone();
-                let op_l = op_language.clone();
-                let op_m = op_model.clone();
-                let app_op_inner = app_op.clone();
-                let p_name = provider_name.clone();
-                let tx_log = tx_log_op.clone();
+                    let b_clone = buffer.clone();
+                    let e_clone = engine_op.clone();
+                    let s_clone = store_op.clone();
+                    let ctx_buf = ctx_buf_op.clone();
+                    let op_p = op_provider.clone();
+                    let op_k = op_api_key.clone();
+                    let op_l = op_language.clone();
+                    let op_m = op_model.clone();
+                    let app_op_inner = app_op.clone();
+                    let p_name = provider_name.clone();
+                    let tx_log = tx_log_op.clone();
 
-                tokio::spawn(async move {
-                    let _permit = maybe_permit; // Released when inference completes
-                    let t0 = std::time::Instant::now();
-                    let result: Option<(String, Option<store::DisplayItem>, f32)> = if is_cloud {
-                        if let Ok(text) = engine::cloud::transcribe_cloud(&b_clone, op_p.as_ref().unwrap(), op_k.as_ref().unwrap(), op_m.as_deref()).await {
-                            log_msg(&app_op_inner, &format!("[Operator] Cloud transcription ({} ms): \"{}\"", t0.elapsed().as_millis(), &text[..text.len().min(80)]));
-                            let t1 = std::time::Instant::now();
-                            let result = tokio::task::spawn_blocking(move || {
+                    tokio::spawn(async move {
+                        let _permit = maybe_permit;
+                        let t0 = std::time::Instant::now();
+                        let result: Option<(String, Option<store::DisplayItem>, f32)> = if is_cloud {
+                            if let Ok(text) = engine::cloud::transcribe_cloud(&b_clone, op_p.as_ref().unwrap(), op_k.as_ref().unwrap(), op_m.as_deref()).await {
+                                log_msg(&app_op_inner, &format!("[Operator] Cloud transcription ({} ms): \"{}\"", t0.elapsed().as_millis(), &text[..text.len().min(80)]));
+                                let t1 = std::time::Instant::now();
+                                let result = tokio::task::spawn_blocking(move || {
+                                    let combined = { let mut buf = ctx_buf.lock(); buf.push(text.clone()); if buf.len() > 3 { buf.remove(0); } buf.join(" ") };
+                                    let embedding = e_clone.embed(&combined).ok();
+                                    let (verse, confidence) = s_clone.detect_verse_hybrid(&combined, embedding);
+                                    Some((text, verse.map(store::DisplayItem::Verse), confidence))
+                                }).await.ok().flatten();
+                                log_msg(&app_op_inner, &format!("[Operator] Verse detection ({} ms)", t1.elapsed().as_millis()));
+                                result
+                            } else {
+                                log_msg(&app_op_inner, &format!("[Operator] Cloud transcription failed after {} ms", t0.elapsed().as_millis()));
+                                None
+                            }
+                        } else {
+                            let app_blk = app_op_inner.clone();
+                            tokio::task::spawn_blocking(move || {
+                                let t_whisper = std::time::Instant::now();
+                                let text = match e_clone.transcribe(&b_clone, op_l.as_deref()) {
+                                    Ok(t) => t,
+                                    Err(e) => {
+                                        log_msg(&app_blk, &format!("[Operator] Whisper error after {} ms: {}", t_whisper.elapsed().as_millis(), e));
+                                        return None;
+                                    }
+                                };
+                                log_msg(&app_blk, &format!("[Operator] Whisper ({} ms): \"{}\"", t_whisper.elapsed().as_millis(), &text[..text.len().min(80)]));
+                                let t_detect = std::time::Instant::now();
                                 let combined = { let mut buf = ctx_buf.lock(); buf.push(text.clone()); if buf.len() > 3 { buf.remove(0); } buf.join(" ") };
                                 let embedding = e_clone.embed(&combined).ok();
                                 let (verse, confidence) = s_clone.detect_verse_hybrid(&combined, embedding);
+                                log_msg(&app_blk, &format!("[Operator] Verse detection ({} ms): {}", t_detect.elapsed().as_millis(),
+                                    match &verse {
+                                        Some(v) => format!("MATCH {} {}:{} (conf={:.2})", v.book, v.chapter, v.verse, confidence),
+                                        None => format!("no match (conf={:.2})", confidence),
+                                    }
+                                ));
                                 Some((text, verse.map(store::DisplayItem::Verse), confidence))
-                            }).await.ok().flatten();
-                            log_msg(&app_op_inner, &format!("[Operator] Verse detection ({} ms)", t1.elapsed().as_millis()));
-                            result
-                        } else {
-                            log_msg(&app_op_inner, &format!("[Operator] Cloud transcription failed after {} ms", t0.elapsed().as_millis()));
-                            None
+                            }).await.ok().flatten()
+                        };
+
+                        if let Some((text, item, confidence)) = result {
+                            if is_hallucination(&text) {
+                                log_msg(&app_op_inner, &format!("[Operator] Hallucination filtered: \"{}\"", &text[..text.len().min(60)]));
+                            } else {
+                                let word_count = text.split_whitespace().count();
+                                if word_count < 3 {
+                                    log_msg(&app_op_inner, &format!("[Operator] Voice search skipped (too short, {} word(s)): \"{}\"", word_count, &text));
+                                } else {
+                                    let now_ms = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis() as u64;
+                                    tx_log.lock().push(TranscriptSegment {
+                                        text: text.clone(),
+                                        timestamp_ms: now_ms.saturating_sub(session_start_ms),
+                                        is_final: true,
+                                        source: p_name.clone(),
+                                    });
+                                    log_msg(&app_op_inner, &format!("[Operator] Voice search done ({} ms) — emitting result", t0.elapsed().as_millis()));
+                                    let _ = app_op_inner.emit("operator-transcription-update", TranscriptionUpdate {
+                                        text: text.clone(), detected_item: item, confidence, source: p_name, is_partial: false,
+                                    });
+                                }
+                            }
                         }
+                    });
+
+                    if trigger_on_release || is_cloud {
+                        buffer.clear();
                     } else {
-                        let app_blk = app_op_inner.clone();
-                        tokio::task::spawn_blocking(move || {
-                            let t_whisper = std::time::Instant::now();
-                            let text = match e_clone.transcribe(&b_clone, op_l.as_deref()) {
-                                Ok(t) => t,
-                                Err(e) => {
-                                    log_msg(&app_blk, &format!("[Operator] Whisper error after {} ms: {}", t_whisper.elapsed().as_millis(), e));
-                                    return None;
-                                }
-                            };
-                            log_msg(&app_blk, &format!("[Operator] Whisper ({} ms): \"{}\"", t_whisper.elapsed().as_millis(), &text[..text.len().min(80)]));
-
-                            let t_detect = std::time::Instant::now();
-                            let combined = { let mut buf = ctx_buf.lock(); buf.push(text.clone()); if buf.len() > 3 { buf.remove(0); } buf.join(" ") };
-                            let embedding = e_clone.embed(&combined).ok();
-                            let (verse, confidence) = s_clone.detect_verse_hybrid(&combined, embedding);
-                            log_msg(&app_blk, &format!("[Operator] Verse detection ({} ms): {}", t_detect.elapsed().as_millis(),
-                                match &verse {
-                                    Some(v) => format!("MATCH {} {}:{} (conf={:.2})", v.book, v.chapter, v.verse, confidence),
-                                    None => format!("no match (conf={:.2})", confidence),
-                                }
-                            ));
-                            Some((text, verse.map(store::DisplayItem::Verse), confidence))
-                        }).await.ok().flatten()
-                    };
-
-                    if let Some((text, item, confidence)) = result {
-                        if is_hallucination(&text) {
-                            log_msg(&app_op_inner, &format!("[Operator] Hallucination filtered: \"{}\"", &text[..text.len().min(60)]));
+                        // Sliding window for continuous PTT hold
+                        if buffer.len() > window_size * 2 {
+                            let to_drain = buffer.len() - (window_size + OVERLAP);
+                            buffer.drain(0..to_drain);
                         } else {
-                            let now_ms = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis() as u64;
-                            tx_log.lock().push(TranscriptSegment {
-                                text: text.clone(),
-                                timestamp_ms: now_ms.saturating_sub(session_start_ms),
-                                is_final: true,
-                                source: p_name.clone(),
-                            });
-                            log_msg(&app_op_inner, &format!("[Operator] Total {} ms — emitting result", t0.elapsed().as_millis()));
-                            let _ = app_op_inner.emit("operator-transcription-update", TranscriptionUpdate {
-                                text: text.clone(), detected_item: item, confidence, source: p_name, is_partial: false,
-                            });
+                            let remaining = buffer.len().saturating_sub(OVERLAP);
+                            buffer = buffer[remaining..].to_vec();
                         }
                     }
-                });
+                }
 
-                if trigger_on_release || is_cloud {
-                    buffer.clear();
-                } else {
-                    // Sliding window for continuous PTT hold
-                    if buffer.len() > window_size * 2 {
-                        let to_drain = buffer.len() - (window_size + OVERLAP);
-                        buffer.drain(0..to_drain);
-                    } else {
-                        let remaining = buffer.len().saturating_sub(OVERLAP);
-                        buffer = buffer[remaining..].to_vec();
+                if !is_ptt_active && !trigger_on_release {
+                    // Keep a small pre-roll buffer when PTT is idle
+                    if buffer.len() > 8000 {
+                        buffer.drain(0..buffer.len() - 8000);
                     }
                 }
-            }
 
-            if !is_ptt_active && !trigger_on_release {
-                // If not active and not just released, keep buffer small (pre-roll)
-                if buffer.len() > 8000 {
-                    buffer.drain(0..buffer.len() - 8000);
-                }
+                was_ptt_active = is_ptt_active;
             }
-
-            was_ptt_active = is_ptt_active;
-        }
-    });
+        });
+    }
 
     // ── Preacher Pipeline (Cloud WS, Cloud REST, or Local)
     let preacher_use_stream = preacher_mode == "cloud"
@@ -793,29 +795,32 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
                 tokio::spawn(async move {
                     while let Some(seg) = transcript_rx.recv().await {
                         let text = seg.text.trim().to_string();
-                        if is_hallucination(&text) { continue; }
+                        // Skip partials and hallucinations
+                        if !seg.is_final || is_hallucination(&text) || text.is_empty() { continue; }
                         let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
-                        if seg.is_final && !text.is_empty() {
-                            tx_log_pr.lock().push(TranscriptSegment { text: text.clone(), timestamp_ms: now_ms.saturating_sub(session_start_ms), is_final: true, source: provider_name.clone() });
+                        tx_log_pr.lock().push(TranscriptSegment { text: text.clone(), timestamp_ms: now_ms.saturating_sub(session_start_ms), is_final: true, source: provider_name.clone() });
+                        let word_count = text.split_whitespace().count();
+                        let (detected_item, confidence) = if word_count >= 3 {
                             let e = engine_ws.clone();
                             let s = store_ws.clone();
                             let ctx = ctx_buf_ws.clone();
                             let t = text.clone();
-                            let (detected_item, confidence) = tokio::task::spawn_blocking(move || {
+                            tokio::task::spawn_blocking(move || {
                                 let combined = { let mut buf = ctx.lock(); buf.push(t.clone()); if buf.len() > 3 { buf.remove(0); } buf.join(" ") };
                                 let embedding = e.embed(&combined).ok();
                                 let (verse, conf) = s.detect_verse_hybrid(&combined, embedding);
                                 (verse.map(store::DisplayItem::Verse), conf)
-                            }).await.unwrap_or((None, 0.0));
-                            if let Some(store::DisplayItem::Verse(ref v)) = detected_item {
-                                log_msg(&app_pr, &format!("[Session] Verse detected: {} {}:{} (conf={:.2})", v.book, v.chapter, v.verse, confidence));
-                            } else {
-                                log_msg(&app_pr, &format!("[Session] Final transcript — no verse match (conf={:.2}): \"{}\"", confidence, &text[..text.len().min(60)]));
-                            }
-                            let _ = app_pr.emit("preacher-transcription-update", TranscriptionUpdate { text: text.clone(), detected_item, confidence, source: provider_name.clone(), is_partial: false });
-                        } else if !seg.is_final {
-                            let _ = app_pr.emit("preacher-transcription-update", TranscriptionUpdate { text: text.clone(), detected_item: None, confidence: 0.0, source: provider_name.clone(), is_partial: true });
+                            }).await.unwrap_or((None, 0.0))
+                        } else {
+                            log_msg(&app_pr, &format!("[Session] Final skipped (too short, {} word(s)): \"{}\"", word_count, &text));
+                            (None, 0.0)
+                        };
+                        if let Some(store::DisplayItem::Verse(ref v)) = detected_item {
+                            log_msg(&app_pr, &format!("[Session] Verse detected: {} {}:{} (conf={:.2})", v.book, v.chapter, v.verse, confidence));
+                        } else if word_count >= 3 {
+                            log_msg(&app_pr, &format!("[Session] Final transcript — no verse match (conf={:.2}): \"{}\"", confidence, &text[..text.len().min(60)]));
                         }
+                        let _ = app_pr.emit("preacher-transcription-update", TranscriptionUpdate { text: text.clone(), detected_item, confidence, source: provider_name.clone(), is_partial: false });
                     }
                     *handle_arc_stop.lock() = None;
                     let mut r = is_running_pr.lock();
