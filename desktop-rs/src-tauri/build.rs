@@ -16,7 +16,10 @@ fn main() {
     // In CI or on fresh clones it will always build; locally Cargo only reruns
     // when the rerun-if-changed paths above are touched.
     if !dist_dir.exists() || std::env::var("FORCE_REMOTE_UI_BUILD").is_ok() {
-        let status = std::process::Command::new("npm")
+        // On Windows, npm is a .cmd batch file and can't be launched directly by name.
+        let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
+
+        let status = std::process::Command::new(npm)
             .args(["run", "build"])
             .current_dir(&remote_ui_dir)
             .status()
