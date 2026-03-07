@@ -35,9 +35,11 @@ use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         ConnectInfo,
+        Path as AxumPath,
         State as AxumState,
     },
-    response::{Html, IntoResponse},
+    http::{header, StatusCode},
+    response::{Html, IntoResponse, Response},
     routing::get,
     Json, Router,
 };
@@ -46,24 +48,59 @@ use serde_json::{json, Value};
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
 
+use axum::{
+    extract::Query as AxumQuery,
+    routing::post,
+};
+use serde::Deserialize;
 use wordlyte_lib::store;
 use crate::AppState;
 
-// ─── Embedded HTML assets ─────────────────────────────────────────────────────
+// ─── Embedded assets ──────────────────────────────────────────────────────────
 
-const REMOTE_HTML: &str = include_str!("remote.html");
+// Legacy single-file HTML pages (camera + output)
 const CAMERA_HTML: &str = include_str!("camera.html");
 const OUTPUT_HTML: &str = include_str!("output.html");
+
+// React remote-ui SPA (built from remote-ui/dist/)
+#[derive(rust_embed::RustEmbed)]
+#[folder = "../remote-ui/dist/"]
+struct RemoteUiAssets;
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 pub async fn start(state: Arc<AppState>, port: u16) {
     let app = Router::new()
-        .route("/health", get(health_handler))
-        .route("/",      get(serve_remote_html))
+        // ── Legacy pages ────────────────────────────────────────────────────
         .route("/camera", get(serve_camera_html))
         .route("/output", get(serve_output_html))
+        // ── WebSocket ───────────────────────────────────────────────────────
         .route("/ws",    get(ws_handler))
+        // ── Media thumbnail ────────────────────────────────────────────────
+        .route("/media-thumb/{id}", get(serve_media_thumb))
+        // ── REST API ────────────────────────────────────────────────────────
+        .route("/health",           get(health_handler))
+        .route("/api/state",        get(api_get_state))
+        .route("/api/versions",     get(api_get_versions))
+        .route("/api/books",        get(api_get_books))
+        .route("/api/chapters",     get(api_get_chapters))
+        .route("/api/verse-count",  get(api_get_verse_count))
+        .route("/api/verse",        get(api_get_verse))
+        .route("/api/songs",        get(api_get_songs))
+        .route("/api/media",        get(api_get_media))
+        .route("/api/schedule",     get(api_get_schedule))
+        .route("/api/lt-templates", get(api_get_lt_templates))
+        .route("/api/go-live",      post(api_go_live))
+        .route("/api/stage",        post(api_stage))
+        .route("/api/clear-live",   post(api_clear_live))
+        .route("/api/blank",        post(api_blank))
+        .route("/api/lt/show",      post(api_lt_show))
+        .route("/api/lt/hide",      post(api_lt_hide))
+        .route("/api/timer/start",  post(api_timer_start))
+        .route("/api/timer/stop",   post(api_timer_stop))
+        .route("/api/timer/reset",  post(api_timer_reset))
+        // ── React SPA + static assets (must be last — catch-all) ───────────
+        .fallback(get(serve_spa))
         .layer(CorsLayer::permissive())
         .with_state(state.clone());
 
@@ -84,17 +121,21 @@ pub async fn start(state: Arc<AppState>, port: u16) {
     }
 }
 
+// ─── Auth helper ──────────────────────────────────────────────────────────────
+
+fn check_token(state: &Arc<AppState>, req_headers: &axum::http::HeaderMap) -> bool {
+    let token = req_headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    state.session_tokens.lock().contains(token)
+}
+
 // ─── HTTP handlers ─────────────────────────────────────────────────────────────
 
 async fn health_handler() -> impl IntoResponse {
-    Json(serde_json::json!({
-        "status": "ok",
-        "version": env!("CARGO_PKG_VERSION")
-    }))
-}
-
-async fn serve_remote_html() -> impl IntoResponse {
-    Html(REMOTE_HTML)
+    Json(serde_json::json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }))
 }
 
 async fn serve_camera_html() -> impl IntoResponse {
@@ -103,6 +144,427 @@ async fn serve_camera_html() -> impl IntoResponse {
 
 async fn serve_output_html() -> impl IntoResponse {
     Html(OUTPUT_HTML)
+}
+
+/// Serve the React SPA and its static assets from the embedded dist/.
+async fn serve_spa(uri: axum::http::Uri) -> Response {
+    let path = uri.path().trim_start_matches('/');
+    // Try exact asset match first
+    let asset_path = if path.is_empty() { "index.html" } else { path };
+    if let Some(content) = RemoteUiAssets::get(asset_path) {
+        let mime = mime_guess::from_path(asset_path).first_or_octet_stream();
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, mime.as_ref())],
+            content.data.into_owned(),
+        ).into_response();
+    }
+    // Fallback to index.html for client-side routing
+    if let Some(index) = RemoteUiAssets::get("index.html") {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            index.data.into_owned(),
+        ).into_response();
+    }
+    (StatusCode::NOT_FOUND, "Not found").into_response()
+}
+
+async fn serve_media_thumb(
+    AxumPath(id): AxumPath<String>,
+    AxumState(state): AxumState<Arc<AppState>>,
+) -> Response {
+    // Sanitise: id must not contain path separators
+    if id.contains('/') || id.contains('\\') || id.contains("..") {
+        return (StatusCode::BAD_REQUEST, "Invalid id").into_response();
+    }
+    let media_dir = state.media_schedule.get_media_dir();
+    // Check thumbs sub-dir first, then fall back to the media file itself
+    let thumb_path = media_dir.join("thumbs").join(format!("{}.jpg", id));
+    let path = if thumb_path.exists() {
+        thumb_path
+    } else {
+        // Look up by sidecar: find file with matching .mediaid
+        let sidecar = media_dir.join(format!("{}.mediaid", id));
+        if sidecar.exists() {
+            // Read sidecar to get canonical filename
+            if let Ok(filename) = std::fs::read_to_string(&sidecar) {
+                media_dir.join(filename.trim())
+            } else {
+                return (StatusCode::NOT_FOUND, "Not found").into_response();
+            }
+        } else {
+            return (StatusCode::NOT_FOUND, "Not found").into_response();
+        }
+    };
+
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => {
+            let mime = match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase().as_str() {
+                "jpg" | "jpeg" => "image/jpeg",
+                "png"  => "image/png",
+                "gif"  => "image/gif",
+                "webp" => "image/webp",
+                _      => "application/octet-stream",
+            };
+            (StatusCode::OK, [(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "max-age=3600")], bytes).into_response()
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "Not found").into_response(),
+    }
+}
+
+// ─── REST API handlers ────────────────────────────────────────────────────────
+
+/// Shared extractor: pulls token from Authorization header and validates it.
+macro_rules! auth_guard {
+    ($state:expr, $headers:expr) => {
+        if !check_token(&$state, &$headers) {
+            return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Unauthorized" }))).into_response();
+        }
+    };
+}
+
+#[derive(Deserialize)]
+struct BooksQuery { version: String }
+
+#[derive(Deserialize)]
+struct ChaptersQuery { version: String, book: String }
+
+#[derive(Deserialize)]
+struct VerseCountQuery { version: String, book: String, chapter: i32 }
+
+#[derive(Deserialize)]
+struct VerseQuery { version: String, book: String, chapter: i32, verse: i32 }
+
+async fn api_get_state(
+    AxumState(state): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    auth_guard!(state, headers);
+    let live = state.live_item.lock().clone();
+    let lt = state.lower_third.lock().clone();
+    let is_blanked = state.settings.lock().is_blanked;
+    Json(json!({ "live_item": live, "lt": lt, "is_blanked": is_blanked })).into_response()
+}
+
+async fn api_get_versions(
+    AxumState(state): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    auth_guard!(state, headers);
+    let versions = state.store.get_available_versions();
+    Json(json!({ "versions": versions })).into_response()
+}
+
+async fn api_get_books(
+    AxumState(state): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    AxumQuery(q): AxumQuery<BooksQuery>,
+) -> Response {
+    auth_guard!(state, headers);
+    match state.store.get_books(&q.version) {
+        Ok(books) => Json(json!({ "books": books, "version": q.version })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+async fn api_get_chapters(
+    AxumState(state): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    AxumQuery(q): AxumQuery<ChaptersQuery>,
+) -> Response {
+    auth_guard!(state, headers);
+    match state.store.get_chapters(&q.book, &q.version) {
+        Ok(chapters) => Json(json!({ "chapters": chapters, "book": q.book, "version": q.version })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+async fn api_get_verse_count(
+    AxumState(state): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    AxumQuery(q): AxumQuery<VerseCountQuery>,
+) -> Response {
+    auth_guard!(state, headers);
+    match state.store.get_verses_count(&q.book, q.chapter, &q.version) {
+        Ok(verses) => Json(json!({ "verses": verses, "book": q.book, "chapter": q.chapter })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+async fn api_get_verse(
+    AxumState(state): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    AxumQuery(q): AxumQuery<VerseQuery>,
+) -> Response {
+    auth_guard!(state, headers);
+    match state.store.get_verse(&q.book, q.chapter, q.verse, &q.version) {
+        Ok(Some(v)) => Json(json!({ "verse": v })).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, Json(json!({ "error": "Verse not found" }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+async fn api_get_songs(
+    AxumState(state): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    auth_guard!(state, headers);
+    match state.media_schedule.list_songs() {
+        Ok(songs) => Json(json!({ "songs": songs })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+async fn api_get_media(
+    AxumState(state): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    auth_guard!(state, headers);
+    match state.media_schedule.list_media() {
+        Ok(items) => Json(json!({ "media_items": items })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+async fn api_get_schedule(
+    AxumState(state): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    auth_guard!(state, headers);
+    match state.media_schedule.load_schedule() {
+        Ok(schedule) => Json(json!({ "schedule": schedule })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+async fn api_get_lt_templates(
+    AxumState(state): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    auth_guard!(state, headers);
+    match state.media_schedule.load_lt_templates() {
+        Ok(templates) => Json(json!({ "templates": templates })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+// ── POST handlers ─────────────────────────────────────────────────────────────
+
+async fn api_go_live(
+    AxumState(state): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    auth_guard!(state, headers);
+    let item_val = match body.get("item") {
+        Some(v) => v.clone(),
+        None => return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Missing 'item'" }))).into_response(),
+    };
+    match serde_json::from_value::<wordlyte_lib::store::DisplayItem>(item_val) {
+        Ok(item) => {
+            *state.live_item.lock() = Some(item.clone());
+            if let Some(handle) = state.app_handle.get() {
+                use tauri::Emitter;
+                let update = json!({
+                    "text": display_item_text(&item),
+                    "detected_item": item.clone(),
+                    "confidence": 1.0,
+                    "source": "manual",
+                    "is_partial": false,
+                });
+                let _ = handle.emit("operator-transcription-update", &update);
+                let _ = handle.emit("preacher-transcription-update", &update);
+            }
+            let lt = state.lower_third.lock().clone();
+            broadcast_str(&state, json!({ "type": "state", "live_item": item, "lt": lt }).to_string());
+            Json(json!({ "ok": true })).into_response()
+        }
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+async fn api_stage(
+    AxumState(state): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    auth_guard!(state, headers);
+    let item_val = match body.get("item") {
+        Some(v) => v.clone(),
+        None => return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Missing 'item'" }))).into_response(),
+    };
+    match serde_json::from_value::<wordlyte_lib::store::DisplayItem>(item_val) {
+        Ok(item) => {
+            *state.staged_item.lock() = Some(item.clone());
+            if let Some(handle) = state.app_handle.get() {
+                use tauri::Emitter;
+                let _ = handle.emit("item-staged", &item);
+                let _ = handle.emit("stage-update", Some(&item));
+            }
+            Json(json!({ "ok": true })).into_response()
+        }
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+async fn api_clear_live(
+    AxumState(state): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    auth_guard!(state, headers);
+    *state.live_item.lock() = None;
+    state.operator_audio.lock().media_playing.store(false, std::sync::atomic::Ordering::Relaxed);
+    state.preacher_audio.lock().media_playing.store(false, std::sync::atomic::Ordering::Relaxed);
+    if let Some(handle) = state.app_handle.get() {
+        use tauri::Emitter;
+        let clear = json!({ "text": "", "detected_item": null, "confidence": 1.0, "source": "manual", "is_partial": false });
+        let _ = handle.emit("operator-transcription-update", &clear);
+        let _ = handle.emit("preacher-transcription-update", &clear);
+        let _ = handle.emit("stage-update", Option::<wordlyte_lib::store::DisplayItem>::None);
+    }
+    let lt = state.lower_third.lock().clone();
+    broadcast_str(&state, json!({ "type": "state", "live_item": null, "lt": lt }).to_string());
+    Json(json!({ "ok": true })).into_response()
+}
+
+async fn api_blank(
+    AxumState(state): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    auth_guard!(state, headers);
+    // Accept explicit `blanked: bool` or toggle if omitted
+    let new_blanked = body.get("blanked")
+        .and_then(|b| b.as_bool())
+        .unwrap_or_else(|| !state.settings.lock().is_blanked);
+    let mut new_settings = state.settings.lock().clone();
+    new_settings.is_blanked = new_blanked;
+    match state.media_schedule.save_settings(&new_settings) {
+        Ok(_) => {
+            *state.settings.lock() = new_settings.clone();
+            if let Some(handle) = state.app_handle.get() {
+                use tauri::Emitter;
+                let _ = handle.emit("settings-changed", new_settings.clone());
+            }
+            broadcast_str(&state, json!({ "type": "settings_update", "is_blanked": new_blanked }).to_string());
+            Json(json!({ "ok": true, "is_blanked": new_blanked })).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+async fn api_lt_show(
+    AxumState(state): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    auth_guard!(state, headers);
+    let data_val = body.get("data").cloned().unwrap_or(Value::Null);
+    let template = body.get("template").cloned().unwrap_or(Value::Object(Default::default()));
+    match serde_json::from_value::<wordlyte_lib::store::LowerThirdData>(data_val) {
+        Ok(lt_data) => {
+            let payload = json!({ "data": lt_data, "template": template });
+            *state.lower_third.lock() = Some(payload.clone());
+            if let Some(handle) = state.app_handle.get() {
+                use tauri::Emitter;
+                let _ = handle.emit("lower-third-update", Some(payload.clone()));
+            }
+            broadcast_str(&state, json!({ "type": "lt_update", "payload": payload }).to_string());
+            Json(json!({ "ok": true })).into_response()
+        }
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+async fn api_lt_hide(
+    AxumState(state): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    auth_guard!(state, headers);
+    *state.lower_third.lock() = None;
+    if let Some(handle) = state.app_handle.get() {
+        use tauri::Emitter;
+        let _ = handle.emit("lower-third-update", Option::<Value>::None);
+    }
+    broadcast_str(&state, json!({ "type": "lt_update", "payload": null }).to_string());
+    Json(json!({ "ok": true })).into_response()
+}
+
+async fn api_timer_start(
+    AxumState(state): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    auth_guard!(state, headers);
+    let mut live = state.live_item.lock();
+    if let Some(wordlyte_lib::store::DisplayItem::Timer(ref mut t)) = *live {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        t.started_at = Some(now_ms);
+        let item = live.clone().unwrap();
+        drop(live);
+        if let Some(handle) = state.app_handle.get() {
+            use tauri::Emitter;
+            let update = json!({ "text": display_item_text(&item), "detected_item": item.clone(), "confidence": 1.0, "source": "manual", "is_partial": false });
+            let _ = handle.emit("operator-transcription-update", &update);
+            let _ = handle.emit("preacher-transcription-update", &update);
+        }
+        let lt = state.lower_third.lock().clone();
+        broadcast_str(&state, json!({ "type": "state", "live_item": item, "lt": lt }).to_string());
+        Json(json!({ "ok": true })).into_response()
+    } else {
+        (StatusCode::BAD_REQUEST, Json(json!({ "error": "No live timer" }))).into_response()
+    }
+}
+
+async fn api_timer_stop(
+    AxumState(state): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    auth_guard!(state, headers);
+    let mut live = state.live_item.lock();
+    if let Some(wordlyte_lib::store::DisplayItem::Timer(ref mut t)) = *live {
+        t.started_at = None;
+        let item = live.clone().unwrap();
+        drop(live);
+        if let Some(handle) = state.app_handle.get() {
+            use tauri::Emitter;
+            let update = json!({ "text": display_item_text(&item), "detected_item": item.clone(), "confidence": 1.0, "source": "manual", "is_partial": false });
+            let _ = handle.emit("operator-transcription-update", &update);
+            let _ = handle.emit("preacher-transcription-update", &update);
+        }
+        let lt = state.lower_third.lock().clone();
+        broadcast_str(&state, json!({ "type": "state", "live_item": item, "lt": lt }).to_string());
+        Json(json!({ "ok": true })).into_response()
+    } else {
+        (StatusCode::BAD_REQUEST, Json(json!({ "error": "No live timer" }))).into_response()
+    }
+}
+
+async fn api_timer_reset(
+    AxumState(state): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    auth_guard!(state, headers);
+    let mut live = state.live_item.lock();
+    if let Some(wordlyte_lib::store::DisplayItem::Timer(ref mut t)) = *live {
+        t.started_at = None;
+        let item = live.clone().unwrap();
+        drop(live);
+        if let Some(handle) = state.app_handle.get() {
+            use tauri::Emitter;
+            let update = json!({ "text": display_item_text(&item), "detected_item": item.clone(), "confidence": 1.0, "source": "manual", "is_partial": false });
+            let _ = handle.emit("operator-transcription-update", &update);
+            let _ = handle.emit("preacher-transcription-update", &update);
+        }
+        let lt = state.lower_third.lock().clone();
+        broadcast_str(&state, json!({ "type": "state", "live_item": item, "lt": lt }).to_string());
+        Json(json!({ "ok": true })).into_response()
+    } else {
+        (StatusCode::BAD_REQUEST, Json(json!({ "error": "No live timer" }))).into_response()
+    }
 }
 
 // ─── WebSocket upgrade ────────────────────────────────────────────────────────
@@ -209,9 +671,11 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
 
     let info = match auth_result {
         Ok(Some(Some(info))) => {
-            // Success: clear throttle
+            // Success: clear throttle, issue session token
             state.auth_throttles.lock().remove(&ip);
-            let _ = socket.send(Message::Text(json!({"type":"auth_ok"}).to_string())).await;
+            let token = uuid::Uuid::new_v4().to_string();
+            state.session_tokens.lock().insert(token.clone());
+            let _ = socket.send(Message::Text(json!({"type":"auth_ok","token":token}).to_string())).await;
             info
         }
         Ok(Some(None)) => {
@@ -606,7 +1070,7 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
                         use tauri::Emitter;
                         let _ = handle.emit("settings-changed", new_settings.clone());
                     }
-                    let msg = json!({ "type": "settings_update", "settings": new_settings.is_blanked });
+                    let msg = json!({ "type": "settings_update", "is_blanked": new_settings.is_blanked });
                     broadcast_str(state, msg.to_string());
                 }
                 Err(e) => send_error_to(state, from_key, &format!("Failed to save settings: {}", e)),
@@ -686,6 +1150,94 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
                 let lt = state.lower_third.lock().clone();
                 let msg = json!({ "type": "state", "live_item": item, "lt": lt });
                 broadcast_str(state, msg.to_string());
+            }
+        }
+
+        "get_schedule" => {
+            match state.media_schedule.load_schedule() {
+                Ok(schedule) => {
+                    let msg = json!({ "type": "schedule", "schedule": schedule });
+                    send_to(state, from_key, msg.to_string());
+                }
+                Err(e) => send_error_to(state, from_key, &e.to_string()),
+            }
+        }
+
+        "get_next_verse" => {
+            let book = str_field(&v, "book");
+            let chapter = v.get("chapter").and_then(|c| c.as_i64()).unwrap_or(1) as i32;
+            let verse = v.get("verse").and_then(|x| x.as_i64()).unwrap_or(1) as i32;
+            let version = str_field(&v, "version");
+            match state.store.get_next_verse(&book, chapter, verse, &version) {
+                Ok(Some(vdata)) => {
+                    let msg = json!({ "type": "verse_text", "verse": vdata, "nav": "next" });
+                    send_to(state, from_key, msg.to_string());
+                }
+                Ok(None) => send_error_to(state, from_key, "No next verse"),
+                Err(e) => send_error_to(state, from_key, &e.to_string()),
+            }
+        }
+
+        "get_prev_verse" => {
+            let book = str_field(&v, "book");
+            let chapter = v.get("chapter").and_then(|c| c.as_i64()).unwrap_or(1) as i32;
+            let verse = v.get("verse").and_then(|x| x.as_i64()).unwrap_or(1) as i32;
+            let version = str_field(&v, "version");
+            match state.store.get_prev_verse(&book, chapter, verse, &version) {
+                Ok(Some(vdata)) => {
+                    let msg = json!({ "type": "verse_text", "verse": vdata, "nav": "prev" });
+                    send_to(state, from_key, msg.to_string());
+                }
+                Ok(None) => send_error_to(state, from_key, "No previous verse"),
+                Err(e) => send_error_to(state, from_key, &e.to_string()),
+            }
+        }
+
+        "search_hybrid" => {
+            let query = str_field(&v, "query");
+            // Always do keyword search
+            let fts_results = state.store.search_manual_all_versions(&query).unwrap_or_default();
+            // Try semantic search via engine if available
+            let mut semantic_results: Vec<store::Verse> = Vec::new();
+            if let Some(handle) = state.app_handle.get() {
+                if let Ok(engine) = state.get_or_init_engine(handle).await {
+                    if let Ok(embedding) = engine.embed(&query) {
+                        semantic_results = state.store.search_top_n_semantic(handle, &embedding, 40);
+                    }
+                }
+            }
+            // Reciprocal Rank Fusion merge
+            let mut rrf: std::collections::HashMap<String, (f32, store::Verse)> = std::collections::HashMap::new();
+            let k = 60.0f32;
+            for (rank, verse) in fts_results.into_iter().enumerate() {
+                let key = format!("{}|{}|{}|{}", verse.book, verse.chapter, verse.verse, verse.version);
+                let score = 1.0 / (k + rank as f32 + 1.0);
+                rrf.insert(key, (score, verse));
+            }
+            for (rank, verse) in semantic_results.into_iter().enumerate() {
+                let key = format!("{}|{}|{}|{}", verse.book, verse.chapter, verse.verse, verse.version);
+                let score = 1.0 / (k + rank as f32 + 1.0);
+                let entry = rrf.entry(key).or_insert((0.0, verse.clone()));
+                entry.0 += score;
+            }
+            let mut merged: Vec<store::Verse> = rrf.into_values().collect::<Vec<_>>()
+                .into_iter()
+                .map(|(_, v)| v)
+                .collect();
+            // Sort by score descending (score field on Verse) — use ordering by rank approximation
+            merged.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            merged.truncate(30);
+            let msg = json!({ "type": "search_results", "results": merged });
+            send_to(state, from_key, msg.to_string());
+        }
+
+        "get_lt_templates" => {
+            match state.media_schedule.load_lt_templates() {
+                Ok(templates) => {
+                    let msg = json!({ "type": "lt_templates", "templates": templates });
+                    send_to(state, from_key, msg.to_string());
+                }
+                Err(e) => send_error_to(state, from_key, &e.to_string()),
             }
         }
 

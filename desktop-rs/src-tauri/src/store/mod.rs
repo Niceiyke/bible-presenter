@@ -574,6 +574,29 @@ impl BibleStore {
         Ok(None)
     }
 
+    pub fn get_prev_verse(&self, book: &str, chapter: i32, verse: i32, version: &str) -> anyhow::Result<Option<Verse>> {
+        if verse > 1 {
+            if let Some(v) = self.get_verse(book, chapter, verse - 1, version)? {
+                return Ok(Some(v));
+            }
+        }
+        if chapter > 1 {
+            let last_verse_in_prev_chapter: Option<i32> = {
+                let conn = self.conn.lock();
+                let mut stmt = conn.prepare_cached(
+                    "SELECT MAX(verse) FROM wordlyte_bible WHERE title LIKE ?1 AND chapter = ?2 AND version = ?3"
+                )?;
+                stmt.query_row(params![book, chapter - 1, version], |row| row.get(0))
+                    .ok()
+                    .flatten()
+            };
+            if let Some(lv) = last_verse_in_prev_chapter {
+                return self.get_verse(book, chapter - 1, lv, version);
+            }
+        }
+        Ok(None)
+    }
+
     /// Semantic search across ALL stacked versions using HNSW index.
     /// Returns top-N unique (book,chapter,verse) results.
     /// Prefers the active version for the displayed text.

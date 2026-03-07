@@ -265,6 +265,8 @@ pub struct AppState {
     pub preacher_cloud_stream_handle: Arc<Mutex<Option<engine::cloud_stream::CloudStreamHandle>>>,
     /// IP-based auth throttling to prevent PIN brute-force.
     pub auth_throttles: Arc<Mutex<HashMap<std::net::IpAddr, (u8, std::time::Instant)>>>,
+    /// Valid session tokens issued on WS auth_ok, checked by REST endpoints.
+    pub session_tokens: Arc<Mutex<std::collections::HashSet<String>>>,
     /// NDI Streaming Manager.
     pub ndi_manager: Arc<ndi::NdiManager>,
     /// Whether the operator recording pipeline is currently active.
@@ -314,6 +316,7 @@ impl Clone for AppState {
             operator_cloud_stream_handle: self.operator_cloud_stream_handle.clone(),
             preacher_cloud_stream_handle: self.preacher_cloud_stream_handle.clone(),
             auth_throttles: self.auth_throttles.clone(),
+            session_tokens: self.session_tokens.clone(),
             ndi_manager: self.ndi_manager.clone(),
             operator_is_active: self.operator_is_active.clone(),
             preacher_is_active: self.preacher_is_active.clone(),
@@ -525,6 +528,7 @@ async fn start_operator_recording(app: AppHandle, state: State<'_, AppState>) ->
     let inference_semaphore = state.inference_semaphore.clone();
     let session_transcript = state.session_transcript.clone();
     let op_active = state.operator_is_active.clone();
+    let bcast_tx_op = state.broadcast_tx.clone();
 
     let app_op = app.clone();
     tokio::spawn(async move {
@@ -582,6 +586,7 @@ async fn start_operator_recording(app: AppHandle, state: State<'_, AppState>) ->
                 let app_op_inner = app_op.clone();
                 let p_name = provider_name.clone();
                 let tx_log = session_transcript.clone();
+                let bcast_inner = bcast_tx_op.clone();
 
                 tokio::spawn(async move {
                     let _permit = maybe_permit;
@@ -637,6 +642,7 @@ async fn start_operator_recording(app: AppHandle, state: State<'_, AppState>) ->
                                 tx_log.lock().push(TranscriptSegment { text: text.clone(), timestamp_ms: now_ms.saturating_sub(session_start_ms), is_final: true, source: p_name.clone() });
                                 log_msg(&app_op_inner, &format!("[Operator] Voice search done ({} ms) — emitting result", t0.elapsed().as_millis()));
                                 let _ = app_op_inner.emit("operator-transcription-update", TranscriptionUpdate { text: text.clone(), detected_item: item, confidence, source: p_name, is_partial: false });
+                                let _ = bcast_inner.send(serde_json::json!({ "type": "transcription", "text": text }).to_string());
                             }
                         }
                     }
@@ -1692,6 +1698,20 @@ async fn get_next_verse(
 }
 
 #[tauri::command]
+async fn get_prev_verse(
+    state: State<'_, AppState>,
+    book: String,
+    chapter: i32,
+    verse: i32,
+    version: String,
+) -> Result<Option<store::Verse>, String> {
+    state
+        .store
+        .get_prev_verse(&book, chapter, verse, &version)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn get_settings(state: State<'_, AppState>) -> Result<store::PresentationSettings, String> {
     Ok(state.settings.lock().clone())
 }
@@ -2629,6 +2649,7 @@ fn main() {
                 operator_cloud_stream_handle: Arc::new(Mutex::new(None)),
                 preacher_cloud_stream_handle: Arc::new(Mutex::new(None)),
                 auth_throttles: Arc::new(Mutex::new(HashMap::new())),
+                session_tokens: Arc::new(Mutex::new(std::collections::HashSet::new())),
                 ndi_manager: Arc::new(ndi::NdiManager::new()),
                 operator_is_active: Arc::new(AtomicBool::new(false)),
                 preacher_is_active: Arc::new(AtomicBool::new(false)),
@@ -2721,6 +2742,7 @@ fn main() {
             get_chapter,
             get_verse,
             get_next_verse,
+            get_prev_verse,
             list_media,
             add_media,
             delete_media,

@@ -35,11 +35,12 @@
   .btn-primary:hover{filter:brightness(1.1)}
   .pin-err{color:var(--red);font-size:.8rem;min-height:1.2em;text-align:center}
   /* Tabs */
-  .tab-bar{display:flex;border-bottom:1px solid var(--border);background:var(--panel)}
+  .tab-bar{display:flex;border-bottom:1px solid var(--border);background:var(--panel);overflow-x:auto;flex-shrink:0}
+  .tab-bar::-webkit-scrollbar{display:none}
   .tab-bar button{
-    flex:1;padding:14px 6px;background:none;border:none;color:var(--muted);
-    font-size:.65rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;
-    border-bottom:2px solid transparent;transition:.15s;
+    flex:0 0 auto;padding:12px 10px;background:none;border:none;color:var(--muted);
+    font-size:.6rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;
+    border-bottom:2px solid transparent;transition:.15s;white-space:nowrap;
   }
   .tab-bar button.active{color:var(--amber);border-color:var(--amber)}
   /* Tab panels */
@@ -81,13 +82,15 @@
     background:var(--panel);color:var(--text);font-size:.8rem;font-weight:600;cursor:pointer;transition:.15s;
   }
   .btn:hover{border-color:#4a4d5a;background:#22253a}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
   .btn-live{background:var(--amber);color:#000;border-color:var(--amber)}
-  .btn-live:hover{filter:brightness(1.1)}
+  .btn-live:hover:not(:disabled){filter:brightness(1.1)}
   .btn-live:disabled{background:#4a3d1a;color:#7a6030;border-color:#4a3d1a;cursor:not-allowed}
   .btn-danger{border-color:var(--red);color:var(--red)}
   .btn-danger:hover{background:rgba(239,68,68,.1)}
   .btn-row{display:flex;gap:8px}
   .btn-row .btn{flex:1;text-align:center}
+  .btn-icon{padding:10px 12px}
   /* Search results */
   .result-list{display:flex;flex-direction:column;gap:4px;max-height:240px;overflow-y:auto}
   .result-item{
@@ -101,7 +104,8 @@
   .line-display{
     font-size:1.2rem;font-weight:700;line-height:1.5;padding:16px;
     background:var(--bg);border:1px solid var(--border);border-radius:8px;text-align:center;min-height:80px;
-    display:flex;align-items:center;justify-content:center;
+    display:flex;align-items:center;justify-content:center;flex-direction:column;
+    touch-action:pan-y;user-select:none;
   }
   .line-display .section-label{font-size:.65rem;color:var(--amber);font-weight:700;letter-spacing:.08em;display:block;margin-bottom:6px;text-transform:uppercase}
   /* Toggle */
@@ -120,6 +124,14 @@
     font-size:.75rem;color:var(--amber);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
     flex-shrink:0;display:none;
   }
+  /* Now-Live banner */
+  #now-live-banner{
+    margin:0;padding:10px 14px;background:rgba(34,197,94,.08);border-bottom:1px solid rgba(34,197,94,.25);
+    display:none;flex-shrink:0;flex-direction:column;gap:3px;
+  }
+  #now-live-banner.visible{display:flex}
+  .now-live-label{font-size:.55rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--green)}
+  #now-live-text{font-size:.8rem;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .lt-status-badge{
     padding:3px 9px;border-radius:20px;font-size:.65rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
     background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red);
@@ -145,15 +157,29 @@
   .song-item:hover,.song-item.selected{border-color:var(--amber);background:rgba(245,158,11,.07)}
   .song-author{font-size:.7rem;color:var(--muted);margin-top:2px}
   /* Media items */
-  .media-item { padding: 8px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: .1s; font-size: .85rem; display: flex; align-items: center; gap: 8px; }
-  .media-item:hover, .media-item.selected { border-color: var(--amber); background: rgba(245,158,11,.07); }
-  .media-item img, .media-item video { width: 48px; height: 48px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
-  .media-item-info { flex-grow: 1; }
-  .media-item-name { font-weight: 600; }
-  .media-item-meta { font-size: .7rem; color: var(--muted); }
+  .media-item{padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:.1s;font-size:.85rem;display:flex;align-items:center;gap:8px}
+  .media-item:hover,.media-item.selected{border-color:var(--amber);background:rgba(245,158,11,.07)}
+  .media-item img,.media-item video{width:48px;height:48px;object-fit:cover;border-radius:4px;flex-shrink:0}
+  .media-item-info{flex-grow:1}
+  .media-item-name{font-weight:600}
+  .media-item-meta{font-size:.7rem;color:var(--muted)}
   /* Timer */
-  .timer-display { font-size: 2rem; font-weight: 700; text-align: center; color: var(--text); padding: 20px 0; }
-  .timer-name { font-size: 1rem; color: var(--muted); text-align: center; margin-bottom: 10px; }
+  .timer-display{font-size:2rem;font-weight:700;text-align:center;color:var(--text);padding:20px 0}
+  .timer-name{font-size:1rem;color:var(--muted);text-align:center;margin-bottom:10px}
+  /* Schedule items */
+  .sched-item{padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:.1s;display:flex;align-items:center;gap:10px}
+  .sched-item:hover{border-color:var(--amber);background:rgba(245,158,11,.07)}
+  .sched-item.live{border-color:var(--green);background:rgba(34,197,94,.07)}
+  .sched-num{font-size:.65rem;color:var(--muted);font-weight:700;min-width:18px;text-align:right}
+  .sched-label{flex:1;font-size:.85rem}
+  .sched-badge{font-size:.55rem;padding:2px 7px;border-radius:20px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;background:rgba(34,197,94,.15);color:var(--green);border:1px solid var(--green)}
+  /* LT template selector */
+  .tmpl-item{padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:.1s;font-size:.8rem}
+  .tmpl-item:hover,.tmpl-item.selected{border-color:var(--amber);background:rgba(245,158,11,.07)}
+  /* Search mode toggle */
+  .search-mode-row{display:flex;gap:6px;align-items:center;margin-bottom:2px}
+  .search-mode-btn{padding:4px 10px;border:1px solid var(--border);border-radius:20px;background:none;color:var(--muted);font-size:.7rem;font-weight:600;cursor:pointer;transition:.15s}
+  .search-mode-btn.active{border-color:var(--amber);color:var(--amber);background:rgba(245,158,11,.1)}
 </style>
 </head>
 <body>
@@ -177,12 +203,20 @@
 
 <!-- Main Screen -->
 <div id="main-screen">
-  <div id="live-strip" id="live-strip">🎙 <span id="live-text"></span></div>
+  <!-- Now-Live Banner -->
+  <div id="now-live-banner">
+    <div class="now-live-label">● Now Live</div>
+    <div id="now-live-text"></div>
+  </div>
+
+  <!-- Transcription strip -->
+  <div id="live-strip">🎙 <span id="live-text"></span></div>
 
   <div class="tab-bar">
     <button class="active" data-tab="bible">Bible</button>
     <button data-tab="lyrics">Lyrics</button>
     <button data-tab="media">Media</button>
+    <button data-tab="schedule">Schedule</button>
     <button data-tab="timer">Timer</button>
     <button data-tab="lt">Lower Third</button>
     <button data-tab="control">Control</button>
@@ -211,14 +245,21 @@
         <div id="nav-text"></div>
       </div>
       <div class="btn-row">
-        <button class="btn" id="nav-stage">Stage</button>
+        <button class="btn btn-icon" id="nav-prev" disabled title="Previous verse">◀</button>
+        <button class="btn" id="nav-stage" disabled>Stage</button>
         <button class="btn btn-live" id="nav-go-live" disabled>Go Live</button>
+        <button class="btn btn-icon" id="nav-next" disabled title="Next verse">▶</button>
       </div>
     </div>
 
     <!-- Search -->
     <div class="card">
       <div class="card-label">Search</div>
+      <div class="search-mode-row">
+        <span class="text-muted" style="font-size:.65rem">Mode:</span>
+        <button class="search-mode-btn active" id="search-mode-keyword">Keyword</button>
+        <button class="search-mode-btn" id="search-mode-hybrid">Semantic</button>
+      </div>
       <div class="row">
         <input type="search" id="search-input" class="grow" placeholder="Keywords or reference…">
         <button class="btn" id="search-btn">Search</button>
@@ -253,6 +294,7 @@
       <div class="line-display" id="lyric-display">
         <span class="text-muted">Select a song above</span>
       </div>
+      <div class="text-muted" style="text-align:center;font-size:.65rem">Swipe left/right to navigate</div>
       <div class="btn-row">
         <button class="btn" id="lyric-prev">◀ Prev</button>
         <button class="btn" id="lyric-next">Next ▶</button>
@@ -278,6 +320,17 @@
     </div>
   </div>
 
+  <!-- Schedule Tab -->
+  <div class="tab-panel" id="tab-schedule">
+    <div class="card">
+      <div class="card-label">Service Order</div>
+      <button class="btn" id="schedule-refresh-btn" style="align-self:flex-start">↻ Refresh</button>
+      <div id="schedule-list" style="display:flex;flex-direction:column;gap:6px">
+        <div class="text-muted" style="padding:8px">Loading schedule…</div>
+      </div>
+    </div>
+  </div>
+
   <!-- Timer Tab -->
   <div class="tab-panel" id="tab-timer">
     <div class="card">
@@ -299,6 +352,14 @@
       <div class="mode-pills">
         <button class="mode-pill active" onclick="setLtMode('nameplate')">Nameplate</button>
         <button class="mode-pill" onclick="setLtMode('freetext')">Free Text</button>
+      </div>
+    </div>
+
+    <!-- Template selector -->
+    <div class="card" id="lt-template-card">
+      <div class="card-label">Template</div>
+      <div id="lt-template-list" style="display:flex;flex-direction:column;gap:4px;max-height:120px;overflow-y:auto">
+        <div class="tmpl-item active" id="tmpl-default" onclick="selectLtTemplate(null)">Default</div>
       </div>
     </div>
 
@@ -349,7 +410,7 @@
     <div class="card">
       <div class="card-label">Live Output Control</div>
       <button class="btn btn-danger" id="clear-live-btn">Clear Live</button>
-      <button class="btn" id="toggle-blank-btn">Toggle Blank Output</button>
+      <button class="btn" id="toggle-blank-btn">Blank Output</button>
     </div>
   </div>
 </div>
@@ -376,6 +437,7 @@ let navVerseData = null;
 
 let searchResults = [];
 let selectedSearchIdx = -1;
+let searchMode = 'keyword'; // 'keyword' | 'hybrid'
 
 let songs = [];
 let selectedSong = null;
@@ -387,14 +449,19 @@ let ltShowing = false;
 let mediaItems = [];
 let selectedMediaItem = null;
 
-let liveItem = null; // To track the currently live item, for timer control
-let currentTimer = null; // Store timer data if liveItem is a timer
+let liveItem = null;
+let currentTimer = null;
 let timerIntervalId = null;
+
+let scheduleEntries = [];
 
 let ltMode = 'nameplate';
 let scrollMode = 'Static';
 let isOutputBlanked = false;
-let fullSettings = null; // To store the full settings object
+let fullSettings = null;
+
+let ltTemplates = [];
+let selectedLtTemplate = null; // null = default
 
 const defaultTemplate = {
   bgType: 'gradient',
@@ -429,14 +496,16 @@ const defaultTemplate = {
   animOut: 'fade',
 };
 
-// ─── WebSocket ────────────────────────────────────────────────────────────────
+// ─── WebSocket + reconnect ─────────────────────────────────────────────────────
+let reconnectDelay = 1000;
+
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws`);
 
   ws.onopen = () => {
+    reconnectDelay = 1000; // reset backoff on success
     setConnStatus(false);
-    // If we already have a PIN cached in sessionStorage, auto-auth
     const saved = sessionStorage.getItem('bp_pin');
     if (saved) sendAuth(saved);
   };
@@ -449,8 +518,11 @@ function connect() {
 
   ws.onclose = () => {
     authed = false;
-    setConnStatus(false, 'Disconnected — reconnecting…');
-    setTimeout(connect, 2000);
+    setConnStatus(false, `Disconnected — retrying in ${Math.round(reconnectDelay/1000)}s…`);
+    setTimeout(() => {
+      reconnectDelay = Math.min(reconnectDelay * 1.5, 30000);
+      connect();
+    }, reconnectDelay);
   };
 
   ws.onerror = () => { ws.close(); };
@@ -469,15 +541,16 @@ function handleMsg(msg) {
   switch (msg.type) {
     case 'auth_ok':
       authed = true;
-      sessionStorage.setItem('bp_pin', document.querySelector('#pin-screen') ?
-        getPinValue() : sessionStorage.getItem('bp_pin'));
+      sessionStorage.setItem('bp_pin', getPinValue() || sessionStorage.getItem('bp_pin') || '');
       showMainScreen();
       setConnStatus(true);
       send({ cmd: 'get_state' });
       send({ cmd: 'get_versions' });
       send({ cmd: 'get_songs' });
-      send({ cmd: 'get_media' }); // Fetch initial media items
-      send({ cmd: 'get_settings_full' }); // Fetch initial full settings
+      send({ cmd: 'get_media' });
+      send({ cmd: 'get_settings_full' });
+      send({ cmd: 'get_schedule' });
+      send({ cmd: 'get_lt_templates' });
       break;
 
     case 'auth_fail':
@@ -488,14 +561,14 @@ function handleMsg(msg) {
 
     case 'state':
       liveItem = msg.live_item;
+      updateNowLiveBanner(liveItem);
       if (liveItem && liveItem.type === 'Timer') {
         currentTimer = liveItem.data;
       } else {
         currentTimer = null;
       }
       updateTimerDisplay();
-      if (msg.lt) updateLtBadges(true);
-      else updateLtBadges(false);
+      updateLtBadges(!!(msg.lt));
       break;
 
     case 'transcription':
@@ -514,14 +587,14 @@ function handleMsg(msg) {
       loadBooks();
       break;
 
-    case 'settings_update': // New case for settings updates
-      if (typeof msg.settings === 'boolean') {
-        isOutputBlanked = msg.settings;
+    case 'settings_update':
+      if (typeof msg.is_blanked === 'boolean') {
+        isOutputBlanked = msg.is_blanked;
         renderBlankButton();
       }
       break;
 
-    case 'settings_full': // New case for full settings
+    case 'settings_full':
       fullSettings = msg.settings;
       if (typeof fullSettings.is_blanked === 'boolean') {
         isOutputBlanked = fullSettings.is_blanked;
@@ -559,10 +632,20 @@ function handleMsg(msg) {
       renderSongList();
       break;
 
-    case 'media_list': // New case for media items
+    case 'media_list':
       mediaItems = msg.media_items || [];
       selectedMediaItem = null;
       renderMediaList();
+      break;
+
+    case 'schedule':
+      scheduleEntries = (msg.schedule && msg.schedule.entries) ? msg.schedule.entries : [];
+      renderScheduleList();
+      break;
+
+    case 'lt_templates':
+      ltTemplates = Array.isArray(msg.templates) ? msg.templates : [];
+      renderLtTemplates();
       break;
 
     case 'error':
@@ -571,20 +654,46 @@ function handleMsg(msg) {
   }
 }
 
+// ─── Now-Live Banner ──────────────────────────────────────────────────────────
+function updateNowLiveBanner(item) {
+  const banner = document.getElementById('now-live-banner');
+  const text = document.getElementById('now-live-text');
+  if (!item) {
+    banner.classList.remove('visible');
+    return;
+  }
+  let label = '';
+  if (item.type === 'Verse' && item.data) {
+    const d = item.data;
+    label = `${d.book} ${d.chapter}:${d.verse}${d.version ? ' (' + d.version + ')' : ''} — ${(d.text || '').substring(0, 80)}${(d.text || '').length > 80 ? '…' : ''}`;
+  } else if ((item.type === 'Image' || item.type === 'Video') && item.data) {
+    label = `🖼 ${item.data.name || 'Media'}`;
+  } else if (item.type === 'Timer' && item.data) {
+    label = `⏱ ${item.data.name || 'Timer'}`;
+  } else if (item.type === 'Lyrics' && item.data) {
+    label = `🎵 ${item.data.line1 || 'Lyrics'}`;
+  } else if (item.data && item.data.title) {
+    label = item.data.title;
+  } else {
+    label = item.type || 'Live';
+  }
+  text.textContent = label;
+  banner.classList.add('visible');
+  // Highlight matching schedule entry
+  renderScheduleList();
+}
+
 // ─── Control Tab Functions ────────────────────────────────────────────────────
 function renderBlankButton() {
   const btn = document.getElementById('toggle-blank-btn');
   if (btn) {
     btn.textContent = isOutputBlanked ? 'Unblank Output' : 'Blank Output';
     btn.classList.toggle('btn-danger', isOutputBlanked);
-    btn.classList.toggle('btn', !isOutputBlanked);
   }
 }
 
 document.getElementById('clear-live-btn').addEventListener('click', () => {
   send({ cmd: 'clear_live' });
-  isOutputBlanked = false; // Assume unblanked after clearing live
-  renderBlankButton();
 });
 
 document.getElementById('toggle-blank-btn').addEventListener('click', () => {
@@ -599,19 +708,15 @@ function updateTimerDisplay() {
   const stopBtn = document.getElementById('timer-stop-btn');
   const resetBtn = document.getElementById('timer-reset-btn');
 
-  if (timerIntervalId) {
-    clearInterval(timerIntervalId);
-    timerIntervalId = null;
-  }
+  if (timerIntervalId) { clearInterval(timerIntervalId); timerIntervalId = null; }
 
   if (currentTimer) {
     timerNameEl.textContent = currentTimer.name || 'Untitled Timer';
-    startBtn.disabled = currentTimer.started_at !== null;
-    stopBtn.disabled = currentTimer.started_at === null;
+    startBtn.disabled = currentTimer.started_at !== null && currentTimer.started_at !== undefined;
+    stopBtn.disabled = currentTimer.started_at === null || currentTimer.started_at === undefined;
     resetBtn.disabled = false;
 
-    // Start countdown if timer is running
-    if (currentTimer.started_at !== null) {
+    if (currentTimer.started_at != null) {
       timerIntervalId = setInterval(() => {
         const elapsed_ms = Date.now() - currentTimer.started_at;
         let remaining_secs = Math.max(0, currentTimer.duration_secs - Math.floor(elapsed_ms / 1000));
@@ -620,12 +725,10 @@ function updateTimerDisplay() {
         countdownEl.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
       }, 1000);
     } else {
-      // If not started, just show total duration
       const minutes = Math.floor(currentTimer.duration_secs / 60);
       const seconds = currentTimer.duration_secs % 60;
       countdownEl.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
     }
-
   } else {
     timerNameEl.textContent = 'No timer live';
     countdownEl.textContent = '--:--';
@@ -638,15 +741,84 @@ function updateTimerDisplay() {
 document.getElementById('timer-start-btn').addEventListener('click', () => {
   if (currentTimer) send({ cmd: 'start_live_timer' });
 });
-
 document.getElementById('timer-stop-btn').addEventListener('click', () => {
   if (currentTimer) send({ cmd: 'stop_live_timer' });
 });
-
 document.getElementById('timer-reset-btn').addEventListener('click', () => {
   if (currentTimer) send({ cmd: 'reset_live_timer' });
 });
 
+// ─── Schedule Tab ─────────────────────────────────────────────────────────────
+document.getElementById('schedule-refresh-btn').addEventListener('click', () => {
+  send({ cmd: 'get_schedule' });
+});
+
+function renderScheduleList() {
+  const c = document.getElementById('schedule-list');
+  if (!scheduleEntries.length) {
+    c.innerHTML = '<div class="text-muted" style="padding:8px">No items in schedule</div>';
+    return;
+  }
+  c.innerHTML = '';
+  scheduleEntries.forEach((entry, i) => {
+    const item = entry.item;
+    const label = itemLabel(item);
+    const isLive = liveItem && JSON.stringify(liveItem) === JSON.stringify(item);
+    const el = document.createElement('div');
+    el.className = 'sched-item' + (isLive ? ' live' : '');
+    el.innerHTML = `
+      <span class="sched-num">${i + 1}</span>
+      <span class="sched-label">${label}</span>
+      ${isLive ? '<span class="sched-badge">Live</span>' : ''}
+    `;
+    el.addEventListener('click', () => {
+      if (confirm(`Send "${label}" live?`)) {
+        send({ cmd: 'go_live', item });
+      }
+    });
+    c.appendChild(el);
+  });
+}
+
+function itemLabel(item) {
+  if (!item) return '—';
+  if (item.type === 'Verse' && item.data) {
+    const d = item.data;
+    return `📖 ${d.book} ${d.chapter}:${d.verse}`;
+  }
+  if ((item.type === 'Image' || item.type === 'Video') && item.data) return `🖼 ${item.data.name || item.type}`;
+  if (item.type === 'Timer' && item.data) return `⏱ ${item.data.name || 'Timer'}`;
+  if (item.type === 'PresentationSlide' && item.data) return `📑 ${item.data.title || 'Slide'}`;
+  if (item.type === 'CustomSlide' && item.data) return `📑 ${item.data.title || 'Custom Slide'}`;
+  return item.type || '—';
+}
+
+// ─── LT Templates ─────────────────────────────────────────────────────────────
+function renderLtTemplates() {
+  const c = document.getElementById('lt-template-list');
+  c.innerHTML = `<div class="tmpl-item${selectedLtTemplate === null ? ' active' : ''}" onclick="selectLtTemplate(null)">Default</div>`;
+  ltTemplates.forEach((tmpl, i) => {
+    const el = document.createElement('div');
+    el.className = 'tmpl-item' + (selectedLtTemplate === i ? ' active' : '');
+    el.textContent = tmpl.name || `Template ${i + 1}`;
+    el.onclick = () => selectLtTemplate(i);
+    c.appendChild(el);
+  });
+}
+
+function selectLtTemplate(idx) {
+  selectedLtTemplate = idx;
+  document.querySelectorAll('#lt-template-list .tmpl-item').forEach((el, i) => {
+    el.classList.toggle('active', i === 0 ? idx === null : idx === i - 1);
+  });
+}
+
+function getActiveTemplate() {
+  if (selectedLtTemplate !== null && ltTemplates[selectedLtTemplate]) {
+    return ltTemplates[selectedLtTemplate];
+  }
+  return defaultTemplate;
+}
 
 // ─── UI helpers ───────────────────────────────────────────────────────────────
 function setConnStatus(ok, label) {
@@ -727,6 +899,7 @@ document.querySelectorAll('.tab-bar button').forEach(btn => {
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'schedule') send({ cmd: 'get_schedule' });
   });
 });
 
@@ -829,6 +1002,24 @@ document.getElementById('verse-select').addEventListener('change', function() {
   loadVerseText();
 });
 
+function syncVerseSelects(v) {
+  // Sync dropdowns to the given verse data
+  if (v.book !== selectedBook) {
+    selectedBook = v.book;
+    const sel = document.getElementById('book-select');
+    if (sel) sel.value = v.book;
+  }
+  if (v.chapter !== selectedChapter) {
+    selectedChapter = v.chapter;
+    const sel = document.getElementById('chapter-select');
+    // Only update select value; chapter list may not match yet
+    if (sel) sel.value = v.chapter;
+  }
+  selectedVerse = v.verse;
+  const sel = document.getElementById('verse-select');
+  if (sel) sel.value = v.verse;
+}
+
 function loadVerseText() {
   if (!selectedBook || !selectedChapter || !selectedVerse) return;
   send({ cmd: 'get_verse', book: selectedBook, chapter: selectedChapter, verse: selectedVerse, version: currentVersion });
@@ -836,11 +1027,15 @@ function loadVerseText() {
 
 function showNavPreview(v) {
   navVerseData = v;
+  // Keep dropdowns in sync (chapter/verse may have changed via prev/next)
+  syncVerseSelects(v);
   document.getElementById('nav-preview').style.display = 'block';
   document.getElementById('nav-ref').textContent = `${v.book} ${v.chapter}:${v.verse} (${v.version})`;
   document.getElementById('nav-text').textContent = v.text;
   document.getElementById('nav-go-live').disabled = false;
   document.getElementById('nav-stage').disabled = false;
+  document.getElementById('nav-prev').disabled = false;
+  document.getElementById('nav-next').disabled = false;
 }
 
 function hideNavPreview() {
@@ -848,7 +1043,20 @@ function hideNavPreview() {
   document.getElementById('nav-preview').style.display = 'none';
   document.getElementById('nav-go-live').disabled = true;
   document.getElementById('nav-stage').disabled = true;
+  document.getElementById('nav-prev').disabled = true;
+  document.getElementById('nav-next').disabled = true;
 }
+
+// Prev / Next verse buttons
+document.getElementById('nav-prev').addEventListener('click', () => {
+  if (!navVerseData) return;
+  send({ cmd: 'get_prev_verse', book: navVerseData.book, chapter: navVerseData.chapter, verse: navVerseData.verse, version: currentVersion });
+});
+
+document.getElementById('nav-next').addEventListener('click', () => {
+  if (!navVerseData) return;
+  send({ cmd: 'get_next_verse', book: navVerseData.book, chapter: navVerseData.chapter, verse: navVerseData.verse, version: currentVersion });
+});
 
 document.getElementById('nav-go-live').addEventListener('click', () => {
   if (!navVerseData) return;
@@ -861,6 +1069,17 @@ document.getElementById('nav-stage').addEventListener('click', () => {
 });
 
 // ─── Search ───────────────────────────────────────────────────────────────────
+document.getElementById('search-mode-keyword').addEventListener('click', () => {
+  searchMode = 'keyword';
+  document.getElementById('search-mode-keyword').classList.add('active');
+  document.getElementById('search-mode-hybrid').classList.remove('active');
+});
+document.getElementById('search-mode-hybrid').addEventListener('click', () => {
+  searchMode = 'hybrid';
+  document.getElementById('search-mode-hybrid').classList.add('active');
+  document.getElementById('search-mode-keyword').classList.remove('active');
+});
+
 document.getElementById('search-btn').addEventListener('click', doSearch);
 document.getElementById('search-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') doSearch();
@@ -869,10 +1088,11 @@ document.getElementById('search-input').addEventListener('keydown', e => {
 function doSearch() {
   const q = document.getElementById('search-input').value.trim();
   if (!q) return;
-  document.getElementById('search-results').style.display = 'none';
-  document.getElementById('search-results').innerHTML = '<div class="text-muted" style="padding:8px"><div class="spinner"></div></div>';
-  document.getElementById('search-results').style.display = 'flex';
-  send({ cmd: 'search', query: q });
+  const resultsEl = document.getElementById('search-results');
+  resultsEl.innerHTML = '<div class="text-muted" style="padding:8px"><div class="spinner"></div></div>';
+  resultsEl.style.display = 'flex';
+  const cmd = searchMode === 'hybrid' ? 'search_hybrid' : 'search';
+  send({ cmd, query: q });
 }
 
 function renderSearchResults() {
@@ -945,11 +1165,22 @@ function selectSong(s) {
   selectedSong = s;
   ltLineIdx = 0;
   flatLines = [];
-  (s.sections || []).forEach(sec => {
+
+  // Respect the arrangement if present, otherwise fall back to section order
+  const arrangement = s.arrangement && s.arrangement.length ? s.arrangement : null;
+  const sectionMap = {};
+  (s.sections || []).forEach(sec => { sectionMap[sec.label] = sec; });
+
+  const orderedSections = arrangement
+    ? arrangement.map(label => sectionMap[label]).filter(Boolean)
+    : (s.sections || []);
+
+  orderedSections.forEach(sec => {
     (sec.lines || []).forEach((line, li) => {
       flatLines.push({ sectionLabel: li === 0 ? sec.label : '', text: line });
     });
   });
+
   document.getElementById('lyric-song-title').textContent = s.title;
   document.getElementById('lyric-controls').style.display = 'flex';
   renderSongList(document.getElementById('song-search').value);
@@ -984,18 +1215,36 @@ document.getElementById('lyric-next').addEventListener('click', () => {
   if (ltLineIdx < flatLines.length - 1) { ltLineIdx++; renderLyricDisplay(); }
 });
 
+// ─── Swipe gestures for lyrics ────────────────────────────────────────────────
+(function attachLyricSwipe() {
+  const el = document.getElementById('lyric-display');
+  let touchStartX = 0;
+  let touchStartY = 0;
+  el.addEventListener('touchstart', e => {
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  }, { passive: true });
+  el.addEventListener('touchend', e => {
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    const dy = e.changedTouches[0].clientY - touchStartY;
+    if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy)) return; // too short or vertical
+    if (dx < 0) {
+      // Swipe left → next
+      if (ltLineIdx < flatLines.length - 1) { ltLineIdx++; renderLyricDisplay(); }
+    } else {
+      // Swipe right → prev
+      if (ltLineIdx > 0) { ltLineIdx--; renderLyricDisplay(); }
+    }
+  }, { passive: true });
+})();
+
 document.getElementById('lyric-show').addEventListener('click', () => {
   if (!selectedSong || !flatLines.length) return;
   const idx = Math.min(ltLineIdx, flatLines.length - 1);
   const l = flatLines[idx];
   const l2 = linesMode === 2 && flatLines[idx + 1] ? flatLines[idx + 1] : null;
-  const data = {
-    kind: 'Lyrics',
-    line1: l.text,
-    line2: l2 ? l2.text : null,
-    section_label: l.sectionLabel || null,
-  };
-  send({ cmd: 'show_lt', data, template: defaultTemplate });
+  const data = { kind: 'Lyrics', line1: l.text, line2: l2 ? l2.text : null, section_label: l.sectionLabel || null };
+  send({ cmd: 'show_lt', data, template: getActiveTemplate() });
 });
 
 document.getElementById('lyric-stage').addEventListener('click', () => {
@@ -1005,16 +1254,8 @@ document.getElementById('lyric-stage').addEventListener('click', () => {
   const l2 = linesMode === 2 && flatLines[idx + 1] ? flatLines[idx + 1] : null;
   const item = {
     type: 'Lyrics',
-    data: {
-      kind: 'Lyrics',
-      line1: l.text,
-      line2: l2 ? l2.text : null,
-      section_label: l.sectionLabel || null,
-    },
-    config: {
-      style: 'FullSlide', // Assuming FullSlide for staged lyrics
-      template: defaultTemplate,
-    },
+    data: { kind: 'Lyrics', line1: l.text, line2: l2 ? l2.text : null, section_label: l.sectionLabel || null },
+    config: { style: 'FullSlide', template: getActiveTemplate() },
   };
   send({ cmd: 'stage_item', item });
 });
@@ -1033,7 +1274,6 @@ function renderMediaList(filter) {
   c.innerHTML = '';
   const q = (filter || '').toLowerCase();
   const filtered = mediaItems.filter(m => m.name.toLowerCase().includes(q) || (m.category || '').toLowerCase().includes(q) || (m.tags || []).some(t => t.toLowerCase().includes(q)));
-
   if (!filtered.length) {
     c.innerHTML = '<div class="text-muted" style="padding:8px">No media found</div>';
     return;
@@ -1042,16 +1282,12 @@ function renderMediaList(filter) {
     const el = document.createElement('div');
     el.className = 'media-item' + (selectedMediaItem && selectedMediaItem.id === m.id ? ' selected' : '');
     let mediaPreview = '';
-    // Use tauri://localhost/ for local file access
-    const thumbPath = `tauri://localhost/${m.thumbnail_path || m.path}`;
-    const fullPath = `tauri://localhost/${m.path}`;
-
     if (m.media_type === 'Image') {
-      mediaPreview = `<img src="${thumbPath}" alt="${m.name}">`;
+      // Use a relative HTTP path so LAN clients can load the thumbnail
+      mediaPreview = `<img src="/media-thumb/${encodeURIComponent(m.id)}" alt="${m.name}" onerror="this.style.display='none'">`;
     } else if (m.media_type === 'Video') {
-      mediaPreview = `<video src="${fullPath}" muted preload="metadata" style="max-width: 100%; max-height: 100%;"></video>`;
+      mediaPreview = `<div style="width:48px;height:48px;background:#111;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#64748b;font-size:1.2rem;flex-shrink:0">▶</div>`;
     }
-
     el.innerHTML = `
       ${mediaPreview}
       <div class="media-item-info">
@@ -1064,39 +1300,28 @@ function renderMediaList(filter) {
         <button class="btn btn-live" onclick="goLiveMediaItem('${m.id}')">Live</button>
       </div>
     `;
-    el.onclick = (e) => {
-        // Prevent click on buttons from selecting the item
-        if (e.target.tagName !== 'BUTTON') {
-            selectMediaItem(m.id);
-        }
-    };
+    el.onclick = (e) => { if (e.target.tagName !== 'BUTTON') selectMediaItem(m.id); };
     c.appendChild(el);
   });
 }
 
 function selectMediaItem(id) {
-    selectedMediaItem = mediaItems.find(m => m.id === id) || null;
-    document.querySelectorAll('#media-list .media-item').forEach(el => {
-        // More robust check for selected state based on actual item ID
-        const itemId = el.querySelector('.media-item-name')?.dataset.id || ''; // Assuming data-id can be added for robustness
-        el.classList.toggle('selected', selectedMediaItem && selectedMediaItem.id === itemId);
-    });
+  selectedMediaItem = mediaItems.find(m => m.id === id) || null;
+  document.querySelectorAll('#media-list .media-item').forEach(el => {
+    const itemId = el.querySelector('.media-item-name')?.dataset.id || '';
+    el.classList.toggle('selected', selectedMediaItem && selectedMediaItem.id === itemId);
+  });
 }
 
 function stageMediaItem(id) {
-    const item = mediaItems.find(m => m.id === id);
-    if (item) {
-        send({ cmd: 'stage_item', item: { type: item.media_type, data: item } });
-    }
+  const item = mediaItems.find(m => m.id === id);
+  if (item) send({ cmd: 'stage_item', item: { type: item.media_type, data: item } });
 }
 
 function goLiveMediaItem(id) {
-    const item = mediaItems.find(m => m.id === id);
-    if (item) {
-        send({ cmd: 'go_live', item: { type: item.media_type, data: item } });
-    }
+  const item = mediaItems.find(m => m.id === id);
+  if (item) send({ cmd: 'go_live', item: { type: item.media_type, data: item } });
 }
-
 
 // ─── Lower Third tab ─────────────────────────────────────────────────────────
 function setLtMode(mode) {
@@ -1126,7 +1351,7 @@ document.getElementById('np-show').addEventListener('click', () => {
   if (!name) { document.getElementById('np-name').focus(); return; }
   const title = document.getElementById('np-title').value.trim();
   const data = { kind: 'Nameplate', name, title: title || null };
-  send({ cmd: 'show_lt', data, template: defaultTemplate });
+  send({ cmd: 'show_lt', data, template: getActiveTemplate() });
 });
 
 document.getElementById('np-hide').addEventListener('click', () => {
@@ -1138,7 +1363,7 @@ document.getElementById('ft-show').addEventListener('click', () => {
   if (!text) { document.getElementById('ft-text').focus(); return; }
   const speed = parseInt(document.getElementById('ft-speed').value);
   const data = { kind: 'FreeText', text, scroll_mode: scrollMode, speed };
-  send({ cmd: 'show_lt', data, template: defaultTemplate });
+  send({ cmd: 'show_lt', data, template: getActiveTemplate() });
 });
 
 document.getElementById('ft-hide').addEventListener('click', () => {
@@ -1147,7 +1372,6 @@ document.getElementById('ft-hide').addEventListener('click', () => {
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 connect();
-// Auto-focus first pin digit
 document.querySelector('.pin-digit').focus();
 </script>
 </body>
