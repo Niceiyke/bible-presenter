@@ -1643,6 +1643,17 @@ async fn toggle_studio_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn set_studio_device(state: State<'_, AppState>, device_name: String) -> Result<(), String> {
+    let mut audio = state.studio_audio.lock();
+    audio.select_device(&device_name).map_err(|e| e.to_string())?;
+    // If a recording session is active, hot-swap the device
+    if state.studio_is_active.load(Ordering::Relaxed) {
+        audio.hot_swap_device(&device_name).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[derive(Serialize)]
 struct StudioRecording {
     id: String,
@@ -1921,76 +1932,84 @@ async fn import_studio_audio(app: AppHandle, state: State<'_, AppState>, path: S
 
     // Run transcoding in a separate thread
     tauri::async_runtime::spawn_blocking(move || {
-        let file = fs::File::open(&source_path).map_err(|e| e.to_string())?;
-        let mss = MediaSourceStream::new(Box::new(file), Default::default());
-        
-        let mut hint = Hint::new();
-        if let Some(ext) = source_path.extension().and_then(|s| s.to_str()) {
-            hint.with_extension(ext);
-        }
-
-        let meta_opts = MetadataOptions::default();
-        let fmt_opts = FormatOptions::default();
-        
-        let probed = symphonia::default::get_probe().format(&hint, mss, &fmt_opts, &meta_opts)
-            .map_err(|e| e.to_string())?;
-        
-        let mut format = probed.format;
-        let track = format.tracks().iter().find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
-            .ok_or_else(|| "No supported audio track found".to_string())?;
-        
-        let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default())
-            .map_err(|e| e.to_string())?;
-
-        let track_id = track.id;
-        
-        let spec = hound::WavSpec {
-            channels: 1,
-            sample_rate: 16000,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-        let mut writer = hound::WavWriter::create(target_path, spec).map_err(|e| e.to_string())?;
-
-        // Simple resampler / mono converter
-        // In a real app we'd use rubato, but for a quick import this is a start.
-        // For simplicity here, we'll assume we can decode and write.
-        
-        while let Ok(packet) = format.next_packet() {
-            if packet.track_id() != track_id { continue; }
+        let res = (|| -> Result<(), String> {
+            let file = fs::File::open(&source_path).map_err(|e| e.to_string())?;
+            let mss = MediaSourceStream::new(Box::new(file), Default::default());
             
-            let decoded = decoder.decode(&packet).map_err(|e| e.to_string())?;
-            
-            match decoded {
-                AudioBufferRef::F32(buf) => {
-                    let chan_count = buf.spec().channels.count();
-                    for i in 0..buf.frames() {
-                        let mut sum = 0.0;
-                        for c in 0..chan_count {
-                            sum += buf.chan(c)[i];
-                        }
-                        let mono = sum / chan_count as f32;
-                        let s = (mono * std::i16::MAX as f32).clamp(-32768.0, 32767.0) as i16;
-                        writer.write_sample(s).map_err(|e| e.to_string())?;
-                    }
-                }
-                AudioBufferRef::S16(buf) => {
-                    let chan_count = buf.spec().channels.count();
-                    for i in 0..buf.frames() {
-                        let mut sum = 0i32;
-                        for c in 0..chan_count {
-                            sum += buf.chan(c)[i] as i32;
-                        }
-                        let mono = (sum / chan_count as i32) as i16;
-                        writer.write_sample(mono).map_err(|e| e.to_string())?;
-                    }
-                }
-                _ => return Err("Unsupported buffer format during decode".to_string()),
+            let mut hint = Hint::new();
+            if let Some(ext) = source_path.extension().and_then(|s| s.to_str()) {
+                hint.with_extension(ext);
             }
+
+            let meta_opts = MetadataOptions::default();
+            let fmt_opts = FormatOptions::default();
+            
+            let probed = symphonia::default::get_probe().format(&hint, mss, &fmt_opts, &meta_opts)
+                .map_err(|e| e.to_string())?;
+            
+            let mut format = probed.format;
+            let track = format.tracks().iter().find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
+                .ok_or_else(|| "No supported audio track found".to_string())?;
+            
+            let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default())
+                .map_err(|e| e.to_string())?;
+
+            let track_id = track.id;
+            
+            let spec = hound::WavSpec {
+                channels: 1,
+                sample_rate: 16000,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            };
+            let mut writer = hound::WavWriter::create(target_path, spec).map_err(|e| e.to_string())?;
+
+            loop {
+                let packet = match format.next_packet() {
+                    Ok(p) => p,
+                    Err(symphonia::core::errors::Error::IoError(ref e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                    Err(e) => return Err(e.to_string()),
+                };
+
+                if packet.track_id() != track_id { continue; }
+                
+                let decoded = decoder.decode(&packet).map_err(|e| e.to_string())?;
+                
+                match decoded {
+                    AudioBufferRef::F32(buf) => {
+                        let chan_count = buf.spec().channels.count();
+                        for i in 0..buf.frames() {
+                            let mut sum = 0.0;
+                            for c in 0..chan_count {
+                                sum += buf.chan(c)[i];
+                            }
+                            let mono = sum / chan_count as f32;
+                            let s = (mono * std::i16::MAX as f32).clamp(-32768.0, 32767.0) as i16;
+                            writer.write_sample(s).map_err(|e| e.to_string())?;
+                        }
+                    }
+                    AudioBufferRef::S16(buf) => {
+                        let chan_count = buf.spec().channels.count();
+                        for i in 0..buf.frames() {
+                            let mut sum = 0i32;
+                            for c in 0..chan_count {
+                                sum += buf.chan(c)[i] as i32;
+                            }
+                            let mono = (sum / chan_count as i32) as i16;
+                            writer.write_sample(mono).map_err(|e| e.to_string())?;
+                        }
+                    }
+                    _ => return Err("Unsupported buffer format during decode".to_string()),
+                }
+            }
+            writer.finalize().map_err(|e| e.to_string())?;
+            Ok(())
+        })();
+
+        match res {
+            Ok(_) => { let _ = app.emit("studio-import-complete", stem); }
+            Err(e) => { let _ = app.emit("studio-import-error", e); }
         }
-        writer.finalize().map_err(|e| e.to_string())?;
-        let _ = app.emit("studio-import-complete", stem);
-        Ok(())
     });
 
     Ok(())
@@ -3253,6 +3272,7 @@ fn main() {
             toggle_design_window,
             toggle_studio_window,
             list_studio_recordings,
+            set_studio_device,
             delete_studio_recording,
             rename_studio_recording,
             get_studio_recording_transcript,
