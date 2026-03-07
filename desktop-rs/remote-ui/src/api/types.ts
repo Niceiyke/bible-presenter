@@ -102,13 +102,13 @@ export interface RemoteInfo {
 export type WsEvent =
   | { type: 'auth_ok'; token: string }
   | { type: 'auth_fail' }
-  | { type: 'state'; live_item: DisplayItem | null; lt: unknown | null }
+  | { type: 'state'; live_item: DisplayItem | null; lt: unknown | null; is_blanked?: boolean }
   | { type: 'transcription'; text: string }
   | { type: 'lt_update'; payload: unknown | null }
   | { type: 'settings_update'; is_blanked: boolean }
   | { type: 'settings_full'; settings: { is_blanked: boolean; [key: string]: unknown } }
   | { type: 'verse_text'; verse: Verse; nav?: 'next' | 'prev' }
-  | { type: 'search_results'; results: Verse[] }
+  | { type: 'search_results'; results: Verse[]; method?: string }
   | { type: 'books'; version: string; books: string[] }
   | { type: 'chapters'; book: string; chapters: number[] }
   | { type: 'verses'; book: string; chapter: number; verses: number[] }

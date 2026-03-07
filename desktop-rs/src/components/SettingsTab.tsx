@@ -26,8 +26,6 @@ export function SettingsTab({
     preacherDevice, setPreacherDevice,
     operatorMuted, setOperatorMuted,
     preacherMuted, setPreacherMuted,
-    operatorVadThreshold, setOperatorVadThreshold,
-    preacherVadThreshold, setPreacherVadThreshold,
     transcriptionWindowSec,
     setTranscriptionWindowSec,
     media,
@@ -104,18 +102,6 @@ export function SettingsTab({
   const handleTogglePreacherMute = (val: boolean) => {
     setPreacherMuted(val);
     invoke("set_preacher_muted", { muted: val }).catch(console.error);
-  };
-
-  const handleUpdateOperatorVad = (val: number) => {
-    setOperatorVadThreshold(val);
-    localStorage.setItem("pref_operatorVadThreshold", String(val));
-    invoke("set_operator_vad", { threshold: val }).catch(console.error);
-  };
-
-  const handleUpdatePreacherVad = (val: number) => {
-    setPreacherVadThreshold(val);
-    localStorage.setItem("pref_preacherVadThreshold", String(val));
-    invoke("set_preacher_vad", { threshold: val }).catch(console.error);
   };
 
   const handleUpdateTranscriptionWindow = (sec: number) => {
@@ -382,19 +368,6 @@ export function SettingsTab({
                 ))}
               </div>
             </div>
-
-            <div>
-              <div className="flex justify-between items-center mb-1">
-                <p className="text-[10px] text-slate-500 uppercase font-bold">VAD Sensitivity</p>
-                <span className="text-[10px] font-mono text-amber-500">{(operatorVadThreshold * 1000).toFixed(0)} units</span>
-              </div>
-              <input
-                type="range" min="0.0005" max="0.01" step="0.0005"
-                value={operatorVadThreshold}
-                onChange={(e) => handleUpdateOperatorVad(parseFloat(e.target.value))}
-                className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
-              />
-            </div>
           </div>
 
           {/* Preacher Microphone */}
@@ -446,19 +419,6 @@ export function SettingsTab({
                   </button>
                 ))}
               </div>
-            </div>
-
-            <div>
-              <div className="flex justify-between items-center mb-1">
-                <p className="text-[10px] text-slate-500 uppercase font-bold">VAD Sensitivity</p>
-                <span className="text-[10px] font-mono text-blue-400">{(preacherVadThreshold * 1000).toFixed(0)} units</span>
-              </div>
-              <input
-                type="range" min="0.0005" max="0.01" step="0.0005"
-                value={preacherVadThreshold}
-                onChange={(e) => handleUpdatePreacherVad(parseFloat(e.target.value))}
-                className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
-              />
             </div>
           </div>
         </div>

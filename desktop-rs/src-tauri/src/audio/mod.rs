@@ -5,7 +5,6 @@ use rubato::{
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use webrtc_vad::{Vad, VadMode};
 
 /// A thread-safe wrapper for cpal::Stream.
 ///
@@ -18,18 +17,6 @@ struct StreamHandle(cpal::Stream);
 unsafe impl Send for StreamHandle {}
 unsafe impl Sync for StreamHandle {}
 
-/// Wrapper to make Vad Send.
-/// SAFETY: Vad is only accessed from within the audio callback thread.
-struct SendVad(Vad);
-unsafe impl Send for SendVad {}
-unsafe impl Sync for SendVad {}
-
-impl SendVad {
-    fn is_voice_segment(&mut self, chunk: &[i16]) -> anyhow::Result<bool> {
-        self.0.is_voice_segment(chunk).map_err(|e| anyhow::anyhow!("{:?}", e))
-    }
-}
-
 pub struct AudioEngine {
     stream: Option<Arc<StreamHandle>>,
     selected_device_name: Option<String>,
@@ -37,7 +24,6 @@ pub struct AudioEngine {
     session_audio_tx: Option<mpsc::Sender<Vec<f32>>>,
     session_error_tx: Option<mpsc::Sender<String>>,
     session_level_tx: Option<mpsc::Sender<f32>>,
-    vad_threshold: f32,
     pub media_playing: Arc<AtomicBool>,
     pub is_muted: Arc<AtomicBool>,
 }
@@ -50,14 +36,9 @@ impl AudioEngine {
             session_audio_tx: None,
             session_error_tx: None,
             session_level_tx: None,
-            vad_threshold: 0.002,
             media_playing: Arc::new(AtomicBool::new(false)),
             is_muted: Arc::new(AtomicBool::new(false)),
         }
-    }
-
-    pub fn set_vad_threshold(&mut self, threshold: f32) {
-        self.vad_threshold = threshold;
     }
 
     pub fn list_devices(&self) -> anyhow::Result<Vec<(String, String)>> {
@@ -153,21 +134,20 @@ impl AudioEngine {
         let sample_rate = config.sample_rate().0 as f64;
         let target_rate = 16000.0;
 
-        let vad = self.vad_threshold;
         let aec_flag = self.media_playing.clone();
         let mute_flag = self.is_muted.clone();
 
         let build_result = match config.sample_format() {
             cpal::SampleFormat::F32 => self.build_stream::<f32>(
-                &device, &config.into(), sample_rate, target_rate, vad, aec_flag, mute_flag,
+                &device, &config.into(), sample_rate, target_rate, aec_flag, mute_flag,
                 audio_tx, error_tx, level_tx,
             ),
             cpal::SampleFormat::I16 => self.build_stream::<i16>(
-                &device, &config.into(), sample_rate, target_rate, vad, aec_flag, mute_flag,
+                &device, &config.into(), sample_rate, target_rate, aec_flag, mute_flag,
                 audio_tx, error_tx, level_tx,
             ),
             cpal::SampleFormat::U16 => self.build_stream::<u16>(
-                &device, &config.into(), sample_rate, target_rate, vad, aec_flag, mute_flag,
+                &device, &config.into(), sample_rate, target_rate, aec_flag, mute_flag,
                 audio_tx, error_tx, level_tx,
             ),
             _ => return Err(anyhow::anyhow!("Unsupported sample format")),
@@ -200,7 +180,6 @@ impl AudioEngine {
         config: &cpal::StreamConfig,
         source_rate: f64,
         target_rate: f64,
-        vad_threshold: f32,
         aec_flag: Arc<AtomicBool>,
         mute_flag: Arc<AtomicBool>,
         audio_tx: mpsc::Sender<Vec<f32>>,
@@ -227,25 +206,11 @@ impl AudioEngine {
         // Clone error_tx for use inside the data callback (the original moves into the error callback)
         let error_tx_inner = error_tx.clone();
 
-        // Advanced AI-Driven VAD
-        let mut vad_raw = Vad::new();
-        vad_raw.set_mode(VadMode::Aggressive);
-        let mut vad = SendVad(vad_raw);
-
         // Auto-Gain Control State
         let target_rms = 0.05f32; // ~ -26 dBFS target average
         let mut current_gain = 1.0f32;
         let attack = 0.01f32;
         let release = 0.001f32;
-
-        // Residue buffer for VAD to prevent sample loss
-        let mut residue_i16: Vec<i16> = Vec::with_capacity(160);
-
-        // Pre-roll buffer (500ms at 16kHz = 8000 samples) captures sentence starts without
-        // bloating chunk size, which would slow inference and fill the audio channel faster.
-        let mut pre_roll_buffer = vec![0.0f32; 8000];
-        let mut pre_roll_idx = 0;
-        let mut in_speech_window = false;
 
         device
             .build_input_stream(
@@ -293,7 +258,7 @@ impl AudioEngine {
                                 *s = s.clamp(-1.0, 1.0);
                             }
 
-                            // VU meter logic (before VAD dropping)
+                            // VU meter logic
                             let energy = mono.iter().map(|s| s * s).sum::<f32>() / mono.len() as f32;
                             if let Some(ref ltx) = level_tx {
                                 let _ = ltx.try_send(energy);
@@ -307,52 +272,11 @@ impl AudioEngine {
                                 for s in &mut mono { *s = 0.0; }
                             }
 
-                            // 3. WebRTC VAD + Fallback Energy Threshold
-                            let mut i16_samples: Vec<i16> = residue_i16.clone();
-                            i16_samples.extend(mono.iter().map(|&s| (s * std::i16::MAX as f32).clamp(-32768.0, 32767.0) as i16));
-
-                            let mut is_speech_now = false;
-                            let mut processed_idx = 0;
-                            for chunk in i16_samples.chunks_exact(160) {
-                                if let Ok(active) = vad.is_voice_segment(chunk) {
-                                    if active {
-                                        is_speech_now = true;
-                                    }
-                                }
-                                processed_idx += 160;
-                            }
-
-                            // Store the remainder in residue_i16
-                            residue_i16 = i16_samples[processed_idx..].to_vec();
-
-                            let triggered = is_speech_now || energy > vad_threshold;
-
-                            if triggered {
-                                let chunk = if !in_speech_window {
-                                    // Transition to speech: prepend pre-roll
-                                    in_speech_window = true;
-                                    let mut c = Vec::with_capacity(8000 + mono.len());
-                                    for i in 0..8000 {
-                                        c.push(pre_roll_buffer[(pre_roll_idx + i) % 8000]);
-                                    }
-                                    c.extend_from_slice(&mono);
-                                    c
-                                } else {
-                                    mono.clone()
-                                };
-
-                                if audio_tx.try_send(chunk).is_err() {
-                                    let _ = error_tx_inner.try_send(
-                                        "WARNING: Audio channel full; samples dropped.".to_string()
-                                    );
-                                }
-                            } else {
-                                in_speech_window = false;
-                                // Add to pre-roll circular buffer
-                                for &s in &mono {
-                                    pre_roll_buffer[pre_roll_idx] = s;
-                                    pre_roll_idx = (pre_roll_idx + 1) % 8000;
-                                }
+                            // Since VAD is handled in hardware now, simply send every chunk forward.
+                            if audio_tx.try_send(mono.clone()).is_err() {
+                                let _ = error_tx_inner.try_send(
+                                    "WARNING: Audio channel full; samples dropped.".to_string()
+                                );
                             }
                         }
                         for chan in &mut input_buffer {

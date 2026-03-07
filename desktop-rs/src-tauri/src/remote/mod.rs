@@ -922,7 +922,7 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
             let query = str_field(&v, "query");
             match state.store.search_manual_all_versions(&query) {
                 Ok(results) => {
-                    let msg = json!({ "type": "search_results", "results": results });
+                    let msg = json!({ "type": "search_results", "results": results, "method": "keyword" });
                     send_to(state, from_key, msg.to_string());
                 }
                 Err(e) => send_error_to(state, from_key, &e.to_string()),
@@ -1195,40 +1195,17 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str) {
 
         "search_hybrid" => {
             let query = str_field(&v, "query");
-            // Always do keyword search
-            let fts_results = state.store.search_manual_all_versions(&query).unwrap_or_default();
-            // Try semantic search via engine if available
-            let mut semantic_results: Vec<store::Verse> = Vec::new();
             if let Some(handle) = state.app_handle.get() {
-                if let Ok(engine) = state.get_or_init_engine(handle).await {
-                    if let Ok(embedding) = engine.embed(&query) {
-                        semantic_results = state.store.search_top_n_semantic(handle, &embedding, 40);
+                match state.search_bible(handle, &query).await {
+                    Ok(resp) => {
+                        let msg = json!({ "type": "search_results", "results": resp.results, "method": resp.method });
+                        send_to(state, from_key, msg.to_string());
                     }
+                    Err(e) => send_error_to(state, from_key, &e.to_string()),
                 }
+            } else {
+                send_error_to(state, from_key, "App handle not initialized");
             }
-            // Reciprocal Rank Fusion merge
-            let mut rrf: std::collections::HashMap<String, (f32, store::Verse)> = std::collections::HashMap::new();
-            let k = 60.0f32;
-            for (rank, verse) in fts_results.into_iter().enumerate() {
-                let key = format!("{}|{}|{}|{}", verse.book, verse.chapter, verse.verse, verse.version);
-                let score = 1.0 / (k + rank as f32 + 1.0);
-                rrf.insert(key, (score, verse));
-            }
-            for (rank, verse) in semantic_results.into_iter().enumerate() {
-                let key = format!("{}|{}|{}|{}", verse.book, verse.chapter, verse.verse, verse.version);
-                let score = 1.0 / (k + rank as f32 + 1.0);
-                let entry = rrf.entry(key).or_insert((0.0, verse.clone()));
-                entry.0 += score;
-            }
-            let mut merged: Vec<store::Verse> = rrf.into_values().collect::<Vec<_>>()
-                .into_iter()
-                .map(|(_, v)| v)
-                .collect();
-            // Sort by score descending (score field on Verse) — use ordering by rank approximation
-            merged.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-            merged.truncate(30);
-            let msg = json!({ "type": "search_results", "results": merged });
-            send_to(state, from_key, msg.to_string());
         }
 
         "get_lt_templates" => {

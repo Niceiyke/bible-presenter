@@ -21,10 +21,6 @@ export interface SessionSlice {
   setOperatorDevice: (v: string) => void;
   preacherDevice: string;
   setPreacherDevice: (v: string) => void;
-  operatorVadThreshold: number;
-  setOperatorVadThreshold: (v: number) => void;
-  preacherVadThreshold: number;
-  setPreacherVadThreshold: (v: number) => void;
   transcriptionWindowSec: number;
   setTranscriptionWindowSec: (v: number) => void;
   sessionState: "idle" | "loading" | "running" | "stopping";
@@ -85,10 +81,6 @@ export const createSessionSlice: StateCreator<AppStore, [], [], SessionSlice> = 
   setOperatorDevice: (v) => set({ operatorDevice: v }),
   preacherDevice: localStorage.getItem("pref_preacherDevice") ?? "",
   setPreacherDevice: (v) => set({ preacherDevice: v }),
-  operatorVadThreshold: parseFloat(localStorage.getItem("pref_operatorVadThreshold") ?? "0.002"),
-  setOperatorVadThreshold: (v) => set({ operatorVadThreshold: v }),
-  preacherVadThreshold: parseFloat(localStorage.getItem("pref_preacherVadThreshold") ?? "0.002"),
-  setPreacherVadThreshold: (v) => set({ preacherVadThreshold: v }),
   transcriptionWindowSec: parseFloat(localStorage.getItem("pref_transcriptionWindowSec") ?? "1.0"),
   setTranscriptionWindowSec: (v) => set({ transcriptionWindowSec: v }),
   sessionState: "idle",

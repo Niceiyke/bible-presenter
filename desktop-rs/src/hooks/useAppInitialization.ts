@@ -101,8 +101,6 @@ export function useAppInitialization() {
       invoke("get_current_item").then((v: any) => { if (v) setLiveItem(v); }).catch(() => {});
 
       invoke("set_transcription_window", { samples: Math.round(transcriptionWindowSec * 16000) }).catch(() => {});
-      invoke("set_operator_vad", { threshold: useAppStore.getState().operatorVadThreshold }).catch(() => {});
-      invoke("set_preacher_vad", { threshold: useAppStore.getState().preacherVadThreshold }).catch(() => {});
       
       const opDev = useAppStore.getState().operatorDevice;
       if (opDev) invoke("set_operator_device", { deviceName: opDev }).catch(() => {});

@@ -6,7 +6,7 @@ import type { ReactNode, ButtonHTMLAttributes, InputHTMLAttributes } from 'react
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
     <div
-      className={`flex flex-col gap-2.5 rounded-xl p-3.5 ${className}`}
+      className={`flex flex-col gap-3 rounded-xl p-4 ${className}`}
       style={{ background: 'var(--panel)', border: '1px solid var(--border)' }}
     >
       {children}
@@ -17,7 +17,7 @@ export function Card({ children, className = '' }: { children: ReactNode; classN
 // Card section label
 export function CardLabel({ children }: { children: ReactNode }) {
   return (
-    <div className="text-[10px] font-bold tracking-widest uppercase" style={{ color: 'var(--muted)' }}>
+    <div className="text-[10px] font-bold tracking-widest uppercase mb-1" style={{ color: 'var(--muted)' }}>
       {children}
     </div>
   );
@@ -32,18 +32,18 @@ interface BtnProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variantStyles: Record<BtnVariant, string> = {
-  default: 'border-[var(--border)] bg-[var(--panel)] text-[var(--text)] hover:border-[#4a4d5a] hover:bg-[#22253a]',
-  live:    'border-[var(--amber)] bg-[var(--amber)] text-black hover:brightness-110 disabled:bg-[#4a3d1a] disabled:text-[#7a6030] disabled:border-[#4a3d1a]',
-  danger:  'border-[var(--red)] text-[var(--red)] hover:bg-red-900/20 bg-transparent',
-  ghost:   'border-transparent bg-transparent text-[var(--muted)] hover:text-[var(--text)]',
+  default: 'border-[var(--border)] bg-[var(--panel)] text-[var(--text)] active:bg-[#22253a]',
+  live:    'border-[var(--amber)] bg-[var(--amber)] text-black active:brightness-90 disabled:bg-[#4a3d1a] disabled:text-[#7a6030] disabled:border-[#4a3d1a]',
+  danger:  'border-[var(--red)] text-[var(--red)] active:bg-red-900/20 bg-transparent',
+  ghost:   'border-transparent bg-transparent text-[var(--muted)] active:text-[var(--text)]',
 };
 
 export function Btn({ variant = 'default', className = '', children, ...props }: BtnProps) {
   return (
     <button
       {...props}
-      className={`px-3 py-2.5 border rounded-lg text-xs font-semibold cursor-pointer transition-all
-        disabled:opacity-40 disabled:cursor-not-allowed ${variantStyles[variant]} ${className}`}
+      className={`px-4 py-3 border rounded-xl text-sm font-bold cursor-pointer transition-all
+        disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.97] ${variantStyles[variant]} ${className}`}
     >
       {children}
     </button>
@@ -57,10 +57,10 @@ export function Pill({
   return (
     <button
       onClick={onClick}
-      className="px-3 py-1 rounded-full text-xs font-semibold border transition-all cursor-pointer"
+      className="px-4 py-2 rounded-full text-xs font-bold border transition-all cursor-pointer active:scale-95"
       style={
         active
-          ? { borderColor: 'var(--amber)', color: 'var(--amber)', background: 'rgba(245,158,11,.1)' }
+          ? { borderColor: 'var(--amber)', color: 'var(--amber)', background: 'rgba(245,158,11,.15)' }
           : { borderColor: 'var(--border)', color: 'var(--muted)', background: 'transparent' }
       }
     >
@@ -74,7 +74,7 @@ export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...props}
-      className={`w-full px-3 py-2 rounded-lg text-sm outline-none transition-colors ${props.className ?? ''}`}
+      className={`w-full px-4 py-3 rounded-xl text-base outline-none transition-colors ${props.className ?? ''}`}
       style={{
         background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)',
         ...props.style,
@@ -91,7 +91,7 @@ export function Select(props: InputHTMLAttributes<HTMLSelectElement> & { childre
   return (
     <select
       {...rest}
-      className={`w-full px-3 py-2 rounded-lg text-sm outline-none cursor-pointer ${rest.className ?? ''}`}
+      className={`w-full px-4 py-3 rounded-xl text-base outline-none cursor-pointer appearance-none ${rest.className ?? ''}`}
       style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', ...rest.style }}
     >
       {children}

@@ -82,6 +82,12 @@ pub struct Verse {
     pub score: Option<f32>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SearchResponse {
+    pub results: Vec<Verse>,
+    pub method: String,
+}
+
 /// A compact version of Verse for memory-efficient caching.
 /// Only 6 bytes per verse: (u16 book_idx, u16 chapter, u16 verse, u8 version_idx)
 #[derive(Clone)]

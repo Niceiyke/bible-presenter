@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { ws } from './api/wsClient';
 import type { WsEvent } from './api/types';
 
@@ -59,6 +59,7 @@ function useWsEvents() {
         case 'state':
           live.setLiveItem(evt.live_item);
           live.setLtShowing(!!evt.lt);
+          if (typeof evt.is_blanked === 'boolean') live.setBlanked(evt.is_blanked);
           break;
         case 'transcription':
           live.setTranscription(evt.text);
@@ -136,7 +137,10 @@ function useWsEvents() {
 export default function App() {
   const authed = useAuthStore(s => s.authed);
   const setStatus = useAuthStore(s => s.setStatus);
+  const isOutputBlanked = useLiveStore(s => s.isOutputBlanked);
   const [activeTab, setActiveTab] = useState<TabId>('bible');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useWsEvents();
 
@@ -147,6 +151,17 @@ export default function App() {
     return () => clearInterval(id);
   }, [setStatus]);
 
+  // Close menu on click outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   if (!authed) {
     return (
       <div className="flex flex-col h-full">
@@ -156,31 +171,63 @@ export default function App() {
     );
   }
 
-  return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <NowLiveBanner />
+  const activeLabel = TABS.find(t => t.id === activeTab)?.label ?? 'Menu';
 
-      {/* Tab bar */}
-      <div className="flex flex-shrink-0 overflow-x-auto" style={{ background: 'var(--panel)', borderBottom: '1px solid var(--border)' }}>
-        {TABS.map(tab => (
+  return (
+    <div className="flex flex-col h-full overflow-hidden bg-[var(--bg)]">
+      {/* Persistent Header */}
+      <div className="flex items-center justify-between px-3 py-3 bg-[var(--panel)] border-b border-[var(--border)] shrink-0 shadow-sm z-50">
+        <div className="relative" ref={menuRef}>
           <button
-            key={tab.id}
-            onClick={() => {
-              setActiveTab(tab.id);
-              if (tab.id === 'schedule') ws.send({ cmd: 'get_schedule' });
-            }}
-            style={{
-              flexShrink: 0, padding: '12px 10px', background: 'transparent',
-              border: 'none', cursor: 'pointer', whiteSpace: 'nowrap',
-              borderBottom: `2px solid ${activeTab === tab.id ? 'var(--amber)' : 'transparent'}`,
-              color: activeTab === tab.id ? 'var(--amber)' : 'var(--muted)',
-              fontSize: '10px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
-            }}
+            onClick={() => setMenuOpen(!menuOpen)}
+            className="flex items-center gap-3 px-4 py-2.5 rounded-xl border border-[var(--border)] bg-[var(--bg)] text-xs font-black uppercase tracking-widest text-[var(--amber)] active:scale-95 transition-all shadow-sm"
           >
-            {tab.label}
+            {activeLabel}
+            <span className="text-[10px] opacity-50">▼</span>
           </button>
-        ))}
+          
+          {menuOpen && (
+            <div className="absolute top-full left-0 mt-2 w-56 rounded-2xl border border-[var(--border)] bg-[var(--panel)] shadow-2xl z-[60] overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
+              {TABS.map(tab => (
+                <button
+                  key={tab.id}
+                  onClick={() => {
+                    setActiveTab(tab.id);
+                    setMenuOpen(false);
+                    if (tab.id === 'schedule') ws.send({ cmd: 'get_schedule' });
+                  }}
+                  className={`w-full text-left px-5 py-4 text-xs font-black uppercase tracking-widest transition-all active:bg-[var(--bg)] ${
+                    activeTab === tab.id ? 'text-[var(--amber)] bg-[var(--bg)]' : 'text-[var(--muted)] hover:text-[var(--text)]'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => ws.send({ cmd: 'clear_live' })}
+            className="px-4 py-2.5 rounded-xl border border-red-500/30 bg-red-500/10 text-red-500 text-[10px] font-black uppercase tracking-wider active:scale-90 transition-all"
+          >
+            Clear
+          </button>
+          <button
+            onClick={() => ws.send({ cmd: 'blank_output' })}
+            className={`px-4 py-2.5 rounded-xl border text-[10px] font-black uppercase tracking-wider active:scale-90 transition-all shadow-sm ${
+              isOutputBlanked 
+                ? 'border-[var(--amber)] bg-[var(--amber)] text-black' 
+                : 'border-[var(--border)] bg-[var(--bg)] text-[var(--muted)]'
+            }`}
+          >
+            {isOutputBlanked ? 'Unblank' : 'Logo'}
+          </button>
+        </div>
       </div>
+
+      <NowLiveBanner />
 
       {/* Pages */}
       <div className="flex-1 overflow-hidden flex flex-col">

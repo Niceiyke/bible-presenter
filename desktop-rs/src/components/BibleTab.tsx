@@ -456,20 +456,32 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                 <p className="text-slate-600 text-xs italic text-center pt-4">No results found</p>
               )}
               {searchResults.length > 0 && searchMethod && (
-                <div className="flex items-center gap-2 mb-2 px-1">
-                  <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase tracking-widest ${
-                    (searchMethod === "semantic" || searchMethod === "hybrid") ? "bg-blue-500/20 text-blue-400 border border-blue-500/30" :
-                    searchMethod === "reference" ? "bg-amber-500/20 text-amber-400 border border-amber-500/30" :
-                    "bg-slate-700/50 text-slate-400 border border-slate-600/30"
-                  }`}>
-                    {searchMethod === "semantic" ? "Semantic Match" :
-                     searchMethod === "hybrid" ? "Hybrid Match" :
-                     searchMethod === "reference" ? "Reference Match" :
-                     "Keyword Match"}
-                  </span>
-                  <span className="text-[9px] text-slate-600 font-bold uppercase tracking-tighter">
-                    {searchResults.length} results
-                  </span>
+                <div className="flex items-center justify-between mb-2 px-1">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase tracking-widest ${
+                      (searchMethod === "semantic" || searchMethod === "hybrid") ? "bg-blue-500/20 text-blue-400 border border-blue-500/30" :
+                      searchMethod === "reference" ? "bg-amber-500/20 text-amber-400 border border-amber-500/30" :
+                      "bg-slate-700/50 text-slate-400 border border-slate-600/30"
+                    }`}>
+                      {searchMethod === "semantic" ? "Semantic Match" :
+                       searchMethod === "hybrid" ? "Hybrid Match" :
+                       searchMethod === "reference" ? "Reference Match" :
+                       "Keyword Match"}
+                    </span>
+                    <span className="text-[9px] text-slate-600 font-bold uppercase tracking-tighter">
+                      {searchResults.length} results
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setSearchResults([]);
+                      setSearchMethod("");
+                      setSearchQuery("");
+                    }}
+                    className="text-[9px] font-bold text-slate-500 hover:text-red-400 uppercase tracking-widest transition-colors"
+                  >
+                    Clear Results
+                  </button>
                 </div>
               )}
               {searchResults.map((v: any) => (

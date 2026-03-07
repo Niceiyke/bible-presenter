@@ -442,6 +442,99 @@ impl AppState {
             }
         }
     }
+
+    pub async fn search_bible(&self, app: &tauri::AppHandle, query: &str) -> Result<store::SearchResponse, String> {
+        // 1. Try direct reference match first
+        let ref_results = self.store.detect_verses_by_ref(query);
+        if !ref_results.is_empty() {
+            return Ok(store::SearchResponse {
+                results: ref_results,
+                method: "reference".to_string(),
+            });
+        }
+
+        // 2. Hybrid Search (Semantic + FTS5 Keyword)
+        let fts_results = self.store.search_manual_all_versions(query).unwrap_or_default();
+        let mut semantic_results = Vec::new();
+
+        match self.get_or_init_engine(app).await {
+            Ok(engine) => {
+                log_msg(app, &format!("Generating embedding for query: '{}'...", query));
+                match engine.embed(query) {
+                    Ok(embedding) => {
+                        log_msg(app, "Embedding generated. Searching USearch index...");
+                        // Get a bit more for semantic to ensure good fusion overlap
+                        semantic_results = self.store.search_top_n_semantic(app, &embedding, 50);
+                    }
+                    Err(e) => log_msg(app, &format!("Embedding error: {}", e)),
+                }
+            }
+            Err(e) => log_msg(app, &format!("Failed to lazy-load engine for semantic search: {}", e)),
+        }
+
+        if semantic_results.is_empty() && fts_results.is_empty() {
+            return Ok(store::SearchResponse {
+                results: Vec::new(),
+                method: "hybrid".to_string(),
+            });
+        }
+
+        // Merging via Reciprocal Rank Fusion (RRF)
+        let mut rrf_scores: std::collections::HashMap<(String, i32, i32), (f32, store::Verse)> = std::collections::HashMap::new();
+        let k = 60.0;
+
+        for (rank, verse) in fts_results.into_iter().enumerate() {
+            let key = (verse.book.clone(), verse.chapter, verse.verse);
+            let score = 1.0 / (k + rank as f32 + 1.0);
+            rrf_scores.insert(key, (score, verse));
+        }
+
+        for (rank, verse) in semantic_results.into_iter().enumerate() {
+            let key = (verse.book.clone(), verse.chapter, verse.verse);
+            let score = 1.0 / (k + rank as f32 + 1.0);
+            
+            let entry = rrf_scores.entry(key).or_insert((0.0, verse.clone()));
+            entry.0 += score;
+            
+            // Preserve semantic score if available, otherwise it stays as the one from FTS
+            if entry.1.score.is_none() || (verse.score.is_some() && verse.score > entry.1.score) {
+                 entry.1.score = verse.score; 
+            }
+        }
+
+        let mut final_results: Vec<(f32, store::Verse)> = rrf_scores.into_values().collect();
+        // Sort by RRF score descending
+        final_results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Map back to Verses and take top 50 for reranking
+        let mut candidates: Vec<store::Verse> = final_results.into_iter().take(50).map(|(_, v)| v).collect();
+
+        // 3. Precision Reranking (Cross-Encoder)
+        if !candidates.is_empty() {
+            if let Ok(engine) = self.get_or_init_engine(app).await {
+                log_msg(app, &format!("Reranking {} candidates...", candidates.len()));
+                let passages: Vec<String> = candidates.iter().map(|v| v.text.clone()).collect();
+                match engine.rerank(query, &passages) {
+                    Ok(scores) => {
+                        for (i, score) in scores.into_iter().enumerate() {
+                            candidates[i].score = Some(score);
+                        }
+                        // Sort by reranker score descending
+                        candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+                        log_msg(app, "Reranking complete.");
+                    }
+                    Err(e) => log_msg(app, &format!("Reranking error: {}", e)),
+                }
+            }
+        }
+
+        let results: Vec<store::Verse> = candidates.into_iter().take(20).collect();
+
+        Ok(store::SearchResponse {
+            results,
+            method: "hybrid".to_string(),
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1131,20 +1224,6 @@ async fn set_preacher_device(
 }
 
 #[tauri::command]
-async fn set_operator_vad(state: State<'_, AppState>, threshold: f32) -> Result<(), String> {
-    let mut audio = state.operator_audio.lock();
-    audio.set_vad_threshold(threshold);
-    Ok(())
-}
-
-#[tauri::command]
-async fn set_preacher_vad(state: State<'_, AppState>, threshold: f32) -> Result<(), String> {
-    let mut audio = state.preacher_audio.lock();
-    audio.set_vad_threshold(threshold);
-    Ok(())
-}
-
-#[tauri::command]
 async fn set_operator_ptt(state: State<'_, AppState>, active: bool) -> Result<(), String> {
     state.operator_ptt_active.store(active, std::sync::atomic::Ordering::Relaxed);
     Ok(())
@@ -1213,109 +1292,14 @@ async fn search_manual(
         .map_err(|e: anyhow::Error| e.to_string())
 }
 
-#[derive(Serialize)]
-pub struct SearchResponse {
-    pub results: Vec<store::Verse>,
-    pub method: String,
-}
-
 /// Hybrid search across all versions using ONNX embedding + keyword search with RRF.
 #[tauri::command]
 async fn search_semantic_query(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     query: String,
-) -> Result<SearchResponse, String> {
-    // 1. Try direct reference match first
-    let ref_results = state.store.detect_verses_by_ref(&query);
-    if !ref_results.is_empty() {
-        return Ok(SearchResponse {
-            results: ref_results,
-            method: "reference".to_string(),
-        });
-    }
-
-    // 2. Hybrid Search (Semantic + FTS5 Keyword)
-    let fts_results = state.store.search_manual_all_versions(&query).unwrap_or_default();
-    let mut semantic_results = Vec::new();
-
-    match state.get_or_init_engine(&app).await {
-        Ok(engine) => {
-            log_msg(&app, &format!("Generating embedding for query: '{}'...", query));
-            match engine.embed(&query) {
-                Ok(embedding) => {
-                    log_msg(&app, "Embedding generated. Searching USearch index...");
-                    // Get a bit more for semantic to ensure good fusion overlap
-                    semantic_results = state.store.search_top_n_semantic(&app, &embedding, 50);
-                }
-                Err(e) => log_msg(&app, &format!("Embedding error: {}", e)),
-            }
-        }
-        Err(e) => log_msg(&app, &format!("Failed to lazy-load engine for semantic search: {}", e)),
-    }
-
-    if semantic_results.is_empty() && fts_results.is_empty() {
-        return Ok(SearchResponse {
-            results: Vec::new(),
-            method: "hybrid".to_string(),
-        });
-    }
-
-    // Merging via Reciprocal Rank Fusion (RRF)
-    let mut rrf_scores: std::collections::HashMap<(String, i32, i32), (f32, store::Verse)> = std::collections::HashMap::new();
-    let k = 60.0;
-
-    for (rank, verse) in fts_results.into_iter().enumerate() {
-        let key = (verse.book.clone(), verse.chapter, verse.verse);
-        let score = 1.0 / (k + rank as f32 + 1.0);
-        rrf_scores.insert(key, (score, verse));
-    }
-
-    for (rank, verse) in semantic_results.into_iter().enumerate() {
-        let key = (verse.book.clone(), verse.chapter, verse.verse);
-        let score = 1.0 / (k + rank as f32 + 1.0);
-        
-        let entry = rrf_scores.entry(key).or_insert((0.0, verse.clone()));
-        entry.0 += score;
-        
-        // Preserve semantic score if available, otherwise it stays as the one from FTS
-        if entry.1.score.is_none() || (verse.score.is_some() && verse.score > entry.1.score) {
-             entry.1.score = verse.score; 
-        }
-    }
-
-    let mut final_results: Vec<(f32, store::Verse)> = rrf_scores.into_values().collect();
-    // Sort by RRF score descending
-    final_results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    // Map back to Verses and take top 50 for reranking
-    let mut candidates: Vec<store::Verse> = final_results.into_iter().take(50).map(|(_, v)| v).collect();
-
-    // 3. Precision Reranking (Cross-Encoder)
-    if !candidates.is_empty() {
-        if let Ok(engine) = state.get_or_init_engine(&app).await {
-            log_msg(&app, &format!("Reranking {} candidates...", candidates.len()));
-            let passages: Vec<String> = candidates.iter().map(|v| v.text.clone()).collect();
-            match engine.rerank(&query, &passages) {
-                Ok(scores) => {
-                    for (i, score) in scores.into_iter().enumerate() {
-                        candidates[i].score = Some(score);
-                    }
-                    // Sort by reranker score descending
-                    candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-                    log_msg(&app, "Reranking complete.");
-                }
-                Err(e) => log_msg(&app, &format!("Reranking error: {}", e)),
-            }
-        }
-    }
-
-    let results: Vec<store::Verse> = candidates.into_iter().take(20).collect();
-
-    Ok(SearchResponse {
-        results,
-        method: "hybrid".to_string(),
-    })
+) -> Result<store::SearchResponse, String> {
+    state.search_bible(&app, &query).await
 }
 
 /// Read a file from disk and return its contents as a base64 string.
@@ -2725,8 +2709,6 @@ fn main() {
             set_preacher_device,
             toggle_ndi,
             get_ndi_config,
-            set_operator_vad,
-            set_preacher_vad,
             set_operator_ptt,
             get_bible_versions,
             set_bible_version,
