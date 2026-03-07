@@ -19,7 +19,9 @@ export function useAppInitialization() {
     setTailscaleUrl, setAvailableVersions, setBibleVersion,
     setPropItems, setSavedScenes, setServices, setLiveItem,
     setTranscript, setSuggestedItem, setSuggestedConfidence,
-    setStagedItem, setOperatorMicLevel, setPreacherMicLevel, setSessionState, setAudioError,
+    setStagedItem, setOperatorMicLevel, setPreacherMicLevel,
+    setOperatorRecordingActive, setPreacherRecordingActive,
+    setSessionState, setAudioError,
     appendTranscriptSegment, setVerseLockUntil, setManualOverrideUntil,
     setStartupIssues, setIsInitialized,
     bibleVersion, transcriptionWindowSec,
@@ -227,6 +229,8 @@ export function useAppInitialization() {
     const unlistenStaged = listen("item-staged", (ev: any) => setStagedItem(ev.payload as DisplayItem));
     const unlistenOperatorLevel = listen("operator-audio-level", (ev: any) => setOperatorMicLevel(Math.min(1, Math.sqrt(ev.payload as number) / 0.35)));
     const unlistenPreacherLevel = listen("preacher-audio-level", (ev: any) => setPreacherMicLevel(Math.min(1, Math.sqrt(ev.payload as number) / 0.35)));
+    const unlistenOperatorStatus = listen("operator-recording-status", (ev: any) => setOperatorRecordingActive((ev.payload as any).active));
+    const unlistenPreacherStatus = listen("preacher-recording-status", (ev: any) => setPreacherRecordingActive((ev.payload as any).active));
     const unlistenSettings = listen("settings-changed", (ev: any) => setSettings(ev.payload as PresentationSettings));
     const unlistenStatus = listen("session-status", (ev: any) => {
       const { status, message } = ev.payload as { status: string; message: string };
@@ -236,6 +240,8 @@ export function useAppInitialization() {
       else {
         // "stopped" or "error"
         setSessionState("idle");
+        setOperatorRecordingActive(false);
+        setPreacherRecordingActive(false);
         if (status === "error" && message) setAudioError(message);
       }
     });
@@ -281,6 +287,8 @@ export function useAppInitialization() {
       unlistenStaged.then(f => f()); 
       unlistenOperatorLevel.then(f => f()); 
       unlistenPreacherLevel.then(f => f());
+      unlistenOperatorStatus.then(f => f());
+      unlistenPreacherStatus.then(f => f());
       unlistenSettings.then(f => f());
       unlistenStatus.then(f => f());
       unlistenAudioErr.then(f => f());

@@ -41,6 +41,10 @@ export interface SessionSlice {
   setOperatorMuted: (v: boolean) => void;
   preacherMuted: boolean;
   setPreacherMuted: (v: boolean) => void;
+  operatorRecordingActive: boolean;
+  setOperatorRecordingActive: (v: boolean) => void;
+  preacherRecordingActive: boolean;
+  setPreacherRecordingActive: (v: boolean) => void;
   remoteUrl: string;
   setRemoteUrl: (v: string) => void;
   lanUrls: [string, string][];
@@ -101,6 +105,10 @@ export const createSessionSlice: StateCreator<AppStore, [], [], SessionSlice> = 
   setOperatorMuted: (v) => set({ operatorMuted: v }),
   preacherMuted: false,
   setPreacherMuted: (v) => set({ preacherMuted: v }),
+  operatorRecordingActive: false,
+  setOperatorRecordingActive: (v) => set({ operatorRecordingActive: v }),
+  preacherRecordingActive: false,
+  setPreacherRecordingActive: (v) => set({ preacherRecordingActive: v }),
   remoteUrl: "",
   setRemoteUrl: (v) => set({ remoteUrl: v }),
   lanUrls: [],

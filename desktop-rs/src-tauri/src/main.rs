@@ -267,6 +267,13 @@ pub struct AppState {
     pub auth_throttles: Arc<Mutex<HashMap<std::net::IpAddr, (u8, std::time::Instant)>>>,
     /// NDI Streaming Manager.
     pub ndi_manager: Arc<ndi::NdiManager>,
+    /// Whether the operator recording pipeline is currently active.
+    pub operator_is_active: Arc<AtomicBool>,
+    /// Whether the preacher recording pipeline is currently active.
+    pub preacher_is_active: Arc<AtomicBool>,
+    /// Session start timestamp (ms since epoch). Set by start_session and read
+    /// by start_preacher_recording so relative timestamps stay consistent.
+    pub session_start_ms: Arc<Mutex<u64>>,
 }
 
 impl Clone for AppState {
@@ -308,6 +315,9 @@ impl Clone for AppState {
             preacher_cloud_stream_handle: self.preacher_cloud_stream_handle.clone(),
             auth_throttles: self.auth_throttles.clone(),
             ndi_manager: self.ndi_manager.clone(),
+            operator_is_active: self.operator_is_active.clone(),
+            preacher_is_active: self.preacher_is_active.clone(),
+            session_start_ms: self.session_start_ms.clone(),
         }
     }
 }
@@ -445,41 +455,36 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
         *running = true;
     }
 
-    let is_running = state.is_running.clone();
-    let operator_audio = state.operator_audio.clone();
-    let preacher_audio = state.preacher_audio.clone();
-    let store = state.store.clone();
-    let _broadcast_tx = state.broadcast_tx.clone();
-    let transcription_window = state.transcription_window.clone();
-    let transcription_paused = state.transcription_paused.clone();
-    let session_transcript = state.session_transcript.clone();
-    let context_buffer = state.context_buffer.clone();
-    let preacher_muted = state.preacher_muted.clone();
-    let operator_muted = state.operator_muted.clone();
-    let operator_ptt_active = state.operator_ptt_active.clone();
-    let inference_semaphore = state.inference_semaphore.clone();
-
     state.session_transcript.lock().clear();
     state.context_buffer.lock().clear();
 
-    let config = state.transcription_config.lock().clone();
-    let cloud_provider = config.cloud_provider.clone();
-    let cloud_api_key = config.cloud_api_key.clone();
-    let cloud_hostname = config.cloud_hostname.clone();
-    let cloud_model = config.cloud_model.clone(); // streaming model (preacher WS)
-    let cloud_rest_model = config.cloud_rest_model.clone().or_else(|| cloud_model.clone()); // REST model (operator), falls back to stream model
-    let cloud_language = config.cloud_language.clone();
-    
-    let operator_mode = config.operator_mode.clone().unwrap_or_else(|| "local".to_string());
-    let preacher_mode = config.preacher_mode.clone().unwrap_or_else(|| "cloud".to_string());
+    // Pre-load AI engine so the first REC click is instant.
+    if let Err(e) = state.get_or_init_engine(&app).await {
+        *state.is_running.lock() = false;
+        let _ = app.emit("session-status", SessionStatus { status: "error".to_string(), message: format!("AI models failed to load: {}", e) });
+        return Err(e);
+    }
+
+    let session_start_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+    *state.session_start_ms.lock() = session_start_ms;
+
+    let _ = app.emit("session-status", SessionStatus { status: "running".to_string(), message: "Live session started".to_string() });
+    Ok(())
+}
+
+/// Start the operator mic + PTT pipeline independently.
+#[tauri::command]
+async fn start_operator_recording(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    if !*state.is_running.lock() {
+        return Err("No active session. Start the session first.".to_string());
+    }
+    if state.operator_is_active.load(Ordering::Relaxed) {
+        return Err("Operator recording is already active.".to_string());
+    }
 
     let engine = match state.get_or_init_engine(&app).await {
         Ok(e) => e,
-        Err(e) => {
-            *is_running.lock() = false;
-            let _ = app.emit("session-status", SessionStatus { status: "error".to_string(), message: format!("AI models failed to load: {}", e) });
-            return Err(e);
-        }
+        Err(e) => return Err(format!("AI models failed to load: {}", e)),
     };
 
     let (op_audio_tx, mut op_audio_rx) = tokio::sync::mpsc::channel::<Vec<f32>>(128);
@@ -487,445 +492,184 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
     let (op_level_tx, mut op_level_rx) = tokio::sync::mpsc::channel::<f32>(50);
 
     {
-        let op_device = operator_audio.lock().selected_device().map(|s| s.to_string()).unwrap_or_else(|| "system default".to_string());
-        if let Err(e) = operator_audio.lock().start_capturing(op_audio_tx, op_error_tx, Some(op_level_tx)) {
-            *is_running.lock() = false;
+        let op_device = state.operator_audio.lock().selected_device().map(|s| s.to_string()).unwrap_or_else(|| "system default".to_string());
+        if let Err(e) = state.operator_audio.lock().start_capturing(op_audio_tx, op_error_tx, Some(op_level_tx)) {
             return Err(format!("Operator mic error: {}", e));
         }
-        log_msg(&app, &format!("[Session] Operator mic recording started — device: \"{}\"", op_device));
+        log_msg(&app, &format!("[Operator] Recording started — device: \"{}\"", op_device));
     }
-
-    // Only start preacher audio if it has a distinct, explicitly-named device.
-    // If both engines would use the same device (both None/default, or same name),
-    // skip starting a second CPAL stream — it would capture the same signal and
-    // light up both VU meters identically.
-    let op_dev = operator_audio.lock().selected_device().map(str::to_string);
-    let pr_dev = preacher_audio.lock().selected_device().map(str::to_string);
-    let preacher_active = pr_dev.is_some() && pr_dev != op_dev;
-
-    let pr_audio_rx_opt = if preacher_active {
-        let (pr_audio_tx, pr_audio_rx) = tokio::sync::mpsc::channel::<Vec<f32>>(128);
-        let (pr_error_tx, mut pr_error_rx) = tokio::sync::mpsc::channel::<String>(10);
-        let (pr_level_tx, mut pr_level_rx) = tokio::sync::mpsc::channel::<f32>(50);
-
-        let pr_device = preacher_audio.lock().selected_device().map(|s| s.to_string()).unwrap_or_else(|| "system default".to_string());
-        if let Err(e) = preacher_audio.lock().start_capturing(pr_audio_tx, pr_error_tx, Some(pr_level_tx)) {
-            operator_audio.lock().stop();
-            *is_running.lock() = false;
-            return Err(format!("Preacher mic error: {}", e));
-        }
-        log_msg(&app, &format!("[Session] Preacher mic recording started — device: \"{}\"", pr_device));
-
-        let app_err2 = app.clone();
-        tokio::spawn(async move { while let Some(msg) = pr_error_rx.recv().await { let _ = app_err2.emit("audio-error", format!("Preacher: {}", msg)); } });
-        let app_level2 = app.clone();
-        tokio::spawn(async move { while let Some(level) = pr_level_rx.recv().await { let _ = app_level2.emit("preacher-audio-level", level); } });
-
-        Some(pr_audio_rx)
-    } else {
-        log_msg(&app, &format!(
-            "[Session] Preacher mic NOT started — {} (no separate device configured)",
-            if pr_dev.is_none() { "no device selected" } else { "same device as operator" }
-        ));
-        None
-    };
 
     let app_err = app.clone();
     tokio::spawn(async move { while let Some(msg) = op_error_rx.recv().await { let _ = app_err.emit("audio-error", format!("Operator: {}", msg)); } });
     let app_level = app.clone();
     tokio::spawn(async move { while let Some(level) = op_level_rx.recv().await { let _ = app_level.emit("operator-audio-level", level); } });
 
-    let _ = app.emit("session-status", SessionStatus { status: "running".to_string(), message: "Live session started".to_string() });
+    state.operator_is_active.store(true, Ordering::Relaxed);
+    let _ = app.emit("operator-recording-status", serde_json::json!({"active": true}));
 
-    let session_start_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+    let config = state.transcription_config.lock().clone();
+    let operator_mode = config.operator_mode.clone().unwrap_or_else(|| "local".to_string());
+    let cloud_provider = config.cloud_provider.clone();
+    let cloud_api_key = config.cloud_api_key.clone();
+    let cloud_model = config.cloud_model.clone();
+    let cloud_rest_model = config.cloud_rest_model.clone().or_else(|| cloud_model.clone());
+    let cloud_language = config.cloud_language.clone();
 
-    // ── Operator Pipeline (PTT voice search — Local Whisper or Cloud REST)
-    // The operator mic is for on-demand scripture lookup by voice (press-to-talk),
-    // not continuous transcription. Fires only on PTT release or window-full while held.
-    {
-        let app_op = app.clone();
-        let engine_op = engine.clone();
-        let store_op = store.clone();
-        let ctx_buf_op = context_buffer.clone();
-        let op_provider = cloud_provider.clone();
-        let op_api_key = cloud_api_key.clone();
-        let op_language = cloud_language.clone();
-        let op_model = cloud_rest_model.clone();
-        let trans_window_op = transcription_window.clone();
-        let trans_paused_op = transcription_paused.clone();
-        let op_muted_pipeline = operator_muted.clone();
-        let tx_log_op = session_transcript.clone();
-        let semaphore_op = inference_semaphore.clone();
+    let session_start_ms = *state.session_start_ms.lock();
+    let store = state.store.clone();
+    let context_buffer = state.context_buffer.clone();
+    let transcription_window = state.transcription_window.clone();
+    let transcription_paused = state.transcription_paused.clone();
+    let operator_muted = state.operator_muted.clone();
+    let operator_ptt_active = state.operator_ptt_active.clone();
+    let inference_semaphore = state.inference_semaphore.clone();
+    let session_transcript = state.session_transcript.clone();
+    let op_active = state.operator_is_active.clone();
 
-        tokio::spawn(async move {
-            let mut buffer = Vec::with_capacity(48000 * 3);
-            const OVERLAP: usize = 4000;
-            const MIN_SAMPLES: usize = 8000; // 0.5s
-            let is_cloud = operator_mode == "cloud" && op_provider.is_some() && op_api_key.is_some();
-            let provider_name = if is_cloud { op_provider.clone().unwrap() } else { "local".to_string() };
-            let mut was_ptt_active = false;
-            let mut first_chunk = true;
+    let app_op = app.clone();
+    tokio::spawn(async move {
+        let mut buffer = Vec::with_capacity(48000 * 3);
+        const OVERLAP: usize = 4000;
+        const MIN_SAMPLES: usize = 8000; // 0.5s
+        let is_cloud = operator_mode == "cloud" && cloud_provider.is_some() && cloud_api_key.is_some();
+        let provider_name = if is_cloud { cloud_provider.clone().unwrap() } else { "local".to_string() };
+        let mut was_ptt_active = false;
+        let mut first_chunk = true;
 
-            while let Some(chunk) = op_audio_rx.recv().await {
-                if first_chunk {
-                    log_msg(&app_op, &format!("[Operator] PTT pipeline ready ({})", provider_name));
-                    first_chunk = false;
-                }
-                let window_size = *trans_window_op.lock();
-                let is_ptt_active = operator_ptt_active.load(std::sync::atomic::Ordering::Relaxed);
-                let is_paused = trans_paused_op.load(std::sync::atomic::Ordering::Relaxed);
-                let is_muted = op_muted_pipeline.load(std::sync::atomic::Ordering::Relaxed);
+        while let Some(chunk) = op_audio_rx.recv().await {
+            if first_chunk {
+                log_msg(&app_op, &format!("[Operator] PTT pipeline ready ({})", provider_name));
+                first_chunk = false;
+            }
+            let window_size = *transcription_window.lock();
+            let is_ptt_active = operator_ptt_active.load(std::sync::atomic::Ordering::Relaxed);
+            let is_paused = transcription_paused.load(std::sync::atomic::Ordering::Relaxed);
+            let is_muted = operator_muted.load(std::sync::atomic::Ordering::Relaxed);
 
-                if is_muted {
-                    buffer.clear();
-                    was_ptt_active = false;
-                    continue;
-                }
+            if is_muted { buffer.clear(); was_ptt_active = false; continue; }
+            buffer.extend_from_slice(&chunk);
 
-                buffer.extend_from_slice(&chunk);
+            let trigger_on_release = was_ptt_active && !is_ptt_active && buffer.len() >= MIN_SAMPLES;
+            let trigger_on_window = is_ptt_active && buffer.len() >= window_size;
 
-                // Trigger on PTT release (speak then release) or window-full while held
-                let trigger_on_release = was_ptt_active && !is_ptt_active && buffer.len() >= MIN_SAMPLES;
-                let trigger_on_window = is_ptt_active && buffer.len() >= window_size;
+            if !is_paused && (trigger_on_release || trigger_on_window) {
+                let buf_samples = buffer.len();
+                let buf_ms = buf_samples * 1000 / 16000;
+                let trigger_reason = if trigger_on_release { "PTT released" } else { "window full" };
 
-                if !is_paused && (trigger_on_release || trigger_on_window) {
-                    let buf_samples = buffer.len();
-                    let buf_ms = buf_samples * 1000 / 16000;
-                    let trigger_reason = if trigger_on_release { "PTT released" } else { "window full" };
-
-                    let maybe_permit = if !is_cloud {
-                        match Arc::clone(&semaphore_op).try_acquire_owned() {
-                            Ok(p) => Some(p),
-                            Err(_) => {
-                                log_msg(&app_op, &format!("[Operator] Inference busy — window dropped ({} samples / {}ms)", buf_samples, buf_ms));
-                                buffer.clear();
-                                was_ptt_active = is_ptt_active;
-                                continue;
-                            }
+                let maybe_permit = if !is_cloud {
+                    match Arc::clone(&inference_semaphore).try_acquire_owned() {
+                        Ok(p) => Some(p),
+                        Err(_) => {
+                            log_msg(&app_op, &format!("[Operator] Inference busy — window dropped ({} samples / {}ms)", buf_samples, buf_ms));
+                            buffer.clear();
+                            was_ptt_active = is_ptt_active;
+                            continue;
                         }
-                    } else {
-                        None
-                    };
+                    }
+                } else { None };
 
-                    log_msg(&app_op, &format!("[Operator] Voice search triggered: {} — {}ms via {}", trigger_reason, buf_ms, provider_name));
+                log_msg(&app_op, &format!("[Operator] Voice search triggered: {} — {}ms via {}", trigger_reason, buf_ms, provider_name));
 
-                    let b_clone = buffer.clone();
-                    let e_clone = engine_op.clone();
-                    let s_clone = store_op.clone();
-                    let ctx_buf = ctx_buf_op.clone();
-                    let op_p = op_provider.clone();
-                    let op_k = op_api_key.clone();
-                    let op_l = op_language.clone();
-                    let op_m = op_model.clone();
-                    let app_op_inner = app_op.clone();
-                    let p_name = provider_name.clone();
-                    let tx_log = tx_log_op.clone();
+                let b_clone = buffer.clone();
+                let e_clone = engine.clone();
+                let s_clone = store.clone();
+                let ctx_buf = context_buffer.clone();
+                let op_p = cloud_provider.clone();
+                let op_k = cloud_api_key.clone();
+                let op_l = cloud_language.clone();
+                let op_m = cloud_rest_model.clone();
+                let app_op_inner = app_op.clone();
+                let p_name = provider_name.clone();
+                let tx_log = session_transcript.clone();
 
-                    tokio::spawn(async move {
-                        let _permit = maybe_permit;
-                        let t0 = std::time::Instant::now();
-                        let result: Option<(String, Option<store::DisplayItem>, f32)> = if is_cloud {
-                            if let Ok(text) = engine::cloud::transcribe_cloud(&b_clone, op_p.as_ref().unwrap(), op_k.as_ref().unwrap(), op_m.as_deref()).await {
-                                log_msg(&app_op_inner, &format!("[Operator] Cloud transcription ({} ms): \"{}\"", t0.elapsed().as_millis(), &text[..text.len().min(80)]));
-                                let t1 = std::time::Instant::now();
-                                let result = tokio::task::spawn_blocking(move || {
-                                    let combined = { let mut buf = ctx_buf.lock(); buf.push(text.clone()); if buf.len() > 3 { buf.remove(0); } buf.join(" ") };
-                                    let embedding = e_clone.embed(&combined).ok();
-                                    let (verse, confidence) = s_clone.detect_verse_hybrid(&combined, embedding);
-                                    Some((text, verse.map(store::DisplayItem::Verse), confidence))
-                                }).await.ok().flatten();
-                                log_msg(&app_op_inner, &format!("[Operator] Verse detection ({} ms)", t1.elapsed().as_millis()));
-                                result
-                            } else {
-                                log_msg(&app_op_inner, &format!("[Operator] Cloud transcription failed after {} ms", t0.elapsed().as_millis()));
-                                None
-                            }
-                        } else {
-                            let app_blk = app_op_inner.clone();
-                            tokio::task::spawn_blocking(move || {
-                                let t_whisper = std::time::Instant::now();
-                                let text = match e_clone.transcribe(&b_clone, op_l.as_deref()) {
-                                    Ok(t) => t,
-                                    Err(e) => {
-                                        log_msg(&app_blk, &format!("[Operator] Whisper error after {} ms: {}", t_whisper.elapsed().as_millis(), e));
-                                        return None;
-                                    }
-                                };
-                                log_msg(&app_blk, &format!("[Operator] Whisper ({} ms): \"{}\"", t_whisper.elapsed().as_millis(), &text[..text.len().min(80)]));
-                                let t_detect = std::time::Instant::now();
+                tokio::spawn(async move {
+                    let _permit = maybe_permit;
+                    let t0 = std::time::Instant::now();
+                    let result: Option<(String, Option<store::DisplayItem>, f32)> = if is_cloud {
+                        if let Ok(text) = engine::cloud::transcribe_cloud(&b_clone, op_p.as_ref().unwrap(), op_k.as_ref().unwrap(), op_m.as_deref()).await {
+                            log_msg(&app_op_inner, &format!("[Operator] Cloud transcription ({} ms): \"{}\"", t0.elapsed().as_millis(), &text[..text.len().min(80)]));
+                            let t1 = std::time::Instant::now();
+                            let result = tokio::task::spawn_blocking(move || {
                                 let combined = { let mut buf = ctx_buf.lock(); buf.push(text.clone()); if buf.len() > 3 { buf.remove(0); } buf.join(" ") };
                                 let embedding = e_clone.embed(&combined).ok();
                                 let (verse, confidence) = s_clone.detect_verse_hybrid(&combined, embedding);
-                                log_msg(&app_blk, &format!("[Operator] Verse detection ({} ms): {}", t_detect.elapsed().as_millis(),
-                                    match &verse {
-                                        Some(v) => format!("MATCH {} {}:{} (conf={:.2})", v.book, v.chapter, v.verse, confidence),
-                                        None => format!("no match (conf={:.2})", confidence),
-                                    }
-                                ));
                                 Some((text, verse.map(store::DisplayItem::Verse), confidence))
-                            }).await.ok().flatten()
-                        };
-
-                        if let Some((text, item, confidence)) = result {
-                            if is_hallucination(&text) {
-                                log_msg(&app_op_inner, &format!("[Operator] Hallucination filtered: \"{}\"", &text[..text.len().min(60)]));
-                            } else {
-                                let word_count = text.split_whitespace().count();
-                                if word_count < 3 {
-                                    log_msg(&app_op_inner, &format!("[Operator] Voice search skipped (too short, {} word(s)): \"{}\"", word_count, &text));
-                                } else {
-                                    let now_ms = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis() as u64;
-                                    tx_log.lock().push(TranscriptSegment {
-                                        text: text.clone(),
-                                        timestamp_ms: now_ms.saturating_sub(session_start_ms),
-                                        is_final: true,
-                                        source: p_name.clone(),
-                                    });
-                                    log_msg(&app_op_inner, &format!("[Operator] Voice search done ({} ms) — emitting result", t0.elapsed().as_millis()));
-                                    let _ = app_op_inner.emit("operator-transcription-update", TranscriptionUpdate {
-                                        text: text.clone(), detected_item: item, confidence, source: p_name, is_partial: false,
-                                    });
-                                }
-                            }
-                        }
-                    });
-
-                    if trigger_on_release || is_cloud {
-                        buffer.clear();
-                    } else {
-                        // Sliding window for continuous PTT hold
-                        if buffer.len() > window_size * 2 {
-                            let to_drain = buffer.len() - (window_size + OVERLAP);
-                            buffer.drain(0..to_drain);
+                            }).await.ok().flatten();
+                            log_msg(&app_op_inner, &format!("[Operator] Verse detection ({} ms)", t1.elapsed().as_millis()));
+                            result
                         } else {
-                            let remaining = buffer.len().saturating_sub(OVERLAP);
-                            buffer = buffer[remaining..].to_vec();
-                        }
-                    }
-                }
-
-                if !is_ptt_active && !trigger_on_release {
-                    // Keep a small pre-roll buffer when PTT is idle
-                    if buffer.len() > 8000 {
-                        buffer.drain(0..buffer.len() - 8000);
-                    }
-                }
-
-                was_ptt_active = is_ptt_active;
-            }
-        });
-    }
-
-    // ── Preacher Pipeline (Cloud WS, Cloud REST, or Local)
-    let preacher_use_stream = preacher_mode == "cloud"
-        && cloud_provider.as_deref().map(engine::cloud_stream::provider_supports_streaming).unwrap_or(false)
-        && cloud_api_key.is_some();
-
-    // Pre-clone before the streaming branch may consume cloud_provider / cloud_api_key.
-    let pr_provider_fb = cloud_provider.clone();
-    let pr_api_key_fb = cloud_api_key.clone();
-
-    // pr_audio_rx_fallback receives the preacher rx if:
-    //   (a) streaming mode is not in use, OR
-    //   (b) streaming was requested but the WebSocket connection failed.
-    // In both cases we fall through to the same local/REST pipeline below.
-    let mut pr_audio_rx_fallback: Option<tokio::sync::mpsc::Receiver<Vec<f32>>> = None;
-
-    if preacher_use_stream {
-        let provider = cloud_provider.unwrap();
-        let api_key = cloud_api_key.unwrap();
-        log_msg(&app, &format!("[Session] Starting {} WebSocket stream (model={:?}, host={:?})", provider, cloud_model, cloud_hostname));
-        let stream_result = engine::cloud_stream::start_stream(&app, &provider, &api_key, cloud_hostname.as_deref(), cloud_model.as_deref(), cloud_language.as_deref()).await;
-
-        match stream_result {
-            Ok((stream_handle, mut transcript_rx)) => {
-                log_msg(&app, "[Session] Cloud WS stream connected — audio pump starting");
-                *state.preacher_cloud_stream_handle.lock() = Some(stream_handle);
-                let handle_arc = state.preacher_cloud_stream_handle.clone();
-                let pr_muted_pump = preacher_muted.clone();
-
-                if let Some(mut pr_audio_rx) = pr_audio_rx_opt {
-                    let app_pump = app.clone();
-                    tokio::spawn(async move {
-                        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
-                        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                        let mut first_chunk = true;
-                        loop {
-                            tokio::select! {
-                                res = pr_audio_rx.recv() => {
-                                    if let Some(chunk) = res {
-                                        if first_chunk {
-                                            log_msg(&app_pump, "[Preacher] First audio chunk received — VAD active, streaming to cloud");
-                                            first_chunk = false;
-                                        }
-                                        let is_muted = pr_muted_pump.load(Ordering::Relaxed);
-                                        let bytes: Vec<u8> = chunk.iter()
-                                            .map(|&s| if is_muted { 0i16 } else { (s.clamp(-1.0, 1.0) * 32767.0) as i16 })
-                                            .flat_map(|s| s.to_le_bytes())
-                                            .collect();
-                                        if let Some(ref h) = *handle_arc.lock() {
-                                            if h.audio_tx.send(bytes).is_err() { break; }
-                                        } else { break; }
-                                    } else { break; }
-                                }
-                                _ = interval.tick() => {
-                                    // Keep-alive: prevents provider timeout during silence / mute
-                                    let silence = vec![0u8; 320]; // 10ms of silence @ 16kHz
-                                    if let Some(ref h) = *handle_arc.lock() {
-                                        if h.audio_tx.send(silence).is_err() { break; }
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }
-
-                let app_pr = app.clone();
-                let tx_log_pr = session_transcript.clone();
-                let provider_name = provider.clone();
-                let is_running_pr = is_running.clone();
-                let handle_arc_stop = state.preacher_cloud_stream_handle.clone();
-                let engine_ws = engine.clone();
-                let store_ws = store.clone();
-                let ctx_buf_ws = context_buffer.clone();
-
-                tokio::spawn(async move {
-                    while let Some(seg) = transcript_rx.recv().await {
-                        let text = seg.text.trim().to_string();
-                        // Skip partials and hallucinations
-                        if !seg.is_final || is_hallucination(&text) || text.is_empty() { continue; }
-                        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
-                        tx_log_pr.lock().push(TranscriptSegment { text: text.clone(), timestamp_ms: now_ms.saturating_sub(session_start_ms), is_final: true, source: provider_name.clone() });
-                        let word_count = text.split_whitespace().count();
-                        let (detected_item, confidence) = if word_count >= 3 {
-                            let e = engine_ws.clone();
-                            let s = store_ws.clone();
-                            let ctx = ctx_buf_ws.clone();
-                            let t = text.clone();
-                            tokio::task::spawn_blocking(move || {
-                                let combined = { let mut buf = ctx.lock(); buf.push(t.clone()); if buf.len() > 3 { buf.remove(0); } buf.join(" ") };
-                                let embedding = e.embed(&combined).ok();
-                                let (verse, conf) = s.detect_verse_hybrid(&combined, embedding);
-                                (verse.map(store::DisplayItem::Verse), conf)
-                            }).await.unwrap_or((None, 0.0))
-                        } else {
-                            log_msg(&app_pr, &format!("[Session] Final skipped (too short, {} word(s)): \"{}\"", word_count, &text));
-                            (None, 0.0)
-                        };
-                        if let Some(store::DisplayItem::Verse(ref v)) = detected_item {
-                            log_msg(&app_pr, &format!("[Session] Verse detected: {} {}:{} (conf={:.2})", v.book, v.chapter, v.verse, confidence));
-                        } else if word_count >= 3 {
-                            log_msg(&app_pr, &format!("[Session] Final transcript — no verse match (conf={:.2}): \"{}\"", confidence, &text[..text.len().min(60)]));
-                        }
-                        let _ = app_pr.emit("preacher-transcription-update", TranscriptionUpdate { text: text.clone(), detected_item, confidence, source: provider_name.clone(), is_partial: false });
-                    }
-                    *handle_arc_stop.lock() = None;
-                    let mut r = is_running_pr.lock();
-                    if *r { *r = false; let _ = app_pr.emit("session-status", SessionStatus { status: "stopped".to_string(), message: "Session ended".to_string() }); }
-                });
-            }
-            Err(e) => {
-                // Cloud WS failed — fall through to local/REST so the preacher pipeline
-                // keeps running instead of silently discarding all captured audio.
-                log_msg(&app, &format!("[Session] Cloud WS failed: {}. Falling back to local transcription.", e));
-                let _ = app.emit("audio-error", format!("Preacher cloud stream failed: {}. Using local transcription.", e));
-                pr_audio_rx_fallback = pr_audio_rx_opt;
-            }
-        }
-    } else {
-        pr_audio_rx_fallback = pr_audio_rx_opt;
-    }
-
-    // ── Preacher local/REST pipeline
-    // Handles: (a) streaming not configured, (b) cloud WS connection failure fallback.
-    if let Some(mut pr_audio_rx) = pr_audio_rx_fallback {
-        let app_pr = app.clone();
-        let engine_pr = engine.clone();
-        let pr_provider = pr_provider_fb;
-        let pr_api_key = pr_api_key_fb;
-        let pr_language = cloud_language.clone();
-        let pr_model = cloud_model.clone();
-        let trans_window_pr = transcription_window.clone();
-        let trans_paused_pr = transcription_paused.clone();
-        let tx_log_pr = session_transcript.clone();
-        let pr_muted_pipeline = preacher_muted.clone();
-        let semaphore_pr = inference_semaphore.clone();
-
-        tokio::spawn(async move {
-            let mut buffer = Vec::with_capacity(48000 * 3);
-            const OVERLAP: usize = 4000;
-            let is_cloud = preacher_mode == "cloud" && pr_provider.is_some() && pr_api_key.is_some();
-            let provider_name = if is_cloud { pr_provider.clone().unwrap() } else { "local".to_string() };
-
-            while let Some(chunk) = pr_audio_rx.recv().await {
-                let is_muted = pr_muted_pipeline.load(Ordering::Relaxed);
-                if is_muted { buffer.clear(); continue; }
-
-                buffer.extend_from_slice(&chunk);
-
-                let window_size = *trans_window_pr.lock();
-                let paused = trans_paused_pr.load(std::sync::atomic::Ordering::Relaxed);
-                if paused {
-                    if buffer.len() > window_size { let keep = buffer.len().min(8000); buffer.drain(0..buffer.len() - keep); }
-                    continue;
-                }
-
-                if buffer.len() >= window_size {
-                    // For local Whisper: enforce single-flight inference.
-                    let maybe_permit = if !is_cloud {
-                        match Arc::clone(&semaphore_pr).try_acquire_owned() {
-                            Ok(p) => Some(p),
-                            Err(_) => {
-                                // Inference busy — keep only a short overlap and wait
-                                let keep = buffer.len().min(OVERLAP);
-                                buffer.drain(0..buffer.len() - keep);
-                                continue;
-                            }
+                            log_msg(&app_op_inner, &format!("[Operator] Cloud transcription failed after {} ms", t0.elapsed().as_millis()));
+                            None
                         }
                     } else {
-                        None
+                        let app_blk = app_op_inner.clone();
+                        tokio::task::spawn_blocking(move || {
+                            let t_whisper = std::time::Instant::now();
+                            let text = match e_clone.transcribe(&b_clone, op_l.as_deref()) {
+                                Ok(t) => t,
+                                Err(e) => { log_msg(&app_blk, &format!("[Operator] Whisper error after {} ms: {}", t_whisper.elapsed().as_millis(), e)); return None; }
+                            };
+                            log_msg(&app_blk, &format!("[Operator] Whisper ({} ms): \"{}\"", t_whisper.elapsed().as_millis(), &text[..text.len().min(80)]));
+                            let t_detect = std::time::Instant::now();
+                            let combined = { let mut buf = ctx_buf.lock(); buf.push(text.clone()); if buf.len() > 3 { buf.remove(0); } buf.join(" ") };
+                            let embedding = e_clone.embed(&combined).ok();
+                            let (verse, confidence) = s_clone.detect_verse_hybrid(&combined, embedding);
+                            log_msg(&app_blk, &format!("[Operator] Verse detection ({} ms): {}", t_detect.elapsed().as_millis(),
+                                match &verse {
+                                    Some(v) => format!("MATCH {} {}:{} (conf={:.2})", v.book, v.chapter, v.verse, confidence),
+                                    None => format!("no match (conf={:.2})", confidence),
+                                }
+                            ));
+                            Some((text, verse.map(store::DisplayItem::Verse), confidence))
+                        }).await.ok().flatten()
                     };
 
-                    let b_clone = buffer.clone();
-                    let e_clone = engine_pr.clone();
-                    let pr_m = pr_model.clone();
-                    let lang_opt = pr_language.clone();
-                    let prov = pr_provider.clone();
-                    let key = pr_api_key.clone();
-                    let tx_log = tx_log_pr.clone();
-                    let app_pr_inner = app_pr.clone();
-                    let p_name = provider_name.clone();
-
-                    tokio::spawn(async move {
-                        let _permit = maybe_permit; // Released when inference completes
-                        let text_opt: Option<String> = if is_cloud {
-                            engine::cloud::transcribe_cloud(&b_clone, prov.as_ref().unwrap(), key.as_ref().unwrap(), pr_m.as_deref()).await.ok()
+                    if let Some((text, item, confidence)) = result {
+                        if is_hallucination(&text) {
+                            log_msg(&app_op_inner, &format!("[Operator] Hallucination filtered: \"{}\"", &text[..text.len().min(60)]));
                         } else {
-                            tokio::task::spawn_blocking(move || { e_clone.transcribe(&b_clone, lang_opt.as_deref()).ok() }).await.ok().flatten()
-                        };
-
-                        if let Some(text) = text_opt {
-                            if !is_hallucination(&text) {
+                            let word_count = text.split_whitespace().count();
+                            if word_count < 3 && item.is_none() {
+                                log_msg(&app_op_inner, &format!("[Operator] Voice search skipped (too short, {} word(s)): \"{}\"", word_count, &text));
+                            } else {
                                 let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
                                 tx_log.lock().push(TranscriptSegment { text: text.clone(), timestamp_ms: now_ms.saturating_sub(session_start_ms), is_final: true, source: p_name.clone() });
-                                let _ = app_pr_inner.emit("preacher-transcription-update", TranscriptionUpdate { text: text.clone(), detected_item: None, confidence: 1.0, source: p_name, is_partial: false });
+                                log_msg(&app_op_inner, &format!("[Operator] Voice search done ({} ms) — emitting result", t0.elapsed().as_millis()));
+                                let _ = app_op_inner.emit("operator-transcription-update", TranscriptionUpdate { text: text.clone(), detected_item: item, confidence, source: p_name, is_partial: false });
                             }
                         }
-                    });
-
-                    if is_cloud { buffer.clear(); } else {
-                        if buffer.len() > window_size * 2 { let to_drain = buffer.len() - (window_size + OVERLAP); buffer.drain(0..to_drain); } else { let remaining = buffer.len().saturating_sub(OVERLAP); buffer = buffer[remaining..].to_vec(); }
                     }
+                });
+
+                if trigger_on_release || is_cloud { buffer.clear(); } else {
+                    if buffer.len() > window_size * 2 { let to_drain = buffer.len() - (window_size + OVERLAP); buffer.drain(0..to_drain); }
+                    else { let remaining = buffer.len().saturating_sub(OVERLAP); buffer = buffer[remaining..].to_vec(); }
                 }
             }
-            let mut r = is_running.lock();
-            if *r { *r = false; let _ = app_pr.emit("session-status", SessionStatus { status: "stopped".to_string(), message: "Session ended".to_string() }); }
-        });
-    }
 
+            if !is_ptt_active && !trigger_on_release {
+                if buffer.len() > 8000 { buffer.drain(0..buffer.len() - 8000); }
+            }
+            was_ptt_active = is_ptt_active;
+        }
+        op_active.store(false, Ordering::Relaxed);
+        let _ = app_op.emit("operator-recording-status", serde_json::json!({"active": false}));
+    });
+
+    Ok(())
+}
+
+/// Stop the operator mic + PTT pipeline without stopping the whole session.
+#[tauri::command]
+async fn stop_operator_recording(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(handle) = state.operator_cloud_stream_handle.lock().take() {
+        handle.stop();
+    }
+    state.operator_audio.lock().stop();
+    state.operator_is_active.store(false, Ordering::Relaxed);
+    log_msg(&app, "[Operator] Recording stopped");
+    let _ = app.emit("operator-recording-status", serde_json::json!({"active": false}));
     Ok(())
 }
 
@@ -953,6 +697,8 @@ async fn stop_session(app: AppHandle, state: State<'_, AppState>) -> Result<(), 
     state.operator_audio.lock().stop();
     state.preacher_audio.lock().stop();
     *state.is_running.lock() = false;
+    state.operator_is_active.store(false, Ordering::Relaxed);
+    state.preacher_is_active.store(false, Ordering::Relaxed);
 
     // Auto-save the session transcript to disk
     let transcript = state.session_transcript.lock().clone();
@@ -973,6 +719,266 @@ async fn stop_session(app: AppHandle, state: State<'_, AppState>) -> Result<(), 
         status: "stopped".to_string(),
         message: "Session stopped".to_string(),
     });
+    Ok(())
+}
+
+/// Start the preacher mic + transcription pipeline independently of start_session.
+/// Call this after start_session when you want the pastor feed to begin recording.
+#[tauri::command]
+async fn start_preacher_recording(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    if !*state.is_running.lock() {
+        return Err("No active session. Start the session first.".to_string());
+    }
+    if state.preacher_is_active.load(Ordering::Relaxed) {
+        return Err("Preacher recording is already active.".to_string());
+    }
+
+    let op_dev = state.operator_audio.lock().selected_device().map(str::to_string);
+    let pr_dev = state.preacher_audio.lock().selected_device().map(str::to_string);
+    if pr_dev.is_none() {
+        return Err("No preacher microphone selected. Choose a device in Settings.".to_string());
+    }
+    if pr_dev == op_dev {
+        return Err("Preacher device is the same as the operator device. Select a separate microphone.".to_string());
+    }
+
+    let engine = match state.get_or_init_engine(&app).await {
+        Ok(e) => e,
+        Err(e) => return Err(format!("AI models failed to load: {}", e)),
+    };
+
+    let (pr_audio_tx, pr_audio_rx) = tokio::sync::mpsc::channel::<Vec<f32>>(128);
+    let (pr_error_tx, mut pr_error_rx) = tokio::sync::mpsc::channel::<String>(10);
+    let (pr_level_tx, mut pr_level_rx) = tokio::sync::mpsc::channel::<f32>(50);
+
+    let pr_device = state.preacher_audio.lock().selected_device().map(|s| s.to_string()).unwrap_or_default();
+    if let Err(e) = state.preacher_audio.lock().start_capturing(pr_audio_tx, pr_error_tx, Some(pr_level_tx)) {
+        return Err(format!("Preacher mic error: {}", e));
+    }
+    log_msg(&app, &format!("[Preacher] Recording started — device: \"{}\"", pr_device));
+
+    let app_err = app.clone();
+    tokio::spawn(async move { while let Some(msg) = pr_error_rx.recv().await { let _ = app_err.emit("audio-error", format!("Preacher: {}", msg)); } });
+    let app_level = app.clone();
+    tokio::spawn(async move { while let Some(level) = pr_level_rx.recv().await { let _ = app_level.emit("preacher-audio-level", level); } });
+
+    state.preacher_is_active.store(true, Ordering::Relaxed);
+    let _ = app.emit("preacher-recording-status", serde_json::json!({"active": true}));
+
+    let config = state.transcription_config.lock().clone();
+    let preacher_mode = config.preacher_mode.clone().unwrap_or_else(|| "cloud".to_string());
+    let cloud_provider = config.cloud_provider.clone();
+    let cloud_api_key = config.cloud_api_key.clone();
+    let cloud_hostname = config.cloud_hostname.clone();
+    let cloud_model = config.cloud_model.clone();
+    let cloud_language = config.cloud_language.clone();
+
+    let session_start_ms = *state.session_start_ms.lock();
+    let preacher_muted = state.preacher_muted.clone();
+    let session_transcript = state.session_transcript.clone();
+    let context_buffer = state.context_buffer.clone();
+    let transcription_window = state.transcription_window.clone();
+    let transcription_paused = state.transcription_paused.clone();
+    let inference_semaphore = state.inference_semaphore.clone();
+    let preacher_is_active = state.preacher_is_active.clone();
+    let store = state.store.clone();
+
+    let preacher_use_stream = preacher_mode == "cloud"
+        && cloud_provider.as_deref().map(engine::cloud_stream::provider_supports_streaming).unwrap_or(false)
+        && cloud_api_key.is_some();
+
+    let pr_provider_fb = cloud_provider.clone();
+    let pr_api_key_fb = cloud_api_key.clone();
+    let mut pr_audio_rx_fallback: Option<tokio::sync::mpsc::Receiver<Vec<f32>>> = None;
+
+    if preacher_use_stream {
+        let provider = cloud_provider.unwrap();
+        let api_key = cloud_api_key.unwrap();
+        log_msg(&app, &format!("[Preacher] Starting {} WebSocket stream (model={:?}, host={:?})", provider, cloud_model, cloud_hostname));
+        let stream_result = engine::cloud_stream::start_stream(&app, &provider, &api_key, cloud_hostname.as_deref(), cloud_model.as_deref(), cloud_language.as_deref()).await;
+
+        match stream_result {
+            Ok((stream_handle, mut transcript_rx)) => {
+                log_msg(&app, "[Preacher] Cloud WS stream connected — audio pump starting");
+                *state.preacher_cloud_stream_handle.lock() = Some(stream_handle);
+                let handle_arc = state.preacher_cloud_stream_handle.clone();
+                let pr_muted_pump = preacher_muted.clone();
+                let mut pr_audio_rx = pr_audio_rx;
+
+                let app_pump = app.clone();
+                tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    let mut first_chunk = true;
+                    loop {
+                        tokio::select! {
+                            res = pr_audio_rx.recv() => {
+                                if let Some(chunk) = res {
+                                    if first_chunk {
+                                        log_msg(&app_pump, "[Preacher] First audio chunk received — VAD active, streaming to cloud");
+                                        first_chunk = false;
+                                    }
+                                    let is_muted = pr_muted_pump.load(Ordering::Relaxed);
+                                    let bytes: Vec<u8> = chunk.iter()
+                                        .map(|&s| if is_muted { 0i16 } else { (s.clamp(-1.0, 1.0) * 32767.0) as i16 })
+                                        .flat_map(|s| s.to_le_bytes())
+                                        .collect();
+                                    if let Some(ref h) = *handle_arc.lock() {
+                                        if h.audio_tx.send(bytes).is_err() { break; }
+                                    } else { break; }
+                                } else { break; }
+                            }
+                            _ = interval.tick() => {
+                                let silence = vec![0u8; 320];
+                                if let Some(ref h) = *handle_arc.lock() {
+                                    if h.audio_tx.send(silence).is_err() { break; }
+                                }
+                            }
+                        }
+                    }
+                });
+
+                let app_pr = app.clone();
+                let tx_log_pr = session_transcript.clone();
+                let provider_name = provider.clone();
+                let handle_arc_stop = state.preacher_cloud_stream_handle.clone();
+                let engine_ws = engine.clone();
+                let store_ws = store.clone();
+                let ctx_buf_ws = context_buffer.clone();
+                let pr_active = preacher_is_active.clone();
+
+                tokio::spawn(async move {
+                    while let Some(seg) = transcript_rx.recv().await {
+                        let text = seg.text.trim().to_string();
+                        if !seg.is_final || is_hallucination(&text) || text.is_empty() { continue; }
+                        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+                        tx_log_pr.lock().push(TranscriptSegment { text: text.clone(), timestamp_ms: now_ms.saturating_sub(session_start_ms), is_final: true, source: provider_name.clone() });
+                        let word_count = text.split_whitespace().count();
+                        let (detected_item, confidence) = if word_count >= 3 {
+                            let e = engine_ws.clone();
+                            let s = store_ws.clone();
+                            let ctx = ctx_buf_ws.clone();
+                            let t = text.clone();
+                            tokio::task::spawn_blocking(move || {
+                                let combined = { let mut buf = ctx.lock(); buf.push(t.clone()); if buf.len() > 3 { buf.remove(0); } buf.join(" ") };
+                                let embedding = e.embed(&combined).ok();
+                                let (verse, conf) = s.detect_verse_hybrid(&combined, embedding);
+                                (verse.map(store::DisplayItem::Verse), conf)
+                            }).await.unwrap_or((None, 0.0))
+                        } else if let Some(verse) = store_ws.detect_verse_by_ref(&text) {
+                            (Some(store::DisplayItem::Verse(verse)), 1.0)
+                        } else {
+                            log_msg(&app_pr, &format!("[Session] Final skipped (too short, {} word(s)): \"{}\"", word_count, &text));
+                            (None, 0.0)
+                        };
+                        if let Some(store::DisplayItem::Verse(ref v)) = detected_item {
+                            log_msg(&app_pr, &format!("[Session] Verse detected: {} {}:{} (conf={:.2})", v.book, v.chapter, v.verse, confidence));
+                        } else if word_count >= 3 {
+                            log_msg(&app_pr, &format!("[Session] Final transcript — no verse match (conf={:.2}): \"{}\"", confidence, &text[..text.len().min(60)]));
+                        }
+                        let _ = app_pr.emit("preacher-transcription-update", TranscriptionUpdate { text: text.clone(), detected_item, confidence, source: provider_name.clone(), is_partial: false });
+                    }
+                    *handle_arc_stop.lock() = None;
+                    pr_active.store(false, Ordering::Relaxed);
+                    let _ = app_pr.emit("preacher-recording-status", serde_json::json!({"active": false}));
+                });
+            }
+            Err(e) => {
+                log_msg(&app, &format!("[Preacher] Cloud WS failed: {}. Falling back to local/REST.", e));
+                let _ = app.emit("audio-error", format!("Preacher cloud stream failed: {}. Using local transcription.", e));
+                pr_audio_rx_fallback = Some(pr_audio_rx);
+            }
+        }
+    } else {
+        pr_audio_rx_fallback = Some(pr_audio_rx);
+    }
+
+    if let Some(mut pr_audio_rx) = pr_audio_rx_fallback {
+        let app_pr = app.clone();
+        let engine_pr = engine.clone();
+        let pr_provider = pr_provider_fb;
+        let pr_api_key = pr_api_key_fb;
+        let pr_language = cloud_language.clone();
+        let pr_model = cloud_model.clone();
+        let pr_active = preacher_is_active.clone();
+
+        tokio::spawn(async move {
+            let mut buffer = Vec::with_capacity(48000 * 3);
+            const OVERLAP: usize = 4000;
+            let is_cloud = preacher_mode == "cloud" && pr_provider.is_some() && pr_api_key.is_some();
+            let provider_name = if is_cloud { pr_provider.clone().unwrap() } else { "local".to_string() };
+
+            while let Some(chunk) = pr_audio_rx.recv().await {
+                let is_muted = preacher_muted.load(Ordering::Relaxed);
+                if is_muted { buffer.clear(); continue; }
+
+                buffer.extend_from_slice(&chunk);
+
+                let window_size = *transcription_window.lock();
+                let paused = transcription_paused.load(std::sync::atomic::Ordering::Relaxed);
+                if paused {
+                    if buffer.len() > window_size { let keep = buffer.len().min(8000); buffer.drain(0..buffer.len() - keep); }
+                    continue;
+                }
+
+                if buffer.len() >= window_size {
+                    let maybe_permit = if !is_cloud {
+                        match Arc::clone(&inference_semaphore).try_acquire_owned() {
+                            Ok(p) => Some(p),
+                            Err(_) => { let keep = buffer.len().min(OVERLAP); buffer.drain(0..buffer.len() - keep); continue; }
+                        }
+                    } else { None };
+
+                    let b_clone = buffer.clone();
+                    let e_clone = engine_pr.clone();
+                    let pr_m = pr_model.clone();
+                    let lang_opt = pr_language.clone();
+                    let prov = pr_provider.clone();
+                    let key = pr_api_key.clone();
+                    let tx_log = session_transcript.clone();
+                    let app_pr_inner = app_pr.clone();
+                    let p_name = provider_name.clone();
+
+                    tokio::spawn(async move {
+                        let _permit = maybe_permit;
+                        let text_opt: Option<String> = if is_cloud {
+                            engine::cloud::transcribe_cloud(&b_clone, prov.as_ref().unwrap(), key.as_ref().unwrap(), pr_m.as_deref()).await.ok()
+                        } else {
+                            tokio::task::spawn_blocking(move || { e_clone.transcribe(&b_clone, lang_opt.as_deref()).ok() }).await.ok().flatten()
+                        };
+
+                        if let Some(text) = text_opt {
+                            if !is_hallucination(&text) {
+                                let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+                                tx_log.lock().push(TranscriptSegment { text: text.clone(), timestamp_ms: now_ms.saturating_sub(session_start_ms), is_final: true, source: p_name.clone() });
+                                let _ = app_pr_inner.emit("preacher-transcription-update", TranscriptionUpdate { text: text.clone(), detected_item: None, confidence: 1.0, source: p_name, is_partial: false });
+                            }
+                        }
+                    });
+
+                    if is_cloud { buffer.clear(); } else {
+                        if buffer.len() > window_size * 2 { let to_drain = buffer.len() - (window_size + OVERLAP); buffer.drain(0..to_drain); } else { let remaining = buffer.len().saturating_sub(OVERLAP); buffer = buffer[remaining..].to_vec(); }
+                    }
+                }
+            }
+            pr_active.store(false, Ordering::Relaxed);
+            let _ = app_pr.emit("preacher-recording-status", serde_json::json!({"active": false}));
+        });
+    }
+
+    Ok(())
+}
+
+/// Stop the preacher mic + transcription pipeline without stopping the whole session.
+#[tauri::command]
+async fn stop_preacher_recording(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(handle) = state.preacher_cloud_stream_handle.lock().take() {
+        handle.stop();
+    }
+    state.preacher_audio.lock().stop();
+    state.preacher_is_active.store(false, Ordering::Relaxed);
+    log_msg(&app, "[Preacher] Recording stopped by operator");
+    let _ = app.emit("preacher-recording-status", serde_json::json!({"active": false}));
     Ok(())
 }
 
@@ -2624,6 +2630,9 @@ fn main() {
                 preacher_cloud_stream_handle: Arc::new(Mutex::new(None)),
                 auth_throttles: Arc::new(Mutex::new(HashMap::new())),
                 ndi_manager: Arc::new(ndi::NdiManager::new()),
+                operator_is_active: Arc::new(AtomicBool::new(false)),
+                preacher_is_active: Arc::new(AtomicBool::new(false)),
+                session_start_ms: Arc::new(Mutex::new(0)),
             };
 
             // Sync NDI state from persisted settings
@@ -2685,6 +2694,10 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             start_session,
             stop_session,
+            start_operator_recording,
+            stop_operator_recording,
+            start_preacher_recording,
+            stop_preacher_recording,
             toggle_output_window,
             get_audio_devices,
             set_operator_device,

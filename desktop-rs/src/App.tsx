@@ -81,6 +81,8 @@ export default function App() {
     ltSongId, scheduleEntries, setScheduleEntries, services,
     activeServiceId, setActiveServiceId, media, setMedia, pauseWhisper, transcript, sessionTranscript, sessionState, setSessionState,
     operatorMicLevel, preacherMicLevel, operatorMuted, setOperatorMuted, preacherMuted, setPreacherMuted,
+    operatorRecordingActive, setOperatorRecordingActive,
+    preacherRecordingActive, setPreacherRecordingActive,
     remoteUrl, remotePin, bibleVersion, topPanelPct, setTopPanelPct, stagePct, setStagePct, 
     studioList, setStudioList, studioSlides, setStudioSlides,
     setIsBlackout, songs, setPropItems, audioError, setAudioError, deviceError,
@@ -754,8 +756,8 @@ export default function App() {
               }
             </button>
 
-            {/* PTT — only while running */}
-            {sessionState === "running" && (
+            {/* PTT — only while operator is recording */}
+            {sessionState === "running" && operatorRecordingActive && (
               <button
                 onMouseDown={handlePttDown}
                 onMouseUp={handlePttUp}
@@ -793,6 +795,26 @@ export default function App() {
                     transition={{ type: "spring", bounce: 0, duration: 0.1 }}
                   />
                 </div>
+                {sessionState === "running" && (
+                  <button
+                    onClick={async () => {
+                      if (operatorRecordingActive) {
+                        await invoke("stop_operator_recording").catch((e: any) => setAudioError(String(e)));
+                        setOperatorRecordingActive(false);
+                      } else {
+                        await invoke("start_operator_recording").catch((e: any) => setAudioError(String(e)));
+                      }
+                    }}
+                    title={operatorRecordingActive ? "Stop operator recording" : "Start operator recording"}
+                    className={`text-[8px] font-black uppercase px-1 py-0.5 rounded transition-all ${
+                      operatorRecordingActive
+                        ? "bg-amber-600/30 text-amber-400 animate-pulse"
+                        : "bg-slate-800 text-slate-400 hover:text-amber-300 hover:bg-slate-700"
+                    }`}
+                  >
+                    {operatorRecordingActive ? "■" : "REC"}
+                  </button>
+                )}
               </div>
               {/* Preacher row */}
               <div className="flex items-center gap-1.5">
@@ -812,6 +834,26 @@ export default function App() {
                     transition={{ type: "spring", bounce: 0, duration: 0.1 }}
                   />
                 </div>
+                {sessionState === "running" && (
+                  <button
+                    onClick={async () => {
+                      if (preacherRecordingActive) {
+                        await invoke("stop_preacher_recording").catch((e: any) => setAudioError(String(e)));
+                        setPreacherRecordingActive(false);
+                      } else {
+                        await invoke("start_preacher_recording").catch((e: any) => setAudioError(String(e)));
+                      }
+                    }}
+                    title={preacherRecordingActive ? "Stop pastor recording" : "Start pastor recording"}
+                    className={`text-[8px] font-black uppercase px-1 py-0.5 rounded transition-all ${
+                      preacherRecordingActive
+                        ? "bg-red-600/30 text-red-400 animate-pulse"
+                        : "bg-slate-800 text-slate-400 hover:text-blue-300 hover:bg-slate-700"
+                    }`}
+                  >
+                    {preacherRecordingActive ? "■" : "REC"}
+                  </button>
+                )}
               </div>
             </div>
           </div>
