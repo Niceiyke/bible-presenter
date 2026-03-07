@@ -19,6 +19,19 @@ fn main() {
         // On Windows, npm is a .cmd batch file and can't be launched directly by name.
         let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
 
+        // Install dependencies if node_modules is absent (fresh CI clone).
+        let node_modules = remote_ui_dir.join("node_modules");
+        if !node_modules.exists() {
+            let install = std::process::Command::new(npm)
+                .args(["ci"])
+                .current_dir(&remote_ui_dir)
+                .status()
+                .expect("Failed to run `npm ci` in remote-ui/. Is Node.js installed?");
+            if !install.success() {
+                panic!("remote-ui npm ci failed");
+            }
+        }
+
         let status = std::process::Command::new(npm)
             .args(["run", "build"])
             .current_dir(&remote_ui_dir)
