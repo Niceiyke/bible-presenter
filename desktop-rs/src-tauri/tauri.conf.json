@@ -48,6 +48,17 @@
         "alwaysOnTop": false,
         "visible": false,
         "resizable": true
+      },
+      {
+        "title": "Wordlyte - Audio Studio",
+        "label": "studio",
+        "width": 1440,
+        "height": 900,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": false,
+        "visible": false,
+        "resizable": true
       }
     ],
     "security": {

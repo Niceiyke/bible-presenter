@@ -33,7 +33,7 @@ import { SlideEditor } from "./components/editors/SlideEditor";
 import { LogViewer } from "./components/LogViewer";
 import { RemoteProposals } from "./components/RemoteProposals";
 import { MusicPlayer } from "./components/MusicPlayer";
-import { OutputWindow, StageWindow, DesignHub } from "./windows";
+import { OutputWindow, StageWindow, DesignHub, AudioStudio } from "./windows";
 import { stableId, newDefaultSlide } from "./utils";
 import { useLanCamera } from "./hooks/useLanCamera";
 import { useAppInitialization } from "./hooks/useAppInitialization";
@@ -561,6 +561,7 @@ export default function App() {
         case "F1": setActiveTab("bible"); break;
         case "F2": setActiveTab("songs"); break;
         case "F3": setActiveTab("media"); break;
+        case "F4": invoke("toggle_studio_window"); break;
         case "F5": invoke("toggle_design_window"); break;
         case "F6": setActiveTab("scenes"); break;
         case "F7": setActiveTab("scene-builder"); break;
@@ -672,6 +673,7 @@ export default function App() {
   if (label === "output") return <OutputWindow />;
   if (label === "stage") return <StageWindow />;
   if (label === "design") return <DesignHub />;
+  if (label === "studio") return <AudioStudio />;
 
   const updateSettings = async (next: PresentationSettings) => {
     setSettings(next);
@@ -874,12 +876,12 @@ export default function App() {
 
           {/* System Icons Block */}
           <div className="flex items-center gap-1 bg-slate-950 px-1.5 py-1.5 rounded-xl border border-slate-800/60 shadow-inner">
-            <button
-              onClick={() => { invoke("toggle_output_window"); setOutputVisible(v => !v); }}
+            <button onClick={() => { invoke("toggle_output_window"); setOutputVisible(v => !v); }}
               className={`p-1.5 rounded-lg transition-all ${outputVisible ? "bg-green-500/20 text-green-400" : "text-slate-400 hover:text-green-400 hover:bg-slate-800"}`}
               title="Toggle Output Window (Ctrl+O)"
             ><Monitor size={16} /></button>
             <button onClick={() => invoke("toggle_design_window")} className="p-1.5 text-slate-400 hover:text-purple-400 hover:bg-slate-800 rounded-lg transition-all" title="Design Hub"><Layout size={16} /></button>
+            <button onClick={() => invoke("toggle_studio_window")} className="p-1.5 text-slate-400 hover:text-indigo-400 hover:bg-slate-800 rounded-lg transition-all" title="Audio Studio"><Mic size={16} /></button>
             <div className="w-px h-4 bg-slate-800 mx-1 hidden sm:block" />
             <button onClick={() => setIsLogOpen(!isLogOpen)} className={`p-1.5 rounded-lg transition-all hidden sm:block ${isLogOpen ? "bg-slate-800 text-amber-500" : "text-slate-400 hover:text-white hover:bg-slate-800"}`} title="System Logs"><Repeat size={16} className="rotate-90" /></button>
             <button onClick={() => setShowShortcuts(true)} className={`p-1.5 rounded-lg transition-all hidden sm:block ${showShortcuts ? "bg-slate-800 text-amber-500" : "text-slate-400 hover:text-white hover:bg-slate-800"}`} title="Keyboard Shortcuts (?)"><Keyboard size={16} /></button>

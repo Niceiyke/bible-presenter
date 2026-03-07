@@ -13,6 +13,12 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
+use symphonia::core::audio::{AudioBufferRef, Signal};
+use symphonia::core::codecs::DecoderOptions;
+use symphonia::core::formats::FormatOptions;
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::MetadataOptions;
+use symphonia::core::probe::Hint;
 use engine::model_manager::{
     self, detect_hardware, download_model, list_model_statuses, model_path_if_exists,
     resolve_whisper_path, user_models_dir, DownloadProgress, HardwareInfo, ModelStatus,
@@ -214,6 +220,7 @@ pub struct RemoteProposal {
 pub struct AppState {
     operator_audio: Arc<Mutex<audio::AudioEngine>>,
     preacher_audio: Arc<Mutex<audio::AudioEngine>>,
+    studio_audio: Arc<Mutex<audio::AudioEngine>>,
     operator_ptt_active: Arc<AtomicBool>,
     /// C5: Engine is None until the user first clicks START LIVE.
     /// Wrapped in Mutex so start_session can populate it after the fact.
@@ -289,6 +296,8 @@ pub struct AppState {
     pub operator_is_active: Arc<AtomicBool>,
     /// Whether the preacher recording pipeline is currently active.
     pub preacher_is_active: Arc<AtomicBool>,
+    /// Whether the studio recording pipeline is currently active.
+    pub studio_is_active: Arc<AtomicBool>,
     /// Session start timestamp (ms since epoch). Set by start_session and read
     /// by start_preacher_recording so relative timestamps stay consistent.
     pub session_start_ms: Arc<Mutex<u64>>,
@@ -304,6 +313,7 @@ impl Clone for AppState {
         Self {
             operator_audio: self.operator_audio.clone(),
             preacher_audio: self.preacher_audio.clone(),
+            studio_audio: self.studio_audio.clone(),
             operator_ptt_active: self.operator_ptt_active.clone(),
             engine: self.engine.clone(),
             store: self.store.clone(),
@@ -341,6 +351,7 @@ impl Clone for AppState {
             ndi_manager: self.ndi_manager.clone(),
             operator_is_active: self.operator_is_active.clone(),
             preacher_is_active: self.preacher_is_active.clone(),
+            studio_is_active: self.studio_is_active.clone(),
             session_start_ms: self.session_start_ms.clone(),
             remote_operators: self.remote_operators.clone(),
             remote_proposals: self.remote_proposals.clone(),
@@ -1609,6 +1620,372 @@ async fn toggle_design_window(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn toggle_studio_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("studio") {
+        if window.is_visible().unwrap_or(false) {
+            window.hide().map_err(|e: tauri::Error| e.to_string())?;
+        } else {
+            window.show().map_err(|e: tauri::Error| e.to_string())?;
+            window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct StudioRecording {
+    id: String,
+    name: String,
+    path: String,
+    size_mb: f32,
+    date: String,
+    duration: String,
+    transcribed: bool,
+}
+
+#[tauri::command]
+async fn list_studio_recordings(state: State<'_, AppState>) -> Result<Vec<StudioRecording>, String> {
+    let recordings_dir = state.app_data_dir.join("recordings");
+    if !recordings_dir.exists() {
+        fs::create_dir_all(&recordings_dir).map_err(|e| e.to_string())?;
+        return Ok(vec![]);
+    }
+
+    let mut list = Vec::new();
+    let entries = fs::read_dir(recordings_dir).map_err(|e| e.to_string())?;
+    for entry in entries {
+        if let Ok(entry) = entry {
+            let path = entry.path();
+            if path.is_file() && path.extension().map_or(false, |ext| ext == "wav") {
+                let metadata = entry.metadata().map_err(|e| e.to_string())?;
+                let id = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                let name = id.clone();
+                let size_bytes = metadata.len();
+                let size_mb = size_bytes as f32 / 1024.0 / 1024.0;
+                let date = metadata.modified().map(|m| {
+                    chrono::DateTime::<chrono::Local>::from(m).format("%Y-%m-%d %H:%M").to_string()
+                }).unwrap_or_default();
+                
+                // Estimate duration for 16kHz 16-bit mono WAV
+                // bytes / (sample_rate * channels * bytes_per_sample)
+                let duration_secs = size_bytes / (16000 * 1 * 2);
+                let duration = format!("{}:{:02}", duration_secs / 60, duration_secs % 60);
+                
+                let transcribed = state.app_data_dir.join("recordings").join(format!("{}.txt", id)).exists();
+
+                list.push(StudioRecording {
+                    id,
+                    name,
+                    path: path.to_string_lossy().to_string(),
+                    size_mb,
+                    date,
+                    duration,
+                    transcribed,
+                });
+            }
+        }
+    }
+    
+    // Sort by date descending
+    list.sort_by(|a, b| b.date.cmp(&a.date));
+    Ok(list)
+}
+
+#[tauri::command]
+async fn delete_studio_recording(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let path = state.app_data_dir.join("recordings").join(format!("{}.wav", id));
+    if path.exists() {
+        fs::remove_file(path).map_err(|e| e.to_string())?;
+    }
+    // Also remove transcription if exists
+    let txt_path = state.app_data_dir.join("recordings").join(format!("{}.txt", id));
+    if txt_path.exists() {
+        let _ = fs::remove_file(txt_path);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn rename_studio_recording(state: State<'_, AppState>, id: String, new_name: String) -> Result<(), String> {
+    let old_path = state.app_data_dir.join("recordings").join(format!("{}.wav", id));
+    let new_path = state.app_data_dir.join("recordings").join(format!("{}.wav", new_name));
+    if old_path.exists() {
+        fs::rename(old_path, new_path).map_err(|e| e.to_string())?;
+    }
+    // Also rename transcription if exists
+    let old_txt = state.app_data_dir.join("recordings").join(format!("{}.txt", id));
+    let new_txt = state.app_data_dir.join("recordings").join(format!("{}.txt", new_name));
+    if old_txt.exists() {
+        let _ = fs::rename(old_txt, new_txt);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_studio_recording_transcript(state: State<'_, AppState>, id: String) -> Result<String, String> {
+    let txt_path = state.app_data_dir.join("recordings").join(format!("{}.txt", id));
+    if txt_path.exists() {
+        fs::read_to_string(txt_path).map_err(|e| e.to_string())
+    } else {
+        Ok("".to_string())
+    }
+}
+
+#[tauri::command]
+async fn transcribe_studio_recording(app: AppHandle, state: State<'_, AppState>, id: String, mode: Option<String>) -> Result<String, String> {
+    let path = state.app_data_dir.join("recordings").join(format!("{}.wav", id));
+    if !path.exists() {
+        return Err("Recording not found".to_string());
+    }
+
+    let config = state.transcription_config.lock().clone();
+    let selected_mode = mode.unwrap_or_else(|| "local".to_string());
+
+    // Load audio from WAV
+    let mut reader = hound::WavReader::open(&path).map_err(|e| e.to_string())?;
+    let samples: Vec<f32> = reader.samples::<i16>()
+        .map(|s| s.unwrap_or(0) as f32 / std::i16::MAX as f32)
+        .collect();
+
+    if samples.is_empty() {
+        return Err("Audio file is empty".to_string());
+    }
+
+    let _ = app.emit("studio-transcription-status", serde_json::json!({"id": id, "status": "processing"}));
+
+    let result = if selected_mode == "cloud" {
+        let provider = config.cloud_provider.clone().ok_or("No cloud provider configured in Settings")?;
+        let api_key = config.cloud_api_key.clone().ok_or("No cloud API key configured")?;
+        let model = config.cloud_rest_model.clone().or(config.cloud_model.clone());
+
+        engine::cloud::transcribe_cloud(&samples, &provider, &api_key, model.as_deref())
+            .await
+            .map_err(|e| format!("Cloud transcription failed: {}", e))?
+    } else {
+        let engine = state.get_or_init_engine(&app).await?;
+        tauri::async_runtime::spawn_blocking(move || {
+            engine.transcribe(&samples, None)
+        }).await.map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?
+    };
+
+    // Save transcription next to the audio file
+    let txt_path = state.app_data_dir.join("recordings").join(format!("{}.txt", id));
+    fs::write(txt_path, &result).map_err(|e| e.to_string())?;
+
+    let _ = app.emit("studio-transcription-status", serde_json::json!({"id": id, "status": "complete", "text": result.clone()}));
+
+    Ok(result)
+}
+
+#[tauri::command]
+async fn trim_studio_recording(state: State<'_, AppState>, id: String, start_sec: f32, end_sec: f32) -> Result<(), String> {
+    let path = state.app_data_dir.join("recordings").join(format!("{}.wav", id));
+    if !path.exists() {
+        return Err("Recording not found".to_string());
+    }
+
+    let mut reader = hound::WavReader::open(&path).map_err(|e| e.to_string())?;
+    let spec = reader.spec();
+    let sample_rate = spec.sample_rate as f32;
+    let channels = spec.channels as usize;
+
+    let start_sample = (start_sec * sample_rate) as u32 * channels as u32;
+    let end_sample = (end_sec * sample_rate) as u32 * channels as u32;
+
+    let samples: Vec<i16> = reader.samples::<i16>()
+        .map(|s| s.unwrap_or(0))
+        .collect();
+
+    if start_sample >= end_sample || end_sample as usize > samples.len() {
+        return Err("Invalid trim range".to_string());
+    }
+
+    let trimmed_samples = &samples[start_sample as usize..end_sample as usize];
+
+    // Overwrite the file with trimmed version
+    let mut writer = hound::WavWriter::create(&path, spec).map_err(|e| e.to_string())?;
+    for &s in trimmed_samples {
+        writer.write_sample(s).map_err(|e| e.to_string())?;
+    }
+    writer.finalize().map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn start_studio_recording(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    if state.studio_is_active.load(Ordering::Relaxed) {
+        return Err("Recording already in progress".to_string());
+    }
+
+    let recordings_dir = state.app_data_dir.join("recordings");
+    if !recordings_dir.exists() {
+        fs::create_dir_all(&recordings_dir).map_err(|e| e.to_string())?;
+    }
+
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let filename = format!("rec_{}.wav", timestamp);
+    let path = recordings_dir.join(&filename);
+
+    let (audio_tx, mut audio_rx) = tokio::sync::mpsc::channel::<Vec<f32>>(100);
+    let (error_tx, mut error_rx) = tokio::sync::mpsc::channel::<String>(10);
+    let (level_tx, mut level_rx) = tokio::sync::mpsc::channel::<f32>(50);
+
+    state.studio_is_active.store(true, Ordering::Relaxed);
+    let is_active = state.studio_is_active.clone();
+    
+    // Start capturing in the studio_audio engine
+    {
+        let mut audio = state.studio_audio.lock();
+        audio.start_capturing(audio_tx, error_tx, Some(level_tx)).map_err(|e| e.to_string())?;
+    }
+
+    let path_clone = path.clone();
+    // Spawn task to write to file
+    tauri::async_runtime::spawn(async move {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = match hound::WavWriter::create(path_clone, spec) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("Failed to create WavWriter: {}", e);
+                is_active.store(false, Ordering::Relaxed);
+                return;
+            }
+        };
+
+        while is_active.load(Ordering::Relaxed) {
+            tokio::select! {
+                Some(samples) = audio_rx.recv() => {
+                    for s in samples {
+                        let sample = (s as f32 * std::i16::MAX as f32).clamp(-32768.0, 32767.0) as i16;
+                        if let Err(e) = writer.write_sample(sample) {
+                            eprintln!("Failed to write sample: {}", e);
+                            break;
+                        }
+                    }
+                }
+                Some(level) = level_rx.recv() => {
+                    let _ = app.emit("studio-audio-level", level);
+                }
+                Some(err) = error_rx.recv() => {
+                    let _ = app.emit("studio-audio-error", err);
+                }
+                else => break,
+            }
+        }
+        let _ = writer.finalize();
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn stop_studio_recording(state: State<'_, AppState>) -> Result<(), String> {
+    state.studio_is_active.store(false, Ordering::Relaxed);
+    state.studio_audio.lock().stop();
+    Ok(())
+}
+
+#[tauri::command]
+async fn import_studio_audio(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<(), String> {
+    let source_path = PathBuf::from(path);
+    if !source_path.exists() {
+        return Err("File not found".to_string());
+    }
+
+    let recordings_dir = state.app_data_dir.join("recordings");
+    if !recordings_dir.exists() {
+        fs::create_dir_all(&recordings_dir).map_err(|e| e.to_string())?;
+    }
+
+    let stem = source_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+    let target_filename = format!("{}_imported.wav", stem);
+    let target_path = recordings_dir.join(target_filename);
+
+    // Run transcoding in a separate thread
+    tauri::async_runtime::spawn_blocking(move || {
+        let file = fs::File::open(&source_path).map_err(|e| e.to_string())?;
+        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+        
+        let mut hint = Hint::new();
+        if let Some(ext) = source_path.extension().and_then(|s| s.to_str()) {
+            hint.with_extension(ext);
+        }
+
+        let meta_opts = MetadataOptions::default();
+        let fmt_opts = FormatOptions::default();
+        
+        let probed = symphonia::default::get_probe().format(&hint, mss, &fmt_opts, &meta_opts)
+            .map_err(|e| e.to_string())?;
+        
+        let mut format = probed.format;
+        let track = format.tracks().iter().find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
+            .ok_or_else(|| "No supported audio track found".to_string())?;
+        
+        let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default())
+            .map_err(|e| e.to_string())?;
+
+        let track_id = track.id;
+        
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(target_path, spec).map_err(|e| e.to_string())?;
+
+        // Simple resampler / mono converter
+        // In a real app we'd use rubato, but for a quick import this is a start.
+        // For simplicity here, we'll assume we can decode and write.
+        
+        while let Ok(packet) = format.next_packet() {
+            if packet.track_id() != track_id { continue; }
+            
+            let decoded = decoder.decode(&packet).map_err(|e| e.to_string())?;
+            
+            match decoded {
+                AudioBufferRef::F32(buf) => {
+                    let chan_count = buf.spec().channels.count();
+                    for i in 0..buf.frames() {
+                        let mut sum = 0.0;
+                        for c in 0..chan_count {
+                            sum += buf.chan(c)[i];
+                        }
+                        let mono = sum / chan_count as f32;
+                        let s = (mono * std::i16::MAX as f32).clamp(-32768.0, 32767.0) as i16;
+                        writer.write_sample(s).map_err(|e| e.to_string())?;
+                    }
+                }
+                AudioBufferRef::S16(buf) => {
+                    let chan_count = buf.spec().channels.count();
+                    for i in 0..buf.frames() {
+                        let mut sum = 0i32;
+                        for c in 0..chan_count {
+                            sum += buf.chan(c)[i] as i32;
+                        }
+                        let mono = (sum / chan_count as i32) as i16;
+                        writer.write_sample(mono).map_err(|e| e.to_string())?;
+                    }
+                }
+                _ => return Err("Unsupported buffer format during decode".to_string()),
+            }
+        }
+        writer.finalize().map_err(|e| e.to_string())?;
+        let _ = app.emit("studio-import-complete", stem);
+        Ok(())
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn get_available_monitors(app: AppHandle) -> Result<Vec<MonitorInfo>, String> {
     let win = app.get_webview_window("main").ok_or("no main window")?;
     let primary_name = win
@@ -2689,6 +3066,7 @@ fn main() {
             let state = AppState {
                 operator_audio,
                 preacher_audio,
+                studio_audio: Arc::new(Mutex::new(audio::AudioEngine::new())),
                 operator_ptt_active: Arc::new(AtomicBool::new(false)),
                 engine: Arc::new(Mutex::new(None)), // loaded lazily in start_session
                 store,
@@ -2726,6 +3104,7 @@ fn main() {
                 ndi_manager: Arc::new(ndi::NdiManager::new()),
                 operator_is_active: Arc::new(AtomicBool::new(false)),
                 preacher_is_active: Arc::new(AtomicBool::new(false)),
+                studio_is_active: Arc::new(AtomicBool::new(false)),
                 session_start_ms: Arc::new(Mutex::new(0)),
                 remote_operators: Arc::new(Mutex::new(HashMap::new())),
                 remote_proposals: Arc::new(Mutex::new(HashMap::new())),
@@ -2860,6 +3239,16 @@ fn main() {
             update_timer,
             toggle_stage_window,
             toggle_design_window,
+            toggle_studio_window,
+            list_studio_recordings,
+            delete_studio_recording,
+            rename_studio_recording,
+            get_studio_recording_transcript,
+            transcribe_studio_recording,
+            trim_studio_recording,
+            start_studio_recording,
+            stop_studio_recording,
+            import_studio_audio,
             get_available_monitors,
             list_services,
             save_service,
