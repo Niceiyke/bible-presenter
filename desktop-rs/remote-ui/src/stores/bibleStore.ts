@@ -13,7 +13,6 @@ interface BibleState {
   navVerse: Verse | null;
   searchResults: Verse[];
   searchQuery: string;
-  searchMode: 'keyword' | 'hybrid';
 
   setVersions: (v: string[]) => void;
   setCurrentVersion: (v: string) => void;
@@ -26,7 +25,6 @@ interface BibleState {
   setNavVerse: (v: Verse | null) => void;
   setSearchResults: (r: Verse[]) => void;
   setSearchQuery: (q: string) => void;
-  setSearchMode: (m: 'keyword' | 'hybrid') => void;
 }
 
 export const useBibleStore = create<BibleState>((set) => ({
@@ -41,7 +39,6 @@ export const useBibleStore = create<BibleState>((set) => ({
   navVerse: null,
   searchResults: [],
   searchQuery: '',
-  searchMode: 'keyword',
 
   setVersions: (versions) => set({ versions }),
   setCurrentVersion: (currentVersion) => set({ currentVersion }),
@@ -54,5 +51,4 @@ export const useBibleStore = create<BibleState>((set) => ({
   setNavVerse: (navVerse) => set({ navVerse }),
   setSearchResults: (searchResults) => set({ searchResults }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
-  setSearchMode: (searchMode) => set({ searchMode }),
 }));

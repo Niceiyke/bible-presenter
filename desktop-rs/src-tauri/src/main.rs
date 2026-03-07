@@ -1500,29 +1500,40 @@ async fn clear_recovery(state: State<'_, AppState>) -> Result<(), String> {
 async fn go_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let staged = state.staged_item.lock().clone();
     if let Some(item) = staged {
-        *state.live_item.lock() = Some(item.clone());
-        
-        let mut is_media = false;
-        if let store::DisplayItem::Media(ref m) = item {
-            if matches!(m.media_type, store::MediaItemType::Video) { is_media = true; }
-        }
-        state.operator_audio.lock().media_playing.store(is_media, std::sync::atomic::Ordering::Relaxed);
-        state.preacher_audio.lock().media_playing.store(is_media, std::sync::atomic::Ordering::Relaxed);
-        
-        let update = TranscriptionUpdate {
-            text: item.to_label(),
-            detected_item: Some(item.clone()),
-            confidence: 1.0,
-            source: "manual".to_string(),
-            is_partial: false,
-        };
-        let _ = app.emit("operator-transcription-update", &update);
-        let _ = app.emit("preacher-transcription-update", &update);
-        // Broadcast to WS remote clients
-        let _ = state.broadcast_tx.send(
-            serde_json::json!({ "type": "state", "live_item": item }).to_string()
-        );
+        go_live_item(app, state, item).await?;
     }
+    Ok(())
+}
+
+#[tauri::command]
+async fn go_live_item(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    item: store::DisplayItem,
+) -> Result<(), String> {
+    *state.live_item.lock() = Some(item.clone());
+    
+    let mut is_media = false;
+    if let store::DisplayItem::Media(ref m) = item {
+        if matches!(m.media_type, store::MediaItemType::Video) { is_media = true; }
+    }
+    state.operator_audio.lock().media_playing.store(is_media, std::sync::atomic::Ordering::Relaxed);
+    state.preacher_audio.lock().media_playing.store(is_media, std::sync::atomic::Ordering::Relaxed);
+    
+    use tauri::Emitter;
+    let update = TranscriptionUpdate {
+        text: item.to_label(),
+        detected_item: Some(item.clone()),
+        confidence: 1.0,
+        source: "manual".to_string(),
+        is_partial: false,
+    };
+    let _ = app.emit("operator-transcription-update", &update);
+    let _ = app.emit("preacher-transcription-update", &update);
+    // Broadcast to WS remote clients
+    let _ = state.broadcast_tx.send(
+        serde_json::json!({ "type": "state", "live_item": item }).to_string()
+    );
     Ok(())
 }
 
@@ -3207,6 +3218,7 @@ fn main() {
             load_schedule,
             stage_item,
             go_live,
+            go_live_item,
             clear_live,
             get_settings,
             save_settings,

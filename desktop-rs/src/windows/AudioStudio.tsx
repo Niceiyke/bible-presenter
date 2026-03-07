@@ -38,7 +38,6 @@ export function AudioStudio() {
       cursorColor: '#f59e0b',
       barWidth: 2,
       barRadius: 3,
-      responsive: true,
       height: 200,
       normalize: true,
       url: convertFileSrc(selectedRecording.path),

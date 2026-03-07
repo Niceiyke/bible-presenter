@@ -24,8 +24,8 @@ export function RemoteProposals() {
       // Note: stage_item in backend emits "item-staged" which we listen to in useAppInitialization
     } else {
       if (liveItem) setPreviousItem(liveItem);
-      await invoke("go_live", { item: proposal.item });
-      // Note: go_live in backend broadcasts state update
+      await invoke("go_live_item", { item: proposal.item });
+      // Note: go_live_item in backend broadcasts state update
     }
     
     // Auto-dismiss after accepting

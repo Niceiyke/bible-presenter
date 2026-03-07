@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Search, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { ws } from '../api/wsClient';
 import { useBibleStore } from '../stores/bibleStore';
-import { Card, CardLabel, Btn, Pill, Input, Row, Select, VerseResult, VersePreview, Spinner, Segment } from '../components/ui';
+import { Card, CardLabel, Btn, Pill, Input, Row, Select, VerseResult, VersePreview, Spinner } from '../components/ui';
 
 // ── Quick verse entry ─────────────────────────────────────────────────────────
 function QuickBiblePicker() {
@@ -131,7 +131,6 @@ export function BiblePage() {
     verses, selectedVerse,
     navVerse, setNavVerse,
     searchResults, setSearchResults,
-    searchMode, setSearchMode,
   } = useBibleStore();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -156,7 +155,7 @@ export function BiblePage() {
   function doSearch() {
     if (!searchQuery.trim()) return;
     setSearching(true);
-    ws.send({ cmd: searchMode === 'hybrid' ? 'search_hybrid' : 'search', query: searchQuery });
+    ws.send({ cmd: 'search_hybrid', query: searchQuery });
   }
 
   useEffect(() => {
@@ -248,16 +247,10 @@ export function BiblePage() {
           )}
         </div>
 
-        <Segment
-          options={[{ value: 'keyword', label: 'Keyword' }, { value: 'hybrid', label: 'Semantic AI' }]}
-          value={searchMode}
-          onChange={setSearchMode}
-        />
-
         <Row>
           <div className="flex-1 relative">
             <Input
-              placeholder={searchMode === 'hybrid' ? 'Ask in natural language…' : 'Keywords or reference…'}
+              placeholder="Ask in natural language…"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && doSearch()}
@@ -272,7 +265,7 @@ export function BiblePage() {
           <div className="flex items-center justify-center py-6 gap-3">
             <Spinner />
             <span className="text-xs" style={{ color: 'var(--muted)' }}>
-              {searchMode === 'hybrid' ? 'Running semantic search…' : 'Searching…'}
+              Running semantic search…
             </span>
           </div>
         )}
@@ -281,7 +274,7 @@ export function BiblePage() {
           <div className="flex flex-col gap-2">
             <p className="text-[10px] font-bold" style={{ color: 'var(--muted)' }}>
               {searchResults.length} result{searchResults.length !== 1 ? 's' : ''}
-              {searchMode === 'hybrid' && ' · ranked by relevance'}
+              {' · ranked by relevance'}
             </p>
             {searchResults.map((v, i) => (
               <VerseResult
