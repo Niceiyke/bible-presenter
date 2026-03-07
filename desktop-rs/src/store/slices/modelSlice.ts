@@ -37,8 +37,10 @@ export interface TranscriptionConfig {
   cloud_api_key: string | null;
   /** Override API hostname for enterprise endpoints. null = use provider default. */
   cloud_hostname: string | null;
-  /** Model string passed to provider (e.g. "nova-2", "best", "whisper-1"). */
+  /** Streaming model for preacher WebSocket (e.g. "best", "nova-2", "universal-streaming-english"). */
   cloud_model: string | null;
+  /** REST/batch model for operator PTT calls (e.g. "universal", "nova-2", "whisper-1"). Falls back to cloud_model if null. */
+  cloud_rest_model: string | null;
   /** BCP-47 language code (e.g. "en", "en-US"). null = provider default. */
   cloud_language: string | null;
   /** Mode for operator audio transcription. */
@@ -113,7 +115,7 @@ export const createModelSlice: StateCreator<AppStore, [], [], ModelSlice> = (set
   transcriptionConfig: {
     active_model: null, use_gpu: false,
     cloud_provider: null, cloud_api_key: null,
-    cloud_hostname: null, cloud_model: null, cloud_language: null,
+    cloud_hostname: null, cloud_model: null, cloud_rest_model: null, cloud_language: null,
     operator_mode: "local", preacher_mode: "cloud",
     auto_project: false, verse_lock_secs: 8, confidence_threshold: 0.55,
   },

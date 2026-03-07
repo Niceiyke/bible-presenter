@@ -466,7 +466,8 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
     let cloud_provider = config.cloud_provider.clone();
     let cloud_api_key = config.cloud_api_key.clone();
     let cloud_hostname = config.cloud_hostname.clone();
-    let cloud_model = config.cloud_model.clone();
+    let cloud_model = config.cloud_model.clone(); // streaming model (preacher WS)
+    let cloud_rest_model = config.cloud_rest_model.clone().or_else(|| cloud_model.clone()); // REST model (operator), falls back to stream model
     let cloud_language = config.cloud_language.clone();
     
     let operator_mode = config.operator_mode.clone().unwrap_or_else(|| "local".to_string());
@@ -485,9 +486,13 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
     let (op_error_tx, mut op_error_rx) = tokio::sync::mpsc::channel::<String>(10);
     let (op_level_tx, mut op_level_rx) = tokio::sync::mpsc::channel::<f32>(50);
 
-    if let Err(e) = operator_audio.lock().start_capturing(op_audio_tx, op_error_tx, Some(op_level_tx)) {
-        *is_running.lock() = false;
-        return Err(format!("Operator mic error: {}", e));
+    {
+        let op_device = operator_audio.lock().selected_device().map(|s| s.to_string()).unwrap_or_else(|| "system default".to_string());
+        if let Err(e) = operator_audio.lock().start_capturing(op_audio_tx, op_error_tx, Some(op_level_tx)) {
+            *is_running.lock() = false;
+            return Err(format!("Operator mic error: {}", e));
+        }
+        log_msg(&app, &format!("[Session] Operator mic recording started — device: \"{}\"", op_device));
     }
 
     // Only start preacher audio if it has a distinct, explicitly-named device.
@@ -503,11 +508,13 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
         let (pr_error_tx, mut pr_error_rx) = tokio::sync::mpsc::channel::<String>(10);
         let (pr_level_tx, mut pr_level_rx) = tokio::sync::mpsc::channel::<f32>(50);
 
+        let pr_device = preacher_audio.lock().selected_device().map(|s| s.to_string()).unwrap_or_else(|| "system default".to_string());
         if let Err(e) = preacher_audio.lock().start_capturing(pr_audio_tx, pr_error_tx, Some(pr_level_tx)) {
             operator_audio.lock().stop();
             *is_running.lock() = false;
             return Err(format!("Preacher mic error: {}", e));
         }
+        log_msg(&app, &format!("[Session] Preacher mic recording started — device: \"{}\"", pr_device));
 
         let app_err2 = app.clone();
         tokio::spawn(async move { while let Some(msg) = pr_error_rx.recv().await { let _ = app_err2.emit("audio-error", format!("Preacher: {}", msg)); } });
@@ -516,6 +523,10 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
 
         Some(pr_audio_rx)
     } else {
+        log_msg(&app, &format!(
+            "[Session] Preacher mic NOT started — {} (no separate device configured)",
+            if pr_dev.is_none() { "no device selected" } else { "same device as operator" }
+        ));
         None
     };
 
@@ -537,7 +548,7 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
     let op_provider = cloud_provider.clone();
     let op_api_key = cloud_api_key.clone();
     let op_language = cloud_language.clone();
-    let op_model = cloud_model.clone();
+    let op_model = cloud_rest_model.clone(); // operator always uses REST model
     let trans_window_op = transcription_window.clone();
     let trans_paused_op = transcription_paused.clone();
     let op_muted_pipeline = operator_muted.clone();
@@ -551,8 +562,13 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
         let is_cloud = operator_mode == "cloud" && op_provider.is_some() && op_api_key.is_some();
         let provider_name = if is_cloud { op_provider.clone().unwrap() } else { "local".to_string() };
         let mut was_ptt_active = false;
+        let mut first_chunk = true;
 
         while let Some(chunk) = op_audio_rx.recv().await {
+            if first_chunk {
+                log_msg(&app_op, &format!("[Operator] First audio chunk received — VAD active, pipeline running ({})", provider_name));
+                first_chunk = false;
+            }
             let window_size = *trans_window_op.lock();
             let is_ptt_active = operator_ptt_active.load(std::sync::atomic::Ordering::Relaxed);
             let is_paused = trans_paused_op.load(std::sync::atomic::Ordering::Relaxed);
@@ -573,6 +589,10 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
             let trigger_on_window = is_ptt_active && buffer.len() >= window_size;
 
             if !is_paused && (trigger_on_release || trigger_on_window) {
+                let buf_samples = buffer.len();
+                let buf_ms = buf_samples * 1000 / 16000;
+                let trigger_reason = if trigger_on_release { "PTT released" } else { "window full" };
+
                 // For local Whisper: enforce single-flight inference.
                 // If inference is already running, discard this window to prevent CPU pileup.
                 // Cloud REST is remote so we allow concurrent calls there.
@@ -580,6 +600,7 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
                     match Arc::clone(&semaphore_op).try_acquire_owned() {
                         Ok(p) => Some(p),
                         Err(_) => {
+                            log_msg(&app_op, &format!("[Operator] Inference busy — window dropped ({} samples / {}ms)", buf_samples, buf_ms));
                             buffer.clear();
                             was_ptt_active = is_ptt_active;
                             continue;
@@ -588,6 +609,8 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
                 } else {
                     None
                 };
+
+                log_msg(&app_op, &format!("[Operator] Transcription triggered: {} — {} samples ({}ms) via {}", trigger_reason, buf_samples, buf_ms, provider_name));
 
                 let b_clone = buffer.clone();
                 let e_clone = engine_op.clone();
@@ -603,27 +626,54 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
 
                 tokio::spawn(async move {
                     let _permit = maybe_permit; // Released when inference completes
+                    let t0 = std::time::Instant::now();
                     let result: Option<(String, Option<store::DisplayItem>, f32)> = if is_cloud {
                         if let Ok(text) = engine::cloud::transcribe_cloud(&b_clone, op_p.as_ref().unwrap(), op_k.as_ref().unwrap(), op_m.as_deref()).await {
-                            tokio::task::spawn_blocking(move || {
+                            log_msg(&app_op_inner, &format!("[Operator] Cloud transcription ({} ms): \"{}\"", t0.elapsed().as_millis(), &text[..text.len().min(80)]));
+                            let t1 = std::time::Instant::now();
+                            let result = tokio::task::spawn_blocking(move || {
                                 let combined = { let mut buf = ctx_buf.lock(); buf.push(text.clone()); if buf.len() > 3 { buf.remove(0); } buf.join(" ") };
                                 let embedding = e_clone.embed(&combined).ok();
                                 let (verse, confidence) = s_clone.detect_verse_hybrid(&combined, embedding);
                                 Some((text, verse.map(store::DisplayItem::Verse), confidence))
-                            }).await.ok().flatten()
-                        } else { None }
+                            }).await.ok().flatten();
+                            log_msg(&app_op_inner, &format!("[Operator] Verse detection ({} ms)", t1.elapsed().as_millis()));
+                            result
+                        } else {
+                            log_msg(&app_op_inner, &format!("[Operator] Cloud transcription failed after {} ms", t0.elapsed().as_millis()));
+                            None
+                        }
                     } else {
+                        let app_blk = app_op_inner.clone();
                         tokio::task::spawn_blocking(move || {
-                            let text = e_clone.transcribe(&b_clone, op_l.as_deref()).ok()?;
+                            let t_whisper = std::time::Instant::now();
+                            let text = match e_clone.transcribe(&b_clone, op_l.as_deref()) {
+                                Ok(t) => t,
+                                Err(e) => {
+                                    log_msg(&app_blk, &format!("[Operator] Whisper error after {} ms: {}", t_whisper.elapsed().as_millis(), e));
+                                    return None;
+                                }
+                            };
+                            log_msg(&app_blk, &format!("[Operator] Whisper ({} ms): \"{}\"", t_whisper.elapsed().as_millis(), &text[..text.len().min(80)]));
+
+                            let t_detect = std::time::Instant::now();
                             let combined = { let mut buf = ctx_buf.lock(); buf.push(text.clone()); if buf.len() > 3 { buf.remove(0); } buf.join(" ") };
                             let embedding = e_clone.embed(&combined).ok();
                             let (verse, confidence) = s_clone.detect_verse_hybrid(&combined, embedding);
+                            log_msg(&app_blk, &format!("[Operator] Verse detection ({} ms): {}", t_detect.elapsed().as_millis(),
+                                match &verse {
+                                    Some(v) => format!("MATCH {} {}:{} (conf={:.2})", v.book, v.chapter, v.verse, confidence),
+                                    None => format!("no match (conf={:.2})", confidence),
+                                }
+                            ));
                             Some((text, verse.map(store::DisplayItem::Verse), confidence))
                         }).await.ok().flatten()
                     };
 
                     if let Some((text, item, confidence)) = result {
-                        if !is_hallucination(&text) {
+                        if is_hallucination(&text) {
+                            log_msg(&app_op_inner, &format!("[Operator] Hallucination filtered: \"{}\"", &text[..text.len().min(60)]));
+                        } else {
                             let now_ms = std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap_or_default()
@@ -634,6 +684,7 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
                                 is_final: true,
                                 source: p_name.clone(),
                             });
+                            log_msg(&app_op_inner, &format!("[Operator] Total {} ms — emitting result", t0.elapsed().as_millis()));
                             let _ = app_op_inner.emit("operator-transcription-update", TranscriptionUpdate {
                                 text: text.clone(), detected_item: item, confidence, source: p_name, is_partial: false,
                             });
@@ -695,13 +746,19 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> Result<(),
                 let pr_muted_pump = preacher_muted.clone();
 
                 if let Some(mut pr_audio_rx) = pr_audio_rx_opt {
+                    let app_pump = app.clone();
                     tokio::spawn(async move {
                         let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
                         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                        let mut first_chunk = true;
                         loop {
                             tokio::select! {
                                 res = pr_audio_rx.recv() => {
                                     if let Some(chunk) = res {
+                                        if first_chunk {
+                                            log_msg(&app_pump, "[Preacher] First audio chunk received — VAD active, streaming to cloud");
+                                            first_chunk = false;
+                                        }
                                         let is_muted = pr_muted_pump.load(Ordering::Relaxed);
                                         let bytes: Vec<u8> = chunk.iter()
                                             .map(|&s| if is_muted { 0i16 } else { (s.clamp(-1.0, 1.0) * 32767.0) as i16 })
@@ -2153,6 +2210,7 @@ async fn set_cloud_config(
     api_key: Option<String>,
     hostname: Option<String>,
     model: Option<String>,
+    rest_model: Option<String>,
     language: Option<String>,
     operator_mode: Option<String>,
     preacher_mode: Option<String>,
@@ -2172,9 +2230,10 @@ async fn set_cloud_config(
         let mut config = state.transcription_config.lock();
         config.cloud_provider = provider.clone();
         if api_key.is_some() { config.cloud_api_key = api_key; }
-        config.cloud_hostname = hostname.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-        config.cloud_model    = model.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-        config.cloud_language = language.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        config.cloud_hostname   = hostname.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        config.cloud_model      = model.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        config.cloud_rest_model = rest_model.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        config.cloud_language   = language.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         if let Some(v) = operator_mode       { config.operator_mode        = Some(v); }
         if let Some(v) = preacher_mode       { config.preacher_mode        = Some(v); }
         if let Some(v) = auto_project        { config.auto_project         = v; }

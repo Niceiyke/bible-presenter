@@ -243,6 +243,9 @@ export function SettingsTab({
   const [cloudModelDraft, setCloudModelDraft] = useState(
     transcriptionConfig.cloud_model ?? ""
   );
+  const [cloudRestModelDraft, setCloudRestModelDraft] = useState(
+    transcriptionConfig.cloud_rest_model ?? ""
+  );
   const [cloudLanguageDraft, setCloudLanguageDraft] = useState(
     transcriptionConfig.cloud_language ?? ""
   );
@@ -250,8 +253,9 @@ export function SettingsTab({
   useEffect(() => {
     setCloudHostnameDraft(transcriptionConfig.cloud_hostname ?? "");
     setCloudModelDraft(transcriptionConfig.cloud_model ?? "");
+    setCloudRestModelDraft(transcriptionConfig.cloud_rest_model ?? "");
     setCloudLanguageDraft(transcriptionConfig.cloud_language ?? "");
-  }, [transcriptionConfig.cloud_hostname, transcriptionConfig.cloud_model, transcriptionConfig.cloud_language]);
+  }, [transcriptionConfig.cloud_hostname, transcriptionConfig.cloud_model, transcriptionConfig.cloud_rest_model, transcriptionConfig.cloud_language]);
 
   const handleSaveCloud = (provider: string | null, key: string) => {
     invoke("set_cloud_config", {
@@ -259,6 +263,7 @@ export function SettingsTab({
       apiKey: key || null,
       hostname: cloudHostnameDraft.trim() || null,
       model: cloudModelDraft.trim() || null,
+      restModel: cloudRestModelDraft.trim() || null,
       language: cloudLanguageDraft.trim() || null,
       operatorMode: transcriptionConfig.operator_mode,
       preacherMode: transcriptionConfig.preacher_mode,
@@ -275,6 +280,7 @@ export function SettingsTab({
       provider: transcriptionConfig.cloud_provider,
       hostname: cloudHostnameDraft.trim() || null,
       model: cloudModelDraft.trim() || null,
+      restModel: cloudRestModelDraft.trim() || null,
       language: cloudLanguageDraft.trim() || null,
       operatorMode: transcriptionConfig.operator_mode,
       preacherMode: transcriptionConfig.preacher_mode,
@@ -1367,15 +1373,33 @@ export function SettingsTab({
 
                   <div className="flex gap-2">
                     <div className="flex-1">
-                      <label className="text-[10px] text-slate-500 uppercase font-bold block mb-1">Model</label>
+                      <label className="text-[10px] text-slate-500 uppercase font-bold block mb-1">
+                        Stream Model <span className="text-slate-600 normal-case font-normal">(preacher WS)</span>
+                      </label>
                       <input
                         type="text"
                         value={cloudModelDraft}
                         onChange={(e) => setCloudModelDraft(e.target.value)}
                         placeholder={
                           transcriptionConfig.cloud_provider === "deepgram" ? "nova-2" :
-                          transcriptionConfig.cloud_provider === "assemblyai" ? "universal-streaming-english" :
+                          transcriptionConfig.cloud_provider === "assemblyai" ? "best" :
                           transcriptionConfig.cloud_provider === "openai" ? "whisper-1" : "model"
+                        }
+                        className="w-full bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-1.5 font-mono focus:outline-none focus:border-amber-500"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <label className="text-[10px] text-slate-500 uppercase font-bold block mb-1">
+                        REST Model <span className="text-slate-600 normal-case font-normal">(operator PTT)</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={cloudRestModelDraft}
+                        onChange={(e) => setCloudRestModelDraft(e.target.value)}
+                        placeholder={
+                          transcriptionConfig.cloud_provider === "deepgram" ? "nova-2" :
+                          transcriptionConfig.cloud_provider === "assemblyai" ? "universal" :
+                          transcriptionConfig.cloud_provider === "openai" ? "whisper-1" : "fallback to stream model"
                         }
                         className="w-full bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-1.5 font-mono focus:outline-none focus:border-amber-500"
                       />

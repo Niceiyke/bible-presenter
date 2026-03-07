@@ -117,9 +117,13 @@ pub struct TranscriptionConfig {
     /// Override API hostname (e.g. enterprise Deepgram endpoint). None = use provider default.
     #[serde(default)]
     pub cloud_hostname: Option<String>,
-    /// Model to request from the cloud provider (e.g. "nova-2", "best", "whisper-1").
+    /// Model for the preacher WebSocket stream (e.g. "best", "nova-2", "universal-streaming-english").
     #[serde(default)]
     pub cloud_model: Option<String>,
+    /// Model for the operator REST/batch API (e.g. "universal", "nova-2", "whisper-1").
+    /// Falls back to cloud_model if not set.
+    #[serde(default)]
+    pub cloud_rest_model: Option<String>,
     /// BCP-47 language code (e.g. "en", "en-US"). None = provider default.
     #[serde(default)]
     pub cloud_language: Option<String>,
@@ -152,6 +156,7 @@ impl Default for TranscriptionConfig {
             cloud_api_key: None,
             cloud_hostname: None,
             cloud_model: None,
+            cloud_rest_model: None,
             cloud_language: None,
             operator_mode: Some("local".to_string()),
             preacher_mode: Some("cloud".to_string()),

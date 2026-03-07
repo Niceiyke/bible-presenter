@@ -111,7 +111,8 @@ const BACKOFF_SECS: &[u64] = &[2, 4, 8, 16, 30, 60];
 /// Returns whether a session ended due to a disconnect (true = reconnect) or a
 /// clean shutdown (false = exit the connection manager loop).
 enum SessionEnd {
-    Reconnect(String), // reason string for logging
+    Reconnect(String), // transient error — retry with backoff
+    Fatal(String),     // permanent error — do not reconnect (bad model, invalid key, etc.)
     Shutdown,
 }
 
@@ -244,9 +245,18 @@ async fn deepgram_manager(
             }
         };
 
+        let session_start = std::time::Instant::now();
         match deepgram_run_session(&app, &transcript_tx, &mut audio_rx, &shutdown_tx, ws_stream).await {
             SessionEnd::Shutdown => return,
+            SessionEnd::Fatal(reason) => {
+                log_err(&app, format!("[Deepgram] Fatal error — not reconnecting: {}", reason));
+                let _ = app.emit("audio-error", format!("Deepgram fatal error: {}", reason));
+                return;
+            }
             SessionEnd::Reconnect(reason) => {
+                if session_start.elapsed().as_secs() >= 30 {
+                    backoff_idx = 0;
+                }
                 let delay = BACKOFF_SECS[backoff_idx.min(BACKOFF_SECS.len() - 1)];
                 log_warn(&app, format!("[Deepgram] Session ended: {}. Reconnecting in {}s…", reason, delay));
                 let _ = app.emit("audio-error", format!("Stream disconnected: {}. Reconnecting…", reason));
@@ -491,11 +501,21 @@ async fn assemblyai_manager(
                 log_warn(&app, format!("[AssemblyAI] Drained {} stale audio chunks", drained));
             }
         }
-        backoff_idx = 0;
 
+        let session_start = std::time::Instant::now();
         match assemblyai_run_session(&app, &transcript_tx, &mut audio_rx, &shutdown_tx, ws_stream).await {
             SessionEnd::Shutdown => return,
+            SessionEnd::Fatal(reason) => {
+                log_err(&app, format!("[AssemblyAI] Fatal error — not reconnecting: {}", reason));
+                let _ = app.emit("audio-error", format!("AssemblyAI fatal error: {}", reason));
+                return;
+            }
             SessionEnd::Reconnect(reason) => {
+                // Only reset backoff if the session was stable (ran ≥30s). Short sessions
+                // keep the backoff increasing to avoid hammering the server on persistent errors.
+                if session_start.elapsed().as_secs() >= 30 {
+                    backoff_idx = 0;
+                }
                 let delay = BACKOFF_SECS[backoff_idx.min(BACKOFF_SECS.len() - 1)];
                 log_warn(&app, format!("[AssemblyAI] Session ended: {}. Reconnecting in {}s…", reason, delay));
                 let _ = app.emit("audio-error", format!("Stream disconnected: {}. Reconnecting…", reason));
@@ -523,11 +543,23 @@ async fn assemblyai_run_session(
             match msg {
                 Ok(Message::Text(text)) => {
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                        parse_assemblyai_message(&app_r, &v, &tx);
+                        if let Some(fatal) = parse_assemblyai_message(&app_r, &v, &tx) {
+                            let _ = disc_tx.send(format!("FATAL:{}", fatal));
+                            return;
+                        }
                     }
                 }
                 Ok(Message::Close(frame)) => {
-                    let reason = frame.map(|f| f.reason.to_string()).unwrap_or_else(|| "server close".to_string());
+                    let reason = if let Some(f) = frame {
+                        let code = u16::from(f.code);
+                        if f.reason.is_empty() {
+                            format!("server close (code={})", code)
+                        } else {
+                            format!("server close (code={}, reason='{}')", code, f.reason)
+                        }
+                    } else {
+                        "server close (no frame)".to_string()
+                    };
                     let _ = disc_tx.send(reason);
                     return;
                 }
@@ -542,13 +574,19 @@ async fn assemblyai_run_session(
     });
 
     let mut shutdown_rx = shutdown_tx.subscribe();
-    // AssemblyAI needs a continuous audio stream — send silence every 300ms if no audio,
-    // to keep the session alive during natural pauses. The main.rs pump also sends silence
-    // every 500ms, so this is double-defence.
-    let mut keepalive = tokio::time::interval(std::time::Duration::from_millis(300));
-    keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let silence_chunk = vec![0u8; 320]; // 10ms of 16kHz 16-bit silence
-    let mut audio_chunk_count: u64 = 0;
+
+    // AssemblyAI v3 requires each binary message to be 50–1000 ms of audio.
+    // At 16kHz 16-bit: 50ms = 1600 bytes, 100ms = 3200 bytes.
+    // We buffer incoming chunks (which may be as small as 10–30ms from CPAL)
+    // and flush in 3200-byte (100ms) blocks.
+    const SEND_BYTES: usize = 3200; // 100ms at 16kHz i16-LE
+    let mut send_buf: Vec<u8> = Vec::with_capacity(SEND_BYTES * 2);
+
+    // Flush timer: if audio arrives but hasn't filled a block yet, send what we have
+    // (padded to minimum) after 200ms. Also drives keepalive silence when no audio.
+    let mut flush_timer = tokio::time::interval(std::time::Duration::from_millis(200));
+    flush_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut send_count: u64 = 0;
 
     loop {
         while audio_rx.len() > MAX_BUFFERED_AUDIO_CHUNKS {
@@ -557,7 +595,11 @@ async fn assemblyai_run_session(
 
         tokio::select! {
             reason = &mut disc_rx => {
-                return SessionEnd::Reconnect(reason.unwrap_or_else(|_| "receiver task exited".to_string()));
+                let r = reason.unwrap_or_else(|_| "receiver task exited".to_string());
+                if let Some(fatal_msg) = r.strip_prefix("FATAL:") {
+                    return SessionEnd::Fatal(fatal_msg.to_string());
+                }
+                return SessionEnd::Reconnect(r);
             }
             _ = shutdown_rx.recv() => {
                 let _ = sink.send(Message::Text(r#"{"type":"Terminate"}"#.to_string().into())).await;
@@ -568,20 +610,48 @@ async fn assemblyai_run_session(
                 match chunk {
                     None => return SessionEnd::Shutdown,
                     Some(c) => {
-                        audio_chunk_count += 1;
-                        if audio_chunk_count % 500 == 0 {
-                            log(app, format!("[AssemblyAI] Audio pump: {} chunks sent", audio_chunk_count));
+                        send_buf.extend_from_slice(&c);
+                        // Drain full 100ms blocks as soon as they're ready.
+                        while send_buf.len() >= SEND_BYTES {
+                            let block: Vec<u8> = send_buf.drain(..SEND_BYTES).collect();
+                            send_count += 1;
+                            if send_count % 100 == 0 {
+                                log(app, format!("[AssemblyAI] Audio pump: {} blocks sent", send_count));
+                            }
+                            if sink.send(Message::Binary(block.into())).await.is_err() {
+                                return SessionEnd::Reconnect("audio send error".to_string());
+                            }
                         }
-                        if sink.send(Message::Binary(c.into())).await.is_err() {
-                            return SessionEnd::Reconnect("audio send error".to_string());
+                        // If the channel is now empty the speaker just stopped mid-block.
+                        // Flush immediately (padded to 50ms minimum) so AssemblyAI sees the
+                        // utterance end without waiting for the 200ms timer — this cuts latency
+                        // for short phrases like "Matthew 5 verse 12" from ~200ms to ~0ms.
+                        if audio_rx.is_empty() && !send_buf.is_empty() {
+                            if send_buf.len() < 1600 {
+                                send_buf.resize(1600, 0u8);
+                            }
+                            let block: Vec<u8> = send_buf.drain(..).collect();
+                            if sink.send(Message::Binary(block.into())).await.is_err() {
+                                return SessionEnd::Reconnect("audio send error".to_string());
+                            }
                         }
                     }
                 }
             }
-            _ = keepalive.tick() => {
-                // Only send silence keepalive if the audio channel has been quiet
-                if audio_rx.is_empty() {
-                    if sink.send(Message::Binary(silence_chunk.clone().into())).await.is_err() {
+            _ = flush_timer.tick() => {
+                if !send_buf.is_empty() {
+                    // Partial block still pending after 200ms — flush it now.
+                    if send_buf.len() < 1600 {
+                        send_buf.resize(1600, 0u8);
+                    }
+                    let block: Vec<u8> = send_buf.drain(..).collect();
+                    if sink.send(Message::Binary(block.into())).await.is_err() {
+                        return SessionEnd::Reconnect("flush send error".to_string());
+                    }
+                } else {
+                    // No audio at all — send 100ms of silence to keep the session alive.
+                    let silence = vec![0u8; SEND_BYTES];
+                    if sink.send(Message::Binary(silence.into())).await.is_err() {
                         return SessionEnd::Reconnect("keepalive send error".to_string());
                     }
                 }
@@ -590,11 +660,14 @@ async fn assemblyai_run_session(
     }
 }
 
+/// Returns `Some(fatal_reason)` if the message indicates a permanent server error
+/// that should stop reconnection attempts (e.g. invalid model, auth failure).
+/// Returns `None` for normal operational messages.
 fn parse_assemblyai_message(
     app: &AppHandle,
     v: &serde_json::Value,
     tx: &mpsc::UnboundedSender<StreamTranscript>,
-) {
+) -> Option<String> {
     let msg_type = v["type"].as_str().unwrap_or("");
     match msg_type {
         "Begin" => {
@@ -623,9 +696,18 @@ fn parse_assemblyai_message(
                 v["session_duration_seconds"].as_f64().unwrap_or(0.0),
             ));
         }
+        "error" | "Error" => {
+            let error_msg = v["error"].as_str()
+                .or_else(|| v["message"].as_str())
+                .unwrap_or("unknown server error");
+            log_err(app, format!("[AssemblyAI] Server error: {}", error_msg));
+            // Errors about model name, auth, or parameters are permanent — stop reconnecting.
+            return Some(error_msg.to_string());
+        }
         "" => {}
         other => {
             log_warn(app, format!("[AssemblyAI] Unknown message type: {} — {}", other, v));
         }
     }
+    None
 }
