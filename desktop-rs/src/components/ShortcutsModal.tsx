@@ -34,27 +34,36 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose 
 
   const groups = [
     {
-      title: "General Controls",
+      title: "Output Controls",
       shortcuts: [
-        { key: "ESC", desc: "Clear Live Output immediately" },
+        { key: "ESC", desc: "Clear Live Output" },
         { key: "Enter", desc: "Go Live with staged item" },
+        { key: "Ctrl + G", desc: "Go Live with staged item" },
+        { key: "Ctrl + B", desc: "Toggle Blackout (black screen)" },
+        { key: "Ctrl + L", desc: "Clear output (logo screen)" },
         { key: "Ctrl + O", desc: "Toggle Output Window" },
-        { key: "Ctrl + B", desc: "Toggle Blackout" },
-        { key: "Ctrl + T", desc: "Toggle Unified Bottom Deck" },
-        { key: "Ctrl + S", desc: "Toggle Settings Tab" },
-        { key: "?", desc: "Show this Shortcuts help" },
       ]
     },
     {
-      title: "Navigation",
+      title: "Schedule Navigation",
+      shortcuts: [
+        { key: "↓", desc: "Go Live with next schedule item" },
+        { key: "↑", desc: "Go Live with previous schedule item" },
+        { key: "→", desc: "Next slide / verse / song section" },
+        { key: "←", desc: "Previous slide / song section" },
+        { key: "Home", desc: "First slide of current item" },
+        { key: "End", desc: "Last slide of current item" },
+      ]
+    },
+    {
+      title: "Tab Navigation",
       shortcuts: [
         { key: "F1", desc: "Switch to Bible Tab" },
         { key: "F2", desc: "Switch to Songs Tab" },
         { key: "F3", desc: "Switch to Media Tab" },
         { key: "F5", desc: "Toggle Design Window" },
-        { key: "F6", desc: "Switch to Scenes Tab" },
-        { key: "F7", desc: "Switch to Scene Builder" },
-        { key: "F8", desc: "Switch to Props Tab" },
+        { key: "Ctrl + S", desc: "Open Settings Tab" },
+        { key: "Ctrl + T", desc: "Toggle Bottom Deck" },
       ]
     },
     {
@@ -62,13 +71,6 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose 
       shortcuts: [
         { key: "N", desc: "Stage Next Verse" },
         { key: "Ctrl + N", desc: "Go Live with Next Verse" },
-      ]
-    },
-    {
-      title: "Presentations & Slides",
-      shortcuts: [
-        { key: "→", desc: "Next Slide" },
-        { key: "←", desc: "Previous Slide" },
       ]
     },
     {
@@ -85,6 +87,13 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose 
         { key: "K", desc: "Play / Pause video" },
         { key: "R", desc: "Restart video" },
         { key: "M", desc: "Mute / Unmute video" },
+      ]
+    },
+    {
+      title: "General",
+      shortcuts: [
+        { key: "?", desc: "Show this Shortcuts reference" },
+        { key: "Space (hold)", desc: "Push-to-talk microphone" },
       ]
     }
   ];
@@ -115,12 +124,12 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose 
 
         <div className="flex-1 overflow-y-auto p-6 custom-scrollbar grid grid-cols-1 md:grid-cols-2 gap-x-8">
           <div className="space-y-2">
-            {groups.slice(0, 3).map((g, i) => (
+            {groups.slice(0, 4).map((g, i) => (
               <ShortcutGroup key={i} title={g.title} shortcuts={g.shortcuts} />
             ))}
           </div>
           <div className="space-y-2">
-            {groups.slice(3).map((g, i) => (
+            {groups.slice(4).map((g, i) => (
               <ShortcutGroup key={i} title={g.title} shortcuts={g.shortcuts} />
             ))}
           </div>

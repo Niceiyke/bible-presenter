@@ -39,6 +39,14 @@ export function TiptapEditor({ content, onChange, fontFamily, fontSize, color, t
       attributes: {
         class: 'prose prose-invert focus:outline-none max-w-none min-h-[100px] p-2 text-sm',
       },
+      // Stop ALL keydown events from reaching parent window handlers.
+      // This fixes spacebar, delete, and other keys being intercepted.
+      handleDOMEvents: {
+        keydown: (_view, event) => {
+          event.stopPropagation();
+          return false; // let Tiptap/ProseMirror handle the key normally
+        },
+      },
     },
   });
 

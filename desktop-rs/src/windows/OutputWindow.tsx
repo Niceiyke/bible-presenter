@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback } from "react";
+import React, { useEffect, useState, useRef, useCallback, useLayoutEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import type { DisplayItem, PropItem, PresentationSettings, LowerThirdData, LowerThirdTemplate } from "../types";
@@ -60,6 +60,10 @@ export function OutputWindow() {
   const [windowScale, setWindowScale] = useState(1);
   const isMounted = useRef(true);
 
+  // Auto-fit font size when verse splitting is disabled
+  const verseContainerRef = useRef<HTMLDivElement>(null);
+  const [fittedFontPt, setFittedFontPt] = useState<number | null>(null);
+
   // Cursor is hidden via CSS cursor-none on the root element
 
   // Calculate font scale based on current window height relative to 1080p reference
@@ -71,6 +75,64 @@ export function OutputWindow() {
     window.addEventListener("resize", updateScale);
     return () => window.removeEventListener("resize", updateScale);
   }, []);
+
+  // Auto-fit: binary-search the largest font size that fits without overflow
+  // Only active when verse splitting is disabled
+  useLayoutEffect(() => {
+    const isVerse = liveItem?.type === "Verse";
+    if (settings.auto_split_verses || !isVerse || !verseContainerRef.current) {
+      setFittedFontPt(null);
+      return;
+    }
+
+    const text = (liveItem as any).data.text as string;
+    const maxPt = settings.font_size * windowScale;
+    const fontFamily = settings.verse_font_family ?? "Georgia, serif";
+    const container = verseContainerRef.current;
+
+    // Reserve ~15% of height for reference tag + gaps
+    const availH = container.clientHeight * 0.80;
+    const availW = container.clientWidth - 128; // p-16 = 64px each side
+
+    if (availH <= 0 || availW <= 0) return;
+
+    const probe = document.createElement("p");
+    probe.style.cssText = [
+      "position:absolute",
+      "visibility:hidden",
+      "pointer-events:none",
+      `width:${availW}px`,
+      `font-family:${fontFamily}`,
+      "text-align:center",
+      "word-break:break-word",
+      "line-height:1.25",
+      "white-space:normal",
+    ].join(";");
+    container.appendChild(probe);
+
+    let lo = 10, hi = maxPt, best = 10;
+    for (let i = 0; i < 16; i++) {
+      const mid = (lo + hi) / 2;
+      probe.style.fontSize = `${mid}pt`;
+      probe.textContent = text;
+      if (probe.scrollHeight <= availH) {
+        best = mid;
+        lo = mid + 0.25;
+      } else {
+        hi = mid - 0.25;
+      }
+    }
+
+    container.removeChild(probe);
+    // Only apply if the text actually needs shrinking
+    setFittedFontPt(best < maxPt ? Math.floor(best) : null);
+  }, [
+    liveItem,
+    settings.auto_split_verses,
+    settings.font_size,
+    settings.verse_font_family,
+    windowScale,
+  ]);
 
   function sendOutputWs(obj: object) {
     if (outputWsRef.current?.readyState === WebSocket.OPEN) {
@@ -377,12 +439,21 @@ export function OutputWindow() {
   const refFontSize = settings.reference_font_size ?? 36;
   const refFontFamily = settings.reference_font_family ?? "Arial, sans-serif";
 
+  const cvFontSize = (settings.chapter_verse_font_size ?? refFontSize) * windowScale;
+  const cvFontFamily = settings.chapter_verse_font_family ?? refFontFamily;
+  const cvColor = settings.chapter_verse_color && settings.chapter_verse_color !== ""
+    ? settings.chapter_verse_color
+    : refColor;
+
   const ReferenceTag = liveItem?.type === "Verse" ? (
     <p
       className="uppercase tracking-widest font-bold shrink-0"
       style={{ color: refColor, fontSize: `${refFontSize * windowScale}pt`, fontFamily: refFontFamily }}
     >
-      {liveItem.data.book} {liveItem.data.chapter}:{liveItem.data.verse}
+      {liveItem.data.book}{" "}
+      <span style={{ fontSize: `${cvFontSize}pt`, fontFamily: cvFontFamily, color: cvColor }}>
+        {liveItem.data.chapter}:{liveItem.data.verse}
+      </span>
       {liveItem.data.version && (
         <span 
           className="font-normal ml-2" 
@@ -486,7 +557,7 @@ export function OutputWindow() {
             )}
           >
             {liveItem.type === "Verse" ? (
-              <div className="absolute inset-0 flex flex-col items-center justify-center p-16 text-center">
+              <div ref={verseContainerRef} className="absolute inset-0 flex flex-col items-center justify-center p-16 text-center">
                 <motion.div
                   className="w-full flex flex-col items-center gap-8"
                   initial={{ y: 20, opacity: 0 }}
@@ -499,7 +570,7 @@ export function OutputWindow() {
                       className="leading-tight drop-shadow-2xl"
                       style={{
                         color: colors.verseText,
-                        fontSize: `${settings.font_size * windowScale}pt`,
+                        fontSize: `${(fittedFontPt ?? (settings.font_size * windowScale))}pt`,
                         fontFamily: settings.verse_font_family ?? "Georgia, serif",
                       }}
                     >
