@@ -231,7 +231,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
               <button
                 onClick={handleDisplaySelection}
                 disabled={!selectedBook}
-                className="bg-slate-700 hover:bg-slate-600 text-white font-bold py-2 rounded-lg transition-all text-xs disabled:opacity-30"
+                className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2 rounded-lg transition-all text-xs disabled:opacity-30"
               >
                 STAGE
               </button>
@@ -276,7 +276,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
             {activeChapter ? (
               <>
                 <div className="flex items-center justify-between mb-2 px-1">
-                  <p className="text-[10px] font-black text-amber-500 uppercase">
+                  <p className="text-[10px] font-mono font-black text-amber-500 uppercase">
                     {activeChapter.book} {activeChapter.chapter} ({activeChapter.version})
                   </p>
                   {loadingChapter && <span className="text-[10px] text-slate-600 animate-pulse">Loading...</span>}
@@ -306,7 +306,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                         onClick={() => onStage({ type: "Verse", data: v })}
                       >
                         <div className="flex gap-2">
-                          <span className={`text-[10px] font-black shrink-0 ${isStaged ? "text-amber-500" : isLive ? "text-red-500" : "text-slate-600"}`}>
+                          <span className={`text-[10px] font-mono font-black shrink-0 ${isStaged ? "text-amber-500" : isLive ? "text-red-500" : "text-slate-600"}`}>
                             {v.verse}
                           </span>
                           <p className={`text-[11px] leading-snug ${isStaged ? "text-slate-200" : isLive ? "text-white font-medium" : "text-slate-400 group-hover:text-slate-300"}`}>
@@ -387,7 +387,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                           <div className="flex-1 min-w-0">
                             {item.type === "Verse" ? (
                               <p className="text-xs truncate">
-                                <span className="text-amber-500/80 font-bold">{item.data.book} {item.data.chapter}:{item.data.verse}</span>
+                                <span className="text-amber-500/80 font-mono font-bold">{item.data.book} {item.data.chapter}:{item.data.verse}</span>
                                 <span className="text-slate-600 ml-1 text-[10px]">{item.data.version}</span>
                               </p>
                             ) : (
@@ -487,7 +487,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
               {searchResults.map((v: any) => (
                 <div key={`${v.version}-${v.book}-${v.chapter}-${v.verse}`} className="p-3 rounded-lg bg-slate-800/50 border border-transparent hover:border-slate-700 transition-all group">
                   <div className="flex justify-between items-start mb-1">
-                    <p className="text-amber-500 text-xs font-bold uppercase">{v.book} {v.chapter}:{v.verse} <span className="text-slate-500 font-normal normal-case">{v.version}</span></p>
+                    <p className="text-amber-500 font-mono text-xs font-bold uppercase">{v.book} {v.chapter}:{v.verse} <span className="text-slate-500 font-normal normal-case font-sans">{v.version}</span></p>
                     {v.score !== undefined && (
                       <div className="flex items-center gap-1">
                         <div className="w-12 h-1 bg-slate-700 rounded-full overflow-hidden">
@@ -502,9 +502,9 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                   </div>
                   <p className="text-slate-300 text-xs mb-2 line-clamp-2">{v.text}</p>
                   <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-all">
-                    <button onClick={() => onStage({ type: "Verse", data: v })} className="flex-1 bg-slate-600 hover:bg-slate-500 text-white text-[10px] font-bold py-1 rounded transition-all">STAGE</button>
+                    <button onClick={() => onStage({ type: "Verse", data: v })} className="flex-1 bg-slate-800 hover:bg-slate-700 text-white text-[10px] font-bold py-1 rounded transition-all">STAGE</button>
                     <button onClick={() => onLive({ type: "Verse", data: v })} className="flex-1 bg-amber-500 hover:bg-amber-400 text-black text-[10px] font-bold py-1 rounded transition-all">DISPLAY</button>
-                    <button onClick={() => onAddToSchedule({ type: "Verse", data: v })} className="px-2 bg-slate-700 hover:bg-slate-600 text-amber-500 text-[10px] font-bold py-1 rounded transition-all flex items-center" title="Add to schedule"><Plus size={11} /></button>
+                    <button onClick={() => onAddToSchedule({ type: "Verse", data: v })} className="px-2 bg-slate-800 hover:bg-slate-700 text-amber-500 text-[10px] font-bold py-1 rounded transition-all flex items-center" title="Add to schedule"><Plus size={11} /></button>
                   </div>
                 </div>
               ))}

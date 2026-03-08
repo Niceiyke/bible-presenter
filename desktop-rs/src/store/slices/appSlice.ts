@@ -19,8 +19,8 @@ export interface AppSlice {
   setIsSchedulePersistent: (v: boolean) => void;
   bottomDeckOpen: boolean;
   setBottomDeckOpen: (v: boolean) => void;
-  bottomDeckMode: "live-lt" | "timer";
-  setBottomDeckMode: (v: "live-lt" | "timer") => void;
+  bottomDeckMode: "live-lt" | "timer" | "transcript" | "audio";
+  setBottomDeckMode: (v: "live-lt" | "timer" | "transcript" | "audio") => void;
   topPanelPct: number;
   setTopPanelPct: (v: number | ((prev: number) => number)) => void;
   stagePct: number;
@@ -29,6 +29,10 @@ export interface AppSlice {
   setAppDataDir: (v: string | null) => void;
   isInitialized: boolean;
   setIsInitialized: (v: boolean) => void;
+  outputVisible: boolean;
+  setOutputVisible: (v: boolean | ((prev: boolean) => boolean)) => void;
+  showShortcuts: boolean;
+  setShowShortcuts: (v: boolean | ((prev: boolean) => boolean)) => void;
 }
 
 export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) => ({
@@ -58,4 +62,8 @@ export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) =>
   setAppDataDir: (v) => set({ appDataDir: v }),
   isInitialized: false,
   setIsInitialized: (v) => set({ isInitialized: v }),
+  outputVisible: false,
+  setOutputVisible: (v) => set((s) => ({ outputVisible: typeof v === "function" ? v(s.outputVisible) : v })),
+  showShortcuts: false,
+  setShowShortcuts: (v) => set((s) => ({ showShortcuts: typeof v === "function" ? v(s.showShortcuts) : v })),
 });

@@ -29,6 +29,7 @@ export function PreviewCard({
   badge,
   empty,
   isLocalPreview = false,
+  hideHeader = false,
 }: {
   item: DisplayItem | null;
   label: string;
@@ -38,6 +39,8 @@ export function PreviewCard({
   /** When true, video controls act on the local preview element only (stage panel).
    *  When false (default), controls emit media-control events to the output window. */
   isLocalPreview?: boolean;
+  /** When true, suppresses the label/badge header row entirely. */
+  hideHeader?: boolean;
 }) {
   const { appDataDir } = useAppStore();
   const isVideo = item?.type === "Media" && (item.data as MediaItem).media_type === "Video";
@@ -152,10 +155,12 @@ export function PreviewCard({
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <div className="flex justify-between items-center mb-3 shrink-0">
-        <h2 className={`text-xs font-bold uppercase tracking-widest ${accent}`}>{label}</h2>
-        {badge}
-      </div>
+      {!hideHeader && (
+        <div className="flex justify-between items-center mb-3 shrink-0">
+          <h2 className={`text-xs font-bold uppercase tracking-widest ${accent}`}>{label}</h2>
+          {badge}
+        </div>
+      )}
       <div
         className={`flex-1 flex flex-col items-center justify-center bg-black/40 rounded-2xl border border-slate-800 text-center min-h-0 relative group ${
           item?.type === "Media" || item?.type === "CameraFeed" ? "p-0 overflow-hidden" : "p-6"
@@ -174,7 +179,7 @@ export function PreviewCard({
                 <p className="text-xl font-serif text-slate-300 leading-snug line-clamp-5">
                   {item.data.text}
                 </p>
-                <p className="text-amber-500 font-bold uppercase tracking-widest text-sm shrink-0">
+                <p className="text-amber-500 font-mono font-bold uppercase tracking-widest text-sm shrink-0">
                   {item.data.book} {item.data.chapter}:{item.data.verse}
                 </p>
               </div>

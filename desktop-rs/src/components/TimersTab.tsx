@@ -79,7 +79,7 @@ export function TimersTab({ onStage, onLive }: TimersTabProps) {
                 <input
                   type="number" min={0} max={max} value={val}
                   onChange={(e) => (setter as any)((prev: number) => parseInt(e.target.value) || 0)}
-                  className="w-full bg-slate-800 text-slate-200 text-center text-sm rounded border border-slate-700 py-1"
+                  className="w-full bg-slate-800 text-slate-200 text-center font-mono text-sm rounded border border-slate-700 py-1"
                 />
               </div>
             ))}
