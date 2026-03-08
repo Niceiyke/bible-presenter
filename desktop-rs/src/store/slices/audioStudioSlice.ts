@@ -24,6 +24,7 @@ export interface AudioStudioSlice {
   isTrimming: boolean;
   micLevel: number;
   transMode: "local" | "cloud";
+  error: string | null;
   
   // Actions
   setRecordings: (recordings: Recording[]) => void;
@@ -36,6 +37,7 @@ export interface AudioStudioSlice {
   setIsTrimming: (v: boolean) => void;
   setMicLevel: (v: number) => void;
   setTransMode: (v: "local" | "cloud") => void;
+  setError: (v: string | null) => void;
   
   // Async Actions
   fetchRecordings: (autoSelectId?: string) => Promise<void>;
@@ -59,6 +61,7 @@ export const createAudioStudioSlice: StateCreator<AppStore, [], [], AudioStudioS
   isTrimming: false,
   micLevel: 0,
   transMode: "local",
+  error: null,
 
   setRecordings: (recordings) => set({ recordings }),
   setSelectedRecording: (recording) => set({ selectedRecording: recording }),
@@ -70,6 +73,7 @@ export const createAudioStudioSlice: StateCreator<AppStore, [], [], AudioStudioS
   setIsTrimming: (isTrimming) => set({ isTrimming }),
   setMicLevel: (micLevel) => set({ micLevel }),
   setTransMode: (transMode) => set({ transMode }),
+  setError: (error) => set({ error }),
 
   fetchRecordings: async (autoSelectId) => {
     try {

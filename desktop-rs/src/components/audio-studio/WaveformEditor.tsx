@@ -5,7 +5,7 @@ import {
   ZoomIn, ZoomOut, RotateCcw, Trash2
 } from "lucide-react";
 import WaveSurfer from "wavesurfer.js";
-import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.esm.js";
+import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
 import { useAppStore } from "../../store";
 
 export function WaveformEditor() {
@@ -16,8 +16,13 @@ export function WaveformEditor() {
     handleRenameRecording,
     isTrimming,
     setIsTrimming,
-    handleDeleteRecording
+    handleDeleteRecording,
+    setError
   } = useAppStore();
+
+  useEffect(() => {
+    console.log("Selected Recording in WaveformEditor:", selectedRecording);
+  }, [selectedRecording]);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isWaveformLoading, setIsWaveformLoading] = useState(false);
@@ -32,13 +37,21 @@ export function WaveformEditor() {
   const regionsRef = useRef<any>(null);
 
   useEffect(() => {
-    if (!wavesurferRef.current || !selectedRecording) return;
+    if (!wavesurferRef.current || !selectedRecording) {
+      console.warn("WaveSurfer container or recording missing", { 
+        container: !!wavesurferRef.current, 
+        recording: !!selectedRecording 
+      });
+      return;
+    }
 
+    const container = wavesurferRef.current;
     setIsWaveformLoading(true);
-    const url = convertFileSrc(selectedRecording.path) + `?t=${Date.now()}`;
+    const url = convertFileSrc(selectedRecording.path);
+    console.log("WaveSurfer initialization starting for URL:", url);
 
     const ws = WaveSurfer.create({
-      container: wavesurferRef.current,
+      container,
       waveColor: '#4f46e5',
       progressColor: '#818cf8',
       cursorColor: '#f59e0b',
@@ -47,34 +60,43 @@ export function WaveformEditor() {
       height: 160,
       normalize: true,
       url,
-      plugins: [],
+      plugins: [RegionsPlugin.create()],
     });
 
-    const regions = ws.registerPlugin(RegionsPlugin.create());
+    // Access the regions plugin instance safely
+    const activePlugins = ws.getActivePlugins();
+    const regions = activePlugins.find(p => p.constructor.name === 'RegionsPlugin' || 'addRegion' in p) as any;
     regionsRef.current = regions;
 
     ws.on('play', () => setIsPlaying(true));
     ws.on('pause', () => setIsPlaying(false));
     ws.on('finish', () => setIsPlaying(false));
     ws.on('ready', () => {
+      console.log("WaveSurfer Ready, duration:", ws.getDuration());
       setIsWaveformLoading(false);
       setDuration(ws.getDuration());
       
-      // Initialize with a default region for the whole file
-      regions.addRegion({
-        start: 0,
-        end: ws.getDuration(),
-        color: 'rgba(79, 70, 229, 0.2)',
-        drag: true,
-        resize: true,
-      });
+      if (regions) {
+        regions.addRegion({
+          start: 0,
+          end: ws.getDuration(),
+          color: 'rgba(79, 70, 229, 0.2)',
+          drag: true,
+          resize: true,
+        });
+      }
     });
-    ws.on('error', () => setIsWaveformLoading(false));
+    ws.on('error', (err) => {
+      console.error("WaveSurfer Detailed Error:", err);
+      setIsWaveformLoading(false);
+      setError("Failed to load audio: " + err);
+    });
     ws.on('timeupdate', (time) => setCurrentTime(time));
 
     wsInstance.current = ws;
 
     return () => {
+      console.log("Cleaning up WaveSurfer instance...");
       if (wsInstance.current) {
         wsInstance.current.destroy();
         wsInstance.current = null;
@@ -105,9 +127,9 @@ export function WaveformEditor() {
       });
       setSelectedRecording({ ...selectedRecording, _ts: Date.now() });
       fetchRecordings();
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert("Trim failed: " + err);
+      setError("Trim failed: " + err);
     } finally {
       setIsTrimming(false);
     }
@@ -133,12 +155,12 @@ export function WaveformEditor() {
         id: selectedRecording.id, 
         startSec: region.start, 
         endSec: region.end,
-        save_as: newName // Hypothetical parameter
+        new_id: newName // Corrected parameter
       });
       fetchRecordings();
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert("Save As failed. This feature might require backend updates.");
+      setError("Save As failed: " + err);
     } finally {
       setIsTrimming(false);
     }

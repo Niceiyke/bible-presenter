@@ -1,11 +1,14 @@
 import React, { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Mic } from "lucide-react";
+import { AnimatePresence } from "framer-motion";
 import { useAppStore } from "../store";
 import { AudioHeader } from "../components/audio-studio/AudioHeader";
 import { AudioSidebar } from "../components/audio-studio/AudioSidebar";
 import { WaveformEditor } from "../components/audio-studio/WaveformEditor";
 import { TranscriptPanel } from "../components/audio-studio/TranscriptPanel";
+import { LiveRecordingView } from "../components/audio-studio/LiveRecordingView";
+import { Toast } from "../components/Toast";
 
 export function AudioStudio() {
   const { 
@@ -15,8 +18,11 @@ export function AudioStudio() {
     setMicLevel, 
     setIsImporting,
     setIsTranscribing,
-    setSelectedRecording
+    isRecording,
+    error,
+    setError
   } = useAppStore();
+
 
   useEffect(() => {
     fetchRecordings();
@@ -55,7 +61,9 @@ export function AudioStudio() {
     });
 
     const decayInterval = setInterval(() => {
-      setMicLevel((prev: number) => (prev > 0.01 ? prev * 0.85 : 0));
+      // Use useAppStore.getState() to get the freshest value without adding it to dependency array
+      const currentLevel = useAppStore.getState().micLevel;
+      setMicLevel(currentLevel > 0.01 ? currentLevel * 0.85 : 0);
     }, 50);
 
     return () => {
@@ -70,15 +78,20 @@ export function AudioStudio() {
 
   return (
     <div className="h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden select-none">
+      <AnimatePresence>
+        {error && <Toast message={error} onDone={() => setError(null)} />}
+      </AnimatePresence>
       <AudioHeader />
 
       <main className="flex-1 flex overflow-hidden">
         <AudioSidebar />
 
         <section className="flex-1 flex flex-col bg-slate-950 relative overflow-hidden">
-          {selectedRecording ? (
+          {isRecording ? (
+            <LiveRecordingView />
+          ) : selectedRecording ? (
             <div className="h-full flex flex-col p-8 overflow-hidden">
-              <WaveformEditor />
+              <WaveformEditor key={selectedRecording.id} />
               <div className="flex-1 mt-6 overflow-hidden flex flex-col">
                 <TranscriptPanel />
               </div>

@@ -1822,11 +1822,14 @@ async fn transcribe_studio_recording(app: AppHandle, state: State<'_, AppState>,
 }
 
 #[tauri::command]
-async fn trim_studio_recording(state: State<'_, AppState>, id: String, start_sec: f32, end_sec: f32) -> Result<(), String> {
+async fn trim_studio_recording(state: State<'_, AppState>, id: String, start_sec: f32, end_sec: f32, new_id: Option<String>) -> Result<(), String> {
     let path = state.app_data_dir.join("recordings").join(format!("{}.wav", id));
     if !path.exists() {
         return Err("Recording not found".to_string());
     }
+
+    let target_id = new_id.unwrap_or_else(|| id.clone());
+    let target_path = state.app_data_dir.join("recordings").join(format!("{}.wav", target_id));
 
     let mut reader = hound::WavReader::open(&path).map_err(|e| e.to_string())?;
     let spec = reader.spec();
@@ -1840,7 +1843,7 @@ async fn trim_studio_recording(state: State<'_, AppState>, id: String, start_sec
         .map(|s| s.unwrap_or(0))
         .collect();
     
-    // Drop reader so we can overwrite the file
+    // Drop reader so we can overwrite the file if target_path == path
     drop(reader);
 
     if start_sample >= end_sample || end_sample as usize > samples.len() {
@@ -1849,8 +1852,7 @@ async fn trim_studio_recording(state: State<'_, AppState>, id: String, start_sec
 
     let trimmed_samples = &samples[start_sample as usize..end_sample as usize];
 
-    // Overwrite the file with trimmed version
-    let mut writer = hound::WavWriter::create(&path, spec).map_err(|e| e.to_string())?;
+    let mut writer = hound::WavWriter::create(&target_path, spec).map_err(|e| e.to_string())?;
     for &s in trimmed_samples {
         writer.write_sample(s).map_err(|e| e.to_string())?;
     }
@@ -3043,6 +3045,13 @@ fn atomic_write(path: &PathBuf, content: String) -> std::io::Result<()> {
     Ok(())
 }
 
+#[tauri::command]
+async fn save_studio_recording_transcript(state: State<'_, AppState>, id: String, text: String) -> Result<(), String> {
+    let txt_path = state.app_data_dir.join("recordings").join(format!("{}.txt", id));
+    fs::write(txt_path, text).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -3368,6 +3377,7 @@ fn main() {
             delete_studio_recording,
             rename_studio_recording,
             get_studio_recording_transcript,
+            save_studio_recording_transcript,
             transcribe_studio_recording,
             trim_studio_recording,
             start_studio_recording,
