@@ -4,6 +4,7 @@ import { createLiveSlice, LiveSlice } from "./slices/liveSlice";
 import { createBibleSlice, BibleSlice } from "./slices/bibleSlice";
 import { createMediaSlice, MediaSlice } from "./slices/mediaSlice";
 import { createStudioSlice, StudioSlice } from "./slices/studioSlice";
+import { createAudioStudioSlice, AudioStudioSlice } from "./slices/audioStudioSlice";
 import { createLowerThirdSlice, LowerThirdSlice } from "./slices/lowerThirdSlice";
 import { createServiceSlice, ServiceSlice } from "./slices/serviceSlice";
 import { createTimerSlice, TimerSlice } from "./slices/timerSlice";
@@ -17,6 +18,7 @@ export type AppStore = AppSlice &
   BibleSlice &
   MediaSlice &
   StudioSlice &
+  AudioStudioSlice &
   LowerThirdSlice &
   ServiceSlice &
   TimerSlice &
@@ -31,6 +33,7 @@ export const useAppStore = create<AppStore>()((...a) => ({
   ...createBibleSlice(...a),
   ...createMediaSlice(...a),
   ...createStudioSlice(...a),
+  ...createAudioStudioSlice(...a),
   ...createLowerThirdSlice(...a),
   ...createServiceSlice(...a),
   ...createTimerSlice(...a),
