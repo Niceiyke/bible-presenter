@@ -10,17 +10,19 @@ function QuickBiblePicker() {
   const [bookQuery, setBookQuery] = useState('');
   const [lockedBook, setLockedBook] = useState<string | null>(null);
   const [cvText, setCvText] = useState('');
-  const [suggestions, setSuggestions] = useState<string[]>([]);
   const [activeSuggIdx, setActiveSuggIdx] = useState(0);
   const bookInputRef = useRef<HTMLInputElement>(null);
   const cvInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    if (!bookQuery.trim()) { setSuggestions([]); return; }
+  const suggestions = useMemo(() => {
+    if (!bookQuery.trim()) return [];
     const q = bookQuery.toLowerCase();
-    setSuggestions(books.filter(b => b.toLowerCase().includes(q)).slice(0, 6));
-    setActiveSuggIdx(0);
+    return books.filter(b => b.toLowerCase().includes(q)).slice(0, 6);
   }, [bookQuery, books]);
+
+  useEffect(() => {
+    setTimeout(() => setActiveSuggIdx(0), 0);
+  }, [suggestions]);
 
   const confirmBook = (book: string) => {
     setLockedBook(book); setBookQuery(''); setSuggestions([]);
@@ -160,7 +162,7 @@ export function BiblePage() {
 
   useEffect(() => {
     if (searching && searchResults.length !== prevLen.current) {
-      setSearching(false);
+      setTimeout(() => setSearching(false), 0);
       prevLen.current = searchResults.length;
     }
   }, [searching, searchResults]);

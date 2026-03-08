@@ -20,7 +20,7 @@ export function TimerPage() {
     if (intervalRef.current) clearInterval(intervalRef.current);
 
     if (!timer) {
-      setDisplay('--:--');
+      setTimeout(() => setDisplay('--:--'), 0);
       return;
     }
 

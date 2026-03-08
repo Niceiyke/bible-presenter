@@ -349,7 +349,7 @@ export function AudioStudio() {
 
             <div className="flex items-center justify-between">
               <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-500">History</h2>
-              <button onClick={fetchRecordings} className="text-slate-500 hover:text-white transition-colors">
+              <button onClick={() => fetchRecordings()} className="text-slate-500 hover:text-white transition-colors">
                 <RefreshCw size={14} />
               </button>
             </div>

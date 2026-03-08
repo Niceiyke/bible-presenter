@@ -144,7 +144,7 @@ export function LyricsPage() {
               const dx = e.changedTouches[0].clientX - touchX.current;
               const dy = e.changedTouches[0].clientY - touchY.current;
               if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy)) return;
-              dx < 0 ? nextLine() : prevLine();
+              if (dx < 0) nextLine(); else prevLine();
             }}
           >
             {!line1 ? (

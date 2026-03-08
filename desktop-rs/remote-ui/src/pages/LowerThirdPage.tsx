@@ -3,11 +3,11 @@ import { Eye, EyeOff, Plus, Trash2, ChevronDown, ChevronUp } from 'lucide-react'
 import { ws } from '../api/wsClient';
 import { useLiveStore } from '../stores/liveStore';
 import { Card, CardLabel, Input, Segment } from '../components/ui';
-import type { LtPreset } from '../api/types';
+import type { LtPreset, LtTemplate } from '../api/types';
 
 type LtMode = 'nameplate' | 'freetext';
 
-const DEFAULT_TEMPLATE = {
+const DEFAULT_TEMPLATE: LtTemplate = {
   bgType: 'gradient', bgColor: '#000000', bgOpacity: 85, bgGradientEnd: '#141428',
   bgBlur: false, bgBlurAmount: 8,
   accentSide: 'left', accentColor: '#f59e0b', accentWidth: 4, accentEnabled: true,
@@ -23,8 +23,8 @@ const DEFAULT_TEMPLATE = {
 // ── Preset row ────────────────────────────────────────────────────────────────
 function PresetRow({ preset, templates, currentTemplate, onDelete }: { 
   preset: LtPreset; 
-  templates: any[]; 
-  currentTemplate: object; 
+  templates: LtTemplate[]; 
+  currentTemplate: LtTemplate; 
   onDelete: (id: string) => void 
 }) {
   const isNameplate = preset.data.kind === 'Nameplate';
@@ -132,7 +132,7 @@ export function LowerThirdPage() {
     
     let tpl_id: string | undefined = undefined;
     if (saveTemplateIdx !== null && ltTemplates[saveTemplateIdx]) {
-      tpl_id = (ltTemplates[saveTemplateIdx] as any).id;
+      tpl_id = (ltTemplates[saveTemplateIdx] as LtTemplate).id;
     }
 
     const preset: LtPreset = {
@@ -342,7 +342,7 @@ export function LowerThirdPage() {
                           : { borderColor: 'var(--border)', color: 'var(--muted)', background: 'transparent' }
                         }
                       >
-                        {(t as any).name ?? `Style ${i+1}`}
+                        {ltTemplates[i].name ?? `Style ${i+1}`}
                       </button>
                     ))}
                   </div>
@@ -370,9 +370,6 @@ export function LowerThirdPage() {
           </div>
         )}
       </Card>
-    </div>
-  );
-}
     </div>
   );
 }
