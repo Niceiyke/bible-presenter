@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
+import { readFile } from "@tauri-apps/plugin-fs";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import {
   Play, Pause, Scissors, RefreshCw, RotateCcw,
@@ -38,74 +39,101 @@ export function WaveformEditor() {
   const regionsRef     = useRef<any>(null);
   const audioRef       = useRef<HTMLAudioElement | null>(null);
   const initTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Blob URL created from the FS-plugin read — must be revoked on cleanup
+  const blobUrlRef     = useRef<string | null>(null);
 
   const isLargeFile = (selectedRecording?.size_mb ?? 0) > WAVEFORM_SIZE_LIMIT_MB;
 
+  const revokeBlobUrl = () => {
+    if (blobUrlRef.current) { URL.revokeObjectURL(blobUrlRef.current); blobUrlRef.current = null; }
+  };
+
   // ── WaveSurfer init ────────────────────────────────────────────────────────
-  // setTimeout(fn,0) survives React 18 StrictMode double-invoke: cleanup
-  // cancels the timeout before WaveSurfer is ever created.
+  // We read the file through the Tauri FS plugin (readFile) and feed WaveSurfer
+  // a blob: URL. This bypasses convertFileSrc / the asset protocol entirely,
+  // which fails on some Linux/WebKitGTK builds even for valid local files.
+  //
+  // setTimeout(fn,0) also survives React 18 StrictMode double-invoke: the
+  // cleanup cancels the timeout before WaveSurfer is ever created.
   useEffect(() => {
     if (!wavesurferRef.current || !selectedRecording?.path || isLargeFile) return;
 
     const container = wavesurferRef.current;
-    const url = convertFileSrc(selectedRecording.path);
+    const filePath  = selectedRecording.path;
 
-    if (wsInstance.current) {
-      wsInstance.current.destroy();
-      wsInstance.current = null;
-    }
+    if (wsInstance.current) { wsInstance.current.destroy(); wsInstance.current = null; }
+    revokeBlobUrl();
 
     initTimeoutRef.current = setTimeout(() => {
       if (!container) return;
       setIsWaveformLoading(true);
-      try {
-        const regions = RegionsPlugin.create();
-        regionsRef.current = regions;
 
-        const ws = WaveSurfer.create({
-          container,
-          waveColor: "#f59e0b",
-          progressColor: "#d97706",
-          cursorColor: "#fbbf24",
-          barWidth: 2,
-          barRadius: 2,
-          height: 80,
-          url,
-          plugins: [regions],
-        });
-
-        ws.on("play",   () => setIsPlaying(true));
-        ws.on("pause",  () => setIsPlaying(false));
-        ws.on("finish", () => setIsPlaying(false));
-        ws.on("ready",  () => {
+      // Async IIFE so we can await readFile inside setTimeout
+      (async () => {
+        let url: string;
+        try {
+          const bytes = await readFile(filePath);
+          const blob  = new Blob([bytes], { type: "audio/wav" });
+          url = URL.createObjectURL(blob);
+          blobUrlRef.current = url;
+        } catch (e) {
+          console.error("Failed to read audio file:", e);
           setIsWaveformLoading(false);
-          setDuration(ws.getDuration());
-          regions.addRegion({
-            start: 0,
-            end: ws.getDuration(),
-            color: "rgba(245,158,11,0.12)",
-            drag: true,
-            resize: true,
+          setError("Could not read audio file from disk.");
+          return;
+        }
+
+        try {
+          const regions = RegionsPlugin.create();
+          regionsRef.current = regions;
+
+          const ws = WaveSurfer.create({
+            container,
+            waveColor: "#f59e0b",
+            progressColor: "#d97706",
+            cursorColor: "#fbbf24",
+            barWidth: 2,
+            barRadius: 2,
+            height: 80,
+            url,
+            plugins: [regions],
           });
-        });
-        ws.on("error", (err) => {
-          console.error("WaveSurfer error:", err);
+
+          ws.on("play",   () => setIsPlaying(true));
+          ws.on("pause",  () => setIsPlaying(false));
+          ws.on("finish", () => setIsPlaying(false));
+          ws.on("ready",  () => {
+            setIsWaveformLoading(false);
+            setDuration(ws.getDuration());
+            regions.addRegion({
+              start: 0,
+              end: ws.getDuration(),
+              color: "rgba(245,158,11,0.12)",
+              drag: true,
+              resize: true,
+            });
+          });
+          ws.on("error", (err) => {
+            console.error("WaveSurfer error:", err);
+            setIsWaveformLoading(false);
+            if (wsInstance.current === ws) {
+              setError("Failed to decode audio. Try re-importing or re-recording.");
+            }
+          });
+          ws.on("timeupdate", (t) => setCurrentTime(t));
+          wsInstance.current = ws;
+        } catch (e) {
+          console.error("WaveSurfer init failed:", e);
           setIsWaveformLoading(false);
-          if (wsInstance.current === ws) {
-            setError("Failed to load audio — file may be corrupted.");
-          }
-        });
-        ws.on("timeupdate", (t) => setCurrentTime(t));
-        wsInstance.current = ws;
-      } catch (e) {
-        console.error("WaveSurfer init failed:", e);
-        setIsWaveformLoading(false);
-      }
+          setError("Waveform initialisation failed.");
+        }
+      })();
     }, 0);
 
     return () => {
       if (initTimeoutRef.current) { clearTimeout(initTimeoutRef.current); initTimeoutRef.current = null; }
       if (wsInstance.current)     { wsInstance.current.destroy(); wsInstance.current = null; }
+      revokeBlobUrl();
     };
   }, [selectedRecording?.path, selectedRecording?._ts, isLargeFile]);
 
@@ -114,11 +142,22 @@ export function WaveformEditor() {
     wsInstance.current?.zoom(zoomLevel);
   }, [zoomLevel]);
 
-  // Large-file fallback <audio> src
+  // Large-file fallback <audio> src — also uses readFile to avoid asset
+  // protocol issues on Linux/WebKitGTK.
   useEffect(() => {
     if (!isLargeFile || !selectedRecording?.path || !audioRef.current) return;
-    audioRef.current.src = convertFileSrc(selectedRecording.path);
-    audioRef.current.load();
+    const el = audioRef.current;
+    readFile(selectedRecording.path).then((bytes) => {
+      const blob = new Blob([bytes], { type: "audio/wav" });
+      const url  = URL.createObjectURL(blob);
+      el.src = url;
+      el.load();
+      // Revoke once the element has loaded enough to play
+      el.oncanplay = () => { URL.revokeObjectURL(url); el.oncanplay = null; };
+    }).catch((e) => {
+      console.error("Failed to load large audio file:", e);
+      setError("Could not read audio file from disk.");
+    });
   }, [selectedRecording?.path, isLargeFile]);
 
   // ── Handlers ───────────────────────────────────────────────────────────────
