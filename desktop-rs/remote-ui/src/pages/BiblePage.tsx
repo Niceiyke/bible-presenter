@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { Search, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { ws } from '../api/wsClient';
 import { useBibleStore } from '../stores/bibleStore';
@@ -25,12 +25,12 @@ function QuickBiblePicker() {
   }, [suggestions]);
 
   const confirmBook = (book: string) => {
-    setLockedBook(book); setBookQuery(''); setSuggestions([]);
+    setLockedBook(book); setBookQuery('');
     setTimeout(() => cvInputRef.current?.focus(), 40);
   };
 
   const clearBook = () => {
-    setLockedBook(null); setCvText(''); setSuggestions([]);
+    setLockedBook(null); setCvText('');
     setTimeout(() => bookInputRef.current?.focus(), 40);
   };
 
@@ -39,7 +39,7 @@ function QuickBiblePicker() {
     else if (e.key === 'ArrowUp') { e.preventDefault(); setActiveSuggIdx(i => Math.max(i - 1, 0)); }
     else if ((e.key === ' ' || e.key === 'Tab' || e.key === 'Enter') && suggestions.length > 0) {
       e.preventDefault(); confirmBook(suggestions[activeSuggIdx]);
-    } else if (e.key === 'Escape') { setSuggestions([]); setBookQuery(''); }
+    } else if (e.key === 'Escape') { setBookQuery(''); }
   };
 
   const handleCvKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -108,7 +108,7 @@ function QuickBiblePicker() {
           className="absolute top-full left-0 right-0 mt-2 rounded-2xl shadow-2xl z-[70] overflow-hidden anim-slide-up"
           style={{ background: 'var(--elevated)', border: '1px solid var(--border-hi)' }}
         >
-          {suggestions.map((book, i) => (
+          {suggestions.map((book: string, i: number) => (
             <button
               key={book}
               onMouseDown={e => { e.preventDefault(); confirmBook(book); }}

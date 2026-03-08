@@ -332,7 +332,7 @@ export function LowerThirdPage() {
                         : { borderColor: 'var(--border)', color: 'var(--muted)', background: 'transparent' }
                       }
                     >Default</button>
-                    {ltTemplates.map((t, i) => (
+                    {ltTemplates.map((_, i) => (
                       <button
                         key={i}
                         onClick={() => setSaveTemplateIdx(i)}

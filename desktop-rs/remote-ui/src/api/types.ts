@@ -79,6 +79,7 @@ export type LowerThirdData =
   | { kind: 'FreeText';  data: LowerThirdFreeText };
 
 export interface LtTemplate {
+  id?: string;
   name?: string;
   [key: string]: unknown;
 }
