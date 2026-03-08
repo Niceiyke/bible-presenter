@@ -21,6 +21,8 @@ export interface LowerThirdSlice {
   setLtTitle: (v: string) => void;
   ltFreeText: string;
   setLtFreeText: (v: string) => void;
+  currentLowerThird: { data: any; template: any } | null;
+  setCurrentLowerThird: (v: { data: any; template: any } | null) => void;
   ltSongId: string | null;
   setLtSongId: (v: string | null) => void;
   ltLineIndex: number;
@@ -68,6 +70,8 @@ export const createLowerThirdSlice: StateCreator<AppStore, [], [], LowerThirdSli
   setLtTitle: (v) => set({ ltTitle: v }),
   ltFreeText: "",
   setLtFreeText: (v) => set({ ltFreeText: v }),
+  currentLowerThird: null,
+  setCurrentLowerThird: (v) => set({ currentLowerThird: v }),
   ltSongId: null,
   setLtSongId: (v) => set({ ltSongId: v }),
   ltLineIndex: 0,

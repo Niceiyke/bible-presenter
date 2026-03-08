@@ -128,7 +128,7 @@ export function BottomDrawer({
         </div>
 
         {/* Drawer content */}
-        <div className="flex-1 overflow-hidden p-4">
+        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
           {bottomDeckMode === "transcript" && (
             <div className="h-full flex flex-col">
               <TranscriptLog segments={sessionTranscript} />

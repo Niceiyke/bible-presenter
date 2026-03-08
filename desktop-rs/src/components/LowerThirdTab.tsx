@@ -16,6 +16,7 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
   setLtTemplate: (t: LowerThirdTemplate) => void;
   onSetToast: (msg: string) => void;
 }) {
+  const { currentLowerThird, ltVisible, setLtVisible } = useAppStore();
   const [presets, setPresets] = useState<LtPreset[]>([]);
   const [saveLabel, setSaveLabel] = useState("");
   const [saveMode, setSaveMode] = useState<"nameplate" | "freetext">("nameplate");
@@ -51,6 +52,15 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
       
       await invoke("show_lt_preset", { id: preset.id, template: targetTemplate });
       onSetToast(`Showing: ${preset.label}`);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function hidePreset() {
+    try {
+      await invoke("hide_lower_third");
+      setLtVisible(false);
     } catch (err) {
       console.error(err);
     }
@@ -117,10 +127,15 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
             const summary = isNp
               ? `${(p.data as { kind: "Nameplate"; data: { name: string } }).data.name}`
               : (p.data as { kind: "FreeText"; data: { text: string } }).data.text.slice(0, 35) + "…";
+            
+            // Check if this preset is currently active/live
+            const isActive = ltVisible && currentLowerThird && 
+              JSON.stringify(currentLowerThird.data) === JSON.stringify(p.data);
+
             return (
               <div
                 key={p.id}
-                className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5"
+                className={`flex items-center gap-2 bg-slate-900 border rounded-lg px-2 py-1.5 transition-colors ${isActive ? "border-amber-500/50 bg-amber-500/5" : "border-slate-800"}`}
               >
                 <span className={`shrink-0 text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${isNp ? "bg-blue-900/40 text-blue-400" : "bg-purple-900/40 text-purple-400"}`}>
                   {isNp ? "NP" : "FT"}
@@ -130,14 +145,18 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
                   <p className="text-[9px] text-slate-500 truncate">{summary}</p>
                 </div>
                 <button
-                  onClick={() => activatePreset(p)}
-                  className="shrink-0 px-2 py-1 text-[9px] font-black bg-amber-600 hover:bg-amber-500 text-black rounded transition-all"
+                  onClick={() => isActive ? hidePreset() : activatePreset(p)}
+                  className={`shrink-0 px-2 py-1 text-[9px] font-black rounded transition-all ${
+                    isActive 
+                      ? "bg-red-700 hover:bg-red-600 text-white" 
+                      : "bg-amber-600 hover:bg-amber-500 text-black"
+                  }`}
                 >
-                  SHOW
+                  {isActive ? "HIDE" : "SHOW"}
                 </button>
                 <button
                   onClick={() => deletePreset(p.id)}
-                  className="shrink-0 text-[10px] text-red-500 hover:text-red-400 px-1 transition-colors"
+                  className="shrink-0 text-[10px] text-slate-600 hover:text-red-500 px-1 transition-colors"
                   title="Delete preset"
                 >
                   ✕
