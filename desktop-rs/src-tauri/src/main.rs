@@ -1952,6 +1952,7 @@ async fn import_studio_audio(app: AppHandle, state: State<'_, AppState>, path: S
     // Run transcoding in a separate thread
     tauri::async_runtime::spawn_blocking(move || {
         let res = (|| -> Result<(), String> {
+            log_msg(&app, &format!("[Studio] Importing audio from: {:?}", source_path));
             let file = fs::File::open(&source_path).map_err(|e| e.to_string())?;
             let mss = MediaSourceStream::new(Box::new(file), Default::default());
             
@@ -1974,7 +1975,10 @@ async fn import_studio_audio(app: AppHandle, state: State<'_, AppState>, path: S
                 .map_err(|e| e.to_string())?;
 
             let track_id = track.id;
-            
+            let source_rate = track.codec_params.sample_rate.unwrap_or(44100) as f64;
+            let source_channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(2);
+            let target_rate = 16000.0;
+
             let spec = hound::WavSpec {
                 channels: 1,
                 sample_rate: 16000,
@@ -1982,6 +1986,22 @@ async fn import_studio_audio(app: AppHandle, state: State<'_, AppState>, path: S
                 sample_format: hound::SampleFormat::Int,
             };
             let mut writer = hound::WavWriter::create(target_path, spec).map_err(|e| e.to_string())?;
+
+            // Setup resampler if rate differs
+            let mut resampler = if (source_rate - target_rate).abs() > 0.1 {
+                let params = rubato::SincInterpolationParameters {
+                    sinc_len: 256,
+                    f_cutoff: 0.95,
+                    interpolation: rubato::SincInterpolationType::Linear,
+                    window: rubato::WindowFunction::BlackmanHarris2,
+                    oversampling_factor: 256,
+                };
+                Some(rubato::SincFixedIn::<f32>::new(target_rate / source_rate, 2.0, params, 1024, source_channels).map_err(|e| e.to_string())?)
+            } else {
+                None
+            };
+
+            let mut sample_buf = None;
 
             loop {
                 let packet = match format.next_packet() {
@@ -1993,35 +2013,54 @@ async fn import_studio_audio(app: AppHandle, state: State<'_, AppState>, path: S
                 if packet.track_id() != track_id { continue; }
                 
                 let decoded = decoder.decode(&packet).map_err(|e| e.to_string())?;
-                
-                match decoded {
-                    AudioBufferRef::F32(buf) => {
-                        let chan_count = buf.spec().channels.count();
-                        for i in 0..buf.frames() {
-                            let mut sum = 0.0;
-                            for c in 0..chan_count {
-                                sum += buf.chan(c)[i];
-                            }
-                            let mono = sum / chan_count as f32;
-                            let s = (mono * std::i16::MAX as f32).clamp(-32768.0, 32767.0) as i16;
-                            writer.write_sample(s).map_err(|e| e.to_string())?;
-                        }
+
+                if sample_buf.is_none() {
+                    let spec = *decoded.spec();
+                    let duration = decoded.capacity() as u64;
+                    sample_buf = Some(symphonia::core::audio::SampleBuffer::<f32>::new(duration, spec));
+                }
+
+                if let Some(buf) = sample_buf.as_mut() {
+                    buf.copy_interleaved_ref(decoded);
+                    let samples = buf.samples();
+                    
+                    // Convert interleaved samples to planar for rubato or mono conversion
+                    let mut planar = vec![vec![0.0f32; samples.len() / source_channels]; source_channels];
+                    for (i, &s) in samples.iter().enumerate() {
+                        planar[i % source_channels][i / source_channels] = s;
                     }
-                    AudioBufferRef::S16(buf) => {
-                        let chan_count = buf.spec().channels.count();
-                        for i in 0..buf.frames() {
-                            let mut sum = 0i32;
-                            for c in 0..chan_count {
-                                sum += buf.chan(c)[i] as i32;
+
+                    let mono_samples = if let Some(ref mut rs) = resampler {
+                        let output = rs.process(&planar, None).map_err(|e| e.to_string())?;
+                        let out_len = output[0].len();
+                        let mut mono = vec![0.0f32; out_len];
+                        for chan_data in output {
+                            for (i, &s) in chan_data.iter().enumerate() {
+                                mono[i] += s;
                             }
-                            let mono = (sum / chan_count as i32) as i16;
-                            writer.write_sample(mono).map_err(|e| e.to_string())?;
                         }
+                        for s in &mut mono { *s /= source_channels as f32; }
+                        mono
+                    } else {
+                        let out_len = planar[0].len();
+                        let mut mono = vec![0.0f32; out_len];
+                        for chan_data in planar {
+                            for (i, &s) in chan_data.iter().enumerate() {
+                                mono[i] += s;
+                            }
+                        }
+                        for s in &mut mono { *s /= source_channels as f32; }
+                        mono
+                    };
+
+                    for s in mono_samples {
+                        let sample = (s * std::i16::MAX as f32).clamp(-32768.0, 32767.0) as i16;
+                        writer.write_sample(sample).map_err(|e| e.to_string())?;
                     }
-                    _ => return Err("Unsupported buffer format during decode".to_string()),
                 }
             }
             writer.finalize().map_err(|e| e.to_string())?;
+            log_msg(&app, "[Studio] Import complete.");
             Ok(())
         })();
 
