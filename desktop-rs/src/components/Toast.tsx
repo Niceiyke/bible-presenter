@@ -5,7 +5,7 @@ export function Toast({ message, onDone }: { message: string; onDone: () => void
   useEffect(() => {
     const t = setTimeout(onDone, 2000);
     return () => clearTimeout(t);
-  }, [onDone]);
+  }, []); // Run once on mount
 
   return (
     <motion.div
