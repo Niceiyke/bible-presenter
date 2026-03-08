@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import {
@@ -11,20 +11,22 @@ import { useAppStore } from "../../store";
 
 const WAVEFORM_SIZE_LIMIT_MB = 80;
 
-// Read a local file via the existing read_file_base64 Tauri command and return
-// a blob: URL.  This works reliably on all platforms (Windows, Linux, macOS)
-// because it goes through Rust IPC instead of the asset protocol, which can
-// fail to serve files in some WebView2 / WebKitGTK configurations.
-async function filePathToBlobUrl(filePath: string): Promise<string> {
-  const b64  = await invoke<string>("read_file_base64", { path: filePath });
-  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-  return URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+// Read a local file and return its raw bytes via Tauri IPC (avoids asset
+// protocol issues on Linux/WebKitGTK).
+async function readFileBytes(filePath: string): Promise<Uint8Array> {
+  const b64 = await invoke<string>("read_file_base64", { path: filePath });
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 }
 
-// Fetch pre-computed waveform peaks from Rust.
-// Returns peaks in [0,1] range + duration in seconds.
-// Using Rust-side peaks + an HTMLAudioElement for the media element avoids
-// AudioContext.decodeAudioData, which fails on Linux/WebKitGTK for 16 kHz WAV.
+// Build a blob URL from raw bytes (used only for the large-file <audio> fallback).
+function bytesToBlobUrl(bytes: Uint8Array): string {
+  const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+}
+
+// Fetch pre-computed waveform peaks from Rust (avoids AudioContext.decodeAudioData).
 async function fetchRecordingPeaks(
   id: string,
 ): Promise<{ peaks: number[][]; duration: number }> {
@@ -34,6 +36,67 @@ async function fetchRecordingPeaks(
   );
   return { peaks: [result.peaks], duration: result.duration };
 }
+
+// Parse raw WAV bytes into a Float32Array of mono samples without using
+// AudioContext.decodeAudioData.  Supports 16-bit int and 32-bit float PCM.
+// Returns null if the header cannot be parsed.
+function parseWavBytes(
+  bytes: Uint8Array,
+): { samples: Float32Array; sampleRate: number } | null {
+  try {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let pos = 12; // skip "RIFF????WAVE"
+    let sampleRate = 16000;
+    let bitsPerSample = 16;
+    let numChannels = 1;
+    let dataStart = 0;
+    let dataSize = 0;
+
+    while (pos + 8 <= bytes.length) {
+      const id =
+        String.fromCharCode(bytes[pos]) +
+        String.fromCharCode(bytes[pos + 1]) +
+        String.fromCharCode(bytes[pos + 2]) +
+        String.fromCharCode(bytes[pos + 3]);
+      const chunkSize = view.getUint32(pos + 4, true);
+      if (id === "fmt ") {
+        numChannels   = view.getUint16(pos + 10, true);
+        sampleRate    = view.getUint32(pos + 12, true);
+        bitsPerSample = view.getUint16(pos + 22, true);
+      } else if (id === "data") {
+        dataStart = pos + 8;
+        dataSize  = Math.min(chunkSize, bytes.length - dataStart);
+        break;
+      }
+      // Word-align the next chunk position
+      pos += 8 + chunkSize + (chunkSize & 1);
+    }
+
+    if (!dataStart || !dataSize) return null;
+
+    const bytesPerSample = bitsPerSample / 8;
+    const totalFrames    = Math.floor(dataSize / (numChannels * bytesPerSample));
+    const mono           = new Float32Array(new ArrayBuffer(totalFrames * 4));
+
+    for (let i = 0; i < totalFrames; i++) {
+      let sum = 0;
+      for (let ch = 0; ch < numChannels; ch++) {
+        const off = dataStart + (i * numChannels + ch) * bytesPerSample;
+        sum +=
+          bitsPerSample === 16
+            ? view.getInt16(off, true) / 32768.0
+            : view.getFloat32(off, true);
+      }
+      mono[i] = sum / numChannels;
+    }
+
+    return { samples: mono, sampleRate };
+  } catch {
+    return null;
+  }
+}
+
+// ── Component ────────────────────────────────────────────────────────────────
 
 export function WaveformEditor() {
   const {
@@ -47,64 +110,138 @@ export function WaveformEditor() {
     setError,
   } = useAppStore();
 
-  const [isPlaying, setIsPlaying]           = useState(false);
+  const [isPlaying, setIsPlaying]               = useState(false);
   const [isWaveformLoading, setIsWaveformLoading] = useState(false);
-  const [isRenaming, setIsRenaming]         = useState(false);
-  const [renameValue, setRenameValue]       = useState("");
-  const [zoomLevel, setZoomLevel]           = useState(0);
-  const [duration, setDuration]             = useState(0);
-  const [currentTime, setCurrentTime]       = useState(0);
-  const [showSaveAs, setShowSaveAs]         = useState(false);
-  const [saveAsName, setSaveAsName]         = useState("");
+  const [isRenaming, setIsRenaming]             = useState(false);
+  const [renameValue, setRenameValue]           = useState("");
+  const [zoomLevel, setZoomLevel]               = useState(0);
+  const [duration, setDuration]                 = useState(0);
+  const [currentTime, setCurrentTime]           = useState(0);
+  const [showSaveAs, setShowSaveAs]             = useState(false);
+  const [saveAsName, setSaveAsName]             = useState("");
 
+  // WaveSurfer (visualisation only — no internal audio decode/playback)
   const wavesurferRef  = useRef<HTMLDivElement>(null);
   const wsInstance     = useRef<WaveSurfer | null>(null);
   const regionsRef     = useRef<any>(null);
-  const audioRef       = useRef<HTMLAudioElement | null>(null);
   const initTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Blob URL created from the FS-plugin read — must be revoked on cleanup
-  const blobUrlRef     = useRef<string | null>(null);
+
+  // Large-file <audio> element fallback
+  const audioRef    = useRef<HTMLAudioElement | null>(null);
+  const blobUrlRef  = useRef<string | null>(null);
+
+  // Web Audio API playback (bypasses codec / decodeAudioData entirely)
+  const audioCtxRef       = useRef<AudioContext | null>(null);
+  const audioBufferRef    = useRef<AudioBuffer | null>(null);
+  const sourceNodeRef     = useRef<AudioBufferSourceNode | null>(null);
+  const playOffsetRef     = useRef<number>(0);   // seconds from start
+  const playStartCtxRef   = useRef<number>(0);   // AudioContext.currentTime at play start
+  const rafRef            = useRef<number | null>(null);
+  const isPlayingRef      = useRef<boolean>(false); // mirror of isPlaying for closures
 
   const isLargeFile = (selectedRecording?.size_mb ?? 0) > WAVEFORM_SIZE_LIMIT_MB;
 
-  const revokeBlobUrl = () => {
-    if (blobUrlRef.current) { URL.revokeObjectURL(blobUrlRef.current); blobUrlRef.current = null; }
-  };
+  // ── Web Audio playback helpers ──────────────────────────────────────────
 
-  // ── WaveSurfer init ────────────────────────────────────────────────────────
-  // Strategy: pre-compute waveform peaks in Rust and pass them directly to
-  // WaveSurfer together with an HTMLAudioElement for playback.  This completely
-  // avoids AudioContext.decodeAudioData, which fails on Linux/WebKitGTK for
-  // 16 kHz mono WAV files.  The blob: URL is still used so the <audio> element
-  // can play the file via the native GStreamer media pipeline.
-  //
-  // setTimeout(fn,0) survives React 18 StrictMode double-invoke: the cleanup
-  // cancels the timeout before WaveSurfer is ever created.
+  const stopCursorRaf = useCallback(() => {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+  }, []);
+
+  const stopSource = useCallback(() => {
+    if (sourceNodeRef.current) {
+      try { sourceNodeRef.current.stop(); } catch { /* already stopped */ }
+      sourceNodeRef.current.onended = null;
+      sourceNodeRef.current = null;
+    }
+  }, []);
+
+  const startPlaybackFrom = useCallback((offset: number) => {
+    const ctx = audioCtxRef.current;
+    const buf = audioBufferRef.current;
+    if (!ctx || !buf) return;
+
+    stopSource();
+    stopCursorRaf();
+
+    const clampedOffset = Math.min(Math.max(offset, 0), buf.duration - 0.001);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start(0, clampedOffset);
+    src.onended = () => {
+      stopCursorRaf();
+      isPlayingRef.current = false;
+      setIsPlaying(false);
+      playOffsetRef.current = 0;
+      setCurrentTime(0);
+      if (wsInstance.current) wsInstance.current.seekTo(0);
+    };
+
+    sourceNodeRef.current = src;
+    playStartCtxRef.current = ctx.currentTime - clampedOffset;
+    isPlayingRef.current = true;
+    setIsPlaying(true);
+
+    const tick = () => {
+      const t = Math.min(
+        ctx.currentTime - playStartCtxRef.current,
+        buf.duration,
+      );
+      setCurrentTime(t);
+      if (wsInstance.current) wsInstance.current.seekTo(t / buf.duration);
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  }, [stopSource, stopCursorRaf]);
+
+  const handlePlayPause = useCallback(() => {
+    if (!audioCtxRef.current || !audioBufferRef.current) return;
+    if (isPlayingRef.current) {
+      // Pause: capture current position before stopping
+      const elapsed = audioCtxRef.current.currentTime - playStartCtxRef.current;
+      playOffsetRef.current = Math.min(elapsed, audioBufferRef.current.duration);
+      stopSource();
+      stopCursorRaf();
+      isPlayingRef.current = false;
+      setIsPlaying(false);
+    } else {
+      startPlaybackFrom(playOffsetRef.current);
+    }
+  }, [stopSource, stopCursorRaf, startPlaybackFrom]);
+
+  // ── WaveSurfer + AudioBuffer init ───────────────────────────────────────
   useEffect(() => {
     if (!wavesurferRef.current || !selectedRecording?.path || isLargeFile) return;
 
     const container = wavesurferRef.current;
     const filePath  = selectedRecording.path;
     const recId     = selectedRecording.id;
-    // Abort flag: set to true when cleanup fires so the async IIFE
-    // (which may still be awaiting IPC round-trips) bails out instead of
-    // creating an orphaned WaveSurfer on an unmounted component.
-    let cancelled = false;
+    let cancelled   = false;
 
+    // Tear down previous instances
     if (wsInstance.current) { wsInstance.current.destroy(); wsInstance.current = null; }
-    revokeBlobUrl();
+    stopSource();
+    stopCursorRaf();
+    if (audioCtxRef.current) { audioCtxRef.current.close(); audioCtxRef.current = null; }
+    audioBufferRef.current  = null;
+    playOffsetRef.current   = 0;
+    isPlayingRef.current    = false;
+    setIsPlaying(false);
+    setCurrentTime(0);
 
     initTimeoutRef.current = setTimeout(() => {
       if (cancelled || !container) return;
       setIsWaveformLoading(true);
 
       (async () => {
-        // 1. Read file bytes → blob URL (for the <audio> media element)
-        let url: string;
+        // 1. Read raw bytes from disk
+        let bytes: Uint8Array;
         try {
-          url = await filePathToBlobUrl(filePath);
-          if (cancelled) { URL.revokeObjectURL(url); return; }
-          blobUrlRef.current = url;
+          bytes = await readFileBytes(filePath);
+          if (cancelled) return;
         } catch (e) {
           if (!cancelled) {
             console.error("Failed to read audio file:", e);
@@ -114,26 +251,38 @@ export function WaveformEditor() {
           return;
         }
 
-        // 2. Fetch pre-computed peaks from Rust so WaveSurfer never calls
-        //    AudioContext.decodeAudioData (which breaks on Linux/WebKitGTK).
+        // 2. Fetch Rust-computed waveform peaks (skips AudioContext.decodeAudioData)
         let peaksData: { peaks: number[][]; duration: number } | null = null;
         try {
           peaksData = await fetchRecordingPeaks(recId);
           if (cancelled) return;
         } catch (e) {
-          console.warn("get_recording_peaks failed, WaveSurfer will decode:", e);
+          console.warn("get_recording_peaks failed:", e);
         }
 
-        // 3. Create a media element that plays the blob URL via the native
-        //    GStreamer pipeline (avoids WebAudio decode issues on Linux).
-        const audioEl = new Audio();
-        audioEl.src = url;
+        // 3. Parse WAV bytes → Float32Array and build AudioBuffer.
+        //    AudioContext.createBuffer() is just memory allocation — no codec involved.
+        const parsed = parseWavBytes(bytes);
+        if (parsed && !cancelled) {
+          try {
+            const ctx = new AudioContext({ sampleRate: parsed.sampleRate });
+            if (cancelled) { ctx.close(); return; }
+            audioCtxRef.current = ctx;
+            const buf = ctx.createBuffer(1, parsed.samples.length, parsed.sampleRate);
+            buf.copyToChannel(parsed.samples as Float32Array<ArrayBuffer>, 0);
+            audioBufferRef.current = buf;
+          } catch (e) {
+            console.warn("AudioBuffer creation failed:", e);
+          }
+        }
 
+        // 4. Create WaveSurfer for visualisation only (no url / media / decode)
         try {
           const regions = RegionsPlugin.create();
           if (cancelled) return;
           regionsRef.current = regions;
 
+          const dur = peaksData?.duration ?? audioBufferRef.current?.duration ?? 0;
           const wsOpts: Parameters<typeof WaveSurfer.create>[0] = {
             container,
             waveColor: "#f59e0b",
@@ -142,46 +291,45 @@ export function WaveformEditor() {
             barWidth: 2,
             barRadius: 2,
             height: 80,
-            media: audioEl,
             plugins: [regions],
+            // peaks + duration → WaveSurfer renders immediately, no fetch/decode
+            ...(peaksData
+              ? { peaks: peaksData.peaks, duration: peaksData.duration }
+              : { peaks: [[0]], duration: dur }),
           };
-
-          if (peaksData) {
-            // Peaks + duration supplied → WaveSurfer renders without decoding
-            (wsOpts as any).peaks    = peaksData.peaks;
-            (wsOpts as any).duration = peaksData.duration;
-          } else {
-            // Fallback: let WaveSurfer fetch/decode from the blob URL
-            wsOpts.url = url;
-          }
 
           const ws = WaveSurfer.create(wsOpts);
 
-          ws.on("play",   () => { if (!cancelled) setIsPlaying(true); });
-          ws.on("pause",  () => { if (!cancelled) setIsPlaying(false); });
-          ws.on("finish", () => { if (!cancelled) setIsPlaying(false); });
-          ws.on("ready",  () => {
+          ws.on("ready", () => {
             if (cancelled) return;
             setIsWaveformLoading(false);
-            const dur = ws.getDuration();
-            setDuration(dur);
+            const d = ws.getDuration();
+            setDuration(d);
             regions.addRegion({
               start: 0,
-              end: dur,
+              end: d,
               color: "rgba(245,158,11,0.12)",
               drag: true,
               resize: true,
             });
           });
-          ws.on("error", (err) => {
+
+          // User clicks/seeks on waveform → WaveSurfer v7 fires "interaction"
+          // with the new absolute time in seconds.
+          ws.on("interaction", (newTime: number) => {
             if (cancelled) return;
-            console.error("WaveSurfer error:", err);
-            setIsWaveformLoading(false);
-            if (wsInstance.current === ws) {
-              setError("Waveform load failed. Playback may still work via controls.");
+            playOffsetRef.current = newTime;
+            setCurrentTime(newTime);
+            if (isPlayingRef.current) {
+              startPlaybackFrom(newTime);
             }
           });
-          ws.on("timeupdate", (t) => { if (!cancelled) setCurrentTime(t); });
+
+          ws.on("error", (err) => {
+            console.warn("WaveSurfer (viz) error:", err);
+            // Non-fatal: waveform is drawn from peaks, playback is via Web Audio API
+            setIsWaveformLoading(false);
+          });
 
           if (cancelled) { ws.destroy(); return; }
           wsInstance.current = ws;
@@ -199,43 +347,60 @@ export function WaveformEditor() {
       cancelled = true;
       if (initTimeoutRef.current) { clearTimeout(initTimeoutRef.current); initTimeoutRef.current = null; }
       if (wsInstance.current)     { wsInstance.current.destroy(); wsInstance.current = null; }
-      revokeBlobUrl();
+      stopSource();
+      stopCursorRaf();
     };
-  }, [selectedRecording?.path, selectedRecording?._ts, isLargeFile]);
+  }, [selectedRecording?.path, selectedRecording?._ts, isLargeFile, stopSource, stopCursorRaf, startPlaybackFrom]);
+
+  // Close AudioContext on unmount
+  useEffect(() => {
+    return () => {
+      if (audioCtxRef.current) { audioCtxRef.current.close(); audioCtxRef.current = null; }
+    };
+  }, []);
 
   // Zoom
   useEffect(() => {
     wsInstance.current?.zoom(zoomLevel);
   }, [zoomLevel]);
 
-  // Large-file fallback <audio> src — also uses readFile to avoid asset
-  // protocol issues on Linux/WebKitGTK.
+  // Large-file fallback — blob URL for the native <audio> element
   useEffect(() => {
     if (!isLargeFile || !selectedRecording?.path || !audioRef.current) return;
     const el = audioRef.current;
-    filePathToBlobUrl(selectedRecording.path).then((url) => {
-      el.src = url;
-      el.load();
-      el.oncanplay = () => { URL.revokeObjectURL(url); el.oncanplay = null; };
-    }).catch((e) => {
-      console.error("Failed to load large audio file:", e);
-      setError("Could not read audio file from disk.");
-    });
+    readFileBytes(selectedRecording.path)
+      .then((bytes) => {
+        const url = bytesToBlobUrl(bytes);
+        blobUrlRef.current = url;
+        el.src = url;
+        el.load();
+        el.oncanplay = () => {
+          if (blobUrlRef.current) { URL.revokeObjectURL(blobUrlRef.current); blobUrlRef.current = null; }
+          el.oncanplay = null;
+        };
+      })
+      .catch((e) => {
+        console.error("Failed to load large audio file:", e);
+        setError("Could not read audio file from disk.");
+      });
   }, [selectedRecording?.path, isLargeFile]);
 
-  // ── Handlers ───────────────────────────────────────────────────────────────
+  // ── Handlers ──────────────────────────────────────────────────────────────
+
   const handleTrim = async () => {
     if (!selectedRecording || !regionsRef.current) return;
     const region = regionsRef.current.getRegions()[0];
     if (!region) return;
     const ok = await confirm(
       `Trim to ${fmtTime(region.start)} – ${fmtTime(region.end)}?\nThis overwrites the original.`,
-      { title: "Trim Recording", kind: "warning" }
+      { title: "Trim Recording", kind: "warning" },
     );
     if (!ok) return;
     setIsTrimming(true);
     try {
-      await invoke("trim_studio_recording", { id: selectedRecording.id, startSec: region.start, endSec: region.end });
+      await invoke("trim_studio_recording", {
+        id: selectedRecording.id, startSec: region.start, endSec: region.end,
+      });
       setSelectedRecording({ ...selectedRecording, _ts: Date.now() });
       fetchRecordings();
     } catch (err: any) { setError("Trim failed: " + err); }
@@ -250,7 +415,8 @@ export function WaveformEditor() {
     setIsTrimming(true);
     try {
       await invoke("trim_studio_recording", {
-        id: selectedRecording.id, startSec: region.start, endSec: region.end, newId: saveAsName.trim(),
+        id: selectedRecording.id, startSec: region.start, endSec: region.end,
+        newId: saveAsName.trim(),
       });
       fetchRecordings();
     } catch (err: any) { setError("Save as clip failed: " + err); }
@@ -398,10 +564,11 @@ export function WaveformEditor() {
       {/* ── Controls ──────────────────────────────────────────────────────── */}
       {!isLargeFile && (
         <div className="flex items-center gap-2 px-4 py-2.5">
-          {/* Play/pause */}
+          {/* Play/pause — uses Web Audio API AudioBuffer, not the <audio> element */}
           <button
-            onClick={() => wsInstance.current?.playPause()}
-            className="w-8 h-8 bg-amber-500 hover:bg-amber-400 text-black rounded-lg flex items-center justify-center transition-all shadow-lg shadow-amber-500/20 active:scale-95 shrink-0"
+            onClick={handlePlayPause}
+            disabled={!audioBufferRef.current && !isWaveformLoading}
+            className="w-8 h-8 bg-amber-500 hover:bg-amber-400 text-black rounded-lg flex items-center justify-center transition-all shadow-lg shadow-amber-500/20 active:scale-95 shrink-0 disabled:opacity-40"
           >
             {isPlaying
               ? <Pause size={14} fill="currentColor" />
