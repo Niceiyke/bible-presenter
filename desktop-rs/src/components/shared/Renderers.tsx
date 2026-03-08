@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { resolvePath } from "../../utils";
 import { useAppStore } from "../../store";
-import type {
+import {
   CustomSlide,
   CustomSlideDisplayData,
   DisplayItem,
@@ -11,11 +11,12 @@ import type {
   LayerContent,
   LowerThirdData,
   LowerThirdTemplate,
-    TimerData,
-    PropItem,
-    SongSlideData,
-    PresentationSettings
-  } from "../../types";
+  TimerData,
+  PropItem,
+  SongSlideData,
+  PresentationSettings,
+  DEFAULT_LT_TEMPLATE
+} from "../../types";
   
   // ─── Live Context (for OBS-style source layers in Scene Renderer) ─────────────
   
@@ -32,11 +33,21 @@ export interface SceneLiveContext {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 export function hexToRgba(hex: string, opacity: number): string {
+  if (!hex || typeof hex !== "string" || !hex.startsWith("#")) {
+    return `rgba(0,0,0,${((opacity ?? 100) / 100).toFixed(2)})`;
+  }
   const h = hex.replace("#", "");
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${(opacity / 100).toFixed(2)})`;
+  let r = 0, g = 0, b = 0;
+  if (h.length === 3) {
+    r = parseInt(h[0] + h[0], 16) || 0;
+    g = parseInt(h[1] + h[1], 16) || 0;
+    b = parseInt(h[2] + h[2], 16) || 0;
+  } else {
+    r = parseInt(h.slice(0, 2), 16) || 0;
+    g = parseInt(h.slice(2, 4), 16) || 0;
+    b = parseInt(h.slice(4, 6), 16) || 0;
+  }
+  return `rgba(${r},${g},${b},${((opacity ?? 100) / 100).toFixed(2)})`;
 }
 
 // ─── Custom Slide Renderer ───────────────────────────────────────────────────
@@ -649,13 +660,14 @@ const substituteTokens = (text: string) => {
 
 export function LowerThirdOverlay({
   data,
-  template: t,
+  template: rawTemplate,
   onCycleComplete
 }: {
   data: LowerThirdData;
   template: LowerThirdTemplate;
   onCycleComplete?: () => void;
 }) {
+  const t = { ...DEFAULT_LT_TEMPLATE, ...(rawTemplate || {}) };
   // Guards against onCycleComplete firing multiple times per scroll cycle
   const cycleCompleteFiredRef = useRef(false);
   const containerStyle = {

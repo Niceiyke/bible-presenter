@@ -1688,10 +1688,13 @@ async fn list_studio_recordings(state: State<'_, AppState>) -> Result<Vec<Studio
                     chrono::DateTime::<chrono::Local>::from(m).format("%Y-%m-%d %H:%M").to_string()
                 }).unwrap_or_default();
                 
-                // Estimate duration for 16kHz 16-bit mono WAV
-                // bytes / (sample_rate * channels * bytes_per_sample)
-                let duration_secs = size_bytes / (16000 * 1 * 2);
-                let duration = format!("{}:{:02}", duration_secs / 60, duration_secs % 60);
+                let duration = hound::WavReader::open(&path).map(|r| {
+                    let secs = r.duration() / r.spec().sample_rate;
+                    format!("{}:{:02}", secs / 60, secs % 60)
+                }).unwrap_or_else(|_| {
+                    let secs = size_bytes / (16000 * 2);
+                    format!("{}:{:02}", secs / 60, secs % 60)
+                });
                 
                 let transcribed = state.app_data_dir.join("recordings").join(format!("{}.txt", id)).exists();
 
@@ -1736,6 +1739,10 @@ async fn rename_studio_recording(state: State<'_, AppState>, id: String, new_nam
         &new_name
     };
 
+    if clean_name.contains('/') || clean_name.contains('\\') || clean_name.contains("..") {
+        return Err("Invalid recording name".to_string());
+    }
+
     let old_path = state.app_data_dir.join("recordings").join(format!("{}.wav", id));
     let new_path = state.app_data_dir.join("recordings").join(format!("{}.wav", clean_name));
     if old_path.exists() {
@@ -1772,9 +1779,15 @@ async fn transcribe_studio_recording(app: AppHandle, state: State<'_, AppState>,
 
     // Load audio from WAV
     let mut reader = hound::WavReader::open(&path).map_err(|e| e.to_string())?;
-    let samples: Vec<f32> = reader.samples::<i16>()
-        .map(|s| s.unwrap_or(0) as f32 / std::i16::MAX as f32)
-        .collect();
+    let spec = reader.spec();
+    let samples: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Int => reader.samples::<i16>()
+            .map(|s| s.unwrap_or(0) as f32 / i16::MAX as f32)
+            .collect(),
+        hound::SampleFormat::Float => reader.samples::<f32>()
+            .map(|s| s.unwrap_or(0.0))
+            .collect(),
+    };
 
     if samples.is_empty() {
         return Err("Audio file is empty".to_string());
@@ -1873,6 +1886,7 @@ async fn start_studio_recording(app: AppHandle, state: State<'_, AppState>) -> R
     let path_clone = path.clone();
     // Spawn task to write to file
     tauri::async_runtime::spawn(async move {
+        let stem = path_clone.file_stem().unwrap_or_default().to_string_lossy().to_string();
         let spec = hound::WavSpec {
             channels: 1,
             sample_rate: 16000,
@@ -1921,6 +1935,7 @@ async fn start_studio_recording(app: AppHandle, state: State<'_, AppState>) -> R
             }
         }
         let _ = writer.finalize();
+        let _ = app.emit("studio-recording-saved", stem);
     });
 
     Ok(())
@@ -2400,7 +2415,22 @@ async fn show_lt_preset(
     let presets = state.media_schedule.list_lt_presets().map_err(|e| e.to_string())?;
     let preset = presets.into_iter().find(|p| p.id == id)
         .ok_or_else(|| format!("Preset '{}' not found", id))?;
-    let tpl = template.unwrap_or(serde_json::json!({}));
+    
+    let mut tpl = template.unwrap_or(serde_json::json!({}));
+    
+    // If no template provided and preset has one, try to load it
+    if tpl.as_object().map_or(true, |o| o.is_empty()) {
+        if let Some(tpl_id) = &preset.template_id {
+            if let Ok(all_tpls) = state.media_schedule.load_lt_templates() {
+                if let Some(arr) = all_tpls.as_array() {
+                    if let Some(found) = arr.iter().find(|t| t.get("id").and_then(|v| v.as_str()) == Some(tpl_id)) {
+                        tpl = found.clone();
+                    }
+                }
+            }
+        }
+    }
+
     let payload = serde_json::json!({ "data": preset.data, "template": tpl });
     *state.lower_third.lock() = Some(payload.clone());
     let _ = app.emit("lower-third-update", Some(payload.clone()));

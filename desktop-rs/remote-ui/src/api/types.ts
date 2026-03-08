@@ -87,6 +87,7 @@ export interface LtTemplate {
 export interface LtPreset {
   id: string;
   label: string;
+  template_id?: string;
   data: LowerThirdData;
 }
 

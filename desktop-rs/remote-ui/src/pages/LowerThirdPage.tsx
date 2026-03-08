@@ -8,18 +8,25 @@ import type { LtPreset } from '../api/types';
 type LtMode = 'nameplate' | 'freetext';
 
 const DEFAULT_TEMPLATE = {
-  bgType: 'gradient', bgColor: '#000000', bgOpacity: 0.85,
-  bgGradient: 'linear-gradient(to top, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0) 100%)',
-  bgBlur: 0, accentSide: 'left', accentColor: '#f59e0b', accentWidth: 4,
-  hAlign: 'left', vAlign: 'bottom', offsetX: 5, offsetY: 5,
-  widthPct: 60, paddingX: 32, paddingY: 20, borderRadius: 8,
-  primaryFont: 'Georgia', primarySize: 36, primaryColor: '#ffffff', primaryWeight: '700',
-  secondaryFont: 'Arial', secondarySize: 22, secondaryColor: '#e2e8f0', secondaryWeight: '400',
-  animIn: 'fade', animOut: 'fade',
+  bgType: 'gradient', bgColor: '#000000', bgOpacity: 85, bgGradientEnd: '#141428',
+  bgBlur: false, bgBlurAmount: 8,
+  accentSide: 'left', accentColor: '#f59e0b', accentWidth: 4, accentEnabled: true,
+  hAlign: 'left', vAlign: 'bottom', offsetX: 48, offsetY: 40,
+  widthPct: 60, paddingX: 24, paddingY: 16, borderRadius: 12,
+  primaryFont: 'Georgia', primarySize: 36, primaryColor: '#ffffff', primaryBold: true, primaryItalic: false, primaryUppercase: false,
+  secondaryFont: 'Arial', secondarySize: 22, secondaryColor: '#f59e0b', secondaryBold: false, secondaryItalic: false, secondaryUppercase: false,
+  animation: 'slide-up', animationDuration: 0.5, exitDuration: 0.2,
+  variant: 'classic',
+  labelVisible: true, labelColor: '#f59e0b', labelSize: 13, labelUppercase: true,
 };
 
 // ── Preset row ────────────────────────────────────────────────────────────────
-function PresetRow({ preset, template, onDelete }: { preset: LtPreset; template: object; onDelete: (id: string) => void }) {
+function PresetRow({ preset, templates, currentTemplate, onDelete }: { 
+  preset: LtPreset; 
+  templates: any[]; 
+  currentTemplate: object; 
+  onDelete: (id: string) => void 
+}) {
   const isNameplate = preset.data.kind === 'Nameplate';
   const summary = isNameplate
     ? `${(preset.data as { kind: 'Nameplate'; data: { name: string; title?: string } }).data.name}${(preset.data as { kind: 'Nameplate'; data: { name: string; title?: string } }).data.title ? ` · ${(preset.data as { kind: 'Nameplate'; data: { name: string; title?: string } }).data.title}` : ''}`
@@ -50,7 +57,14 @@ function PresetRow({ preset, template, onDelete }: { preset: LtPreset; template:
       {/* Actions */}
       <div className="flex gap-1.5 shrink-0">
         <button
-          onClick={() => ws.send({ cmd: 'show_lt_preset', id: preset.id, template })}
+          onClick={() => {
+            let targetTemplate = currentTemplate;
+            if (preset.template_id) {
+              const found = templates.find(t => t.id === preset.template_id);
+              if (found) targetTemplate = found;
+            }
+            ws.send({ cmd: 'show_lt_preset', id: preset.id, template: targetTemplate });
+          }}
           className="flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-black cursor-pointer active:scale-95 transition-all"
           style={{ background: 'var(--amber)', color: '#000', border: '1px solid var(--amber)' }}
         >
@@ -79,10 +93,16 @@ export function LowerThirdPage() {
 
   // Save-as-preset form
   const [saveLabel, setSaveLabel] = useState('');
+  const [saveTemplateIdx, setSaveTemplateIdx] = useState<number | null>(selectedTemplateIdx);
   const [saveOpen, setSaveOpen] = useState(false);
 
   // Preset list collapse
   const [presetsOpen, setPresetsOpen] = useState(true);
+
+  // Update saveTemplateIdx when selectedTemplateIdx changes if form is not open
+  if (!saveOpen && saveTemplateIdx !== selectedTemplateIdx) {
+    setSaveTemplateIdx(selectedTemplateIdx);
+  }
 
   function getTemplate() {
     if (selectedTemplateIdx !== null && ltTemplates[selectedTemplateIdx]) return ltTemplates[selectedTemplateIdx];
@@ -109,9 +129,16 @@ export function LowerThirdPage() {
     if (!saveLabel.trim()) return;
     const data = buildData();
     if (!data) return;
+    
+    let tpl_id: string | undefined = undefined;
+    if (saveTemplateIdx !== null && ltTemplates[saveTemplateIdx]) {
+      tpl_id = (ltTemplates[saveTemplateIdx] as any).id;
+    }
+
     const preset: LtPreset = {
       id: `preset-${Date.now()}`,
       label: saveLabel.trim(),
+      template_id: tpl_id,
       data,
     };
     ws.send({ cmd: 'save_lt_preset', preset });
@@ -128,11 +155,11 @@ export function LowerThirdPage() {
   const canShow = !!buildData();
 
   return (
-    <div className="flex flex-col gap-3 p-4 overflow-y-auto flex-1">
+    <div className="flex flex-col gap-3 p-4 overflow-y-auto flex-1 custom-scrollbar">
 
       {/* ── Status banner ── */}
       <div
-        className="flex items-center justify-between rounded-2xl px-4 py-3"
+        className="flex items-center justify-between rounded-2xl px-4 py-3 shrink-0"
         style={ltShowing
           ? { background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.3)' }
           : { background: 'var(--surface)', border: '1px solid var(--border)' }
@@ -174,7 +201,7 @@ export function LowerThirdPage() {
             ) : (
               <div className="flex flex-col gap-2">
                 {ltPresets.map(p => (
-                  <PresetRow key={p.id} preset={p} template={getTemplate()} onDelete={deletePreset} />
+                  <PresetRow key={p.id} preset={p} templates={ltTemplates} currentTemplate={getTemplate()} onDelete={deletePreset} />
                 ))}
               </div>
             )}
@@ -195,7 +222,7 @@ export function LowerThirdPage() {
         {/* Template selector */}
         {ltTemplates.length > 0 && (
           <div>
-            <CardLabel>Style template</CardLabel>
+            <CardLabel>Live style template</CardLabel>
             <div className="flex gap-1.5 flex-wrap mt-1.5">
               <button
                 onClick={() => setSelectedTemplate(null)}
@@ -235,15 +262,6 @@ export function LowerThirdPage() {
               value={npTitle}
               onChange={e => setNpTitle(e.target.value)}
             />
-            {npName && (
-              <div
-                className="rounded-xl px-4 py-3"
-                style={{ background: 'var(--bg)', borderLeft: '4px solid var(--amber)', border: '1px solid var(--amber)' }}
-              >
-                <p className="font-bold text-base" style={{ color: '#fff' }}>{npName}</p>
-                {npTitle && <p className="text-sm mt-0.5" style={{ color: '#e2e8f0' }}>{npTitle}</p>}
-              </div>
-            )}
           </div>
         )}
 
@@ -262,7 +280,7 @@ export function LowerThirdPage() {
         )}
 
         {/* Show / Hide row */}
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-2 pt-2">
           <button
             onClick={showCurrent} disabled={!canShow}
             className="flex items-center justify-center gap-2 py-4 rounded-2xl font-black text-sm transition-all active:scale-95 disabled:opacity-30 cursor-pointer"
@@ -281,7 +299,7 @@ export function LowerThirdPage() {
 
         {/* Save as preset */}
         {canShow && (
-          <div>
+          <div className="pt-2 border-t border-white/5 mt-2">
             {!saveOpen ? (
               <button
                 onClick={() => setSaveOpen(true)}
@@ -291,34 +309,70 @@ export function LowerThirdPage() {
                 <Plus size={14} /> Save as preset
               </button>
             ) : (
-              <div className="flex gap-2 anim-fade-up">
-                <Input
-                  placeholder="Preset name…"
-                  value={saveLabel}
-                  onChange={e => setSaveLabel(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') savePreset(); if (e.key === 'Escape') setSaveOpen(false); }}
-                  className="flex-1"
-                />
-                <button
-                  onClick={savePreset}
-                  disabled={!saveLabel.trim()}
-                  className="px-4 py-2 rounded-2xl text-sm font-black cursor-pointer active:scale-95 disabled:opacity-40 transition-all"
-                  style={{ background: 'var(--amber)', color: '#000', border: 'none' }}
-                >
-                  Save
-                </button>
-                <button
-                  onClick={() => { setSaveOpen(false); setSaveLabel(''); }}
-                  className="px-3 py-2 rounded-2xl text-sm cursor-pointer active:scale-95"
-                  style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--muted)' }}
-                >
-                  ✕
-                </button>
+              <div className="flex flex-col gap-3 anim-fade-up bg-black/20 p-3 rounded-2xl border border-white/5">
+                <p className="text-[10px] font-black text-amber-500 uppercase tracking-widest">New Preset</p>
+                
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase px-1">Preset Label</span>
+                  <Input
+                    placeholder="E.g. Pastor's Nameplate"
+                    value={saveLabel}
+                    onChange={e => setSaveLabel(e.target.value)}
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase px-1">Style Template</span>
+                  <div className="flex gap-1.5 flex-wrap">
+                    <button
+                      onClick={() => setSaveTemplateIdx(null)}
+                      className="px-3 py-1.5 rounded-full text-xs font-bold border cursor-pointer active:scale-95 transition-all"
+                      style={saveTemplateIdx === null
+                        ? { borderColor: 'var(--amber)', color: 'var(--amber)', background: 'var(--amber-dim)' }
+                        : { borderColor: 'var(--border)', color: 'var(--muted)', background: 'transparent' }
+                      }
+                    >Default</button>
+                    {ltTemplates.map((t, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setSaveTemplateIdx(i)}
+                        className="px-3 py-1.5 rounded-full text-xs font-bold border cursor-pointer active:scale-95 transition-all"
+                        style={saveTemplateIdx === i
+                          ? { borderColor: 'var(--amber)', color: 'var(--amber)', background: 'var(--amber-dim)' }
+                          : { borderColor: 'var(--border)', color: 'var(--muted)', background: 'transparent' }
+                        }
+                      >
+                        {(t as any).name ?? `Style ${i+1}`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex gap-2 mt-1">
+                  <button
+                    onClick={savePreset}
+                    disabled={!saveLabel.trim()}
+                    className="flex-1 py-3 rounded-xl text-sm font-black cursor-pointer active:scale-95 disabled:opacity-40 transition-all"
+                    style={{ background: 'var(--amber)', color: '#000', border: 'none' }}
+                  >
+                    Save Preset
+                  </button>
+                  <button
+                    onClick={() => { setSaveOpen(false); setSaveLabel(''); }}
+                    className="px-4 py-3 rounded-xl text-sm font-bold cursor-pointer active:scale-95"
+                    style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--muted)' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
             )}
           </div>
         )}
       </Card>
+    </div>
+  );
+}
     </div>
   );
 }

@@ -6,14 +6,16 @@ import { useLiveStore } from '../stores/liveStore';
 import { Card, CardLabel, Input, Segment } from '../components/ui';
 
 const DEFAULT_TEMPLATE = {
-  bgType: 'gradient', bgColor: '#000000', bgOpacity: 0.85,
-  bgGradient: 'linear-gradient(to top, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0) 100%)',
-  bgBlur: 0, accentSide: 'left', accentColor: '#f59e0b', accentWidth: 4,
-  hAlign: 'left', vAlign: 'bottom', offsetX: 5, offsetY: 5,
-  widthPct: 60, paddingX: 32, paddingY: 20, borderRadius: 8,
-  primaryFont: 'Georgia', primarySize: 36, primaryColor: '#ffffff', primaryWeight: '700',
-  secondaryFont: 'Arial', secondarySize: 22, secondaryColor: '#e2e8f0', secondaryWeight: '400',
-  animIn: 'fade', animOut: 'fade',
+  bgType: 'gradient', bgColor: '#000000', bgOpacity: 85, bgGradientEnd: '#141428',
+  bgBlur: false, bgBlurAmount: 8,
+  accentSide: 'left', accentColor: '#f59e0b', accentWidth: 4, accentEnabled: true,
+  hAlign: 'left', vAlign: 'bottom', offsetX: 48, offsetY: 40,
+  widthPct: 60, paddingX: 24, paddingY: 16, borderRadius: 12,
+  primaryFont: 'Georgia', primarySize: 36, primaryColor: '#ffffff', primaryBold: true, primaryItalic: false, primaryUppercase: false,
+  secondaryFont: 'Arial', secondarySize: 22, secondaryColor: '#f59e0b', secondaryBold: false, secondaryItalic: false, secondaryUppercase: false,
+  animation: 'slide-up', animationDuration: 0.5, exitDuration: 0.2,
+  variant: 'classic',
+  labelVisible: true, labelColor: '#f59e0b', labelSize: 13, labelUppercase: true,
 };
 
 export function LyricsPage() {

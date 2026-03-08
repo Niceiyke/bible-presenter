@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useMemo, useCallback, useState } from "react"
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store";
 import { ltBuildLyricsPayload } from "../utils";
-import type { LowerThirdData, LtPreset } from "../types";
+import type { LowerThirdData, LtPreset, LowerThirdTemplate } from "../types";
 
 interface LowerThirdTabProps {
   onLoadMedia: () => Promise<void>;
@@ -10,15 +10,25 @@ interface LowerThirdTabProps {
 }
 
 // ── Preset panel ──────────────────────────────────────────────────────────────
-function PresetsPanel({ ltTemplate, onSetToast }: { ltTemplate: object; onSetToast: (msg: string) => void }) {
+function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast }: { 
+  ltTemplate: LowerThirdTemplate; 
+  ltSavedTemplates: LowerThirdTemplate[];
+  setLtTemplate: (t: LowerThirdTemplate) => void;
+  onSetToast: (msg: string) => void;
+}) {
   const [presets, setPresets] = useState<LtPreset[]>([]);
   const [saveLabel, setSaveLabel] = useState("");
   const [saveMode, setSaveMode] = useState<"nameplate" | "freetext">("nameplate");
   const [saveNpName, setSaveNpName] = useState("");
   const [saveNpTitle, setSaveNpTitle] = useState("");
   const [saveFtText, setSaveFtText] = useState("");
+  const [saveTemplateId, setSaveTemplateId] = useState(ltTemplate.id);
   const [addOpen, setAddOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    setSaveTemplateId(ltTemplate.id);
+  }, [addOpen, ltTemplate.id]);
 
   useEffect(() => {
     invoke<LtPreset[]>("list_lt_presets")
@@ -28,7 +38,18 @@ function PresetsPanel({ ltTemplate, onSetToast }: { ltTemplate: object; onSetToa
 
   async function activatePreset(preset: LtPreset) {
     try {
-      await invoke("show_lt_preset", { id: preset.id, template: ltTemplate });
+      // If the preset has a specific template, let's load it first if it's not the active one
+      let targetTemplate = ltTemplate;
+      if (preset.template_id && preset.template_id !== ltTemplate.id) {
+        const found = ltSavedTemplates.find(t => t.id === preset.template_id);
+        if (found) {
+          targetTemplate = found;
+          setLtTemplate(found);
+          localStorage.setItem("activeLtTemplateId", found.id);
+        }
+      }
+      
+      await invoke("show_lt_preset", { id: preset.id, template: targetTemplate });
       onSetToast(`Showing: ${preset.label}`);
     } catch (err) {
       console.error(err);
@@ -55,7 +76,12 @@ function PresetsPanel({ ltTemplate, onSetToast }: { ltTemplate: object; onSetToa
       if (!saveFtText.trim()) return;
       data = { kind: "FreeText", data: { text: saveFtText.trim() } };
     }
-    const preset: LtPreset = { id: `preset-${Date.now()}`, label: saveLabel.trim(), data };
+    const preset: LtPreset = { 
+      id: `preset-${Date.now()}`, 
+      label: saveLabel.trim(), 
+      template_id: saveTemplateId,
+      data 
+    };
     try {
       const updated = await invoke<LtPreset[]>("save_lt_preset", { preset });
       setPresets(updated);
@@ -144,36 +170,55 @@ function PresetsPanel({ ltTemplate, onSetToast }: { ltTemplate: object; onSetToa
                 ))}
               </div>
 
-              <input
-                className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 focus:outline-none focus:border-amber-500/50"
-                placeholder="Preset name…"
-                value={saveLabel}
-                onChange={e => setSaveLabel(e.target.value)}
-              />
-
-              {saveMode === "nameplate" ? (
-                <>
-                  <input
-                    className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 focus:outline-none focus:border-amber-500/50"
-                    placeholder="Name (required)"
-                    value={saveNpName}
-                    onChange={e => setSaveNpName(e.target.value)}
-                  />
-                  <input
-                    className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 focus:outline-none focus:border-amber-500/50"
-                    placeholder="Title / Role (optional)"
-                    value={saveNpTitle}
-                    onChange={e => setSaveNpTitle(e.target.value)}
-                  />
-                </>
-              ) : (
-                <textarea
-                  className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 resize-none h-16 focus:outline-none focus:border-amber-500/50"
-                  placeholder="Text to display…"
-                  value={saveFtText}
-                  onChange={e => setSaveFtText(e.target.value)}
+              <div className="space-y-1.5">
+                <p className="text-[8px] font-bold text-slate-600 uppercase">Preset Label</p>
+                <input
+                  className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 focus:outline-none focus:border-amber-500/50"
+                  placeholder="Preset name (e.g. Host Nameplate)…"
+                  value={saveLabel}
+                  onChange={e => setSaveLabel(e.target.value)}
                 />
-              )}
+              </div>
+
+              <div className="space-y-1.5">
+                <p className="text-[8px] font-bold text-slate-600 uppercase">Style Template</p>
+                <select
+                  className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 focus:outline-none focus:border-amber-500/50"
+                  value={saveTemplateId}
+                  onChange={e => setSaveTemplateId(e.target.value)}
+                >
+                  {ltSavedTemplates.map(t => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1.5 pt-1">
+                <p className="text-[8px] font-bold text-slate-600 uppercase">Content</p>
+                {saveMode === "nameplate" ? (
+                  <div className="flex flex-col gap-1.5">
+                    <input
+                      className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 focus:outline-none focus:border-amber-500/50"
+                      placeholder="Name (required)"
+                      value={saveNpName}
+                      onChange={e => setSaveNpName(e.target.value)}
+                    />
+                    <input
+                      className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 focus:outline-none focus:border-amber-500/50"
+                      placeholder="Title / Role (optional)"
+                      value={saveNpTitle}
+                      onChange={e => setSaveNpTitle(e.target.value)}
+                    />
+                  </div>
+                ) : (
+                  <textarea
+                    className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 resize-none h-16 focus:outline-none focus:border-amber-500/50"
+                    placeholder="Text to display…"
+                    value={saveFtText}
+                    onChange={e => setSaveFtText(e.target.value)}
+                  />
+                )}
+              </div>
 
               <div className="flex gap-1.5">
                 <button
@@ -310,7 +355,12 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
     <div className="flex flex-col gap-3 p-3">
 
       {/* ── Saved presets (at top for quick access) ── */}
-      <PresetsPanel ltTemplate={ltTemplate} onSetToast={onSetToast} />
+      <PresetsPanel 
+        ltTemplate={ltTemplate} 
+        ltSavedTemplates={ltSavedTemplates}
+        setLtTemplate={setLtTemplate}
+        onSetToast={onSetToast} 
+      />
 
       {/* ── Template selector ── */}
       <div className="flex flex-col gap-1.5">

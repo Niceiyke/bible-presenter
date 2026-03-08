@@ -60,13 +60,7 @@ export function OutputWindow() {
   const [windowScale, setWindowScale] = useState(1);
   const isMounted = useRef(true);
 
-  // Hide cursor on the entire window
-  useEffect(() => {
-    document.body.style.cursor = 'none';
-    return () => {
-      document.body.style.cursor = 'default';
-    };
-  }, []);
+  // Cursor is hidden via CSS cursor-none on the root element
 
   // Calculate font scale based on current window height relative to 1080p reference
   useEffect(() => {
@@ -369,7 +363,7 @@ export function OutputWindow() {
   }, [videoBg?.path]);
 
   if (settings.is_blanked) {
-    return <div className="h-screen w-screen bg-black cursor-none" />;
+    return <div className="fixed inset-0 bg-black cursor-none pointer-events-none select-none" />;
   }
 
   const { colors } = THEMES[settings.theme] ?? THEMES.dark;
@@ -409,7 +403,7 @@ export function OutputWindow() {
 
   return (
     <div
-      className="h-screen w-screen overflow-hidden relative cursor-none"
+      className="fixed inset-0 overflow-hidden cursor-none pointer-events-none select-none"
       style={
         cameraBgId || isLanCameraLive || videoBg
           ? { color: colors.verseText }

@@ -3,7 +3,7 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { 
   Mic, StopCircle, Play, Pause, Scissors, 
-  Trash2, FileAudio, Download, RefreshCw,
+  Trash2, FileAudio, RefreshCw,
   Clock, Save, FileUp, Edit2
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -29,8 +29,14 @@ export function AudioStudio() {
   const wavesurferRef = useRef<HTMLDivElement>(null);
   const wsInstance = useRef<WaveSurfer | null>(null);
 
-  const fetchRecordings = () => {
-    invoke<any[]>("list_studio_recordings").then(setRecordings).catch(console.error);
+  const fetchRecordings = (autoSelectId?: string) => {
+    invoke<any[]>("list_studio_recordings").then(list => {
+      setRecordings(list);
+      if (autoSelectId) {
+        const found = list.find((r: any) => r.id === autoSelectId);
+        if (found) setSelectedRecording(found);
+      }
+    }).catch(console.error);
   };
 
   const fetchDevices = async () => {
@@ -53,12 +59,16 @@ export function AudioStudio() {
 
     const unlistenImport = listen("studio-import-complete", (ev: any) => {
       setIsImporting(false);
-      fetchRecordings();
+      fetchRecordings(`${ev.payload as string}_imported`);
     });
 
     const unlistenImportErr = listen("studio-import-error", (ev: any) => {
       setIsImporting(false);
       alert("Import failed: " + ev.payload);
+    });
+
+    const unlistenSaved = listen("studio-recording-saved", (ev: any) => {
+      fetchRecordings(ev.payload as string);
     });
 
     const decayInterval = setInterval(() => {
@@ -69,16 +79,13 @@ export function AudioStudio() {
       unlistenLevel.then(f => f());
       unlistenImport.then(f => f());
       unlistenImportErr.then(f => f());
+      unlistenSaved.then(f => f());
       clearInterval(decayInterval);
     };
   }, []);
 
   useEffect(() => {
     if (!wavesurferRef.current || !selectedRecording) return;
-
-    if (wsInstance.current) {
-      wsInstance.current.destroy();
-    }
 
     const ws = WaveSurfer.create({
       container: wavesurferRef.current,
@@ -149,10 +156,7 @@ export function AudioStudio() {
       setTrimStart(null);
       setTrimEnd(null);
       fetchRecordings();
-      // Force reload
-      const updated = { ...selectedRecording };
-      setSelectedRecording(null);
-      setTimeout(() => setSelectedRecording(updated), 100);
+      wsInstance.current?.load(convertFileSrc(selectedRecording.path));
     } catch (err) {
       console.error(err);
       alert("Trim failed: " + err);
@@ -165,12 +169,15 @@ export function AudioStudio() {
       return;
     }
     try {
-      await invoke("rename_studio_recording", { id: selectedRecording.id, new_name: renameValue.trim() });
+      const newName = renameValue.trim();
+      await invoke("rename_studio_recording", { id: selectedRecording.id, newName });
       setIsRenaming(false);
       fetchRecordings();
-      // Update local state so the UI updates immediately
-      const newName = renameValue.trim();
-      setSelectedRecording((prev: any) => prev ? { ...prev, name: newName, id: newName } : null);
+      setSelectedRecording((prev: any) => {
+        if (!prev) return null;
+        const newPath = prev.path.replace(/[^\\/]+\.wav$/, `${newName}.wav`);
+        return { ...prev, name: newName, id: newName, path: newPath };
+      });
     } catch (err) {
       console.error(err);
       alert("Rename failed: " + err);
@@ -234,7 +241,6 @@ export function AudioStudio() {
     try {
       await invoke("stop_studio_recording");
       setIsRecording(false);
-      setTimeout(fetchRecordings, 500);
     } catch (err) {
       console.error(err);
     }
@@ -488,9 +494,6 @@ export function AudioStudio() {
                       className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-[10px] font-black uppercase tracking-widest border border-slate-700 transition-all disabled:opacity-30"
                     >
                       <Scissors size={14} className="inline mr-2" /> Trim Selection
-                    </button>
-                    <button className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-[10px] font-black uppercase tracking-widest border border-slate-700 transition-all">
-                      <Save size={14} className="inline mr-2" /> Save Edit
                     </button>
                   </div>
                 </div>

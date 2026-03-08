@@ -506,6 +506,7 @@ pub struct LtPreset {
     pub id: String,
     /// Human-readable label shown in the preset list.
     pub label: String,
+    pub template_id: Option<String>,
     pub data: LowerThirdData,
 }
 
