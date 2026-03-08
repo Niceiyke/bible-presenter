@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { readFile } from "@tauri-apps/plugin-fs";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import {
   Play, Pause, Scissors, RefreshCw, RotateCcw,
@@ -11,6 +10,16 @@ import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
 import { useAppStore } from "../../store";
 
 const WAVEFORM_SIZE_LIMIT_MB = 80;
+
+// Read a local file via the existing read_file_base64 Tauri command and return
+// a blob: URL.  This works reliably on all platforms (Windows, Linux, macOS)
+// because it goes through Rust IPC instead of the asset protocol, which can
+// fail to serve files in some WebView2 / WebKitGTK configurations.
+async function filePathToBlobUrl(filePath: string): Promise<string> {
+  const b64  = await invoke<string>("read_file_base64", { path: filePath });
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  return URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+}
 
 export function WaveformEditor() {
   const {
@@ -72,9 +81,7 @@ export function WaveformEditor() {
       (async () => {
         let url: string;
         try {
-          const bytes = await readFile(filePath);
-          const blob  = new Blob([bytes], { type: "audio/wav" });
-          url = URL.createObjectURL(blob);
+          url = await filePathToBlobUrl(filePath);
           blobUrlRef.current = url;
         } catch (e) {
           console.error("Failed to read audio file:", e);
@@ -147,12 +154,9 @@ export function WaveformEditor() {
   useEffect(() => {
     if (!isLargeFile || !selectedRecording?.path || !audioRef.current) return;
     const el = audioRef.current;
-    readFile(selectedRecording.path).then((bytes) => {
-      const blob = new Blob([bytes], { type: "audio/wav" });
-      const url  = URL.createObjectURL(blob);
+    filePathToBlobUrl(selectedRecording.path).then((url) => {
       el.src = url;
       el.load();
-      // Revoke once the element has loaded enough to play
       el.oncanplay = () => { URL.revokeObjectURL(url); el.oncanplay = null; };
     }).catch((e) => {
       console.error("Failed to load large audio file:", e);
