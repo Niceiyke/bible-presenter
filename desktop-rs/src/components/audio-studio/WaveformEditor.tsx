@@ -69,29 +69,39 @@ export function WaveformEditor() {
 
     const container = wavesurferRef.current;
     const filePath  = selectedRecording.path;
+    // Abort flag: set to true when cleanup fires so the async IIFE
+    // (which may still be awaiting the Tauri IPC round-trip) bails out
+    // instead of creating an orphaned WaveSurfer on an unmounted component.
+    let cancelled = false;
 
     if (wsInstance.current) { wsInstance.current.destroy(); wsInstance.current = null; }
     revokeBlobUrl();
 
+    // setTimeout(fn, 0) survives React 18 StrictMode double-invoke:
+    // the cleanup cancels the timeout before WaveSurfer is ever created.
     initTimeoutRef.current = setTimeout(() => {
-      if (!container) return;
+      if (cancelled || !container) return;
       setIsWaveformLoading(true);
 
-      // Async IIFE so we can await readFile inside setTimeout
       (async () => {
         let url: string;
         try {
           url = await filePathToBlobUrl(filePath);
+          // Check after every await — cleanup may have fired while we waited
+          if (cancelled) { URL.revokeObjectURL(url); return; }
           blobUrlRef.current = url;
         } catch (e) {
-          console.error("Failed to read audio file:", e);
-          setIsWaveformLoading(false);
-          setError("Could not read audio file from disk.");
+          if (!cancelled) {
+            console.error("Failed to read audio file:", e);
+            setIsWaveformLoading(false);
+            setError("Could not read audio file from disk.");
+          }
           return;
         }
 
         try {
           const regions = RegionsPlugin.create();
+          if (cancelled) return;
           regionsRef.current = regions;
 
           const ws = WaveSurfer.create({
@@ -106,10 +116,12 @@ export function WaveformEditor() {
             plugins: [regions],
           });
 
-          ws.on("play",   () => setIsPlaying(true));
-          ws.on("pause",  () => setIsPlaying(false));
-          ws.on("finish", () => setIsPlaying(false));
+          // Guard every async callback — the component may have moved on
+          ws.on("play",   () => { if (!cancelled) setIsPlaying(true); });
+          ws.on("pause",  () => { if (!cancelled) setIsPlaying(false); });
+          ws.on("finish", () => { if (!cancelled) setIsPlaying(false); });
           ws.on("ready",  () => {
+            if (cancelled) return;
             setIsWaveformLoading(false);
             setDuration(ws.getDuration());
             regions.addRegion({
@@ -121,23 +133,29 @@ export function WaveformEditor() {
             });
           });
           ws.on("error", (err) => {
+            if (cancelled) return;
             console.error("WaveSurfer error:", err);
             setIsWaveformLoading(false);
             if (wsInstance.current === ws) {
               setError("Failed to decode audio. Try re-importing or re-recording.");
             }
           });
-          ws.on("timeupdate", (t) => setCurrentTime(t));
+          ws.on("timeupdate", (t) => { if (!cancelled) setCurrentTime(t); });
+
+          if (cancelled) { ws.destroy(); return; }
           wsInstance.current = ws;
         } catch (e) {
-          console.error("WaveSurfer init failed:", e);
-          setIsWaveformLoading(false);
-          setError("Waveform initialisation failed.");
+          if (!cancelled) {
+            console.error("WaveSurfer init failed:", e);
+            setIsWaveformLoading(false);
+            setError("Waveform initialisation failed.");
+          }
         }
       })();
     }, 0);
 
     return () => {
+      cancelled = true; // Signal all in-flight async work to abort
       if (initTimeoutRef.current) { clearTimeout(initTimeoutRef.current); initTimeoutRef.current = null; }
       if (wsInstance.current)     { wsInstance.current.destroy(); wsInstance.current = null; }
       revokeBlobUrl();
