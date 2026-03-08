@@ -123,10 +123,11 @@ export interface RemoteInfo {
 // ─── WebSocket event shapes ───────────────────────────────────────────────────
 
 export type WsEvent =
-  | { type: 'auth_ok'; token: string }
+  | { type: 'auth_ok'; token: string; key?: string }
   | { type: 'auth_fail' }
   | { type: 'state'; live_item: DisplayItem | null; staged_item?: DisplayItem | null; lt: unknown | null; is_blanked?: boolean; changed_by?: string; remote_proposals?: RemoteProposal[] }
   | { type: 'staged'; staged_item: DisplayItem | null; changed_by?: string }
+  | { type: 'proposal_handled' }
   | { type: 'operators'; operators: RemoteOperator[] }
   | { type: 'remote_proposals'; proposals: RemoteProposal[] }
   | { type: 'transcription'; text: string }

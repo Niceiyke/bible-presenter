@@ -29,7 +29,7 @@ function useWsEvents() {
     const unsub = ws.subscribe((evt: WsEvent) => {
       switch (evt.type) {
         case 'auth_ok':
-          auth.setAuthed(evt.token);
+          auth.setAuthed(evt.token, evt.key);
           auth.setStatus('connected', 'Connected');
           ws.send({ cmd: 'get_state' });
           ws.send({ cmd: 'get_versions' });
@@ -52,6 +52,10 @@ function useWsEvents() {
           break;
         case 'staged':
           live.setStagedItem(evt.staged_item);
+          break;
+        case 'proposal_handled':
+          live.showToast('Your proposal was handled (accepted or dismissed)', 'info');
+          live.setStagedItem(null);
           break;
         case 'operators':
           live.setOperators(evt.operators);

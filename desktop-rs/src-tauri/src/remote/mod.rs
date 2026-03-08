@@ -689,7 +689,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
             state.auth_throttles.lock().remove(&ip);
             let token = uuid::Uuid::new_v4().to_string();
             state.session_tokens.lock().insert(token.clone());
-            let _ = socket.send(Message::Text(json!({"type":"auth_ok","token":token}).to_string())).await;
+            let _ = socket.send(Message::Text(json!({"type":"auth_ok","token":token, "key": info.key}).to_string())).await;
             info
         }
         Ok(Some(None)) => {
@@ -911,6 +911,10 @@ async fn handle_command(state: &Arc<AppState>, v: Value, from_key: &str, role: &
             }
             let key = str_field(&v, "operator_key");
             state.remote_proposals.lock().remove(&key);
+            
+            // Notify the specific client that their proposal was handled
+            send_to(state, &key, json!({ "type": "proposal_handled" }).to_string());
+
             broadcast_remote_proposals(state);
         }
 
@@ -1434,7 +1438,7 @@ fn broadcast_str(state: &AppState, msg: String) {
 }
 
 /// Send a message to a single client by key. No-op if client is not connected.
-fn send_to(state: &AppState, client_key: &str, msg: String) {
+pub fn send_to(state: &AppState, client_key: &str, msg: String) {
     let clients = state.signaling_clients.lock();
     if let Some(ch) = clients.get(client_key) {
         let _ = ch.send(msg);

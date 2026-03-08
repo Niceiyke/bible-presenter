@@ -8,6 +8,7 @@ use wordlyte_lib::{audio, engine, store};
 use store::log_msg;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -1449,6 +1450,10 @@ async fn dismiss_remote_proposal(
     operator_key: String,
 ) -> Result<(), String> {
     state.remote_proposals.lock().remove(&operator_key);
+    
+    // Notify the specific client that their proposal was handled (accepted or dismissed)
+    remote::send_to(&state, &operator_key, json!({ "type": "proposal_handled" }).to_string());
+
     // Broadcast update to all clients and Tauri windows
     remote::broadcast_remote_proposals(&state);
     Ok(())
