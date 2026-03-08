@@ -1633,7 +1633,8 @@ async fn toggle_design_window(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn toggle_studio_window(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("studio") {
-        if window.is_visible().unwrap_or(false) {
+        let is_visible = window.is_visible().unwrap_or(false);
+        if is_visible {
             window.hide().map_err(|e: tauri::Error| e.to_string())?;
         } else {
             window.show().map_err(|e: tauri::Error| e.to_string())?;
@@ -1838,6 +1839,9 @@ async fn trim_studio_recording(state: State<'_, AppState>, id: String, start_sec
     let samples: Vec<i16> = reader.samples::<i16>()
         .map(|s| s.unwrap_or(0))
         .collect();
+    
+    // Drop reader so we can overwrite the file
+    drop(reader);
 
     if start_sample >= end_sample || end_sample as usize > samples.len() {
         return Err("Invalid trim range".to_string());
@@ -3249,7 +3253,7 @@ fn main() {
 
             // Intercept close on secondary windows — hide instead of destroy so
             // the toggle commands can show them again later.
-            for label in ["output", "stage", "design"] {
+            for label in ["output", "stage", "design", "studio"] {
                 if let Some(win) = app.get_webview_window(label) {
                     let win2 = win.clone();
                     win.on_window_event(move |event| {

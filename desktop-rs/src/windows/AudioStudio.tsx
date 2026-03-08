@@ -25,6 +25,8 @@ export function AudioStudio() {
   const [selectedDevice, setSelectedDevice] = useState<string>("");
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
+  const [isWaveformLoading, setIsWaveformLoading] = useState(false);
+  const [isTrimming, setIsTrimming] = useState(false);
 
   const wavesurferRef = useRef<HTMLDivElement>(null);
   const wsInstance = useRef<WaveSurfer | null>(null);
@@ -87,6 +89,11 @@ export function AudioStudio() {
   useEffect(() => {
     if (!wavesurferRef.current || !selectedRecording) return;
 
+    setIsWaveformLoading(true);
+    // Use a cache-buster to ensure we load the latest version of the file
+    const url = convertFileSrc(selectedRecording.path) + `?t=${Date.now()}`;
+    console.log("Loading WaveSurfer with URL:", url);
+
     const ws = WaveSurfer.create({
       container: wavesurferRef.current,
       waveColor: '#4f46e5',
@@ -96,12 +103,20 @@ export function AudioStudio() {
       barRadius: 3,
       height: 120,
       normalize: true,
-      url: convertFileSrc(selectedRecording.path),
+      url,
     });
 
     ws.on('play', () => setIsPlaying(true));
     ws.on('pause', () => setIsPlaying(false));
     ws.on('finish', () => setIsPlaying(false));
+    ws.on('ready', () => {
+      console.log("WaveSurfer is ready");
+      setIsWaveformLoading(false);
+    });
+    ws.on('error', (err) => {
+      console.error("WaveSurfer Error:", err);
+      setIsWaveformLoading(false);
+    });
 
     wsInstance.current = ws;
     setTrimStart(null);
@@ -116,7 +131,12 @@ export function AudioStudio() {
       setTranscript(null);
     }
 
-    return () => ws.destroy();
+    return () => {
+      if (wsInstance.current) {
+        wsInstance.current.destroy();
+        wsInstance.current = null;
+      }
+    };
   }, [selectedRecording]);
 
   const handleDeviceChange = async (name: string) => {
@@ -130,13 +150,15 @@ export function AudioStudio() {
 
   const handleSetStart = () => {
     if (wsInstance.current) {
-      setTrimStart(wsInstance.current.getCurrentTime());
+      const time = wsInstance.current.getCurrentTime();
+      setTrimStart(time);
     }
   };
 
   const handleSetEnd = () => {
     if (wsInstance.current) {
-      setTrimEnd(wsInstance.current.getCurrentTime());
+      const time = wsInstance.current.getCurrentTime();
+      setTrimEnd(time);
     }
   };
 
@@ -147,6 +169,8 @@ export function AudioStudio() {
       return;
     }
     if (!window.confirm("Trim the file? This will overwrite the original recording.")) return;
+    
+    setIsTrimming(true);
     try {
       await invoke("trim_studio_recording", { 
         id: selectedRecording.id, 
@@ -155,11 +179,15 @@ export function AudioStudio() {
       });
       setTrimStart(null);
       setTrimEnd(null);
+      
+      // Update the local object to trigger a reload in the useEffect
+      setSelectedRecording((prev: any) => ({ ...prev, _ts: Date.now() }));
       fetchRecordings();
-      wsInstance.current?.load(convertFileSrc(selectedRecording.path));
     } catch (err) {
       console.error(err);
       alert("Trim failed: " + err);
+    } finally {
+      setIsTrimming(false);
     }
   };
 
@@ -419,36 +447,55 @@ export function AudioStudio() {
 
               <div className="flex-1 flex flex-col gap-6 overflow-hidden">
                 <div className="shrink-0 space-y-4">
-                  <div className="bg-slate-900/50 rounded-3xl border border-slate-800 flex flex-col items-center justify-center relative overflow-hidden group p-4 min-h-[160px]">
-                    <div ref={wavesurferRef} className="w-full" />
-                    {trimStart !== null && (
-                      <div 
-                        className="absolute top-0 bottom-0 w-0.5 bg-green-500 z-10"
-                        style={{ left: `${(trimStart / (wsInstance.current?.getDuration() || 1)) * 100}%` }}
-                      >
-                        <span className="absolute top-2 left-2 bg-green-600 text-[8px] font-black px-1 rounded">START</span>
+                  <div className="bg-slate-900/50 rounded-3xl border border-slate-800 flex flex-col relative overflow-hidden group p-6 min-h-[180px]">
+                    {isWaveformLoading && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-slate-900/80 z-20 backdrop-blur-sm">
+                        <div className="flex flex-col items-center gap-3">
+                          <RefreshCw size={24} className="animate-spin text-indigo-500" />
+                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Loading Waveform...</p>
+                        </div>
                       </div>
                     )}
-                    {trimEnd !== null && (
-                      <div 
-                        className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10"
-                        style={{ left: `${(trimEnd / (wsInstance.current?.getDuration() || 1)) * 100}%` }}
-                      >
-                        <span className="absolute top-2 right-2 bg-red-600 text-[8px] font-black px-1 rounded">END</span>
-                      </div>
-                    )}
+                    
+                    <div className="relative w-full">
+                      <div ref={wavesurferRef} className="w-full min-h-[120px]" />
+                      
+                      {/* Trim Markers */}
+                      {wsInstance.current && (
+                        <>
+                          {trimStart !== null && (
+                            <div 
+                              className="absolute top-0 bottom-0 w-px bg-green-500 z-10 shadow-[0_0_8px_rgba(34,197,94,0.5)]"
+                              style={{ left: `${(trimStart / (wsInstance.current.getDuration() || 1)) * 100}%` }}
+                            >
+                              <div className="absolute top-0 -translate-x-1/2 bg-green-600 text-[8px] font-black px-1.5 py-0.5 rounded shadow-lg text-white">START</div>
+                            </div>
+                          )}
+                          {trimEnd !== null && (
+                            <div 
+                              className="absolute top-0 bottom-0 w-px bg-red-500 z-10 shadow-[0_0_8px_rgba(239,68,68,0.5)]"
+                              style={{ left: `${(trimEnd / (wsInstance.current.getDuration() || 1)) * 100}%` }}
+                            >
+                              <div className="absolute bottom-0 -translate-x-1/2 bg-red-600 text-[8px] font-black px-1.5 py-0.5 rounded shadow-lg text-white">END</div>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
                   </div>
 
                   <div className="flex gap-4">
                     <button 
                       onClick={handleSetStart}
-                      className="flex-1 py-2 bg-slate-800 hover:bg-green-900/30 text-slate-300 hover:text-green-400 rounded-xl text-[10px] font-black uppercase tracking-widest border border-slate-700 transition-all"
+                      disabled={isWaveformLoading || !selectedRecording}
+                      className="flex-1 py-2 bg-slate-800 hover:bg-green-900/30 text-slate-300 hover:text-green-400 rounded-xl text-[10px] font-black uppercase tracking-widest border border-slate-700 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
                     >
                       Set Trim Start
                     </button>
                     <button 
                       onClick={handleSetEnd}
-                      className="flex-1 py-2 bg-slate-800 hover:bg-red-900/30 text-slate-300 hover:text-red-400 rounded-xl text-[10px] font-black uppercase tracking-widest border border-slate-700 transition-all"
+                      disabled={isWaveformLoading || !selectedRecording}
+                      className="flex-1 py-2 bg-slate-800 hover:bg-red-900/30 text-slate-300 hover:text-red-400 rounded-xl text-[10px] font-black uppercase tracking-widest border border-slate-700 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
                     >
                       Set Trim End
                     </button>
@@ -483,18 +530,28 @@ export function AudioStudio() {
                 <div className="flex items-center gap-3">
                   <button 
                     onClick={togglePlayPause}
-                    className="w-12 h-12 bg-white text-black rounded-full flex items-center justify-center hover:scale-105 transition-transform"
+                    disabled={isWaveformLoading}
+                    className="w-12 h-12 bg-white text-black rounded-full flex items-center justify-center hover:scale-105 transition-transform disabled:opacity-50 disabled:scale-100"
                   >
                     {isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" className="ml-1" />}
                   </button>
                   <div className="flex gap-2">
                     <button 
                       onClick={handleTrim}
-                      disabled={trimStart === null || trimEnd === null}
-                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-[10px] font-black uppercase tracking-widest border border-slate-700 transition-all disabled:opacity-30"
+                      disabled={isWaveformLoading || isTrimming || trimStart === null || trimEnd === null}
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-[10px] font-black uppercase tracking-widest border border-slate-700 transition-all disabled:opacity-30 flex items-center gap-2"
                     >
-                      <Scissors size={14} className="inline mr-2" /> Trim Selection
+                      {isTrimming ? <RefreshCw size={14} className="animate-spin" /> : <Scissors size={14} />}
+                      {isTrimming ? "Trimming..." : "Trim Selection"}
                     </button>
+                    {(trimStart !== null || trimEnd !== null) && (
+                      <button 
+                        onClick={() => { setTrimStart(null); setTrimEnd(null); }}
+                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-500 hover:text-white rounded-xl text-[10px] font-black uppercase tracking-widest border border-slate-700 transition-all"
+                      >
+                        Clear Selection
+                      </button>
+                    )}
                   </div>
                 </div>
 
