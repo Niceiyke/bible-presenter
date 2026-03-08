@@ -61,9 +61,10 @@ export function AudioStudio() {
     });
 
     const decayInterval = setInterval(() => {
-      // Use useAppStore.getState() to get the freshest value without adding it to dependency array
       const currentLevel = useAppStore.getState().micLevel;
-      setMicLevel(currentLevel > 0.01 ? currentLevel * 0.85 : 0);
+      if (currentLevel > 0) {
+        setMicLevel(currentLevel > 0.01 ? currentLevel * 0.85 : 0);
+      }
     }, 50);
 
     return () => {
@@ -91,7 +92,7 @@ export function AudioStudio() {
             <LiveRecordingView />
           ) : selectedRecording ? (
             <div className="h-full flex flex-col p-8 overflow-hidden">
-              <WaveformEditor key={selectedRecording.id} />
+              <WaveformEditor />
               <div className="flex-1 mt-6 overflow-hidden flex flex-col">
                 <TranscriptPanel />
               </div>

@@ -1,6 +1,6 @@
-# Bible Presenter Keyboard Shortcuts
+# Wordlyte Keyboard Shortcuts
 
-This document lists the available keyboard shortcuts for managing the projection and various processes in the Bible Presenter application.
+This document lists the available keyboard shortcuts for managing the projection and various processes in the Wordlyte application.
 
 ## General Controls
 

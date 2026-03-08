@@ -35,9 +35,14 @@ export function AppHeader({
 
   return (
     <header className="h-11 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-3 shrink-0 z-30">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2.5">
         {/* Logo */}
-        <div className="w-7 h-7 bg-amber-500 rounded-md flex items-center justify-center text-black font-black text-sm shadow-lg shadow-amber-500/20 shrink-0">BP</div>
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 bg-amber-500 rounded-md flex items-center justify-center text-black font-black text-xs shadow-lg shadow-amber-500/20 shrink-0">WL</div>
+          <span className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-100 hidden sm:block">Wordlyte</span>
+        </div>
+
+        <div className="h-4 w-px bg-slate-800 mx-1" />
 
         {/* Session START / STOP */}
         <button

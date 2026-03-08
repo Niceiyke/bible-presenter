@@ -20,10 +20,6 @@ export function WaveformEditor() {
     setError
   } = useAppStore();
 
-  useEffect(() => {
-    console.log("Selected Recording in WaveformEditor:", selectedRecording);
-  }, [selectedRecording]);
-
   const [isPlaying, setIsPlaying] = useState(false);
   const [isWaveformLoading, setIsWaveformLoading] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
@@ -36,47 +32,43 @@ export function WaveformEditor() {
   const wsInstance = useRef<WaveSurfer | null>(null);
   const regionsRef = useRef<any>(null);
 
+  // Initialize WaveSurfer
   useEffect(() => {
-    if (!wavesurferRef.current || !selectedRecording) {
-      console.warn("WaveSurfer container or recording missing", { 
-        container: !!wavesurferRef.current, 
-        recording: !!selectedRecording 
-      });
-      return;
-    }
+    if (!wavesurferRef.current || !selectedRecording?.path) return;
 
     const container = wavesurferRef.current;
     setIsWaveformLoading(true);
     const url = convertFileSrc(selectedRecording.path);
-    console.log("WaveSurfer initialization starting for URL:", url);
+    
+    // Clean up old instance first
+    if (wsInstance.current) {
+      wsInstance.current.destroy();
+      wsInstance.current = null;
+    }
 
-    const ws = WaveSurfer.create({
-      container,
-      waveColor: '#4f46e5',
-      progressColor: '#818cf8',
-      cursorColor: '#f59e0b',
-      barWidth: 2,
-      barRadius: 3,
-      height: 160,
-      normalize: true,
-      url,
-      plugins: [RegionsPlugin.create()],
-    });
+    try {
+      const regions = RegionsPlugin.create();
+      regionsRef.current = regions;
 
-    // Access the regions plugin instance safely
-    const activePlugins = ws.getActivePlugins();
-    const regions = activePlugins.find(p => p.constructor.name === 'RegionsPlugin' || 'addRegion' in p) as any;
-    regionsRef.current = regions;
+      const ws = WaveSurfer.create({
+        container,
+        waveColor: '#4f46e5',
+        progressColor: '#818cf8',
+        cursorColor: '#f59e0b',
+        barWidth: 2,
+        barRadius: 3,
+        height: 160,
+        normalize: true,
+        url,
+        plugins: [regions],
+      });
 
-    ws.on('play', () => setIsPlaying(true));
-    ws.on('pause', () => setIsPlaying(false));
-    ws.on('finish', () => setIsPlaying(false));
-    ws.on('ready', () => {
-      console.log("WaveSurfer Ready, duration:", ws.getDuration());
-      setIsWaveformLoading(false);
-      setDuration(ws.getDuration());
-      
-      if (regions) {
+      ws.on('play', () => setIsPlaying(true));
+      ws.on('pause', () => setIsPlaying(false));
+      ws.on('finish', () => setIsPlaying(false));
+      ws.on('ready', () => {
+        setIsWaveformLoading(false);
+        setDuration(ws.getDuration());
         regions.addRegion({
           start: 0,
           end: ws.getDuration(),
@@ -84,26 +76,32 @@ export function WaveformEditor() {
           drag: true,
           resize: true,
         });
-      }
-    });
-    ws.on('error', (err) => {
-      console.error("WaveSurfer Detailed Error:", err);
-      setIsWaveformLoading(false);
-      setError("Failed to load audio: " + err);
-    });
-    ws.on('timeupdate', (time) => setCurrentTime(time));
+      });
+      ws.on('error', (err) => {
+        console.error("WaveSurfer Error:", err);
+        setIsWaveformLoading(false);
+        // Only set error if we're still on this recording
+        if (wsInstance.current === ws) {
+          setError("Failed to load audio. The file might be corrupted or missing.");
+        }
+      });
+      ws.on('timeupdate', (time) => setCurrentTime(time));
 
-    wsInstance.current = ws;
+      wsInstance.current = ws;
+    } catch (e) {
+      console.error("WaveSurfer initialization failed:", e);
+      setIsWaveformLoading(false);
+    }
 
     return () => {
-      console.log("Cleaning up WaveSurfer instance...");
       if (wsInstance.current) {
         wsInstance.current.destroy();
         wsInstance.current = null;
       }
     };
-  }, [selectedRecording]);
+  }, [selectedRecording?.path, selectedRecording?._ts]); // Re-init on path or explicit refresh timestamp change
 
+  // Apply zoom
   useEffect(() => {
     if (wsInstance.current) {
       wsInstance.current.zoom(zoomLevel);
@@ -125,10 +123,10 @@ export function WaveformEditor() {
         startSec: start, 
         endSec: end 
       });
+      // Force refresh by updating timestamp
       setSelectedRecording({ ...selectedRecording, _ts: Date.now() });
       fetchRecordings();
     } catch (err: any) {
-      console.error(err);
       setError("Trim failed: " + err);
     } finally {
       setIsTrimming(false);
@@ -145,21 +143,14 @@ export function WaveformEditor() {
 
     setIsTrimming(true);
     try {
-      // Assuming we have a 'save_as_studio_recording' or similar. 
-      // If not, we might need to implement it in Rust or use existing trim then rename.
-      // But let's assume we can add it or use the same logic if we pass a new name.
-      // For now, let's stick to existing commands or propose a new one.
-      // Actually, I'll just use the trim logic and then manually handle the "save as" part if the backend supports it.
-      // Let's check backend if possible. 
       await invoke("trim_studio_recording", { 
         id: selectedRecording.id, 
         startSec: region.start, 
         endSec: region.end,
-        new_id: newName // Corrected parameter
+        new_id: newName
       });
       fetchRecordings();
     } catch (err: any) {
-      console.error(err);
       setError("Save As failed: " + err);
     } finally {
       setIsTrimming(false);

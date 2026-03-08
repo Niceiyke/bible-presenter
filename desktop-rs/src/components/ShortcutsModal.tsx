@@ -102,7 +102,7 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose 
             </div>
             <div>
               <h2 className="text-lg font-bold text-white">Keyboard Shortcuts</h2>
-              <p className="text-xs text-slate-400">Master the presenter workflow</p>
+              <p className="text-xs text-slate-400">Master the Wordlyte workflow</p>
             </div>
           </div>
           <button 

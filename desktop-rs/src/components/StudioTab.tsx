@@ -69,8 +69,8 @@ export function StudioTab({ onStage, onLive, onOpenEditor, onNewPresentation }: 
         {studioList.map((pres) => (
           <div key={pres.id} className="flex flex-col bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden">
             <div className="flex items-center gap-2 p-3">
-              <div className="w-8 h-8 bg-purple-900/30 rounded flex items-center justify-center text-purple-400 font-bold text-xs shrink-0">
-                BP
+              <div className="w-8 h-8 bg-purple-900/30 rounded flex items-center justify-center text-purple-400 font-black text-[10px] shrink-0">
+                WL
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-bold text-slate-200 truncate">{pres.name}</p>

@@ -1,6 +1,6 @@
 # Fixes & Improvements
 
-This directory contains the fixed Rust version of the Bible Presenter.
+This directory contains the fixed Rust version of Wordlyte.
 
 ## Changes Made
 1.  **Audio Device Selection**: 
@@ -27,7 +27,7 @@ If you encounter errors saying these DLLs were not found when running the Window
 ### App Exits/Crashes at Startup
 If the application exits unexpectedly after opening:
 1.  **Check Logs**: Look for `app.log` in your local app data directory:
-    - `C:\Users\<YourUsername>\AppData\Local\com.biblepresenter.rs\logs\app.log`
+    - `C:\Users\<YourUsername>\AppData\Local\io.wordlyte.app\logs\app.log`
 2.  **Common Causes**:
     - Missing models in `src-tauri/models/`.
     - Database file `bible.db` is locked or corrupted.

@@ -1,6 +1,6 @@
 # Audio Pipeline
 
-This document describes how audio capture, resampling, and transcription work in the Bible Presenter desktop app.
+This document describes how audio capture, resampling, and transcription work in the Wordlyte desktop app.
 
 ---
 
