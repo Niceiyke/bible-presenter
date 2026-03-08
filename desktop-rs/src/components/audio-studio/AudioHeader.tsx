@@ -4,6 +4,13 @@ import { useAppStore } from "../../store";
 import { open as openDialog, message } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 
+const SAMPLE_RATE_OPTIONS = [
+  { value: 16000,  label: "16 kHz" },
+  { value: 22050,  label: "22 kHz" },
+  { value: 44100,  label: "44.1 kHz" },
+  { value: 48000,  label: "48 kHz" },
+];
+
 export function AudioHeader() {
   const {
     selectedDevice,
@@ -15,6 +22,8 @@ export function AudioHeader() {
     micLevel,
     isImporting,
     setIsImporting,
+    recordingSampleRate,
+    setRecordingSampleRate,
   } = useAppStore();
 
   const handleImport = async () => {
@@ -25,7 +34,7 @@ export function AudioHeader() {
       });
       if (!selected || typeof selected !== "string") return;
       setIsImporting(true);
-      await invoke("import_studio_audio", { path: selected });
+      await invoke("import_studio_audio", { path: selected, sampleRate: recordingSampleRate });
     } catch (err) {
       console.error(err);
       setIsImporting(false);
@@ -79,6 +88,19 @@ export function AudioHeader() {
           <option value="">Default Input</option>
           {devices.map(([id, name]) => (
             <option key={id} value={id}>{name}</option>
+          ))}
+        </select>
+
+        {/* Sample rate selector */}
+        <select
+          value={recordingSampleRate}
+          onChange={(e) => setRecordingSampleRate(Number(e.target.value))}
+          disabled={isRecording}
+          title="Recording sample rate"
+          className="bg-slate-800 border border-slate-700 text-slate-300 text-[9px] font-bold rounded-md px-2 py-1 cursor-pointer focus:outline-none focus:border-amber-500 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {SAMPLE_RATE_OPTIONS.map(({ value, label }) => (
+            <option key={value} value={value}>{label}</option>
           ))}
         </select>
 

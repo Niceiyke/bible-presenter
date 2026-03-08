@@ -24,7 +24,7 @@ export function useKeyboardShortcuts(props: Props): void {
     setActiveTab, setBottomDeckOpen, bottomDeckOpen,
     showShortcuts, setShowShortcuts,
     outputVisible, setOutputVisible,
-    songs,
+    songs, scheduleEntries, activeScheduleIdx, setActiveScheduleIdx,
   } = useAppStore();
 
   useEffect(() => {
@@ -146,9 +146,71 @@ export function useKeyboardShortcuts(props: Props): void {
         case "k": emit("media-control", { action: "video-play-pause" }); break;
         case "r": emit("media-control", { action: "video-restart" }); break;
         case "m": emit("media-control", { action: "video-mute-toggle" }); break;
+        // EasyWorship-style shortcuts
+        case "g": if (e.ctrlKey) { e.preventDefault(); if (stagedItem) goLive(); } break;
+        case "l": if (e.ctrlKey) { e.preventDefault(); invoke("clear_live"); } break;
+        case "s": if (e.ctrlKey) { e.preventDefault(); setActiveTab("settings"); } break;
+        case "ArrowDown": {
+          e.preventDefault();
+          const nextIdx = activeScheduleIdx !== null ? activeScheduleIdx + 1 : 0;
+          if (nextIdx < scheduleEntries.length) {
+            setActiveScheduleIdx(nextIdx);
+            sendLive(scheduleEntries[nextIdx].item);
+          }
+          break;
+        }
+        case "ArrowUp": {
+          e.preventDefault();
+          const prevIdx = activeScheduleIdx !== null ? activeScheduleIdx - 1 : scheduleEntries.length - 1;
+          if (prevIdx >= 0 && scheduleEntries.length > 0) {
+            setActiveScheduleIdx(prevIdx);
+            sendLive(scheduleEntries[prevIdx].item);
+          }
+          break;
+        }
+        case "Home": {
+          e.preventDefault();
+          if (liveItem?.type === "CustomSlide") {
+            const slides = studioSlides[liveItem.data.presentation_id];
+            if (slides && slides.length > 0) {
+              sendLive(buildCustomSlideItem({ id: liveItem.data.presentation_id, name: liveItem.data.presentation_name, slide_count: slides.length }, slides, 0));
+            }
+          } else if (liveItem?.type === "Song") {
+            const song = songs.find(s => s.id === liveItem.data.song_id);
+            if (song) {
+              const flat = song.arrangement && song.arrangement.length > 0
+                ? song.arrangement.map(lbl => song.sections.find(s => s.label === lbl)).filter(Boolean) as { label: string; lines: string[] }[]
+                : song.sections;
+              if (flat.length > 0) sendLive({ type: "Song", data: { ...liveItem.data, section_label: flat[0].label, lines: flat[0].lines, slide_index: 0 } });
+            }
+          }
+          break;
+        }
+        case "End": {
+          e.preventDefault();
+          if (liveItem?.type === "CustomSlide") {
+            const slides = studioSlides[liveItem.data.presentation_id];
+            if (slides && slides.length > 0) {
+              const last = slides.length - 1;
+              sendLive(buildCustomSlideItem({ id: liveItem.data.presentation_id, name: liveItem.data.presentation_name, slide_count: slides.length }, slides, last));
+            }
+          } else if (liveItem?.type === "Song") {
+            const song = songs.find(s => s.id === liveItem.data.song_id);
+            if (song) {
+              const flat = song.arrangement && song.arrangement.length > 0
+                ? song.arrangement.map(lbl => song.sections.find(s => s.label === lbl)).filter(Boolean) as { label: string; lines: string[] }[]
+                : song.sections;
+              if (flat.length > 0) {
+                const last = flat.length - 1;
+                sendLive({ type: "Song", data: { ...liveItem.data, section_label: flat[last].label, lines: flat[last].lines, slide_index: last } });
+              }
+            }
+          }
+          break;
+        }
       }
     };
     window.addEventListener("keydown", handleKD);
     return () => window.removeEventListener("keydown", handleKD);
-  }, [label, stagedItem, goLive, liveItem, studioSlides, nextVerse, ltVisible, ltFlatLines, ltLineIndex, ltTemplate, settings, bottomDeckOpen, setSettings, setIsBlackout, setActiveTab, setBottomDeckOpen, sendLive, stageItem, setLtVisible, ltLinesPerDisplay, ltMode, setLtLineIndex, showShortcuts, setShowShortcuts, outputVisible, setOutputVisible, songs, getNextItem]);
+  }, [label, stagedItem, goLive, liveItem, studioSlides, nextVerse, ltVisible, ltFlatLines, ltLineIndex, ltTemplate, settings, bottomDeckOpen, setSettings, setIsBlackout, setActiveTab, setBottomDeckOpen, sendLive, stageItem, setLtVisible, ltLinesPerDisplay, ltMode, setLtLineIndex, showShortcuts, setShowShortcuts, outputVisible, setOutputVisible, songs, getNextItem, scheduleEntries, activeScheduleIdx, setActiveScheduleIdx]);
 }

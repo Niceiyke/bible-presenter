@@ -26,6 +26,8 @@ pub struct AudioEngine {
     session_level_tx: Option<mpsc::Sender<f32>>,
     pub media_playing: Arc<AtomicBool>,
     pub is_muted: Arc<AtomicBool>,
+    /// Target sample rate for resampling (stored so hot-swap reopens at the same rate).
+    target_rate: f64,
 }
 
 impl AudioEngine {
@@ -38,6 +40,7 @@ impl AudioEngine {
             session_level_tx: None,
             media_playing: Arc::new(AtomicBool::new(false)),
             is_muted: Arc::new(AtomicBool::new(false)),
+            target_rate: 16000.0,
         }
     }
 
@@ -73,18 +76,21 @@ impl AudioEngine {
     }
 
     /// Start capturing audio, storing the senders for future hot-swaps.
+    /// `target_rate` — desired output sample rate in Hz (e.g. 16000.0 for Whisper, 44100.0 for studio).
     pub fn start_capturing(
         &mut self,
         audio_tx: mpsc::Sender<Vec<f32>>,
         error_tx: mpsc::Sender<String>,
         level_tx: Option<mpsc::Sender<f32>>,
+        target_rate: f64,
     ) -> anyhow::Result<()> {
         // Stop any existing stream before starting a new one (prevents double-stream)
         self.stop();
+        self.target_rate = target_rate;
         self.session_audio_tx = Some(audio_tx.clone());
         self.session_error_tx = Some(error_tx.clone());
         self.session_level_tx = level_tx.clone();
-        self.open_stream(audio_tx, error_tx, level_tx)
+        self.open_stream(audio_tx, error_tx, level_tx, target_rate)
     }
 
     /// Hot-swap to a different audio device mid-session.
@@ -103,7 +109,8 @@ impl AudioEngine {
         ) {
             // Drop old CPAL stream only — keep senders so the processing task continues
             self.stream = None;
-            self.open_stream(atx, etx, self.session_level_tx.clone())?;
+            let rate = self.target_rate;
+            self.open_stream(atx, etx, self.session_level_tx.clone(), rate)?;
         }
         Ok(())
     }
@@ -114,6 +121,7 @@ impl AudioEngine {
         audio_tx: mpsc::Sender<Vec<f32>>,
         error_tx: mpsc::Sender<String>,
         level_tx: Option<mpsc::Sender<f32>>,
+        target_rate: f64,
     ) -> anyhow::Result<()> {
         let host = cpal::default_host();
 
@@ -132,7 +140,6 @@ impl AudioEngine {
 
         let config = device.default_input_config()?;
         let sample_rate = config.sample_rate().0 as f64;
-        let target_rate = 16000.0;
 
         let aec_flag = self.media_playing.clone();
         let mute_flag = self.is_muted.clone();

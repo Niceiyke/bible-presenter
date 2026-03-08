@@ -24,8 +24,9 @@ export interface AudioStudioSlice {
   isTrimming: boolean;
   micLevel: number;
   transMode: "local" | "cloud";
+  recordingSampleRate: number;
   error: string | null;
-  
+
   // Actions
   setRecordings: (recordings: Recording[]) => void;
   setSelectedRecording: (recording: Recording | null) => void;
@@ -37,6 +38,7 @@ export interface AudioStudioSlice {
   setIsTrimming: (v: boolean) => void;
   setMicLevel: (v: number) => void;
   setTransMode: (v: "local" | "cloud") => void;
+  setRecordingSampleRate: (v: number) => void;
   setError: (v: string | null) => void;
   
   // Async Actions
@@ -61,6 +63,7 @@ export const createAudioStudioSlice: StateCreator<AppStore, [], [], AudioStudioS
   isTrimming: false,
   micLevel: 0,
   transMode: "local",
+  recordingSampleRate: 44100,
   error: null,
 
   setRecordings: (recordings) => set({ recordings }),
@@ -73,6 +76,7 @@ export const createAudioStudioSlice: StateCreator<AppStore, [], [], AudioStudioS
   setIsTrimming: (isTrimming) => set({ isTrimming }),
   setMicLevel: (micLevel) => set({ micLevel }),
   setTransMode: (transMode) => set({ transMode }),
+  setRecordingSampleRate: (recordingSampleRate) => set({ recordingSampleRate }),
   setError: (error) => set({ error }),
 
   fetchRecordings: async (autoSelectId) => {
@@ -108,7 +112,8 @@ export const createAudioStudioSlice: StateCreator<AppStore, [], [], AudioStudioS
 
   handleStartRecording: async () => {
     try {
-      await invoke("start_studio_recording");
+      const { recordingSampleRate } = get();
+      await invoke("start_studio_recording", { sampleRate: recordingSampleRate });
       set({ isRecording: true });
     } catch (error) {
       console.error("Failed to start recording:", error);

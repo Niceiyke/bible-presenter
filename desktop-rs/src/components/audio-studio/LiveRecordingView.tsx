@@ -3,7 +3,7 @@ import { Mic, Square } from "lucide-react";
 import { useAppStore } from "../../store";
 
 export function LiveRecordingView() {
-  const { micLevel, handleStopRecording } = useAppStore();
+  const { micLevel, handleStopRecording, recordingSampleRate } = useAppStore();
   const [seconds, setSeconds] = useState(0);
 
   useEffect(() => {
@@ -67,7 +67,7 @@ export function LiveRecordingView() {
       <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg">
         <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
         <p className="text-[8px] font-bold uppercase tracking-widest text-slate-500">
-          Capturing · 16 kHz Mono
+          Capturing · {recordingSampleRate >= 1000 ? `${(recordingSampleRate / 1000).toFixed(recordingSampleRate % 1000 === 0 ? 0 : 1)} kHz` : `${recordingSampleRate} Hz`} · Mono
         </p>
       </div>
     </div>

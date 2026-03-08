@@ -624,7 +624,7 @@ async fn start_operator_recording(app: AppHandle, state: State<'_, AppState>) ->
 
     {
         let op_device = state.operator_audio.lock().selected_device().map(|s| s.to_string()).unwrap_or_else(|| "system default".to_string());
-        if let Err(e) = state.operator_audio.lock().start_capturing(op_audio_tx, op_error_tx, Some(op_level_tx)) {
+        if let Err(e) = state.operator_audio.lock().start_capturing(op_audio_tx, op_error_tx, Some(op_level_tx), 16000.0) {
             return Err(format!("Operator mic error: {}", e));
         }
         log_msg(&app, &format!("[Operator] Recording started — device: \"{}\"", op_device));
@@ -886,7 +886,7 @@ async fn start_preacher_recording(app: AppHandle, state: State<'_, AppState>) ->
     let (pr_level_tx, mut pr_level_rx) = tokio::sync::mpsc::channel::<f32>(50);
 
     let pr_device = state.preacher_audio.lock().selected_device().map(|s| s.to_string()).unwrap_or_default();
-    if let Err(e) = state.preacher_audio.lock().start_capturing(pr_audio_tx, pr_error_tx, Some(pr_level_tx)) {
+    if let Err(e) = state.preacher_audio.lock().start_capturing(pr_audio_tx, pr_error_tx, Some(pr_level_tx), 16000.0) {
         return Err(format!("Preacher mic error: {}", e));
     }
     log_msg(&app, &format!("[Preacher] Recording started — device: \"{}\"", pr_device));
@@ -1870,7 +1870,7 @@ async fn transcribe_studio_recording(app: AppHandle, state: State<'_, AppState>,
 }
 
 #[tauri::command]
-async fn trim_studio_recording(state: State<'_, AppState>, id: String, start_sec: f32, end_sec: f32, new_id: Option<String>) -> Result<(), String> {
+async fn trim_studio_recording(state: State<'_, AppState>, id: String, start_sec: f32, end_sec: f32, new_id: Option<String>, fade_in_sec: Option<f32>, fade_out_sec: Option<f32>) -> Result<(), String> {
     let path = state.app_data_dir.join("recordings").join(format!("{}.wav", id));
     if !path.exists() {
         return Err("Recording not found".to_string());
@@ -1900,21 +1900,48 @@ async fn trim_studio_recording(state: State<'_, AppState>, id: String, start_sec
             return Err("Invalid trim range".to_string());
         }
 
-        let trimmed_samples = &samples[start_sample as usize..end_sample as usize];
+        // Convert trimmed slice to f32 for fade processing
+        let mut faded: Vec<f32> = samples[start_sample as usize..end_sample as usize]
+            .iter()
+            .map(|&s| s as f32 / 32768.0)
+            .collect();
+
+        // Apply linear fade-in
+        if let Some(fi) = fade_in_sec {
+            if fi > 0.0 {
+                let fi_frames = ((fi * sample_rate).round() as usize * channels).min(faded.len());
+                for i in 0..fi_frames {
+                    faded[i] *= i as f32 / fi_frames as f32;
+                }
+            }
+        }
+
+        // Apply linear fade-out
+        if let Some(fo) = fade_out_sec {
+            if fo > 0.0 {
+                let fo_frames = ((fo * sample_rate).round() as usize * channels).min(faded.len());
+                let start_idx = faded.len().saturating_sub(fo_frames);
+                for i in 0..fo_frames {
+                    faded[start_idx + i] *= 1.0 - (i as f32 / fo_frames as f32);
+                }
+            }
+        }
 
         let mut writer = hound::WavWriter::create(&target_path, spec).map_err(|e| e.to_string())?;
-        for &s in trimmed_samples {
-            writer.write_sample(s).map_err(|e| e.to_string())?;
+        for s in faded {
+            let sample = (s * 32767.0).clamp(-32768.0, 32767.0) as i16;
+            writer.write_sample(sample).map_err(|e| e.to_string())?;
         }
         writer.finalize().map_err(|e| e.to_string())
     }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-async fn start_studio_recording(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+async fn start_studio_recording(app: AppHandle, state: State<'_, AppState>, sample_rate: Option<u32>) -> Result<(), String> {
     if state.studio_is_active.load(Ordering::Relaxed) {
         return Err("Recording already in progress".to_string());
     }
+    let sample_rate = sample_rate.unwrap_or(44100).clamp(8000, 192000);
 
     let recordings_dir = state.app_data_dir.join("recordings");
     if !recordings_dir.exists() {
@@ -1935,7 +1962,7 @@ async fn start_studio_recording(app: AppHandle, state: State<'_, AppState>) -> R
     // Start capturing in the studio_audio engine
     {
         let mut audio = state.studio_audio.lock();
-        audio.start_capturing(audio_tx, error_tx, Some(level_tx)).map_err(|e| e.to_string())?;
+        audio.start_capturing(audio_tx, error_tx, Some(level_tx), sample_rate as f64).map_err(|e| e.to_string())?;
     }
 
     let path_clone = path.clone();
@@ -1944,7 +1971,7 @@ async fn start_studio_recording(app: AppHandle, state: State<'_, AppState>) -> R
         let stem = path_clone.file_stem().unwrap_or_default().to_string_lossy().to_string();
         let spec = hound::WavSpec {
             channels: 1,
-            sample_rate: 16000,
+            sample_rate,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
@@ -2004,7 +2031,7 @@ async fn stop_studio_recording(state: State<'_, AppState>) -> Result<(), String>
 }
 
 #[tauri::command]
-async fn import_studio_audio(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<(), String> {
+async fn import_studio_audio(app: AppHandle, state: State<'_, AppState>, path: String, sample_rate: Option<u32>) -> Result<(), String> {
     let source_path = PathBuf::from(path);
     if !source_path.exists() {
         return Err("File not found".to_string());
@@ -2018,6 +2045,8 @@ async fn import_studio_audio(app: AppHandle, state: State<'_, AppState>, path: S
     let stem = source_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
     let target_filename = format!("{}_imported.wav", stem);
     let target_path = recordings_dir.join(target_filename);
+
+    let sample_rate = sample_rate.unwrap_or(44100).clamp(8000, 192000);
 
     // Run transcoding in a separate thread
     tauri::async_runtime::spawn_blocking(move || {
@@ -2047,11 +2076,11 @@ async fn import_studio_audio(app: AppHandle, state: State<'_, AppState>, path: S
             let track_id = track.id;
             let source_rate = track.codec_params.sample_rate.unwrap_or(44100) as f64;
             let source_channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(2);
-            let target_rate = 16000.0;
+            let target_rate = sample_rate as f64;
 
             let spec = hound::WavSpec {
                 channels: 1,
-                sample_rate: 16000,
+                sample_rate,
                 bits_per_sample: 16,
                 sample_format: hound::SampleFormat::Int,
             };
