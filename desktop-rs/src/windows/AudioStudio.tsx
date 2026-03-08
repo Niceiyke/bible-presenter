@@ -170,7 +170,7 @@ export function AudioStudio() {
       fetchRecordings();
       // Update local state so the UI updates immediately
       const newName = renameValue.trim();
-      setSelectedRecording(prev => prev ? { ...prev, name: newName, id: newName } : null);
+      setSelectedRecording((prev: any) => prev ? { ...prev, name: newName, id: newName } : null);
     } catch (err) {
       console.error(err);
       alert("Rename failed: " + err);

@@ -13,7 +13,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
-use symphonia::core::audio::{AudioBufferRef, Signal};
+use rubato::Resampler;
 use symphonia::core::codecs::DecoderOptions;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
@@ -2031,12 +2031,12 @@ async fn import_studio_audio(app: AppHandle, state: State<'_, AppState>, path: S
                     }
 
                     let mono_samples = if let Some(ref mut rs) = resampler {
-                        let output = rs.process(&planar, None).map_err(|e| e.to_string())?;
+                        let output = rs.process(&planar, None).map_err(|e: rubato::ResampleError| e.to_string())?;
                         let out_len = output[0].len();
                         let mut mono = vec![0.0f32; out_len];
                         for chan_data in output {
-                            for (i, &s) in chan_data.iter().enumerate() {
-                                mono[i] += s;
+                            for (i, s) in chan_data.iter().enumerate() {
+                                mono[i] += *s;
                             }
                         }
                         for s in &mut mono { *s /= source_channels as f32; }
@@ -2045,8 +2045,8 @@ async fn import_studio_audio(app: AppHandle, state: State<'_, AppState>, path: S
                         let out_len = planar[0].len();
                         let mut mono = vec![0.0f32; out_len];
                         for chan_data in planar {
-                            for (i, &s) in chan_data.iter().enumerate() {
-                                mono[i] += s;
+                            for (i, s) in chan_data.iter().enumerate() {
+                                mono[i] += *s;
                             }
                         }
                         for s in &mut mono { *s /= source_channels as f32; }
