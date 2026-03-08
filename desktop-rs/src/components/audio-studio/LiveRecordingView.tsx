@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Mic, Square, Circle } from "lucide-react";
+import { Mic, Square } from "lucide-react";
 import { useAppStore } from "../../store";
 
 export function LiveRecordingView() {
@@ -7,73 +7,67 @@ export function LiveRecordingView() {
   const [seconds, setSeconds] = useState(0);
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      setSeconds(s => s + 1);
-    }, 1000);
+    const timer = setInterval(() => setSeconds(s => s + 1), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  const formatTime = (totalSeconds: number) => {
-    const hrs = Math.floor(totalSeconds / 3600);
-    const mins = Math.floor((totalSeconds % 3600) / 60);
-    const secs = totalSeconds % 60;
-    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  const fmtTime = (s: number) => {
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
   };
 
-  // Generate a simple "heartbeat" or rolling bars visualizer
-  const bars = Array.from({ length: 40 }).map((_, i) => {
-    // Random jitter + base level for a "live" feel
-    const height = Math.max(10, (micLevel * 100) * (0.5 + Math.random() * 0.5));
-    return height;
-  });
-
   return (
-    <div className="flex-1 flex flex-col items-center justify-center bg-slate-950 p-12">
-      <div className="relative mb-12">
-        <div className="absolute inset-0 bg-red-500/20 blur-3xl rounded-full animate-pulse" />
-        <div className="relative w-32 h-32 bg-slate-900 rounded-[2.5rem] border border-red-500/30 flex items-center justify-center shadow-2xl shadow-red-500/10">
-          <Mic size={48} className="text-red-500 animate-pulse" />
+    <div className="flex-1 flex flex-col items-center justify-center bg-slate-950 gap-8">
+      {/* Mic icon with live badge */}
+      <div className="relative">
+        <div className="absolute inset-0 bg-red-500/15 blur-2xl rounded-full" />
+        <div className="relative w-20 h-20 bg-slate-900 border border-red-500/20 rounded-2xl flex items-center justify-center shadow-xl">
+          <Mic size={32} className="text-red-500" />
         </div>
-        <div className="absolute -top-2 -right-2 flex items-center gap-1.5 bg-red-600 px-3 py-1 rounded-full shadow-lg">
-          <Circle size={8} fill="currentColor" className="text-white animate-pulse" />
-          <span className="text-[10px] font-black text-white uppercase tracking-widest">Live</span>
+        <div className="absolute -top-2 -right-2 flex items-center gap-1 bg-red-600 px-2 py-0.5 rounded-full">
+          <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+          <span className="text-[8px] font-black uppercase tracking-widest text-white">Live</span>
         </div>
       </div>
 
-      <div className="text-center mb-12">
-        <h3 className="text-6xl font-black text-white tabular-nums tracking-tighter mb-2">
-          {formatTime(seconds)}
-        </h3>
-        <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em]">Recording in Progress</p>
+      {/* Timer */}
+      <div className="text-center">
+        <p className="text-4xl font-black text-white tabular-nums tracking-tighter">
+          {fmtTime(seconds)}
+        </p>
+        <p className="text-[9px] font-black uppercase tracking-widest text-slate-600 mt-1">Recording in progress</p>
       </div>
 
-      <div className="w-full max-w-2xl h-32 flex items-center justify-center gap-1 mb-16">
-        {bars.map((h, i) => (
-          <div 
-            key={i}
-            className="w-1.5 bg-red-500 rounded-full transition-all duration-75 opacity-80"
-            style={{ 
-              height: `${h}%`,
-              opacity: 0.3 + (h / 100) * 0.7 
-            }}
-          />
-        ))}
+      {/* VU bars */}
+      <div className="flex items-center justify-center gap-0.5 h-16 w-48">
+        {Array.from({ length: 32 }).map((_, i) => {
+          const h = Math.max(8, micLevel * 100 * (0.4 + Math.random() * 0.6));
+          return (
+            <div
+              key={i}
+              className="w-1 bg-red-500 rounded-full transition-all duration-75"
+              style={{ height: `${h}%`, opacity: 0.3 + (h / 100) * 0.7 }}
+            />
+          );
+        })}
       </div>
 
-      <button 
+      {/* Stop button */}
+      <button
         onClick={handleStopRecording}
-        className="group flex flex-col items-center gap-4 transition-transform hover:scale-105 active:scale-95"
+        className="group flex items-center gap-2.5 px-5 py-2.5 bg-slate-800 hover:bg-red-600 border border-slate-700 hover:border-red-500 text-slate-300 hover:text-white rounded-lg text-[9px] font-black uppercase tracking-widest transition-all shadow-lg active:scale-95"
       >
-        <div className="w-20 h-20 bg-white text-black rounded-full flex items-center justify-center shadow-xl shadow-white/5 group-hover:bg-red-500 group-hover:text-white transition-colors">
-          <Square size={32} fill="currentColor" />
-        </div>
-        <span className="text-[11px] font-black text-slate-400 uppercase tracking-widest group-hover:text-red-500 transition-colors">Stop Session</span>
+        <Square size={12} fill="currentColor" />
+        Stop Session
       </button>
-      
-      <div className="mt-12 p-4 bg-slate-900/50 border border-slate-800 rounded-2xl flex items-center gap-3">
-        <div className="w-2 h-2 rounded-full bg-indigo-500" />
-        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-          Audio is being captured at 16kHz Mono (Broadcaster Standard)
+
+      {/* Info badge */}
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg">
+        <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+        <p className="text-[8px] font-bold uppercase tracking-widest text-slate-500">
+          Capturing · 16 kHz Mono
         </p>
       </div>
     </div>

@@ -1,7 +1,8 @@
 import React, { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Mic } from "lucide-react";
+import { message } from "@tauri-apps/plugin-dialog";
 import { AnimatePresence } from "framer-motion";
+import { Mic } from "lucide-react";
 import { useAppStore } from "../store";
 import { AudioHeader } from "../components/audio-studio/AudioHeader";
 import { AudioSidebar } from "../components/audio-studio/AudioSidebar";
@@ -11,24 +12,22 @@ import { LiveRecordingView } from "../components/audio-studio/LiveRecordingView"
 import { Toast } from "../components/Toast";
 
 export function AudioStudio() {
-  const { 
-    selectedRecording, 
-    fetchRecordings, 
-    fetchDevices, 
-    setMicLevel, 
+  const {
+    selectedRecording,
+    fetchRecordings,
+    fetchDevices,
+    setMicLevel,
     setIsImporting,
     setIsTranscribing,
     isRecording,
     error,
-    setError
+    setError,
   } = useAppStore();
-
 
   useEffect(() => {
     fetchRecordings();
     fetchDevices();
 
-    // Listen for level updates
     const unlistenLevel = listen("studio-audio-level", (ev: any) => {
       setMicLevel(ev.payload as number);
     });
@@ -40,7 +39,7 @@ export function AudioStudio() {
 
     const unlistenImportErr = listen("studio-import-error", (ev: any) => {
       setIsImporting(false);
-      alert("Import failed: " + ev.payload);
+      message("Import failed: " + ev.payload, { title: "Import Error", kind: "error" });
     });
 
     const unlistenSaved = listen("studio-recording-saved", (ev: any) => {
@@ -48,23 +47,17 @@ export function AudioStudio() {
     });
 
     const unlistenTrans = listen("studio-transcription-status", (ev: any) => {
-      const { id, status, text } = ev.payload;
-      // We need to update the recording in the store if it's the one currently selected
-      // Actually, just refetching recordings or updating the selected one works.
+      const { status } = ev.payload;
       if (status === "processing") setIsTranscribing(true);
       if (status === "complete") {
         setIsTranscribing(false);
         fetchRecordings();
-        // Force update selected recording if it's the one transcribed
-        // Note: the component handles fetching transcript via useEffect on selectedRecording
       }
     });
 
     const decayInterval = setInterval(() => {
-      const currentLevel = useAppStore.getState().micLevel;
-      if (currentLevel > 0) {
-        setMicLevel(currentLevel > 0.01 ? currentLevel * 0.85 : 0);
-      }
+      const level = useAppStore.getState().micLevel;
+      if (level > 0) setMicLevel(level > 0.01 ? level * 0.85 : 0);
     }, 50);
 
     return () => {
@@ -82,34 +75,39 @@ export function AudioStudio() {
       <AnimatePresence>
         {error && <Toast message={error} onDone={() => setError(null)} />}
       </AnimatePresence>
+
       <AudioHeader />
 
-      <main className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden">
         <AudioSidebar />
 
-        <section className="flex-1 flex flex-col bg-slate-950 relative overflow-hidden">
+        <main className="flex-1 flex flex-col overflow-hidden bg-slate-950">
           {isRecording ? (
             <LiveRecordingView />
           ) : selectedRecording ? (
-            <div className="h-full flex flex-col p-8 overflow-hidden">
-              <WaveformEditor />
-              <div className="flex-1 mt-6 overflow-hidden flex flex-col">
+            <div className="flex-1 flex flex-col overflow-hidden">
+              {/* Top: waveform editor */}
+              <div className="shrink-0 border-b border-slate-800">
+                <WaveformEditor />
+              </div>
+              {/* Bottom: transcript */}
+              <div className="flex-1 overflow-hidden flex flex-col">
                 <TranscriptPanel />
               </div>
             </div>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center text-slate-800">
-              <div className="w-24 h-24 bg-slate-900 rounded-3xl flex items-center justify-center mb-6 border border-slate-800">
-                <Mic size={48} strokeWidth={1} className="text-slate-700" />
+            <div className="flex-1 flex flex-col items-center justify-center gap-3 text-slate-700">
+              <div className="w-16 h-16 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-center">
+                <Mic size={28} strokeWidth={1.5} className="text-slate-600" />
               </div>
-              <h3 className="text-xl font-black text-slate-700 uppercase tracking-widest mb-2">Recording Workspace</h3>
-              <p className="text-slate-600 max-w-sm text-center text-sm leading-relaxed">
-                Select a recording from the history to begin editing or start a new recording session.
-              </p>
+              <div className="text-center">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-600">Recording Workspace</p>
+                <p className="text-[9px] text-slate-700 mt-1">Select a recording or start a new session</p>
+              </div>
             </div>
           )}
-        </section>
-      </main>
+        </main>
+      </div>
     </div>
   );
 }

@@ -1836,34 +1836,35 @@ async fn trim_studio_recording(state: State<'_, AppState>, id: String, start_sec
     let target_id = new_id.unwrap_or_else(|| id.clone());
     let target_path = state.app_data_dir.join("recordings").join(format!("{}.wav", target_id));
 
-    let mut reader = hound::WavReader::open(&path).map_err(|e| e.to_string())?;
-    let spec = reader.spec();
-    let sample_rate = spec.sample_rate as f32;
-    let channels = spec.channels as usize;
+    // Run heavy file I/O on a blocking thread to avoid stalling the Tokio executor.
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut reader = hound::WavReader::open(&path).map_err(|e| e.to_string())?;
+        let spec = reader.spec();
+        let sample_rate = spec.sample_rate as f32;
+        let channels = spec.channels as usize;
 
-    let start_sample = (start_sec * sample_rate) as u32 * channels as u32;
-    let end_sample = (end_sec * sample_rate) as u32 * channels as u32;
+        let start_sample = (start_sec * sample_rate) as u32 * channels as u32;
+        let end_sample = (end_sec * sample_rate) as u32 * channels as u32;
 
-    let samples: Vec<i16> = reader.samples::<i16>()
-        .map(|s| s.unwrap_or(0))
-        .collect();
-    
-    // Drop reader so we can overwrite the file if target_path == path
-    drop(reader);
+        let samples: Vec<i16> = reader.samples::<i16>()
+            .map(|s| s.unwrap_or(0))
+            .collect();
 
-    if start_sample >= end_sample || end_sample as usize > samples.len() {
-        return Err("Invalid trim range".to_string());
-    }
+        // Drop reader so we can overwrite the file if target_path == path
+        drop(reader);
 
-    let trimmed_samples = &samples[start_sample as usize..end_sample as usize];
+        if start_sample >= end_sample || end_sample as usize > samples.len() {
+            return Err("Invalid trim range".to_string());
+        }
 
-    let mut writer = hound::WavWriter::create(&target_path, spec).map_err(|e| e.to_string())?;
-    for &s in trimmed_samples {
-        writer.write_sample(s).map_err(|e| e.to_string())?;
-    }
-    writer.finalize().map_err(|e| e.to_string())?;
+        let trimmed_samples = &samples[start_sample as usize..end_sample as usize];
 
-    Ok(())
+        let mut writer = hound::WavWriter::create(&target_path, spec).map_err(|e| e.to_string())?;
+        for &s in trimmed_samples {
+            writer.write_sample(s).map_err(|e| e.to_string())?;
+        }
+        writer.finalize().map_err(|e| e.to_string())
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
