@@ -1,9 +1,14 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Plus, Trash2, Save, X, ChevronLeft, ChevronRight, Type, Image as ImageIcon, Copy, Square, Undo2, Redo2, AlignCenter, AlignJustify, AlignLeft, AlignRight, ArrowUp, ArrowDown, MoveUp, MoveDown, BookOpen, Lock, Unlock } from "lucide-react";
+import {
+  Trash2, Save, X, ChevronLeft, ChevronRight,
+  Type, Image as ImageIcon, Copy, Square,
+  Undo2, Redo2, AlignCenter, AlignLeft, AlignRight,
+  ArrowUp, ArrowDown, MoveUp, MoveDown,
+  BookOpen, Lock, Unlock,
+} from "lucide-react";
 import { CustomSlideRenderer } from "../shared/Renderers";
-import { TiptapEditor } from "./TiptapEditor";
 import { MediaPickerModal } from "../MediaPickerModal";
 import { BiblePickerModal } from "../BiblePickerModal";
 import { newDefaultSlide, newTitleSlide, newBlankSlide, stableId, relativizePath } from "../../utils";
@@ -11,848 +16,974 @@ import { useAppStore } from "../../store";
 import type { CustomPresentation, CustomSlide, MediaItem, SlideElement } from "../../types";
 import { FONTS } from "../../types";
 
+// ─── Inline Text Editor ───────────────────────────────────────────────────────
+// Renders directly on the canvas. stopPropagation fixes spacebar & all key input.
+function InlineTextEditor({
+  el,
+  canvasScale,
+  onCommit,
+}: {
+  el: SlideElement;
+  canvasScale: number;
+  onCommit: (html: string) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const div = ref.current;
+    if (!div) return;
+    // Set HTML once on mount only (avoid React overwriting cursor position)
+    div.innerHTML = el.content || "";
+    div.focus();
+    // Move cursor to end
+    const range = document.createRange();
+    range.selectNodeContents(div);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  }, []); // intentionally empty – only run once
+
+  const justifyContent =
+    el.v_align === "middle" ? "center" :
+    el.v_align === "bottom" ? "flex-end" : "flex-start";
+
+  return (
+    <div
+      ref={ref}
+      contentEditable
+      suppressContentEditableWarning
+      onBlur={() => { if (ref.current) onCommit(ref.current.innerHTML); }}
+      onKeyDown={(e) => {
+        // Critical: stop ALL keys from reaching global shortcut handlers
+        e.stopPropagation();
+        if (e.key === "Escape") {
+          e.preventDefault();
+          if (ref.current) onCommit(ref.current.innerHTML);
+        }
+      }}
+      className="absolute inset-0 outline-none overflow-hidden ring-2 ring-emerald-400/60"
+      style={{
+        fontFamily: el.font_family || "inherit",
+        fontSize: `${(el.font_size || 32) * canvasScale}px`,
+        color: el.color || "#ffffff",
+        fontWeight: el.bold ? "bold" : "normal",
+        fontStyle: el.italic ? "italic" : "normal",
+        textAlign: (el.align || "center") as React.CSSProperties["textAlign"],
+        display: "flex",
+        flexDirection: "column",
+        justifyContent,
+        padding: "2px 4px",
+        lineHeight: 1.25,
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-word",
+        cursor: "text",
+        textShadow:
+          el.shadow !== false
+            ? `2px 2px 6px ${el.shadow_color || "#000"}`
+            : "none",
+      }}
+    />
+  );
+}
+
+// ─── Presentation migrator ────────────────────────────────────────────────────
+function migratePresentation(p: CustomPresentation): CustomPresentation {
+  if (p.version && p.version >= 1) return p;
+  return {
+    ...p, version: 1,
+    slides: p.slides.map(s => {
+      if (!s.elements || s.elements.length === 0) {
+        const elements: SlideElement[] = [];
+        if (s.headerEnabled !== false && s.header) {
+          elements.push({ id: stableId(), kind: "text", x: 10, y: 10, w: 80, h: s.headerHeightPct ?? 35, z_index: 1, content: s.header.text, font_size: s.header.fontSize, font_family: s.header.fontFamily, color: s.header.color, bold: s.header.bold, italic: s.header.italic, align: s.header.align });
+        }
+        if (s.body) {
+          elements.push({ id: stableId(), kind: "text", x: 10, y: (s.headerHeightPct ?? 35) + 15, w: 80, h: 40, z_index: 2, content: s.body.text, font_size: s.body.fontSize, font_family: s.body.fontFamily, color: s.body.color, bold: s.body.bold, italic: s.body.italic, align: s.body.align });
+        }
+        return { ...s, elements };
+      }
+      return s;
+    }),
+  };
+}
+
+// ─── Resize handle positions ─────────────────────────────────────────────────
+const HANDLES: Record<string, React.CSSProperties> = {
+  nw: { top: -5, left: -5, cursor: "nwse-resize" },
+  n:  { top: -5, left: "50%", transform: "translateX(-50%)", cursor: "ns-resize" },
+  ne: { top: -5, right: -5, cursor: "nesw-resize" },
+  e:  { top: "50%", right: -5, transform: "translateY(-50%)", cursor: "ew-resize" },
+  se: { bottom: -5, right: -5, cursor: "nwse-resize" },
+  s:  { bottom: -5, left: "50%", transform: "translateX(-50%)", cursor: "ns-resize" },
+  sw: { bottom: -5, left: -5, cursor: "nesw-resize" },
+  w:  { top: "50%", left: -5, transform: "translateY(-50%)", cursor: "ew-resize" },
+};
+
+// ─── Main SlideEditor ────────────────────────────────────────────────────────
 interface SlideEditorProps {
   initialPres: CustomPresentation;
   mediaImages: MediaItem[];
   onClose: (saved: boolean) => void;
 }
 
-function migratePresentation(initialPres: CustomPresentation): CustomPresentation {
-  if (initialPres.version && initialPres.version >= 1) return initialPres;
-
-  return {
-    ...initialPres,
-    version: 1,
-    slides: initialPres.slides.map(s => {
-      if (!s.elements || s.elements.length === 0) {
-        const elements: SlideElement[] = [];
-        if (s.headerEnabled !== false && s.header) {
-          elements.push({
-            id: stableId(), kind: "text",
-            x: 10, y: 10, w: 80, h: s.headerHeightPct ?? 35, z_index: 1,
-            content: s.header.text, font_size: s.header.fontSize, font_family: s.header.fontFamily,
-            color: s.header.color, bold: s.header.bold, italic: s.header.italic, align: s.header.align
-          });
-        }
-        if (s.body) {
-          elements.push({
-            id: stableId(), kind: "text",
-            x: 10, y: (s.headerHeightPct ?? 35) + 15, w: 80, h: 40, z_index: 2,
-            content: s.body.text, font_size: s.body.fontSize, font_family: s.body.fontFamily,
-            color: s.body.color, bold: s.body.bold, italic: s.body.italic, align: s.body.align
-          });
-        }
-        return { ...s, elements };
-      }
-      return s;
-    })
-  };
-}
-
 export function SlideEditor({ initialPres, mediaImages, onClose }: SlideEditorProps) {
   const { appDataDir, stagedItem } = useAppStore();
-  const [pres, _setPres] = useState<CustomPresentation>(() => migratePresentation(JSON.parse(JSON.stringify(initialPres))));
-  const [history, setHistory] = useState<CustomPresentation[]>([migratePresentation(JSON.parse(JSON.stringify(initialPres)))]);
+
+  const init = () => migratePresentation(JSON.parse(JSON.stringify(initialPres)));
+  const [pres, _setPres] = useState<CustomPresentation>(init);
+  const [history, setHistory] = useState<CustomPresentation[]>([init()]);
   const [historyIndex, setHistoryIndex] = useState(0);
 
   const [activeSlideIdx, setActiveSlideIdx] = useState(0);
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
-  const [showBgImagePicker, setShowBgImagePicker] = useState(false);
-  const [showElementImagePicker, setShowElementImagePicker] = useState(false);
+  const [editingElementId, setEditingElementId] = useState<string | null>(null);
+
+  const [showBgPicker, setShowBgPicker] = useState(false);
+  const [showImgPicker, setShowImgPicker] = useState(false);
   const [showBiblePicker, setShowBiblePicker] = useState(false);
+
   const canvasRef = useRef<HTMLDivElement>(null);
   const [canvasScale, setCanvasScale] = useState(1);
 
-  // Calculate scale based on canvas height vs 1080p reference
+  // ── Scale tracking ──────────────────────────────────────────────────────────
   useEffect(() => {
-    const updateScale = () => {
-      if (canvasRef.current) {
-        const height = canvasRef.current.clientHeight;
-        setCanvasScale(height / 1080);
-      }
+    const update = () => {
+      if (canvasRef.current) setCanvasScale(canvasRef.current.clientHeight / 1080);
     };
+    update();
+    window.addEventListener("resize", update);
+    const t = setTimeout(update, 120);
+    return () => { window.removeEventListener("resize", update); clearTimeout(t); };
+  }, [pres.slides.length]);
 
-    updateScale();
-    window.addEventListener("resize", updateScale);
-    // Also update after a short delay to account for sidebar animations or layout shifts
-    const timer = setTimeout(updateScale, 100);
-    return () => {
-      window.removeEventListener("resize", updateScale);
-      clearTimeout(timer);
-    };
-  }, [pres.slides.length]); // Re-run when slides change as it might affect layout
+  const slide = pres.slides[activeSlideIdx] ?? pres.slides[0];
 
-  const slide = pres.slides[activeSlideIdx] || pres.slides[0];
-
-  // History management
-  const setPres = useCallback((next: CustomPresentation | ((prev: CustomPresentation) => CustomPresentation), saveToHistory = true) => {
-    _setPres(prev => {
-      const resolvedNext = typeof next === "function" ? next(prev) : next;
-      if (saveToHistory) {
-        const nextHistory = history.slice(0, historyIndex + 1);
-        nextHistory.push(JSON.parse(JSON.stringify(resolvedNext)));
-        // Limit history to 50 steps
-        if (nextHistory.length > 50) nextHistory.shift();
-        setHistory(nextHistory);
-        setHistoryIndex(nextHistory.length - 1);
-      }
-      return resolvedNext;
-    });
-  }, [history, historyIndex]);
+  // ── History-aware setter ────────────────────────────────────────────────────
+  const setPres = useCallback(
+    (next: CustomPresentation | ((p: CustomPresentation) => CustomPresentation), save = true) => {
+      _setPres(prev => {
+        const resolved = typeof next === "function" ? next(prev) : next;
+        if (save) {
+          const hist = history.slice(0, historyIndex + 1);
+          hist.push(JSON.parse(JSON.stringify(resolved)));
+          if (hist.length > 50) hist.shift();
+          setHistory(hist);
+          setHistoryIndex(hist.length - 1);
+        }
+        return resolved;
+      });
+    },
+    [history, historyIndex],
+  );
 
   const undo = useCallback(() => {
     if (historyIndex > 0) {
-      const nextIdx = historyIndex - 1;
-      const prevPres = JSON.parse(JSON.stringify(history[nextIdx]));
-      _setPres(prevPres);
-      setHistoryIndex(nextIdx);
+      const idx = historyIndex - 1;
+      _setPres(JSON.parse(JSON.stringify(history[idx])));
+      setHistoryIndex(idx);
     }
   }, [history, historyIndex]);
 
   const redo = useCallback(() => {
     if (historyIndex < history.length - 1) {
-      const nextIdx = historyIndex + 1;
-      const nextPres = JSON.parse(JSON.stringify(history[nextIdx]));
-      _setPres(nextPres);
-      setHistoryIndex(nextIdx);
+      const idx = historyIndex + 1;
+      _setPres(JSON.parse(JSON.stringify(history[idx])));
+      setHistoryIndex(idx);
     }
   }, [history, historyIndex]);
 
+  // ── Global keyboard shortcuts ───────────────────────────────────────────────
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const down = (e: KeyboardEvent) => {
+      const tgt = e.target as HTMLElement;
+      const typing =
+        tgt.tagName === "INPUT" ||
+        tgt.tagName === "TEXTAREA" ||
+        tgt.tagName === "SELECT" ||
+        tgt.contentEditable === "true";
+
+      if (typing) return; // never intercept while user types
+
       if ((e.ctrlKey || e.metaKey) && e.key === "z") {
-        e.preventDefault();
-        if (e.shiftKey) redo(); else undo();
+        e.preventDefault(); e.shiftKey ? redo() : undo();
       } else if ((e.ctrlKey || e.metaKey) && e.key === "y") {
-        e.preventDefault();
-        redo();
+        e.preventDefault(); redo();
+      } else if (e.key === "Escape") {
+        setActiveElementId(null); setEditingElementId(null);
       } else if (e.key === "Delete" || e.key === "Backspace") {
-        if (activeElementId && document.activeElement?.tagName !== "TEXTAREA" && document.activeElement?.tagName !== "INPUT") {
-          deleteElement(activeElementId);
-        }
+        if (activeElementId) deleteElement(activeElementId);
       } else if ((e.ctrlKey || e.metaKey) && e.key === "d") {
+        e.preventDefault();
         if (activeElementId) {
-          e.preventDefault();
           const el = slide.elements.find(x => x.id === activeElementId);
           if (el) duplicateElement(el);
         }
       }
     };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", down);
+    return () => window.removeEventListener("keydown", down);
   }, [undo, redo, activeElementId, slide.elements]);
 
-  const updateSlide = (next: CustomSlide) => {
-    setPres(prev => {
-      const nextSlides = [...prev.slides];
-      nextSlides[activeSlideIdx] = next;
-      return { ...prev, slides: nextSlides };
-    });
-  };
+  // ── Slide/element helpers ───────────────────────────────────────────────────
+  const updateSlide = (next: CustomSlide) =>
+    setPres(prev => { const s = [...prev.slides]; s[activeSlideIdx] = next; return { ...prev, slides: s }; });
 
-  const updateElement = (id: string, updates: Partial<SlideElement>, saveToHistory = true) => {
+  const updateElement = (id: string, updates: Partial<SlideElement>, save = true) =>
     setPres(prev => {
-      const currentSlide = prev.slides[activeSlideIdx];
-      const nextElements = currentSlide.elements.map(e => e.id === id ? { ...e, ...updates } : e);
-      const nextSlides = [...prev.slides];
-      nextSlides[activeSlideIdx] = { ...currentSlide, elements: nextElements };
-      return { ...prev, slides: nextSlides };
-    }, saveToHistory);
-  };
+      const cs = prev.slides[activeSlideIdx];
+      const ns = [...prev.slides];
+      ns[activeSlideIdx] = { ...cs, elements: cs.elements.map(e => e.id === id ? { ...e, ...updates } : e) };
+      return { ...prev, slides: ns };
+    }, save);
 
   const deleteElement = (id: string) => {
     setPres(prev => {
-      const currentSlide = prev.slides[activeSlideIdx];
-      const nextElements = currentSlide.elements.filter(e => e.id !== id);
-      const nextSlides = [...prev.slides];
-      nextSlides[activeSlideIdx] = { ...currentSlide, elements: nextElements };
-      return { ...prev, slides: nextSlides };
+      const cs = prev.slides[activeSlideIdx];
+      const ns = [...prev.slides];
+      ns[activeSlideIdx] = { ...cs, elements: cs.elements.filter(e => e.id !== id) };
+      return { ...prev, slides: ns };
     });
     if (activeElementId === id) setActiveElementId(null);
   };
 
   const duplicateElement = (el: SlideElement) => {
-    const newEl = { ...el, id: stableId(), x: el.x + 5, y: el.y + 5, z_index: slide.elements.length + 1 };
+    const n = { ...el, id: stableId(), x: el.x + 3, y: el.y + 3, z_index: slide.elements.length + 1 };
     setPres(prev => {
-      const currentSlide = prev.slides[activeSlideIdx];
-      const nextSlides = [...prev.slides];
-      nextSlides[activeSlideIdx] = { ...currentSlide, elements: [...currentSlide.elements, newEl] };
-      return { ...prev, slides: nextSlides };
+      const cs = prev.slides[activeSlideIdx];
+      const ns = [...prev.slides];
+      ns[activeSlideIdx] = { ...cs, elements: [...cs.elements, n] };
+      return { ...prev, slides: ns };
     });
-    setActiveElementId(newEl.id);
+    setActiveElementId(n.id);
   };
 
-  const handleSave = async () => {
-    try {
-      await invoke("save_studio_presentation", { presentation: pres });
-      onClose(true);
-    } catch (err) {
-      console.error("Save failed", err);
-    }
+  const addEl = (el: SlideElement) => {
+    setPres(prev => {
+      const cs = prev.slides[activeSlideIdx];
+      const ns = [...prev.slides];
+      ns[activeSlideIdx] = { ...cs, elements: [...cs.elements, el] };
+      return { ...prev, slides: ns };
+    });
+    setActiveElementId(el.id);
   };
+
+  const addTextElement = () => addEl({
+    id: stableId(), kind: "text", x: 20, y: 35, w: 60, h: 30,
+    z_index: slide.elements.length + 1,
+    content: "Double-click to edit", font_size: 48, font_family: "Arial",
+    color: "#ffffff", align: "center", v_align: "middle",
+    bold: false, italic: false, shadow: true, shadow_color: "#000000",
+  });
+
+  const addShapeElement = () => addEl({
+    id: stableId(), kind: "shape", x: 25, y: 25, w: 50, h: 50,
+    z_index: slide.elements.length + 1, content: "", color: "#6366f1", opacity: 0.85,
+  });
 
   const handleAddSlide = (type: "default" | "title" | "blank") => {
     setPres(prev => {
-      const nextSlides = [...prev.slides];
-      const newSlide = type === "title" ? newTitleSlide() : type === "blank" ? newBlankSlide() : newDefaultSlide();
-      nextSlides.splice(activeSlideIdx + 1, 0, newSlide);
-      return { ...prev, slides: nextSlides };
+      const ns = [...prev.slides];
+      ns.splice(activeSlideIdx + 1, 0,
+        type === "title" ? newTitleSlide() : type === "blank" ? newBlankSlide() : newDefaultSlide());
+      return { ...prev, slides: ns };
     });
-    setActiveSlideIdx(activeSlideIdx + 1);
+    setActiveSlideIdx(i => i + 1);
     setActiveElementId(null);
   };
 
   const handleDuplicateSlide = () => {
     setPres(prev => {
-      const nextSlides = [...prev.slides];
-      const newSlide = JSON.parse(JSON.stringify(nextSlides[activeSlideIdx]));
-      newSlide.id = stableId();
-      newSlide.elements.forEach((e: SlideElement) => e.id = stableId());
-      nextSlides.splice(activeSlideIdx + 1, 0, newSlide);
-      return { ...prev, slides: nextSlides };
+      const ns = [...prev.slides];
+      const copy: CustomSlide = JSON.parse(JSON.stringify(ns[activeSlideIdx]));
+      copy.id = stableId();
+      copy.elements.forEach((e: SlideElement) => (e.id = stableId()));
+      ns.splice(activeSlideIdx + 1, 0, copy);
+      return { ...prev, slides: ns };
     });
-    setActiveSlideIdx(activeSlideIdx + 1);
+    setActiveSlideIdx(i => i + 1);
     setActiveElementId(null);
   };
 
   const handleDeleteSlide = () => {
     if (pres.slides.length <= 1) return;
-    setPres(prev => {
-      const nextSlides = prev.slides.filter((_, i) => i !== activeSlideIdx);
-      return { ...prev, slides: nextSlides };
-    });
-    setActiveSlideIdx(Math.max(0, activeSlideIdx - 1));
+    setPres(prev => ({ ...prev, slides: prev.slides.filter((_, i) => i !== activeSlideIdx) }));
+    setActiveSlideIdx(i => Math.max(0, i - 1));
     setActiveElementId(null);
-  };
-
-  const addTextElement = () => {
-    const newEl: SlideElement = {
-      id: stableId(), kind: "text",
-      x: 10, y: 10, w: 80, h: 20, z_index: slide.elements.length + 1,
-      content: "New Text", font_size: 32, font_family: "Arial", color: "#ffffff", align: "center", v_align: "middle", bold: false, italic: false
-    };
-    setPres(prev => {
-      const currentSlide = prev.slides[activeSlideIdx];
-      const nextSlides = [...prev.slides];
-      nextSlides[activeSlideIdx] = { ...currentSlide, elements: [...currentSlide.elements, newEl] };
-      return { ...prev, slides: nextSlides };
-    });
-    setActiveElementId(newEl.id);
-  };
-
-  const addShapeElement = () => {
-    const newEl: SlideElement = {
-      id: stableId(), kind: "shape",
-      x: 30, y: 30, w: 40, h: 40, z_index: slide.elements.length + 1,
-      content: "", color: "#3b82f6", opacity: 1
-    };
-    setPres(prev => {
-      const currentSlide = prev.slides[activeSlideIdx];
-      const nextSlides = [...prev.slides];
-      nextSlides[activeSlideIdx] = { ...currentSlide, elements: [...currentSlide.elements, newEl] };
-      return { ...prev, slides: nextSlides };
-    });
-    setActiveElementId(newEl.id);
   };
 
   const alignElement = (type: "left" | "center" | "right" | "top" | "middle" | "bottom") => {
     if (!activeElementId) return;
     const el = slide.elements.find(e => e.id === activeElementId);
     if (!el) return;
-
-    let updates: Partial<SlideElement> = {};
-    if (type === "left") updates.x = 0;
-    if (type === "right") updates.x = 100 - el.w;
-    if (type === "center") updates.x = (100 - el.w) / 2;
-    if (type === "top") updates.y = 0;
-    if (type === "bottom") updates.y = 100 - el.h;
-    if (type === "middle") updates.y = (100 - el.h) / 2;
-
-    updateElement(activeElementId, updates);
+    const u: Partial<SlideElement> = {};
+    if (type === "left")   u.x = 0;
+    if (type === "right")  u.x = 100 - el.w;
+    if (type === "center") u.x = (100 - el.w) / 2;
+    if (type === "top")    u.y = 0;
+    if (type === "bottom") u.y = 100 - el.h;
+    if (type === "middle") u.y = (100 - el.h) / 2;
+    updateElement(activeElementId, u);
   };
 
   const updateZOrder = (dir: "forward" | "backward" | "front" | "back") => {
     if (!activeElementId) return;
-    const elements = [...slide.elements].sort((a, b) => a.z_index - b.z_index);
-    const idx = elements.findIndex(e => e.id === activeElementId);
-    if (idx === -1) return;
-
-    if (dir === "forward" && idx < elements.length - 1) {
-      const temp = elements[idx].z_index;
-      elements[idx].z_index = elements[idx+1].z_index;
-      elements[idx+1].z_index = temp;
-    } else if (dir === "backward" && idx > 0) {
-      const temp = elements[idx].z_index;
-      elements[idx].z_index = elements[idx-1].z_index;
-      elements[idx-1].z_index = temp;
-    } else if (dir === "front") {
-      const maxZ = Math.max(...elements.map(e => e.z_index), 0);
-      elements[idx].z_index = maxZ + 1;
-    } else if (dir === "back") {
-      const minZ = Math.min(...elements.map(e => e.z_index), 0);
-      elements[idx].z_index = minZ - 1;
-    }
-
-    updateSlide({ ...slide, elements });
+    const els = [...slide.elements].sort((a, b) => a.z_index - b.z_index);
+    const i = els.findIndex(e => e.id === activeElementId);
+    if (i === -1) return;
+    if (dir === "forward" && i < els.length - 1)
+      [els[i].z_index, els[i + 1].z_index] = [els[i + 1].z_index, els[i].z_index];
+    else if (dir === "backward" && i > 0)
+      [els[i].z_index, els[i - 1].z_index] = [els[i - 1].z_index, els[i].z_index];
+    else if (dir === "front")
+      els[i].z_index = Math.max(...els.map(e => e.z_index)) + 1;
+    else if (dir === "back")
+      els[i].z_index = Math.min(...els.map(e => e.z_index)) - 1;
+    updateSlide({ ...slide, elements: els });
   };
 
-  const handlePickBgImage = async () => {
-    if (mediaImages.length > 0) {
-      setShowBgImagePicker(true);
-    } else {
-      try {
-        const selected = await openDialog({
-          multiple: false,
-          filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"] }],
-        });
-        if (typeof selected !== "string") return;
-        const rel = relativizePath(selected, appDataDir);
-        updateSlide({ ...slide, backgroundImage: rel });
-      } catch (err) {
-        console.error("Pick failed", err);
-      }
-    }
-  };
-
-  const handleElementDrag = (id: string, e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    e.stopPropagation();
-    e.preventDefault();
+  // ── Drag & resize ───────────────────────────────────────────────────────────
+  const handleDrag = (id: string, e: React.PointerEvent) => {
+    if (e.button !== 0 || editingElementId === id) return;
+    e.stopPropagation(); e.preventDefault();
     setActiveElementId(id);
-
     const el = slide.elements.find(x => x.id === id);
     if (!el || !canvasRef.current || el.locked) return;
-
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const initialElX = el.x;
-    const initialElY = el.y;
-    const canvasRect = canvasRef.current.getBoundingClientRect();
-
-    let lastX = initialElX;
-    let lastY = initialElY;
-
-    const onMove = (moveEvent: PointerEvent) => {
-      const dx = moveEvent.clientX - startX;
-      const dy = moveEvent.clientY - startY;
-      
-      const dxPct = (dx / canvasRect.width) * 100;
-      const dyPct = (dy / canvasRect.height) * 100;
-
-      lastX = initialElX + dxPct;
-      lastY = initialElY + dyPct;
-
-      updateElement(id, { x: lastX, y: lastY }, false);
+    const sx = e.clientX, sy = e.clientY, ix = el.x, iy = el.y;
+    const rect = canvasRef.current.getBoundingClientRect();
+    let lx = ix, ly = iy;
+    const move = (mv: PointerEvent) => {
+      lx = ix + ((mv.clientX - sx) / rect.width) * 100;
+      ly = iy + ((mv.clientY - sy) / rect.height) * 100;
+      updateElement(id, { x: lx, y: ly }, false);
     };
-
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      updateElement(id, { x: lastX, y: lastY }, true);
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      updateElement(id, { x: lx, y: ly }, true);
     };
-
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
   };
 
-  const handleResize = (id: string, e: React.PointerEvent, handle: string) => {
+  const handleResize = (id: string, e: React.PointerEvent, h: string) => {
+    e.stopPropagation(); e.preventDefault();
+    const el = slide.elements.find(x => x.id === id);
+    if (!el || !canvasRef.current || el.locked) return;
+    const sx = e.clientX, sy = e.clientY;
+    const { x: ix, y: iy, w: iw, h: ih } = el;
+    const rect = canvasRef.current.getBoundingClientRect();
+    let lx = ix, ly = iy, lw = iw, lh = ih;
+    const move = (mv: PointerEvent) => {
+      const dx = ((mv.clientX - sx) / rect.width) * 100;
+      const dy = ((mv.clientY - sy) / rect.height) * 100;
+      let nx = ix, ny = iy, nw = iw, nh = ih;
+      if (h.includes("e")) nw = Math.max(5, iw + dx);
+      if (h.includes("s")) nh = Math.max(5, ih + dy);
+      if (h.includes("w")) { const d = Math.min(iw - 5, dx); nx = ix + d; nw = iw - d; }
+      if (h.includes("n")) { const d = Math.min(ih - 5, dy); ny = iy + d; nh = ih - d; }
+      lx = nx; ly = ny; lw = nw; lh = nh;
+      updateElement(id, { x: nx, y: ny, w: nw, h: nh }, false);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      updateElement(id, { x: lx, y: ly, w: lw, h: lh }, true);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  const handleDblClick = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    e.preventDefault();
     const el = slide.elements.find(x => x.id === id);
-    if (!el || !canvasRef.current || el.locked) return;
-
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const initialX = el.x;
-    const initialY = el.y;
-    const initialW = el.w;
-    const initialH = el.h;
-    const canvasRect = canvasRef.current.getBoundingClientRect();
-
-    let lastX = el.x;
-    let lastY = el.y;
-    let lastW = el.w;
-    let lastH = el.h;
-
-    const onMove = (moveEvent: PointerEvent) => {
-      const dx = ((moveEvent.clientX - startX) / canvasRect.width) * 100;
-      const dy = ((moveEvent.clientY - startY) / canvasRect.height) * 100;
-
-      let nextX = initialX;
-      let nextY = initialY;
-      let nextW = initialW;
-      let nextH = initialH;
-
-      if (handle.includes("e")) nextW = Math.max(1, initialW + dx);
-      if (handle.includes("s")) nextH = Math.max(1, initialH + dy);
-      if (handle.includes("w")) {
-        const delta = Math.min(initialW - 1, dx);
-        nextX = initialX + delta;
-        nextW = initialW - delta;
-      }
-      if (handle.includes("n")) {
-        const delta = Math.min(initialH - 1, dy);
-        nextY = initialY + delta;
-        nextH = initialH - delta;
-      }
-
-      lastX = nextX; lastY = nextY; lastW = nextW; lastH = nextH;
-      updateElement(id, { x: nextX, y: nextY, w: nextW, h: nextH }, false);
-    };
-
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      updateElement(id, { x: lastX, y: lastY, w: lastW, h: lastH }, true);
-    };
-
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    if (el?.kind === "text" && !el.locked) setEditingElementId(id);
   };
 
-  const activeElement = slide.elements.find(e => e.id === activeElementId);
+  const commitInline = (id: string, html: string) => {
+    updateElement(id, { content: html });
+    setEditingElementId(null);
+  };
 
+  const handleSave = async () => {
+    try { await invoke("save_studio_presentation", { presentation: pres }); onClose(true); }
+    catch (err) { console.error("Save failed", err); }
+  };
+
+  const activeEl = slide.elements.find(e => e.id === activeElementId);
+
+  // Helper: add element or replace image src
+  const handleImageSelect = (path: string) => {
+    const rel = relativizePath(path, appDataDir);
+    if (activeEl?.kind === "image") {
+      updateElement(activeEl.id, { content: rel });
+    } else {
+      addEl({ id: stableId(), kind: "image", x: 20, y: 15, w: 60, h: 70, z_index: slide.elements.length + 1, content: rel });
+    }
+    setShowImgPicker(false);
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────────
   return (
-    <div className="fixed inset-0 z-[60] bg-slate-950 flex flex-col font-sans">
-      {/* Top Bar */}
-      <header className="flex items-center gap-4 px-6 py-3 border-b border-slate-800 bg-slate-900/80 shrink-0">
-        <button onClick={() => onClose(false)} className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white transition-all">
-          <X size={20} />
+    <div className="fixed inset-0 z-[60] bg-[#0e0e1c] flex flex-col font-sans">
+
+      {/* ══ TOP BAR ══════════════════════════════════════════════════════════ */}
+      <header className="flex items-center gap-3 px-4 py-2 border-b border-white/8 bg-[#131326] shrink-0">
+        <button
+          onClick={() => onClose(false)}
+          className="p-1.5 hover:bg-white/8 rounded-lg text-slate-500 hover:text-white transition-all"
+          title="Close without saving"
+        >
+          <X size={18} />
         </button>
-        <div className="h-6 w-px bg-slate-800" />
+
+        <div className="h-5 w-px bg-white/10" />
+
+        {/* Presentation title */}
         <input
           value={pres.name}
-          onChange={(e) => setPres({ ...pres, name: e.target.value })}
-          className="bg-transparent text-xl font-bold text-white focus:outline-none focus:ring-b-2 focus:ring-amber-500 min-w-0 flex-1"
-          placeholder="Presentation Title"
+          onChange={e => setPres({ ...pres, name: e.target.value })}
+          onKeyDown={e => e.stopPropagation()}
+          className="bg-transparent text-sm font-semibold text-white focus:outline-none min-w-0 flex-1"
+          placeholder="Untitled Presentation"
         />
-        
-        <div className="flex items-center gap-1 bg-slate-800 p-1 rounded-lg">
-          <button
-            onClick={undo}
-            disabled={historyIndex === 0}
-            className="p-1.5 text-slate-400 hover:text-white disabled:opacity-20 transition-all"
-            title="Undo (Ctrl+Z)"
-          >
-            <Undo2 size={18} />
+
+        {/* Slide counter */}
+        <span className="text-[10px] font-bold text-slate-500 tabular-nums whitespace-nowrap bg-white/6 px-2 py-1 rounded">
+          {activeSlideIdx + 1} / {pres.slides.length}
+        </span>
+
+        <div className="h-5 w-px bg-white/10" />
+
+        {/* Undo / Redo */}
+        <div className="flex bg-white/6 rounded-lg p-0.5 gap-0.5">
+          <button onClick={undo} disabled={historyIndex === 0}
+            className="p-1.5 text-slate-400 hover:text-white hover:bg-white/10 rounded disabled:opacity-20 transition-all" title="Undo (Ctrl+Z)">
+            <Undo2 size={15} />
           </button>
-          <button
-            onClick={redo}
-            disabled={historyIndex === history.length - 1}
-            className="p-1.5 text-slate-400 hover:text-white disabled:opacity-20 transition-all"
-            title="Redo (Ctrl+Y)"
-          >
-            <Redo2 size={18} />
+          <button onClick={redo} disabled={historyIndex === history.length - 1}
+            className="p-1.5 text-slate-400 hover:text-white hover:bg-white/10 rounded disabled:opacity-20 transition-all" title="Redo (Ctrl+Y)">
+            <Redo2 size={15} />
           </button>
         </div>
 
-        <div className="flex gap-2">
-          <button
-            onClick={handleSave}
-            className="flex items-center gap-2 px-5 py-2 bg-amber-500 hover:bg-amber-400 text-black font-black uppercase text-xs rounded-full transition-all shadow-lg"
-          >
-            <Save size={16} /> Save
-          </button>
-        </div>
+        <button
+          onClick={handleSave}
+          className="flex items-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-black font-black uppercase text-[11px] rounded-lg transition-all shadow-lg tracking-wide"
+        >
+          <Save size={14} /> Save
+        </button>
       </header>
 
       <div className="flex-1 flex overflow-hidden">
-        {/* Sidebar: Thumbnails */}
-        <aside className="w-64 border-r border-slate-800 bg-slate-900/30 flex flex-col overflow-hidden shrink-0">
-          <div className="p-3 border-b border-slate-800 flex flex-col gap-2">
-            <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Slides</span>
-            <div className="flex items-center gap-1">
-              <button onClick={() => handleAddSlide("title")} className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[9px] font-bold rounded transition-all">
-                + Title
-              </button>
-              <button onClick={() => handleAddSlide("default")} className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[9px] font-bold rounded transition-all">
-                + Body
-              </button>
-              <button onClick={() => handleAddSlide("blank")} className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[9px] font-bold rounded transition-all">
-                + Blank
-              </button>
-            </div>
+
+        {/* ══ LEFT: SLIDE PANEL ════════════════════════════════════════════════ */}
+        <aside className="w-48 border-r border-white/8 bg-[#131326] flex flex-col overflow-hidden shrink-0">
+          <div className="px-3 py-2 border-b border-white/8 flex items-center justify-between shrink-0">
+            <span className="text-[8px] font-black uppercase tracking-widest text-slate-600">Slides</span>
+            <span className="text-[8px] text-slate-700">{pres.slides.length}</span>
           </div>
-          <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-3">
+
+          {/* Thumbnail list */}
+          <div className="flex-1 overflow-y-auto py-2 px-2 flex flex-col gap-2 custom-scrollbar">
             {pres.slides.map((s, i) => (
               <button
                 key={s.id}
-                onClick={() => { setActiveSlideIdx(i); setActiveElementId(null); }}
-                className={`relative aspect-video rounded-lg overflow-hidden border-2 transition-all shrink-0 ${
-                  activeSlideIdx === i ? "border-amber-500 shadow-lg scale-105 z-10" : "border-slate-800 hover:border-slate-600"
+                onClick={() => { setActiveSlideIdx(i); setActiveElementId(null); setEditingElementId(null); }}
+                className={`relative aspect-video rounded-xl overflow-hidden border-2 transition-all shrink-0 group ${
+                  i === activeSlideIdx
+                    ? "border-indigo-500 shadow-lg shadow-indigo-500/20"
+                    : "border-white/8 hover:border-white/20"
                 }`}
               >
-                <CustomSlideRenderer slide={s} scale={0.06} appDataDir={appDataDir} />
-                <div className="absolute bottom-1 left-1 bg-black/60 px-1.5 py-0.5 rounded text-[8px] font-bold text-white">
+                <CustomSlideRenderer slide={s} scale={0.07} appDataDir={appDataDir} />
+                <span className={`absolute top-1.5 left-1.5 w-5 h-5 rounded flex items-center justify-center text-[8px] font-black ${
+                  i === activeSlideIdx ? "bg-indigo-500 text-white" : "bg-black/60 text-white/50"
+                }`}>
                   {i + 1}
-                </div>
+                </span>
+              </button>
+            ))}
+          </div>
+
+          {/* Add slide */}
+          <div className="border-t border-white/8 p-2 flex gap-1 shrink-0">
+            {(["Title", "Body", "Blank"] as const).map(t => (
+              <button key={t}
+                onClick={() => handleAddSlide(t.toLowerCase() as "title" | "default" | "blank")}
+                className="flex-1 py-1.5 bg-white/6 hover:bg-white/12 text-slate-500 hover:text-slate-300 text-[8px] font-bold rounded-lg transition-all"
+              >
+                +{t[0]}
               </button>
             ))}
           </div>
         </aside>
 
-        {/* Main: Preview & Editor */}
-        <div className="flex-1 flex flex-col overflow-hidden bg-black/40">
-          
-          {/* Toolbar */}
-          <div className="h-12 border-b border-slate-800 flex items-center justify-center gap-4 bg-slate-900/50">
-            <button onClick={addTextElement} className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded">
-              <Type size={14} /> Add Text
-            </button>
-            <button onClick={() => setShowElementImagePicker(true)} className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded">
-              <ImageIcon size={14} /> Add Image
-            </button>
-            <button onClick={addShapeElement} className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded">
-              <Square size={14} /> Add Shape
-            </button>
-            <button onClick={() => setShowBiblePicker(true)} className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded">
-              <BookOpen size={14} /> Search Bible
-            </button>
-            {stagedItem?.type === "Verse" && (
-              <button onClick={() => {
-                const verse = stagedItem.data;
-                const newEl: SlideElement = {
-                  id: stableId(), kind: "text",
-                  x: 10, y: 10, w: 80, h: 80, z_index: slide.elements.length + 1,
-                  content: `${verse.text}\n— ${verse.book} ${verse.chapter}:${verse.verse}`, font_size: 40, font_family: "Georgia", color: "#ffffff", align: "center", v_align: "middle", bold: false, italic: true
-                };
-                setPres(prev => {
-                  const currentSlide = prev.slides[activeSlideIdx];
-                  const nextSlides = [...prev.slides];
-                  nextSlides[activeSlideIdx] = { ...currentSlide, elements: [...currentSlide.elements, newEl] };
-                  return { ...prev, slides: nextSlides };
-                });
-                setActiveElementId(newEl.id);
-              }} className="flex items-center gap-2 px-3 py-1.5 bg-indigo-900/50 hover:bg-indigo-800 text-indigo-300 text-xs font-bold rounded">
-                <BookOpen size={14} /> Insert Verse
+        {/* ══ CENTER: CANVAS ════════════════════════════════════════════════════ */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+
+          {/* Context toolbar — changes based on selected element */}
+          <div className="h-11 border-b border-white/8 flex items-center px-3 gap-1 bg-[#131326] shrink-0 overflow-x-auto">
+
+            {/* ── No selection: Insert tools ── */}
+            {!activeEl && <>
+              <span className="text-[8px] font-black uppercase tracking-widest text-slate-600 mr-1 shrink-0">Insert</span>
+              <Btn onClick={addTextElement} icon={<Type size={13} />}>Text</Btn>
+              <Btn onClick={() => setShowImgPicker(true)} icon={<ImageIcon size={13} />}>Image</Btn>
+              <Btn onClick={addShapeElement} icon={<Square size={13} />}>Shape</Btn>
+              <div className="w-px h-5 bg-white/10 mx-1 shrink-0" />
+              <Btn
+                onClick={() => setShowBiblePicker(true)}
+                icon={<BookOpen size={13} />}
+                className="bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/20"
+              >
+                Bible
+              </Btn>
+              {stagedItem?.type === "Verse" && (
+                <Btn
+                  onClick={() => {
+                    const v = stagedItem.data;
+                    addEl({
+                      id: stableId(), kind: "text", x: 10, y: 10, w: 80, h: 80,
+                      z_index: slide.elements.length + 1,
+                      content: `${v.text}\n— ${v.book} ${v.chapter}:${v.verse}`,
+                      font_size: 40, font_family: "Georgia", color: "#ffffff",
+                      align: "center", v_align: "middle", bold: false, italic: true,
+                      shadow: true, shadow_color: "#000",
+                    });
+                  }}
+                  icon={<BookOpen size={13} />}
+                  className="text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/20"
+                >
+                  Insert Verse
+                </Btn>
+              )}
+            </>}
+
+            {/* ── Text element selected ── */}
+            {activeEl?.kind === "text" && <>
+              {/* Font family */}
+              <select
+                value={activeEl.font_family}
+                onChange={e => updateElement(activeEl.id, { font_family: e.target.value })}
+                onKeyDown={e => e.stopPropagation()}
+                className="bg-white/8 border border-white/10 rounded-lg px-2 py-1 text-[11px] text-slate-300 outline-none max-w-[130px] shrink-0"
+              >
+                {FONTS.map(f => <option key={f} value={f}>{f}</option>)}
+              </select>
+
+              {/* Font size stepper */}
+              <div className="flex items-center bg-white/8 border border-white/10 rounded-lg shrink-0 overflow-hidden">
+                <button onClick={() => updateElement(activeEl.id, { font_size: Math.max(8, (activeEl.font_size ?? 32) - 2) })} className="px-2 py-1 text-slate-400 hover:text-white hover:bg-white/10 text-sm font-bold">−</button>
+                <input
+                  type="number"
+                  value={activeEl.font_size ?? 32}
+                  onChange={e => updateElement(activeEl.id, { font_size: Number(e.target.value) })}
+                  onKeyDown={e => e.stopPropagation()}
+                  className="w-10 bg-transparent py-1 text-xs text-white text-center outline-none tabular-nums"
+                />
+                <button onClick={() => updateElement(activeEl.id, { font_size: (activeEl.font_size ?? 32) + 2 })} className="px-2 py-1 text-slate-400 hover:text-white hover:bg-white/10 text-sm font-bold">+</button>
+              </div>
+
+              <Div />
+
+              {/* Bold, Italic */}
+              <ToggleBtn active={!!activeEl.bold} onClick={() => updateElement(activeEl.id, { bold: !activeEl.bold })} title="Bold">
+                <span className="font-black text-sm">B</span>
+              </ToggleBtn>
+              <ToggleBtn active={!!activeEl.italic} onClick={() => updateElement(activeEl.id, { italic: !activeEl.italic })} title="Italic">
+                <span className="font-serif italic text-sm">I</span>
+              </ToggleBtn>
+
+              <Div />
+
+              {/* H-Align */}
+              <ToggleBtn active={activeEl.align === "left"} onClick={() => updateElement(activeEl.id, { align: "left" })} title="Align left"><AlignLeft size={14} /></ToggleBtn>
+              <ToggleBtn active={activeEl.align === "center" || !activeEl.align} onClick={() => updateElement(activeEl.id, { align: "center" })} title="Center"><AlignCenter size={14} /></ToggleBtn>
+              <ToggleBtn active={activeEl.align === "right"} onClick={() => updateElement(activeEl.id, { align: "right" })} title="Align right"><AlignRight size={14} /></ToggleBtn>
+
+              <Div />
+
+              {/* Color + shadow */}
+              <div className="flex items-center gap-1.5 shrink-0">
+                <span className="text-[9px] text-slate-600">Color</span>
+                <input type="color" value={activeEl.color}
+                  onChange={e => updateElement(activeEl.id, { color: e.target.value })}
+                  className="w-7 h-7 rounded-lg cursor-pointer border border-white/20 bg-transparent" />
+              </div>
+              <label className="flex items-center gap-1.5 shrink-0 cursor-pointer ml-1">
+                <input type="checkbox" checked={activeEl.shadow !== false}
+                  onChange={e => updateElement(activeEl.id, { shadow: e.target.checked })}
+                  className="accent-indigo-500" />
+                <span className="text-[9px] text-slate-500">Shadow</span>
+              </label>
+            </>}
+
+            {/* ── Shape selected ── */}
+            {activeEl?.kind === "shape" && <>
+              <span className="text-[9px] text-slate-500 shrink-0">Fill</span>
+              <input type="color" value={activeEl.color}
+                onChange={e => updateElement(activeEl.id, { color: e.target.value })}
+                className="w-8 h-8 rounded-lg cursor-pointer border border-white/20 bg-transparent shrink-0" />
+              <Div />
+              <span className="text-[9px] text-slate-500 shrink-0">Opacity</span>
+              <input type="range" min={0} max={1} step={0.05}
+                value={activeEl.opacity ?? 1}
+                onChange={e => updateElement(activeEl.id, { opacity: Number(e.target.value) })}
+                className="w-20 accent-indigo-500 shrink-0" />
+              <span className="text-[10px] text-slate-400 font-mono shrink-0 w-8">{Math.round((activeEl.opacity ?? 1) * 100)}%</span>
+            </>}
+
+            {/* ── Image selected ── */}
+            {activeEl?.kind === "image" && <>
+              <Btn onClick={() => setShowImgPicker(true)} icon={<ImageIcon size={13} />}>Change Image</Btn>
+            </>}
+
+            <div className="flex-1" />
+
+            {/* Always: slide-level actions */}
+            <div className="flex items-center gap-1 border-l border-white/8 pl-2 shrink-0">
+              <Btn onClick={handleDuplicateSlide} icon={<Copy size={13} />}>Dupe</Btn>
+              <button
+                onClick={handleDeleteSlide}
+                disabled={pres.slides.length <= 1}
+                className="p-2 bg-white/6 hover:bg-red-500/20 text-slate-500 hover:text-red-400 rounded-lg transition-all disabled:opacity-20"
+                title="Delete slide"
+              >
+                <Trash2 size={13} />
               </button>
-            )}
-            <div className="w-px h-6 bg-slate-700 mx-2" />
-            <button onClick={handleDuplicateSlide} className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded">
-              <Copy size={14} /> Duplicate Slide
-            </button>
-            <button onClick={handleDeleteSlide} className="flex items-center gap-2 px-3 py-1.5 bg-red-900/30 hover:bg-red-900/50 text-red-400 text-xs font-bold rounded">
-              <Trash2 size={14} /> Delete Slide
-            </button>
+            </div>
           </div>
 
-          {/* Canvas Area */}
-          <div className="flex-1 flex items-center justify-center p-8 overflow-hidden relative" onPointerDown={() => setActiveElementId(null)}>
-            <div 
+          {/* Canvas area */}
+          <div
+            className="flex-1 flex items-center justify-center p-10 overflow-hidden relative select-none"
+            style={{
+              background: "radial-gradient(circle, #252540 1px, transparent 1px)",
+              backgroundSize: "22px 22px",
+              backgroundColor: "#0b0b18",
+            }}
+            onPointerDown={() => { setActiveElementId(null); }}
+          >
+            <div
               ref={canvasRef}
-              className="w-full max-w-5xl shadow-2xl ring-1 ring-slate-700 relative select-none" 
-              style={{ aspectRatio: "16/9", backgroundColor: slide.backgroundColor }}
+              className="relative shadow-2xl shadow-black/80 ring-1 ring-white/8"
+              style={{
+                aspectRatio: "16/9",
+                backgroundColor: slide.backgroundColor,
+                width: "min(100%, calc((100vh - 140px) * 16 / 9))",
+              }}
             >
+              {/* Rendered slide content */}
               <CustomSlideRenderer slide={slide} scale={canvasScale} appDataDir={appDataDir} />
-              
-              {/* Interactive Overlay */}
-              <div className="absolute inset-0 z-50 pointer-events-none">
-                {slide.elements.map(el => {
-                  const isActive = activeElementId === el.id;
-                  return (
-                    <div
-                      key={el.id}
-                      onPointerDown={(e) => handleElementDrag(el.id, e)}
-                      className={`absolute pointer-events-auto cursor-move border-2 ${isActive ? 'border-amber-500 bg-amber-500/5' : 'border-transparent hover:border-slate-500/50'}`}
-                      style={{ left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, zIndex: el.z_index }}
-                    >
-                      {isActive && (
-                        <>
-                          {/* Resize Handles */}
-                          {(["nw", "n", "ne", "e", "se", "s", "sw", "w"] as const).map(h => (
-                            <div
-                              key={h}
-                              onPointerDown={(e) => handleResize(el.id, e, h)}
-                              className={`absolute w-2.5 h-2.5 bg-white border border-amber-500 rounded-full shadow-md z-[60] 
-                                ${h.includes("n") ? "-top-1.5" : h.includes("s") ? "-bottom-1.5" : "top-1/2 -translate-y-1/2"}
-                                ${h.includes("w") ? "-left-1.5" : h.includes("e") ? "-right-1.5" : "left-1/2 -translate-x-1/2"}
-                                ${h === "nw" || h === "se" ? "cursor-nwse-resize" : h === "ne" || h === "sw" ? "cursor-nesw-resize" : h === "n" || h === "s" ? "cursor-ns-resize" : "cursor-ew-resize"}
-                              `}
-                            />
-                          ))}
-                        </>
-                      )}
-                    </div>
-                  );
-                })}
+
+              {/* Interactive element overlay */}
+              <div className="absolute inset-0 z-50">
+                {slide.elements
+                  .slice()
+                  .sort((a, b) => a.z_index - b.z_index)
+                  .map(el => {
+                    const isActive = activeElementId === el.id;
+                    const isEditing = editingElementId === el.id;
+                    return (
+                      <div
+                        key={el.id}
+                        className={`absolute pointer-events-auto transition-all ${
+                          isEditing
+                            ? "cursor-text"
+                            : isActive
+                              ? "cursor-move"
+                              : "cursor-pointer"
+                        }`}
+                        style={{
+                          left: `${el.x}%`, top: `${el.y}%`,
+                          width: `${el.w}%`, height: `${el.h}%`,
+                          zIndex: el.z_index + 100,
+                          outline: isEditing
+                            ? "2px solid #34d399"
+                            : isActive
+                              ? "2px solid #818cf8"
+                              : "2px solid transparent",
+                          outlineOffset: "1px",
+                        }}
+                        onPointerDown={e => { if (!isEditing) handleDrag(el.id, e); }}
+                        onDoubleClick={e => handleDblClick(el.id, e)}
+                      >
+                        {/* Inline text editor (on double-click) */}
+                        {isEditing && el.kind === "text" && (
+                          <InlineTextEditor
+                            el={el}
+                            canvasScale={canvasScale}
+                            onCommit={html => commitInline(el.id, html)}
+                          />
+                        )}
+
+                        {/* Resize handles when active & not editing */}
+                        {isActive && !isEditing && Object.entries(HANDLES).map(([h, style]) => (
+                          <div
+                            key={h}
+                            onPointerDown={e => handleResize(el.id, e, h)}
+                            className="absolute w-2.5 h-2.5 bg-white border-2 border-indigo-400 rounded-full shadow-md"
+                            style={{ position: "absolute", ...style }}
+                          />
+                        ))}
+
+                        {/* Edit hint for text */}
+                        {isActive && !isEditing && el.kind === "text" && (
+                          <span className="absolute top-full left-0 mt-1 px-1.5 py-0.5 bg-indigo-500 text-white text-[7px] font-bold rounded whitespace-nowrap pointer-events-none z-[200]">
+                            ↕ drag · double-click to edit
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
               </div>
             </div>
 
-            {/* Navigation Overlays */}
-            <div className="absolute left-4 top-1/2 -translate-y-1/2 flex flex-col gap-2 z-[70]">
+            {/* Bottom slide navigator */}
+            <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/60 backdrop-blur border border-white/10 rounded-full px-3 py-1.5 z-[70]">
               <button
                 disabled={activeSlideIdx === 0}
-                onClick={(e) => { e.stopPropagation(); setActiveSlideIdx(activeSlideIdx - 1); setActiveElementId(null); }}
-                className="p-3 bg-slate-900/80 hover:bg-slate-800 text-white rounded-full disabled:opacity-20 transition-all"
+                onClick={e => { e.stopPropagation(); setActiveSlideIdx(i => i - 1); setActiveElementId(null); }}
+                className="text-slate-400 hover:text-white disabled:opacity-20 transition-all"
               >
-                <ChevronLeft size={24} />
+                <ChevronLeft size={16} />
               </button>
-            </div>
-            <div className="absolute right-4 top-1/2 -translate-y-1/2 flex flex-col gap-2 z-[70]">
+              <span className="text-xs text-slate-300 font-bold tabular-nums min-w-[40px] text-center">
+                {activeSlideIdx + 1} / {pres.slides.length}
+              </span>
               <button
                 disabled={activeSlideIdx === pres.slides.length - 1}
-                onClick={(e) => { e.stopPropagation(); setActiveSlideIdx(activeSlideIdx + 1); setActiveElementId(null); }}
-                className="p-3 bg-slate-900/80 hover:bg-slate-800 text-white rounded-full disabled:opacity-20 transition-all"
+                onClick={e => { e.stopPropagation(); setActiveSlideIdx(i => i + 1); setActiveElementId(null); }}
+                className="text-slate-400 hover:text-white disabled:opacity-20 transition-all"
               >
-                <ChevronRight size={24} />
+                <ChevronRight size={16} />
               </button>
             </div>
           </div>
         </div>
 
-        {/* Properties Panel */}
-        <aside className="w-80 border-l border-slate-800 bg-slate-900/90 flex flex-col overflow-hidden shrink-0">
-          <div className="p-3 border-b border-slate-800 flex items-center justify-between">
-            <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Properties</span>
+        {/* ══ RIGHT: PROPERTIES PANEL ═══════════════════════════════════════════ */}
+        <aside className="w-60 border-l border-white/8 bg-[#131326] flex flex-col overflow-hidden shrink-0">
+          <div className="px-3 py-2.5 border-b border-white/8 flex items-center justify-between shrink-0">
+            <span className="text-[8px] font-black uppercase tracking-widest text-slate-600">
+              {activeEl ? `${activeEl.kind} element` : "Slide"}
+            </span>
           </div>
-          
-          <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-6">
-            {!activeElement && (
-              <div className="flex flex-col gap-4">
-                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Slide Background</h3>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="color"
-                    value={slide.backgroundColor}
-                    onChange={(e) => updateSlide({ ...slide, backgroundColor: e.target.value, backgroundImage: undefined })}
-                    className="w-10 h-10 rounded cursor-pointer border border-slate-700 bg-transparent"
-                  />
-                  <span className="text-xs text-slate-500 font-mono uppercase">{slide.backgroundColor}</span>
+
+          <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-3 custom-scrollbar">
+
+            {/* ── Slide background ── */}
+            <Panel label="Background">
+              <div className="flex items-center gap-3">
+                <input type="color" value={slide.backgroundColor}
+                  onChange={e => updateSlide({ ...slide, backgroundColor: e.target.value, backgroundImage: undefined })}
+                  className="w-9 h-9 rounded-lg cursor-pointer border border-white/20 bg-transparent shrink-0" />
+                <span className="text-xs text-slate-400 font-mono">{slide.backgroundColor}</span>
+              </div>
+              <button onClick={() => setShowBgPicker(true)}
+                className="w-full px-3 py-2 bg-white/6 hover:bg-white/10 text-slate-400 hover:text-slate-200 text-[11px] font-semibold rounded-lg transition-all text-left">
+                {slide.backgroundImage ? "Change Image…" : "Set Image…"}
+              </button>
+              {slide.backgroundImage && (
+                <div className="flex items-center justify-between bg-white/4 p-2 rounded-lg border border-white/8">
+                  <span className="text-[9px] text-slate-500 truncate">{slide.backgroundImage.split(/[/\\]/).pop()}</span>
+                  <button onClick={() => updateSlide({ ...slide, backgroundImage: undefined })} className="text-red-400 text-[9px] font-bold ml-2 shrink-0 hover:text-red-300">✕</button>
                 </div>
+              )}
+            </Panel>
+
+            {/* ── Element controls ── */}
+            {activeEl && <>
+              {/* Quick actions */}
+              <div className="flex gap-1.5">
                 <button
-                  onClick={handlePickBgImage}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded border border-slate-700 transition-all"
+                  onClick={() => updateElement(activeEl.id, { locked: !activeEl.locked })}
+                  className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[10px] font-bold transition-all border ${
+                    activeEl.locked
+                      ? "bg-amber-500/15 border-amber-500/30 text-amber-400"
+                      : "bg-white/6 border-white/8 text-slate-400 hover:text-white"
+                  }`}
                 >
-                  {slide.backgroundImage ? "Change Background..." : "Choose Image..."}
+                  {activeEl.locked ? <Lock size={11} /> : <Unlock size={11} />}
+                  {activeEl.locked ? "Locked" : "Lock"}
                 </button>
-                {slide.backgroundImage && (
-                  <div className="flex items-center justify-between bg-slate-950 p-2 rounded border border-slate-800">
-                    <span className="text-[9px] text-slate-500 truncate max-w-[200px]">{slide.backgroundImage.split(/[/\\]/).pop()}</span>
-                    <button onClick={() => updateSlide({ ...slide, backgroundImage: undefined })} className="text-red-500 hover:text-red-400 text-[10px] font-bold">Clear</button>
-                  </div>
-                )}
+                <button onClick={() => duplicateElement(activeEl)}
+                  className="px-3 py-2 bg-white/6 hover:bg-white/12 border border-white/8 text-slate-400 hover:text-white rounded-xl transition-all" title="Duplicate">
+                  <Copy size={13} />
+                </button>
+                <button onClick={() => deleteElement(activeEl.id)}
+                  className="px-3 py-2 bg-white/6 hover:bg-red-500/20 border border-white/8 text-slate-500 hover:text-red-400 rounded-xl transition-all" title="Delete">
+                  <Trash2 size={13} />
+                </button>
               </div>
-            )}
 
-            {activeElement && (
-              <div className="flex flex-col gap-4">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-bold text-amber-500 uppercase tracking-widest">Edit Element</h3>
+              {/* Position & Size */}
+              <Panel label="Position & Size">
+                <div className="grid grid-cols-2 gap-2">
+                  {([["X %", "x"], ["Y %", "y"], ["W %", "w"], ["H %", "h"]] as const).map(([lbl, key]) => (
+                    <div key={key}>
+                      <span className="text-[8px] text-slate-600 uppercase font-black">{lbl}</span>
+                      <input
+                        type="number"
+                        value={Math.round(activeEl[key])}
+                        onChange={e => updateElement(activeEl.id, { [key]: Number(e.target.value) })}
+                        onKeyDown={e => e.stopPropagation()}
+                        className="mt-1 w-full bg-white/6 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-indigo-500/50 transition-colors"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </Panel>
+
+              {/* Arrange */}
+              <Panel label="Arrange">
+                <div className="grid grid-cols-3 gap-1">
+                  <IconBtn onClick={() => alignElement("left")} title="Left edge"><AlignLeft size={12} /></IconBtn>
+                  <IconBtn onClick={() => alignElement("center")} title="Center H"><AlignCenter size={12} /></IconBtn>
+                  <IconBtn onClick={() => alignElement("right")} title="Right edge"><AlignRight size={12} /></IconBtn>
+                  <TextBtn onClick={() => alignElement("top")} title="Top">Top</TextBtn>
+                  <TextBtn onClick={() => alignElement("middle")} title="Center V">Mid</TextBtn>
+                  <TextBtn onClick={() => alignElement("bottom")} title="Bottom">Bot</TextBtn>
+                </div>
+                <div className="grid grid-cols-4 gap-1 mt-1">
+                  <IconBtn onClick={() => updateZOrder("back")} title="Send to Back"><MoveDown size={12} /></IconBtn>
+                  <IconBtn onClick={() => updateZOrder("backward")} title="Send Backward"><ArrowDown size={12} /></IconBtn>
+                  <IconBtn onClick={() => updateZOrder("forward")} title="Bring Forward"><ArrowUp size={12} /></IconBtn>
+                  <IconBtn onClick={() => updateZOrder("front")} title="Bring to Front"><MoveUp size={12} /></IconBtn>
+                </div>
+              </Panel>
+
+              {/* Text vertical alignment */}
+              {activeEl.kind === "text" && (
+                <Panel label="Vertical Align">
                   <div className="flex gap-1">
-                    <button onClick={() => updateElement(activeElement.id, { locked: !activeElement.locked })} className={`p-1.5 rounded ${activeElement.locked ? "bg-amber-500/20 text-amber-400" : "bg-slate-800 hover:bg-slate-700 text-slate-400"}`} title={activeElement.locked ? "Unlock Element" : "Lock Element"}>
-                      {activeElement.locked ? <Lock size={12} /> : <Unlock size={12} />}
-                    </button>
-                    <button onClick={() => duplicateElement(activeElement)} className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded" title="Duplicate"><Copy size={12} /></button>
-                    <button onClick={() => deleteElement(activeElement.id)} className="p-1.5 bg-red-900/30 hover:bg-red-900/50 text-red-400 rounded" title="Delete"><Trash2 size={12} /></button>
+                    {(["top", "middle", "bottom"] as const).map(a => (
+                      <button key={a}
+                        onClick={() => updateElement(activeEl.id, { v_align: a })}
+                        className={`flex-1 py-2 text-[10px] font-bold rounded-lg capitalize transition-all ${
+                          (activeEl.v_align === a || (!activeEl.v_align && a === "top"))
+                            ? "bg-indigo-500 text-white"
+                            : "bg-white/6 text-slate-500 hover:text-white hover:bg-white/10"
+                        }`}
+                      >
+                        {a[0].toUpperCase() + a.slice(1)}
+                      </button>
+                    ))}
                   </div>
-                </div>
+                </Panel>
+              )}
+            </>}
 
-                {/* Position & Size */}
-                <div className="flex flex-col gap-3">
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="flex flex-col gap-1">
-                      <span className="text-[9px] text-slate-500 uppercase font-bold">X (%)</span>
-                      <input type="number" value={Math.round(activeElement.x)} onChange={e => updateElement(activeElement.id, { x: Number(e.target.value) })} className="bg-slate-950 border border-slate-700 rounded p-1 text-xs text-white" />
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <span className="text-[9px] text-slate-500 uppercase font-bold">Y (%)</span>
-                      <input type="number" value={Math.round(activeElement.y)} onChange={e => updateElement(activeElement.id, { y: Number(e.target.value) })} className="bg-slate-950 border border-slate-700 rounded p-1 text-xs text-white" />
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <span className="text-[9px] text-slate-500 uppercase font-bold">W (%)</span>
-                      <input type="number" value={Math.round(activeElement.w)} onChange={e => updateElement(activeElement.id, { w: Number(e.target.value) })} className="bg-slate-950 border border-slate-700 rounded p-1 text-xs text-white" />
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <span className="text-[9px] text-slate-500 uppercase font-bold">H (%)</span>
-                      <input type="number" value={Math.round(activeElement.h)} onChange={e => updateElement(activeElement.id, { h: Number(e.target.value) })} className="bg-slate-950 border border-slate-700 rounded p-1 text-xs text-white" />
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col gap-2">
-                    <span className="text-[9px] text-slate-500 uppercase font-bold">Alignment</span>
-                    <div className="grid grid-cols-3 gap-1">
-                      <button onClick={() => alignElement("left")} className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded flex items-center justify-center" title="Align Left"><AlignLeft size={14} /></button>
-                      <button onClick={() => alignElement("center")} className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded flex items-center justify-center" title="Center Horizontal"><AlignCenter size={14} /></button>
-                      <button onClick={() => alignElement("right")} className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded flex items-center justify-center" title="Align Right"><AlignRight size={14} /></button>
-                      <button onClick={() => alignElement("top")} className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded flex items-center justify-center" title="Align Top" style={{ transform: 'rotate(90deg)' }}><AlignRight size={14} /></button>
-                      <button onClick={() => alignElement("middle")} className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded flex items-center justify-center" title="Center Vertical" style={{ transform: 'rotate(90deg)' }}><AlignCenter size={14} /></button>
-                      <button onClick={() => alignElement("bottom")} className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded flex items-center justify-center" title="Align Bottom" style={{ transform: 'rotate(90deg)' }}><AlignLeft size={14} /></button>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col gap-2">
-                    <span className="text-[9px] text-slate-500 uppercase font-bold">Z-Order</span>
-                    <div className="grid grid-cols-4 gap-1">
-                      <button onClick={() => updateZOrder("back")} className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded flex items-center justify-center" title="Send to Back"><MoveDown size={14} /></button>
-                      <button onClick={() => updateZOrder("backward")} className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded flex items-center justify-center" title="Send Backward"><ArrowDown size={14} /></button>
-                      <button onClick={() => updateZOrder("forward")} className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded flex items-center justify-center" title="Bring Forward"><ArrowUp size={14} /></button>
-                      <button onClick={() => updateZOrder("front")} className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded flex items-center justify-center" title="Bring to Front"><MoveUp size={14} /></button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Text Content */}
-                {activeElement.kind === "text" && (
-                  <div className="flex flex-col gap-3 pt-3 border-t border-slate-800">
-                    <TiptapEditor
-                      content={activeElement.content}
-                      onChange={html => updateElement(activeElement.id, { content: html })}
-                      fontFamily={activeElement.font_family}
-                      fontSize={activeElement.font_size}
-                      color={activeElement.color}
-                      textAlign={activeElement.align}
-                    />
-                    
-                    <div className="flex flex-col gap-2">
-                      <select value={activeElement.font_family} onChange={e => updateElement(activeElement.id, { font_family: e.target.value })} className="bg-slate-950 border border-slate-700 rounded p-1.5 text-xs text-white">
-                        {FONTS.map(f => <option key={f} value={f}>{f}</option>)}
-                      </select>
-                      
-                      <div className="flex items-center gap-2">
-                        <div className="flex flex-1 items-center bg-slate-950 border border-slate-700 rounded px-2">
-                          <span className="text-[10px] text-slate-500">Size</span>
-                          <input type="number" value={activeElement.font_size} onChange={e => updateElement(activeElement.id, { font_size: Number(e.target.value) })} className="bg-transparent w-full p-1 text-xs text-white text-right outline-none" />
-                        </div>
-                        <input type="color" value={activeElement.color} onChange={e => updateElement(activeElement.id, { color: e.target.value })} className="w-8 h-8 rounded cursor-pointer border border-slate-700 bg-transparent shrink-0" />
-                      </div>
-
-                      <div className="flex gap-2">
-                        <div className="flex flex-col gap-1.5 flex-1">
-                          <span className="text-[8px] text-slate-500 uppercase font-black">H-Align</span>
-                          <div className="flex bg-slate-950 border border-slate-700 rounded overflow-hidden">
-                            {(["left", "center", "right"] as const).map((a) => (
-                              <button key={a} onClick={() => updateElement(activeElement.id, { align: a })} className={`flex-1 px-2 py-1 text-[10px] font-bold ${activeElement.align === a ? "bg-amber-500 text-black" : "text-slate-400 hover:text-white"}`}>{a.charAt(0).toUpperCase()}</button>
-                            ))}
-                          </div>
-                        </div>
-                        <div className="flex flex-col gap-1.5 flex-1">
-                          <span className="text-[8px] text-slate-500 uppercase font-black">V-Align</span>
-                          <div className="flex bg-slate-950 border border-slate-700 rounded overflow-hidden">
-                            {(["top", "middle", "bottom"] as const).map((a) => (
-                              <button key={a} onClick={() => updateElement(activeElement.id, { v_align: a })} className={`flex-1 px-2 py-1 text-[10px] font-bold ${(activeElement.v_align === a || (!activeElement.v_align && a === 'top')) ? "bg-amber-500 text-black" : "text-slate-400 hover:text-white"}`}>{a.charAt(0).toUpperCase()}</button>
-                            ))}
-                          </div>
-                        </div>
-                        <div className="flex flex-col gap-1.5">
-                          <span className="text-[8px] text-slate-500 uppercase font-black">Style</span>
-                          <div className="flex bg-slate-950 border border-slate-700 rounded overflow-hidden">
-                            <button onClick={() => updateElement(activeElement.id, { bold: !activeElement.bold })} className={`px-2 py-1 text-[10px] font-bold ${activeElement.bold ? "bg-amber-500 text-black" : "text-slate-400"}`}>B</button>
-                            <button onClick={() => updateElement(activeElement.id, { italic: !activeElement.italic })} className={`px-2 py-1 text-[10px] font-serif italic ${activeElement.italic ? "bg-amber-500 text-black" : "text-slate-400"}`}>I</button>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2 mt-1">
-                        <label className="flex items-center gap-1.5 text-[10px] text-slate-400 cursor-pointer">
-                          <input type="checkbox" checked={activeElement.shadow !== false} onChange={e => updateElement(activeElement.id, { shadow: e.target.checked })} className="accent-amber-500" />
-                          Drop Shadow
-                        </label>
-                        {activeElement.shadow !== false && (
-                          <input type="color" value={activeElement.shadow_color || "#000000"} onChange={e => updateElement(activeElement.id, { shadow_color: e.target.value })} className="w-6 h-6 rounded cursor-pointer border border-slate-700 bg-transparent shrink-0 ml-auto" />
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Shape Content */}
-                {activeElement.kind === "shape" && (
-                  <div className="flex flex-col gap-3 pt-3 border-t border-slate-800">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-slate-500">Color</span>
-                      <input type="color" value={activeElement.color} onChange={e => updateElement(activeElement.id, { color: e.target.value })} className="w-8 h-8 rounded cursor-pointer border border-slate-700 bg-transparent shrink-0" />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-slate-500 w-12">Opacity</span>
-                      <input type="range" min={0} max={1} step={0.1} value={activeElement.opacity ?? 1} onChange={e => updateElement(activeElement.id, { opacity: Number(e.target.value) })} className="flex-1 accent-amber-500" />
-                    </div>
-                  </div>
-                )}
-              </div>
+            {!activeEl && (
+              <p className="text-[10px] text-slate-700 text-center pt-4 leading-relaxed">
+                Click to select · double-click text to edit
+              </p>
             )}
           </div>
         </aside>
       </div>
 
-      {showBgImagePicker && (
+      {/* ── Modals ── */}
+      {showBgPicker && (
         <MediaPickerModal
           images={mediaImages}
-          onSelect={(path) => {
-            const rel = relativizePath(path, appDataDir);
-            updateSlide({ ...slide, backgroundImage: rel });
-            setShowBgImagePicker(false);
-          }}
-          onClose={() => setShowBgImagePicker(false)}
+          onSelect={path => { updateSlide({ ...slide, backgroundImage: relativizePath(path, appDataDir) }); setShowBgPicker(false); }}
+          onClose={() => setShowBgPicker(false)}
           onUpload={async () => {
-            try {
-              const selected = await openDialog({
-                multiple: false,
-                filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"] }],
-              });
-              if (typeof selected !== "string") return;
-              await invoke("add_media", { path: selected });
-            } catch (err) {
-              console.error("Upload failed", err);
-            }
+            try { const s = await openDialog({ multiple: false, filters: [{ name: "Images", extensions: ["jpg","jpeg","png","gif","webp","bmp"] }] }); if (typeof s === "string") await invoke("add_media", { path: s }); } catch {}
           }}
         />
       )}
-
-      {showElementImagePicker && (
+      {showImgPicker && (
         <MediaPickerModal
           images={mediaImages}
-          onSelect={(path) => {
-            const rel = relativizePath(path, appDataDir);
-            const newEl: SlideElement = {
-              id: stableId(), kind: "image",
-              x: 20, y: 20, w: 60, h: 60, z_index: slide.elements.length + 1,
-              content: rel
-            };
-            setPres(prev => {
-              const currentSlide = prev.slides[activeSlideIdx];
-              const nextSlides = [...prev.slides];
-              nextSlides[activeSlideIdx] = { ...currentSlide, elements: [...currentSlide.elements, newEl] };
-              return { ...prev, slides: nextSlides };
-            });
-            setActiveElementId(newEl.id);
-            setShowElementImagePicker(false);
-          }}
-          onClose={() => setShowElementImagePicker(false)}
+          onSelect={handleImageSelect}
+          onClose={() => setShowImgPicker(false)}
           onUpload={async () => {
-            try {
-              const selected = await openDialog({
-                multiple: false,
-                filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"] }],
-              });
-              if (typeof selected !== "string") return;
-              await invoke("add_media", { path: selected });
-            } catch (err) {
-              console.error("Upload failed", err);
-            }
+            try { const s = await openDialog({ multiple: false, filters: [{ name: "Images", extensions: ["jpg","jpeg","png","gif","webp","bmp"] }] }); if (typeof s === "string") await invoke("add_media", { path: s }); } catch {}
           }}
         />
       )}
       {showBiblePicker && (
         <BiblePickerModal
           onClose={() => setShowBiblePicker(false)}
-          onSelect={(verse) => {
-            const newEl: SlideElement = {
-              id: stableId(), kind: "text",
-              x: 10, y: 10, w: 80, h: 80, z_index: slide.elements.length + 1,
-              content: `${verse.text}\n\n— ${verse.book} ${verse.chapter}:${verse.verse} (${verse.version})`, 
-              font_size: 40, font_family: "Georgia", color: "#ffffff", align: "center", v_align: "middle", bold: false, italic: true
-            };
-            setPres(prev => {
-              const currentSlide = prev.slides[activeSlideIdx];
-              const nextSlides = [...prev.slides];
-              nextSlides[activeSlideIdx] = { ...currentSlide, elements: [...currentSlide.elements, newEl] };
-              return { ...prev, slides: nextSlides };
+          onSelect={verse => {
+            addEl({
+              id: stableId(), kind: "text", x: 10, y: 10, w: 80, h: 80,
+              z_index: slide.elements.length + 1,
+              content: `${verse.text}\n\n— ${verse.book} ${verse.chapter}:${verse.verse} (${verse.version})`,
+              font_size: 40, font_family: "Georgia", color: "#ffffff",
+              align: "center", v_align: "middle", bold: false, italic: true,
+              shadow: true, shadow_color: "#000",
             });
-            setActiveElementId(newEl.id);
             setShowBiblePicker(false);
           }}
         />
       )}
     </div>
+  );
+}
+
+// ─── Micro UI helpers ─────────────────────────────────────────────────────────
+function Btn({ onClick, icon, children, className = "" }: { onClick: () => void; icon?: React.ReactNode; children: React.ReactNode; className?: string }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-1.5 px-2.5 py-1.5 bg-white/8 hover:bg-white/14 text-slate-300 hover:text-white text-[11px] font-semibold rounded-lg transition-all shrink-0 ${className}`}
+    >
+      {icon}{children}
+    </button>
+  );
+}
+
+function ToggleBtn({ active, onClick, title, children }: { active: boolean; onClick: () => void; title?: string; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={`w-8 h-8 flex items-center justify-center rounded-lg transition-all shrink-0 ${
+        active ? "bg-indigo-500 text-white" : "bg-white/8 text-slate-400 hover:text-white hover:bg-white/14"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Div() {
+  return <div className="w-px h-5 bg-white/10 mx-0.5 shrink-0" />;
+}
+
+function Panel({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="bg-white/4 rounded-xl border border-white/8 p-3 flex flex-col gap-2.5">
+      <p className="text-[8px] font-black uppercase tracking-widest text-slate-600">{label}</p>
+      {children}
+    </div>
+  );
+}
+
+function IconBtn({ onClick, title, children }: { onClick: () => void; title?: string; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className="p-2 bg-white/6 hover:bg-white/12 text-slate-400 hover:text-white rounded-lg flex items-center justify-center transition-all"
+    >
+      {children}
+    </button>
+  );
+}
+
+function TextBtn({ onClick, title, children }: { onClick: () => void; title?: string; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className="p-2 bg-white/6 hover:bg-white/12 text-slate-500 hover:text-white rounded-lg flex items-center justify-center transition-all text-[9px] font-bold"
+    >
+      {children}
+    </button>
   );
 }

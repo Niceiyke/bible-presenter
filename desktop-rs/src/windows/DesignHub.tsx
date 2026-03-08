@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { AnimatePresence } from "framer-motion";
-import { Layers, Plus, X, Monitor } from "lucide-react";
+import { Layers, Monitor, Sliders, Wand2, Clapperboard, LayoutDashboard } from "lucide-react";
 import { useAppStore } from "../store";
 import { SlideEditor } from "../components/editors/SlideEditor";
 import { SceneComposerTab } from "../components/SceneComposerTab";
@@ -153,29 +153,40 @@ export function DesignHub() {
     );
   }
 
+  const tabs = [
+    { id: "studio" as const, label: "Studio", icon: <Clapperboard size={14} /> },
+    { id: "lt-designer" as const, label: "LT Designer", icon: <Wand2 size={14} /> },
+    { id: "scene" as const, label: "Scene Builder", icon: <LayoutDashboard size={14} /> },
+    { id: "props" as const, label: "Props", icon: <Layers size={14} /> },
+    { id: "settings" as const, label: "Preferences", icon: <Sliders size={14} /> },
+  ];
+
   return (
     <div className="h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden">
-      <header className="flex items-center gap-3 px-4 py-3 border-b border-slate-800 bg-slate-900/60 shrink-0">
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 bg-purple-600 rounded flex items-center justify-center text-white font-black text-xs">DH</div>
-          <span className="text-[10px] font-black uppercase tracking-widest text-purple-400">Design Hub</span>
+      <header className="flex items-center gap-0 px-0 border-b border-slate-800 bg-slate-900 shrink-0">
+        {/* Branding */}
+        <div className="flex items-center gap-2.5 px-4 py-3 border-r border-slate-800 shrink-0">
+          <div className="w-7 h-7 bg-gradient-to-br from-purple-600 to-purple-800 rounded-lg flex items-center justify-center shadow-lg">
+            <Clapperboard size={14} className="text-white" />
+          </div>
+          <div>
+            <p className="text-[11px] font-black uppercase tracking-widest text-white leading-tight">Design Hub</p>
+            <p className="text-[8px] text-purple-500 font-semibold leading-tight">Presentation Tools</p>
+          </div>
         </div>
-        <div className="h-4 w-px bg-slate-700 mx-2" />
-        <div className="flex gap-1 flex-wrap">
-          {([
-            { id: "studio", label: "Studio" },
-            { id: "lt-designer", label: "LT Designer" },
-            { id: "scene", label: "Scene Builder" },
-            { id: "props", label: "Props" },
-            { id: "settings", label: "Preferences" },
-          ] as const).map(({ id, label }) => (
+        {/* Tabs */}
+        <div className="flex flex-1 h-full">
+          {tabs.map(({ id, label, icon }) => (
             <button
               key={id}
               onClick={() => setHubTab(id)}
-              className={`px-3 py-1 rounded text-xs font-bold transition-all ${
-                hubTab === id ? "bg-purple-600 text-white shadow-lg" : "bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white"
+              className={`flex items-center gap-2 px-4 py-3 text-[11px] font-semibold border-b-2 transition-all ${
+                hubTab === id
+                  ? "border-purple-500 text-purple-300 bg-purple-500/5"
+                  : "border-transparent text-slate-500 hover:text-slate-300 hover:bg-slate-800/30"
               }`}
             >
+              <span className={hubTab === id ? "text-purple-400" : "text-slate-600"}>{icon}</span>
               {label}
             </button>
           ))}
