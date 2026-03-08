@@ -41,6 +41,10 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
   const [chapterVerses, setChapterVerses] = useState<Verse[]>([]);
   const [loadingChapter, setLoadingChapter] = useState(false);
   const [activeChapter, setActiveChapter] = useState<{ book: string; chapter: number; version: string } | null>(null);
+  const [chapterViewFontSize, setChapterViewFontSize] = useState<number>(() => {
+    const stored = localStorage.getItem("pref_chapterViewFontSize");
+    return stored ? parseInt(stored, 10) : 11;
+  });
   
   // Ref to track if we are programmatically updating dropdowns to avoid loops
   const isSyncingRef = useRef(false);
@@ -142,7 +146,11 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
         verse: selectedVerse,
         version: bibleVersion,
       });
-      if (verse) onLive({ type: "Verse", data: verse });
+      if (verse) {
+        const item: DisplayItem = { type: "Verse", data: verse };
+        onStage(item);
+        onLive(item);
+      }
     } catch (err) {
       console.error("handleSendLivePicker:", err);
     }
@@ -264,13 +272,38 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
 
       {/* Chapter View — Active staged chapter */}
       <div className="flex flex-col min-h-0">
-        <button
-          onClick={() => setBibleOpen((p: any) => ({ ...p, chapterView: !p.chapterView }))}
-          className="w-full flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 hover:text-slate-300 transition-colors"
-        >
-          <span className="flex items-center gap-1.5"><List size={11} />Chapter View</span>
-          {bibleOpen.chapterView ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-        </button>
+        <div className="w-full flex items-center justify-between mb-3">
+          <button
+            onClick={() => setBibleOpen((p: any) => ({ ...p, chapterView: !p.chapterView }))}
+            className="flex items-center gap-1.5 text-xs font-bold text-slate-500 uppercase tracking-widest hover:text-slate-300 transition-colors"
+          >
+            <List size={11} />Chapter View
+            {bibleOpen.chapterView ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+          </button>
+          {bibleOpen.chapterView && (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => {
+                  const next = Math.max(8, chapterViewFontSize - 1);
+                  setChapterViewFontSize(next);
+                  localStorage.setItem("pref_chapterViewFontSize", String(next));
+                }}
+                className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 text-[10px] font-black flex items-center justify-center transition-colors"
+                title="Decrease font size"
+              >A−</button>
+              <span className="text-[9px] font-mono text-slate-600 w-5 text-center">{chapterViewFontSize}</span>
+              <button
+                onClick={() => {
+                  const next = Math.min(20, chapterViewFontSize + 1);
+                  setChapterViewFontSize(next);
+                  localStorage.setItem("pref_chapterViewFontSize", String(next));
+                }}
+                className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 text-[10px] font-black flex items-center justify-center transition-colors"
+                title="Increase font size"
+              >A+</button>
+            </div>
+          )}
+        </div>
         {bibleOpen.chapterView && (
           <div className="flex-1 flex flex-col min-h-0">
             {activeChapter ? (
@@ -306,10 +339,16 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                         onClick={() => onStage({ type: "Verse", data: v })}
                       >
                         <div className="flex gap-2">
-                          <span className={`text-[10px] font-mono font-black shrink-0 ${isStaged ? "text-amber-500" : isLive ? "text-red-500" : "text-slate-600"}`}>
+                          <span
+                            className={`font-mono font-black shrink-0 ${isStaged ? "text-amber-500" : isLive ? "text-red-500" : "text-slate-600"}`}
+                            style={{ fontSize: `${Math.max(8, chapterViewFontSize - 1)}px` }}
+                          >
                             {v.verse}
                           </span>
-                          <p className={`text-[11px] leading-snug ${isStaged ? "text-slate-200" : isLive ? "text-white font-medium" : "text-slate-400 group-hover:text-slate-300"}`}>
+                          <p
+                            className={`leading-snug ${isStaged ? "text-slate-200" : isLive ? "text-white font-medium" : "text-slate-400 group-hover:text-slate-300"}`}
+                            style={{ fontSize: `${chapterViewFontSize}px` }}
+                          >
                             {v.text}
                           </p>
                         </div>

@@ -451,6 +451,10 @@ function ReferenceTag({
   const finalFontFamily = settings?.reference_font_family ?? "Arial, sans-serif";
   const finalColor = (settings?.reference_color && settings.reference_color !== "") ? settings.reference_color : "#f59e0b";
 
+  const cvFontSize = (settings?.chapter_verse_font_size ?? (settings?.reference_font_size ?? 36)) * scale;
+  const cvFontFamily = settings?.chapter_verse_font_family ?? finalFontFamily;
+  const cvColor = (settings?.chapter_verse_color && settings.chapter_verse_color !== "") ? settings.chapter_verse_color : finalColor;
+
   const vFontSize = (settings?.version_font_size ?? 24) * scale;
   const vFontFamily = settings?.version_font_family ?? "Arial, sans-serif";
   const vColor = (settings?.version_color && settings.version_color !== "") ? settings.version_color : undefined;
@@ -465,7 +469,10 @@ function ReferenceTag({
         textTransform: "uppercase",
         letterSpacing: "0.05em",
       }}>
-        {book} {chapter}:{verse}
+        {book}{" "}
+        <span style={{ fontSize: `${cvFontSize}pt`, fontFamily: cvFontFamily, color: cvColor }}>
+          {chapter}:{verse}
+        </span>
       </p>
       <p style={{
         fontSize: `${vFontSize}pt`,

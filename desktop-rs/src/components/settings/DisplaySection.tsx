@@ -338,6 +338,77 @@ export function DisplaySection({ onUpdateSettings, onUploadMedia }: DisplaySecti
             <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>
           ))}
         </select>
+
+        {/* Chapter:Verse number sub-styling */}
+        <details className="group mt-4">
+          <summary className="text-[10px] text-slate-500 uppercase font-bold cursor-pointer select-none hover:text-slate-400 mb-2 list-none flex items-center gap-1">
+            <span className="group-open:rotate-90 transition-transform">▸</span> Chapter:Verse Number Styling
+          </summary>
+          <div className="p-3 bg-slate-900/50 border border-slate-800 rounded-lg flex flex-col gap-3 mt-2">
+            <p className="text-[9px] text-slate-600 italic">Override styling for the "3:16" part only. Leave blank to inherit from reference.</p>
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <span className="text-[10px] text-slate-500 uppercase font-bold">Font Size</span>
+                <span className="text-xs font-mono text-amber-500">
+                  {settings.chapter_verse_font_size != null ? `${settings.chapter_verse_font_size}pt` : "inherit"}
+                </span>
+              </div>
+              <input
+                type="range" min="12" max="120" step="2"
+                value={settings.chapter_verse_font_size ?? (settings.reference_font_size ?? 36)}
+                onChange={(e) => onUpdateSettings({ ...settings, chapter_verse_font_size: parseInt(e.target.value) })}
+                className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
+              />
+              {settings.chapter_verse_font_size != null && (
+                <button
+                  onClick={() => onUpdateSettings({ ...settings, chapter_verse_font_size: undefined })}
+                  className="text-[9px] text-red-400 hover:text-red-300 font-bold uppercase mt-1"
+                >
+                  Reset to inherit
+                </button>
+              )}
+            </div>
+            <div>
+              <span className="text-[10px] text-slate-500 uppercase font-bold block mb-1">Font Family</span>
+              <select
+                value={settings.chapter_verse_font_family ?? ""}
+                onChange={(e) => onUpdateSettings({ ...settings, chapter_verse_font_family: e.target.value || undefined })}
+                className="w-full bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-2 cursor-pointer focus:outline-none focus:border-amber-500"
+                style={{ fontFamily: settings.chapter_verse_font_family ?? "inherit" }}
+              >
+                <option value="">(inherit from reference)</option>
+                {FONTS.map((f) => (
+                  <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] text-slate-500 uppercase font-bold">Color</span>
+                <span className="text-[10px] text-slate-500">(empty = inherit)</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <input
+                  type="color"
+                  value={settings.chapter_verse_color && settings.chapter_verse_color !== "" ? settings.chapter_verse_color : "#f59e0b"}
+                  onChange={(e) => onUpdateSettings({ ...settings, chapter_verse_color: e.target.value })}
+                  className="w-10 h-8 rounded cursor-pointer bg-transparent border-0"
+                />
+                <span className="text-xs font-mono text-slate-300">
+                  {settings.chapter_verse_color && settings.chapter_verse_color !== "" ? settings.chapter_verse_color : "inherit"}
+                </span>
+                {settings.chapter_verse_color && settings.chapter_verse_color !== "" && (
+                  <button
+                    onClick={() => onUpdateSettings({ ...settings, chapter_verse_color: "" })}
+                    className="ml-auto text-[10px] text-red-400 hover:text-red-300 font-bold"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </details>
       </div>
 
       <div className="border-t border-slate-800 pt-4">

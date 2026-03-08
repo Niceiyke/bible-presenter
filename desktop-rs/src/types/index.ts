@@ -329,6 +329,9 @@ export interface PresentationSettings {
   /** Hex color override for the reference line. Empty / undefined = use theme color. */
   reference_color?: string;
   reference_font_family?: string;
+  chapter_verse_font_size?: number;
+  chapter_verse_font_family?: string;
+  chapter_verse_color?: string;
   disabled_bible_versions: string[];
   version_font_family?: string;
   version_font_size?: number;
@@ -394,6 +397,9 @@ export const DEFAULT_SETTINGS: PresentationSettings = {
   reference_font_size: 36,
   reference_color: "",
   reference_font_family: "Arial, sans-serif",
+  chapter_verse_font_size: undefined,
+  chapter_verse_font_family: undefined,
+  chapter_verse_color: undefined,
   disabled_bible_versions: [],
   camera_resolution: "720p",
   auto_split_verses: true,
