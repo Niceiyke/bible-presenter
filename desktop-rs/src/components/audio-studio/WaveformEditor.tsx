@@ -21,6 +21,20 @@ async function filePathToBlobUrl(filePath: string): Promise<string> {
   return URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
 }
 
+// Fetch pre-computed waveform peaks from Rust.
+// Returns peaks in [0,1] range + duration in seconds.
+// Using Rust-side peaks + an HTMLAudioElement for the media element avoids
+// AudioContext.decodeAudioData, which fails on Linux/WebKitGTK for 16 kHz WAV.
+async function fetchRecordingPeaks(
+  id: string,
+): Promise<{ peaks: number[][]; duration: number }> {
+  const result = await invoke<{ peaks: number[]; duration: number }>(
+    "get_recording_peaks",
+    { id, nPeaks: 1000 },
+  );
+  return { peaks: [result.peaks], duration: result.duration };
+}
+
 export function WaveformEditor() {
   const {
     selectedRecording,
@@ -58,36 +72,37 @@ export function WaveformEditor() {
   };
 
   // ── WaveSurfer init ────────────────────────────────────────────────────────
-  // We read the file through the Tauri FS plugin (readFile) and feed WaveSurfer
-  // a blob: URL. This bypasses convertFileSrc / the asset protocol entirely,
-  // which fails on some Linux/WebKitGTK builds even for valid local files.
+  // Strategy: pre-compute waveform peaks in Rust and pass them directly to
+  // WaveSurfer together with an HTMLAudioElement for playback.  This completely
+  // avoids AudioContext.decodeAudioData, which fails on Linux/WebKitGTK for
+  // 16 kHz mono WAV files.  The blob: URL is still used so the <audio> element
+  // can play the file via the native GStreamer media pipeline.
   //
-  // setTimeout(fn,0) also survives React 18 StrictMode double-invoke: the
-  // cleanup cancels the timeout before WaveSurfer is ever created.
+  // setTimeout(fn,0) survives React 18 StrictMode double-invoke: the cleanup
+  // cancels the timeout before WaveSurfer is ever created.
   useEffect(() => {
     if (!wavesurferRef.current || !selectedRecording?.path || isLargeFile) return;
 
     const container = wavesurferRef.current;
     const filePath  = selectedRecording.path;
+    const recId     = selectedRecording.id;
     // Abort flag: set to true when cleanup fires so the async IIFE
-    // (which may still be awaiting the Tauri IPC round-trip) bails out
-    // instead of creating an orphaned WaveSurfer on an unmounted component.
+    // (which may still be awaiting IPC round-trips) bails out instead of
+    // creating an orphaned WaveSurfer on an unmounted component.
     let cancelled = false;
 
     if (wsInstance.current) { wsInstance.current.destroy(); wsInstance.current = null; }
     revokeBlobUrl();
 
-    // setTimeout(fn, 0) survives React 18 StrictMode double-invoke:
-    // the cleanup cancels the timeout before WaveSurfer is ever created.
     initTimeoutRef.current = setTimeout(() => {
       if (cancelled || !container) return;
       setIsWaveformLoading(true);
 
       (async () => {
+        // 1. Read file bytes → blob URL (for the <audio> media element)
         let url: string;
         try {
           url = await filePathToBlobUrl(filePath);
-          // Check after every await — cleanup may have fired while we waited
           if (cancelled) { URL.revokeObjectURL(url); return; }
           blobUrlRef.current = url;
         } catch (e) {
@@ -99,12 +114,27 @@ export function WaveformEditor() {
           return;
         }
 
+        // 2. Fetch pre-computed peaks from Rust so WaveSurfer never calls
+        //    AudioContext.decodeAudioData (which breaks on Linux/WebKitGTK).
+        let peaksData: { peaks: number[][]; duration: number } | null = null;
+        try {
+          peaksData = await fetchRecordingPeaks(recId);
+          if (cancelled) return;
+        } catch (e) {
+          console.warn("get_recording_peaks failed, WaveSurfer will decode:", e);
+        }
+
+        // 3. Create a media element that plays the blob URL via the native
+        //    GStreamer pipeline (avoids WebAudio decode issues on Linux).
+        const audioEl = new Audio();
+        audioEl.src = url;
+
         try {
           const regions = RegionsPlugin.create();
           if (cancelled) return;
           regionsRef.current = regions;
 
-          const ws = WaveSurfer.create({
+          const wsOpts: Parameters<typeof WaveSurfer.create>[0] = {
             container,
             waveColor: "#f59e0b",
             progressColor: "#d97706",
@@ -112,21 +142,32 @@ export function WaveformEditor() {
             barWidth: 2,
             barRadius: 2,
             height: 80,
-            url,
+            media: audioEl,
             plugins: [regions],
-          });
+          };
 
-          // Guard every async callback — the component may have moved on
+          if (peaksData) {
+            // Peaks + duration supplied → WaveSurfer renders without decoding
+            (wsOpts as any).peaks    = peaksData.peaks;
+            (wsOpts as any).duration = peaksData.duration;
+          } else {
+            // Fallback: let WaveSurfer fetch/decode from the blob URL
+            wsOpts.url = url;
+          }
+
+          const ws = WaveSurfer.create(wsOpts);
+
           ws.on("play",   () => { if (!cancelled) setIsPlaying(true); });
           ws.on("pause",  () => { if (!cancelled) setIsPlaying(false); });
           ws.on("finish", () => { if (!cancelled) setIsPlaying(false); });
           ws.on("ready",  () => {
             if (cancelled) return;
             setIsWaveformLoading(false);
-            setDuration(ws.getDuration());
+            const dur = ws.getDuration();
+            setDuration(dur);
             regions.addRegion({
               start: 0,
-              end: ws.getDuration(),
+              end: dur,
               color: "rgba(245,158,11,0.12)",
               drag: true,
               resize: true,
@@ -137,7 +178,7 @@ export function WaveformEditor() {
             console.error("WaveSurfer error:", err);
             setIsWaveformLoading(false);
             if (wsInstance.current === ws) {
-              setError("Failed to decode audio. Try re-importing or re-recording.");
+              setError("Waveform load failed. Playback may still work via controls.");
             }
           });
           ws.on("timeupdate", (t) => { if (!cancelled) setCurrentTime(t); });
@@ -155,7 +196,7 @@ export function WaveformEditor() {
     }, 0);
 
     return () => {
-      cancelled = true; // Signal all in-flight async work to abort
+      cancelled = true;
       if (initTimeoutRef.current) { clearTimeout(initTimeoutRef.current); initTimeoutRef.current = null; }
       if (wsInstance.current)     { wsInstance.current.destroy(); wsInstance.current = null; }
       revokeBlobUrl();

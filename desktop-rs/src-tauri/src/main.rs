@@ -1671,6 +1671,49 @@ struct StudioRecording {
     transcribed: bool,
 }
 
+#[derive(Serialize)]
+struct RecordingPeaks {
+    peaks: Vec<f32>,
+    duration: f32,
+}
+
+/// Read a studio recording's WAV file and return waveform peak amplitudes.
+/// Returns n_peaks values (default 1000) in [0.0, 1.0] plus the duration in seconds.
+/// This lets the frontend render the waveform WITHOUT calling AudioContext.decodeAudioData,
+/// which fails on Linux/WebKitGTK for 16 kHz mono WAV files.
+#[tauri::command]
+async fn get_recording_peaks(
+    state: State<'_, AppState>,
+    id: String,
+    n_peaks: Option<usize>,
+) -> Result<RecordingPeaks, String> {
+    let path = state.app_data_dir.join("recordings").join(format!("{}.wav", id));
+    tauri::async_runtime::spawn_blocking(move || {
+        let reader = hound::WavReader::open(&path).map_err(|e| e.to_string())?;
+        let spec = reader.spec();
+        let total_samples = reader.duration() as usize;
+        let duration = total_samples as f32 / spec.sample_rate as f32;
+
+        let n = n_peaks.unwrap_or(1000).clamp(100, 8000);
+        let window = (total_samples / n).max(1);
+
+        let all_samples: Vec<f32> = reader
+            .into_samples::<i16>()
+            .filter_map(|s| s.ok())
+            .map(|s| s as f32 / i16::MAX as f32)
+            .collect();
+
+        let peaks: Vec<f32> = all_samples
+            .chunks(window)
+            .map(|chunk| chunk.iter().map(|s| s.abs()).fold(0.0f32, f32::max))
+            .collect();
+
+        Ok(RecordingPeaks { peaks, duration })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn list_studio_recordings(state: State<'_, AppState>) -> Result<Vec<StudioRecording>, String> {
     let recordings_dir = state.app_data_dir.join("recordings");
@@ -3389,6 +3432,7 @@ fn main() {
             start_studio_recording,
             stop_studio_recording,
             import_studio_audio,
+            get_recording_peaks,
             get_available_monitors,
             list_services,
             save_service,
