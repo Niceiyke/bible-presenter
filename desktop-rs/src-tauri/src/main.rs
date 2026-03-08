@@ -1729,14 +1729,21 @@ async fn delete_studio_recording(state: State<'_, AppState>, id: String) -> Resu
 
 #[tauri::command]
 async fn rename_studio_recording(state: State<'_, AppState>, id: String, new_name: String) -> Result<(), String> {
+    // Strip .wav if the user included it manually
+    let clean_name = if new_name.to_lowercase().ends_with(".wav") {
+        &new_name[..new_name.len() - 4]
+    } else {
+        &new_name
+    };
+
     let old_path = state.app_data_dir.join("recordings").join(format!("{}.wav", id));
-    let new_path = state.app_data_dir.join("recordings").join(format!("{}.wav", new_name));
+    let new_path = state.app_data_dir.join("recordings").join(format!("{}.wav", clean_name));
     if old_path.exists() {
         fs::rename(old_path, new_path).map_err(|e| e.to_string())?;
     }
     // Also rename transcription if exists
     let old_txt = state.app_data_dir.join("recordings").join(format!("{}.txt", id));
-    let new_txt = state.app_data_dir.join("recordings").join(format!("{}.txt", new_name));
+    let new_txt = state.app_data_dir.join("recordings").join(format!("{}.txt", clean_name));
     if old_txt.exists() {
         let _ = fs::rename(old_txt, new_txt);
     }
@@ -1883,22 +1890,34 @@ async fn start_studio_recording(app: AppHandle, state: State<'_, AppState>) -> R
 
         while is_active.load(Ordering::Relaxed) {
             tokio::select! {
-                Some(samples) = audio_rx.recv() => {
-                    for s in samples {
-                        let sample = (s as f32 * std::i16::MAX as f32).clamp(-32768.0, 32767.0) as i16;
-                        if let Err(e) = writer.write_sample(sample) {
-                            eprintln!("Failed to write sample: {}", e);
-                            break;
+                res = audio_rx.recv() => {
+                    if let Some(samples) = res {
+                        for s in samples {
+                            let sample = (s * std::i16::MAX as f32).clamp(-32768.0, 32767.0) as i16;
+                            if let Err(e) = writer.write_sample(sample) {
+                                eprintln!("Failed to write sample: {}", e);
+                                is_active.store(false, Ordering::Relaxed);
+                                break;
+                            }
                         }
+                    } else {
+                        break;
                     }
                 }
-                Some(level) = level_rx.recv() => {
-                    let _ = app.emit("studio-audio-level", level);
+                res = level_rx.recv() => {
+                    if let Some(level) = res {
+                        let _ = app.emit("studio-audio-level", level);
+                    } else {
+                        break;
+                    }
                 }
-                Some(err) = error_rx.recv() => {
-                    let _ = app.emit("studio-audio-error", err);
+                res = error_rx.recv() => {
+                    if let Some(err) = res {
+                        let _ = app.emit("studio-audio-error", err);
+                    } else {
+                        break;
+                    }
                 }
-                else => break,
             }
         }
         let _ = writer.finalize();

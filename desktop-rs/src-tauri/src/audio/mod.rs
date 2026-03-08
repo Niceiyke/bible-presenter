@@ -258,10 +258,11 @@ impl AudioEngine {
                                 *s = s.clamp(-1.0, 1.0);
                             }
 
-                            // VU meter logic
-                            let energy = mono.iter().map(|s| s * s).sum::<f32>() / mono.len() as f32;
+                            // VU meter logic - Use RMS and apply a scaling factor for better UI visibility
+                            let rms = (mono.iter().map(|s| s * s).sum::<f32>() / mono.len() as f32).sqrt();
+                            let ui_level = (rms * 5.0).min(1.0); // Boost small signals for the meter
                             if let Some(ref ltx) = level_tx {
-                                let _ = ltx.try_send(energy);
+                                let _ = ltx.try_send(ui_level);
                             }
 
                             // --- HARD MUTE CHECK ---

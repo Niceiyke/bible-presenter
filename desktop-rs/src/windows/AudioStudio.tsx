@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { 
   Mic, StopCircle, Play, Pause, Scissors, 
   Trash2, FileAudio, Download, RefreshCw,
-  Clock, Save, FileUp
+  Clock, Save, FileUp, Edit2
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import WaveSurfer from "wavesurfer.js";
@@ -23,6 +23,8 @@ export function AudioStudio() {
   const [transMode, setTransMode] = useState<"local" | "cloud">("local");
   const [devices, setDevices] = useState<[string, string][]>([]);
   const [selectedDevice, setSelectedDevice] = useState<string>("");
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
 
   const wavesurferRef = useRef<HTMLDivElement>(null);
   const wsInstance = useRef<WaveSurfer | null>(null);
@@ -154,6 +156,24 @@ export function AudioStudio() {
     } catch (err) {
       console.error(err);
       alert("Trim failed: " + err);
+    }
+  };
+
+  const handleRename = async () => {
+    if (!selectedRecording || !renameValue.trim()) {
+      setIsRenaming(false);
+      return;
+    }
+    try {
+      await invoke("rename_studio_recording", { id: selectedRecording.id, new_name: renameValue.trim() });
+      setIsRenaming(false);
+      fetchRecordings();
+      // Update local state so the UI updates immediately
+      const newName = renameValue.trim();
+      setSelectedRecording(prev => prev ? { ...prev, name: newName, id: newName } : null);
+    } catch (err) {
+      console.error(err);
+      alert("Rename failed: " + err);
     }
   };
 
@@ -361,7 +381,27 @@ export function AudioStudio() {
           {selectedRecording ? (
             <div className="h-full flex flex-col p-8 overflow-hidden">
               <div className="shrink-0 mb-6">
-                <h2 className="text-2xl font-black text-white mb-2">{selectedRecording.name}</h2>
+                {isRenaming ? (
+                  <div className="flex items-center gap-2 mb-2">
+                    <input 
+                      autoFocus
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleRename()}
+                      onBlur={() => setIsRenaming(false)}
+                      className="bg-slate-900 border border-indigo-500 text-2xl font-black text-white px-2 py-1 rounded-xl outline-none"
+                    />
+                    <button onClick={handleRename} className="p-2 bg-indigo-600 text-white rounded-xl shadow-lg shadow-indigo-600/20"><Save size={20} /></button>
+                  </div>
+                ) : (
+                  <h2 
+                    onClick={() => { setIsRenaming(true); setRenameValue(selectedRecording.name); }}
+                    className="text-2xl font-black text-white mb-2 cursor-pointer hover:text-indigo-400 transition-colors group flex items-center gap-3"
+                  >
+                    {selectedRecording.name}
+                    <Edit2 size={18} className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-500" />
+                  </h2>
+                )}
                 <div className="flex items-center gap-4 text-xs font-bold text-slate-500 uppercase tracking-widest">
                   <span>Format: WAV</span>
                   <span>Size: {selectedRecording.size_mb.toFixed(1)} MB</span>
