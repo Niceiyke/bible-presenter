@@ -32,29 +32,30 @@ pub const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(20);
 /// How often the watchdog sweeps for stale sessions.
 pub const WATCHDOG_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Spawn a background Tokio task that sweeps `SessionRegistry` for stale sessions
-/// and removes them, broadcasting a `camera_source_disconnected` event.
-pub fn spawn_heartbeat_watchdog(
+/// Async heartbeat loop — sweeps `SessionRegistry` for stale sessions and
+/// removes them, broadcasting a `camera_source_disconnected` event.
+///
+/// Caller is responsible for spawning this on the correct runtime.
+/// In Tauri, use `tauri::async_runtime::spawn(camera::heartbeat_watchdog(...))`.
+pub async fn heartbeat_watchdog(
     sessions: SessionRegistry,
     tally: TallyRegistry,
     broadcast_tx: tokio::sync::broadcast::Sender<String>,
 ) {
-    tokio::spawn(async move {
-        let mut tick = interval(WATCHDOG_INTERVAL);
-        loop {
-            tick.tick().await;
-            let stale = sessions.stale_ids(HEARTBEAT_TIMEOUT);
-            for device_id in stale {
-                eprintln!("[camera] Watchdog: session {} timed out, removing", device_id);
-                sessions.remove(&device_id);
-                tally.remove(&device_id);
-                let msg = serde_json::json!({
-                    "type": "camera_source_disconnected",
-                    "device_id": device_id,
-                })
-                .to_string();
-                let _ = broadcast_tx.send(msg);
-            }
+    let mut tick = interval(WATCHDOG_INTERVAL);
+    loop {
+        tick.tick().await;
+        let stale = sessions.stale_ids(HEARTBEAT_TIMEOUT);
+        for device_id in stale {
+            eprintln!("[camera] Watchdog: session {} timed out, removing", device_id);
+            sessions.remove(&device_id);
+            tally.remove(&device_id);
+            let msg = serde_json::json!({
+                "type": "camera_source_disconnected",
+                "device_id": device_id,
+            })
+            .to_string();
+            let _ = broadcast_tx.send(msg);
         }
-    });
+    }
 }

@@ -3345,12 +3345,14 @@ fn main() {
                 remote::start(remote_state, remote_port).await;
             });
 
-            // Spawn camera session heartbeat watchdog
-            camera::spawn_heartbeat_watchdog(
-                state.camera_sessions.clone(),
-                state.camera_tally.clone(),
-                state.broadcast_tx.clone(),
-            );
+            // Spawn camera session heartbeat watchdog via Tauri's runtime
+            // (avoids tokio::spawn panic if setup hook runs outside a Tokio context)
+            {
+                let sessions = state.camera_sessions.clone();
+                let tally    = state.camera_tally.clone();
+                let bcast    = state.broadcast_tx.clone();
+                tauri::async_runtime::spawn(camera::heartbeat_watchdog(sessions, tally, bcast));
+            }
 
             app.manage(state);
 
