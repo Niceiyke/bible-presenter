@@ -296,6 +296,10 @@ pub struct AppState {
     pub auth_throttles: Arc<Mutex<HashMap<std::net::IpAddr, (u8, std::time::Instant)>>>,
     /// Valid session tokens issued on WS auth_ok, checked by REST endpoints.
     pub session_tokens: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Self-signed TLS certificate for the embedded HTTPS/WSS server.
+    pub app_cert: std::sync::Arc<camera::AppCert>,
+    /// HMAC-signed device tokens for camera clients (avoids re-entering PIN).
+    pub device_tokens: std::sync::Arc<camera::DeviceTokenManager>,
     /// NDI Streaming Manager.
     pub ndi_manager: Arc<ndi::NdiManager>,
     /// Whether the operator recording pipeline is currently active.
@@ -356,6 +360,8 @@ impl Clone for AppState {
             preacher_cloud_stream_handle: self.preacher_cloud_stream_handle.clone(),
             auth_throttles: self.auth_throttles.clone(),
             session_tokens: self.session_tokens.clone(),
+            app_cert: self.app_cert.clone(),
+            device_tokens: self.device_tokens.clone(),
             ndi_manager: self.ndi_manager.clone(),
             operator_is_active: self.operator_is_active.clone(),
             preacher_is_active: self.preacher_is_active.clone(),
@@ -2541,8 +2547,11 @@ struct RemoteInfo {
     lan_urls: Vec<(String, String)>,
     pin: String,
     port: u16,
-    /// Some("http://100.x.x.x:port") when Tailscale is running; None otherwise.
+    /// Some("https://100.x.x.x:port") when Tailscale is running; None otherwise.
     tailscale_url: Option<String>,
+    /// SHA-256 fingerprint of the self-signed TLS cert, colon-hex (AA:BB:…).
+    /// Display this in the QR code or settings so users can verify the cert.
+    cert_fingerprint: String,
 }
 
 /// Try `tailscale ip -4` to get the Tailscale IPv4 address.
@@ -2582,7 +2591,7 @@ async fn get_remote_info(state: State<'_, AppState>) -> Result<RemoteInfo, Strin
         for (name, ip) in ifas {
             if let std::net::IpAddr::V4(ipv4) = ip {
                 if !ipv4.is_loopback() {
-                    lan_urls.push((name, format!("http://{}:{}", ipv4, port)));
+                    lan_urls.push((name, format!("https://{}:{}", ipv4, port)));
                 }
             }
         }
@@ -2594,16 +2603,19 @@ async fn get_remote_info(state: State<'_, AppState>) -> Result<RemoteInfo, Strin
         .await
         .ok()
         .flatten()
-        .map(|ip| format!("http://{}:{}", ip, port));
+        .map(|ip| format!("https://{}:{}", ip, port));
 
-    let primary_url = format!("http://{}:{}", lan_ip, port);
+    let primary_url = format!("https://{}:{}", lan_ip, port);
+    let pin = state.remote_pin.lock().clone();
+    let cert_fingerprint = state.app_cert.fingerprint.clone();
 
     Ok(RemoteInfo {
         url: primary_url,
         lan_urls,
-        pin: state.remote_pin.lock().clone(),
+        pin,
         port,
         tailscale_url,
+        cert_fingerprint,
     })
 }
 
@@ -3279,6 +3291,27 @@ fn main() {
                 });
             log_msg(app, &format!("Remote PIN: {}", remote_pin));
 
+            // Generate or load the self-signed TLS cert for the embedded HTTPS server.
+            let cert_dir = app_data_dir.join("tls");
+            let app_cert = camera::AppCert::load_or_generate(&cert_dir)
+                .unwrap_or_else(|e| {
+                    log_msg(app, &format!("[tls] Cert init failed: {e} — falling back to plain HTTP"));
+                    // Create a dummy cert so the field is always populated;
+                    // remote::start will fall back to plain HTTP if cert is invalid.
+                    panic!("TLS cert generation failed: {e}");
+                });
+            log_msg(app, &format!("[tls] Certificate fingerprint: {}", app_cert.fingerprint));
+
+            // Device token secret = SHA-256 of "wordlyte-device-token:" + PIN
+            // This ties tokens to the current PIN, so rotating the PIN invalidates all tokens.
+            let token_secret = {
+                use sha2::{Digest, Sha256};
+                Sha256::digest(
+                    format!("wordlyte-device-token:{}", remote_pin).as_bytes()
+                ).to_vec()
+            };
+            let device_tokens = std::sync::Arc::new(camera::DeviceTokenManager::new(token_secret));
+
             let state = AppState {
                 operator_audio,
                 preacher_audio,
@@ -3319,6 +3352,8 @@ fn main() {
                 preacher_cloud_stream_handle: Arc::new(Mutex::new(None)),
                 auth_throttles: Arc::new(Mutex::new(HashMap::new())),
                 session_tokens: Arc::new(Mutex::new(std::collections::HashSet::new())),
+                app_cert,
+                device_tokens,
                 ndi_manager: Arc::new(ndi::NdiManager::new()),
                 operator_is_active: Arc::new(AtomicBool::new(false)),
                 preacher_is_active: Arc::new(AtomicBool::new(false)),

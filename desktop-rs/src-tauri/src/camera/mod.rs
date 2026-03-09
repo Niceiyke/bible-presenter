@@ -11,9 +11,11 @@ pub mod auth;
 pub mod commands;
 pub mod session;
 pub mod tally;
+pub mod tls;
 pub mod types;
 
-pub use auth::AuthManager;
+pub use auth::{AuthManager, DeviceTokenManager};
+pub use tls::AppCert;
 pub use commands::{
     camera_clear_program, camera_get_status, camera_kick_device, camera_list_devices,
     camera_set_preview, camera_set_program,

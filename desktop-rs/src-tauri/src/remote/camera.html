@@ -276,6 +276,15 @@ async function sendTelemetry() {
 // ── PIN screen ────────────────────────────────────────────────────────────────
 const pinInputs = [0,1,2,3,4,5].map(i => document.getElementById(`p${i}`));
 
+// Auto-fill PIN from ?pin= URL parameter (e.g. when opened via QR code scan)
+(function autoFillPin() {
+  const params = new URLSearchParams(location.search);
+  const pinParam = params.get('pin');
+  if (pinParam && /^\d{6}$/.test(pinParam)) {
+    pinInputs.forEach((inp, i) => { inp.value = pinParam[i]; });
+  }
+})();
+
 pinInputs.forEach((inp, idx) => {
   inp.addEventListener('input', () => {
     const val = inp.value.replace(/\D/g, '').slice(-1);
@@ -296,15 +305,24 @@ async function doAuth() {
   authFailed = false;
   document.getElementById('pin-btn').disabled = true;
   document.getElementById('pin-err').textContent = '';
-  connectWs(pin);
+  connectWs({ pin });
 }
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
-function connectWs(pin) {
+// opts: { pin } for first connect, or { deviceToken } for reconnect via stored token
+function connectWs(opts = {}) {
   ws = new WebSocket(WS_URL);
 
   ws.onopen = () => {
-    ws.send(JSON.stringify({ cmd: 'auth', pin, client_type: 'mobile', device_id: deviceId, device_name: deviceName || deviceId.slice(0, 8) }));
+    const storedToken = localStorage.getItem('cam_device_token');
+    let authMsg;
+    if (storedToken && !opts.pin) {
+      // Reconnect with stored device token — no PIN required.
+      authMsg = { cmd: 'auth', device_token: storedToken, client_type: 'mobile', device_id: deviceId, device_name: deviceName || deviceId.slice(0, 8) };
+    } else {
+      authMsg = { cmd: 'auth', pin: opts.pin || '', client_type: 'mobile', device_id: deviceId, device_name: deviceName || deviceId.slice(0, 8) };
+    }
+    ws.send(JSON.stringify(authMsg));
     requestWakeLock();
     telemetryInterval = setInterval(sendTelemetry, 10000);
   };
@@ -312,8 +330,24 @@ function connectWs(pin) {
   ws.onmessage = async (e) => {
     let msg; try { msg = JSON.parse(e.data); } catch { return; }
 
-    if (msg.type === 'auth_ok') { showCameraScreen(); await startCamera(); return; }
+    if (msg.type === 'auth_ok') {
+      // Persist device token if server issued one (mobile-only).
+      if (msg.device_token) {
+        localStorage.setItem('cam_device_token', msg.device_token);
+      }
+      showCameraScreen();
+      await startCamera();
+      return;
+    }
     if (msg.type === 'auth_fail') {
+      // If we tried a stored token and it was rejected, clear it and show PIN screen.
+      if (localStorage.getItem('cam_device_token') && !opts.pin) {
+        localStorage.removeItem('cam_device_token');
+        authFailed = false;
+        document.getElementById('pin-btn').disabled = false;
+        ws.close();
+        return;
+      }
       authFailed = true;
       document.getElementById('pin-err').textContent = 'Wrong PIN. Try again.';
       document.getElementById('pin-btn').disabled = false;
@@ -363,7 +397,17 @@ function connectWs(pin) {
     if (wakeLock) { wakeLock.release(); wakeLock = null; }
     setStatus('disconnected');
     if (!authFailed) {
-      setTimeout(() => { if (ws.readyState === WebSocket.CLOSED) { const pin = getPin(); if (pin.length === 6) connectWs(pin); } }, 3000);
+      setTimeout(() => {
+        if (ws.readyState === WebSocket.CLOSED) {
+          const storedToken = localStorage.getItem('cam_device_token');
+          const pin = getPin();
+          if (storedToken) {
+            connectWs({}); // will use stored token
+          } else if (pin.length === 6) {
+            connectWs({ pin });
+          }
+        }
+      }, 3000);
     }
     authFailed = false;
   };
@@ -506,6 +550,16 @@ function updateStatus() {
 function sendMsg(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
 }
+
+// ── Auto-connect on load if we have a stored device token ─────────────────────
+window.addEventListener('load', () => {
+  const storedToken = localStorage.getItem('cam_device_token');
+  if (storedToken) {
+    // Show connecting state on PIN screen subtitle while we try the token
+    document.getElementById('pin-err').textContent = 'Reconnecting…';
+    connectWs({}); // will use stored token; falls back to PIN screen if token invalid
+  }
+});
 </script>
 </body>
 </html>

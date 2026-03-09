@@ -70,7 +70,7 @@ struct RemoteUiAssets;
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 pub async fn start(state: Arc<AppState>, port: u16) {
-    let app = Router::new()
+    let router = Router::new()
         // ── Legacy pages ────────────────────────────────────────────────────
         .route("/camera", get(serve_camera_html))
         .route("/output", get(serve_output_html))
@@ -105,18 +105,35 @@ pub async fn start(state: Arc<AppState>, port: u16) {
         .with_state(state.clone());
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-    match tokio::net::TcpListener::bind(addr).await {
-        Ok(listener) => {
-            state.log(&format!("[remote] Listening on http://{}", addr));
-            if let Err(e) = axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<SocketAddr>(),
-            ).await {
-                state.log(&format!("[remote] Server error: {}", e));
+
+    // ── Try HTTPS/WSS first; fall back to plain HTTP/WS ────────────────────
+    let (cert_pem, key_pem) = state.app_cert.pem_bytes();
+    match axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem).await {
+        Ok(tls_config) => {
+            state.log(&format!("[remote] Listening on https://{}", addr));
+            if let Err(e) = axum_server::bind_rustls(addr, tls_config)
+                .serve(router.into_make_service_with_connect_info::<SocketAddr>())
+                .await
+            {
+                state.log(&format!("[remote] TLS server error: {}", e));
             }
         }
         Err(e) => {
-            state.log(&format!("[remote] Failed to bind port {}: {}", port, e));
+            state.log(&format!("[remote] TLS config failed ({}), falling back to HTTP", e));
+            match tokio::net::TcpListener::bind(addr).await {
+                Ok(listener) => {
+                    state.log(&format!("[remote] Listening on http://{}", addr));
+                    if let Err(e) = axum::serve(
+                        listener,
+                        router.into_make_service_with_connect_info::<SocketAddr>(),
+                    ).await {
+                        state.log(&format!("[remote] Server error: {}", e));
+                    }
+                }
+                Err(e) => {
+                    state.log(&format!("[remote] Failed to bind port {}: {}", port, e));
+                }
+            }
         }
     }
 }
@@ -629,6 +646,42 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
                 if let Message::Text(text) = msg {
                     if let Ok(v) = serde_json::from_str::<Value>(&text) {
                         if v.get("cmd").and_then(|c| c.as_str()) == Some("auth") {
+                            let client_type = v.get("client_type")
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("remote");
+                            let is_mobile = client_type == "mobile";
+
+                            // ── Device token fast-path (mobile cameras only) ───────
+                            // Mobile clients that previously authenticated may send a
+                            // `device_token` instead of the PIN. This avoids re-pairing
+                            // on every reconnect without weakening security.
+                            if is_mobile {
+                                if let Some(token) = v.get("device_token").and_then(|t| t.as_str()) {
+                                    match state.device_tokens.verify(token) {
+                                        Ok(verified_device_id) => {
+                                            // Token is valid — skip PIN check.
+                                            let device_name = v.get("device_name")
+                                                .and_then(|n| n.as_str())
+                                                .unwrap_or(&verified_device_id)
+                                                .to_string();
+                                            let key = format!("mobile:{}", verified_device_id);
+                                            return Some(Some(ClientInfo {
+                                                key,
+                                                device_id: verified_device_id,
+                                                device_name,
+                                                is_mobile: true,
+                                                name: String::new(),
+                                                role: "viewer".into(),
+                                            }));
+                                        }
+                                        Err(_) => {
+                                            // Invalid/expired token — fall through to PIN check.
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ── PIN auth path ─────────────────────────────────────
                             let provided = v.get("pin").and_then(|p| p.as_str()).unwrap_or("");
                             if provided != pin.as_str() {
                                 // Tarpit: wait 2s before signaling failure to slow down automated brute force
@@ -636,9 +689,6 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
                                 return Some(None); // wrong PIN — signal auth fail
                             }
 
-                            let client_type = v.get("client_type")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("remote");
                             let device_id = v.get("device_id")
                                 .and_then(|d| d.as_str())
                                 .unwrap_or("")
@@ -647,7 +697,6 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
                                 .and_then(|n| n.as_str())
                                 .unwrap_or(&device_id)
                                 .to_string();
-                            let is_mobile = client_type == "mobile";
                             let name = v.get("name")
                                 .and_then(|n| n.as_str())
                                 .unwrap_or("Remote")
@@ -689,7 +738,24 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
             state.auth_throttles.lock().remove(&ip);
             let token = uuid::Uuid::new_v4().to_string();
             state.session_tokens.lock().insert(token.clone());
-            let _ = socket.send(Message::Text(json!({"type":"auth_ok","token":token, "key": info.key}).to_string())).await;
+
+            // For mobile cameras: issue a long-lived device token so subsequent
+            // reconnects skip PIN entry entirely.
+            let device_token = if info.is_mobile && !info.device_id.is_empty() {
+                Some(state.device_tokens.issue(&info.device_id))
+            } else {
+                None
+            };
+
+            let mut auth_ok_payload = json!({
+                "type": "auth_ok",
+                "token": token,
+                "key": info.key,
+            });
+            if let Some(dt) = device_token {
+                auth_ok_payload["device_token"] = serde_json::Value::String(dt);
+            }
+            let _ = socket.send(Message::Text(auth_ok_payload.to_string())).await;
             info
         }
         Ok(Some(None)) => {

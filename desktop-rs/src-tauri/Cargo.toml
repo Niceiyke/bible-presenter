@@ -42,6 +42,9 @@ rand = "0.8"
 futures-util = "0.3"
 hmac = "0.12"
 sha2 = "0.10"
+rcgen = { version = "0.13", features = ["pem", "crypto", "ring"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rustls-pemfile = "2"
 reqwest  = { version = "0.12", features = ["json", "stream", "rustls-tls", "rustls-tls-native-roots", "multipart"], default-features = false }
 sysinfo  = { version = "0.30", default-features = false }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"], default-features = false }
