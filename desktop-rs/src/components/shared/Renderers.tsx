@@ -56,10 +56,12 @@ export function CustomSlideRenderer({
   slide,
   scale = 1,
   appDataDir = null,
+  hiddenElementIds = [],
 }: {
   slide: CustomSlide | CustomSlideDisplayData;
   scale?: number;
   appDataDir?: string | null;
+  hiddenElementIds?: string[];
 }) {
   const isDisplayData = "background_color" in slide;
   
@@ -96,6 +98,8 @@ export function CustomSlideRenderer({
     return (
       <div className="w-full h-full relative overflow-hidden" style={bgStyle}>
         {elements.map((el) => {
+          if (hiddenElementIds.includes(el.id)) return null;
+
           const elStyle: React.CSSProperties = {
             position: "absolute",
             left: `${el.x}%`,

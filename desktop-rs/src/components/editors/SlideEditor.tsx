@@ -65,7 +65,7 @@ function InlineTextEditor({
       className="absolute inset-0 outline-none overflow-hidden ring-2 ring-emerald-400/60"
       style={{
         fontFamily: el.font_family || "inherit",
-        fontSize: `${(el.font_size || 32) * canvasScale}px`,
+        fontSize: `${(el.font_size || 32) * canvasScale}pt`,
         color: el.color || "#ffffff",
         fontWeight: el.bold ? "bold" : "normal",
         fontStyle: el.italic ? "italic" : "normal",
@@ -73,16 +73,19 @@ function InlineTextEditor({
         display: "flex",
         flexDirection: "column",
         justifyContent,
-        padding: "2px 4px",
-        lineHeight: 1.25,
+        padding: "0", // Changed from 2px 4px to match CustomSlideRenderer closely
+        lineHeight: 1.3, // Match CustomSlideRenderer (1.3)
         whiteSpace: "pre-wrap",
         wordBreak: "break-word",
         cursor: "text",
         textShadow:
           el.shadow !== false
-            ? `2px 2px 6px ${el.shadow_color || "#000"}`
+            ? `0 2px 8px ${el.shadow_color || "rgba(0,0,0,0.6)"}` // Match CustomSlideRenderer
             : "none",
       }}
+      onPointerDown={(e) => e.stopPropagation()} // Allow text selection
+      onPointerUp={(e) => e.stopPropagation()}
+      onPointerMove={(e) => e.stopPropagation()}
     />
   );
 }
@@ -657,7 +660,7 @@ export function SlideEditor({ initialPres, mediaImages, onClose }: SlideEditorPr
 
           {/* Canvas area */}
           <div
-            className="flex-1 flex items-center justify-center p-10 overflow-hidden relative select-none"
+            className={`flex-1 flex items-center justify-center p-10 overflow-hidden relative ${editingElementId ? '' : 'select-none'}`}
             style={{
               background: "radial-gradient(circle, #252540 1px, transparent 1px)",
               backgroundSize: "22px 22px",
@@ -675,7 +678,7 @@ export function SlideEditor({ initialPres, mediaImages, onClose }: SlideEditorPr
               }}
             >
               {/* Rendered slide content */}
-              <CustomSlideRenderer slide={slide} scale={canvasScale} appDataDir={appDataDir} />
+              <CustomSlideRenderer slide={slide} scale={canvasScale} appDataDir={appDataDir} hiddenElementIds={editingElementId ? [editingElementId] : []} />
 
               {/* Interactive element overlay */}
               <div className="absolute inset-0 z-50">
