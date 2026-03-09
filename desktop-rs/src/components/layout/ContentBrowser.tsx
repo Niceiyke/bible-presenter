@@ -13,6 +13,7 @@ import { ScheduleTab } from "../ScheduleTab";
 import { SettingsTab } from "../SettingsTab";
 import { PropsTab } from "../PropsTab";
 import type { DisplayItem, PresentationSettings, PropItem, CustomPresentation } from "../../types";
+import type { CameraSource as NewCameraSource } from "../../features/camera/types";
 
 interface ContentBrowserProps {
   stageItem: (item: DisplayItem) => Promise<void>;
@@ -28,6 +29,9 @@ interface ContentBrowserProps {
   removeCameraSource: (deviceId: string) => void;
   previewVideoMapRef: React.MutableRefObject<Map<string, HTMLVideoElement>>;
   previewObserverMapRef: React.MutableRefObject<Map<string, IntersectionObserver>>;
+  lanSources: Map<string, NewCameraSource>;
+  attachPreview: (deviceId: string, el: HTMLVideoElement | null) => void;
+  setProgram: (deviceId: string | null, slot?: "A" | "B") => void;
   setEditingPres: (pres: CustomPresentation | null) => void;
   persistSchedule: () => Promise<void>;
 }
@@ -46,6 +50,9 @@ export function ContentBrowser({
   removeCameraSource,
   previewVideoMapRef,
   previewObserverMapRef,
+  lanSources,
+  attachPreview,
+  setProgram,
   setEditingPres,
   persistSchedule,
 }: ContentBrowserProps) {
@@ -75,6 +82,7 @@ export function ContentBrowser({
           remoteUrl={remoteUrl} remotePin={remotePin}
           cameraSources={cameraSources} onEnableCameraPreview={enableCameraPreview} onDisableCameraPreview={disableCameraPreview}
           onRemoveCameraSource={removeCameraSource} previewVideoMapRef={previewVideoMapRef} previewObserverMapRef={previewObserverMapRef}
+          lanSources={lanSources} attachPreview={attachPreview} setProgram={setProgram}
         />
       )}
       {activeTab === "studio" && (

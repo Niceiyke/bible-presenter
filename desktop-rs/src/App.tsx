@@ -66,7 +66,8 @@ export default function App() {
   // LAN Camera WebRTC hook
   const {
     cameraSources, enableCameraPreview, disableCameraPreview,
-    removeCameraSource, previewVideoMapRef, previewObserverMapRef, setLiveCamera
+    removeCameraSource, previewVideoMapRef, previewObserverMapRef, setLiveCamera,
+    lanSources, attachPreview, setProgram,
   } = useLanCamera(remotePin, label);
 
   // Item action handlers (stage, go live, send live, etc.)
@@ -267,6 +268,9 @@ export default function App() {
             removeCameraSource={removeCameraSource}
             previewVideoMapRef={previewVideoMapRef}
             previewObserverMapRef={previewObserverMapRef}
+            lanSources={lanSources}
+            attachPreview={attachPreview}
+            setProgram={setProgram}
             setEditingPres={setEditingPres}
             persistSchedule={persistSchedule}
           />

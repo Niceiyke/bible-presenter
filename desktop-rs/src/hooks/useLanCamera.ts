@@ -91,6 +91,7 @@ export function useLanCamera(pin: string | null, label: string) {
   );
 
   return {
+    // Legacy API (snake_case) — unchanged for existing consumers
     cameraSources,
     enableCameraPreview,
     disableCameraPreview,
@@ -98,7 +99,10 @@ export function useLanCamera(pin: string | null, label: string) {
     previewVideoMapRef,
     previewObserverMapRef,
     setLiveCamera,
-    // Expose new-API extras for consumers that want to migrate gradually
+    // New modular API — for components that use features/camera directly
+    lanSources: sources,
+    attachPreview,
+    setProgram,
     registerSceneHandler,
     unregisterSceneHandler,
   };

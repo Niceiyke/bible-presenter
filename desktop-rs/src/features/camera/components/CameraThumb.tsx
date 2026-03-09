@@ -7,9 +7,12 @@ interface Props {
   source: CameraSource;
   onSetProgram: (deviceId: string) => void;
   onAttachPreview: (deviceId: string, el: HTMLVideoElement | null) => void;
+  onStage?: (deviceId: string) => void;
+  onLive?: (deviceId: string) => void;
+  onQueue?: (deviceId: string) => void;
 }
 
-export function CameraThumb({ source, onSetProgram, onAttachPreview }: Props) {
+export function CameraThumb({ source, onSetProgram, onAttachPreview, onStage, onLive, onQueue }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
@@ -60,8 +63,8 @@ export function CameraThumb({ source, onSetProgram, onAttachPreview }: Props) {
         <QualityBadge quality={source.quality} />
       </div>
 
-      {/* Hover actions */}
-      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-center pb-2 gap-1 bg-black/40">
+      {/* Hover: PGM button */}
+      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-center pb-10 gap-1 bg-black/20 pointer-events-none group-hover:pointer-events-auto">
         <button
           onClick={() => onSetProgram(source.deviceId)}
           className="text-[10px] font-bold px-2 py-1 bg-red-600 hover:bg-red-500 text-white rounded"
@@ -69,6 +72,30 @@ export function CameraThumb({ source, onSetProgram, onAttachPreview }: Props) {
           PGM
         </button>
       </div>
+
+      {/* Action row: STAGE / LIVE / +Q */}
+      {(onStage || onLive || onQueue) && (
+        <div className="grid grid-cols-3 gap-px bg-zinc-800">
+          {onStage && (
+            <button
+              onClick={() => onStage(source.deviceId)}
+              className="text-[9px] font-bold py-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 transition-colors"
+            >STG</button>
+          )}
+          {onLive && (
+            <button
+              onClick={() => onLive(source.deviceId)}
+              className="text-[9px] font-bold py-1 bg-amber-600 hover:bg-amber-500 text-black transition-colors"
+            >LIVE</button>
+          )}
+          {onQueue && (
+            <button
+              onClick={() => onQueue(source.deviceId)}
+              className="text-[9px] font-bold py-1 bg-zinc-700 hover:bg-zinc-600 text-amber-400 transition-colors"
+            >+Q</button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

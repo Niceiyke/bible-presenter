@@ -6,9 +6,12 @@ interface Props {
   sources: Map<string, CameraSource>;
   onSetProgram: (deviceId: string) => void;
   onAttachPreview: (deviceId: string, el: HTMLVideoElement | null) => void;
+  onStage?: (deviceId: string) => void;
+  onLive?: (deviceId: string) => void;
+  onQueue?: (deviceId: string) => void;
 }
 
-export function CameraGrid({ sources, onSetProgram, onAttachPreview }: Props) {
+export function CameraGrid({ sources, onSetProgram, onAttachPreview, onStage, onLive, onQueue }: Props) {
   if (sources.size === 0) {
     return (
       <div className="flex items-center justify-center h-32 text-zinc-500 text-sm">
@@ -25,6 +28,9 @@ export function CameraGrid({ sources, onSetProgram, onAttachPreview }: Props) {
           source={source}
           onSetProgram={onSetProgram}
           onAttachPreview={onAttachPreview}
+          onStage={onStage}
+          onLive={onLive}
+          onQueue={onQueue}
         />
       ))}
     </div>
