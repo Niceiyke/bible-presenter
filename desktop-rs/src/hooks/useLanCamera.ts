@@ -1,368 +1,94 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+/**
+ * Compatibility shim — wraps the new modular `useCameraManager` and maps its
+ * API to the legacy shape expected by App.tsx, MediaTab.tsx, and ContentBrowser.tsx.
+ *
+ * Migration path:
+ *   - New code should import directly from `../features/camera`
+ *   - Old consumers can continue using this hook unchanged
+ */
+import { useMemo, useRef, useCallback } from "react";
+import { useCameraManager } from "../features/camera";
+import type { CameraSource as NewCameraSource } from "../features/camera/types";
 import type { CameraSource } from "../types";
 
-const STUN_CONFIG: RTCConfiguration = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-  iceCandidatePoolSize: 10,
-};
+/** Map new (camelCase) CameraSource → legacy (snake_case) CameraSource. */
+function toLegacySource(s: NewCameraSource): CameraSource {
+  return {
+    device_id: s.deviceId,
+    device_name: s.deviceName,
+    previewStream: s.previewStream,
+    previewPc: null,          // internal to usePublisherPc; not exposed
+    status: s.status,
+    connectedAt: s.connectedAt,
+    battery: s.quality.batteryPct,
+    lastTelemetryAt: s.quality.updatedAtMs || undefined,
+    enabled: s.status === "connected",
+  };
+}
 
 export function useLanCamera(pin: string | null, label: string) {
-  const [cameraSources, setCameraSources] = useState<Map<string, CameraSource>>(new Map());
-  
-  const operatorWsRef = useRef<WebSocket | null>(null);
-  const previewPcMapRef = useRef<Map<string, RTCPeerConnection>>(new Map());
-  const previewVideoMapRef = useRef<Map<string, HTMLVideoElement>>(new Map());
+  const {
+    sources,
+    attachPreview,
+    setProgram,
+    registerSceneHandler,
+    unregisterSceneHandler,
+  } = useCameraManager({ pin, windowLabel: label });
+
+  // Derive legacy-typed Map from new sources.
+  // useMemo keeps the reference stable across renders when sources don't change.
+  const cameraSources = useMemo<Map<string, CameraSource>>(
+    () => new Map([...sources.entries()].map(([id, s]) => [id, toLegacySource(s)])),
+    [sources],
+  );
+
+  // Legacy refs expected by MediaTab: a Map<deviceId, HTMLVideoElement>.
+  // We intercept .set() via a Proxy so that attaching a video element also
+  // calls attachPreview, ensuring new tracks auto-flow to the element.
+  const rawVideoMapRef = useRef<Map<string, HTMLVideoElement>>(new Map());
+  const previewVideoMapRef = useRef<Map<string, HTMLVideoElement>>(
+    new Proxy(rawVideoMapRef.current, {
+      get(target, prop) {
+        if (prop === "set") {
+          return (deviceId: string, el: HTMLVideoElement | null) => {
+            if (el) {
+              target.set(deviceId, el);
+            } else {
+              target.delete(deviceId);
+            }
+            // Wire the video element into the new system
+            attachPreview(deviceId, el);
+          };
+        }
+        const val = (target as any)[prop];
+        return typeof val === "function" ? val.bind(target) : val;
+      },
+    }),
+  );
   const previewObserverMapRef = useRef<Map<string, IntersectionObserver>>(new Map());
-  const pendingOffersRef = useRef<Map<string, { device_id: string; device_name?: string; sdp: string }>>(new Map());
-  const pendingIceRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
-  const cameraEnabledRef = useRef<Set<string>>(new Set());
 
-  // Relay connections to the Output Window
-  const relayPcRef = useRef<Record<string, RTCPeerConnection | null>>({ A: null, B: null });
-  const relaySenderRef = useRef<Record<string, RTCRtpSender | null>>({ A: null, B: null });
-  // Reusable black-frame streams — created once per slot, never leaked
-  const blackFrameStreamRef = useRef<Record<string, MediaStream | null>>({ A: null, B: null });
-
-  // Initialize a persistent relay connection for a specific slot (A or B)
-  const initRelayPc = useCallback(async (slot: 'A' | 'B') => {
-    // Only the main operator window should initiate relays
-    if (label !== "main") return;
-
-    const existingPc = relayPcRef.current[slot];
-    // If already connected and healthy, nothing to do — output_ready will
-    // re-trigger us if the output window reconnects.
-    if (existingPc && (existingPc.iceConnectionState === 'connected' || existingPc.iceConnectionState === 'completed')) {
-      return;
-    }
-
-    if (existingPc) existingPc.close();
-    
-    const pc = new RTCPeerConnection(STUN_CONFIG);
-    relayPcRef.current[slot] = pc;
-
-    // Create a dummy video track
-    const canvas = document.createElement("canvas");
-    canvas.width = 640; canvas.height = 360;
-    const ctx = canvas.getContext("2d");
-    if (ctx) { ctx.fillStyle = "black"; ctx.fillRect(0, 0, 640, 360); }
-    const stream = canvas.captureStream(1);
-    const track = stream.getVideoTracks()[0];
-    
-    relaySenderRef.current[slot] = pc.addTrack(track, stream);
-
-    pc.onicecandidate = (ev) => {
-      if (ev.candidate && operatorWsRef.current?.readyState === WebSocket.OPEN) {
-        operatorWsRef.current.send(JSON.stringify({
-          cmd: "camera_ice",
-          device_id: `hub_relay_${slot.toLowerCase()}`,
-          target: "window:output",
-          candidate: ev.candidate
-        }));
-      }
-    };
-
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    
-    if (operatorWsRef.current?.readyState === WebSocket.OPEN) {
-      operatorWsRef.current.send(JSON.stringify({
-        cmd: "camera_offer",
-        device_id: `hub_relay_${slot.toLowerCase()}`,
-        target: "window:output",
-        sdp: offer.sdp
-      }));
-    }
-  }, [label]);
-
-  const handlePreviewOffer = useCallback(async (msg: { device_id: string; device_name?: string; sdp: string }) => {
-    const { device_id, sdp } = msg;
-    const oldPc = previewPcMapRef.current.get(device_id);
-    if (oldPc) {
-      oldPc.close();
-      previewPcMapRef.current.delete(device_id);
-    }
-
-    try {
-      const pc = new RTCPeerConnection(STUN_CONFIG);
-
-      pc.ontrack = (ev: RTCTrackEvent) => {
-        const stream = ev.streams[0] ?? new MediaStream([ev.track]);
-        setCameraSources(prev => {
-          const next = new Map(prev);
-          const src = next.get(device_id);
-          if (src) next.set(device_id, { ...src, previewStream: stream, previewPc: pc, status: "connected" });
-          return next;
-        });
-        const videoEl = previewVideoMapRef.current.get(device_id);
-        if (videoEl) videoEl.srcObject = stream;
-      };
-
-      pc.onicecandidate = (ev) => {
-        if (ev.candidate) {
-          operatorWsRef.current?.send(JSON.stringify({
-            cmd: "camera_ice",
-            device_id,
-            target: `mobile:${device_id}`,
-            candidate: ev.candidate
-          }));
-        }
-      };
-
-      pc.oniceconnectionstatechange = () => {
-        const s = pc.iceConnectionState;
-        setCameraSources(prev => {
-          const next = new Map(prev);
-          const src = next.get(device_id);
-          if (!src) return prev;
-          const status = (s === "connected" || s === "completed") ? "connected"
-            : (s === "failed" || s === "disconnected" || s === "closed") ? "disconnected"
-            : "connecting";
-          next.set(device_id, { ...src, status });
-          return next;
-        });
-      };
-
-      await pc.setRemoteDescription({ type: "offer", sdp });
-      previewPcMapRef.current.set(device_id, pc);
-
-      const buffered = pendingIceRef.current.get(device_id) ?? [];
-      pendingIceRef.current.delete(device_id);
-      for (const candidate of buffered) { try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch {} }
-
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      operatorWsRef.current?.send(JSON.stringify({
-        cmd: "camera_answer",
-        device_id,
-        target: `mobile:${device_id}`,
-        sdp: answer.sdp
-      }));
-    } catch (err) {
-      console.error(`[LanCamera] handlePreviewOffer failed for ${device_id}:`, err);
-      setCameraSources(prev => {
-        const next = new Map(prev);
-        const src = next.get(device_id);
-        if (src) next.set(device_id, { ...src, status: "disconnected" });
-        return next;
-      });
-    }
+  // Legacy enable/disable — in the new system all preview PCs are managed
+  // automatically, so enable is a no-op and disable detaches the video element.
+  const enableCameraPreview = useCallback((_deviceId: string) => {
+    // Preview PCs are auto-managed by useCameraManager on offer receipt.
   }, []);
 
-  const connectOperatorWs = useCallback((authPin: string) => {
-    // If not main/operator, we connect as a window:stage or window:output
-    // but ONLY if explicitly needed. For now, let's keep it restricted to main
-    // to avoid registration hijacking in the backend.
-    const clientType = label === "main" ? "window:main" : `window:${label}`;
+  const disableCameraPreview = useCallback((deviceId: string) => {
+    attachPreview(deviceId, null);
+  }, [attachPreview]);
 
-    // Dynamically resolve the backend host if accessed via browser on another machine
-    const host = window.location.hostname === 'localhost' || window.location.hostname === 'tauri.localhost' || !window.location.hostname
-      ? '127.0.0.1' 
-      : window.location.hostname;
-    
-    const ws = new WebSocket(`ws://${host}:7420/ws`);
-    operatorWsRef.current = ws;
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ cmd: "auth", pin: authPin, client_type: clientType }));
-    };
-    ws.onmessage = async (e) => {
-      let msg: any; try { msg = JSON.parse(e.data); } catch { return; }
-      console.log("[LanCamera] WS Msg:", msg.cmd || msg.type, msg);
-      if (msg.type === "auth_ok") {
-        // Request any mobiles that connected before us to re-send their offer
-        ws.send(JSON.stringify({ cmd: "request_all_offers" }));
-        // Init relay in case the output window is already connected and waiting
-        initRelayPc('A');
-        initRelayPc('B');
-        return;
-      }
+  const removeCameraSource = useCallback((deviceId: string) => {
+    attachPreview(deviceId, null);
+    // The source will be removed from `sources` when the mobile disconnects.
+  }, [attachPreview]);
 
-      // Handle Relay Answer from Output Window
-      if (msg.cmd === "camera_answer" && msg.device_id.startsWith("hub_relay_")) {
-        const slot: 'A' | 'B' = msg.device_id === "hub_relay_a" ? 'A' : 'B';
-        const pc = relayPcRef.current[slot];
-        if (pc && msg.sdp) {
-          try { await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp }); } catch {}
-        }
-        return;
-      }
-      // Handle Relay ICE from Output Window
-      if (msg.cmd === "camera_ice" && msg.device_id.startsWith("hub_relay_")) {
-        const slot: 'A' | 'B' = msg.device_id === "hub_relay_a" ? 'A' : 'B';
-        const pc = relayPcRef.current[slot];
-        if (pc && msg.candidate) {
-          try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
-        }
-        return;
-      }
-
-      // Handle Device Telemetry
-      if (msg.cmd === "camera_telemetry") {
-        setCameraSources(prev => {
-          const next = new Map(prev);
-          const src = next.get(msg.device_id);
-          if (src) {
-            next.set(msg.device_id, {
-              ...src,
-              battery: msg.battery,
-              lastTelemetryAt: Date.now()
-            });
-          }
-          return next;
-        });
-        return;
-      }
-
-      // Handle output_ready from any output window (allows multi-window relay)
-      if (msg.cmd === "output_ready") {
-        initRelayPc('A');
-        initRelayPc('B');
-        return;
-      }
-
-      if (msg.type === "camera_source_connected") {
-        setCameraSources(prev => {
-          const next = new Map(prev);
-          next.set(msg.device_id, { 
-            device_id: msg.device_id, 
-            device_name: msg.device_name, 
-            previewStream: null, 
-            previewPc: null, 
-            status: "disconnected", 
-            connectedAt: Date.now(), 
-            enabled: prev.get(msg.device_id)?.enabled ?? false 
-          });
-          return next;
-        });
-      }
-      if (msg.type === "camera_source_disconnected") {
-        const pc = previewPcMapRef.current.get(msg.device_id); if (pc) pc.close(); previewPcMapRef.current.delete(msg.device_id);
-        setCameraSources(prev => { const next = new Map(prev); next.delete(msg.device_id); return next; });
-      }
-      if (msg.cmd === "camera_offer") {
-        pendingOffersRef.current.set(msg.device_id, msg);
-        setCameraSources(prev => {
-          if (prev.has(msg.device_id)) return prev;
-          const next = new Map(prev);
-          next.set(msg.device_id, {
-            device_id: msg.device_id,
-            device_name: msg.device_name ?? msg.device_id.slice(0, 8),
-            previewStream: null,
-            previewPc: null,
-            status: "connecting",
-            connectedAt: Date.now(),
-            enabled: false,
-          });
-          return next;
-        });
-        await handlePreviewOffer(msg);
-      }
-      if (msg.cmd === "camera_ice") {
-        const pc = previewPcMapRef.current.get(msg.device_id);
-        if (pc && msg.candidate) try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
-        else if (msg.candidate) { 
-          const buf = pendingIceRef.current.get(msg.device_id) ?? []; 
-          buf.push(msg.candidate); 
-          pendingIceRef.current.set(msg.device_id, buf); 
-        }
-      }
-    };
-    ws.onclose = () => setTimeout(() => { if (operatorWsRef.current?.readyState === WebSocket.CLOSED) connectOperatorWs(authPin); }, 5000);
-  }, [label, handlePreviewOffer, initRelayPc]);
-
-  useEffect(() => {
-    // Only connect if it's the main operator window. 
-    // Other windows (Output, Stage) have their own specialized signaling if needed.
-    if (pin && label === "main") connectOperatorWs(pin);
-    return () => {
-      operatorWsRef.current?.close();
-      if (relayPcRef.current.A) relayPcRef.current.A.close();
-      if (relayPcRef.current.B) relayPcRef.current.B.close();
-      for (const stream of Object.values(blackFrameStreamRef.current)) {
-        stream?.getTracks().forEach(t => t.stop());
-      }
-    };
-  }, [pin, label, connectOperatorWs]);
-
-  const lastLiveDeviceIdsRef = useRef<Record<string, string | null>>({ A: null, B: null });
-
-  // Use this to switch the track being forwarded to the Output Window in a specific slot
-  const setLiveCamera = useCallback((device_id: string | null, slot: 'A' | 'B' = 'A') => {
-    // Notify the server about the Tally (On Air) status change
-    if (device_id !== lastLiveDeviceIdsRef.current[slot]) {
-        if (lastLiveDeviceIdsRef.current[slot]) {
-            operatorWsRef.current?.send(JSON.stringify({ cmd: "camera_disconnect_program", device_id: lastLiveDeviceIdsRef.current[slot] }));
-        }
-        if (device_id) {
-            operatorWsRef.current?.send(JSON.stringify({ cmd: "camera_connect_program", device_id }));
-        }
-        lastLiveDeviceIdsRef.current[slot] = device_id;
-    }
-
-    const sender = relaySenderRef.current[slot];
-    if (!sender || !relayPcRef.current[slot]) return;
-    
-    if (!device_id) {
-      // Reuse a single black-frame stream per slot — never create more than one
-      if (!blackFrameStreamRef.current[slot]) {
-        const canvas = document.createElement("canvas");
-        canvas.width = 2; canvas.height = 2;
-        const ctx = canvas.getContext("2d");
-        if (ctx) { ctx.fillStyle = "black"; ctx.fillRect(0, 0, 2, 2); }
-        blackFrameStreamRef.current[slot] = canvas.captureStream(1);
-      }
-      const track = blackFrameStreamRef.current[slot]!.getVideoTracks()[0];
-      sender.replaceTrack(track);
-      return;
-    }
-
-    const pc = previewPcMapRef.current.get(device_id);
-    if (!pc) return;
-    
-    const receiver = pc.getReceivers().find(r => r.track.kind === 'video');
-    if (receiver && receiver.track) {
-      sender.replaceTrack(receiver.track);
-    }
-  }, []);
-
-  const enableCameraPreview = useCallback(async (device_id: string) => {
-    cameraEnabledRef.current.add(device_id);
-    setCameraSources(prev => {
-      const next = new Map(prev);
-      const src = next.get(device_id);
-      if (src) next.set(device_id, { ...src, enabled: true });
-      return next;
-    });
-    const existingPc = previewPcMapRef.current.get(device_id);
-    if (!existingPc) {
-      const pending = pendingOffersRef.current.get(device_id);
-      if (pending) await handlePreviewOffer(pending);
-    }
-  }, [handlePreviewOffer]);
-
-  const disableCameraPreview = useCallback((device_id: string) => {
-    cameraEnabledRef.current.delete(device_id);
-    const pc = previewPcMapRef.current.get(device_id);
-    if (pc) { pc.close(); previewPcMapRef.current.delete(device_id); }
-    const videoEl = previewVideoMapRef.current.get(device_id);
-    if (videoEl) videoEl.srcObject = null;
-    setCameraSources(prev => {
-      const next = new Map(prev);
-      const src = next.get(device_id);
-      if (src) next.set(device_id, { ...src, enabled: false, previewStream: null, previewPc: null, status: "disconnected" });
-      return next;
-    });
-  }, []);
-
-  const removeCameraSource = useCallback((device_id: string) => {
-    disableCameraPreview(device_id);
-    pendingOffersRef.current.delete(device_id);
-    pendingIceRef.current.delete(device_id);
-    setCameraSources(prev => {
-      const next = new Map(prev);
-      next.delete(device_id);
-      return next;
-    });
-  }, [disableCameraPreview]);
+  /** Legacy setLiveCamera → setProgram in new API. */
+  const setLiveCamera = useCallback(
+    (deviceId: string | null, slot: "A" | "B" = "A") => {
+      setProgram(deviceId, slot);
+    },
+    [setProgram],
+  );
 
   return {
     cameraSources,
@@ -371,6 +97,9 @@ export function useLanCamera(pin: string | null, label: string) {
     removeCameraSource,
     previewVideoMapRef,
     previewObserverMapRef,
-    setLiveCamera, // New method to switch output
+    setLiveCamera,
+    // Expose new-API extras for consumers that want to migrate gradually
+    registerSceneHandler,
+    unregisterSceneHandler,
   };
 }

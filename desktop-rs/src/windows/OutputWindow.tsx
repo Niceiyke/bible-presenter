@@ -1,4 +1,7 @@
-import React, { useEffect, useState, useRef, useCallback, useLayoutEffect } from "react";
+import React, { useEffect, useState, useRef, useCallback, useLayoutEffect, useMemo } from "react";
+import { useOutputCamera } from "../features/camera";
+import { useSignaling } from "../features/camera/hooks/useSignaling";
+import type { WsInbound } from "../features/camera/types";
 import { listen } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import type { DisplayItem, PropItem, PresentationSettings, LowerThirdData, LowerThirdTemplate } from "../types";
@@ -23,7 +26,7 @@ import {
 } from "../components/shared/Renderers";
 import { AnimatePresence, motion } from "framer-motion";
 
-const OUTPUT_STUN: RTCConfiguration = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+// WebRTC is managed by useOutputCamera + useSignaling hooks below.
 
 export function OutputWindow() {
   const [liveItem, setLiveItem] = useState<DisplayItem | null>(null);
@@ -47,16 +50,22 @@ export function OutputWindow() {
   const [cameraMuted, setCameraMuted] = useState(false);
 
   const bgVideoRef = useRef<HTMLVideoElement>(null);
-  const programVideoRef = useRef<HTMLVideoElement>(null);
-  const [hubRelayStreamA, setHubRelayStreamA] = useState<MediaStream | null>(null);
-  const [hubRelayStreamB, setHubRelayStreamB] = useState<MediaStream | null>(null);
-  const programPcsRef = useRef<Record<string, RTCPeerConnection | null>>({ A: null, B: null });
-  const programDeviceId = useRef<string | null>(null);
-  const outputWsRef = useRef<WebSocket | null>(null);
-  const reconnectAttemptsRef = useRef(0);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const MAX_RECONNECT_ATTEMPTS = 15; // ~8.5 min of retrying
   const sceneCameraHandlersRef = useRef<Map<string, (msg: any) => void>>(new Map());
+  const programDeviceId = useRef<string | null>(null);
+
+  // ── Camera hooks (replaces inline WS + WebRTC code) ──────────────────────
+  const outputSend = useCallback((payload: object) => {
+    outputWsRef.current?.send(JSON.stringify(payload));
+  }, []);
+
+  const { handleOffer: handleProgramOffer, addIce: addProgramIce, closeAll: closeAllProgramPcs, programVideoRef } =
+    useOutputCamera(outputSend);
+
+  // Mutable ref so the WS onmessage closure can call sendOutputWs
+  const outputWsRef = useRef<WebSocket | null>(null);
+
+  const [hubRelayStreamA] = useState<MediaStream | null>(null);
+  const [hubRelayStreamB] = useState<MediaStream | null>(null);
   const [windowScale, setWindowScale] = useState(1);
   const isMounted = useRef(true);
 
@@ -134,135 +143,51 @@ export function OutputWindow() {
     windowScale,
   ]);
 
-  function sendOutputWs(obj: object) {
-    if (outputWsRef.current?.readyState === WebSocket.OPEN) {
-      outputWsRef.current.send(JSON.stringify(obj));
+  // ── Output signaling via useSignaling hook ────────────────────────────────
+  const [outputPin, setOutputPin] = useState<string | null>(null);
+
+  const handleOutputMessage = useCallback(async (msg: WsInbound) => {
+    const m = msg as any;
+    if (m.type === "auth_ok") {
+      outputWsRef.current?.send(JSON.stringify({ cmd: "output_ready", target: "operator" }));
+      return;
     }
-  }
-
-  const closeProgramPc = useCallback((slot: 'A' | 'B' = 'A') => {
-    const pc = programPcsRef.current[slot];
-    if (pc) {
-      console.log(`[WebRTC] Closing peer connection in slot ${slot}`);
-      pc.ontrack = null;
-      pc.onicecandidate = null;
-      pc.oniceconnectionstatechange = null;
-      pc.close();
-      programPcsRef.current[slot] = null;
+    if (m.cmd === "camera_offer" && (m.target === "output" || m.target === "window:output")) {
+      const sceneHandler = sceneCameraHandlersRef.current.get(m.device_id);
+      if (sceneHandler) { sceneHandler(m); return; }
+      await handleProgramOffer(m);
+      return;
     }
-    
-    if (slot === 'A') {
-        if (programVideoRef.current) programVideoRef.current.srcObject = null;
-        setHubRelayStreamA(null);
-        if (programDeviceId.current && !programDeviceId.current.startsWith("hub_relay_")) {
-          sendOutputWs({ cmd: "camera_disconnect_program", device_id: programDeviceId.current });
-          programDeviceId.current = null;
-        }
-    } else {
-        setHubRelayStreamB(null);
+    if (m.cmd === "camera_ice" && (m.target === "output" || m.target === "window:output")) {
+      const sceneHandler = sceneCameraHandlersRef.current.get(m.device_id);
+      if (sceneHandler) { sceneHandler(m); return; }
+      await addProgramIce(m.device_id, m.candidate);
+      return;
     }
-  }, []);
+  }, [handleProgramOffer, addProgramIce]);
 
-  async function handleProgramOffer(msg: { device_id: string; sdp: string }) {
-    const { device_id, sdp } = msg;
-    const slot = device_id === "hub_relay_b" ? 'B' : 'A';
-    
-    closeProgramPc(slot);
+  const { wsRef: signalingWsRef } = useSignaling({
+    pin: outputPin,
+    clientType: "window:output",
+    onMessage: handleOutputMessage,
+  });
 
-    const pc = new RTCPeerConnection(OUTPUT_STUN);
-    programPcsRef.current[slot] = pc;
+  // Keep outputWsRef in sync with signaling hook's wsRef (for sendOutputWs closure)
+  useEffect(() => {
+    outputWsRef.current = signalingWsRef.current;
+  });
 
-    pc.ontrack = (ev: RTCTrackEvent) => {
-      const stream = ev.streams[0] ?? new MediaStream([ev.track]);
-      if (slot === 'A') {
-        if (programVideoRef.current) programVideoRef.current.srcObject = stream;
-        setHubRelayStreamA(stream);
-      } else {
-        setHubRelayStreamB(stream);
-      }
-    };
-
-    const target = device_id.startsWith("hub_relay_") ? "window:main" : `mobile:${device_id}`;
-
-    pc.onicecandidate = (ev: RTCPeerConnectionIceEvent) => {
-      if (ev.candidate) {
-        sendOutputWs({ cmd: "camera_ice", device_id, target, candidate: ev.candidate });
-      }
-    };
-
-    pc.oniceconnectionstatechange = () => {
-      console.log(`[WebRTC] ICE state (${slot}): ${pc.iceConnectionState}`);
-      if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected" || pc.iceConnectionState === "closed") {
-        closeProgramPc(slot);
-      }
-    };
-
-    await pc.setRemoteDescription({ type: "offer", sdp });
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    sendOutputWs({ cmd: "camera_answer", device_id, target, sdp: answer.sdp });
-  }
-
-  function connectOutputWs(pin: string, port: number = 7420) {
-    const host = window.location.hostname === 'localhost' || window.location.hostname === 'tauri.localhost' || !window.location.hostname
-      ? '127.0.0.1' 
-      : window.location.hostname;
-    const ws = new WebSocket(`ws://${host}:${port}/ws`);
-    outputWsRef.current = ws;
-
-    ws.onopen = () => {
-      if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
-      reconnectAttemptsRef.current = 0;
-      ws.send(JSON.stringify({ cmd: "auth", pin, client_type: "window:output" }));
-    };
-
-    ws.onmessage = async (e: MessageEvent) => {
-      let msg: any;
-      try { msg = JSON.parse(e.data); } catch { return; }
-      if (msg.type === "auth_ok") {
-        // Now registered in signaling_clients — safe to notify operator for relay offers
-        ws.send(JSON.stringify({ cmd: "output_ready", target: "operator" }));
-        return;
-      }
-
-      if (msg.cmd === "camera_offer" && (msg.target === "output" || msg.target === "window:output")) {
-        const sceneHandler = sceneCameraHandlersRef.current.get(msg.device_id);
-        if (sceneHandler) { sceneHandler(msg); return; }
-        await handleProgramOffer(msg);
-        return;
-      }
-      if (msg.cmd === "camera_ice" && (msg.target === "output" || msg.target === "window:output")) {
-        const sceneHandler = sceneCameraHandlersRef.current.get(msg.device_id);
-        if (sceneHandler) { sceneHandler(msg); return; }
-        
-        const slot = msg.device_id === "hub_relay_b" ? 'B' : 'A';
-        const pc = programPcsRef.current[slot];
-        if (pc && msg.candidate) {
-          try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
-        }
-        return;
-      }
-    };
-
-    ws.onclose = () => {
-      if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) return;
-      const delay = Math.min(30000, 1000 * Math.pow(2, reconnectAttemptsRef.current));
-      reconnectAttemptsRef.current++;
-      reconnectTimerRef.current = setTimeout(async () => {
-        if (!isMounted.current) return;
-        const info = await invoke("get_remote_info").catch(() => null) as any;
-        if (info?.pin && isMounted.current) connectOutputWs(info.pin, info.port);
-      }, delay);
-    };
-  }
+  const sendOutputWs = useCallback((obj: object) => {
+    const ws = signalingWsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  }, [signalingWsRef]);
 
   useEffect(() => {
     return () => {
       isMounted.current = false;
-      closeProgramPc('A');
-      closeProgramPc('B');
+      closeAllProgramPcs();
     };
-  }, [closeProgramPc]);
+  }, [closeAllProgramPcs]);
 
   useEffect(() => {
     // Attach ALL listeners first, before any async work, to avoid missing events
@@ -326,13 +251,13 @@ export function OutputWindow() {
       invoke("get_current_item").then((v: any) => { if (v) setLiveItem(v); }).catch(() => {}),
       invoke("get_current_lower_third").then((lt: any) => { if (lt) setLowerThird(lt); }).catch(() => {}),
       invoke("get_settings").then((s: any) => { if (s) setSettings(s); }).catch(() => {}),
-      invoke("get_remote_info").then((info: any) => { if (info?.pin) connectOutputWs(info.pin, info.port); }).catch(() => {}),
+      invoke("get_remote_info").then((info: any) => { if (info?.pin) setOutputPin(info.pin); }).catch(() => {}),
       invoke<string>("get_app_data_dir").then(setAppDataDir).catch(() => {}),
       invoke<PropItem[]>("get_props").then(setPropItems).catch(() => {}),
     ]);
 
     return () => {
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      // reconnect timer managed by useSignaling hook
       unlistenTrans.then((f) => f());
       unlistenSettings.then((f) => f());
       unlistenStaged.then((f) => f());
@@ -403,7 +328,8 @@ export function OutputWindow() {
       programDeviceId.current = newDeviceId;
       sendOutputWs({ cmd: "camera_connect_program", device_id: newDeviceId });
     } else if (programDeviceId.current) {
-      closeProgramPc();
+      sendOutputWs({ cmd: "camera_disconnect_program", device_id: programDeviceId.current });
+      programDeviceId.current = null;
     }
   }, [liveItem]);
 

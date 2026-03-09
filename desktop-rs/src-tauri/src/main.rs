@@ -1,6 +1,7 @@
 // Wordlyte Main Entry Point
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod camera;
 mod remote;
 mod ndi;
 
@@ -278,6 +279,10 @@ pub struct AppState {
     pub props_layer: Arc<Mutex<Vec<store::PropItem>>>,
     /// Currently connected LAN camera clients: device_id → device_name.
     pub connected_cameras: Arc<tokio::sync::Mutex<HashMap<String, String>>>,
+    /// Typed camera session registry (replaces raw signaling_clients for mobile devices).
+    pub camera_sessions: camera::SessionRegistry,
+    /// Authoritative tally state machine (Off / Preview / Program per device).
+    pub camera_tally: camera::TallyRegistry,
     /// Full transcript log for the current service session.
     pub session_transcript: Arc<Mutex<Vec<TranscriptSegment>>>,
     /// Rolling last-3 final-segment context buffer used to improve semantic
@@ -343,6 +348,8 @@ impl Clone for AppState {
             inference_semaphore: self.inference_semaphore.clone(),
             props_layer: self.props_layer.clone(),
             connected_cameras: self.connected_cameras.clone(),
+            camera_sessions: self.camera_sessions.clone(),
+            camera_tally: self.camera_tally.clone(),
             session_transcript: self.session_transcript.clone(),
             context_buffer: self.context_buffer.clone(),
             operator_cloud_stream_handle: self.operator_cloud_stream_handle.clone(),
@@ -3304,6 +3311,8 @@ fn main() {
                 inference_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
                 props_layer: Arc::new(Mutex::new(Vec::new())),
                 connected_cameras: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+                camera_sessions: camera::SessionRegistry::new(),
+                camera_tally: camera::TallyRegistry::new(),
                 session_transcript: Arc::new(Mutex::new(Vec::new())),
                 context_buffer: Arc::new(Mutex::new(Vec::new())),
                 operator_cloud_stream_handle: Arc::new(Mutex::new(None)),
@@ -3335,6 +3344,13 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 remote::start(remote_state, remote_port).await;
             });
+
+            // Spawn camera session heartbeat watchdog
+            camera::spawn_heartbeat_watchdog(
+                state.camera_sessions.clone(),
+                state.camera_tally.clone(),
+                state.broadcast_tx.clone(),
+            );
 
             app.manage(state);
 
@@ -3496,7 +3512,13 @@ fn main() {
             list_transcripts,
             save_recovery,
             load_recovery,
-            clear_recovery
+            clear_recovery,
+            camera::commands::camera_list_devices,
+            camera::commands::camera_get_status,
+            camera::commands::camera_set_program,
+            camera::commands::camera_set_preview,
+            camera::commands::camera_clear_program,
+            camera::commands::camera_kick_device,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

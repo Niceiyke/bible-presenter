@@ -718,7 +718,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
 
     // ── 2. Register direct signaling channel ──────────────────────────────────
     let (direct_tx, mut direct_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    state.signaling_clients.lock().insert(client_key.clone(), direct_tx);
+    state.signaling_clients.lock().insert(client_key.clone(), direct_tx.clone());
 
     // ── 2b. Register non-mobile in operator registry and announce presence ────
     if !is_mobile {
@@ -729,9 +729,30 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
         broadcast_operators_list(&state);
     }
 
-    // ── 3. Broadcast mobile connect event ─────────────────────────────────────
+    // ── 3. Register mobile in camera session registry + broadcast connect ──────
     if is_mobile && !device_id.is_empty() {
         state.connected_cameras.lock().await.insert(device_id.clone(), device_name.clone());
+
+        // Register in typed camera session registry
+        let session = crate::camera::CameraSession::new(
+            device_id.clone(),
+            device_name.clone(),
+            direct_tx,
+        );
+        state.camera_sessions.insert(session);
+        state.camera_sessions.mark_connected(&device_id);
+
+        // Restore authoritative tally state to reconnecting mobile
+        let tally = state.camera_tally.get(&device_id);
+        if tally != crate::camera::TallyState::Off {
+            let event_name = match tally {
+                crate::camera::TallyState::Program => "connect_program",
+                crate::camera::TallyState::Preview => "connect_preview",
+                crate::camera::TallyState::Off     => "disconnect_program",
+            };
+            state.camera_sessions.send_to(&device_id, &json!({"event": event_name}).to_string());
+        }
+
         let msg = json!({
             "type": "camera_source_connected",
             "device_id": device_id,
@@ -791,6 +812,9 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
 
     if is_mobile && !device_id.is_empty() {
         state.connected_cameras.lock().await.remove(&device_id);
+        // Remove from typed camera session registry; clear tally
+        state.camera_sessions.remove(&device_id);
+        state.camera_tally.remove(&device_id);
         let msg = json!({
             "type": "camera_source_disconnected",
             "device_id": device_id,
@@ -851,22 +875,58 @@ async fn route_or_handle(state: &Arc<AppState>, v: Value, raw: &str, from_key: &
 
     let cmd = v.get("cmd").and_then(|c| c.as_str()).unwrap_or("");
 
-    // Lifecycle commands: implicit routing to mobile by device_id.
+    // Lifecycle commands: tally routing via authoritative TallyRegistry.
     if cmd == "camera_connect_program" || cmd == "camera_disconnect_program" {
         let dev_id = str_field(&v, "device_id");
         if !dev_id.is_empty() {
-            let target_key = format!("mobile:{}", dev_id);
-            let event_name = if cmd == "camera_connect_program" {
-                "connect_program"
+            let new_tally = if cmd == "camera_connect_program" {
+                crate::camera::TallyState::Program
             } else {
-                "disconnect_program"
+                crate::camera::TallyState::Off
             };
-            let event_msg = json!({ "event": event_name }).to_string();
-            let clients = state.signaling_clients.lock();
-            if let Some(ch) = clients.get(&target_key) {
-                let _ = ch.send(event_msg);
+            // Update authoritative tally state; clear old program device if switching
+            if new_tally == crate::camera::TallyState::Program {
+                if let Some(old_id) = state.camera_tally.clear_program() {
+                    if old_id != dev_id {
+                        state.camera_sessions.send_to(&old_id, &json!({"event":"disconnect_program"}).to_string());
+                        let tally_msg = json!({"type":"tally_update","device_id":old_id,"tally":"off"}).to_string();
+                        let _ = state.broadcast_tx.send(tally_msg);
+                    }
+                }
+            }
+            let changed = state.camera_tally.set(&dev_id, new_tally);
+            state.camera_sessions.set_tally(&dev_id, new_tally);
+            // Route tally event directly to the mobile device
+            let event_name = if new_tally == crate::camera::TallyState::Program { "connect_program" } else { "disconnect_program" };
+            state.camera_sessions.send_to(&dev_id, &json!({"event": event_name}).to_string());
+            // Broadcast tally update to all operator/output windows
+            if changed {
+                let tally_str = if new_tally == crate::camera::TallyState::Program { "program" } else { "off" };
+                let tally_msg = json!({"type":"tally_update","device_id":dev_id,"tally":tally_str}).to_string();
+                let _ = state.broadcast_tx.send(tally_msg);
             }
         }
+        return;
+    }
+
+    // Telemetry: update session quality stats and touch heartbeat.
+    if cmd == "camera_telemetry" {
+        let dev_id = str_field(&v, "device_id");
+        if !dev_id.is_empty() {
+            state.camera_sessions.touch(&dev_id);
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+            state.camera_sessions.update_quality(&dev_id, |q| {
+                q.battery_pct    = v.get("battery").and_then(|b| b.as_u64()).map(|b| b as u8);
+                q.resolution_w   = v.get("resolution_w").and_then(|b| b.as_u64()).map(|b| b as u16);
+                q.resolution_h   = v.get("resolution_h").and_then(|b| b.as_u64()).map(|b| b as u16);
+                q.rtt_ms         = v.get("rtt_ms").and_then(|b| b.as_u64()).map(|b| b as u32);
+                q.bitrate_kbps   = v.get("bitrate_kbps").and_then(|b| b.as_u64()).map(|b| b as u32);
+                q.updated_at_ms  = now_ms;
+            });
+        }
+        // Forward telemetry to operator windows too (for UI quality badges)
+        let _ = state.broadcast_tx.send(v.to_string());
         return;
     }
 
