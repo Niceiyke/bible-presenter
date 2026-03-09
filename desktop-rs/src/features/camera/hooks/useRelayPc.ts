@@ -1,5 +1,6 @@
 import { useRef, useCallback } from "react";
 import { STUN_CONFIG } from "../types";
+import { cameraLog } from "../cameraLog";
 
 type SendFn = (payload: object) => void;
 
@@ -36,37 +37,61 @@ export function useRelayPc(send: SendFn) {
     const existing = slotsRef.current[slot];
     if (existing) {
       const s = existing.pc.iceConnectionState;
-      if (s === "connected" || s === "completed") return; // already healthy
+      if (s === "connected" || s === "completed") {
+        cameraLog("debug", "relay", `Slot ${slot} already connected — skipping init`);
+        return;
+      }
+      cameraLog("info", "relay", `Slot ${slot} — closing stale PC (was ${s})`);
       existing.pc.close();
     }
 
+    cameraLog("info", "relay", `Slot ${slot} — creating relay PC → output window`);
     const pc = new RTCPeerConnection(STUN_CONFIG);
     const blackTrack = makeBlackTrack();
     const sender = pc.addTrack(blackTrack);
 
     pc.onicecandidate = (ev) => {
       if (ev.candidate) {
+        cameraLog("debug", "relay", `Slot ${slot} — ICE candidate → output: ${ev.candidate.candidate.slice(0, 60)}…`);
         send({ cmd: "camera_ice", device_id: slotId(slot), target: "window:output", candidate: ev.candidate });
       }
     };
 
     pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === "failed") pc.restartIce();
+      cameraLog(
+        pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed" ? "info"
+          : pc.iceConnectionState === "failed" ? "error" : "warn",
+        "relay",
+        `Slot ${slot} ICE → ${pc.iceConnectionState}`
+      );
+      if (pc.iceConnectionState === "failed") {
+        cameraLog("warn", "relay", `Slot ${slot} — ICE restart`);
+        pc.restartIce();
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      cameraLog("info", "relay", `Slot ${slot} connection → ${pc.connectionState}`);
     };
 
     slotsRef.current[slot] = { pc, sender, blackTrack };
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
+    cameraLog("info", "relay", `Slot ${slot} — sending relay offer to output window`);
     send({ cmd: "camera_offer", device_id: slotId(slot), target: "window:output", sdp: offer.sdp });
   }, [send]);
 
   const handleAnswer = useCallback(async (slot: Slot, sdp: string) => {
+    cameraLog("info", "relay", `Slot ${slot} — received SDP answer from output`);
     const s = slotsRef.current[slot];
     if (s) {
-      try { await s.pc.setRemoteDescription({ type: "answer", sdp }); } catch {}
+      try { await s.pc.setRemoteDescription({ type: "answer", sdp }); } catch (e) {
+        cameraLog("error", "relay", `Slot ${slot} — setRemoteDescription failed: ${e}`);
+      }
     }
   }, []);
+
 
   const handleIce = useCallback(async (slot: Slot, candidate: RTCIceCandidateInit) => {
     const s = slotsRef.current[slot];

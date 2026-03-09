@@ -738,6 +738,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
             state.auth_throttles.lock().remove(&ip);
             let token = uuid::Uuid::new_v4().to_string();
             state.session_tokens.lock().insert(token.clone());
+            camera_log(&state, "info", &format!("Auth OK: {} from {} (key={})", info.device_name, ip, info.key));
 
             // For mobile cameras: issue a long-lived device token so subsequent
             // reconnects skip PIN entry entirely.
@@ -766,6 +767,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
                 entry.0 += 1;
                 entry.1 = std::time::Instant::now();
             }
+            camera_log(&state, "warn", &format!("Auth FAILED from {} — wrong PIN or invalid token", ip));
             let _ = socket.send(Message::Text(json!({"type":"auth_fail"}).to_string())).await;
             return;
         }
@@ -797,6 +799,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
 
     // ── 3. Register mobile in camera session registry + broadcast connect ──────
     if is_mobile && !device_id.is_empty() {
+        camera_log(&state, "info", &format!("Mobile camera connected: '{}' id={} from {}", device_name, &device_id[..8.min(device_id.len())], ip));
         state.connected_cameras.lock().await.insert(device_id.clone(), device_name.clone());
 
         // Register in typed camera session registry
@@ -811,6 +814,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
         // Restore authoritative tally state to reconnecting mobile
         let tally = state.camera_tally.get(&device_id);
         if tally != crate::camera::TallyState::Off {
+            camera_log(&state, "info", &format!("Restoring tally {:?} to reconnected device {}", tally, &device_id[..8.min(device_id.len())]));
             let event_name = match tally {
                 crate::camera::TallyState::Program => "connect_program",
                 crate::camera::TallyState::Preview => "connect_preview",
@@ -877,6 +881,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, peer_addr: S
     state.signaling_clients.lock().remove(&client_key);
 
     if is_mobile && !device_id.is_empty() {
+        camera_log(&state, "warn", &format!("Mobile camera disconnected: '{}' id={}", device_name, &device_id[..8.min(device_id.len())]));
         state.connected_cameras.lock().await.remove(&device_id);
         // Remove from typed camera session registry; clear tally
         state.camera_sessions.remove(&device_id);
@@ -1561,6 +1566,21 @@ fn str_field(v: &Value, key: &str) -> String {
 
 fn broadcast_str(state: &AppState, msg: String) {
     let _ = state.broadcast_tx.send(msg);
+}
+
+/// Send a structured camera log entry to all operator windows via broadcast.
+/// The frontend `useSignaling` picks up `type=camera_log` and writes it to the
+/// in-UI log panel.
+fn camera_log(state: &AppState, level: &str, msg: &str) {
+    eprintln!("[camera][{}] {}", level, msg);
+    let entry = json!({
+        "type": "camera_log",
+        "level": level,
+        "source": "server",
+        "msg": msg,
+    })
+    .to_string();
+    let _ = state.broadcast_tx.send(entry);
 }
 
 /// Send a message to a single client by key. No-op if client is not connected.

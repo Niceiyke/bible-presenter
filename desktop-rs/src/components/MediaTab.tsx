@@ -6,6 +6,7 @@ import { CameraFeedRenderer } from "./shared/Renderers";
 import type { DisplayItem, CameraSource, MediaFitMode, MediaItem } from "../types";
 import type { CameraSource as NewCameraSource } from "../features/camera/types";
 import { CameraGrid, CameraSwitcher } from "../features/camera";
+import { CameraLogPanel } from "../features/camera/components/CameraLogPanel";
 import { EditMediaModal } from "./EditMediaModal";
 
 interface MediaTabProps {
@@ -532,6 +533,9 @@ export function MediaTab({
                     sources={lanSources}
                     onSetProgram={(deviceId) => setProgram(deviceId, "A")}
                   />
+                  <div className="p-3 border-t border-zinc-800 bg-zinc-900/20">
+                    <CameraLogPanel maxHeight={200} />
+                  </div>
                 </>
               )}
             </div>

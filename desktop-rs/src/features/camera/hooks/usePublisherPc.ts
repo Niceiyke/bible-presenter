@@ -1,5 +1,6 @@
 import { useRef, useCallback } from "react";
 import { STUN_CONFIG } from "../types";
+import { cameraLog } from "../cameraLog";
 
 interface PcEntry {
   pc: RTCPeerConnection;
@@ -32,12 +33,18 @@ export function usePublisherPc(send: SendFn, onTrack: OnTrack, onStateChange: On
   const handleOffer = useCallback(async (deviceId: string, deviceName: string | undefined, sdp: string) => {
     // Close any existing PC for this device
     const old = pcsRef.current.get(deviceId);
-    if (old) { old.pc.close(); pcsRef.current.delete(deviceId); }
+    if (old) {
+      cameraLog("info", "publisher", `[${deviceId.slice(0,8)}] Closing old PC, replacing with new offer`);
+      old.pc.close();
+      pcsRef.current.delete(deviceId);
+    }
 
+    cameraLog("info", "publisher", `[${deviceId.slice(0,8)}] Creating RTCPeerConnection for preview (${deviceName ?? "?"})`);
     const pc = new RTCPeerConnection(STUN_CONFIG);
 
     pc.ontrack = (ev) => {
       const stream = ev.streams[0] ?? new MediaStream([ev.track]);
+      cameraLog("info", "publisher", `[${deviceId.slice(0,8)}] Track received — kind=${ev.track.kind} id=${ev.track.id.slice(0,8)}`);
       const entry = pcsRef.current.get(deviceId);
       if (entry) { entry.stream = stream; }
       // Attach to video element if already registered
@@ -48,25 +55,41 @@ export function usePublisherPc(send: SendFn, onTrack: OnTrack, onStateChange: On
 
     pc.onicecandidate = (ev) => {
       if (ev.candidate) {
+        cameraLog("debug", "publisher", `[${deviceId.slice(0,8)}] Sending ICE candidate to mobile: ${ev.candidate.candidate.slice(0, 60)}…`);
         send({ cmd: "camera_ice", device_id: deviceId, target: `mobile:${deviceId}`, candidate: ev.candidate });
+      } else {
+        cameraLog("debug", "publisher", `[${deviceId.slice(0,8)}] ICE gathering complete`);
       }
     };
 
     pc.oniceconnectionstatechange = () => {
+      cameraLog(
+        pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed" ? "info"
+          : pc.iceConnectionState === "failed" ? "error" : "warn",
+        "publisher",
+        `[${deviceId.slice(0,8)}] ICE state → ${pc.iceConnectionState}`
+      );
       onStateChange(deviceId, pc.iceConnectionState);
       // ICE restart on transient failure — avoids full reconnect
       if (pc.iceConnectionState === "failed") {
+        cameraLog("warn", "publisher", `[${deviceId.slice(0,8)}] ICE failed — triggering ICE restart`);
         pc.restartIce();
       }
     };
 
+    pc.onconnectionstatechange = () => {
+      cameraLog("info", "publisher", `[${deviceId.slice(0,8)}] Connection state → ${pc.connectionState}`);
+    };
+
     pcsRef.current.set(deviceId, { pc, stream: null });
 
+    cameraLog("info", "publisher", `[${deviceId.slice(0,8)}] Setting remote offer SDP`);
     await pc.setRemoteDescription({ type: "offer", sdp });
     await _drainIce(deviceId, pc);
 
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
+    cameraLog("info", "publisher", `[${deviceId.slice(0,8)}] Sending SDP answer to mobile`);
     send({ cmd: "camera_answer", device_id: deviceId, target: `mobile:${deviceId}`, sdp: answer.sdp });
   }, [send, onTrack, onStateChange, _drainIce]);
 

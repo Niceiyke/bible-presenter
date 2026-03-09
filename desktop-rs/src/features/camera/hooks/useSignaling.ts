@@ -1,5 +1,6 @@
 import { useRef, useCallback, useEffect } from "react";
 import type { WsInbound } from "../types";
+import { cameraLog } from "../cameraLog";
 
 export type MessageHandler = (msg: WsInbound) => void;
 
@@ -47,10 +48,17 @@ export function useSignaling({ pin, clientType, onMessage, onConnected, onDiscon
     if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) return;
 
     const host = resolveHost();
-    const ws = new WebSocket(`ws://${host}:7420/ws`);
+    const isLocal = host === "localhost" || host === "127.0.0.1";
+    // If local, prefer ws:// to avoid cert issues. If remote, prefer wss://.
+    const protocol = isLocal ? "ws" : "wss";
+    const url = `${protocol}://${host}:7420/ws`;
+    
+    cameraLog("info", "ws", `Connecting to ${url} as ${clientType}`);
+    const ws = new WebSocket(url);
     wsRef.current = ws;
 
     ws.onopen = () => {
+      cameraLog("info", "ws", `Socket open — sending auth (client_type=${clientType})`);
       ws.send(JSON.stringify({ cmd: "auth", pin, client_type: clientType }));
     };
 
@@ -62,6 +70,7 @@ export function useSignaling({ pin, clientType, onMessage, onConnected, onDiscon
       backoffRef.current = MIN_BACKOFF_MS;
 
       if ((msg as any).type === "auth_ok") {
+        cameraLog("info", "ws", `Auth OK — key=${(msg as any).key ?? "?"}`);
         onConnected?.();
         // Start ping to keep connection alive and feed server heartbeat
         if (pingTimerRef.current) clearInterval(pingTimerRef.current);
@@ -70,16 +79,24 @@ export function useSignaling({ pin, clientType, onMessage, onConnected, onDiscon
         }, PING_INTERVAL_MS);
       }
       if ((msg as any).type === "auth_fail") {
-        console.warn("[signaling] Auth failed:", (msg as any).reason);
+        cameraLog("error", "ws", `Auth FAILED — reason=${(msg as any).reason ?? "wrong PIN"}`);
         ws.close();
+        return;
+      }
+
+      // Server-relayed log entries
+      if ((msg as any).type === "camera_log") {
+        cameraLog((msg as any).level ?? "info", "server", (msg as any).msg ?? "");
         return;
       }
 
       onMessage(msg);
     };
 
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       if (pingTimerRef.current) clearInterval(pingTimerRef.current);
+      const delay = Math.round(backoffRef.current / 1000);
+      cameraLog("warn", "ws", `Socket closed (code=${ev.code}) — reconnecting in ${delay}s`);
       onDisconnected?.();
       if (!mountedRef.current) return;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
@@ -89,7 +106,10 @@ export function useSignaling({ pin, clientType, onMessage, onConnected, onDiscon
       }, backoffRef.current);
     };
 
-    ws.onerror = () => ws.close();
+    ws.onerror = (ev) => {
+      cameraLog("error", "ws", `Socket error — check that the server is running and the TLS cert is trusted`);
+      ws.close();
+    };
   }, [pin, clientType, onMessage, onConnected, onDisconnected]);
 
   const disconnect = useCallback(() => {
