@@ -33,6 +33,16 @@ If the application exits unexpectedly after opening:
     - Database file `bible.db` is locked or corrupted.
     - No audio input devices found.
 
+## Troubleshooting Build Errors (Windows)
+
+### glib-sys / GStreamer Build Failure
+**Issue**: `failed to run custom build command for glib-sys v0.20.10` or `The pkg-config command could not be found.`
+**Fix**: Compilation on Windows now requires GStreamer development libraries.
+1.  **Download**: Install **MSVC 64-bit (Development)** and **MSVC 64-bit (Runtime)** from [gstreamer.freedesktop.org](https://gstreamer.freedesktop.org/download/).
+2.  **Env Vars**: Set `GSTREAMER_1_0_ROOT_MSVC_X86_64` to your install path (e.g., `C:\gstreamer\1.0\msvc_x86_64`).
+3.  **Path**: Add `%GSTREAMER_1_0_ROOT_MSVC_X86_64%\bin` to your system `PATH`.
+4.  **CI (GitHub Actions)**: Add a GStreamer setup step to your workflow (e.g., `vulev/setup-gstreamer@v1.1`).
+
 ## Setup Instructions
 
 ### 1. AI Models

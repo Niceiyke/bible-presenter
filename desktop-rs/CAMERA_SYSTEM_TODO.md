@@ -2,7 +2,32 @@
 
 This list covers the remaining manual and technical steps required to ship the Native GStreamer/NDI engine to end-users.
 
-## 1. 📦 GStreamer Bundling (Zero-Setup Experience)
+## 🛠 Compilation Requirements (Windows)
+The Rust bindings for GStreamer and GLib require development headers to be present during compilation. If you see errors about `glib-sys` failing to find `pkg-config`, follow these steps:
+
+### Local Development:
+1.  Download and install both **Runtime** and **Development** MSVC 64-bit installers from [gstreamer.freedesktop.org](https://gstreamer.freedesktop.org/download/).
+2.  Ensure `GSTREAMER_1_0_ROOT_MSVC_X86_64` is set to your installation path (e.g., `C:\gstreamer\1.0\msvc_x86_64`).
+3.  Add `%GSTREAMER_1_0_ROOT_MSVC_X86_64%\bin` to your system `PATH`.
+4.  Restart your terminal/IDE.
+
+### GitHub Actions (CI):
+Add these steps to your workflow before the Tauri build step:
+```yaml
+- name: Install GStreamer
+  uses: vulev/setup-gstreamer@v1.1
+  with:
+    gstreamer-version: '1.24.0' # Matches the crate's required version
+    arch: 'x64'
+
+- name: Set GStreamer Env Vars
+  shell: bash
+  run: |
+    echo "GSTREAMER_1_0_ROOT_MSVC_X86_64=${GSTREAMER_1_0_ROOT_X86_64}" >> $GITHUB_ENV
+    echo "PATH=${GSTREAMER_1_0_ROOT_X86_64}\\bin;${PATH}" >> $GITHUB_ENV
+```
+
+## 📦 GStreamer Bundling (Zero-Setup Experience)
 To ensure users don't need to install GStreamer manually, follow these steps before your next production build:
 
 - [ ] **Download Runtime Binaries:**
