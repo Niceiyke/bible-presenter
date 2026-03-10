@@ -78,7 +78,7 @@ impl MediaEngine {
         }
     }
 
-    pub fn setup_pipeline(&mut self, app: AppHandle) -> Result<(), String> {
+    pub fn setup_pipeline(&mut self, _app: AppHandle) -> Result<(), String> {
         gstreamer::init().map_err(|e| format!("GStreamer init failed: {}", e))?;
         let pipeline = gstreamer::Pipeline::new();
         let compositor = gstreamer::ElementFactory::make("compositor").build()

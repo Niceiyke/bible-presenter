@@ -24,12 +24,12 @@ pub struct CameraDeviceInfo {
 pub async fn list_native_cameras() -> Result<Vec<CameraDeviceInfo>, String> {
     // nokhwa 0.10: query_devices is at the root of nokhwa crate if features are correct.
     // If it's missing from root, we try to use it with the correct path or backend.
-    let devices = nokhwa::query_devices(nokhwa::utils::ApiBackend::Auto)
-        .map_err(|e: nokhwa::utils::NokhwaError| e.to_string())?;
+    let devices = nokhwa::query(nokhwa::utils::ApiBackend::Auto)
+        .map_err(|e: nokhwa::NokhwaError| e.to_string())?;
     
     Ok(devices.into_iter().map(|d: nokhwa::utils::CameraInfo| CameraDeviceInfo {
         index: match d.index() {
-            CameraIndex::Index(i) => i,
+            CameraIndex::Index(i) => *i,
             _ => 0,
         },
         name: d.human_name(),
