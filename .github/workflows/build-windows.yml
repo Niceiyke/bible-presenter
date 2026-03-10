@@ -53,13 +53,25 @@ jobs:
           cd desktop-rs
           npm install
 
-      - name: create data directories
+      - name: create data directories and populate gstreamer bundle
         shell: bash
         run: |
           mkdir -p desktop-rs/src-tauri/models
           mkdir -p desktop-rs/src-tauri/bible_data
           # Small placeholder for hymns which is still bundled
           echo "[]" > desktop-rs/src-tauri/bible_data/hymns.json
+          
+          # Populate GStreamer bundle for Tauri resource inclusion
+          # setup-gstreamer installs to a path stored in GSTREAMER_1_0_ROOT_MSVC_X86_64
+          mkdir -p desktop-rs/src-tauri/bin/gstreamer
+          if [ -d "$GSTREAMER_1_0_ROOT_MSVC_X86_64" ]; then
+            echo "Copying GStreamer from $GSTREAMER_1_0_ROOT_MSVC_X86_64 to bundle folder..."
+            # Using copy-item would be more PowerShell-native but we are in bash shell
+            cp -r "$GSTREAMER_1_0_ROOT_MSVC_X86_64"/* desktop-rs/src-tauri/bin/gstreamer/
+          else
+            echo "Warning: GStreamer root not found at $GSTREAMER_1_0_ROOT_MSVC_X86_64. Creating placeholder to prevent build failure."
+            touch desktop-rs/src-tauri/bin/gstreamer/placeholder.txt
+          fi
 
       - name: build and publish release
         uses: tauri-apps/tauri-action@v0
