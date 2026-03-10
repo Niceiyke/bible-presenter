@@ -48,10 +48,11 @@ export function useKeyboardShortcuts(props: Props): void {
         case "F2": setActiveTab("songs"); break;
         case "F3": setActiveTab("media"); break;
         case "F4": invoke("toggle_studio_window"); break;
-        case "F5": invoke("toggle_design_window"); break;
+        case "F5": setActiveTab("camera"); break;
         case "F6": setActiveTab("scenes"); break;
         case "F7": setActiveTab("scene-builder"); break;
         case "F8": setActiveTab("props"); break;
+        case "F9": invoke("toggle_design_window"); break;
         case "n": if (nextVerse) { const it: DisplayItem = { type: "Verse", data: nextVerse }; if (e.ctrlKey) sendLive(it); else stageItem(it); } break;
         case "ArrowRight":
           if (liveItem?.type === "CustomSlide") {

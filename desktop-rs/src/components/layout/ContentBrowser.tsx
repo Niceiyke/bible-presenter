@@ -6,6 +6,7 @@ import { stableId, newDefaultSlide } from "../../utils";
 import { BibleTab } from "../BibleTab";
 import { MediaTab } from "../MediaTab";
 import { SongsTab } from "../SongsTab";
+import { CameraTab } from "../CameraTab";
 import { StudioTab } from "../StudioTab";
 import { SceneComposerTab } from "../SceneComposerTab";
 import { ScenesTab } from "../ScenesTab";
@@ -61,6 +62,7 @@ export function ContentBrowser({
           }}
         />
       )}
+      {activeTab === "camera" && <CameraTab onStage={stageItem} onLive={sendLive} />}
       {activeTab === "studio" && (
         <StudioTab
           onStage={stageItem} onLive={sendLive}

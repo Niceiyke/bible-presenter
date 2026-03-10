@@ -150,6 +150,15 @@ pub struct SongSlideData {
     pub color: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraBackground {
+    pub device_id: String,
+    pub opacity: f32,
+    pub object_fit: String,
+    pub mirrored: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Display item — what gets projected on the output window
 // ---------------------------------------------------------------------------
@@ -159,6 +168,7 @@ pub struct SongSlideData {
 pub enum DisplayItem {
     Verse(Verse),
     Media(MediaItem),
+    Camera(CameraBackground),
     CustomSlide(CustomSlideData),
     Scene(serde_json::Value),
     Timer(TimerData),
@@ -170,6 +180,7 @@ impl DisplayItem {
         match self {
             DisplayItem::Verse(v) => format!("{} {}:{}", v.book, v.chapter, v.verse),
             DisplayItem::Media(m) => m.name.clone(),
+            DisplayItem::Camera(_) => "Live Camera Feed".to_string(),
             DisplayItem::CustomSlide(c) => {
                 format!("{} – slide {}", c.presentation_name, c.slide_index + 1)
             }

@@ -6,6 +6,7 @@ import { THEMES } from "../types";
 import {
   getEffectiveBackground,
   getVideoBackground,
+  getCameraBackground,
   getTransitionVariants,
   getItemUid
 } from "../utils";
@@ -39,6 +40,13 @@ export function OutputWindow() {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const bgVideoRef = useRef<HTMLVideoElement>(null);
+  const cameraRef = useRef<HTMLVideoElement>(null);
+  const mainCameraRef = useRef<HTMLVideoElement>(null);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [mainCameraStream, setMainCameraStream] = useState<MediaStream | null>(null);
+  const [useNativeOutput, setUseNativeOutput] = useState(false);
+  const [nativeFrameUrl, setNativeFrameUrl] = useState("");
+
   const [windowScale, setWindowScale] = useState(1);
   const isMounted = useRef(true);
 
@@ -244,6 +252,101 @@ export function OutputWindow() {
   }, []);
 
   const videoBg = getVideoBackground(settings, liveItem);
+  const cameraBg = getCameraBackground(settings, liveItem);
+
+  // Manage camera stream lifecycle
+  useEffect(() => {
+    let activeStream: MediaStream | null = null;
+    
+    const startCamera = async (deviceId: string) => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: { deviceId: { exact: deviceId } } 
+        });
+        activeStream = stream;
+        setCameraStream(stream);
+        if (cameraRef.current) {
+          cameraRef.current.srcObject = stream;
+        }
+      } catch (err) {
+        console.error("Failed to get camera stream:", err);
+      }
+    };
+
+    if (cameraBg?.deviceId) {
+      startCamera(cameraBg.deviceId);
+    } else {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+        setCameraStream(null);
+      }
+    }
+
+    return () => {
+      if (activeStream) {
+        activeStream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [cameraBg?.deviceId]);
+
+  // Manage independent main camera stream
+  useEffect(() => {
+    let activeStream: MediaStream | null = null;
+    let frameLoopActive = false;
+    
+    const startBrowserCamera = async (deviceId: string) => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: { deviceId: { exact: deviceId } } 
+        });
+        activeStream = stream;
+        setMainCameraStream(stream);
+        setUseNativeOutput(false);
+        if (mainCameraRef.current) {
+          mainCameraRef.current.srcObject = stream;
+        }
+      } catch (err) {
+        console.error("Failed to get main camera stream:", err);
+      }
+    };
+
+    const startNativeStream = async (id: string) => {
+      const isNdi = id.startsWith("ndi:");
+      const val = id.split(":")[1];
+      if (!isNdi) {
+        await invoke("start_camera_stream", { index: parseInt(val) });
+      }
+      setUseNativeOutput(true);
+      frameLoopActive = true;
+      const loop = () => {
+        if (!frameLoopActive) return;
+        setNativeFrameUrl(`wordlyte-stream://live?t=${Date.now()}`);
+        requestAnimationFrame(loop);
+      };
+      loop();
+    };
+
+    if (liveItem?.type === "Camera" && liveItem.data.deviceId) {
+      if (liveItem.data.deviceId.startsWith("native:") || liveItem.data.deviceId.startsWith("ndi:")) {
+        startNativeStream(liveItem.data.deviceId);
+      } else {
+        startBrowserCamera(liveItem.data.deviceId);
+      }
+    } else {
+      frameLoopActive = false;
+      if (mainCameraStream) {
+        mainCameraStream.getTracks().forEach(track => track.stop());
+        setMainCameraStream(null);
+      }
+    }
+
+    return () => {
+      frameLoopActive = false;
+      if (activeStream) {
+        activeStream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [liveItem?.type === "Camera" ? liveItem.data.deviceId : null]);
 
   // Sync playback rate when it changes without unmounting the video element
   useEffect(() => {
@@ -309,7 +412,7 @@ export function OutputWindow() {
     <div
       className="fixed inset-0 overflow-hidden cursor-none pointer-events-none select-none"
       style={
-        videoBg
+        (videoBg || cameraBg)
           ? { color: colors.verseText }
           : { ...bgStyle, color: colors.verseText }
       }
@@ -336,6 +439,21 @@ export function OutputWindow() {
           )}
         </div>
       )}
+
+      {/* Background camera element */}
+      <video
+        ref={cameraRef}
+        className="absolute inset-0 w-full h-full pointer-events-none"
+        style={{
+          zIndex: 0,
+          objectFit: cameraBg?.objectFit ?? "cover",
+          opacity: cameraBg?.opacity ?? 1,
+          visibility: cameraBg?.deviceId ? "visible" : "hidden",
+          transform: cameraBg?.mirrored ? "scaleX(-1)" : "none",
+        }}
+        autoPlay
+        playsInline
+      />
 
       {/* Background video element — rendered at z-0, below all content */}
       <video
@@ -403,6 +521,32 @@ export function OutputWindow() {
                   </div>
                   {!isTop && ReferenceTag}
                 </motion.div>
+              </div>
+            ) : liveItem.type === "Camera" ? (
+              <div className="absolute inset-0">
+                {useNativeOutput ? (
+                  <img
+                    src={nativeFrameUrl}
+                    className="w-full h-full object-contain bg-black"
+                    style={{
+                      opacity: liveItem.data.opacity ?? 1,
+                      transform: liveItem.data.mirrored ? "scaleX(-1)" : "none",
+                    }}
+                    alt="Native Stream"
+                  />
+                ) : (
+                  <video
+                    ref={mainCameraRef}
+                    autoPlay
+                    playsInline
+                    className="w-full h-full"
+                    style={{
+                      objectFit: (liveItem.data.objectFit as any) ?? "cover",
+                      opacity: liveItem.data.opacity ?? 1,
+                      transform: liveItem.data.mirrored ? "scaleX(-1)" : "none",
+                    }}
+                  />
+                )}
               </div>
             ) : liveItem.type === "CustomSlide" ? (
               <div className="absolute inset-0">

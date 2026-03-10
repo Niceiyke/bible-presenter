@@ -4,6 +4,12 @@
 mod ndi;
 
 use wordlyte_lib::{audio, engine, store};
+use wordlyte_lib::camera_engine::{
+    list_native_cameras, start_camera_stream, stop_camera_stream
+};
+use wordlyte_lib::media_engine::{
+    list_ndi_sources, start_mixer, check_media_dependencies, set_mixer_source
+};
 use store::log_msg;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -23,6 +29,7 @@ use engine::model_manager::{
     TranscriptionConfig,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::http::{Response, header::*};
 
 // ---------------------------------------------------------------------------
 // Semantic Index management
@@ -2933,11 +2940,29 @@ async fn save_studio_recording_transcript(state: State<'_, AppState>, id: String
 
 fn main() {
     tauri::Builder::default()
+        .register_uri_scheme_protocol("wordlyte-stream", |_app, request| {
+            if request.uri().to_string().contains("live") {
+                let frame = wordlyte_lib::media_engine::SHARED_FRAME.lock().clone();
+                Response::builder()
+                    .header(CONTENT_TYPE, "image/jpeg")
+                    .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                    .header(CACHE_CONTROL, "no-cache, no-store, must-revalidate")
+                    .body(frame)
+                    .unwrap()
+            } else {
+                Response::builder().status(404).body(Vec::new()).unwrap()
+            }
+        })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
             let resolver = app.path();
+            
+            // Initialize Bundled GStreamer
+            if let Err(e) = wordlyte_lib::media_engine::init_bundled_gstreamer(app.handle()) {
+                log_msg(app, &format!("Bundled GStreamer Init Error: {}", e));
+            }
 
             // Resolve resource directory with a fallback to the executable's own directory.
             // On corporate Windows systems the standard resource_dir() path may be
@@ -3254,6 +3279,13 @@ fn main() {
             set_confidence_threshold,
             get_startup_status,
             list_transcripts,
+            list_native_cameras,
+            start_camera_stream,
+            stop_camera_stream,
+            list_ndi_sources,
+            check_media_dependencies,
+            start_mixer,
+            set_mixer_source,
             save_recovery,
             load_recovery,
             clear_recovery,

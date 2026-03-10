@@ -1,9 +1,9 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { MediaPickerModal } from "./MediaPickerModal";
 import { useAppStore } from "../store";
 import { relativizePath } from "../utils";
-import type { BackgroundSetting, VideoBackground, MediaItem } from "../types";
+import type { BackgroundSetting, VideoBackground, CameraBackground, MediaItem } from "../types";
 
 const DEFAULT_VIDEO_BG: VideoBackground = {
   path: "",
@@ -12,6 +12,13 @@ const DEFAULT_VIDEO_BG: VideoBackground = {
   objectFit: "cover",
   opacity: 1,
   playbackRate: 1,
+};
+
+const DEFAULT_CAMERA_BG: CameraBackground = {
+  deviceId: "",
+  opacity: 1,
+  objectFit: "cover",
+  mirrored: false,
 };
 
 export function BackgroundEditor({
@@ -27,13 +34,24 @@ export function BackgroundEditor({
   mediaImages?: MediaItem[];
   onUploadMedia?: () => Promise<void>;
 }) {
-  const { appDataDir } = useAppStore();
+  const { appDataDir, availableCameras, refreshCameras } = useAppStore();
   const [showPicker, setShowPicker] = useState(false);
   const current: BackgroundSetting = value ?? { type: "None" };
 
   const vbg = current.type === "Video" ? (current as { type: "Video"; value: VideoBackground }).value : null;
+  const cbg = current.type === "Camera" ? (current as { type: "Camera"; value: CameraBackground }).value : null;
+
   const updateVbg = (patch: Partial<VideoBackground>) =>
     onChange({ type: "Video", value: { ...(vbg ?? DEFAULT_VIDEO_BG), ...patch } });
+
+  const updateCbg = (patch: Partial<CameraBackground>) =>
+    onChange({ type: "Camera", value: { ...(cbg ?? DEFAULT_CAMERA_BG), ...patch } });
+
+  useEffect(() => {
+    if (current.type === "Camera" && availableCameras.length === 0) {
+      refreshCameras();
+    }
+  }, [current.type]);
 
   const handlePickVideo = async () => {
     try {
@@ -51,17 +69,18 @@ export function BackgroundEditor({
     <>
       <div>
         {label && <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1.5">{label}</p>}
-        <div className="flex gap-1.5 mb-1.5">
-          {(["None", "Color", "Image", "Video"] as const).map((mode) => (
+        <div className="flex gap-1.5 mb-1.5 overflow-x-auto pb-1 no-scrollbar">
+          {(["None", "Color", "Image", "Video", "Camera"] as const).map((mode) => (
             <button
               key={mode}
               onClick={() => {
                 if (mode === "None") onChange({ type: "None" });
                 else if (mode === "Color") onChange({ type: "Color", value: current.type === "Color" ? (current as any).value : "#000000" });
                 else if (mode === "Image") onChange({ type: "Image", value: current.type === "Image" ? (current as any).value : "" });
-                else onChange({ type: "Video", value: current.type === "Video" ? (current as any).value : { ...DEFAULT_VIDEO_BG } });
+                else if (mode === "Video") onChange({ type: "Video", value: current.type === "Video" ? (current as any).value : { ...DEFAULT_VIDEO_BG } });
+                else onChange({ type: "Camera", value: current.type === "Camera" ? (current as any).value : { ...DEFAULT_CAMERA_BG } });
               }}
-              className={`flex-1 py-1 rounded text-[9px] font-bold border transition-all ${
+              className={`flex-none px-3 py-1 rounded text-[9px] font-bold border transition-all ${
                 current.type === mode ? "border-amber-500 bg-amber-500/10 text-amber-400" : "border-slate-700 bg-slate-800/50 text-slate-500 hover:border-slate-600"
               }`}
             >
@@ -193,6 +212,73 @@ export function BackgroundEditor({
                 type="range" min="0.25" max="2" step="0.25"
                 value={vbg.playbackRate}
                 onChange={(e) => updateVbg({ playbackRate: parseFloat(e.target.value) })}
+                className="w-full h-1 appearance-none bg-slate-700 rounded accent-amber-500 cursor-pointer"
+              />
+            </div>
+          </div>
+        )}
+
+        {cbg !== null && (
+          <div className="flex flex-col gap-2">
+            <div>
+              <p className="text-[8px] text-slate-600 uppercase font-bold mb-1">Device</p>
+              <select
+                value={cbg.deviceId}
+                onChange={(e) => updateCbg({ deviceId: e.target.value })}
+                className="w-full py-1 px-2 rounded border border-slate-700 bg-slate-800 text-[10px] text-slate-300"
+              >
+                <option value="">Select Camera...</option>
+                {availableCameras.map((cam) => (
+                  <option key={cam.deviceId} value={cam.deviceId}>{cam.label}</option>
+                ))}
+              </select>
+              <button 
+                onClick={() => refreshCameras()}
+                className="text-[8px] text-amber-500 hover:text-amber-400 mt-1 font-bold"
+              >
+                Refresh Devices
+              </button>
+            </div>
+
+            <button
+              onClick={() => updateCbg({ mirrored: !cbg.mirrored })}
+              className={`py-1 rounded text-[9px] font-bold border transition-all ${
+                cbg.mirrored ? "border-amber-500 bg-amber-500/10 text-amber-400" : "border-slate-700 bg-slate-800/50 text-slate-500"
+              }`}
+            >
+              Mirrored: {cbg.mirrored ? "On" : "Off"}
+            </button>
+
+            {/* Object Fit */}
+            <div>
+              <p className="text-[8px] text-slate-600 uppercase font-bold mb-1">Fit</p>
+              <div className="flex gap-1">
+                {(["cover", "contain", "fill"] as const).map((fit) => (
+                  <button
+                    key={fit}
+                    onClick={() => updateCbg({ objectFit: fit })}
+                    className={`flex-1 py-0.5 rounded text-[8px] font-bold border transition-all capitalize ${
+                      cbg.objectFit === fit
+                        ? "border-amber-500 bg-amber-500/10 text-amber-400"
+                        : "border-slate-700 bg-slate-800/50 text-slate-500"
+                    }`}
+                  >
+                    {fit}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Opacity */}
+            <div>
+              <div className="flex justify-between mb-0.5">
+                <p className="text-[8px] text-slate-600 uppercase font-bold">Opacity</p>
+                <span className="text-[8px] text-slate-500">{Math.round(cbg.opacity * 100)}%</span>
+              </div>
+              <input
+                type="range" min="0.05" max="1" step="0.05"
+                value={cbg.opacity}
+                onChange={(e) => updateCbg({ opacity: parseFloat(e.target.value) })}
                 className="w-full h-1 appearance-none bg-slate-700 rounded accent-amber-500 cursor-pointer"
               />
             </div>

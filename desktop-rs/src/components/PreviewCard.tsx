@@ -1,6 +1,6 @@
 import React, { useRef, useState, useCallback, useEffect } from "react";
 import { emit } from "@tauri-apps/api/event";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Play, Pause, RotateCcw, Volume2, VolumeX, SkipBack, SkipForward,
@@ -43,10 +43,14 @@ export function PreviewCard({
 }) {
   const { appDataDir } = useAppStore();
   const isVideo = item?.type === "Media" && (item.data as MediaItem).media_type === "Video";
+  const isCamera = item?.type === "Camera";
   const showControls = isVideo;
 
   // Local preview video state
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraPreviewRef = useRef<HTMLVideoElement | null>(null);
+  const [useNativePreview, setUseNativePreview] = useState(false);
+  const [nativeFrameUrl, setNativeFrameUrl] = useState("");
   const videoCleanupRef = useRef<(() => void) | null>(null);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(true);
@@ -62,6 +66,60 @@ export function PreviewCard({
     setMuted(true);
     setVolume(1);
   }, [item]);
+
+  // Manage camera preview stream
+  useEffect(() => {
+    let activeStream: MediaStream | null = null;
+    let frameLoopActive = false;
+
+    const startBrowser = async (deviceId: string) => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: { deviceId: { exact: deviceId } } 
+        });
+        activeStream = stream;
+        setUseNativePreview(false);
+        if (cameraPreviewRef.current) {
+          cameraPreviewRef.current.srcObject = stream;
+        }
+      } catch (err) {
+        console.error("PreviewCard: browser camera failed", err);
+      }
+    };
+
+    const startNative = async (id: string) => {
+      const isNdi = id.startsWith("ndi:");
+      const val = id.split(":")[1];
+      if (!isNdi) {
+        await invoke("start_camera_stream", { index: parseInt(val) });
+      }
+      setUseNativePreview(true);
+      frameLoopActive = true;
+      const loop = () => {
+        if (!frameLoopActive) return;
+        setNativeFrameUrl(`wordlyte-stream://live?t=${Date.now()}`);
+        requestAnimationFrame(loop);
+      };
+      loop();
+    };
+
+    if (isCamera && item?.data.deviceId) {
+      if (item.data.deviceId.startsWith("native:") || item.data.deviceId.startsWith("ndi:")) {
+        startNative(item.data.deviceId);
+      } else {
+        startBrowser(item.data.deviceId);
+      }
+    } else {
+      frameLoopActive = false;
+    }
+
+    return () => {
+      frameLoopActive = false;
+      if (activeStream) {
+        activeStream.getTracks().forEach(t => t.stop());
+      }
+    };
+  }, [isCamera, item?.type === "Camera" ? item.data.deviceId : null]);
 
   // Callback ref — attaches DOM event listeners for local preview; cleans up on unmount/swap
   const setVideoRefCallback = useCallback(
@@ -206,6 +264,29 @@ export function PreviewCard({
             ) : item.type === "Song" ? (
               <div className="w-full" style={{ aspectRatio: "16/9" }}>
                 <SongSlideRenderer data={item.data} scale={0.25} fontSize={48} />
+              </div>
+            ) : item.type === "Camera" ? (
+              <div className="w-full h-full relative border border-slate-800 rounded-lg overflow-hidden bg-black">
+                {useNativePreview ? (
+                  <img
+                    src={nativeFrameUrl}
+                    className="w-full h-full object-contain"
+                    style={{ transform: item.data.mirrored ? "scaleX(-1)" : "none" }}
+                    alt="Native Preview"
+                  />
+                ) : (
+                  <video
+                    ref={cameraPreviewRef}
+                    autoPlay
+                    playsInline
+                    className="w-full h-full object-contain"
+                    style={{ transform: item.data.mirrored ? "scaleX(-1)" : "none" }}
+                  />
+                )}
+                <div className="absolute top-2 left-2 px-1.5 py-0.5 bg-red-500/80 rounded text-[8px] font-black text-white flex items-center gap-1 animate-pulse">
+                  <div className="w-1.5 h-1.5 rounded-full bg-white" />
+                  LIVE CAMERA
+                </div>
               </div>
             ) : (
               /* Media (image or video) */

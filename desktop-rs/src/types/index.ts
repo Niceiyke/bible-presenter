@@ -155,11 +155,19 @@ export type VideoBackground = {
   playbackRate: number;
 };
 
+export type CameraBackground = {
+  deviceId: string;
+  opacity: number;
+  objectFit: "cover" | "contain" | "fill";
+  mirrored: boolean;
+};
+
 export type BackgroundSetting =
   | { type: "None"; value?: string }
   | { type: "Color"; value: string }
   | { type: "Image"; value: string }
-  | { type: "Video"; value: VideoBackground };
+  | { type: "Video"; value: VideoBackground }
+  | { type: "Camera"; value: CameraBackground };
 
 export type LayerSource =
   | { type: "live-output" }
@@ -202,6 +210,7 @@ export interface TimerData {
 export type DisplayItem =
   | { type: "Verse"; data: Verse }
   | { type: "Media"; data: MediaItem }
+  | { type: "Camera"; data: CameraBackground }
   | { type: "CustomSlide"; data: CustomSlideDisplayData }
   | { type: "Scene"; data: SceneData }
   | { type: "Timer"; data: TimerData }

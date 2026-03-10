@@ -12,6 +12,7 @@ import { createSceneSlice, SceneSlice } from "./slices/sceneSlice";
 import { createSessionSlice, SessionSlice } from "./slices/sessionSlice";
 import { createModelSlice, ModelSlice } from "./slices/modelSlice";
 import { createLogSlice, LogSlice } from "./slices/logSlice";
+import { createCameraSlice, CameraSlice } from "./slices/cameraSlice";
 
 export type AppStore = AppSlice &
   LiveSlice &
@@ -25,7 +26,8 @@ export type AppStore = AppSlice &
   SceneSlice &
   SessionSlice &
   ModelSlice &
-  LogSlice;
+  LogSlice &
+  CameraSlice;
 
 export const useAppStore = create<AppStore>()((...a) => ({
   ...createAppSlice(...a),
@@ -41,4 +43,5 @@ export const useAppStore = create<AppStore>()((...a) => ({
   ...createSessionSlice(...a),
   ...createModelSlice(...a),
   ...createLogSlice(...a),
+  ...createCameraSlice(...a),
 }));

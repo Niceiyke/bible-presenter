@@ -1,6 +1,6 @@
 import React from "react";
 import {
-  BookOpen, CalendarDays, Image as ImageIcon,
+  BookOpen, CalendarDays, Camera, Image as ImageIcon,
   Layers, Layout, Mic, Monitor, Settings, Zap
 } from "lucide-react";
 import { useAppStore } from "../../store";
@@ -14,6 +14,7 @@ export function LeftNav() {
         { id: "bible",         icon: BookOpen,    title: "Bible (F1)" },
         { id: "media",         icon: ImageIcon,   title: "Media (F3)" },
         { id: "songs",         icon: Mic,         title: "Songs (F2)" },
+        { id: "camera",        icon: Camera,      title: "Camera (F5)" },
         { id: "studio",        icon: Layers,      title: "Studio (F4)" },
         { id: "scenes",        icon: Layout,      title: "Scenes (F6)" },
         { id: "scene-builder", icon: Layout,      title: "Scene Builder (F7)" },

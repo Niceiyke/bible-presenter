@@ -3,6 +3,7 @@ import type {
   CustomSlide,
   BackgroundSetting,
   VideoBackground,
+  CameraBackground,
   PresentationSettings,
   LowerThirdData,
   LowerThirdTemplate,
@@ -36,12 +37,18 @@ export function getItemUid(item: DisplayItem | null): string {
   if (item.type === "Song") {
     return `song-${item.data.song_id}-${item.data.slide_index}`;
   }
+  if (item.type === "Camera") {
+    return `camera-${item.data.deviceId}`;
+  }
   return "unknown";
 }
 
 export function displayItemLabel(item: DisplayItem): string {
   if (item.type === "Verse") {
     return `${item.data.book} ${item.data.chapter}:${item.data.verse}`;
+  }
+  if (item.type === "Camera") {
+    return `Camera Feed: ${item.data.deviceId.slice(0, 8)}...`;
   }
   if (item.type === "CustomSlide") {
     return `${item.data.presentation_name} – Slide ${item.data.slide_index + 1}`;
@@ -61,6 +68,7 @@ export function displayItemLabel(item: DisplayItem): string {
 export function describeDisplayItem(item: DisplayItem): string {
   if (item.type === "Verse") return `${item.data.book} ${item.data.chapter}:${item.data.verse}`;
   if (item.type === "Media") return item.data.name;
+  if (item.type === "Camera") return "Live Camera";
   if (item.type === "CustomSlide") return `${item.data.presentation_name} (S${item.data.slide_index + 1})`;
   if (item.type === "Scene") return `Scene: ${item.data.name}`;
   if (item.type === "Timer") return `Timer: ${item.data.timer_type}`;
@@ -273,6 +281,21 @@ export function getVideoBackground(
     bg = settings.background;
   const effective = (bg && bg.type !== "None") ? bg : settings.background;
   if (effective?.type === "Video" && effective.value.path) return effective.value;
+  return null;
+}
+
+/** Returns the CameraBackground config if the effective background for the current item is a camera, otherwise null. */
+export function getCameraBackground(
+  settings: PresentationSettings,
+  item: DisplayItem | null
+): CameraBackground | null {
+  let bg: BackgroundSetting | undefined;
+  if (item?.type === "Verse") bg = settings.bible_background;
+  else if (item?.type === "Media") bg = settings.media_background;
+  else if (item?.type === "CustomSlide")
+    bg = settings.background;
+  const effective = (bg && bg.type !== "None") ? bg : settings.background;
+  if (effective?.type === "Camera" && effective.value.deviceId) return effective.value;
   return null;
 }
 
