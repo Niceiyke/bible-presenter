@@ -127,9 +127,8 @@ impl MediaEngine {
                     let buffer = sample.buffer().ok_or(gstreamer::FlowError::Error)?;
                     let map = buffer.map_readable().map_err(|_| gstreamer::FlowError::Error)?;
                     
-                    // Update global buffer with JPEG data
-                    // For absolute performance, we'd add 'jpegenc' to the pipeline 
-                    // before appsink so Rust doesn't do anything but copy bytes.
+                    // println!("DEBUG: Received frame of size {}", map.len());
+
                     let mut shared = SHARED_FRAME.lock();
                     shared.clear();
                     shared.extend_from_slice(map.as_slice());
@@ -149,12 +148,24 @@ impl MediaEngine {
         let compositor = self.compositor.as_ref().ok_or("Compositor not initialized")?;
 
         let src_element = match &source.source_type {
-            SourceType::Camera { index: _ } => {
-                // 'autovideosrc' is the cross-platform way to get the camera.
-                // Note: Indexing in autovideosrc is slightly more complex, 
-                // but for the default camera, this works on all OSs.
-                gstreamer::ElementFactory::make("autovideosrc").build()
-                    .map_err(|e| format!("Could not create autovideosrc: {}", e))?
+            SourceType::Camera { index } => {
+                // Select platform-specific source and set the correct camera device/index
+                if cfg!(target_os = "linux") {
+                    let s = gstreamer::ElementFactory::make("v4l2src").build()
+                        .map_err(|e| format!("Could not create v4l2src: {}", e))?;
+                    s.set_property("device", format!("/dev/video{}", index));
+                    s
+                } else if cfg!(target_os = "windows") {
+                    let s = gstreamer::ElementFactory::make("ksvideosrc").build()
+                        .map_err(|e| format!("Could not create ksvideosrc: {}", e))?;
+                    s.set_property("device-index", *index as i32);
+                    s
+                } else {
+                    // Fallback for macOS (avfvideosrc) or other OSs
+                    let s = gstreamer::ElementFactory::make("autovideosrc").build()
+                        .map_err(|e| format!("Could not create autovideosrc: {}", e))?;
+                    s
+                }
             }
             SourceType::NDI { source_name } => {
                 let ndisrc = gstreamer::ElementFactory::make("ndisrc").build()
@@ -251,20 +262,21 @@ pub async fn start_mixer(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn set_mixer_source(source: MediaSource) -> Result<(), String> {
+pub async fn set_mixer_source(app: AppHandle, source: MediaSource) -> Result<(), String> {
     let mut engine = MEDIA_ENGINE.lock();
-    // For now, simplicity: clear and re-add
-    // In a pro version, we'd swap pads without stopping the pipeline
-    if let Some(p) = &engine.pipeline {
+    
+    // 1. Fully tear down old pipeline
+    if let Some(p) = engine.pipeline.take() {
         let _ = p.set_state(gstreamer::State::Null);
     }
-    
-    // Re-setup (dirty but works for v1)
-    // We actually need the app handle here, so let's adjust start_mixer to be the primary entry
+    engine.compositor = None;
+    engine.is_running = false;
     engine.sources.clear();
+    
+    // 2. Build fresh pipeline
+    engine.setup_pipeline(app)?;
     engine.add_source(source)?;
-    if let Some(p) = &engine.pipeline {
-        let _ = p.set_state(gstreamer::State::Playing);
-    }
+    engine.start()?;
+    
     Ok(())
 }

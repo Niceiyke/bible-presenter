@@ -46,6 +46,7 @@ export function OutputWindow() {
   const [mainCameraStream, setMainCameraStream] = useState<MediaStream | null>(null);
   const [useNativeOutput, setUseNativeOutput] = useState(false);
   const [nativeFrameUrl, setNativeFrameUrl] = useState("");
+  const [nativeBgUrl, setNativeBgUrl] = useState("");
 
   const [windowScale, setWindowScale] = useState(1);
   const isMounted = useRef(true);
@@ -257,25 +258,54 @@ export function OutputWindow() {
   // Manage camera stream lifecycle
   useEffect(() => {
     let activeStream: MediaStream | null = null;
+    let bgLoopActive = false;
     
-    const startCamera = async (deviceId: string) => {
+    const startBrowserCamera = async (deviceId: string) => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ 
           video: { deviceId: { exact: deviceId } } 
         });
         activeStream = stream;
         setCameraStream(stream);
-        if (cameraRef.current) {
-          cameraRef.current.srcObject = stream;
-        }
       } catch (err) {
         console.error("Failed to get camera stream:", err);
       }
     };
 
+    const startNativeBg = async (id: string) => {
+      const isNdi = id.startsWith("ndi:");
+      const val = id.split(":")[1];
+      try {
+        await invoke("start_mixer");
+        await invoke("set_mixer_source", {
+          source: {
+            id: `bg-${val}`,
+            name: `Background ${val}`,
+            source_type: isNdi ? { NDI: { source_name: val } } : { Camera: { index: parseInt(val) } },
+            z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
+          }
+        });
+        bgLoopActive = true;
+        const loop = () => {
+          if (!bgLoopActive) return;
+          setNativeBgUrl(`wordlyte-stream://live?t=${Date.now()}&bg=1`);
+          requestAnimationFrame(loop);
+        };
+        loop();
+      } catch (err) {
+        console.error("Failed to start native bg mixer source:", err);
+      }
+    };
+
     if (cameraBg?.deviceId) {
-      startCamera(cameraBg.deviceId);
+      if (cameraBg.deviceId.startsWith("native:") || cameraBg.deviceId.startsWith("ndi:")) {
+        startNativeBg(cameraBg.deviceId);
+      } else {
+        startBrowserCamera(cameraBg.deviceId);
+      }
     } else {
+      bgLoopActive = false;
+      setNativeBgUrl("");
       if (cameraStream) {
         cameraStream.getTracks().forEach(track => track.stop());
         setCameraStream(null);
@@ -283,6 +313,7 @@ export function OutputWindow() {
     }
 
     return () => {
+      bgLoopActive = false;
       if (activeStream) {
         activeStream.getTracks().forEach(track => track.stop());
       }
@@ -302,9 +333,6 @@ export function OutputWindow() {
         activeStream = stream;
         setMainCameraStream(stream);
         setUseNativeOutput(false);
-        if (mainCameraRef.current) {
-          mainCameraRef.current.srcObject = stream;
-        }
       } catch (err) {
         console.error("Failed to get main camera stream:", err);
       }
@@ -313,9 +341,32 @@ export function OutputWindow() {
     const startNativeStream = async (id: string) => {
       const isNdi = id.startsWith("ndi:");
       const val = id.split(":")[1];
-      if (!isNdi) {
-        await invoke("start_camera_stream", { index: parseInt(val) });
+      
+      try {
+        await invoke("start_mixer");
+        if (isNdi) {
+          await invoke("set_mixer_source", {
+            source: {
+              id: `ndi-${val}`,
+              name: `NDI: ${val}`,
+              source_type: { NDI: { source_name: val } },
+              z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
+            }
+          });
+        } else {
+          await invoke("set_mixer_source", {
+            source: {
+              id: `native-${val}`,
+              name: `Camera ${val}`,
+              source_type: { Camera: { index: parseInt(val) } },
+              z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
+            }
+          });
+        }
+      } catch (err) {
+        console.error("Failed to start native mixer source:", err);
       }
+
       setUseNativeOutput(true);
       frameLoopActive = true;
       const loop = () => {
@@ -441,19 +492,37 @@ export function OutputWindow() {
       )}
 
       {/* Background camera element */}
-      <video
-        ref={cameraRef}
-        className="absolute inset-0 w-full h-full pointer-events-none"
-        style={{
-          zIndex: 0,
-          objectFit: cameraBg?.objectFit ?? "cover",
-          opacity: cameraBg?.opacity ?? 1,
-          visibility: cameraBg?.deviceId ? "visible" : "hidden",
-          transform: cameraBg?.mirrored ? "scaleX(-1)" : "none",
-        }}
-        autoPlay
-        playsInline
-      />
+      {nativeBgUrl ? (
+        <img
+          src={nativeBgUrl}
+          className="absolute inset-0 w-full h-full pointer-events-none"
+          style={{
+            zIndex: 0,
+            objectFit: cameraBg?.objectFit ?? "cover",
+            opacity: cameraBg?.opacity ?? 1,
+            visibility: cameraBg?.deviceId ? "visible" : "hidden",
+            transform: cameraBg?.mirrored ? "scaleX(-1)" : "none",
+          }}
+          alt="Native Background"
+        />
+      ) : (
+        <video
+          ref={(el) => {
+            if (el && cameraStream) el.srcObject = cameraStream;
+            cameraRef.current = el;
+          }}
+          className="absolute inset-0 w-full h-full pointer-events-none"
+          style={{
+            zIndex: 0,
+            objectFit: cameraBg?.objectFit ?? "cover",
+            opacity: cameraBg?.opacity ?? 1,
+            visibility: cameraBg?.deviceId ? "visible" : "hidden",
+            transform: cameraBg?.mirrored ? "scaleX(-1)" : "none",
+          }}
+          autoPlay
+          playsInline
+        />
+      )}
 
       {/* Background video element — rendered at z-0, below all content */}
       <video
@@ -536,7 +605,10 @@ export function OutputWindow() {
                   />
                 ) : (
                   <video
-                    ref={mainCameraRef}
+                    ref={(el) => {
+                      if (el && mainCameraStream) el.srcObject = mainCameraStream;
+                      mainCameraRef.current = el;
+                    }}
                     autoPlay
                     playsInline
                     className="w-full h-full"

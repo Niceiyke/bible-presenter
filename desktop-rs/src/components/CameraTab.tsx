@@ -115,6 +115,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     setUseNativeEngine(true);
     setSelectedNativeIndex(index);
     setSelectedNdi(null);
+    setSelectedCameraId(null); // Release browser camera
     await invoke("set_mixer_source", {
       source: {
         id: `native-${index}`,
@@ -129,6 +130,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     setUseNativeEngine(true);
     setSelectedNdi(name);
     setSelectedNativeIndex(null);
+    setSelectedCameraId(null); // Release browser camera
     await invoke("set_mixer_source", {
       source: {
         id: `ndi-${name}`,
