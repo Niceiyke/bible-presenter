@@ -3,11 +3,10 @@ import { emit } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Play, Pause, RotateCcw, Volume2, VolumeX, EyeOff, SkipBack, SkipForward,
+  Play, Pause, RotateCcw, Volume2, VolumeX, SkipBack, SkipForward,
 } from "lucide-react";
 import {
   CustomSlideRenderer,
-  CameraFeedRenderer,
   SceneRenderer,
   SongSlideRenderer,
 } from "./shared/Renderers";
@@ -44,8 +43,7 @@ export function PreviewCard({
 }) {
   const { appDataDir } = useAppStore();
   const isVideo = item?.type === "Media" && (item.data as MediaItem).media_type === "Video";
-  const isCamera = item?.type === "CameraFeed";
-  const showControls = isVideo || isCamera;
+  const showControls = isVideo;
 
   // Local preview video state
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -163,7 +161,7 @@ export function PreviewCard({
       )}
       <div
         className={`flex-1 flex flex-col items-center justify-center bg-black/40 rounded-2xl border border-slate-800 text-center min-h-0 relative group ${
-          item?.type === "Media" || item?.type === "CameraFeed" ? "p-0 overflow-hidden" : "p-6"
+          item?.type === "Media" || item?.type === "Scene" ? "p-0 overflow-hidden" : "p-6"
         }`}
       >
         {item ? (
@@ -186,25 +184,6 @@ export function PreviewCard({
             ) : item.type === "CustomSlide" ? (
               <div className="w-full" style={{ aspectRatio: "16/9" }}>
                 <CustomSlideRenderer slide={item.data} scale={0.25} appDataDir={appDataDir} />
-              </div>
-            ) : item.type === "CameraFeed" ? (
-              <div className="w-full h-full rounded overflow-hidden relative">
-                {item.data.lan ? (
-                  <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900/60 gap-2">
-                    <span className="text-3xl">📷</span>
-                    <p className="text-teal-400 text-[10px] font-bold uppercase text-center px-2">
-                      {item.data.device_name || item.data.label || "LAN Camera"}
-                    </p>
-                    <span className="text-[8px] text-green-400 font-bold bg-green-500/10 px-2 py-0.5 rounded">
-                      ● LAN
-                    </span>
-                  </div>
-                ) : (
-                  <CameraFeedRenderer deviceId={item.data.device_id} />
-                )}
-                <p className="text-teal-400 text-[10px] font-bold uppercase truncate max-w-full absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/60 px-2 py-0.5 rounded backdrop-blur-sm">
-                  {item.data.device_name || item.data.label || item.data.device_id.slice(0, 16)}
-                </p>
               </div>
             ) : item.type === "Scene" ? (
               <div className="w-full h-full relative border border-slate-800 rounded-lg overflow-hidden">
@@ -364,15 +343,6 @@ export function PreviewCard({
                         <VolumeX size={14} />
                       </button>
                     </>
-                  )}
-                  {isCamera && (
-                    <button
-                      onClick={() => emit("media-control", { action: "camera-mute-toggle" })}
-                      className="w-8 h-8 flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full transition-colors"
-                      title="Hide / Show Camera"
-                    >
-                      <EyeOff size={14} />
-                    </button>
                   )}
                 </div>
               )

@@ -19,14 +19,8 @@ export interface MediaSlice {
       tagsToRemove: string[],
       category: string | undefined
     ) => Promise<void>;
-  cameras: MediaDeviceInfo[];
-  setCameras: (v: MediaDeviceInfo[]) => void;
-  enabledLocalCameras: Set<string>;
-  setEnabledLocalCameras: (v: Set<string> | ((prev: Set<string>) => Set<string>)) => void;
-  mediaFilter: "image" | "video" | "camera";
-  setMediaFilter: (v: "image" | "video" | "camera") => void;
-  pauseWhisper: boolean;
-  setPauseWhisper: (v: boolean | ((prev: boolean) => boolean)) => void;
+  mediaFilter: "image" | "video";
+  setMediaFilter: (v: "image" | "video") => void;
   showLogoPicker: boolean;
   setShowLogoPicker: (v: boolean) => void;
   showGlobalBgPicker: boolean;
@@ -92,14 +86,8 @@ export const createMediaSlice: StateCreator<AppStore, [], [], MediaSlice> = (set
       console.error("Failed to bulk update media:", error);
     }
   },
-  cameras: [],
-  setCameras: (v) => set({ cameras: v }),
-  enabledLocalCameras: new Set<string>(),
-  setEnabledLocalCameras: (v) => set((s) => ({ enabledLocalCameras: typeof v === "function" ? v(s.enabledLocalCameras) : v })),
   mediaFilter: "image",
   setMediaFilter: (v) => set({ mediaFilter: v }),
-  pauseWhisper: localStorage.getItem("pref_pauseWhisper") === "true",
-  setPauseWhisper: (v) => set((s) => ({ pauseWhisper: typeof v === "function" ? v(s.pauseWhisper) : v })),
   showLogoPicker: false,
   setShowLogoPicker: (v) => set({ showLogoPicker: v }),
   showGlobalBgPicker: false,

@@ -11,8 +11,6 @@ export interface TranscriptSegment {
 export interface SessionSlice {
   startupIssues: string[];
   setStartupIssues: (v: string[]) => void;
-  remoteClientCount: number;
-  setRemoteClientCount: (v: number) => void;
   transcript: string;
   setTranscript: (v: string) => void;
   devices: [string, string][];
@@ -41,14 +39,6 @@ export interface SessionSlice {
   setOperatorRecordingActive: (v: boolean) => void;
   preacherRecordingActive: boolean;
   setPreacherRecordingActive: (v: boolean) => void;
-  remoteUrl: string;
-  setRemoteUrl: (v: string) => void;
-  lanUrls: [string, string][];
-  setLanUrls: (v: [string, string][]) => void;
-  remotePin: string;
-  setRemotePin: (v: string) => void;
-  tailscaleUrl: string | null;
-  setTailscaleUrl: (v: string | null) => void;
   /** Full transcript log for the running service session. */
   sessionTranscript: TranscriptSegment[];
   setSessionTranscript: (v: TranscriptSegment[]) => void;
@@ -71,8 +61,6 @@ export interface SessionSlice {
 export const createSessionSlice: StateCreator<AppStore, [], [], SessionSlice> = (set) => ({
   startupIssues: [],
   setStartupIssues: (v) => set({ startupIssues: v }),
-  remoteClientCount: 0,
-  setRemoteClientCount: (v) => set({ remoteClientCount: v }),
   transcript: "",
   setTranscript: (v) => set({ transcript: v }),
   devices: [],
@@ -101,14 +89,6 @@ export const createSessionSlice: StateCreator<AppStore, [], [], SessionSlice> = 
   setOperatorRecordingActive: (v) => set({ operatorRecordingActive: v }),
   preacherRecordingActive: false,
   setPreacherRecordingActive: (v) => set({ preacherRecordingActive: v }),
-  remoteUrl: "",
-  setRemoteUrl: (v) => set({ remoteUrl: v }),
-  lanUrls: [],
-  setLanUrls: (v) => set({ lanUrls: v }),
-  remotePin: "",
-  setRemotePin: (v) => set({ remotePin: v }),
-  tailscaleUrl: null,
-  setTailscaleUrl: (v) => set({ tailscaleUrl: v }),
   sessionTranscript: [],
   setSessionTranscript: (v) => set({ sessionTranscript: v }),
   appendTranscriptSegment: (seg) =>

@@ -257,8 +257,6 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
                     <p className="text-purple-400 text-[10px] font-bold uppercase truncate">
                       STUDIO: {entry.item.data.presentation_name} — Slide {entry.item.data.slide_index + 1}
                     </p>
-                  ) : entry.item.type === "CameraFeed" ? (
-                    <p className="text-teal-400 text-[10px] font-bold uppercase truncate">CAM: {entry.item.data.label || entry.item.data.device_id.slice(0, 12)}</p>
                   ) : entry.item.type === "Scene" ? (
                     <p className="text-blue-500 text-[10px] font-black uppercase truncate italic">SCENE: {entry.item.data.name}</p>
                   ) : entry.item.type === "Timer" ? (

@@ -32,7 +32,6 @@ export function DesignHub() {
     setSavedScenes,
     setPropItems,
     settings, setSettings,
-    setCameras,
     toast, setToast,
     setAppDataDir,
     setStagedItem,
@@ -73,9 +72,6 @@ export function DesignHub() {
       if (settingsRes) setSettings(settingsRes);
       if (appDirRes) setAppDataDir(appDirRes);
 
-      navigator.mediaDevices?.enumerateDevices()
-        .then((devs) => setCameras(devs.filter((d) => d.kind === "videoinput")))
-        .catch(() => {});
     };
     loadAll();
   }, []);

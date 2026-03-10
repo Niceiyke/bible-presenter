@@ -17,7 +17,6 @@ export function DisplaySection({ onUpdateSettings, onUploadMedia }: DisplaySecti
   const {
     settings,
     media,
-    cameras,
     showLogoPicker, setShowLogoPicker,
     showGlobalBgPicker, setShowGlobalBgPicker,
     appDataDir,
@@ -212,26 +211,6 @@ export function DisplaySection({ onUpdateSettings, onUploadMedia }: DisplaySecti
             )}
           </div>
         </details>
-      </div>
-
-      <div>
-        <p className="text-xs text-slate-400 font-bold uppercase mb-3">Camera Resolution (Local)</p>
-        <div className="flex flex-wrap gap-2 mb-3">
-          {(["360p", "480p", "720p", "1080p"] as const).map((r) => (
-            <button
-              key={r}
-              onClick={() => onUpdateSettings({ ...settings, camera_resolution: r })}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
-                (settings.camera_resolution ?? "720p") === r
-                  ? "bg-amber-500 border-amber-500 text-black"
-                  : "bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500"
-              }`}
-            >
-              {r}
-            </button>
-          ))}
-        </div>
-        <p className="text-[10px] text-slate-600">Lower resolution reduces CPU usage and improves smoothness.</p>
       </div>
 
       <div>
@@ -618,7 +597,7 @@ export function DisplaySection({ onUpdateSettings, onUploadMedia }: DisplaySecti
             onChange={(bg) => onUpdateSettings({ ...settings, bible_background: bg })}
             mediaImages={media.filter((m) => m.media_type === "Image")}
             onUploadMedia={onUploadMedia}
-            cameras={cameras}
+
           />
           <div className="border-t border-slate-800" />
           <BackgroundEditor
@@ -627,7 +606,7 @@ export function DisplaySection({ onUpdateSettings, onUploadMedia }: DisplaySecti
             onChange={(bg) => onUpdateSettings({ ...settings, media_background: bg })}
             mediaImages={media.filter((m) => m.media_type === "Image")}
             onUploadMedia={onUploadMedia}
-            cameras={cameras}
+
           />
         </div>
       </div>

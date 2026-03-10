@@ -27,9 +27,6 @@ export function getItemUid(item: DisplayItem | null): string {
   if (item.type === "Media") {
     return `media-${item.data.id}`;
   }
-  if (item.type === "CameraFeed") {
-    return `camera-${item.data.device_id}`;
-  }
   if (item.type === "Scene") {
     return `scene-${item.data.id}`;
   }
@@ -49,9 +46,6 @@ export function displayItemLabel(item: DisplayItem): string {
   if (item.type === "CustomSlide") {
     return `${item.data.presentation_name} – Slide ${item.data.slide_index + 1}`;
   }
-  if (item.type === "CameraFeed") {
-    return `Camera: ${item.data.label || item.data.device_id}`;
-  }
   if (item.type === "Scene") {
     return `Scene: ${item.data.name}`;
   }
@@ -68,7 +62,6 @@ export function describeDisplayItem(item: DisplayItem): string {
   if (item.type === "Verse") return `${item.data.book} ${item.data.chapter}:${item.data.verse}`;
   if (item.type === "Media") return item.data.name;
   if (item.type === "CustomSlide") return `${item.data.presentation_name} (S${item.data.slide_index + 1})`;
-  if (item.type === "CameraFeed") return item.data.device_name ?? item.data.label;
   if (item.type === "Scene") return `Scene: ${item.data.name}`;
   if (item.type === "Timer") return `Timer: ${item.data.timer_type}`;
   if (item.type === "Song") return `${item.data.title} (${item.data.section_label})`;
@@ -84,8 +77,6 @@ export function describeLayerContent(c: LayerContent): string {
     const s = c.source;
     if (s.type === "live-output") return "SOURCE: Live Output";
     if (s.type === "lower-third") return "SOURCE: Lower Third";
-    if (s.type === "camera-lan") return `SOURCE: ${s.device_name} (LAN)`;
-    if (s.type === "camera-local") return `SOURCE: ${s.label} (Local)`;
   }
   return describeDisplayItem((c as any).item);
 }
@@ -268,20 +259,6 @@ export function computePreviewBackground(settings: PresentationSettings, themeCo
     }
   }
   return { backgroundColor: color };
-}
-
-export function getCameraBackgroundDeviceId(
-  settings: PresentationSettings,
-  item: DisplayItem | null
-): string | null {
-  let bg: BackgroundSetting | undefined;
-  if (item?.type === "Verse") bg = settings.bible_background;
-  else if (item?.type === "Media") bg = settings.media_background;
-  else if (item?.type === "CustomSlide")
-    bg = settings.background;
-  const effective = (bg && bg.type !== "None") ? bg : settings.background;
-  if (effective?.type === "Camera") return effective.value;
-  return null;
 }
 
 /** Returns the VideoBackground config if the effective background for the current item is a video, otherwise null. */

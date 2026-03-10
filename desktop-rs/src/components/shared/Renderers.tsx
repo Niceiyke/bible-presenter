@@ -192,65 +192,6 @@ export function CustomSlideRenderer({
   );
 }
 
-// ─── Camera Feed Renderer ─────────────────────────────────────────────────────
-
-export function CameraFeedRenderer({ deviceId, resolution = "720p" }: { deviceId: string; resolution?: "360p" | "480p" | "720p" | "1080p" }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-
-  useEffect(() => {
-    let stream: MediaStream | null = null;
-    
-    const targetWidth = resolution === "1080p" ? 1920 : resolution === "720p" ? 1280 : resolution === "480p" ? 854 : 640;
-    const targetHeight = resolution === "1080p" ? 1080 : resolution === "720p" ? 720 : resolution === "480p" ? 480 : 360;
-    const minWidth = resolution === "1080p" ? 1280 : resolution === "720p" ? 640 : resolution === "480p" ? 640 : undefined;
-    const minHeight = resolution === "1080p" ? 720 : resolution === "720p" ? 480 : resolution === "480p" ? 360 : undefined;
-
-    const constraints: MediaStreamConstraints = {
-      video: {
-        deviceId: { exact: deviceId },
-        width: { ideal: targetWidth, min: minWidth },
-        height: { ideal: targetHeight, min: minHeight },
-        frameRate: { ideal: 30 },
-      },
-    };
-
-    console.log(`[CameraFeedRenderer] Requesting ${resolution} for ${deviceId}`, constraints.video);
-
-    navigator.mediaDevices
-      .getUserMedia(constraints)
-      .then((s) => {
-        stream = s;
-        if (videoRef.current) videoRef.current.srcObject = s;
-        
-        const track = s.getVideoTracks()[0];
-        if (track) {
-          const settings = track.getSettings();
-          console.log(`[CameraFeedRenderer] Actual resolution: ${settings.width}x${settings.height} @ ${settings.frameRate}fps`);
-        }
-      })
-      .catch((err) => {
-        console.error("CameraFeedRenderer: camera access failed, trying fallback", err);
-        const fallbackConstraints: MediaStreamConstraints = {
-          video: {
-            deviceId: { exact: deviceId },
-            width: { ideal: targetWidth },
-            height: { ideal: targetHeight },
-          }
-        };
-        navigator.mediaDevices.getUserMedia(fallbackConstraints).then(s => {
-          stream = s;
-          if (videoRef.current) videoRef.current.srcObject = s;
-        }).catch(e => console.error("CameraFeedRenderer: fallback also failed", e));
-      });
-    return () => {
-      stream?.getTracks().forEach((t) => t.stop());
-      if (videoRef.current) videoRef.current.srcObject = null;
-    };
-  }, [deviceId, resolution]);
-
-  return <video ref={videoRef} className="w-full h-full object-cover" autoPlay muted playsInline />;
-}
-
 // ─── Song Slide Renderer ─────────────────────────────────────────────────────
 
 export function SongSlideRenderer({
@@ -301,62 +242,6 @@ export function SongSlideRenderer({
   );
 }
 
-// ─── LAN Camera Layer (live WebRTC source for scene layers) ──────────────────
-
-function SceneLanCameraLayer({
-  deviceId,
-  deviceName,
-  liveContext,
-  slotIndex = 0,
-}: {
-  deviceId: string;
-  deviceName: string;
-  liveContext?: SceneLiveContext;
-  slotIndex?: number;
-}) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-
-  useEffect(() => {
-    if (!liveContext) return;
-
-    function sendWs(obj: object) {
-      const ws = liveContext!.outputWsRef.current;
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(obj));
-      }
-    }
-
-    sendWs({ cmd: "camera_connect_program", device_id: deviceId });
-
-    return () => {
-      sendWs({ cmd: "camera_disconnect_program", device_id: deviceId });
-    };
-  }, [deviceId, liveContext]);
-
-  useEffect(() => {
-    if (videoRef.current && liveContext) {
-      const stream = slotIndex === 0 ? liveContext.hubRelayStreamA : liveContext.hubRelayStreamB;
-      videoRef.current.srcObject = stream ?? null;
-    }
-  }, [liveContext?.hubRelayStreamA, liveContext?.hubRelayStreamB, slotIndex]);
-
-  if (!liveContext) {
-    return (
-      <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900/70 gap-1">
-        <span className="text-2xl">📷</span>
-        <p className="text-[8px] font-bold text-teal-400 uppercase text-center px-1 truncate max-w-full">
-          {deviceName || deviceId}
-        </p>
-        <p className="text-[7px] text-slate-500 uppercase">LAN CAMERA</p>
-      </div>
-    );
-  }
-
-  return (
-    <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" />
-  );
-}
-
 // ─── Scene Renderer ──────────────────────────────────────────────────────────
 
 export function SceneRenderer({
@@ -381,10 +266,6 @@ export function SceneRenderer({
   const bg = scene.background;
   const resolvedBg = bg?.type === "Image" ? resolvePath(bg.value, appDataDir) : null;
   
-  // Identify all LAN camera layers to assign slots A and B based on order
-  const lanCameraLayers = (scene.layers ?? [])
-    .filter(l => l.content.kind === 'source' && l.content.source.type === 'camera-lan');
-
   return (
     <div
       style={{
@@ -415,16 +296,7 @@ export function SceneRenderer({
             overflow: "hidden",
           }}
         >
-          {layer.content.kind === 'source' && layer.content.source.type === 'camera-lan' ? (
-            <SceneLanCameraLayer 
-              deviceId={layer.content.source.device_id} 
-              deviceName={layer.content.source.device_name} 
-              liveContext={liveContext} 
-              slotIndex={lanCameraLayers.indexOf(layer)}
-            />
-          ) : (
-            <LayerContentRenderer content={layer.content} scale={scale} outputMode={outputMode} liveContext={liveContext} appDataDir={appDataDir} settings={settings} />
-          )}
+          <LayerContentRenderer content={layer.content} scale={scale} outputMode={outputMode} liveContext={liveContext} appDataDir={appDataDir} settings={settings} />
           {!outputMode && activeLayerId === layer.id && (
             <div className="absolute top-1 right-1 bg-blue-500 text-white text-[8px] font-black px-1 rounded shadow-lg pointer-events-none">ACTIVE</div>
           )}
@@ -558,14 +430,6 @@ export function LayerContentRenderer({
         </div>
       );
     }
-    if (src.type === "camera-lan") {
-      return (
-        <SceneLanCameraLayer deviceId={src.device_id} deviceName={src.device_name} liveContext={liveContext} />
-      );
-    }
-    if (src.type === "camera-local") {
-      return <CameraFeedRenderer deviceId={src.device_id} resolution={settings?.camera_resolution} />;
-    }
     return null;
   }
 
@@ -629,18 +493,6 @@ export function LayerContentRenderer({
           muted={!outputMode}
         />
       );
-    case "CameraFeed":
-      if (item.data.lan) {
-        return (
-          <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900/60 gap-1">
-            <span className="text-2xl">📷</span>
-            <p className="text-[8px] font-bold text-teal-400 uppercase text-center px-1 truncate max-w-full">
-              {item.data.device_name || item.data.label || "LAN Cam"}
-            </p>
-          </div>
-        );
-      }
-      return <CameraFeedRenderer deviceId={item.data.device_id} resolution={settings?.camera_resolution} />;
     case "CustomSlide":
       return <CustomSlideRenderer slide={item.data} scale={outputMode ? scale : 0.1} appDataDir={appDataDir} />;
     case "PresentationSlide":
@@ -1063,18 +915,6 @@ export function SmallItemPreview({
       ) : (
         <video src={convertFileSrc(item.data.path)} className="w-full h-full object-cover" muted />
       );
-    case "CameraFeed":
-      if (item.data.lan) {
-        return (
-          <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900/60 gap-1">
-            <span className="text-2xl">📷</span>
-            <p className="text-[8px] font-bold text-teal-400 uppercase text-center px-1 truncate max-w-full">
-              {item.data.device_name || item.data.label || "LAN Cam"}
-            </p>
-          </div>
-        );
-      }
-      return <CameraFeedRenderer deviceId={item.data.device_id} resolution={settings?.camera_resolution} />;
     case "CustomSlide":
       return <CustomSlideRenderer slide={item.data} scale={0.1} appDataDir={appDataDir} />;
     case "Scene":

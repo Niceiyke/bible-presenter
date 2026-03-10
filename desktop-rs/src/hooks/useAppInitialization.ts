@@ -14,9 +14,7 @@ export function useAppInitialization() {
   const {
     setLabel, setMedia, setStudioList, setStudioSlides,
     setScheduleEntries, setSongs, setHymnLibrary, setLtSavedTemplates,
-    setLtTemplate, setSettings, setRemoteUrl, setRemotePin,
-    setLanUrls,
-    setTailscaleUrl, setAvailableVersions, setBibleVersion,
+    setLtTemplate, setSettings, setAvailableVersions, setBibleVersion,
     setPropItems, setSavedScenes, setServices, setLiveItem,
     setTranscript, setSuggestedItem, setSuggestedConfidence,
     setStagedItem, setOperatorMicLevel, setPreacherMicLevel,
@@ -52,8 +50,8 @@ export function useAppInitialization() {
 
       const [
         versionsRes, mediaRes, studioRes, scheduleRes, songsRes, hymnLibraryRes,
-        ltRes, settingsRes, remoteRes, propsRes,
-        scenesRes, servicesRes, proposalsRes, currentLtRes
+        ltRes, settingsRes, propsRes,
+        scenesRes, servicesRes, currentLtRes
       ] = await Promise.all([
         invoke<string[]>("get_bible_versions").catch(() => []),
         invoke<MediaItem[]>("list_media").catch(() => []),
@@ -63,11 +61,9 @@ export function useAppInitialization() {
         invoke<Song[]>("get_hymn_library").catch(() => []),
         invoke<LowerThirdTemplate[]>("load_lt_templates").catch(() => []),
         invoke<PresentationSettings>("get_settings").catch(() => null),
-        invoke<any>("get_remote_info").catch(() => null),
         invoke<PropItem[]>("get_props").catch(() => []),
         invoke<SceneData[]>("list_scenes").catch(() => []),
         invoke<ServiceMeta[]>("list_services").catch(() => []),
-        invoke<any[]>("get_remote_proposals").catch(() => []),
         invoke<any>("get_current_lower_third").catch(() => null),
       ]);
 
@@ -76,7 +72,6 @@ export function useAppInitialization() {
       setScheduleEntries(scheduleRes.items.map((e: any) => ({ id: e.id || stableId(), item: e.item ?? e })));
       setSongs(songsRes);
       setHymnLibrary(hymnLibraryRes);
-      useAppStore.getState().setRemoteProposals(proposalsRes);
 
       // Handle LT templates loading with fallback to default
       const savedTpls = ltRes.length ? ltRes : [useAppStore.getState().ltTemplate];
@@ -88,13 +83,6 @@ export function useAppInitialization() {
       if (currentLtRes) setCurrentLowerThird(currentLtRes);
 
       if (settingsRes) setSettings(settingsRes);
-
-      if (remoteRes) {
-        setRemoteUrl(remoteRes.url);
-        setLanUrls(remoteRes.lan_urls || []);
-        setRemotePin(remoteRes.pin);
-        setTailscaleUrl(remoteRes.tailscale_url);
-      }
 
       // Setting availableVersions is what unblocks useBibleCascade — do it last.
       setAvailableVersions(versionsRes);
@@ -289,9 +277,6 @@ export function useAppInitialization() {
       const { id, slides } = ev.payload;
       setStudioSlides({ ...useAppStore.getState().studioSlides, [id]: slides });
     });
-    const unlistenRemoteProposals = listen<any[]>("remote-proposals-update", (ev) => {
-      useAppStore.getState().setRemoteProposals(ev.payload);
-    });
     const unlistenLog = listen<any>("system-log", (ev) => {
       useAppStore.getState().addLog(ev.payload);
     });
@@ -318,7 +303,6 @@ export function useAppInitialization() {
       unlistenSongsSync.then(f => f());
       unlistenStudioSync.then(f => f());
       unlistenStudioSlidesSync.then(f => f());
-      unlistenRemoteProposals.then(f => f());
       unlistenLog.then(f => f());
       clearInterval(decayInterval);
     };

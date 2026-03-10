@@ -7,7 +7,6 @@ import { AlertCircle, X } from "lucide-react";
 import { useAppStore } from "./store";
 import { useAppInitialization } from "./hooks/useAppInitialization";
 import { useBibleCascade } from "./hooks/useBibleCascade";
-import { useLanCamera } from "./hooks/useLanCamera";
 import { useSessionTimer } from "./hooks/useSessionTimer";
 import { useItemActions } from "./hooks/useItemActions";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
@@ -39,7 +38,6 @@ export default function App() {
     songs, ltSongId,
     operatorMuted, setOperatorMuted,
     preacherMuted, setPreacherMuted,
-    remoteUrl, remotePin,
     media, studioSlides,
     setStudioSlides,
     toast, setToast,
@@ -48,7 +46,6 @@ export default function App() {
     deviceError,
     startupIssues, setStartupIssues,
     isLogOpen,
-    pauseWhisper,
   } = useAppStore();
 
   const [isPttActive, setIsPttActive] = useState(false);
@@ -62,13 +59,6 @@ export default function App() {
 
   // Session timer
   const { sessionSecs, fmtTime } = useSessionTimer();
-
-  // LAN Camera WebRTC hook
-  const {
-    cameraSources, enableCameraPreview, disableCameraPreview,
-    removeCameraSource, previewVideoMapRef, previewObserverMapRef, setLiveCamera,
-    lanSources, attachPreview, setProgram,
-  } = useLanCamera(remotePin, label);
 
   // Item action handlers (stage, go live, send live, etc.)
   const {
@@ -141,26 +131,6 @@ export default function App() {
     invoke("set_preacher_muted", { muted: next }).catch(console.error);
   };
 
-  // ── LAN camera liveItem sync ───────────────────────────────────────────────
-  React.useEffect(() => {
-    let activeDeviceIdA: string | null = null;
-    let activeDeviceIdB: string | null = null;
-
-    if (liveItem?.type === "CameraFeed" && liveItem.data.lan) {
-      activeDeviceIdA = liveItem.data.device_id;
-    } else if (liveItem?.type === "Scene") {
-      const lanSources = liveItem.data.layers
-        .map((l: any) => l.content)
-        .filter((c: any): c is any => c.kind === "source" && c.source.type === "camera-lan")
-        .map((c: any) => c.source);
-      if (lanSources[0]) activeDeviceIdA = lanSources[0].device_id;
-      if (lanSources[1]) activeDeviceIdB = lanSources[1].device_id;
-    }
-
-    setLiveCamera(activeDeviceIdA, 'A');
-    setLiveCamera(activeDeviceIdB, 'B');
-  }, [liveItem, setLiveCamera]);
-
   // ── Next verse sync ────────────────────────────────────────────────────────
   useEffect(() => {
     if (liveItem?.type === "Verse") {
@@ -206,11 +176,6 @@ export default function App() {
     };
     setTimeout(checkRecovery, 1500);
   }, []);
-
-  // ── Pause Whisper when cameras active ─────────────────────────────────────
-  useEffect(() => {
-    invoke("set_transcription_paused", { paused: pauseWhisper && cameraSources.size > 0 }).catch(() => {});
-  }, [pauseWhisper, cameraSources.size]);
 
   // ── Window Routing (after all hooks) ──────────────────────────────────────
   if (label === "output") return <OutputWindow />;
@@ -262,15 +227,6 @@ export default function App() {
             handleDeleteMedia={handleDeleteMedia}
             updateSettings={updateSettings}
             updateProps={updateProps}
-            cameraSources={cameraSources}
-            enableCameraPreview={enableCameraPreview}
-            disableCameraPreview={disableCameraPreview}
-            removeCameraSource={removeCameraSource}
-            previewVideoMapRef={previewVideoMapRef}
-            previewObserverMapRef={previewObserverMapRef}
-            lanSources={lanSources}
-            attachPreview={attachPreview}
-            setProgram={setProgram}
             setEditingPres={setEditingPres}
             persistSchedule={persistSchedule}
           />

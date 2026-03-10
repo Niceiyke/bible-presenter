@@ -1,20 +1,16 @@
 // Wordlyte Main Entry Point
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod camera;
-mod remote;
 mod ndi;
 
 use wordlyte_lib::{audio, engine, store};
 use store::log_msg;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use rubato::Resampler;
 use symphonia::core::codecs::DecoderOptions;
 use symphonia::core::formats::FormatOptions;
@@ -203,22 +199,6 @@ struct MonitorInfo {
 // App state
 // ---------------------------------------------------------------------------
 
-/// Metadata for a connected non-mobile WS remote client.
-#[derive(Debug, Clone)]
-pub struct OperatorMeta {
-    pub name: String,
-    pub role: String, // "operator" | "presenter" | "viewer"
-}
-
-/// An item staged by a remote operator, pending approval by the main desktop operator.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct RemoteProposal {
-    pub operator_key: String,
-    pub operator_name: String,
-    pub item: store::DisplayItem,
-    pub staged_at_ms: u64,
-}
-
 pub struct AppState {
     operator_audio: Arc<Mutex<audio::AudioEngine>>,
     preacher_audio: Arc<Mutex<audio::AudioEngine>>,
@@ -254,21 +234,10 @@ pub struct AppState {
     settings: Arc<Mutex<store::PresentationSettings>>,
     /// Active lower third overlay as a combined {data, template} JSON value (None = hidden).
     pub lower_third: Arc<Mutex<Option<serde_json::Value>>>,
-    /// Broadcast channel: every WS client subscribes to receive state updates.
-    pub broadcast_tx: tokio::sync::broadcast::Sender<String>,
-    /// Tauri AppHandle stored after setup so the remote module can emit events.
-    pub app_handle: Arc<OnceLock<tauri::AppHandle>>,
-    /// 6-digit PIN displayed in Settings tab; required for WS auth. Mutable so it can be regenerated.
-    pub remote_pin: Arc<Mutex<String>>,
     /// Audio window fed to Whisper per inference call, in samples at 16 kHz.
     /// 8000 = 0.5 s (most responsive, highest CPU); 48000 = 3 s (lowest CPU, most latency).
     transcription_window: Arc<Mutex<usize>>,
-    /// Per-client WebRTC signaling channels.
-    /// Key: client identifier ("window:main", "window:output", "mobile:{device_id}").
-    /// Value: unbounded sender for direct point-to-point message delivery.
-    pub signaling_clients: Arc<Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>>,
     /// When true, the transcription pipeline drains its buffer without calling Whisper.
-    /// Set by the operator when LAN cameras are active to free CPU for video decode.
     pub transcription_paused: Arc<AtomicBool>,
     pub operator_muted: Arc<AtomicBool>,
     pub preacher_muted: Arc<AtomicBool>,
@@ -277,12 +246,6 @@ pub struct AppState {
     pub inference_semaphore: Arc<tokio::sync::Semaphore>,
     /// Persistent props layer — graphics that survive slide changes (logos, clocks).
     pub props_layer: Arc<Mutex<Vec<store::PropItem>>>,
-    /// Currently connected LAN camera clients: device_id → device_name.
-    pub connected_cameras: Arc<tokio::sync::Mutex<HashMap<String, String>>>,
-    /// Typed camera session registry (replaces raw signaling_clients for mobile devices).
-    pub camera_sessions: camera::SessionRegistry,
-    /// Authoritative tally state machine (Off / Preview / Program per device).
-    pub camera_tally: camera::TallyRegistry,
     /// Full transcript log for the current service session.
     pub session_transcript: Arc<Mutex<Vec<TranscriptSegment>>>,
     /// Rolling last-3 final-segment context buffer used to improve semantic
@@ -292,14 +255,6 @@ pub struct AppState {
     /// None when local Whisper or REST cloud mode is active.
     pub operator_cloud_stream_handle: Arc<Mutex<Option<engine::cloud_stream::CloudStreamHandle>>>,
     pub preacher_cloud_stream_handle: Arc<Mutex<Option<engine::cloud_stream::CloudStreamHandle>>>,
-    /// IP-based auth throttling to prevent PIN brute-force.
-    pub auth_throttles: Arc<Mutex<HashMap<std::net::IpAddr, (u8, std::time::Instant)>>>,
-    /// Valid session tokens issued on WS auth_ok, checked by REST endpoints.
-    pub session_tokens: Arc<Mutex<std::collections::HashSet<String>>>,
-    /// Self-signed TLS certificate for the embedded HTTPS/WSS server.
-    pub app_cert: std::sync::Arc<camera::AppCert>,
-    /// HMAC-signed device tokens for camera clients (avoids re-entering PIN).
-    pub device_tokens: std::sync::Arc<camera::DeviceTokenManager>,
     /// NDI Streaming Manager.
     pub ndi_manager: Arc<ndi::NdiManager>,
     /// Whether the operator recording pipeline is currently active.
@@ -311,11 +266,6 @@ pub struct AppState {
     /// Session start timestamp (ms since epoch). Set by start_session and read
     /// by start_preacher_recording so relative timestamps stay consistent.
     pub session_start_ms: Arc<Mutex<u64>>,
-    /// Registry of connected non-mobile remote operators: client_key → OperatorMeta.
-    pub remote_operators: Arc<Mutex<HashMap<String, OperatorMeta>>>,
-    /// Pending staging proposals from remote operators: client_key → RemoteProposal.
-    /// Each remote operator has at most one active proposal; the main operator chooses which to send live.
-    pub remote_proposals: Arc<Mutex<HashMap<String, RemoteProposal>>>,
 }
 
 impl Clone for AppState {
@@ -341,34 +291,21 @@ impl Clone for AppState {
             staged_item: self.staged_item.clone(),
             settings: self.settings.clone(),
             lower_third: self.lower_third.clone(),
-            broadcast_tx: self.broadcast_tx.clone(),
-            app_handle: self.app_handle.clone(),
-            remote_pin: self.remote_pin.clone(),
             transcription_window: self.transcription_window.clone(),
-            signaling_clients: self.signaling_clients.clone(),
             transcription_paused: self.transcription_paused.clone(),
             operator_muted: self.operator_muted.clone(),
             preacher_muted: self.preacher_muted.clone(),
             inference_semaphore: self.inference_semaphore.clone(),
             props_layer: self.props_layer.clone(),
-            connected_cameras: self.connected_cameras.clone(),
-            camera_sessions: self.camera_sessions.clone(),
-            camera_tally: self.camera_tally.clone(),
             session_transcript: self.session_transcript.clone(),
             context_buffer: self.context_buffer.clone(),
             operator_cloud_stream_handle: self.operator_cloud_stream_handle.clone(),
             preacher_cloud_stream_handle: self.preacher_cloud_stream_handle.clone(),
-            auth_throttles: self.auth_throttles.clone(),
-            session_tokens: self.session_tokens.clone(),
-            app_cert: self.app_cert.clone(),
-            device_tokens: self.device_tokens.clone(),
             ndi_manager: self.ndi_manager.clone(),
             operator_is_active: self.operator_is_active.clone(),
             preacher_is_active: self.preacher_is_active.clone(),
             studio_is_active: self.studio_is_active.clone(),
             session_start_ms: self.session_start_ms.clone(),
-            remote_operators: self.remote_operators.clone(),
-            remote_proposals: self.remote_proposals.clone(),
         }
     }
 }
@@ -437,11 +374,7 @@ fn is_hallucination(text: &str) -> bool {
 
 impl AppState {
     pub fn log(&self, message: &str) {
-        if let Some(app) = self.app_handle.get() {
-            log_msg(app, message);
-        } else {
-            println!("{}", message);
-        }
+        println!("{}", message);
     }
 
     pub async fn get_or_init_engine(&self, app: &tauri::AppHandle) -> Result<Arc<engine::TranscriptionEngine>, String> {
@@ -669,7 +602,6 @@ async fn start_operator_recording(app: AppHandle, state: State<'_, AppState>) ->
     let inference_semaphore = state.inference_semaphore.clone();
     let session_transcript = state.session_transcript.clone();
     let op_active = state.operator_is_active.clone();
-    let bcast_tx_op = state.broadcast_tx.clone();
 
     let app_op = app.clone();
     tokio::spawn(async move {
@@ -727,7 +659,6 @@ async fn start_operator_recording(app: AppHandle, state: State<'_, AppState>) ->
                 let app_op_inner = app_op.clone();
                 let p_name = provider_name.clone();
                 let tx_log = session_transcript.clone();
-                let bcast_inner = bcast_tx_op.clone();
 
                 tokio::spawn(async move {
                     let _permit = maybe_permit;
@@ -783,7 +714,6 @@ async fn start_operator_recording(app: AppHandle, state: State<'_, AppState>) ->
                                 tx_log.lock().push(TranscriptSegment { text: text.clone(), timestamp_ms: now_ms.saturating_sub(session_start_ms), is_final: true, source: p_name.clone() });
                                 log_msg(&app_op_inner, &format!("[Operator] Voice search done ({} ms) — emitting result", t0.elapsed().as_millis()));
                                 let _ = app_op_inner.emit("operator-transcription-update", TranscriptionUpdate { text: text.clone(), detected_item: item, confidence, source: p_name, is_partial: false });
-                                let _ = bcast_inner.send(serde_json::json!({ "type": "transcription", "text": text }).to_string());
                             }
                         }
                     }
@@ -1451,28 +1381,6 @@ async fn get_staged_item(
 }
 
 #[tauri::command]
-async fn get_remote_proposals(
-    state: State<'_, AppState>,
-) -> Result<Vec<RemoteProposal>, String> {
-    Ok(state.remote_proposals.lock().values().cloned().collect())
-}
-
-#[tauri::command]
-async fn dismiss_remote_proposal(
-    state: State<'_, AppState>,
-    operator_key: String,
-) -> Result<(), String> {
-    state.remote_proposals.lock().remove(&operator_key);
-    
-    // Notify the specific client that their proposal was handled (accepted or dismissed)
-    remote::send_to(&state, &operator_key, json!({ "type": "proposal_handled" }).to_string());
-
-    // Broadcast update to all clients and Tauri windows
-    remote::broadcast_remote_proposals(&state);
-    Ok(())
-}
-
-#[tauri::command]
 async fn stage_item(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1548,10 +1456,6 @@ async fn go_live_item(
     };
     let _ = app.emit("operator-transcription-update", &update);
     let _ = app.emit("preacher-transcription-update", &update);
-    // Broadcast to WS remote clients
-    let _ = state.broadcast_tx.send(
-        serde_json::json!({ "type": "state", "live_item": item }).to_string()
-    );
     Ok(())
 }
 
@@ -1569,10 +1473,6 @@ async fn clear_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), St
     };
     let _ = app.emit("operator-transcription-update", &update);
     let _ = app.emit("preacher-transcription-update", &update);
-    // Broadcast to WS remote clients
-    let _ = state.broadcast_tx.send(
-        serde_json::json!({ "type": "state", "live_item": null }).to_string()
-    );
     // Clear stage display
     let _ = app.emit("stage-update", Option::<store::DisplayItem>::None);
     Ok(())
@@ -2392,16 +2292,6 @@ async fn delete_scene(
     state.media_schedule.delete_scene(&id).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-async fn list_connected_cameras(
-    state: State<'_, AppState>,
-) -> Result<Vec<serde_json::Value>, String> {
-    let cameras = state.connected_cameras.lock().await;
-    Ok(cameras.iter().map(|(id, name)| {
-        serde_json::json!({ "device_id": id, "device_name": name })
-    }).collect())
-}
-
 // ---------------------------------------------------------------------------
 // Songs
 // ---------------------------------------------------------------------------
@@ -2435,10 +2325,6 @@ async fn show_lower_third(
     let payload = serde_json::json!({ "data": data, "template": template });
     *state.lower_third.lock() = Some(payload.clone());
     let _ = app.emit("lower-third-update", Some(payload.clone()));
-    // Broadcast to WS remote clients
-    let _ = state.broadcast_tx.send(
-        serde_json::json!({ "type": "lt_update", "payload": payload }).to_string()
-    );
     Ok(())
 }
 
@@ -2446,10 +2332,6 @@ async fn show_lower_third(
 async fn hide_lower_third(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     *state.lower_third.lock() = None;
     let _ = app.emit("lower-third-update", Option::<serde_json::Value>::None);
-    // Broadcast to WS remote clients
-    let _ = state.broadcast_tx.send(
-        serde_json::json!({ "type": "lt_update", "payload": null }).to_string()
-    );
     Ok(())
 }
 
@@ -2531,44 +2413,7 @@ async fn show_lt_preset(
     let payload = serde_json::json!({ "data": preset.data, "template": tpl });
     *state.lower_third.lock() = Some(payload.clone());
     let _ = app.emit("lower-third-update", Some(payload.clone()));
-    let _ = state.broadcast_tx.send(
-        serde_json::json!({ "type": "lt_update", "payload": payload }).to_string()
-    );
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Remote control info
-// ---------------------------------------------------------------------------
-
-#[derive(serde::Serialize)]
-struct RemoteInfo {
-    url: String,
-    lan_urls: Vec<(String, String)>,
-    pin: String,
-    port: u16,
-    /// Some("https://100.x.x.x:port") when Tailscale is running; None otherwise.
-    tailscale_url: Option<String>,
-    /// SHA-256 fingerprint of the self-signed TLS cert, colon-hex (AA:BB:…).
-    /// Display this in the QR code or settings so users can verify the cert.
-    cert_fingerprint: String,
-}
-
-/// Try `tailscale ip -4` to get the Tailscale IPv4 address.
-/// Returns None if Tailscale is not installed or not connected.
-fn get_tailscale_ip() -> Option<String> {
-    let output = std::process::Command::new("tailscale")
-        .args(["ip", "-4"])
-        .output()
-        .ok()?;
-    if output.status.success() {
-        let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        // Tailscale uses the 100.64.0.0/10 CGNAT range
-        if !ip.is_empty() && ip.starts_with("100.") {
-            return Some(ip);
-        }
-    }
-    None
 }
 
 #[tauri::command]
@@ -2576,47 +2421,6 @@ async fn get_current_lower_third(
     state: State<'_, AppState>,
 ) -> Result<Option<serde_json::Value>, String> {
     Ok(state.lower_third.lock().clone())
-}
-
-#[tauri::command]
-async fn get_remote_info(state: State<'_, AppState>) -> Result<RemoteInfo, String> {
-    let port = state.settings.lock().remote_port;
-    let lan_ip = local_ip_address::local_ip()
-        .map(|ip| ip.to_string())
-        .unwrap_or_else(|_| "localhost".to_string());
-
-    // Collect all local IPv4 addresses (excluding loopback)
-    let mut lan_urls: Vec<(String, String)> = Vec::new();
-    if let Ok(ifas) = local_ip_address::list_afinet_netifas() {
-        for (name, ip) in ifas {
-            if let std::net::IpAddr::V4(ipv4) = ip {
-                if !ipv4.is_loopback() {
-                    lan_urls.push((name, format!("https://{}:{}", ipv4, port)));
-                }
-            }
-        }
-    }
-    lan_urls.sort_by(|a: &(String, String), b: &(String, String)| a.0.cmp(&b.0));
-
-    // Run tailscale CLI in a blocking thread so we don't stall the async runtime
-    let tailscale_url = tokio::task::spawn_blocking(get_tailscale_ip)
-        .await
-        .ok()
-        .flatten()
-        .map(|ip| format!("https://{}:{}", ip, port));
-
-    let primary_url = format!("https://{}:{}", lan_ip, port);
-    let pin = state.remote_pin.lock().clone();
-    let cert_fingerprint = state.app_cert.fingerprint.clone();
-
-    Ok(RemoteInfo {
-        url: primary_url,
-        lan_urls,
-        pin,
-        port,
-        tailscale_url,
-        cert_fingerprint,
-    })
 }
 
 #[tauri::command]
@@ -2656,21 +2460,6 @@ async fn set_preacher_muted(
     state.preacher_muted.store(muted, Ordering::Relaxed);
     state.preacher_audio.lock().is_muted.store(muted, Ordering::Relaxed);
     Ok(())
-}
-
-#[tauri::command]
-async fn regenerate_remote_pin(state: State<'_, AppState>) -> Result<String, String> {
-    let new_pin = format!("{:06}", rand::random::<u32>() % 1000000);
-    *state.remote_pin.lock() = new_pin.clone();
-    // Persist so the new PIN survives the next restart
-    if let Some(handle) = state.app_handle.get() {
-        let dir = handle.path().app_local_data_dir()
-            .or_else(|_| handle.path().app_data_dir())
-            .map_err(|e| e.to_string())?;
-        std::fs::write(dir.join("remote_pin.txt"), &new_pin)
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(new_pin)
 }
 
 // ---------------------------------------------------------------------------
@@ -3023,13 +2812,6 @@ async fn get_startup_status(
     })
 }
 
-/// Returns the count of currently connected remote WebSocket clients.
-#[tauri::command]
-async fn get_remote_client_count(state: State<'_, AppState>) -> Result<u32, String> {
-    let count = state.signaling_clients.lock().len() as u32;
-    Ok(count)
-}
-
 /// Returns a list of saved transcript filenames (most recent first).
 #[tauri::command]
 async fn list_transcripts(state: State<'_, AppState>) -> Result<Vec<String>, String> {
@@ -3276,42 +3058,6 @@ fn main() {
                 "AI models will be loaded on the first START LIVE click (lazy load).",
             );
 
-            let (broadcast_tx, _) = tokio::sync::broadcast::channel::<String>(128);
-
-            // Load persisted PIN or generate a new one and save it.
-            let pin_file = app_data_dir.join("remote_pin.txt");
-            let remote_pin = std::fs::read_to_string(&pin_file)
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| s.len() == 6 && s.chars().all(|c| c.is_ascii_digit()))
-                .unwrap_or_else(|| {
-                    let pin = format!("{:06}", rand::random::<u32>() % 1000000);
-                    let _ = atomic_write(&pin_file, pin.clone());
-                    pin
-                });
-            log_msg(app, &format!("Remote PIN: {}", remote_pin));
-
-            // Generate or load the self-signed TLS cert for the embedded HTTPS server.
-            let cert_dir = app_data_dir.join("tls");
-            let app_cert = camera::AppCert::load_or_generate(&cert_dir)
-                .unwrap_or_else(|e| {
-                    log_msg(app, &format!("[tls] Cert init failed: {e} — falling back to plain HTTP"));
-                    // Create a dummy cert so the field is always populated;
-                    // remote::start will fall back to plain HTTP if cert is invalid.
-                    panic!("TLS cert generation failed: {e}");
-                });
-            log_msg(app, &format!("[tls] Certificate fingerprint: {}", app_cert.fingerprint));
-
-            // Device token secret = SHA-256 of "wordlyte-device-token:" + PIN
-            // This ties tokens to the current PIN, so rotating the PIN invalidates all tokens.
-            let token_secret = {
-                use sha2::{Digest, Sha256};
-                Sha256::digest(
-                    format!("wordlyte-device-token:{}", remote_pin).as_bytes()
-                ).to_vec()
-            };
-            let device_tokens = std::sync::Arc::new(camera::DeviceTokenManager::new(token_secret));
-
             let state = AppState {
                 operator_audio,
                 preacher_audio,
@@ -3333,60 +3079,27 @@ fn main() {
                 staged_item: Arc::new(Mutex::new(None)),
                 settings: Arc::new(Mutex::new(initial_settings.clone())),
                 lower_third: Arc::new(Mutex::new(None)),
-                broadcast_tx,
-                app_handle: Arc::new(OnceLock::new()),
-                remote_pin: Arc::new(Mutex::new(remote_pin)),
                 transcription_window: Arc::new(Mutex::new(16000)), // 1 s default
-                signaling_clients: Arc::new(Mutex::new(HashMap::new())),
                 transcription_paused: Arc::new(AtomicBool::new(false)),
                 operator_muted: Arc::new(AtomicBool::new(false)),
                 preacher_muted: Arc::new(AtomicBool::new(false)),
                 inference_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
                 props_layer: Arc::new(Mutex::new(Vec::new())),
-                connected_cameras: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-                camera_sessions: camera::SessionRegistry::new(),
-                camera_tally: camera::TallyRegistry::new(),
                 session_transcript: Arc::new(Mutex::new(Vec::new())),
                 context_buffer: Arc::new(Mutex::new(Vec::new())),
                 operator_cloud_stream_handle: Arc::new(Mutex::new(None)),
                 preacher_cloud_stream_handle: Arc::new(Mutex::new(None)),
-                auth_throttles: Arc::new(Mutex::new(HashMap::new())),
-                session_tokens: Arc::new(Mutex::new(std::collections::HashSet::new())),
-                app_cert,
-                device_tokens,
                 ndi_manager: Arc::new(ndi::NdiManager::new()),
                 operator_is_active: Arc::new(AtomicBool::new(false)),
                 preacher_is_active: Arc::new(AtomicBool::new(false)),
                 studio_is_active: Arc::new(AtomicBool::new(false)),
                 session_start_ms: Arc::new(Mutex::new(0)),
-                remote_operators: Arc::new(Mutex::new(HashMap::new())),
-                remote_proposals: Arc::new(Mutex::new(HashMap::new())),
             };
 
             // Sync NDI state from persisted settings
             {
                 let mut ndi_config = state.ndi_manager.config.lock();
                 ndi_config.enabled = initial_settings.ndi_enabled;
-            }
-
-            // Store app_handle so remote module can emit events to Tauri windows
-            state.app_handle.set(app.handle().clone()).ok();
-
-            // Start the LAN remote server in the background
-            // Port is configurable via BIBLE_PRESENTER_REMOTE_PORT env var
-            let remote_port = initial_settings.remote_port;
-            let remote_state = Arc::new(state.clone());
-            tauri::async_runtime::spawn(async move {
-                remote::start(remote_state, remote_port).await;
-            });
-
-            // Spawn camera session heartbeat watchdog via Tauri's runtime
-            // (avoids tokio::spawn panic if setup hook runs outside a Tokio context)
-            {
-                let sessions = state.camera_sessions.clone();
-                let tally    = state.camera_tally.clone();
-                let bcast    = state.broadcast_tx.clone();
-                tauri::async_runtime::spawn(camera::heartbeat_watchdog(sessions, tally, bcast));
             }
 
             app.manage(state);
@@ -3480,7 +3193,6 @@ fn main() {
             list_scenes,
             save_scene,
             delete_scene,
-            list_connected_cameras,
             list_songs,
             save_song,
             delete_song,
@@ -3493,8 +3205,6 @@ fn main() {
             save_lt_preset,
             delete_lt_preset,
             show_lt_preset,
-            get_remote_info,
-            regenerate_remote_pin,
             set_transcription_window,
             set_transcription_paused,
             set_operator_muted,
@@ -3543,19 +3253,10 @@ fn main() {
             export_transcript,
             set_confidence_threshold,
             get_startup_status,
-            get_remote_client_count,
-            get_remote_proposals,
-            dismiss_remote_proposal,
             list_transcripts,
             save_recovery,
             load_recovery,
             clear_recovery,
-            camera::commands::camera_list_devices,
-            camera::commands::camera_get_status,
-            camera::commands::camera_set_program,
-            camera::commands::camera_set_preview,
-            camera::commands::camera_clear_program,
-            camera::commands::camera_kick_device,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

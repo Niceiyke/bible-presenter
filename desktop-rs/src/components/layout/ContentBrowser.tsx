@@ -13,7 +13,6 @@ import { ScheduleTab } from "../ScheduleTab";
 import { SettingsTab } from "../SettingsTab";
 import { PropsTab } from "../PropsTab";
 import type { DisplayItem, PresentationSettings, PropItem, CustomPresentation } from "../../types";
-import type { CameraSource as NewCameraSource } from "../../features/camera/types";
 
 interface ContentBrowserProps {
   stageItem: (item: DisplayItem) => Promise<void>;
@@ -23,15 +22,6 @@ interface ContentBrowserProps {
   handleDeleteMedia: (id: string) => Promise<void>;
   updateSettings: (s: PresentationSettings) => Promise<void>;
   updateProps: (items: PropItem[]) => Promise<void>;
-  cameraSources: Map<string, any>;
-  enableCameraPreview: (deviceId: string) => void;
-  disableCameraPreview: (deviceId: string) => void;
-  removeCameraSource: (deviceId: string) => void;
-  previewVideoMapRef: React.MutableRefObject<Map<string, HTMLVideoElement>>;
-  previewObserverMapRef: React.MutableRefObject<Map<string, IntersectionObserver>>;
-  lanSources: Map<string, NewCameraSource>;
-  attachPreview: (deviceId: string, el: HTMLVideoElement | null) => void;
-  setProgram: (deviceId: string | null, slot?: "A" | "B") => void;
   setEditingPres: (pres: CustomPresentation | null) => void;
   persistSchedule: () => Promise<void>;
 }
@@ -44,21 +34,11 @@ export function ContentBrowser({
   handleDeleteMedia,
   updateSettings,
   updateProps,
-  cameraSources,
-  enableCameraPreview,
-  disableCameraPreview,
-  removeCameraSource,
-  previewVideoMapRef,
-  previewObserverMapRef,
-  lanSources,
-  attachPreview,
-  setProgram,
   setEditingPres,
   persistSchedule,
 }: ContentBrowserProps) {
   const {
     activeTab,
-    remoteUrl, remotePin,
     media, setMedia,
     studioList, setStudioList,
     studioSlides, setStudioSlides,
@@ -79,10 +59,6 @@ export function ContentBrowser({
             updateSettings({ ...useAppStore.getState().settings, background_logo_path: path, background_logo_fit: fit, show_background_logo: true });
             setToast("Background logo set & activated");
           }}
-          remoteUrl={remoteUrl} remotePin={remotePin}
-          cameraSources={cameraSources} onEnableCameraPreview={enableCameraPreview} onDisableCameraPreview={disableCameraPreview}
-          onRemoveCameraSource={removeCameraSource} previewVideoMapRef={previewVideoMapRef} previewObserverMapRef={previewObserverMapRef}
-          lanSources={lanSources} attachPreview={attachPreview} setProgram={setProgram}
         />
       )}
       {activeTab === "studio" && (

@@ -1,10 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { useAppStore } from "../store";
 import { stableId, ltBuildLyricsPayload, describeLayerContent, relativizePath } from "../utils";
 import { SceneRenderer } from "./shared/Renderers";
-import { Eye, EyeOff, Layers, RefreshCw, Zap, Play, Plus, Trash2 } from "lucide-react";
+import { Eye, EyeOff, Layers, Zap, Play, Plus, Trash2 } from "lucide-react";
 import type { DisplayItem, LayerContent, LowerThirdData, SceneData, SceneLayer } from "../types";
 
 interface SceneComposerTabProps {
@@ -24,43 +24,11 @@ export function SceneComposerTab({ onSetToast, onStage, onLive, onAddToSchedule 
     ltSavedTemplates,
     songs, ltSongId,
     media: mediaItems,
-    cameras: storeCameras,
     appDataDir,
     settings,
   } = useAppStore();
 
-  const [availableLanCams, setAvailableLanCams] = useState<{ device_id: string; device_name: string }[]>([]);
   const [staticColor, setStaticColor] = useState("#1a1a2e");
-
-  // Use the cameras already enumerated by the main app (with labels).
-  // Fall back to a fresh enumerate if the store list is empty.
-  const [fallbackCams, setFallbackCams] = useState<MediaDeviceInfo[]>([]);
-  const didFallback = useRef(false);
-
-  useEffect(() => {
-    if (storeCameras.length === 0 && !didFallback.current) {
-      didFallback.current = true;
-      navigator.mediaDevices.enumerateDevices()
-        .then((devs) => setFallbackCams(devs.filter((d) => d.kind === "videoinput")))
-        .catch(() => {});
-    }
-  }, [storeCameras.length]);
-
-  const availableLocalCams = (storeCameras.length > 0 ? storeCameras : fallbackCams)
-    .map((d) => ({ deviceId: d.deviceId, label: d.label || d.deviceId }));
-
-  const fetchLanCams = useCallback(async () => {
-    try {
-      const cams = await invoke<{ device_id: string; device_name: string }[]>("list_connected_cameras");
-      setAvailableLanCams(cams);
-    } catch {
-      setAvailableLanCams([]);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchLanCams();
-  }, [fetchLanCams]);
 
   const ltFlatLines = useMemo(() => {
     const song = songs.find(s => s.id === ltSongId);
@@ -217,42 +185,6 @@ export function SceneComposerTab({ onSetToast, onStage, onLive, onAddToSchedule 
                 </select>
               </div>
             </div>
-            {/* LAN cameras */}
-            <div className="flex items-center gap-1">
-              <select
-                className="flex-1 bg-slate-900 text-slate-300 text-[8px] px-1.5 py-1 rounded border border-slate-700"
-                defaultValue=""
-                onChange={(e) => {
-                  const cam = availableLanCams.find(c => c.device_id === e.target.value);
-                  if (cam) addLayer({ kind: "source", source: { type: "camera-lan", device_id: cam.device_id, device_name: cam.device_name } }, cam.device_name);
-                  e.target.value = "";
-                }}
-              >
-                <option value="" disabled>+ LAN Camera…</option>
-                {availableLanCams.map(c => (
-                  <option key={c.device_id} value={c.device_id}>{c.device_name}</option>
-                ))}
-              </select>
-              <button onClick={fetchLanCams} title="Refresh" className="p-1 text-slate-500 hover:text-teal-400"><RefreshCw size={10} /></button>
-            </div>
-            {/* Local cameras */}
-            {availableLocalCams.length > 0 && (
-              <select
-                className="w-full bg-slate-900 text-slate-300 text-[8px] px-1.5 py-1 rounded border border-slate-700"
-                defaultValue=""
-                onChange={(e) => {
-                  const cam = availableLocalCams.find(c => c.deviceId === e.target.value);
-                  if (cam) addLayer({ kind: "source", source: { type: "camera-local", device_id: cam.deviceId, label: cam.label } }, cam.label);
-                  e.target.value = "";
-                }}
-              >
-                <option value="" disabled>+ Local Camera…</option>
-                {availableLocalCams.map(c => (
-                  <option key={c.deviceId} value={c.deviceId}>{c.label}</option>
-                ))}
-              </select>
-            )}
-
             {/* Static layers */}
             <p className="text-[8px] font-black text-pink-500 uppercase tracking-widest border-t border-slate-800 pt-2">Add Static Layer</p>
             <div className="flex items-center gap-1">

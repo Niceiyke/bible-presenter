@@ -4,7 +4,6 @@ import { CalendarDays, ChevronRight, Clock, EyeOff, Layers, X, Zap } from "lucid
 import { useAppStore } from "../../store";
 import { displayItemLabel, getItemUid } from "../../utils";
 import { PreviewCard } from "../PreviewCard";
-import { RemoteProposals } from "../RemoteProposals";
 import type { DisplayItem, PresentationSettings } from "../../types";
 
 interface CockpitProps {
@@ -137,7 +136,6 @@ export function Cockpit({
             </h2>
             <button onClick={persistSchedule} className="text-[8px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded transition-colors">SAVE</button>
           </div>
-          <RemoteProposals />
           <div className="flex-1 overflow-y-auto py-1 px-2 space-y-0.5 custom-scrollbar">
             {scheduleEntries.map((e, i) => (
               <div key={e.id} onClick={() => stageItem(e.item)}

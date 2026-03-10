@@ -96,24 +96,6 @@ export interface CustomSlideDisplayData {
   body?: { text: string; font_size: number; font_family: string; color: string; bold: boolean; italic: boolean; align: string };
 }
 
-export interface CameraFeedData {
-  device_id: string;
-  label: string;
-  lan?: boolean;
-  device_name?: string;
-}
-
-export interface CameraSource {
-  device_id: string;
-  device_name: string;
-  previewStream: MediaStream | null;
-  previewPc: RTCPeerConnection | null;
-  status: 'connecting' | 'connected' | 'disconnected';
-  connectedAt: number;
-  enabled: boolean;
-  battery?: number; // 0-100
-  lastTelemetryAt?: number;
-}
 
 export interface LtPreset {
   id: string;
@@ -177,14 +159,11 @@ export type BackgroundSetting =
   | { type: "None"; value?: string }
   | { type: "Color"; value: string }
   | { type: "Image"; value: string }
-  | { type: "Camera"; value: string }
   | { type: "Video"; value: VideoBackground };
 
 export type LayerSource =
   | { type: "live-output" }
-  | { type: "lower-third" }
-  | { type: "camera-lan"; device_id: string; device_name: string }
-  | { type: "camera-local"; device_id: string; label: string };
+  | { type: "lower-third" };
 
 export type LayerContent =
   | { kind: "empty" }
@@ -224,7 +203,6 @@ export type DisplayItem =
   | { type: "Verse"; data: Verse }
   | { type: "Media"; data: MediaItem }
   | { type: "CustomSlide"; data: CustomSlideDisplayData }
-  | { type: "CameraFeed"; data: CameraFeedData }
   | { type: "Scene"; data: SceneData }
   | { type: "Timer"; data: TimerData }
   | { type: "Song"; data: SongSlideData };
@@ -234,12 +212,6 @@ export interface ScheduleEntry {
   item: DisplayItem;
 }
 
-export interface RemoteProposal {
-  operator_key: string;
-  operator_name: string;
-  item: DisplayItem;
-  staged_at_ms: number;
-}
 
 export interface Schedule {
   id: string;
@@ -336,10 +308,8 @@ export interface PresentationSettings {
   version_font_family?: string;
   version_font_size?: number;
   version_color?: string;
-  camera_resolution?: "360p" | "480p" | "720p" | "1080p";
   auto_split_verses: boolean;
   verse_split_threshold: number;
-  remote_port: number;
   ndi_enabled: boolean;
   preferred_monitor?: string;
   custom_theme_colors?: Partial<ThemeColors>;
@@ -401,10 +371,8 @@ export const DEFAULT_SETTINGS: PresentationSettings = {
   chapter_verse_font_family: undefined,
   chapter_verse_color: undefined,
   disabled_bible_versions: [],
-  camera_resolution: "720p",
   auto_split_verses: true,
   verse_split_threshold: 200,
-  remote_port: 7420,
   ndi_enabled: false,
 };
 
@@ -447,9 +415,3 @@ export const THEMES: Record<string, { label: string; colors: ThemeColors }> = {
   },
 };
 
-export interface RemoteProposal {
-  operator_key: string;
-  operator_name: string;
-  item: DisplayItem;
-  staged_at_ms: number;
-}

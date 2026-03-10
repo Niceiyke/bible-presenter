@@ -1,32 +1,23 @@
-import React, { useEffect, useState, useRef, useCallback, useLayoutEffect, useMemo } from "react";
-import { useOutputCamera } from "../features/camera";
-import { useSignaling } from "../features/camera/hooks/useSignaling";
-import type { WsInbound } from "../features/camera/types";
+import React, { useEffect, useState, useRef, useCallback, useLayoutEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import type { DisplayItem, PropItem, PresentationSettings, LowerThirdData, LowerThirdTemplate } from "../types";
 import { THEMES } from "../types";
 import {
   getEffectiveBackground,
-  getCameraBackgroundDeviceId,
   getVideoBackground,
   getTransitionVariants,
-  displayItemLabel,
   getItemUid
 } from "../utils";
 import {
   CustomSlideRenderer,
   SceneRenderer,
-  CameraFeedRenderer,
   TimerRenderer,
   SongSlideRenderer,
   LowerThirdOverlay,
   PropsRenderer,
-  type SceneLiveContext
 } from "../components/shared/Renderers";
 import { AnimatePresence, motion } from "framer-motion";
-
-// WebRTC is managed by useOutputCamera + useSignaling hooks below.
 
 export function OutputWindow() {
   const [liveItem, setLiveItem] = useState<DisplayItem | null>(null);
@@ -42,30 +33,12 @@ export function OutputWindow() {
     disabled_bible_versions: [],
     auto_split_verses: true,
     verse_split_threshold: 200,
-    remote_port: 8080,
     ndi_enabled: true,
   });
   const [appDataDir, setAppDataDir] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [cameraMuted, setCameraMuted] = useState(false);
 
   const bgVideoRef = useRef<HTMLVideoElement>(null);
-  const sceneCameraHandlersRef = useRef<Map<string, (msg: any) => void>>(new Map());
-  const programDeviceId = useRef<string | null>(null);
-
-  // ── Camera hooks (replaces inline WS + WebRTC code) ──────────────────────
-  const outputSend = useCallback((payload: object) => {
-    outputWsRef.current?.send(JSON.stringify(payload));
-  }, []);
-
-  const { handleOffer: handleProgramOffer, addIce: addProgramIce, closeAll: closeAllProgramPcs, programVideoRef } =
-    useOutputCamera(outputSend);
-
-  // Mutable ref so the WS onmessage closure can call sendOutputWs
-  const outputWsRef = useRef<WebSocket | null>(null);
-
-  const [hubRelayStreamA] = useState<MediaStream | null>(null);
-  const [hubRelayStreamB] = useState<MediaStream | null>(null);
   const [windowScale, setWindowScale] = useState(1);
   const isMounted = useRef(true);
 
@@ -143,51 +116,11 @@ export function OutputWindow() {
     windowScale,
   ]);
 
-  // ── Output signaling via useSignaling hook ────────────────────────────────
-  const [outputPin, setOutputPin] = useState<string | null>(null);
-
-  const handleOutputMessage = useCallback(async (msg: WsInbound) => {
-    const m = msg as any;
-    if (m.type === "auth_ok") {
-      outputWsRef.current?.send(JSON.stringify({ cmd: "output_ready", target: "operator" }));
-      return;
-    }
-    if (m.cmd === "camera_offer" && (m.target === "output" || m.target === "window:output")) {
-      const sceneHandler = sceneCameraHandlersRef.current.get(m.device_id);
-      if (sceneHandler) { sceneHandler(m); return; }
-      await handleProgramOffer(m);
-      return;
-    }
-    if (m.cmd === "camera_ice" && (m.target === "output" || m.target === "window:output")) {
-      const sceneHandler = sceneCameraHandlersRef.current.get(m.device_id);
-      if (sceneHandler) { sceneHandler(m); return; }
-      await addProgramIce(m.device_id, m.candidate);
-      return;
-    }
-  }, [handleProgramOffer, addProgramIce]);
-
-  const { wsRef: signalingWsRef } = useSignaling({
-    pin: outputPin,
-    clientType: "window:output",
-    onMessage: handleOutputMessage,
-  });
-
-  // Keep outputWsRef in sync with signaling hook's wsRef (for sendOutputWs closure)
-  useEffect(() => {
-    outputWsRef.current = signalingWsRef.current;
-  });
-
-  const sendOutputWs = useCallback((obj: object) => {
-    const ws = signalingWsRef.current;
-    if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
-  }, [signalingWsRef]);
-
   useEffect(() => {
     return () => {
       isMounted.current = false;
-      closeAllProgramPcs();
     };
-  }, [closeAllProgramPcs]);
+  }, []);
 
   useEffect(() => {
     // Attach ALL listeners first, before any async work, to avoid missing events
@@ -195,7 +128,6 @@ export function OutputWindow() {
       const { detected_item, source } = event.payload;
       if (source === "manual") {
         setLiveItem(detected_item ?? null);
-        if (detected_item) setCameraMuted(false);
       }
     });
 
@@ -237,8 +169,6 @@ export function OutputWindow() {
         if (videoRef.current && volume !== undefined) {
           videoRef.current.volume = volume;
         }
-      } else if (action === "camera-mute-toggle") {
-        setCameraMuted((m) => !m);
       }
     });
 
@@ -251,7 +181,6 @@ export function OutputWindow() {
       invoke("get_current_item").then((v: any) => { if (v) setLiveItem(v); }).catch(() => {}),
       invoke("get_current_lower_third").then((lt: any) => { if (lt) setLowerThird(lt); }).catch(() => {}),
       invoke("get_settings").then((s: any) => { if (s) setSettings(s); }).catch(() => {}),
-      invoke("get_remote_info").then((info: any) => { if (info?.pin) setOutputPin(info.pin); }).catch(() => {}),
       invoke<string>("get_app_data_dir").then(setAppDataDir).catch(() => {}),
       invoke<PropItem[]>("get_props").then(setPropItems).catch(() => {}),
     ]);
@@ -314,25 +243,6 @@ export function OutputWindow() {
     }
   }, []);
 
-  useEffect(() => {
-    const isLanCamera = liveItem?.type === "CameraFeed" && liveItem.data.lan;
-
-    if (isLanCamera) {
-      const newDeviceId = liveItem!.data.device_id;
-      if (programDeviceId.current === newDeviceId) return;
-
-      if (programDeviceId.current) {
-        sendOutputWs({ cmd: "camera_disconnect_program", device_id: programDeviceId.current });
-      }
-
-      programDeviceId.current = newDeviceId;
-      sendOutputWs({ cmd: "camera_connect_program", device_id: newDeviceId });
-    } else if (programDeviceId.current) {
-      sendOutputWs({ cmd: "camera_disconnect_program", device_id: programDeviceId.current });
-      programDeviceId.current = null;
-    }
-  }, [liveItem]);
-
   const videoBg = getVideoBackground(settings, liveItem);
 
   // Sync playback rate when it changes without unmounting the video element
@@ -357,7 +267,6 @@ export function OutputWindow() {
   const { colors } = THEMES[settings.theme] ?? THEMES.dark;
   const isTop = settings.reference_position === "top";
   const bgStyle = getEffectiveBackground(settings, liveItem, colors);
-  const cameraBgId = getCameraBackgroundDeviceId(settings, liveItem);
 
   const refColor = settings.reference_color && settings.reference_color !== ""
     ? settings.reference_color
@@ -396,13 +305,11 @@ export function OutputWindow() {
     </p>
   ) : null;
 
-  const isLanCameraLive = liveItem?.type === "CameraFeed" && !!liveItem.data.lan;
-
   return (
     <div
       className="fixed inset-0 overflow-hidden cursor-none pointer-events-none select-none"
       style={
-        cameraBgId || isLanCameraLive || videoBg
+        videoBg
           ? { color: colors.verseText }
           : { ...bgStyle, color: colors.verseText }
       }
@@ -447,23 +354,6 @@ export function OutputWindow() {
         playsInline
       />
 
-      <video
-        ref={programVideoRef}
-        className="absolute inset-0 w-full h-full object-cover"
-        style={{ zIndex: 0, visibility: (isLanCameraLive && !cameraMuted) ? "visible" : "hidden" }}
-        autoPlay
-        playsInline
-      />
-
-      {isLanCameraLive && (
-        <div className="absolute inset-0 bg-black/25 pointer-events-none" style={{ zIndex: 9 }} />
-      )}
-
-      {cameraBgId && (
-        <div className="absolute inset-0 z-0">
-          <CameraFeedRenderer deviceId={cameraBgId} resolution={settings.camera_resolution} />
-        </div>
-      )}
       {settings.logo_path && (
         <img
           src={convertFileSrc(settings.logo_path)}
@@ -518,14 +408,6 @@ export function OutputWindow() {
               <div className="absolute inset-0">
                 <CustomSlideRenderer slide={liveItem.data} scale={windowScale} appDataDir={appDataDir} />
               </div>
-            ) : liveItem.type === "CameraFeed" ? (
-              liveItem.data.lan ? (
-                <div className="absolute inset-0" />
-              ) : (
-                <div className="absolute inset-0" style={{ visibility: cameraMuted ? "hidden" : "visible" }}>
-                  <CameraFeedRenderer deviceId={liveItem.data.device_id} resolution={settings.camera_resolution} />
-                </div>
-              )
             ) : liveItem.type === "Media" ? (
               <div className="absolute inset-0">
                 {liveItem.data.media_type === "Image" ? (
@@ -563,10 +445,8 @@ export function OutputWindow() {
                   liveContext={{
                     liveItem,
                     lowerThird,
-                    outputWsRef: outputWsRef as React.RefObject<WebSocket | null>,
-                    sceneCameraHandlers: sceneCameraHandlersRef,
-                    hubRelayStreamA,
-                    hubRelayStreamB,
+                    outputWsRef: { current: null } as React.RefObject<WebSocket | null>,
+                    sceneCameraHandlers: { current: new Map() },
                   } as any}
                 />
               </div>

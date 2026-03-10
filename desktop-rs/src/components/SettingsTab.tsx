@@ -3,7 +3,6 @@ import type { PresentationSettings } from "../types";
 import { AudioSection } from "./settings/AudioSection";
 import { BibleAssetsSection } from "./settings/BibleAssetsSection";
 import { DisplaySection } from "./settings/DisplaySection";
-import { RemoteSection } from "./settings/RemoteSection";
 import { TranscriptionSection } from "./settings/TranscriptionSection";
 
 interface SettingsTabProps {
@@ -20,7 +19,6 @@ export function SettingsTab({
       <AudioSection onUpdateSettings={onUpdateSettings} />
       <BibleAssetsSection />
       <DisplaySection onUpdateSettings={onUpdateSettings} onUploadMedia={onUploadMedia} />
-      <RemoteSection onUpdateSettings={onUpdateSettings} />
       <TranscriptionSection />
     </div>
   );

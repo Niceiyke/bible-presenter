@@ -20,14 +20,12 @@ export function BackgroundEditor({
   onChange,
   mediaImages = [],
   onUploadMedia = async () => {},
-  cameras = [],
 }: {
   label: string;
   value: BackgroundSetting | undefined;
   onChange: (bg: BackgroundSetting) => void;
   mediaImages?: MediaItem[];
   onUploadMedia?: () => Promise<void>;
-  cameras?: MediaDeviceInfo[];
 }) {
   const { appDataDir } = useAppStore();
   const [showPicker, setShowPicker] = useState(false);
@@ -54,15 +52,14 @@ export function BackgroundEditor({
       <div>
         {label && <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1.5">{label}</p>}
         <div className="flex gap-1.5 mb-1.5">
-          {(["None", "Color", "Image", "Video", "Camera"] as const).map((mode) => (
+          {(["None", "Color", "Image", "Video"] as const).map((mode) => (
             <button
               key={mode}
               onClick={() => {
                 if (mode === "None") onChange({ type: "None" });
                 else if (mode === "Color") onChange({ type: "Color", value: current.type === "Color" ? (current as any).value : "#000000" });
                 else if (mode === "Image") onChange({ type: "Image", value: current.type === "Image" ? (current as any).value : "" });
-                else if (mode === "Video") onChange({ type: "Video", value: current.type === "Video" ? (current as any).value : { ...DEFAULT_VIDEO_BG } });
-                else onChange({ type: "Camera", value: cameras[0]?.deviceId ?? "" });
+                else onChange({ type: "Video", value: current.type === "Video" ? (current as any).value : { ...DEFAULT_VIDEO_BG } });
               }}
               className={`flex-1 py-1 rounded text-[9px] font-bold border transition-all ${
                 current.type === mode ? "border-amber-500 bg-amber-500/10 text-amber-400" : "border-slate-700 bg-slate-800/50 text-slate-500 hover:border-slate-600"
@@ -106,24 +103,6 @@ export function BackgroundEditor({
           <p className="text-[8px] text-slate-600 truncate mt-1">
             {(current as { type: "Image"; value: string }).value.split(/[/\\]/).pop()}
           </p>
-        )}
-
-        {current.type === "Camera" && (
-          cameras.length === 0 ? (
-            <p className="text-[9px] text-slate-600 italic mt-1">No cameras detected. Visit the Cameras tab to grant access.</p>
-          ) : (
-            <select
-              value={(current as { type: "Camera"; value: string }).value}
-              onChange={(e) => onChange({ type: "Camera", value: e.target.value })}
-              className="w-full mt-1 bg-slate-800 text-white border border-slate-700 rounded px-2 py-1 text-[9px] focus:outline-none focus:ring-1 focus:ring-amber-500"
-            >
-              {cameras.map((cam) => (
-                <option key={cam.deviceId} value={cam.deviceId}>
-                  {cam.label || `Camera ${cam.deviceId.slice(0, 8)}`}
-                </option>
-              ))}
-            </select>
-          )
         )}
 
         {vbg !== null && (

@@ -1,6 +1,6 @@
 import { StateCreator } from "zustand";
 import { AppStore } from "../index";
-import { DisplayItem, Verse, RemoteProposal } from "../../types";
+import { DisplayItem, Verse } from "../../types";
 
 export interface RecentItems {
   bible: DisplayItem[];
@@ -27,8 +27,6 @@ export interface LiveSlice {
   setHistoryOpen: (v: boolean) => void;
   isBlackout: boolean;
   setIsBlackout: (v: boolean) => void;
-  remoteProposals: RemoteProposal[];
-  setRemoteProposals: (v: RemoteProposal[]) => void;
 }
 
 export const createLiveSlice: StateCreator<AppStore, [], [], LiveSlice> = (set) => ({
@@ -50,6 +48,4 @@ export const createLiveSlice: StateCreator<AppStore, [], [], LiveSlice> = (set) 
   setHistoryOpen: (v) => set({ historyOpen: v }),
   isBlackout: false,
   setIsBlackout: (v) => set({ isBlackout: v }),
-  remoteProposals: [],
-  setRemoteProposals: (v) => set({ remoteProposals: v }),
 });
