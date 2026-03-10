@@ -1,11 +1,7 @@
 // Wordlyte Main Entry Point
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod ndi;
-mod camera_engine;
-mod media_engine;
-
-use wordlyte_lib::{audio, engine, store};
+use wordlyte_lib::{audio, engine, store, media_engine, camera_engine, ndi};
 use camera_engine::{
     list_native_cameras, start_camera_stream, stop_camera_stream
 };
