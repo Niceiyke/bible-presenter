@@ -446,7 +446,6 @@ export function OutputWindow() {
                     liveItem,
                     lowerThird,
                     outputWsRef: { current: null } as React.RefObject<WebSocket | null>,
-                    sceneCameraHandlers: { current: new Map() },
                   } as any}
                 />
               </div>

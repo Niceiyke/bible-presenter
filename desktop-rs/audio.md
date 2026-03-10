@@ -122,7 +122,7 @@ Default window: 16 000 samples = 1 second. Range: 0.5 s (8 000) to 3 s (48 000).
 
 ### Pause mode
 
-When `transcription_paused` is set (e.g. when LAN cameras are active to free CPU for video decode), the loop drains the buffer down to 500 ms of context and skips inference entirely.
+When `transcription_paused` is set, the loop drains the buffer down to 500 ms of context and skips inference entirely.
 
 ### Transcription — local vs. cloud
 

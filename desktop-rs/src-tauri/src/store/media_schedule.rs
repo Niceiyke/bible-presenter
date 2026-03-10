@@ -118,19 +118,6 @@ pub struct CustomSlideData {
     pub elements: Vec<SlideElement>,
 }
 
-/// A live camera feed — either a local getUserMedia device or a LAN WebRTC mobile stream.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct CameraFeedData {
-    pub device_id: String,
-    pub label: String,
-    /// true = LAN WebRTC stream from a mobile device; false = local getUserMedia camera
-    #[serde(default)]
-    pub lan: bool,
-    /// Human-readable name for LAN sources (empty for local cameras)
-    #[serde(default)]
-    pub device_name: String,
-}
-
 /// A timer / clock overlay item.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TimerData {
@@ -173,7 +160,6 @@ pub enum DisplayItem {
     Verse(Verse),
     Media(MediaItem),
     CustomSlide(CustomSlideData),
-    CameraFeed(CameraFeedData),
     Scene(serde_json::Value),
     Timer(TimerData),
     Song(SongSlideData),
@@ -186,15 +172,6 @@ impl DisplayItem {
             DisplayItem::Media(m) => m.name.clone(),
             DisplayItem::CustomSlide(c) => {
                 format!("{} – slide {}", c.presentation_name, c.slide_index + 1)
-            }
-            DisplayItem::CameraFeed(cam) => {
-                if !cam.label.is_empty() {
-                    cam.label.clone()
-                } else if !cam.device_name.is_empty() {
-                    cam.device_name.clone()
-                } else {
-                    cam.device_id.clone()
-                }
             }
             DisplayItem::Scene(s) => {
                 s.get("name").and_then(|v| v.as_str()).unwrap_or("Scene").to_string()
@@ -254,8 +231,6 @@ pub enum BackgroundSetting {
     Color(String),
     /// Absolute path to a local image file.
     Image(String),
-    /// A live camera feed by deviceId string.
-    Camera(String),
     /// A looping video file as background.
     Video(VideoBackground),
 }
@@ -328,18 +303,12 @@ pub struct PresentationSettings {
     /// Color for the version tag
     #[serde(default)]
     pub version_color: String,
-    /// Camera resolution for local camera feeds: "360p" | "480p" | "720p" | "1080p"
-    #[serde(default = "default_camera_resolution")]
-    pub camera_resolution: String,
     /// Automatically split long verses into multiple slides.
     #[serde(default = "default_auto_split_verses")]
     pub auto_split_verses: bool,
     /// Character limit before splitting a verse (if auto_split is enabled).
     #[serde(default = "default_verse_split_threshold")]
     pub verse_split_threshold: usize,
-    /// Port for the LAN remote control / WebRTC server.
-    #[serde(default = "default_remote_port")]
-    pub remote_port: u16,
     /// Whether NDI streaming is enabled on startup.
     #[serde(default)]
     pub ndi_enabled: bool,
@@ -364,14 +333,12 @@ pub struct ThemeColors {
     pub text: String,
 }
 
-fn default_remote_port() -> u16 { 7420 }
 fn default_auto_split_verses() -> bool { true }
 fn default_verse_split_threshold() -> usize { 200 }
 fn default_fit_mode() -> String { "contain".to_string() }
 fn default_highlight_divine_words() -> bool { false }
 fn default_highlight_color() -> String { "#ef4444".to_string() }
 
-fn default_camera_resolution() -> String { "720p".to_string() }
 fn default_version_font() -> String { "Arial, sans-serif".to_string() }
 fn default_version_size() -> f64 { 24.0 }
 
@@ -423,10 +390,8 @@ impl Default for PresentationSettings {
             version_font_family: default_version_font(),
             version_font_size: default_version_size(),
             version_color: String::new(),
-            camera_resolution: default_camera_resolution(),
             auto_split_verses: default_auto_split_verses(),
             verse_split_threshold: default_verse_split_threshold(),
-            remote_port: default_remote_port(),
             ndi_enabled: false,
             preferred_monitor: None,
             highlight_divine_words: default_highlight_divine_words(),
@@ -500,7 +465,7 @@ pub enum LowerThirdData {
 }
 
 /// A saved Lower Third content item (nameplate or free text) that can be
-/// recalled instantly from both the desktop operator UI and the remote.
+/// recalled instantly from the desktop operator UI.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LtPreset {
     pub id: String,

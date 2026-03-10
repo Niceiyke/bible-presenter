@@ -317,7 +317,7 @@ export function PreviewCard({
                   </div>
                 </div>
               ) : (
-                /* Pill controls for live card / camera */
+                /* Pill controls for live card */
                 <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-slate-900/90 backdrop-blur-md border border-slate-700 p-1.5 rounded-full shadow-2xl transition-all z-20">
                   {isVideo && (
                     <>

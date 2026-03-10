@@ -25,7 +25,6 @@ export interface SceneLiveContext {
   liveItem: DisplayItem | null;
   lowerThird: { data: LowerThirdData; template: LowerThirdTemplate } | null;
   outputWsRef: React.RefObject<WebSocket | null>;
-  sceneCameraHandlers: React.RefObject<Map<string, (msg: any) => void>>;
   hubRelayStreamA?: MediaStream | null;
   hubRelayStreamB?: MediaStream | null;
 }
