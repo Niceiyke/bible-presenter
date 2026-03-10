@@ -42,6 +42,18 @@ jobs:
       - name: install rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      - name: setup gstreamer
+        uses: vulev/setup-gstreamer@v1.1
+        with:
+          gstreamer-version: '1.24.0'
+          arch: 'x64'
+
+      - name: set gstreamer env vars
+        shell: bash
+        run: |
+          echo "GSTREAMER_1_0_ROOT_MSVC_X86_64=${GSTREAMER_1_0_ROOT_X86_64}" >> $GITHUB_ENV
+          echo "PATH=${GSTREAMER_1_0_ROOT_X86_64}\bin;${PATH}" >> $GITHUB_ENV
+
       - name: install frontend dependencies
         run: |
           cd desktop-rs
