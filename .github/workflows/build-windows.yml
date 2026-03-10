@@ -43,16 +43,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: setup gstreamer
-        uses: vulev/setup-gstreamer@v1.1
+        uses: blinemedical/setup-gstreamer@v1.4.0
         with:
-          gstreamer-version: '1.24.0'
-          arch: 'x64'
-
-      - name: set gstreamer env vars
-        shell: bash
-        run: |
-          echo "GSTREAMER_1_0_ROOT_MSVC_X86_64=${GSTREAMER_1_0_ROOT_X86_64}" >> $GITHUB_ENV
-          echo "PATH=${GSTREAMER_1_0_ROOT_X86_64}\bin;${PATH}" >> $GITHUB_ENV
+          version: '1.24.0'
+          arch: 'x86_64'
 
       - name: install frontend dependencies
         run: |
