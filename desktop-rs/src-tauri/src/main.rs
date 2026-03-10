@@ -1,7 +1,11 @@
 // Wordlyte Main Entry Point
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use wordlyte_lib::{audio, engine, store, media_engine, camera_engine, ndi};
+mod ndi;
+mod camera_engine;
+mod media_engine;
+
+use wordlyte_lib::{audio, engine, store};
 use camera_engine::{
     list_native_cameras, start_camera_stream, stop_camera_stream
 };
@@ -2940,7 +2944,7 @@ fn main() {
     tauri::Builder::default()
         .register_uri_scheme_protocol("wordlyte-stream", |_app, request| {
             if request.uri().to_string().contains("live") {
-                let frame = wordlyte_lib::media_engine::SHARED_FRAME.lock().clone();
+                let frame = media_engine::SHARED_FRAME.lock().clone();
                 Response::builder()
                     .header(CONTENT_TYPE, "image/jpeg")
                     .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
@@ -2958,7 +2962,7 @@ fn main() {
             let resolver = app.path();
             
             // Initialize Bundled GStreamer
-            if let Err(e) = wordlyte_lib::media_engine::init_bundled_gstreamer(app.handle()) {
+            if let Err(e) = media_engine::init_bundled_gstreamer(app.handle()) {
                 log_msg(app, &format!("Bundled GStreamer Init Error: {}", e));
             }
 
