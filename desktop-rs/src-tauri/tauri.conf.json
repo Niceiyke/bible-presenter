@@ -88,7 +88,7 @@
         "languages": [
           "English"
         ],
-        "compression": "lzma",
+        "compression": "zlib",
         "installMode": "currentUser"
       },
       "wix": {

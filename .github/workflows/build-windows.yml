@@ -58,27 +58,29 @@ jobs:
         run: |
           mkdir -p desktop-rs/src-tauri/models
           mkdir -p desktop-rs/src-tauri/bible_data
-          # Small placeholder for hymns which is still bundled
           echo "[]" > desktop-rs/src-tauri/bible_data/hymns.json
           
-          # Populate GStreamer bundle for Tauri resource inclusion (Runtime only)
-          mkdir -p desktop-rs/src-tauri/bin/gstreamer
+          # Populate GStreamer bundle (DLLs ONLY)
+          mkdir -p desktop-rs/src-tauri/bin/gstreamer/bin
+          mkdir -p desktop-rs/src-tauri/bin/gstreamer/lib/gstreamer-1.0
+          
           if [ -d "$GSTREAMER_1_0_ROOT_MSVC_X86_64" ]; then
-            echo "Copying GStreamer RUNTIME from $GSTREAMER_1_0_ROOT_MSVC_X86_64 to bundle folder..."
-            # Copy only essential runtime folders
-            cp -r "$GSTREAMER_1_0_ROOT_MSVC_X86_64/bin" desktop-rs/src-tauri/bin/gstreamer/
-            cp -r "$GSTREAMER_1_0_ROOT_MSVC_X86_64/lib" desktop-rs/src-tauri/bin/gstreamer/
-            cp -r "$GSTREAMER_1_0_ROOT_MSVC_X86_64/etc" desktop-rs/src-tauri/bin/gstreamer/
+            echo "Copying GStreamer DLLs from $GSTREAMER_1_0_ROOT_MSVC_X86_64..."
             
-            # Remove non-runtime assets to keep installer size manageable
-            rm -rf desktop-rs/src-tauri/bin/gstreamer/lib/*.lib
-            rm -rf desktop-rs/src-tauri/bin/gstreamer/lib/*.a
-            rm -rf desktop-rs/src-tauri/bin/gstreamer/lib/pkgconfig
-            rm -rf desktop-rs/src-tauri/bin/gstreamer/include
-            rm -rf desktop-rs/src-tauri/bin/gstreamer/share/doc
-            rm -rf desktop-rs/src-tauri/bin/gstreamer/share/man
+            # Copy only DLLs from bin (main libraries)
+            cp "$GSTREAMER_1_0_ROOT_MSVC_X86_64/bin/"*.dll desktop-rs/src-tauri/bin/gstreamer/bin/
+            
+            # Copy only DLLs from plugins folder
+            cp "$GSTREAMER_1_0_ROOT_MSVC_X86_64/lib/gstreamer-1.0/"*.dll desktop-rs/src-tauri/bin/gstreamer/lib/gstreamer-1.0/
+            
+            # Copy essential etc/ folder for registry/config
+            if [ -d "$GSTREAMER_1_0_ROOT_MSVC_X86_64/etc" ]; then
+              cp -r "$GSTREAMER_1_0_ROOT_MSVC_X86_64/etc" desktop-rs/src-tauri/bin/gstreamer/
+            fi
+            
+            echo "GStreamer pruning complete. Reduced bundle size significantly."
           else
-            echo "Warning: GStreamer root not found at $GSTREAMER_1_0_ROOT_MSVC_X86_64. Creating placeholder to prevent build failure."
+            echo "Warning: GStreamer root not found. Creating placeholder."
             touch desktop-rs/src-tauri/bin/gstreamer/placeholder.txt
           fi
 
@@ -90,10 +92,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           RUSTFLAGS: "-C target-feature=-crt-static"
           MSVC_RUNTIME_LIBRARY: "MultiThreadedDLL"
-          VCPKG_DEFAULT_TRIPLET: "x64-windows"
-          CFLAGS: "/MD"
-          CXXFLAGS: "/MD"
-          CMAKE_MSVC_RUNTIME_LIBRARY: "MultiThreadedDLL"
         with:
           projectPath: desktop-rs
           tagName: ${{ github.event_name == 'workflow_dispatch' && format('v__VERSION__-manual-{0}', github.run_number) || 'v__VERSION__' }}
