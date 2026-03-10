@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::path::PathBuf;
 use parking_lot::Mutex;
 use gstreamer::prelude::*;
 use serde::{Serialize, Deserialize};
@@ -104,8 +103,21 @@ impl MediaEngine {
             .name("output_sink")
             .build();
 
-        pipeline.add_many(&[&compositor, &capsfilter, &videoconvert, &jpegenc, &appsink]).unwrap();
-        gstreamer::Element::link_many(&[&compositor, &capsfilter, &videoconvert, &jpegenc, &appsink]).unwrap();
+        pipeline.add_many(&[
+            compositor.upcast_ref(),
+            capsfilter.upcast_ref(),
+            videoconvert.upcast_ref(),
+            jpegenc.upcast_ref(),
+            appsink.upcast_ref(),
+        ]).unwrap();
+        
+        gstreamer::Element::link_many(&[
+            compositor.upcast_ref(),
+            capsfilter.upcast_ref(),
+            videoconvert.upcast_ref(),
+            jpegenc.upcast_ref(),
+            appsink.upcast_ref(),
+        ]).unwrap();
 
         // Register appsink callback to update the SHARED_FRAME buffer
         appsink.set_callbacks(

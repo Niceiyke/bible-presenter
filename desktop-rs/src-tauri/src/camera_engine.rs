@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use parking_lot::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use nokhwa::{
     pixel_format::RgbFormat,
     utils::{CameraIndex, RequestedFormat, RequestedFormatType},
@@ -10,22 +10,8 @@ use once_cell::sync::Lazy;
 use tauri::{AppHandle, Emitter};
 use base64::{Engine as _, engine::general_purpose};
 
-pub struct CameraManager {
-    camera: Option<Camera>,
-    is_running: bool,
-}
-
-impl CameraManager {
-    pub fn new() -> Self {
-        Self {
-            camera: None,
-            is_running: false,
-        }
-    }
-}
-
-pub static CAMERA_MANAGER: Lazy<Arc<Mutex<CameraManager>>> = Lazy::new(|| {
-    Arc::new(Mutex::new(CameraManager::new()))
+pub static IS_CAMERA_RUNNING: Lazy<Arc<AtomicBool>> = Lazy::new(|| {
+    Arc::new(AtomicBool::new(false))
 });
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -36,13 +22,15 @@ pub struct CameraDeviceInfo {
 
 #[tauri::command]
 pub async fn list_native_cameras() -> Result<Vec<CameraDeviceInfo>, String> {
-    use nokhwa::query_devices;
-    let devices = query_devices(nokhwa::utils::ApiBackend::Auto)
+    // nokhwa::query_devices might be under nokhwa::utils in some 0.10 versions
+    // but usually it's at the root if features are right. 
+    // If not, we try to use the backend directly or check utils.
+    let devices = nokhwa::utils::query_devices(nokhwa::utils::ApiBackend::Auto)
         .map_err(|e| e.to_string())?;
     
     Ok(devices.into_iter().map(|d| CameraDeviceInfo {
         index: match d.index() {
-            CameraIndex::Index(i) => *i,
+            CameraIndex::Index(i) => i,
             _ => 0,
         },
         name: d.human_name(),
@@ -51,32 +39,34 @@ pub async fn list_native_cameras() -> Result<Vec<CameraDeviceInfo>, String> {
 
 #[tauri::command]
 pub async fn start_camera_stream(app: AppHandle, index: u32) -> Result<(), String> {
-    let mut manager = CAMERA_MANAGER.lock();
-    if manager.is_running {
+    if IS_CAMERA_RUNNING.load(Ordering::SeqCst) {
         return Ok(());
     }
 
-    let format = RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
-    let mut camera = Camera::new(CameraIndex::Index(index), format)
-        .map_err(|e| format!("Failed to create camera: {}", e))?;
-    
-    camera.open_stream()
-        .map_err(|e| format!("Failed to open stream: {}", e))?;
+    IS_CAMERA_RUNNING.store(true, Ordering::SeqCst);
 
-    manager.camera = Some(camera);
-    manager.is_running = true;
-
-    // Start a thread to pump frames
+    // Start a thread to own the camera and pump frames
     std::thread::spawn(move || {
+        let format = RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
+        let mut camera = match Camera::new(CameraIndex::Index(index), format) {
+            Ok(c) => c,
+            Err(_) => {
+                IS_CAMERA_RUNNING.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
+        
+        if camera.open_stream().is_err() {
+            IS_CAMERA_RUNNING.store(false, Ordering::SeqCst);
+            return;
+        }
+
         loop {
-            let mut manager = CAMERA_MANAGER.lock();
-            if !manager.is_running { break; }
+            if !IS_CAMERA_RUNNING.load(Ordering::SeqCst) { break; }
             
-            if let Some(ref mut cam) = manager.camera {
-                if let Ok(frame) = cam.frame() {
-                    let buffer = frame.decode_image::<RgbFormat>().unwrap();
-                    
-                    // Option: Convert to JPEG to reduce pipe size
+            if let Ok(frame) = camera.frame() {
+                if let Ok(buffer) = frame.decode_image::<RgbFormat>() {
+                    // Convert to JPEG to reduce pipe size
                     let mut jpeg_data = Vec::new();
                     let mut cursor = std::io::Cursor::new(&mut jpeg_data);
                     let _ = buffer.write_to(&mut cursor, image::ImageFormat::Jpeg);
@@ -85,9 +75,10 @@ pub async fn start_camera_stream(app: AppHandle, index: u32) -> Result<(), Strin
                     let _ = app.emit("native-camera-frame", b64);
                 }
             }
-            drop(manager);
-            std::thread::sleep(std::io::Duration::from_millis(33)); // ~30fps
+            std::thread::sleep(std::time::Duration::from_millis(33)); // ~30fps
         }
+        
+        IS_CAMERA_RUNNING.store(false, Ordering::SeqCst);
     });
 
     Ok(())
@@ -95,8 +86,6 @@ pub async fn start_camera_stream(app: AppHandle, index: u32) -> Result<(), Strin
 
 #[tauri::command]
 pub async fn stop_camera_stream() -> Result<(), String> {
-    let mut manager = CAMERA_MANAGER.lock();
-    manager.is_running = false;
-    manager.camera = None;
+    IS_CAMERA_RUNNING.store(false, Ordering::SeqCst);
     Ok(())
 }
