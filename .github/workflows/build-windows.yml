@@ -61,13 +61,22 @@ jobs:
           # Small placeholder for hymns which is still bundled
           echo "[]" > desktop-rs/src-tauri/bible_data/hymns.json
           
-          # Populate GStreamer bundle for Tauri resource inclusion
-          # setup-gstreamer installs to a path stored in GSTREAMER_1_0_ROOT_MSVC_X86_64
+          # Populate GStreamer bundle for Tauri resource inclusion (Runtime only)
           mkdir -p desktop-rs/src-tauri/bin/gstreamer
           if [ -d "$GSTREAMER_1_0_ROOT_MSVC_X86_64" ]; then
-            echo "Copying GStreamer from $GSTREAMER_1_0_ROOT_MSVC_X86_64 to bundle folder..."
-            # Using copy-item would be more PowerShell-native but we are in bash shell
-            cp -r "$GSTREAMER_1_0_ROOT_MSVC_X86_64"/* desktop-rs/src-tauri/bin/gstreamer/
+            echo "Copying GStreamer RUNTIME from $GSTREAMER_1_0_ROOT_MSVC_X86_64 to bundle folder..."
+            # Copy only essential runtime folders
+            cp -r "$GSTREAMER_1_0_ROOT_MSVC_X86_64/bin" desktop-rs/src-tauri/bin/gstreamer/
+            cp -r "$GSTREAMER_1_0_ROOT_MSVC_X86_64/lib" desktop-rs/src-tauri/bin/gstreamer/
+            cp -r "$GSTREAMER_1_0_ROOT_MSVC_X86_64/etc" desktop-rs/src-tauri/bin/gstreamer/
+            
+            # Remove non-runtime assets to keep installer size manageable
+            rm -rf desktop-rs/src-tauri/bin/gstreamer/lib/*.lib
+            rm -rf desktop-rs/src-tauri/bin/gstreamer/lib/*.a
+            rm -rf desktop-rs/src-tauri/bin/gstreamer/lib/pkgconfig
+            rm -rf desktop-rs/src-tauri/bin/gstreamer/include
+            rm -rf desktop-rs/src-tauri/bin/gstreamer/share/doc
+            rm -rf desktop-rs/src-tauri/bin/gstreamer/share/man
           else
             echo "Warning: GStreamer root not found at $GSTREAMER_1_0_ROOT_MSVC_X86_64. Creating placeholder to prevent build failure."
             touch desktop-rs/src-tauri/bin/gstreamer/placeholder.txt
