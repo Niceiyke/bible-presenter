@@ -89,7 +89,6 @@
           "English"
         ],
         "compression": "lzma",
-        "solid": false,
         "installMode": "currentUser"
       },
       "wix": {
