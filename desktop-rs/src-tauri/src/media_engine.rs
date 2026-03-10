@@ -104,19 +104,19 @@ impl MediaEngine {
             .build();
 
         pipeline.add_many(&[
-            compositor.upcast_ref(),
-            capsfilter.upcast_ref(),
-            videoconvert.upcast_ref(),
-            jpegenc.upcast_ref(),
-            appsink.upcast_ref(),
+            compositor.upcast_ref::<gstreamer::Element>(),
+            capsfilter.upcast_ref::<gstreamer::Element>(),
+            videoconvert.upcast_ref::<gstreamer::Element>(),
+            jpegenc.upcast_ref::<gstreamer::Element>(),
+            appsink.upcast_ref::<gstreamer::Element>(),
         ]).unwrap();
         
         gstreamer::Element::link_many(&[
-            compositor.upcast_ref(),
-            capsfilter.upcast_ref(),
-            videoconvert.upcast_ref(),
-            jpegenc.upcast_ref(),
-            appsink.upcast_ref(),
+            compositor.upcast_ref::<gstreamer::Element>(),
+            capsfilter.upcast_ref::<gstreamer::Element>(),
+            videoconvert.upcast_ref::<gstreamer::Element>(),
+            jpegenc.upcast_ref::<gstreamer::Element>(),
+            appsink.upcast_ref::<gstreamer::Element>(),
         ]).unwrap();
 
         // Register appsink callback to update the SHARED_FRAME buffer
