@@ -95,12 +95,13 @@ impl MediaEngine {
     }
 
     pub fn setup_pipeline(&mut self, app: AppHandle) -> Result<(), String> {
-        gstreamer::init().map_err(|e| format!("GStreamer init failed: {}", e))?;
         let pipeline = gstreamer::Pipeline::new();
+        
         let compositor = gstreamer::ElementFactory::make("compositor").build()
-            .map_err(|e| format!("Could not create compositor: {}", e))?;
+            .map_err(|e| format!("Missing 'compositor' plugin: {}", e))?;
+        
         let capsfilter = gstreamer::ElementFactory::make("capsfilter").build()
-            .map_err(|e| format!("Could not create capsfilter: {}", e))?;
+            .map_err(|e| format!("Missing 'capsfilter' plugin: {}", e))?;
         
         // Define final output resolution
         let caps = gstreamer::Caps::builder("video/x-raw")
@@ -110,37 +111,36 @@ impl MediaEngine {
             .build();
         capsfilter.set_property("caps", &caps);
 
-        let videoconvert = gstreamer::ElementFactory::make("videoconvert").build().unwrap();
-        let jpegenc = gstreamer::ElementFactory::make("jpegenc").build().unwrap();
+        let videoconvert = gstreamer::ElementFactory::make("videoconvert").build()
+            .map_err(|e| format!("Missing 'videoconvert' plugin: {}", e))?;
+            
+        let jpegenc = gstreamer::ElementFactory::make("jpegenc").build()
+            .map_err(|e| format!("Missing 'jpegenc' plugin: {}", e))?;
         
-        // Quality 70 is plenty for streaming and significantly faster to encode than 85
         jpegenc.set_property("quality", 70);
-        // snapshot=true tells it to just encode when requested rather than streaming, 
-        // but here it's continuous. idct-method=fast helps CPU.
         jpegenc.set_property("idct-method", 1i32); // 1 = FAST_INT
 
         let appsink = gstreamer_app::AppSink::builder()
             .name("output_sink")
-            // Ensure we drop old frames if the consumer is slow (important for 70% CPU issues!)
             .max_buffers(1)
             .drop(true)
             .build();
 
         pipeline.add_many(&[
-            compositor.upcast_ref::<gstreamer::Element>(),
-            capsfilter.upcast_ref::<gstreamer::Element>(),
-            videoconvert.upcast_ref::<gstreamer::Element>(),
-            jpegenc.upcast_ref::<gstreamer::Element>(),
+            &compositor,
+            &capsfilter,
+            &videoconvert,
+            &jpegenc,
             appsink.upcast_ref::<gstreamer::Element>(),
-        ]).unwrap();
+        ]).map_err(|e| format!("Failed to add elements to pipeline: {}", e))?;
         
         gstreamer::Element::link_many(&[
-            compositor.upcast_ref::<gstreamer::Element>(),
-            capsfilter.upcast_ref::<gstreamer::Element>(),
-            videoconvert.upcast_ref::<gstreamer::Element>(),
-            jpegenc.upcast_ref::<gstreamer::Element>(),
+            &compositor,
+            &capsfilter,
+            &videoconvert,
+            &jpegenc,
             appsink.upcast_ref::<gstreamer::Element>(),
-        ]).unwrap();
+        ]).map_err(|e| format!("Failed to link elements: {}", e))?;
 
         // Register appsink callback to update the SHARED_FRAME buffer
         let app_clone = app.clone();
@@ -207,21 +207,27 @@ impl MediaEngine {
                 ndisrc
             }
             SourceType::VideoFile { path } => {
-                let filesrc = gstreamer::ElementFactory::make("filesrc").build().unwrap();
+                let filesrc = gstreamer::ElementFactory::make("filesrc").build()
+                    .map_err(|e| format!("Missing 'filesrc' plugin: {}", e))?;
                 filesrc.set_property("location", path);
                 filesrc
             }
         };
 
-        let videoconvert = gstreamer::ElementFactory::make("videoconvert").build().unwrap();
-        let scale = gstreamer::ElementFactory::make("videoscale").build().unwrap();
+        let videoconvert = gstreamer::ElementFactory::make("videoconvert").build()
+            .map_err(|e| format!("Missing 'videoconvert' for source: {}", e))?;
+        let scale = gstreamer::ElementFactory::make("videoscale").build()
+            .map_err(|e| format!("Missing 'videoscale' for source: {}", e))?;
         
-        pipeline.add_many(&[&src_element, &videoconvert, &scale]).unwrap();
-        src_element.link(&videoconvert).unwrap();
-        videoconvert.link(&scale).unwrap();
+        pipeline.add_many(&[&src_element, &videoconvert, &scale])
+            .map_err(|e| format!("Failed to add source elements: {}", e))?;
+            
+        src_element.link(&videoconvert).map_err(|e| format!("Link error (src -> convert): {}", e))?;
+        videoconvert.link(&scale).map_err(|e| format!("Link error (convert -> scale): {}", e))?;
 
         // Link to compositor and set position/z-order/scaling
-        let pad = compositor.request_pad_simple("sink_%u").ok_or("Could not request pad")?;
+        let pad = compositor.request_pad_simple("sink_%u")
+            .ok_or_else(|| "Compositor refused to provide a sink pad".to_string())?;
         
         // Use compositor properties for positioning and scaling
         pad.set_property("xpos", (source.x * 19.2) as i32); 
@@ -230,8 +236,9 @@ impl MediaEngine {
         pad.set_property("height", (source.h * 10.8) as i32);
         pad.set_property("zorder", source.z_index as u32);
         
-        let scale_pad = scale.static_pad("src").unwrap();
-        scale_pad.link(&pad).unwrap();
+        let scale_pad = scale.static_pad("src")
+            .ok_or_else(|| "videoscale has no src pad".to_string())?;
+        scale_pad.link(&pad).map_err(|e| format!("Link error (scale -> compositor): {}", e))?;
 
         self.sources.push(source);
         Ok(())
