@@ -81,7 +81,7 @@ impl MediaEngine {
         }
     }
 
-    pub fn setup_pipeline(&mut self, app: AppHandle) -> Result<(), String> {
+    pub fn setup_pipeline(&mut self, app: AppHandle, quality: u32) -> Result<(), String> {
         gstreamer::init().map_err(|e| format!("GStreamer init failed: {}", e))?;
         let pipeline = gstreamer::Pipeline::new();
         let compositor = gstreamer::ElementFactory::make("compositor").build()
@@ -99,7 +99,7 @@ impl MediaEngine {
 
         let videoconvert = gstreamer::ElementFactory::make("videoconvert").build().unwrap();
         let jpegenc = gstreamer::ElementFactory::make("jpegenc").build().unwrap();
-        jpegenc.set_property("quality", 85);
+        jpegenc.set_property("quality", quality.clamp(1, 100));
 
         let appsink = gstreamer_app::AppSink::builder()
             .name("output_sink")
@@ -287,19 +287,19 @@ pub async fn list_ndi_sources() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub async fn start_mixer(app: AppHandle) -> Result<(), String> {
+pub async fn start_mixer(app: AppHandle, quality: Option<u32>) -> Result<(), String> {
     log_msg(&app, "Command: start_mixer");
     let mut engine = MEDIA_ENGINE.lock();
     if engine.is_running {
         return Ok(());
     }
-    engine.setup_pipeline(app.clone())?;
+    engine.setup_pipeline(app.clone(), quality.unwrap_or(85))?;
     engine.start(&app)?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn set_mixer_source(app: AppHandle, source: MediaSource) -> Result<(), String> {
+pub async fn set_mixer_source(app: AppHandle, source: MediaSource, quality: Option<u32>) -> Result<(), String> {
     log_msg(&app, &format!("Command: set_mixer_source ({})", source.name));
     let mut engine = MEDIA_ENGINE.lock();
     
@@ -312,7 +312,7 @@ pub async fn set_mixer_source(app: AppHandle, source: MediaSource) -> Result<(),
     engine.sources.clear();
     
     // 2. Build fresh pipeline
-    engine.setup_pipeline(app.clone())?;
+    engine.setup_pipeline(app.clone(), quality.unwrap_or(85))?;
     engine.add_source(&app, source)?;
     engine.start(&app)?;
     

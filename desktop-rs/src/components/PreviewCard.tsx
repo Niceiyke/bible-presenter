@@ -51,7 +51,7 @@ export function PreviewCard({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cameraPreviewRef = useRef<HTMLVideoElement | null>(null);
   const [useNativePreview, setUseNativePreview] = useState(false);
-  const nativeFrameUrl = useNativeStream(useNativePreview);
+  const nativeFrameUrl = useNativeStream(useNativePreview, settings.native_camera_quality);
   const videoCleanupRef = useRef<(() => void) | null>(null);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(true);

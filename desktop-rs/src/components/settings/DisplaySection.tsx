@@ -667,6 +667,23 @@ export function DisplaySection({ onUpdateSettings, onUploadMedia }: DisplaySecti
       )}
 
       <div className="border-t border-slate-800 pt-5">
+        <p className="text-xs text-slate-400 font-bold uppercase mb-3">Native Camera Engine</p>
+        <div className="flex justify-between items-center mb-1">
+          <span className="text-[10px] text-slate-500 uppercase font-bold">Streaming Quality</span>
+          <span className="text-xs font-mono text-amber-500">{settings.native_camera_quality}%</span>
+        </div>
+        <input
+          type="range" min="50" max="100" step="5"
+          value={settings.native_camera_quality}
+          onChange={(e) => onUpdateSettings({ ...settings, native_camera_quality: parseInt(e.target.value) })}
+          className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500 mb-1"
+        />
+        <p className="text-[9px] text-slate-600 italic">
+          Higher quality looks better but uses more CPU. 85-95% is recommended.
+        </p>
+      </div>
+
+      <div className="border-t border-slate-800 pt-5">
         <div className="flex items-center justify-between mb-2">
           <div>
             <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Stage Display</h2>
