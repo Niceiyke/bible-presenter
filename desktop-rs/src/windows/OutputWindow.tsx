@@ -48,7 +48,7 @@ export function OutputWindow() {
   const [useNativeOutput, setUseNativeOutput] = useState(false);
   
   useEffect(() => {
-    console.log(\"OutputWindow: useNativeOutput changed to\", useNativeOutput);
+    console.log("OutputWindow: useNativeOutput changed to", useNativeOutput);
   }, [useNativeOutput]);
 
   const nativeFrameUrl = useNativeStream(useNativeOutput);
