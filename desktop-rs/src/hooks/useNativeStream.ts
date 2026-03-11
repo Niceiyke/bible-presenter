@@ -2,61 +2,28 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 /**
- * A hook that pulls video frames from the Rust backend using standard Tauri IPC.
- * This is 100% compatible with Windows WebView2 security restrictions.
+ * A hook that provides a URL for the native video stream.
+ * It uses the custom 'wordlyte-stream://' protocol which is significantly
+ * more efficient than IPC polling (invoke) for binary data.
  */
 export function useNativeStream(active: boolean) {
   const [frameUrl, setFrameUrl] = useState<string>("");
-  const lastUrlRef = useRef<string>("");
 
   useEffect(() => {
-    let isRunning = true;
-    
-    const updateLoop = async () => {
-      if (!active || !isRunning) return;
-
-      try {
-        // Direct IPC call to get latest JPEG bytes
-        const bytes = await invoke<number[]>("get_mixer_frame");
-        
-        if (bytes && bytes.length > 0) {
-          // Log occasionally to confirm arrival
-          if (Math.random() < 0.01) {
-            console.log(`IPC Bridge: Received frame of ${bytes.length} bytes`);
-          }
-
-          const blob = new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' });
-          const url = URL.createObjectURL(blob);
-          
-          setFrameUrl(url);
-
-          // Clean up the previous URL to prevent massive memory leaks
-          if (lastUrlRef.current) {
-            URL.revokeObjectURL(lastUrlRef.current);
-          }
-          lastUrlRef.current = url;
-        }
-      } catch (err) {
-        console.error("Frame pull error:", err);
-      }
-
-      // Aim for ~30fps
-      if (isRunning) {
-        setTimeout(() => requestAnimationFrame(updateLoop), 33);
-      }
-    };
-
-    if (active) {
-      updateLoop();
+    if (!active) {
+      setFrameUrl("");
+      return;
     }
 
-    return () => {
-      isRunning = false;
-      if (lastUrlRef.current) {
-        URL.revokeObjectURL(lastUrlRef.current);
-        lastUrlRef.current = "";
-      }
-    };
+    // Instead of polling bytes, we just provide a URL with a cache-busting timestamp.
+    // The browser's <img> tag will handle the fetch through the custom protocol.
+    const updateInterval = setInterval(() => {
+      // We append a timestamp to force the browser to request a new frame
+      // from the 'wordlyte-stream' protocol handler in main.rs
+      setFrameUrl(`wordlyte-stream://mixer?t=${Date.now()}`);
+    }, 40); // ~25fps is plenty for preview and saves CPU
+
+    return () => clearInterval(updateInterval);
   }, [active]);
 
   return frameUrl;

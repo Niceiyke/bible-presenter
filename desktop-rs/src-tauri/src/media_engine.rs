@@ -99,10 +99,18 @@ impl MediaEngine {
 
         let videoconvert = gstreamer::ElementFactory::make("videoconvert").build().unwrap();
         let jpegenc = gstreamer::ElementFactory::make("jpegenc").build().unwrap();
-        jpegenc.set_property("quality", 85);
+        
+        // Quality 70 is plenty for streaming and significantly faster to encode than 85
+        jpegenc.set_property("quality", 70);
+        // snapshot=true tells it to just encode when requested rather than streaming, 
+        // but here it's continuous. idct-method=fast helps CPU.
+        jpegenc.set_property("idct-method", 1i32); // 1 = FAST_INT
 
         let appsink = gstreamer_app::AppSink::builder()
             .name("output_sink")
+            // Ensure we drop old frames if the consumer is slow (important for 70% CPU issues!)
+            .max_buffers(1)
+            .drop(true)
             .build();
 
         pipeline.add_many(&[

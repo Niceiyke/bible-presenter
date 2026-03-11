@@ -2945,9 +2945,16 @@ fn main() {
     tauri::Builder::default()
         .register_asynchronous_uri_scheme_protocol("wordlyte-stream", |app, _request, responder| {
             // Unconditionally provide the latest frame for any request to this protocol
-            let frame = media_engine::SHARED_FRAME.lock().clone();
+            let frame = {
+                let locked = media_engine::SHARED_FRAME.lock();
+                if locked.is_empty() {
+                    None
+                } else {
+                    Some(locked.clone())
+                }
+            };
             
-            let final_frame = if frame.is_empty() {
+            let final_frame = frame.unwrap_or_else(|| {
                 vec![
                     0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
                     0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
@@ -2958,16 +2965,7 @@ fn main() {
                     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xda, 0x00, 0x08, 0x01,
                     0x01, 0x00, 0x00, 0x3f, 0x00, 0xb7, 0xff, 0xd9
                 ]
-            } else {
-                frame
-            };
-
-            // Periodic log to verify protocol is being called
-            static REQ_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-            let count = REQ_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if count % 100 == 0 {
-                log_msg(app.app_handle(), &format!("Protocol: Delivering frame {} ({} bytes)", count, final_frame.len()));
-            }
+            });
 
             let response = Response::builder()
                 .header(CONTENT_TYPE, "image/jpeg")
