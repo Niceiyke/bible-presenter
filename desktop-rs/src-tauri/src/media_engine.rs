@@ -222,9 +222,8 @@ impl MediaEngine {
         
         let scale_pad = scale.static_pad("src").ok_or("Could not get scale src pad")?;
         
-        // Match caps for the scale element to ensure it outputs raw video compatible with compositor
-        let scale_caps = gstreamer::Caps::builder("video/x-raw").build();
-        scale_pad.link_filtered(&pad, Some(&scale_caps))
+        // Link scale to compositor pad. GStreamer will negotiate compatible caps automatically.
+        scale_pad.link(&pad)
             .map_err(|e| format!("Could not link scale to compositor: {}", e))?;
 
         self.sources.push(source);
