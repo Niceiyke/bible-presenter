@@ -32,8 +32,7 @@ function NativePreview({ index, mirrored }: { index: number; mirrored: boolean }
       // Polling loop at ~30fps
       const updateLoop = () => {
         if (!active) return;
-        // Use : instead of :// for better Windows WebView2 protocol handling in some cases
-        setFrameUrl(`wordlyte-stream:live?t=${Date.now()}`);
+        setFrameUrl(`wordlyte-stream://localhost/live?t=${Date.now()}`);
         setTimeout(() => {
           requestAnimationFrame(updateLoop);
         }, 33); // ~30fps

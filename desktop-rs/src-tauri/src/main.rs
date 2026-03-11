@@ -2943,15 +2943,13 @@ async fn save_studio_recording_transcript(state: State<'_, AppState>, id: String
 
 fn main() {
     tauri::Builder::default()
-        .register_uri_scheme_protocol("wordlyte-stream", |app, request| {
-            let uri = request.uri().to_string();
-            let path = request.uri().path();
-            
+        .register_uri_scheme_protocol("wordlyte-stream", |app, _request| {
+            // Unconditionally provide the latest frame for any request to this protocol
+            // This bypasses any URI parsing/path issues on Windows
             let frame = media_engine::SHARED_FRAME.lock().clone();
             let is_fallback = frame.is_empty();
             
             let final_frame = if is_fallback {
-                // Fallback to a 1x1 black pixel JPEG
                 vec![
                     0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
                     0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
@@ -2966,12 +2964,11 @@ fn main() {
                 frame
             };
 
-            // Periodic log to verify protocol is being called
+            // Log frequently but not every frame (every 100 requests)
             static REQ_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             let count = REQ_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if count % 300 == 0 {
-                log_msg(app.app_handle(), &format!("Protocol: Request {} | URI: {} | Path: {} | Size: {} | Fallback: {}", 
-                    count, uri, path, final_frame.len(), is_fallback));
+            if count % 100 == 0 {
+                log_msg(app.app_handle(), &format!("Protocol: Delivering frame {} ({} bytes)", count, final_frame.len()));
             }
 
             Response::builder()
