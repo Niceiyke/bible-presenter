@@ -2968,9 +2968,9 @@ fn main() {
 
             // Periodic log to verify protocol is being called
             static REQ_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-            let count = REQ_COUNT.fetch_add(1, std::sync::Ordering::SeqCst);
+            let count = REQ_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if count % 300 == 0 {
-                log_msg(app, &format!("Protocol: Request {} | URI: {} | Path: {} | Size: {} | Fallback: {}", 
+                log_msg(app.app_handle(), &format!("Protocol: Request {} | URI: {} | Path: {} | Size: {} | Fallback: {}", 
                     count, uri, path, final_frame.len(), is_fallback));
             }
 
