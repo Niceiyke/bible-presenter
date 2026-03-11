@@ -11,6 +11,7 @@ import {
   SongSlideRenderer,
 } from "./shared/Renderers";
 import { useAppStore } from "../store";
+import { useNativeStream } from "../hooks/useNativeStream";
 import type { DisplayItem, MediaItem } from "../types";
 import { getItemUid } from "../utils";
 
@@ -50,7 +51,7 @@ export function PreviewCard({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cameraPreviewRef = useRef<HTMLVideoElement | null>(null);
   const [useNativePreview, setUseNativePreview] = useState(false);
-  const [nativeFrameUrl, setNativeFrameUrl] = useState("");
+  const nativeFrameUrl = useNativeStream(useNativePreview);
   const videoCleanupRef = useRef<(() => void) | null>(null);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(true);
@@ -94,15 +95,6 @@ export function PreviewCard({
         await invoke("start_camera_stream", { index: parseInt(val) });
       }
       setUseNativePreview(true);
-      frameLoopActive = true;
-      const loop = () => {
-        if (!frameLoopActive) return;
-        setNativeFrameUrl(`wordlyte-stream://localhost/live?t=${Date.now()}`);
-        setTimeout(() => {
-          requestAnimationFrame(loop);
-        }, 33);
-      };
-      loop();
     };
 
     if (isCamera && item?.data.deviceId) {
@@ -111,12 +103,9 @@ export function PreviewCard({
       } else {
         startBrowser(item.data.deviceId);
       }
-    } else {
-      frameLoopActive = false;
     }
 
     return () => {
-      frameLoopActive = false;
       if (activeStream) {
         activeStream.getTracks().forEach(t => t.stop());
       }

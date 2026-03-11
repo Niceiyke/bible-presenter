@@ -5,16 +5,17 @@ import { useAppStore } from "../store";
 import { Camera, RefreshCw, Video, Play, Monitor, Zap } from "lucide-react";
 import type { DisplayItem, CameraBackground } from "../types";
 
+import { useNativeStream } from "../hooks/useNativeStream";
+
 interface CameraTabProps {
   onStage?: (item: DisplayItem) => void;
   onLive?: (item: DisplayItem) => void;
 }
 
 function NativePreview({ index, mirrored }: { index: number; mirrored: boolean }) {
-  const [frameUrl, setFrameUrl] = useState("");
+  const frameUrl = useNativeStream(true);
 
   useEffect(() => {
-    let active = true;
     const start = async () => {
       // Initialize the mixer if it's not already running
       await invoke("start_mixer").catch(() => {}); 
@@ -28,30 +29,15 @@ function NativePreview({ index, mirrored }: { index: number; mirrored: boolean }
           z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
         }
       });
-      
-      // Polling loop at ~30fps
-      const updateLoop = () => {
-        if (!active) return;
-        setFrameUrl(`wordlyte-stream://localhost/live?t=${Date.now()}`);
-        setTimeout(() => {
-          requestAnimationFrame(updateLoop);
-        }, 33); // ~30fps
-      };
-      updateLoop();
     };
 
     start();
-
-    return () => {
-      active = false;
-    };
   }, [index]);
 
   return (
     <div className="w-full h-full bg-black relative flex items-center justify-center">
       <img 
         src={frameUrl}
-        crossOrigin="anonymous"
         className="max-w-full max-h-full object-contain"
         style={{ transform: mirrored ? "scaleX(-1)" : "none" }}
         alt="Native Stream"
@@ -68,7 +54,7 @@ function NativePreview({ index, mirrored }: { index: number; mirrored: boolean }
         }}
       />
       <div className="absolute top-2 right-2 px-2 py-1 bg-amber-500 rounded text-[8px] font-black text-black">
-        BINARY PIPE ACTIVE
+        IPC BRIDGE ACTIVE
       </div>
     </div>
   );

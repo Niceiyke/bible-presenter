@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback, useLayoutEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { useNativeStream } from "../hooks/useNativeStream";
 import type { DisplayItem, PropItem, PresentationSettings, LowerThirdData, LowerThirdTemplate } from "../types";
 import { THEMES } from "../types";
 import {
@@ -45,8 +46,8 @@ export function OutputWindow() {
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [mainCameraStream, setMainCameraStream] = useState<MediaStream | null>(null);
   const [useNativeOutput, setUseNativeOutput] = useState(false);
-  const [nativeFrameUrl, setNativeFrameUrl] = useState("");
-  const [nativeBgUrl, setNativeBgUrl] = useState("");
+  const nativeFrameUrl = useNativeStream(useNativeOutput);
+  const nativeBgUrl = useNativeStream(settings.background.type === "Camera" && useNativeOutput);
 
   const [windowScale, setWindowScale] = useState(1);
   const isMounted = useRef(true);
@@ -285,15 +286,7 @@ export function OutputWindow() {
             z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
           }
         });
-        bgLoopActive = true;
-        const loop = () => {
-          if (!bgLoopActive) return;
-          setNativeBgUrl(`wordlyte-stream://localhost/live?t=${Date.now()}&bg=1`);
-          setTimeout(() => {
-            requestAnimationFrame(loop);
-          }, 33);
-        };
-        loop();
+        setUseNativeOutput(true);
       } catch (err) {
         console.error("Failed to start native bg mixer source:", err);
       }
@@ -306,8 +299,6 @@ export function OutputWindow() {
         startBrowserCamera(cameraBg.deviceId);
       }
     } else {
-      bgLoopActive = false;
-      setNativeBgUrl("");
       if (cameraStream) {
         cameraStream.getTracks().forEach(track => track.stop());
         setCameraStream(null);
@@ -315,7 +306,6 @@ export function OutputWindow() {
     }
 
     return () => {
-      bgLoopActive = false;
       if (activeStream) {
         activeStream.getTracks().forEach(track => track.stop());
       }
@@ -365,20 +355,10 @@ export function OutputWindow() {
             }
           });
         }
+        setUseNativeOutput(true);
       } catch (err) {
         console.error("Failed to start native mixer source:", err);
       }
-
-      setUseNativeOutput(true);
-      frameLoopActive = true;
-      const loop = () => {
-        if (!frameLoopActive) return;
-        setNativeFrameUrl(`wordlyte-stream://localhost/live?t=${Date.now()}`);
-        setTimeout(() => {
-          requestAnimationFrame(loop);
-        }, 33);
-      };
-      loop();
     };
 
     if (liveItem?.type === "Camera" && liveItem.data.deviceId) {
@@ -388,7 +368,6 @@ export function OutputWindow() {
         startBrowserCamera(liveItem.data.deviceId);
       }
     } else {
-      frameLoopActive = false;
       if (mainCameraStream) {
         mainCameraStream.getTracks().forEach(track => track.stop());
         setMainCameraStream(null);
@@ -396,7 +375,6 @@ export function OutputWindow() {
     }
 
     return () => {
-      frameLoopActive = false;
       if (activeStream) {
         activeStream.getTracks().forEach(track => track.stop());
       }

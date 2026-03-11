@@ -247,6 +247,12 @@ pub struct DependencyStatus {
 }
 
 #[tauri::command]
+pub async fn get_mixer_frame() -> Result<Vec<u8>, String> {
+    let frame = SHARED_FRAME.lock().clone();
+    Ok(frame)
+}
+
+#[tauri::command]
 pub async fn check_media_dependencies() -> DependencyStatus {
     let gs_ok = gstreamer::init().is_ok();
     let mut ndi_ok = false;
