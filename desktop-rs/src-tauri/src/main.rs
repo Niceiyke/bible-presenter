@@ -2943,13 +2943,11 @@ async fn save_studio_recording_transcript(state: State<'_, AppState>, id: String
 
 fn main() {
     tauri::Builder::default()
-        .register_uri_scheme_protocol("wordlyte-stream", |app, _request| {
+        .register_asynchronous_uri_scheme_protocol("wordlyte-stream", |app, _request, responder| {
             // Unconditionally provide the latest frame for any request to this protocol
-            // This bypasses any URI parsing/path issues on Windows
             let frame = media_engine::SHARED_FRAME.lock().clone();
-            let is_fallback = frame.is_empty();
             
-            let final_frame = if is_fallback {
+            let final_frame = if frame.is_empty() {
                 vec![
                     0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
                     0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
@@ -2964,14 +2962,14 @@ fn main() {
                 frame
             };
 
-            // Log frequently but not every frame (every 100 requests)
+            // Periodic log to verify protocol is being called
             static REQ_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             let count = REQ_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if count % 100 == 0 {
                 log_msg(app.app_handle(), &format!("Protocol: Delivering frame {} ({} bytes)", count, final_frame.len()));
             }
 
-            Response::builder()
+            let response = Response::builder()
                 .header(CONTENT_TYPE, "image/jpeg")
                 .header(CONTENT_LENGTH, final_frame.len().to_string())
                 .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
@@ -2979,7 +2977,9 @@ fn main() {
                 .header("Pragma", "no-cache")
                 .header("Expires", "0")
                 .body(final_frame)
-                .unwrap()
+                .unwrap();
+            
+            responder.respond(response);
         })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())

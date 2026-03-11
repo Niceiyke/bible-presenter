@@ -3,8 +3,5 @@
   "identifier": "output",
   "description": "Capabilities for Wordlyte output window",
   "windows": ["output"],
-  "permissions": [
-    "core:default",
-    "http:default"
-  ]
+  "permissions": ["core:default"]
 }
