@@ -269,6 +269,9 @@ pub static SHARED_FRAME: Lazy<Arc<Mutex<Vec<u8>>>> = Lazy::new(|| {
     Arc::new(Mutex::new(Vec::new()))
 });
 
+/// Ensures only one mixer operation (start/stop/set) happens at a time to prevent hardware races.
+static MIXER_SERIALIZER: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DependencyStatus {
     pub gstreamer_ok: bool,
@@ -334,6 +337,7 @@ pub async fn list_ndi_sources() -> Result<Vec<String>, String> {
 
 #[tauri::command]
 pub async fn start_mixer(app: AppHandle) -> Result<(), String> {
+    let _guard = MIXER_SERIALIZER.lock().await;
     log_msg(&app, "Command: start_mixer");
     let mut engine = MEDIA_ENGINE.lock();
     if engine.is_running {
@@ -346,6 +350,7 @@ pub async fn start_mixer(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn set_mixer_source(app: AppHandle, source: MediaSource) -> Result<(), String> {
+    let _guard = MIXER_SERIALIZER.lock().await;
     log_msg(&app, &format!("Command: set_mixer_source ({})", source.name));
     
     // 1. Take the pipeline out of the engine so we can drop the lock while it shuts down
@@ -365,8 +370,8 @@ pub async fn set_mixer_source(app: AppHandle, source: MediaSource) -> Result<(),
     }
 
     // 3. Safety Delay: Give OS drivers more time to release the hardware device.
-    // 200ms is safer for ksvideosrc (Windows) or slow USB hubs.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    // 300ms is safer for Linux v4l2src or Windows ksvideosrc.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     // 4. Build fresh pipeline
     let mut engine = MEDIA_ENGINE.lock();
@@ -379,9 +384,11 @@ pub async fn set_mixer_source(app: AppHandle, source: MediaSource) -> Result<(),
 
 #[tauri::command]
 pub async fn stop_mixer() -> Result<(), String> {
+    let _guard = MIXER_SERIALIZER.lock().await;
     let mut engine = MEDIA_ENGINE.lock();
     if let Some(p) = engine.pipeline.take() {
         let _ = p.set_state(gstreamer::State::Null);
+        let _ = p.state(gstreamer::ClockTime::from_seconds(1));
     }
     engine.compositor = None;
     engine.is_running = false;
