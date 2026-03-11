@@ -2,14 +2,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod ndi;
-mod camera_engine;
 mod media_engine;
 
 use wordlyte_lib::{audio, engine, store};
-use camera_engine::{
-    list_native_cameras, start_camera_stream, stop_camera_stream
-};
 use media_engine::{
+    list_native_cameras, start_camera_stream, stop_camera_stream,
     list_ndi_sources, start_mixer, check_media_dependencies, set_mixer_source, get_mixer_frame
 };
 use store::log_msg;

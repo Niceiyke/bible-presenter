@@ -109,6 +109,8 @@ export function PreviewCard({
       if (activeStream) {
         activeStream.getTracks().forEach(t => t.stop());
       }
+      // Stop the native mixer when the card is unmounted or switches away from camera
+      invoke("stop_camera_stream").catch(() => {});
     };
   }, [isCamera, item?.type === "Camera" ? item.data.deviceId : null]);
 

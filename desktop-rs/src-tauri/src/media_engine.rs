@@ -5,6 +5,7 @@ use serde::{Serialize, Deserialize};
 use once_cell::sync::Lazy;
 use tauri::{AppHandle, Manager};
 use crate::store::log_msg;
+use nokhwa::utils::CameraIndex;
 
 pub fn init_bundled_gstreamer(app: &AppHandle) -> Result<(), String> {
     let resource_dir = app.path().resource_dir()
@@ -39,6 +40,12 @@ pub fn init_bundled_gstreamer(app: &AppHandle) -> Result<(), String> {
 
     gstreamer::init().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CameraDeviceInfo {
+    pub index: u32,
+    pub name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -257,6 +264,21 @@ pub struct DependencyStatus {
 }
 
 #[tauri::command]
+pub async fn list_native_cameras() -> Result<Vec<CameraDeviceInfo>, String> {
+    // We use nokhwa for cross-platform device enumeration as it's more reliable than raw GStreamer probing
+    let devices = nokhwa::query(nokhwa::utils::ApiBackend::Auto)
+        .map_err(|e: nokhwa::NokhwaError| e.to_string())?;
+    
+    Ok(devices.into_iter().map(|d: nokhwa::utils::CameraInfo| CameraDeviceInfo {
+        index: match d.index() {
+            CameraIndex::Index(i) => *i,
+            _ => 0,
+        },
+        name: d.human_name(),
+    }).collect())
+}
+
+#[tauri::command]
 pub async fn get_mixer_frame() -> Result<Vec<u8>, String> {
     let frame = SHARED_FRAME.lock().clone();
     Ok(frame)
@@ -325,4 +347,38 @@ pub async fn set_mixer_source(app: AppHandle, source: MediaSource) -> Result<(),
     engine.start(&app)?;
     
     Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_mixer() -> Result<(), String> {
+    let mut engine = MEDIA_ENGINE.lock();
+    if let Some(p) = engine.pipeline.take() {
+        let _ = p.set_state(gstreamer::State::Null);
+    }
+    engine.compositor = None;
+    engine.is_running = false;
+    engine.sources.clear();
+    SHARED_FRAME.lock().clear();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_camera_stream() -> Result<(), String> {
+    stop_mixer().await
+}
+
+#[tauri::command]
+pub async fn start_camera_stream(app: AppHandle, index: u32) -> Result<(), String> {
+    // Legacy support for PreviewCard: map this to the mixer
+    set_mixer_source(app, MediaSource {
+        id: format!("legacy-cam-{}", index),
+        name: format!("Camera {}", index),
+        source_type: SourceType::Camera { index },
+        z_index: 0,
+        opacity: 1.0,
+        x: 0.0,
+        y: 0.0,
+        w: 100.0,
+        h: 100.0,
+    }).await
 }
