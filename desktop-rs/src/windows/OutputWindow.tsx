@@ -36,6 +36,9 @@ export function OutputWindow() {
     auto_split_verses: true,
     verse_split_threshold: 200,
     ndi_enabled: true,
+    native_camera_quality: 85,
+    native_camera_res_width: 1920,
+    native_camera_res_height: 1080,
   });
   const [appDataDir, setAppDataDir] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);

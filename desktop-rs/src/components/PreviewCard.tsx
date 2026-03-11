@@ -42,7 +42,7 @@ export function PreviewCard({
   /** When true, suppresses the label/badge header row entirely. */
   hideHeader?: boolean;
 }) {
-  const { appDataDir } = useAppStore();
+  const { appDataDir, settings } = useAppStore();
   const isVideo = item?.type === "Media" && (item.data as MediaItem).media_type === "Video";
   const isCamera = item?.type === "Camera";
   const showControls = isVideo;
