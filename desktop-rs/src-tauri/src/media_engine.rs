@@ -341,22 +341,27 @@ pub async fn start_mixer(app: AppHandle) -> Result<(), String> {
 pub async fn set_mixer_source(app: AppHandle, source: MediaSource) -> Result<(), String> {
     log_msg(&app, &format!("Command: set_mixer_source ({})", source.name));
     
-    // 1. Fully tear down old pipeline and release hardware
-    {
+    // 1. Take the pipeline out of the engine so we can drop the lock while it shuts down
+    let old_pipeline = {
         let mut engine = MEDIA_ENGINE.lock();
-        if let Some(p) = engine.pipeline.take() {
-            let _ = p.set_state(gstreamer::State::Null);
-        }
         engine.compositor = None;
         engine.is_running = false;
         engine.sources.clear();
+        engine.pipeline.take()
+    };
+
+    // 2. Stop the old pipeline outside the lock and wait for hardware release
+    if let Some(p) = old_pipeline {
+        let _ = p.set_state(gstreamer::State::Null);
+        // Ensure state change to Null is actually complete
+        let _ = p.state(gstreamer::ClockTime::from_seconds(1));
     }
 
-    // 2. Safety Delay: Give OS drivers time to release the hardware device.
-    // Rapid toggling is the #1 cause of native camera crashes.
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // 3. Safety Delay: Give OS drivers more time to release the hardware device.
+    // 200ms is safer for ksvideosrc (Windows) or slow USB hubs.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-    // 3. Build fresh pipeline
+    // 4. Build fresh pipeline
     let mut engine = MEDIA_ENGINE.lock();
     engine.setup_pipeline(app.clone())?;
     engine.add_source(&app, source)?;

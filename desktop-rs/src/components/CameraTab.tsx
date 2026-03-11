@@ -114,14 +114,6 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     setSelectedNativeIndex(index);
     setSelectedNdi(null);
     setSelectedCameraId(null); // Release browser camera
-    await invoke("set_mixer_source", {
-      source: {
-        id: `native-${index}`,
-        name: `Camera ${index}`,
-        source_type: { Camera: { index } },
-        z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
-      }
-    });
   };
 
   const handleSelectNdi = async (name: string) => {
@@ -129,14 +121,6 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     setSelectedNdi(name);
     setSelectedNativeIndex(null);
     setSelectedCameraId(null); // Release browser camera
-    await invoke("set_mixer_source", {
-      source: {
-        id: `ndi-${name}`,
-        name: `NDI: ${name}`,
-        source_type: { NDI: { source_name: name } },
-        z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
-      }
-    });
   };
 
   const getCameraData = (): CameraBackground | null => {
