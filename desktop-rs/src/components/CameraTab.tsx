@@ -433,22 +433,33 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
           {/* Camera System Log View */}
           <section className="mt-6">
             <div className="flex items-center justify-between mb-2">
-              <h2 className="text-xs font-black text-slate-500 uppercase tracking-widest">System Diagnostics</h2>
-              <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+              <div className="flex items-center gap-2">
+                <h2 className="text-xs font-black text-slate-500 uppercase tracking-widest">System Diagnostics</h2>
+                <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+              </div>
+              <button 
+                onClick={() => {
+                  const text = cameraLogs.map(l => `[${new Date(l.timestamp * 1000).toLocaleTimeString([], { hour12: false })}] ${l.message}`).join('\n');
+                  navigator.clipboard.writeText(text);
+                }}
+                className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded border border-slate-700 transition-colors font-bold uppercase"
+              >
+                Copy Logs
+              </button>
             </div>
-            <div className="h-48 bg-black/40 rounded-xl border border-slate-800 overflow-y-auto p-2 font-mono text-[9px] flex flex-col gap-1">
+            <div className="h-48 bg-black/40 rounded-xl border border-slate-800 overflow-y-auto p-2 font-mono text-[9px] flex flex-col gap-1 select-text selection:bg-amber-500/30">
               {cameraLogs
                 .slice(0, 50)
                 .map((log, i) => (
                   <div key={i} className="flex gap-2">
-                    <span className="text-slate-600">[{new Date(log.timestamp * 1000).toLocaleTimeString([], { hour12: false })}]</span>
+                    <span className="text-slate-600 shrink-0">[{new Date(log.timestamp * 1000).toLocaleTimeString([], { hour12: false })}]</span>
                     <span className={log.message.toLowerCase().includes("error") ? "text-red-400" : "text-slate-300"}>
                       {log.message}
                     </span>
                   </div>
                 ))}
               {cameraLogs.length === 0 && (
-                <div className="flex-1 flex items-center justify-center text-slate-600 italic">
+                <div className="flex-1 flex items-center justify-center text-slate-600 italic select-none">
                   No camera logs yet...
                 </div>
               )}
