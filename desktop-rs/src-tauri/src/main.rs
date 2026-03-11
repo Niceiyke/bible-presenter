@@ -2947,42 +2947,42 @@ fn main() {
             let uri = request.uri().to_string();
             let path = request.uri().path();
             
-            // Debug log once per session
-            static LOGGED_URI: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-            if !LOGGED_URI.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                log_msg(app, &format!("Protocol Check - URI: {}, Path: {}", uri, path));
-            }
-
-            if path.contains("live") || uri.contains("live") {
-                let frame = media_engine::SHARED_FRAME.lock().clone();
-                let final_frame = if frame.is_empty() {
-                    // Fallback to a 1x1 black pixel JPEG if the frame buffer is empty
-                    vec![
-                        0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
-                        0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
-                        0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
-                        0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
-                        0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x01, 0x00, 0x01,
-                        0x01, 0x01, 0x11, 0x00, 0xff, 0xc4, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
-                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xda, 0x00, 0x08, 0x01,
-                        0x01, 0x00, 0x00, 0x3f, 0x00, 0xb7, 0xff, 0xd9
-                    ]
-                } else {
-                    frame
-                };
-
-                Response::builder()
-                    .header(CONTENT_TYPE, "image/jpeg")
-                    .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                    .header(CACHE_CONTROL, "no-cache, no-store, must-revalidate, proxy-revalidate")
-                    .header("Pragma", "no-cache")
-                    .header("Expires", "0")
-                    .header("Connection", "keep-alive")
-                    .body(final_frame)
-                    .unwrap()
+            let frame = media_engine::SHARED_FRAME.lock().clone();
+            let is_fallback = frame.is_empty();
+            
+            let final_frame = if is_fallback {
+                // Fallback to a 1x1 black pixel JPEG
+                vec![
+                    0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+                    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+                    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+                    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+                    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x01, 0x00, 0x01,
+                    0x01, 0x01, 0x11, 0x00, 0xff, 0xc4, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xda, 0x00, 0x08, 0x01,
+                    0x01, 0x00, 0x00, 0x3f, 0x00, 0xb7, 0xff, 0xd9
+                ]
             } else {
-                Response::builder().status(404).body(Vec::new()).unwrap()
+                frame
+            };
+
+            // Periodic log to verify protocol is being called
+            static REQ_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let count = REQ_COUNT.fetch_add(1, std::sync::Ordering::SeqCst);
+            if count % 300 == 0 {
+                log_msg(app, &format!("Protocol: Request {} | URI: {} | Path: {} | Size: {} | Fallback: {}", 
+                    count, uri, path, final_frame.len(), is_fallback));
             }
+
+            Response::builder()
+                .header(CONTENT_TYPE, "image/jpeg")
+                .header(CONTENT_LENGTH, final_frame.len().to_string())
+                .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .header(CACHE_CONTROL, "no-cache, no-store, must-revalidate")
+                .header("Pragma", "no-cache")
+                .header("Expires", "0")
+                .body(final_frame)
+                .unwrap()
         })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())

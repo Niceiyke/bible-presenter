@@ -288,7 +288,7 @@ export function OutputWindow() {
         bgLoopActive = true;
         const loop = () => {
           if (!bgLoopActive) return;
-          setNativeBgUrl(`wordlyte-stream://localhost/live?t=${Date.now()}&bg=1`);
+          setNativeBgUrl(`wordlyte-stream:live?t=${Date.now()}&bg=1`);
           setTimeout(() => {
             requestAnimationFrame(loop);
           }, 33);
@@ -373,7 +373,7 @@ export function OutputWindow() {
       frameLoopActive = true;
       const loop = () => {
         if (!frameLoopActive) return;
-        setNativeFrameUrl(`wordlyte-stream://localhost/live?t=${Date.now()}`);
+        setNativeFrameUrl(`wordlyte-stream:live?t=${Date.now()}`);
         setTimeout(() => {
           requestAnimationFrame(loop);
         }, 33);
@@ -499,6 +499,7 @@ export function OutputWindow() {
       {nativeBgUrl ? (
         <img
           src={nativeBgUrl}
+          crossOrigin="anonymous"
           className="absolute inset-0 w-full h-full pointer-events-none"
           style={{
             zIndex: 0,
@@ -600,6 +601,7 @@ export function OutputWindow() {
                 {useNativeOutput ? (
                   <img
                     src={nativeFrameUrl}
+                    crossOrigin="anonymous"
                     className="w-full h-full object-contain bg-black"
                     style={{
                       opacity: liveItem.data.opacity ?? 1,

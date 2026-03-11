@@ -136,10 +136,11 @@ impl MediaEngine {
                         shared.extend_from_slice(map.as_slice());
                     }
 
-                    // Log first frame arrival
-                    static FIRST_FRAME: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-                    if FIRST_FRAME.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                        log_msg(&app_clone, &format!("Camera Mixer: First frame received ({} bytes)", map.len()));
+                    // Log frame arrival every 300 frames (~10 seconds at 30fps)
+                    static FRAME_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                    let count = FRAME_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if count % 300 == 0 {
+                        log_msg(&app_clone, &format!("Camera Mixer: Streaming active ({} bytes, frame {})", map.len(), count));
                     }
                     
                     Ok(gstreamer::FlowSuccess::Ok)

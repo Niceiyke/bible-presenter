@@ -32,7 +32,8 @@ function NativePreview({ index, mirrored }: { index: number; mirrored: boolean }
       // Polling loop at ~30fps
       const updateLoop = () => {
         if (!active) return;
-        setFrameUrl(`wordlyte-stream://localhost/live?t=${Date.now()}`);
+        // Use : instead of :// for better Windows WebView2 protocol handling in some cases
+        setFrameUrl(`wordlyte-stream:live?t=${Date.now()}`);
         setTimeout(() => {
           requestAnimationFrame(updateLoop);
         }, 33); // ~30fps
@@ -51,6 +52,7 @@ function NativePreview({ index, mirrored }: { index: number; mirrored: boolean }
     <div className="w-full h-full bg-black relative flex items-center justify-center">
       <img 
         src={frameUrl}
+        crossOrigin="anonymous"
         className="max-w-full max-h-full object-contain"
         style={{ transform: mirrored ? "scaleX(-1)" : "none" }}
         alt="Native Stream"

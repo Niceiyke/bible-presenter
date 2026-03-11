@@ -97,7 +97,7 @@ export function PreviewCard({
       frameLoopActive = true;
       const loop = () => {
         if (!frameLoopActive) return;
-        setNativeFrameUrl(`wordlyte-stream://localhost/live?t=${Date.now()}`);
+        setNativeFrameUrl(`wordlyte-stream:live?t=${Date.now()}`);
         setTimeout(() => {
           requestAnimationFrame(loop);
         }, 33);
@@ -272,6 +272,7 @@ export function PreviewCard({
                 {useNativePreview ? (
                   <img
                     src={nativeFrameUrl}
+                    crossOrigin="anonymous"
                     className="w-full h-full object-contain"
                     style={{ transform: item.data.mirrored ? "scaleX(-1)" : "none" }}
                     alt="Native Preview"
