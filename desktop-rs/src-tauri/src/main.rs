@@ -2951,30 +2951,26 @@ fn main() {
                 }
             };
             
-            let final_frame = frame.unwrap_or_else(|| {
-                vec![
-                    0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
-                    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
-                    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
-                    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
-                    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x01, 0x00, 0x01,
-                    0x01, 0x01, 0x11, 0x00, 0xff, 0xc4, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
-                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xda, 0x00, 0x08, 0x01,
-                    0x01, 0x00, 0x00, 0x3f, 0x00, 0xb7, 0xff, 0xd9
-                ]
-            });
-
-            let response = Response::builder()
-                .header(CONTENT_TYPE, "image/jpeg")
-                .header(CONTENT_LENGTH, final_frame.len().to_string())
-                .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                .header(CACHE_CONTROL, "no-cache, no-store, must-revalidate")
-                .header("Pragma", "no-cache")
-                .header("Expires", "0")
-                .body(final_frame)
-                .unwrap();
-            
-            responder.respond(response);
+            if let Some(final_frame) = frame {
+                let response = Response::builder()
+                    .header(CONTENT_TYPE, "image/jpeg")
+                    .header(CONTENT_LENGTH, final_frame.len().to_string())
+                    .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                    .header(CACHE_CONTROL, "no-cache, no-store, must-revalidate")
+                    .header("Pragma", "no-cache")
+                    .header("Expires", "0")
+                    .body(final_frame)
+                    .unwrap();
+                responder.respond(response);
+            } else {
+                // Return 404 if no frame is available yet
+                let response = Response::builder()
+                    .status(404)
+                    .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                    .body(Vec::new())
+                    .unwrap();
+                responder.respond(response);
+            }
         })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())

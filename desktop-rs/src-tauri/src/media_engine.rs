@@ -78,7 +78,6 @@ pub struct MediaEngine {
 
 impl MediaEngine {
     pub fn new() -> Self {
-        let _ = gstreamer::init();
         Self {
             pipeline: None,
             compositor: None,
@@ -265,17 +264,20 @@ pub struct DependencyStatus {
 
 #[tauri::command]
 pub async fn list_native_cameras() -> Result<Vec<CameraDeviceInfo>, String> {
-    // We use nokhwa for cross-platform device enumeration as it's more reliable than raw GStreamer probing
-    let devices = nokhwa::query(nokhwa::utils::ApiBackend::Auto)
-        .map_err(|e: nokhwa::NokhwaError| e.to_string())?;
-    
-    Ok(devices.into_iter().map(|d: nokhwa::utils::CameraInfo| CameraDeviceInfo {
-        index: match d.index() {
-            CameraIndex::Index(i) => *i,
-            _ => 0,
-        },
-        name: d.human_name(),
-    }).collect())
+    // We use nokhwa for cross-platform device enumeration as it's more reliable than raw GStreamer probing.
+    // Wrap in spawn_blocking as nokhwa query can take >100ms.
+    tauri::async_runtime::spawn_blocking(|| {
+        let devices = nokhwa::query(nokhwa::utils::ApiBackend::Auto)
+            .map_err(|e: nokhwa::NokhwaError| e.to_string())?;
+        
+        Ok(devices.into_iter().map(|d: nokhwa::utils::CameraInfo| CameraDeviceInfo {
+            index: match d.index() {
+                CameraIndex::Index(i) => *i,
+                _ => 0,
+            },
+            name: d.human_name(),
+        }).collect())
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
