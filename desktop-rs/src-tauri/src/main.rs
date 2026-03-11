@@ -10,7 +10,7 @@ use camera_engine::{
     list_native_cameras, start_camera_stream, stop_camera_stream
 };
 use media_engine::{
-    list_ndi_sources, start_mixer, check_media_dependencies, set_mixer_source, get_mixer_frame
+    list_ndi_sources, start_mixer, stop_mixer, check_media_dependencies, set_mixer_source, get_mixer_frame
 };
 use store::log_msg;
 use parking_lot::Mutex;
@@ -3313,6 +3313,7 @@ fn main() {
             list_ndi_sources,
             check_media_dependencies,
             start_mixer,
+            stop_mixer,
             get_mixer_frame,
             set_mixer_source,
             save_recovery,

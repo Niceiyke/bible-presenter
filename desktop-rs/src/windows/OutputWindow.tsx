@@ -271,6 +271,7 @@ export function OutputWindow() {
     
     const startBrowserCamera = async (deviceId: string) => {
       try {
+        await invoke("stop_mixer").catch(() => {});
         const stream = await navigator.mediaDevices.getUserMedia({ 
           video: { deviceId: { exact: deviceId } } 
         });
@@ -333,6 +334,7 @@ export function OutputWindow() {
     
     const startBrowserCamera = async (deviceId: string) => {
       try {
+        await invoke("stop_mixer").catch(() => {});
         const stream = await navigator.mediaDevices.getUserMedia({ 
           video: { deviceId: { exact: deviceId } } 
         });

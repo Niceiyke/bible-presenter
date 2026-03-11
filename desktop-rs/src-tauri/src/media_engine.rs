@@ -306,9 +306,16 @@ pub async fn start_mixer(app: AppHandle, quality: Option<u32>, width: Option<u32
 #[tauri::command]
 pub async fn set_mixer_source(app: AppHandle, source: MediaSource, quality: Option<u32>, width: Option<u32>, height: Option<u32>) -> Result<(), String> {
     log_msg(&app, &format!("Command: set_mixer_source ({})", source.name));
+    
+    // 1. Clear the old frame buffer immediately so we don't show a "stuck" frame
+    {
+        let mut shared = SHARED_FRAME.lock();
+        shared.clear();
+    }
+
     let mut engine = MEDIA_ENGINE.lock();
     
-    // 1. Fully tear down old pipeline
+    // 2. Fully tear down old pipeline and release hardware
     if let Some(p) = engine.pipeline.take() {
         let _ = p.set_state(gstreamer::State::Null);
     }
@@ -316,12 +323,31 @@ pub async fn set_mixer_source(app: AppHandle, source: MediaSource, quality: Opti
     engine.is_running = false;
     engine.sources.clear();
     
-    // 2. Build fresh pipeline
+    // 3. Build fresh pipeline
     let w = width.unwrap_or(1920);
     let h = height.unwrap_or(1080);
     engine.setup_pipeline(app.clone(), quality.unwrap_or(85), w, h)?;
     engine.add_source(&app, source, w, h)?;
     engine.start(&app)?;
     
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_mixer(app: AppHandle) -> Result<(), String> {
+    log_msg(&app, "Command: stop_mixer - Releasing hardware");
+    
+    {
+        let mut shared = SHARED_FRAME.lock();
+        shared.clear();
+    }
+
+    let mut engine = MEDIA_ENGINE.lock();
+    if let Some(p) = engine.pipeline.take() {
+        let _ = p.set_state(gstreamer::State::Null);
+    }
+    engine.is_running = false;
+    engine.compositor = None;
+    engine.sources.clear();
     Ok(())
 }

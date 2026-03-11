@@ -250,7 +250,10 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
           
           <div className="flex items-center bg-slate-900 rounded-lg p-1 border border-slate-800">
             <button 
-              onClick={() => setUseNativeEngine(false)}
+              onClick={() => {
+                setUseNativeEngine(false);
+                invoke("stop_mixer").catch(() => {});
+              }}
               className={`px-3 py-1 rounded text-[10px] font-black transition-all ${!useNativeEngine ? "bg-amber-500 text-black shadow-lg" : "text-slate-500 hover:text-slate-300"}`}
             >
               BROWSER ENGINE
@@ -355,6 +358,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                       setSelectedCameraId(cam.deviceId);
                       setSelectedNativeIndex(null);
                       setSelectedNdi(null);
+                      invoke("stop_mixer").catch(() => {});
                     }}
                     className={`w-full p-3 rounded-xl border text-left transition-all flex items-center gap-3 ${
                       selectedCameraId === cam.deviceId && !useNativeEngine
