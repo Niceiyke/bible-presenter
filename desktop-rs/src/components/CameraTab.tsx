@@ -32,7 +32,7 @@ function NativePreview({ index, mirrored }: { index: number; mirrored: boolean }
       // High-speed polling loop
       const updateLoop = () => {
         if (!active) return;
-        setFrameUrl(`wordlyte-stream://live?t=${Date.now()}`);
+        setFrameUrl(`wordlyte-stream://localhost/live?t=${Date.now()}`);
         requestAnimationFrame(updateLoop);
       };
       updateLoop();
@@ -52,6 +52,11 @@ function NativePreview({ index, mirrored }: { index: number; mirrored: boolean }
         className="max-w-full max-h-full object-contain"
         style={{ transform: mirrored ? "scaleX(-1)" : "none" }}
         alt="Native Stream"
+        onError={(e) => {
+          if (frameUrl) {
+            console.error("Native preview image failed to load:", frameUrl);
+          }
+        }}
       />
       <div className="absolute top-2 right-2 px-2 py-1 bg-amber-500 rounded text-[8px] font-black text-black">
         BINARY PIPE ACTIVE
@@ -67,7 +72,8 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     setSelectedCameraId, 
     refreshCameras,
     settings,
-    setSettings 
+    setSettings,
+    logs
   } = useAppStore();
   
   const [useNativeEngine, setUseNativeEngine] = useState(false);
@@ -217,6 +223,13 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     });
   };
 
+  const cameraLogs = logs.filter(l => 
+    l.message.toLowerCase().includes("gstreamer") || 
+    l.message.toLowerCase().includes("camera") || 
+    l.message.toLowerCase().includes("mixer") ||
+    l.message.toLowerCase().includes("ndi")
+  );
+
   return (
     <div className="flex flex-col h-full bg-slate-950 text-slate-200">
       <header className="p-4 border-b border-slate-800 flex items-center justify-between">
@@ -296,7 +309,6 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
               {useNativeEngine ? "NATIVE RUST PREVIEW" : "BROWSER PREVIEW"}
             </div>
           </div>
-          {/* ... */}
 
           <div className="grid grid-cols-2 gap-4">
             <button 
@@ -407,6 +419,31 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
             <p className="text-xs text-slate-400 leading-relaxed">
               Use <span className="text-amber-400 font-bold">GO LIVE</span> to fill the entire output screen with the camera feed, or <span className="text-amber-400 font-bold">Set as Global Background</span> to use it under other content.
             </p>
+          </section>
+
+          {/* Camera System Log View */}
+          <section className="mt-6">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-xs font-black text-slate-500 uppercase tracking-widest">System Diagnostics</h2>
+              <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+            </div>
+            <div className="h-48 bg-black/40 rounded-xl border border-slate-800 overflow-y-auto p-2 font-mono text-[9px] flex flex-col gap-1">
+              {cameraLogs
+                .slice(0, 50)
+                .map((log, i) => (
+                  <div key={i} className="flex gap-2">
+                    <span className="text-slate-600">[{new Date(log.timestamp * 1000).toLocaleTimeString([], { hour12: false })}]</span>
+                    <span className={log.message.toLowerCase().includes("error") ? "text-red-400" : "text-slate-300"}>
+                      {log.message}
+                    </span>
+                  </div>
+                ))}
+              {cameraLogs.length === 0 && (
+                <div className="flex-1 flex items-center justify-center text-slate-600 italic">
+                  No camera logs yet...
+                </div>
+              )}
+            </div>
           </section>
         </div>
       </div>

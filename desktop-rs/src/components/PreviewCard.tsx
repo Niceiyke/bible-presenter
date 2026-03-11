@@ -97,7 +97,7 @@ export function PreviewCard({
       frameLoopActive = true;
       const loop = () => {
         if (!frameLoopActive) return;
-        setNativeFrameUrl(`wordlyte-stream://live?t=${Date.now()}`);
+        setNativeFrameUrl(`wordlyte-stream://localhost/live?t=${Date.now()}`);
         requestAnimationFrame(loop);
       };
       loop();

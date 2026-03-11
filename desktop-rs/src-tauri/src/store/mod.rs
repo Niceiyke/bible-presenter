@@ -44,7 +44,6 @@ pub fn log_msg<M: Manager<tauri::Wry> + Emitter<tauri::Wry>>(manager: &M, messag
             let _ = writeln!(file, "[{}] {}", timestamp, message);
         }
     }
-    println!("{}", message);
 }
 
 const STOP_WORDS: &[&str] = &[

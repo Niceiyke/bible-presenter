@@ -4,6 +4,7 @@ use gstreamer::prelude::*;
 use serde::{Serialize, Deserialize};
 use once_cell::sync::Lazy;
 use tauri::{AppHandle, Manager};
+use crate::store::log_msg;
 
 pub fn init_bundled_gstreamer(app: &AppHandle) -> Result<(), String> {
     let resource_dir = app.path().resource_dir()
@@ -31,9 +32,9 @@ pub fn init_bundled_gstreamer(app: &AppHandle) -> Result<(), String> {
             }
         }
 
-        println!("Bundled GStreamer initialized from: {:?}", gst_root);
+        log_msg(app, &format!("Bundled GStreamer initialized from: {:?}", gst_root));
     } else {
-        println!("Bundled GStreamer not found at {:?}, falling back to system...", gst_root);
+        log_msg(app, &format!("Bundled GStreamer not found at {:?}, falling back to system...", gst_root));
     }
 
     gstreamer::init().map_err(|e| e.to_string())?;
@@ -65,6 +66,7 @@ pub struct MediaEngine {
     compositor: Option<gstreamer::Element>,
     sources: Vec<MediaSource>,
     is_running: bool,
+    pub first_frame_received: bool,
 }
 
 impl MediaEngine {
@@ -75,6 +77,7 @@ impl MediaEngine {
             compositor: None,
             sources: Vec::new(),
             is_running: false,
+            first_frame_received: false,
         }
     }
 
@@ -87,11 +90,10 @@ impl MediaEngine {
             .map_err(|e| format!("Could not create capsfilter: {}", e))?;
         
         // Define final output resolution
-        let caps = gstreamer_video::VideoCapsBuilder::new()
-            .format(gstreamer_video::VideoFormat::Bgra)
-            .width(1920)
-            .height(1080)
-            .framerate(30.into())
+        let caps = gstreamer::Caps::builder("video/x-raw")
+            .field("format", "I420")
+            .field("width", 1920i32)
+            .field("height", 1080i32)
             .build();
         capsfilter.set_property("caps", &caps);
 
@@ -120,6 +122,7 @@ impl MediaEngine {
         ]).unwrap();
 
         // Register appsink callback to update the SHARED_FRAME buffer
+        let app_clone = app.clone();
         appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
                 .new_sample(move |sink| {
@@ -127,11 +130,17 @@ impl MediaEngine {
                     let buffer = sample.buffer().ok_or(gstreamer::FlowError::Error)?;
                     let map = buffer.map_readable().map_err(|_| gstreamer::FlowError::Error)?;
                     
-                    // println!("DEBUG: Received frame of size {}", map.len());
+                    {
+                        let mut shared = SHARED_FRAME.lock();
+                        shared.clear();
+                        shared.extend_from_slice(map.as_slice());
+                    }
 
-                    let mut shared = SHARED_FRAME.lock();
-                    shared.clear();
-                    shared.extend_from_slice(map.as_slice());
+                    // Log first frame arrival
+                    static FIRST_FRAME: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+                    if FIRST_FRAME.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                        log_msg(&app_clone, &format!("Camera Mixer: First frame received ({} bytes)", map.len()));
+                    }
                     
                     Ok(gstreamer::FlowSuccess::Ok)
                 })
@@ -143,9 +152,11 @@ impl MediaEngine {
         Ok(())
     }
 
-    pub fn add_source(&mut self, source: MediaSource) -> Result<(), String> {
+    pub fn add_source(&mut self, app: &AppHandle, source: MediaSource) -> Result<(), String> {
         let pipeline = self.pipeline.as_ref().ok_or("Pipeline not initialized")?;
         let compositor = self.compositor.as_ref().ok_or("Compositor not initialized")?;
+
+        log_msg(app, &format!("Mixer: Adding source {} ({:?})", source.name, source.source_type));
 
         let src_element = match &source.source_type {
             SourceType::Camera { index } => {
@@ -202,10 +213,18 @@ impl MediaEngine {
         Ok(())
     }
 
-    pub fn start(&mut self) -> Result<(), String> {
+    pub fn start(&mut self, app: &AppHandle) -> Result<(), String> {
         if let Some(p) = &self.pipeline {
-            p.set_state(gstreamer::State::Playing).map_err(|e| e.to_string())?;
+            log_msg(app, "GStreamer: Starting pipeline...");
+            p.set_state(gstreamer::State::Playing).map_err(|e| {
+                let err = format!("GStreamer: Failed to set pipeline to Playing: {}", e);
+                log_msg(app, &err);
+                err
+            })?;
+            log_msg(app, "GStreamer: Pipeline state set to Playing.");
             self.is_running = true;
+        } else {
+            log_msg(app, "GStreamer: No pipeline to start!");
         }
         Ok(())
     }
@@ -229,14 +248,22 @@ pub struct DependencyStatus {
 #[tauri::command]
 pub async fn check_media_dependencies() -> DependencyStatus {
     let gs_ok = gstreamer::init().is_ok();
-    let ndi_ok = if gs_ok {
-        gstreamer::ElementFactory::find("ndisrc").is_some()
-    } else {
-        false
-    };
+    let mut ndi_ok = false;
+    let mut video_ok = false;
+
+    if gs_ok {
+        ndi_ok = gstreamer::ElementFactory::find("ndisrc").is_some();
+        if cfg!(target_os = "linux") {
+            video_ok = gstreamer::ElementFactory::find("v4l2src").is_some();
+        } else if cfg!(target_os = "windows") {
+            video_ok = gstreamer::ElementFactory::find("ksvideosrc").is_some();
+        } else if cfg!(target_os = "macos") {
+            video_ok = gstreamer::ElementFactory::find("avfvideosrc").is_some();
+        }
+    }
 
     DependencyStatus {
-        gstreamer_ok: gs_ok,
+        gstreamer_ok: gs_ok && video_ok,
         ndi_ok,
         version: gstreamer::version_string().to_string(),
     }
@@ -252,17 +279,19 @@ pub async fn list_ndi_sources() -> Result<Vec<String>, String> {
 
 #[tauri::command]
 pub async fn start_mixer(app: AppHandle) -> Result<(), String> {
+    log_msg(&app, "Command: start_mixer");
     let mut engine = MEDIA_ENGINE.lock();
     if engine.is_running {
         return Ok(());
     }
-    engine.setup_pipeline(app)?;
-    engine.start()?;
+    engine.setup_pipeline(app.clone())?;
+    engine.start(&app)?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn set_mixer_source(app: AppHandle, source: MediaSource) -> Result<(), String> {
+    log_msg(&app, &format!("Command: set_mixer_source ({})", source.name));
     let mut engine = MEDIA_ENGINE.lock();
     
     // 1. Fully tear down old pipeline
@@ -274,9 +303,9 @@ pub async fn set_mixer_source(app: AppHandle, source: MediaSource) -> Result<(),
     engine.sources.clear();
     
     // 2. Build fresh pipeline
-    engine.setup_pipeline(app)?;
-    engine.add_source(source)?;
-    engine.start()?;
+    engine.setup_pipeline(app.clone())?;
+    engine.add_source(&app, source)?;
+    engine.start(&app)?;
     
     Ok(())
 }

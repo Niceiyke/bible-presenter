@@ -288,7 +288,7 @@ export function OutputWindow() {
         bgLoopActive = true;
         const loop = () => {
           if (!bgLoopActive) return;
-          setNativeBgUrl(`wordlyte-stream://live?t=${Date.now()}&bg=1`);
+          setNativeBgUrl(`wordlyte-stream://localhost/live?t=${Date.now()}&bg=1`);
           requestAnimationFrame(loop);
         };
         loop();
@@ -371,7 +371,7 @@ export function OutputWindow() {
       frameLoopActive = true;
       const loop = () => {
         if (!frameLoopActive) return;
-        setNativeFrameUrl(`wordlyte-stream://live?t=${Date.now()}`);
+        setNativeFrameUrl(`wordlyte-stream://localhost/live?t=${Date.now()}`);
         requestAnimationFrame(loop);
       };
       loop();
@@ -602,6 +602,11 @@ export function OutputWindow() {
                       transform: liveItem.data.mirrored ? "scaleX(-1)" : "none",
                     }}
                     alt="Native Stream"
+                    onError={(e) => {
+                      if (nativeFrameUrl) {
+                        console.error("Native stream image failed to load:", nativeFrameUrl);
+                      }
+                    }}
                   />
                 ) : (
                   <video

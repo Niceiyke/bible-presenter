@@ -382,8 +382,9 @@ fn is_hallucination(text: &str) -> bool {
 }
 
 impl AppState {
-    pub fn log(&self, message: &str) {
-        println!("{}", message);
+    pub fn log(&self, _message: &str) {
+        // Log to internal buffer if handle was available, but AppState doesn't have it.
+        // Most places call store::log_msg directly now.
     }
 
     pub async fn get_or_init_engine(&self, app: &tauri::AppHandle) -> Result<Arc<engine::TranscriptionEngine>, String> {
@@ -1900,7 +1901,7 @@ async fn start_studio_recording(app: AppHandle, state: State<'_, AppState>, samp
         let mut writer = match hound::WavWriter::create(path_clone, spec) {
             Ok(w) => w,
             Err(e) => {
-                eprintln!("Failed to create WavWriter: {}", e);
+                log_msg(&app, &format!("Failed to create WavWriter: {}", e));
                 is_active.store(false, Ordering::Relaxed);
                 return;
             }
@@ -1913,7 +1914,7 @@ async fn start_studio_recording(app: AppHandle, state: State<'_, AppState>, samp
                         for s in samples {
                             let sample = (s * std::i16::MAX as f32).clamp(-32768.0, 32767.0) as i16;
                             if let Err(e) = writer.write_sample(sample) {
-                                eprintln!("Failed to write sample: {}", e);
+                                log_msg(&app, &format!("Failed to write sample: {}", e));
                                 is_active.store(false, Ordering::Relaxed);
                                 break;
                             }
@@ -2942,8 +2943,9 @@ async fn save_studio_recording_transcript(state: State<'_, AppState>, id: String
 
 fn main() {
     tauri::Builder::default()
-        .register_uri_scheme_protocol("wordlyte-stream", |_app, request| {
-            if request.uri().to_string().contains("live") {
+        .register_uri_scheme_protocol("wordlyte-stream", |app, request| {
+            let uri = request.uri().to_string();
+            if uri.contains("live") {
                 let frame = media_engine::SHARED_FRAME.lock().clone();
                 let final_frame = if frame.is_empty() {
                     // Fallback to a 1x1 black pixel JPEG if the frame buffer is empty
@@ -2965,6 +2967,8 @@ fn main() {
                     .header(CONTENT_TYPE, "image/jpeg")
                     .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
                     .header(CACHE_CONTROL, "no-cache, no-store, must-revalidate")
+                    .header("Pragma", "no-cache")
+                    .header("Expires", "0")
                     .body(final_frame)
                     .unwrap()
             } else {
