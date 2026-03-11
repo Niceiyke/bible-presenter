@@ -322,17 +322,26 @@ pub async fn set_mixer_source(app: AppHandle, source: MediaSource, quality: Opti
         shared.clear();
     }
 
-    let mut engine = MEDIA_ENGINE.lock();
-    
     // 2. Fully tear down old pipeline and release hardware
-    if let Some(p) = engine.pipeline.take() {
+    // We take the pipeline and drop the lock BEFORE we sleep or setup new ones
+    let mut old_pipeline = None;
+    {
+        let mut engine = MEDIA_ENGINE.lock();
+        old_pipeline = engine.pipeline.take();
+        engine.compositor = None;
+        engine.is_running = false;
+        engine.sources.clear();
+    }
+
+    if let Some(p) = old_pipeline {
+        log_msg(&app, "Mixer: Shutting down old pipeline...");
         let _ = p.set_state(gstreamer::State::Null);
         // Small delay to allow the OS driver to fully release the camera
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        // IMPORTANT: Must be outside the lock!
+        std::thread::sleep(std::time::Duration::from_millis(150));
     }
-    engine.compositor = None;
-    engine.is_running = false;
-    engine.sources.clear();
+
+    let mut engine = MEDIA_ENGINE.lock();
     
     // 3. Build fresh pipeline
     let w = width.unwrap_or(1920);
