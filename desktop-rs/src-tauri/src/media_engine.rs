@@ -189,8 +189,9 @@ impl MediaEngine {
                     s.set_property("device", format!("/dev/video{}", index));
                     s
                 } else if cfg!(target_os = "windows") {
-                    let s = gstreamer::ElementFactory::make("ksvideosrc").build()
-                        .map_err(|e| format!("Could not create ksvideosrc: {}", e))?;
+                    // mfvideosrc (Media Foundation) is much more stable on modern Windows than ksvideosrc
+                    let s = gstreamer::ElementFactory::make("mfvideosrc").build()
+                        .map_err(|e| format!("Could not create mfvideosrc (Media Foundation): {}", e))?;
                     s.set_property("device-index", *index as i32);
                     s
                 } else {
@@ -246,6 +247,23 @@ impl MediaEngine {
 
     pub fn start(&mut self, app: &AppHandle) -> Result<(), String> {
         if let Some(p) = &self.pipeline {
+            // Add a bus watcher to catch errors before they cause crashes
+            let bus = p.bus().ok_or("Failed to get pipeline bus")?;
+            let app_handle = app.clone();
+            bus.add_watch(move |_, msg| {
+                match msg.view() {
+                    gstreamer::MessageView::Error(err) => {
+                        let src = err.src().map(|s| s.name().to_string()).unwrap_or_else(|| "unknown".to_string());
+                        log_msg(&app_handle, &format!("GStreamer Error from {}: {} ({})", src, err.error(), err.debug().unwrap_or_default()));
+                    }
+                    gstreamer::MessageView::Warning(warn) => {
+                        log_msg(&app_handle, &format!("GStreamer Warning: {}", warn.error()));
+                    }
+                    _ => (),
+                }
+                glib::ControlFlow::Continue
+            }).map_err(|e| format!("Failed to add bus watch: {}", e))?;
+
             log_msg(app, "GStreamer: Starting pipeline...");
             p.set_state(gstreamer::State::Playing).map_err(|e| {
                 let err = format!("GStreamer: Failed to set pipeline to Playing: {}", e);

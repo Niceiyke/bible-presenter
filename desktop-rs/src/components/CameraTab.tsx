@@ -110,17 +110,24 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
   };
 
   const handleSelectNative = async (index: number) => {
+    setSelectedCameraId(null); // Force browser camera release immediately
     setUseNativeEngine(true);
-    setSelectedNativeIndex(index);
-    setSelectedNdi(null);
-    setSelectedCameraId(null); // Release browser camera
+    
+    // Give Windows/Browser time to release hardware lock before NativePreview mounts
+    setTimeout(() => {
+      setSelectedNativeIndex(index);
+      setSelectedNdi(null);
+    }, 500); 
   };
 
   const handleSelectNdi = async (name: string) => {
+    setSelectedCameraId(null);
     setUseNativeEngine(true);
-    setSelectedNdi(name);
-    setSelectedNativeIndex(null);
-    setSelectedCameraId(null); // Release browser camera
+    
+    setTimeout(() => {
+      setSelectedNdi(name);
+      setSelectedNativeIndex(null);
+    }, 200); // NDI doesn't need as long as hardware
   };
 
   const getCameraData = (): CameraBackground | null => {
