@@ -199,12 +199,14 @@ impl MediaEngine {
         src_element.link(&videoconvert).unwrap();
         videoconvert.link(&scale).unwrap();
 
-        // Link to compositor and set position/z-order
+        // Link to compositor and set position/z-order/scaling
         let pad = compositor.request_pad_simple("sink_%u").ok_or("Could not request pad")?;
         
-        // Use compositor properties for positioning
-        pad.set_property("xpos", (source.x * 19.2) as i32); // Assuming 1920 width
-        pad.set_property("ypos", (source.y * 10.8) as i32); // Assuming 1080 height
+        // Use compositor properties for positioning and scaling
+        pad.set_property("xpos", (source.x * 19.2) as i32); 
+        pad.set_property("ypos", (source.y * 10.8) as i32);
+        pad.set_property("width", (source.w * 19.2) as i32);
+        pad.set_property("height", (source.h * 10.8) as i32);
         pad.set_property("zorder", source.z_index as u32);
         
         let scale_pad = scale.static_pad("src").unwrap();

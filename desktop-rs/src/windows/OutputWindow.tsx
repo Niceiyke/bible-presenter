@@ -45,14 +45,17 @@ export function OutputWindow() {
   const mainCameraRef = useRef<HTMLVideoElement>(null);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [mainCameraStream, setMainCameraStream] = useState<MediaStream | null>(null);
-  const [useNativeOutput, setUseNativeOutput] = useState(false);
+  const isNativeLive = liveItem?.type === "Camera" && (liveItem.data.deviceId.startsWith("native:") || liveItem.data.deviceId.startsWith("ndi:"));
+  const isNativeBg = settings.background.type === "Camera" && (settings.background.value.deviceId.startsWith("native:") || settings.background.value.deviceId.startsWith("ndi:"));
+  
+  const [useNativeOutput, setUseNativeOutput] = useState(isNativeLive || isNativeBg);
   
   useEffect(() => {
-    console.log("OutputWindow: useNativeOutput changed to", useNativeOutput);
-  }, [useNativeOutput]);
+    setUseNativeOutput(isNativeLive || isNativeBg);
+  }, [isNativeLive, isNativeBg]);
 
-  const nativeFrameUrl = useNativeStream(useNativeOutput);
-  const nativeBgUrl = useNativeStream(settings.background.type === "Camera" && useNativeOutput);
+  const nativeFrameUrl = useNativeStream(isNativeLive);
+  const nativeBgUrl = useNativeStream(isNativeBg);
 
   const [windowScale, setWindowScale] = useState(1);
   const isMounted = useRef(true);
@@ -291,7 +294,6 @@ export function OutputWindow() {
             z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
           }
         });
-        setUseNativeOutput(true);
       } catch (err) {
         console.error("Failed to start native bg mixer source:", err);
       }
@@ -355,17 +357,15 @@ export function OutputWindow() {
             source: {
               id: `native-${val}`,
               name: `Camera ${val}`,
-              source_type: { Camera: { index: parseInt(val) } },
-              z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
-            }
-          });
-        }
-        setUseNativeOutput(true);
-      } catch (err) {
-        console.error("Failed to start native mixer source:", err);
-      }
-    };
-
+                          source_type: { Camera: { index: parseInt(val) } },
+                          z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
+                          }
+                        });
+                      }
+                    } catch (err) {
+                      console.error("Failed to start native mixer source:", err);
+                    }
+                  };
     if (liveItem?.type === "Camera" && liveItem.data.deviceId) {
       if (liveItem.data.deviceId.startsWith("native:") || liveItem.data.deviceId.startsWith("ndi:")) {
         startNativeStream(liveItem.data.deviceId);
