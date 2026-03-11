@@ -678,8 +678,39 @@ export function DisplaySection({ onUpdateSettings, onUploadMedia }: DisplaySecti
           onChange={(e) => onUpdateSettings({ ...settings, native_camera_quality: parseInt(e.target.value) })}
           className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500 mb-1"
         />
-        <p className="text-[9px] text-slate-600 italic">
+        <p className="text-[9px] text-slate-600 italic mb-4">
           Higher quality looks better but uses more CPU. 85-95% is recommended.
+        </p>
+
+        <div className="flex justify-between items-center mb-2">
+          <span className="text-[10px] text-slate-500 uppercase font-bold">Base Resolution</span>
+          <span className="text-xs font-mono text-amber-500">{settings.native_camera_res_width}x{settings.native_camera_res_height}</span>
+        </div>
+        <div className="grid grid-cols-3 gap-2 mb-2">
+          {[
+            { label: "720p", w: 1280, h: 720 },
+            { label: "1080p", w: 1920, h: 1080 },
+            { label: "4K", w: 3840, h: 2160 },
+          ].map((res) => (
+            <button
+              key={res.label}
+              onClick={() => onUpdateSettings({ 
+                ...settings, 
+                native_camera_res_width: res.w, 
+                native_camera_res_height: res.h 
+              })}
+              className={`py-2 rounded-lg border text-[10px] font-bold transition-all ${
+                settings.native_camera_res_width === res.w
+                  ? "border-amber-500 bg-amber-500/10 text-amber-400"
+                  : "border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600 hover:bg-slate-800"
+              }`}
+            >
+              {res.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-[9px] text-slate-600 italic">
+          Match this to your output screen resolution for the sharpest results.
         </p>
       </div>
 

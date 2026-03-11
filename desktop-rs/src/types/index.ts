@@ -321,6 +321,8 @@ export interface PresentationSettings {
   verse_split_threshold: number;
   ndi_enabled: boolean;
   native_camera_quality: number;
+  native_camera_res_width: number;
+  native_camera_res_height: number;
   preferred_monitor?: string;
   custom_theme_colors?: Partial<ThemeColors>;
   highlight_divine_words?: boolean;
@@ -385,6 +387,8 @@ export const DEFAULT_SETTINGS: PresentationSettings = {
   verse_split_threshold: 200,
   ndi_enabled: false,
   native_camera_quality: 85,
+  native_camera_res_width: 1920,
+  native_camera_res_height: 1080,
 };
 
 export interface StartupStatus {

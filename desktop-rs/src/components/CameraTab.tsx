@@ -19,7 +19,11 @@ function NativePreview({ index, mirrored }: { index: number; mirrored: boolean }
   useEffect(() => {
     const start = async () => {
       // Initialize the mixer if it's not already running
-      await invoke("start_mixer", { quality: settings.native_camera_quality }).catch(() => {}); 
+      await invoke("start_mixer", { 
+        quality: settings.native_camera_quality,
+        width: settings.native_camera_res_width,
+        height: settings.native_camera_res_height
+      }).catch(() => {}); 
       
       // Select this camera as the mixer source
       await invoke("set_mixer_source", {
@@ -29,12 +33,14 @@ function NativePreview({ index, mirrored }: { index: number; mirrored: boolean }
           source_type: { Camera: { index } },
           z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
         },
-        quality: settings.native_camera_quality
+        quality: settings.native_camera_quality,
+        width: settings.native_camera_res_width,
+        height: settings.native_camera_res_height
       });
     };
 
     start();
-  }, [index, settings.native_camera_quality]);
+  }, [index, settings.native_camera_quality, settings.native_camera_res_width, settings.native_camera_res_height]);
 
   return (
     <div className="w-full h-full bg-black relative flex items-center justify-center">
@@ -126,7 +132,9 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
         source_type: { Camera: { index } },
         z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
       },
-      quality: settings.native_camera_quality
+      quality: settings.native_camera_quality,
+      width: settings.native_camera_res_width,
+      height: settings.native_camera_res_height
     });
   };
 
@@ -142,7 +150,9 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
         source_type: { NDI: { source_name: name } },
         z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
       },
-      quality: settings.native_camera_quality
+      quality: settings.native_camera_quality,
+      width: settings.native_camera_res_width,
+      height: settings.native_camera_res_height
     });
   };
 

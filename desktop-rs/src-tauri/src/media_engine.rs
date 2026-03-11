@@ -81,7 +81,7 @@ impl MediaEngine {
         }
     }
 
-    pub fn setup_pipeline(&mut self, app: AppHandle, quality: u32) -> Result<(), String> {
+    pub fn setup_pipeline(&mut self, app: AppHandle, quality: u32, width: u32, height: u32) -> Result<(), String> {
         gstreamer::init().map_err(|e| format!("GStreamer init failed: {}", e))?;
         let pipeline = gstreamer::Pipeline::new();
         let compositor = gstreamer::ElementFactory::make("compositor").build()
@@ -92,8 +92,8 @@ impl MediaEngine {
         // Define final output resolution
         let caps = gstreamer::Caps::builder("video/x-raw")
             .field("format", "I420")
-            .field("width", 1920i32)
-            .field("height", 1080i32)
+            .field("width", width as i32)
+            .field("height", height as i32)
             .build();
         capsfilter.set_property("caps", &caps);
 
@@ -153,9 +153,12 @@ impl MediaEngine {
         Ok(())
     }
 
-    pub fn add_source(&mut self, app: &AppHandle, source: MediaSource) -> Result<(), String> {
+    pub fn add_source(&mut self, app: &AppHandle, source: MediaSource, canvas_w: u32, canvas_h: u32) -> Result<(), String> {
         let pipeline = self.pipeline.as_ref().ok_or("Pipeline not initialized")?;
         let compositor = self.compositor.as_ref().ok_or("Compositor not initialized")?;
+
+        let x_scale = canvas_w as f32 / 100.0;
+        let y_scale = canvas_h as f32 / 100.0;
 
         log_msg(app, &format!("Mixer: Adding source {} ({:?})", source.name, source.source_type));
 
@@ -203,10 +206,10 @@ impl MediaEngine {
         let pad = compositor.request_pad_simple("sink_%u").ok_or("Could not request pad")?;
         
         // Use compositor properties for positioning and scaling
-        pad.set_property("xpos", (source.x * 19.2) as i32); 
-        pad.set_property("ypos", (source.y * 10.8) as i32);
-        pad.set_property("width", (source.w * 19.2) as i32);
-        pad.set_property("height", (source.h * 10.8) as i32);
+        pad.set_property("xpos", (source.x * x_scale) as i32); 
+        pad.set_property("ypos", (source.y * y_scale) as i32);
+        pad.set_property("width", (source.w * x_scale) as i32);
+        pad.set_property("height", (source.h * y_scale) as i32);
         pad.set_property("zorder", source.z_index as u32);
         
         let scale_pad = scale.static_pad("src").unwrap();
@@ -287,19 +290,21 @@ pub async fn list_ndi_sources() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub async fn start_mixer(app: AppHandle, quality: Option<u32>) -> Result<(), String> {
+pub async fn start_mixer(app: AppHandle, quality: Option<u32>, width: Option<u32>, height: Option<u32>) -> Result<(), String> {
     log_msg(&app, "Command: start_mixer");
     let mut engine = MEDIA_ENGINE.lock();
     if engine.is_running {
         return Ok(());
     }
-    engine.setup_pipeline(app.clone(), quality.unwrap_or(85))?;
+    let w = width.unwrap_or(1920);
+    let h = height.unwrap_or(1080);
+    engine.setup_pipeline(app.clone(), quality.unwrap_or(85), w, h)?;
     engine.start(&app)?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn set_mixer_source(app: AppHandle, source: MediaSource, quality: Option<u32>) -> Result<(), String> {
+pub async fn set_mixer_source(app: AppHandle, source: MediaSource, quality: Option<u32>, width: Option<u32>, height: Option<u32>) -> Result<(), String> {
     log_msg(&app, &format!("Command: set_mixer_source ({})", source.name));
     let mut engine = MEDIA_ENGINE.lock();
     
@@ -312,8 +317,10 @@ pub async fn set_mixer_source(app: AppHandle, source: MediaSource, quality: Opti
     engine.sources.clear();
     
     // 2. Build fresh pipeline
-    engine.setup_pipeline(app.clone(), quality.unwrap_or(85))?;
-    engine.add_source(&app, source)?;
+    let w = width.unwrap_or(1920);
+    let h = height.unwrap_or(1080);
+    engine.setup_pipeline(app.clone(), quality.unwrap_or(85), w, h)?;
+    engine.add_source(&app, source, w, h)?;
     engine.start(&app)?;
     
     Ok(())

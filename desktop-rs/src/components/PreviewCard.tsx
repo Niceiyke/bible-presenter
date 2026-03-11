@@ -91,9 +91,43 @@ export function PreviewCard({
     const startNative = async (id: string) => {
       const isNdi = id.startsWith("ndi:");
       const val = id.split(":")[1];
-      if (!isNdi) {
-        await invoke("start_camera_stream", { index: parseInt(val) });
+      
+      try {
+        await invoke("start_mixer", { 
+          quality: settings.native_camera_quality,
+          width: settings.native_camera_res_width,
+          height: settings.native_camera_res_height
+        });
+        
+        if (isNdi) {
+          await invoke("set_mixer_source", {
+            source: {
+              id: `preview-ndi-${val}`,
+              name: `Preview NDI: ${val}`,
+              source_type: { NDI: { source_name: val } },
+              z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
+            },
+            quality: settings.native_camera_quality,
+            width: settings.native_camera_res_width,
+            height: settings.native_camera_res_height
+          });
+        } else {
+          await invoke("set_mixer_source", {
+            source: {
+              id: `preview-native-${val}`,
+              name: `Preview Camera ${val}`,
+              source_type: { Camera: { index: parseInt(val) } },
+              z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
+            },
+            quality: settings.native_camera_quality,
+            width: settings.native_camera_res_width,
+            height: settings.native_camera_res_height
+          });
+        }
+      } catch (err) {
+        console.error("PreviewCard: native start failed", err);
       }
+      
       setUseNativePreview(true);
     };
 
