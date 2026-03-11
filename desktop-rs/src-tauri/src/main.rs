@@ -2943,7 +2943,7 @@ async fn save_studio_recording_transcript(state: State<'_, AppState>, id: String
 
 fn main() {
     tauri::Builder::default()
-        .register_uri_scheme_protocol("wordlyte-stream", |app, request| {
+        .register_uri_scheme_protocol("wordlyte-stream", |_app, request| {
             let uri = request.uri().to_string();
             if uri.contains("live") {
                 let frame = media_engine::SHARED_FRAME.lock().clone();
