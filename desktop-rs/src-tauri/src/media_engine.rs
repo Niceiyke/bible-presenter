@@ -97,8 +97,10 @@ impl MediaEngine {
             .build();
         capsfilter.set_property("caps", &caps);
 
-        let videoconvert = gstreamer::ElementFactory::make("videoconvert").build().unwrap();
-        let jpegenc = gstreamer::ElementFactory::make("jpegenc").build().unwrap();
+        let videoconvert = gstreamer::ElementFactory::make("videoconvert").build()
+            .map_err(|e| format!("Could not create videoconvert: {}", e))?;
+        let jpegenc = gstreamer::ElementFactory::make("jpegenc").build()
+            .map_err(|e| format!("Could not create jpegenc: {}", e))?;
         jpegenc.set_property("quality", quality.clamp(1, 100));
 
         let appsink = gstreamer_app::AppSink::builder()
@@ -111,7 +113,7 @@ impl MediaEngine {
             videoconvert.upcast_ref::<gstreamer::Element>(),
             jpegenc.upcast_ref::<gstreamer::Element>(),
             appsink.upcast_ref::<gstreamer::Element>(),
-        ]).unwrap();
+        ]).map_err(|e| format!("Could not add many to pipeline: {}", e))?;
         
         gstreamer::Element::link_many(&[
             compositor.upcast_ref::<gstreamer::Element>(),
@@ -119,7 +121,7 @@ impl MediaEngine {
             videoconvert.upcast_ref::<gstreamer::Element>(),
             jpegenc.upcast_ref::<gstreamer::Element>(),
             appsink.upcast_ref::<gstreamer::Element>(),
-        ]).unwrap();
+        ]).map_err(|e| format!("Could not link many in pipeline: {}", e))?;
 
         // Register appsink callback to update the SHARED_FRAME buffer
         let app_clone = app.clone();
@@ -195,15 +197,21 @@ impl MediaEngine {
             }
         };
 
-        let videoconvert = gstreamer::ElementFactory::make("videoconvert").build().unwrap();
-        let scale = gstreamer::ElementFactory::make("videoscale").build().unwrap();
+        let videoconvert = gstreamer::ElementFactory::make("videoconvert").build()
+            .map_err(|e| format!("Could not create videoconvert: {}", e))?;
+        let scale = gstreamer::ElementFactory::make("videoscale").build()
+            .map_err(|e| format!("Could not create videoscale: {}", e))?;
         
-        pipeline.add_many(&[&src_element, &videoconvert, &scale]).unwrap();
-        src_element.link(&videoconvert).unwrap();
-        videoconvert.link(&scale).unwrap();
+        pipeline.add_many(&[&src_element, &videoconvert, &scale])
+            .map_err(|e| format!("Could not add elements to pipeline: {}", e))?;
+        
+        src_element.link(&videoconvert)
+            .map_err(|e| format!("Could not link source to videoconvert: {}", e))?;
+        videoconvert.link(&scale)
+            .map_err(|e| format!("Could not link videoconvert to scale: {}", e))?;
 
         // Link to compositor and set position/z-order/scaling
-        let pad = compositor.request_pad_simple("sink_%u").ok_or("Could not request pad")?;
+        let pad = compositor.request_pad_simple("sink_%u").ok_or("Could not request pad from compositor")?;
         
         // Use compositor properties for positioning and scaling
         pad.set_property("xpos", (source.x * x_scale) as i32); 
@@ -212,8 +220,12 @@ impl MediaEngine {
         pad.set_property("height", (source.h * y_scale) as i32);
         pad.set_property("zorder", source.z_index as u32);
         
-        let scale_pad = scale.static_pad("src").unwrap();
-        scale_pad.link(&pad).unwrap();
+        let scale_pad = scale.static_pad("src").ok_or("Could not get scale src pad")?;
+        
+        // Match caps for the scale element to ensure it outputs raw video compatible with compositor
+        let scale_caps = gstreamer::Caps::builder("video/x-raw").build();
+        scale_pad.link_filtered(&pad, Some(&scale_caps))
+            .map_err(|e| format!("Could not link scale to compositor: {}", e))?;
 
         self.sources.push(source);
         Ok(())
