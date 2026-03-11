@@ -20,6 +20,11 @@ export function useNativeStream(active: boolean) {
         const bytes = await invoke<number[]>("get_mixer_frame");
         
         if (bytes && bytes.length > 0) {
+          // Log occasionally to confirm arrival
+          if (Math.random() < 0.01) {
+            console.log(`IPC Bridge: Received frame of ${bytes.length} bytes`);
+          }
+
           const blob = new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' });
           const url = URL.createObjectURL(blob);
           

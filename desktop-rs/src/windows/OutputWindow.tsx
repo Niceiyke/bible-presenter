@@ -46,6 +46,11 @@ export function OutputWindow() {
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [mainCameraStream, setMainCameraStream] = useState<MediaStream | null>(null);
   const [useNativeOutput, setUseNativeOutput] = useState(false);
+  
+  useEffect(() => {
+    console.log(\"OutputWindow: useNativeOutput changed to\", useNativeOutput);
+  }, [useNativeOutput]);
+
   const nativeFrameUrl = useNativeStream(useNativeOutput);
   const nativeBgUrl = useNativeStream(settings.background.type === "Camera" && useNativeOutput);
 
