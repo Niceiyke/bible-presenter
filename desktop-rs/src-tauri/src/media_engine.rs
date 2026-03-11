@@ -66,7 +66,6 @@ pub struct MediaEngine {
     compositor: Option<gstreamer::Element>,
     sources: Vec<MediaSource>,
     is_running: bool,
-    pub first_frame_received: bool,
 }
 
 impl MediaEngine {
@@ -77,7 +76,6 @@ impl MediaEngine {
             compositor: None,
             sources: Vec::new(),
             is_running: false,
-            first_frame_received: false,
         }
     }
 
@@ -329,6 +327,8 @@ pub async fn set_mixer_source(app: AppHandle, source: MediaSource, quality: Opti
     // 2. Fully tear down old pipeline and release hardware
     if let Some(p) = engine.pipeline.take() {
         let _ = p.set_state(gstreamer::State::Null);
+        // Small delay to allow the OS driver to fully release the camera
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
     engine.compositor = None;
     engine.is_running = false;

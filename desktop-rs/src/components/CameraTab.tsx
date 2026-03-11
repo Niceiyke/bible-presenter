@@ -18,13 +18,6 @@ function NativePreview({ index, mirrored }: { index: number; mirrored: boolean }
 
   useEffect(() => {
     const start = async () => {
-      // Initialize the mixer if it's not already running
-      await invoke("start_mixer", { 
-        quality: settings.native_camera_quality,
-        width: settings.native_camera_res_width,
-        height: settings.native_camera_res_height
-      }).catch(() => {}); 
-      
       // Select this camera as the mixer source
       await invoke("set_mixer_source", {
         source: {

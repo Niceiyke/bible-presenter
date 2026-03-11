@@ -93,12 +93,6 @@ export function PreviewCard({
       const val = id.split(":")[1];
       
       try {
-        await invoke("start_mixer", { 
-          quality: settings.native_camera_quality,
-          width: settings.native_camera_res_width,
-          height: settings.native_camera_res_height
-        });
-        
         if (isNdi) {
           await invoke("set_mixer_source", {
             source: {
