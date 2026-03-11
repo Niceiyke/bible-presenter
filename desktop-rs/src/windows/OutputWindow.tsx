@@ -289,7 +289,9 @@ export function OutputWindow() {
         const loop = () => {
           if (!bgLoopActive) return;
           setNativeBgUrl(`wordlyte-stream://localhost/live?t=${Date.now()}&bg=1`);
-          requestAnimationFrame(loop);
+          setTimeout(() => {
+            requestAnimationFrame(loop);
+          }, 33);
         };
         loop();
       } catch (err) {
@@ -372,7 +374,9 @@ export function OutputWindow() {
       const loop = () => {
         if (!frameLoopActive) return;
         setNativeFrameUrl(`wordlyte-stream://localhost/live?t=${Date.now()}`);
-        requestAnimationFrame(loop);
+        setTimeout(() => {
+          requestAnimationFrame(loop);
+        }, 33);
       };
       loop();
     };

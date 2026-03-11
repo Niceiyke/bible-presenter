@@ -2943,9 +2943,17 @@ async fn save_studio_recording_transcript(state: State<'_, AppState>, id: String
 
 fn main() {
     tauri::Builder::default()
-        .register_uri_scheme_protocol("wordlyte-stream", |_app, request| {
+        .register_uri_scheme_protocol("wordlyte-stream", |app, request| {
             let uri = request.uri().to_string();
-            if uri.contains("live") {
+            let path = request.uri().path();
+            
+            // Debug log once per session
+            static LOGGED_URI: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !LOGGED_URI.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                log_msg(app, &format!("Protocol Check - URI: {}, Path: {}", uri, path));
+            }
+
+            if path.contains("live") || uri.contains("live") {
                 let frame = media_engine::SHARED_FRAME.lock().clone();
                 let final_frame = if frame.is_empty() {
                     // Fallback to a 1x1 black pixel JPEG if the frame buffer is empty
@@ -2966,9 +2974,10 @@ fn main() {
                 Response::builder()
                     .header(CONTENT_TYPE, "image/jpeg")
                     .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                    .header(CACHE_CONTROL, "no-cache, no-store, must-revalidate")
+                    .header(CACHE_CONTROL, "no-cache, no-store, must-revalidate, proxy-revalidate")
                     .header("Pragma", "no-cache")
                     .header("Expires", "0")
+                    .header("Connection", "keep-alive")
                     .body(final_frame)
                     .unwrap()
             } else {

@@ -29,11 +29,13 @@ function NativePreview({ index, mirrored }: { index: number; mirrored: boolean }
         }
       });
       
-      // High-speed polling loop
+      // Polling loop at ~30fps
       const updateLoop = () => {
         if (!active) return;
         setFrameUrl(`wordlyte-stream://localhost/live?t=${Date.now()}`);
-        requestAnimationFrame(updateLoop);
+        setTimeout(() => {
+          requestAnimationFrame(updateLoop);
+        }, 33); // ~30fps
       };
       updateLoop();
     };
@@ -52,6 +54,12 @@ function NativePreview({ index, mirrored }: { index: number; mirrored: boolean }
         className="max-w-full max-h-full object-contain"
         style={{ transform: mirrored ? "scaleX(-1)" : "none" }}
         alt="Native Stream"
+        onLoad={() => {
+          // Log success occasionally
+          if (Math.random() < 0.01) {
+            console.log("Native stream frame rendered successfully");
+          }
+        }}
         onError={(e) => {
           if (frameUrl) {
             console.error("Native preview image failed to load:", frameUrl);
