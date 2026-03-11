@@ -42,7 +42,7 @@ export function PreviewCard({
   /** When true, suppresses the label/badge header row entirely. */
   hideHeader?: boolean;
 }) {
-  const { appDataDir, settings } = useAppStore();
+  const { appDataDir } = useAppStore();
   const isVideo = item?.type === "Media" && (item.data as MediaItem).media_type === "Video";
   const isCamera = item?.type === "Camera";
   const showControls = isVideo;
@@ -51,7 +51,7 @@ export function PreviewCard({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cameraPreviewRef = useRef<HTMLVideoElement | null>(null);
   const [useNativePreview, setUseNativePreview] = useState(false);
-  const nativeFrameUrl = useNativeStream(useNativePreview, settings.native_camera_quality);
+  const nativeFrameUrl = useNativeStream(useNativePreview);
   const videoCleanupRef = useRef<(() => void) | null>(null);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(true);
@@ -91,37 +91,9 @@ export function PreviewCard({
     const startNative = async (id: string) => {
       const isNdi = id.startsWith("ndi:");
       const val = id.split(":")[1];
-      
-      try {
-        if (isNdi) {
-          await invoke("set_mixer_source", {
-            source: {
-              id: `preview-ndi-${val}`,
-              name: `Preview NDI: ${val}`,
-              source_type: { NDI: { source_name: val } },
-              z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
-            },
-            quality: settings.native_camera_quality,
-            width: settings.native_camera_res_width,
-            height: settings.native_camera_res_height
-          });
-        } else {
-          await invoke("set_mixer_source", {
-            source: {
-              id: `preview-native-${val}`,
-              name: `Preview Camera ${val}`,
-              source_type: { Camera: { index: parseInt(val) } },
-              z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
-            },
-            quality: settings.native_camera_quality,
-            width: settings.native_camera_res_width,
-            height: settings.native_camera_res_height
-          });
-        }
-      } catch (err) {
-        console.error("PreviewCard: native start failed", err);
+      if (!isNdi) {
+        await invoke("start_camera_stream", { index: parseInt(val) });
       }
-      
       setUseNativePreview(true);
     };
 

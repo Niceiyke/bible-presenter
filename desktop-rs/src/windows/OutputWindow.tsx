@@ -36,9 +36,6 @@ export function OutputWindow() {
     auto_split_verses: true,
     verse_split_threshold: 200,
     ndi_enabled: true,
-    native_camera_quality: 85,
-    native_camera_res_width: 1920,
-    native_camera_res_height: 1080,
   });
   const [appDataDir, setAppDataDir] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -57,8 +54,8 @@ export function OutputWindow() {
     setUseNativeOutput(isNativeLive || isNativeBg);
   }, [isNativeLive, isNativeBg]);
 
-  const nativeFrameUrl = useNativeStream(isNativeLive, settings.native_camera_quality);
-  const nativeBgUrl = useNativeStream(isNativeBg, settings.native_camera_quality);
+  const nativeFrameUrl = useNativeStream(isNativeLive);
+  const nativeBgUrl = useNativeStream(isNativeBg);
 
   const [windowScale, setWindowScale] = useState(1);
   const isMounted = useRef(true);
@@ -274,7 +271,6 @@ export function OutputWindow() {
     
     const startBrowserCamera = async (deviceId: string) => {
       try {
-        await invoke("stop_mixer").catch(() => {});
         const stream = await navigator.mediaDevices.getUserMedia({ 
           video: { deviceId: { exact: deviceId } } 
         });
@@ -285,26 +281,25 @@ export function OutputWindow() {
       }
     };
 
-                const startNativeBg = async (id: string) => {
-                  const isNdi = id.startsWith("ndi:");
-                  const val = id.split(":")[1];
-                  
-                  try {
-                    await invoke("set_mixer_source", {
-                      source: {
-                        id: `bg-${val}`,
-                        name: `Background ${val}`,
-                        source_type: isNdi ? { NDI: { source_name: val } } : { Camera: { index: parseInt(val) } },
-                        z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
-                      },
-                      quality: settings.native_camera_quality,
-                      width: settings.native_camera_res_width,
-                      height: settings.native_camera_res_height
-                    });
-                  } catch (err) {
-                    console.error("Failed to start native bg mixer source:", err);
-                  }
-                };    if (cameraBg?.deviceId) {
+    const startNativeBg = async (id: string) => {
+      const isNdi = id.startsWith("ndi:");
+      const val = id.split(":")[1];
+      try {
+        await invoke("start_mixer");
+        await invoke("set_mixer_source", {
+          source: {
+            id: `bg-${val}`,
+            name: `Background ${val}`,
+            source_type: isNdi ? { NDI: { source_name: val } } : { Camera: { index: parseInt(val) } },
+            z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
+          }
+        });
+      } catch (err) {
+        console.error("Failed to start native bg mixer source:", err);
+      }
+    };
+
+    if (cameraBg?.deviceId) {
       if (cameraBg.deviceId.startsWith("native:") || cameraBg.deviceId.startsWith("ndi:")) {
         startNativeBg(cameraBg.deviceId);
       } else {
@@ -331,7 +326,6 @@ export function OutputWindow() {
     
     const startBrowserCamera = async (deviceId: string) => {
       try {
-        await invoke("stop_mixer").catch(() => {});
         const stream = await navigator.mediaDevices.getUserMedia({ 
           video: { deviceId: { exact: deviceId } } 
         });
@@ -343,37 +337,33 @@ export function OutputWindow() {
       }
     };
 
-            const startNativeStream = async (id: string) => {
-              const isNdi = id.startsWith("ndi:");
-              const val = id.split(":")[1];
-              
-              try {
-                if (isNdi) {
-                  await invoke("set_mixer_source", {
-                    source: {
-                      id: `ndi-${val}`,
-                      name: `NDI: ${val}`,
-                      source_type: { NDI: { source_name: val } },
-                      z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
-                    },
-                    quality: settings.native_camera_quality,
-                    width: settings.native_camera_res_width,
-                    height: settings.native_camera_res_height
-                  });
-                } else {
-                  await invoke("set_mixer_source", {
-                    source: {
-                      id: `native-${val}`,
-                      name: `Camera ${val}`,
-                      source_type: { Camera: { index: parseInt(val) } },
-                      z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
-                    },
-                    quality: settings.native_camera_quality,
-                    width: settings.native_camera_res_width,
-                    height: settings.native_camera_res_height
-                  });
-                }
-              } catch (err) {                      console.error("Failed to start native mixer source:", err);
+    const startNativeStream = async (id: string) => {
+      const isNdi = id.startsWith("ndi:");
+      const val = id.split(":")[1];
+      
+      try {
+        await invoke("start_mixer");
+        if (isNdi) {
+          await invoke("set_mixer_source", {
+            source: {
+              id: `ndi-${val}`,
+              name: `NDI: ${val}`,
+              source_type: { NDI: { source_name: val } },
+              z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
+            }
+          });
+        } else {
+          await invoke("set_mixer_source", {
+            source: {
+              id: `native-${val}`,
+              name: `Camera ${val}`,
+                          source_type: { Camera: { index: parseInt(val) } },
+                          z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
+                          }
+                        });
+                      }
+                    } catch (err) {
+                      console.error("Failed to start native mixer source:", err);
                     }
                   };
     if (liveItem?.type === "Camera" && liveItem.data.deviceId) {

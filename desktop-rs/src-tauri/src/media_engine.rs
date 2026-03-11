@@ -66,6 +66,7 @@ pub struct MediaEngine {
     compositor: Option<gstreamer::Element>,
     sources: Vec<MediaSource>,
     is_running: bool,
+    pub first_frame_received: bool,
 }
 
 impl MediaEngine {
@@ -76,10 +77,11 @@ impl MediaEngine {
             compositor: None,
             sources: Vec::new(),
             is_running: false,
+            first_frame_received: false,
         }
     }
 
-    pub fn setup_pipeline(&mut self, app: AppHandle, quality: u32, width: u32, height: u32) -> Result<(), String> {
+    pub fn setup_pipeline(&mut self, app: AppHandle) -> Result<(), String> {
         gstreamer::init().map_err(|e| format!("GStreamer init failed: {}", e))?;
         let pipeline = gstreamer::Pipeline::new();
         let compositor = gstreamer::ElementFactory::make("compositor").build()
@@ -90,16 +92,14 @@ impl MediaEngine {
         // Define final output resolution
         let caps = gstreamer::Caps::builder("video/x-raw")
             .field("format", "I420")
-            .field("width", width as i32)
-            .field("height", height as i32)
+            .field("width", 1920i32)
+            .field("height", 1080i32)
             .build();
         capsfilter.set_property("caps", &caps);
 
-        let videoconvert = gstreamer::ElementFactory::make("videoconvert").build()
-            .map_err(|e| format!("Could not create videoconvert: {}", e))?;
-        let jpegenc = gstreamer::ElementFactory::make("jpegenc").build()
-            .map_err(|e| format!("Could not create jpegenc: {}", e))?;
-        jpegenc.set_property("quality", quality.clamp(1, 100));
+        let videoconvert = gstreamer::ElementFactory::make("videoconvert").build().unwrap();
+        let jpegenc = gstreamer::ElementFactory::make("jpegenc").build().unwrap();
+        jpegenc.set_property("quality", 85);
 
         let appsink = gstreamer_app::AppSink::builder()
             .name("output_sink")
@@ -111,7 +111,7 @@ impl MediaEngine {
             videoconvert.upcast_ref::<gstreamer::Element>(),
             jpegenc.upcast_ref::<gstreamer::Element>(),
             appsink.upcast_ref::<gstreamer::Element>(),
-        ]).map_err(|e| format!("Could not add many to pipeline: {}", e))?;
+        ]).unwrap();
         
         gstreamer::Element::link_many(&[
             compositor.upcast_ref::<gstreamer::Element>(),
@@ -119,7 +119,7 @@ impl MediaEngine {
             videoconvert.upcast_ref::<gstreamer::Element>(),
             jpegenc.upcast_ref::<gstreamer::Element>(),
             appsink.upcast_ref::<gstreamer::Element>(),
-        ]).map_err(|e| format!("Could not link many in pipeline: {}", e))?;
+        ]).unwrap();
 
         // Register appsink callback to update the SHARED_FRAME buffer
         let app_clone = app.clone();
@@ -153,12 +153,9 @@ impl MediaEngine {
         Ok(())
     }
 
-    pub fn add_source(&mut self, app: &AppHandle, source: MediaSource, canvas_w: u32, canvas_h: u32) -> Result<(), String> {
+    pub fn add_source(&mut self, app: &AppHandle, source: MediaSource) -> Result<(), String> {
         let pipeline = self.pipeline.as_ref().ok_or("Pipeline not initialized")?;
         let compositor = self.compositor.as_ref().ok_or("Compositor not initialized")?;
-
-        let x_scale = canvas_w as f32 / 100.0;
-        let y_scale = canvas_h as f32 / 100.0;
 
         log_msg(app, &format!("Mixer: Adding source {} ({:?})", source.name, source.source_type));
 
@@ -195,34 +192,25 @@ impl MediaEngine {
             }
         };
 
-        let videoconvert = gstreamer::ElementFactory::make("videoconvert").build()
-            .map_err(|e| format!("Could not create videoconvert: {}", e))?;
-        let scale = gstreamer::ElementFactory::make("videoscale").build()
-            .map_err(|e| format!("Could not create videoscale: {}", e))?;
+        let videoconvert = gstreamer::ElementFactory::make("videoconvert").build().unwrap();
+        let scale = gstreamer::ElementFactory::make("videoscale").build().unwrap();
         
-        pipeline.add_many(&[&src_element, &videoconvert, &scale])
-            .map_err(|e| format!("Could not add elements to pipeline: {}", e))?;
-        
-        src_element.link(&videoconvert)
-            .map_err(|e| format!("Could not link source to videoconvert: {}", e))?;
-        videoconvert.link(&scale)
-            .map_err(|e| format!("Could not link videoconvert to scale: {}", e))?;
+        pipeline.add_many(&[&src_element, &videoconvert, &scale]).unwrap();
+        src_element.link(&videoconvert).unwrap();
+        videoconvert.link(&scale).unwrap();
 
         // Link to compositor and set position/z-order/scaling
-        let pad = compositor.request_pad_simple("sink_%u").ok_or("Could not request pad from compositor")?;
+        let pad = compositor.request_pad_simple("sink_%u").ok_or("Could not request pad")?;
         
         // Use compositor properties for positioning and scaling
-        pad.set_property("xpos", (source.x * x_scale) as i32); 
-        pad.set_property("ypos", (source.y * y_scale) as i32);
-        pad.set_property("width", (source.w * x_scale) as i32);
-        pad.set_property("height", (source.h * y_scale) as i32);
+        pad.set_property("xpos", (source.x * 19.2) as i32); 
+        pad.set_property("ypos", (source.y * 10.8) as i32);
+        pad.set_property("width", (source.w * 19.2) as i32);
+        pad.set_property("height", (source.h * 10.8) as i32);
         pad.set_property("zorder", source.z_index as u32);
         
-        let scale_pad = scale.static_pad("src").ok_or("Could not get scale src pad")?;
-        
-        // Link scale to compositor pad. GStreamer will negotiate compatible caps automatically.
-        scale_pad.link(&pad)
-            .map_err(|e| format!("Could not link scale to compositor: {}", e))?;
+        let scale_pad = scale.static_pad("src").unwrap();
+        scale_pad.link(&pad).unwrap();
 
         self.sources.push(source);
         Ok(())
@@ -299,75 +287,34 @@ pub async fn list_ndi_sources() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub async fn start_mixer(app: AppHandle, quality: Option<u32>, width: Option<u32>, height: Option<u32>) -> Result<(), String> {
+pub async fn start_mixer(app: AppHandle) -> Result<(), String> {
     log_msg(&app, "Command: start_mixer");
     let mut engine = MEDIA_ENGINE.lock();
     if engine.is_running {
         return Ok(());
     }
-    let w = width.unwrap_or(1920);
-    let h = height.unwrap_or(1080);
-    engine.setup_pipeline(app.clone(), quality.unwrap_or(85), w, h)?;
+    engine.setup_pipeline(app.clone())?;
     engine.start(&app)?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn set_mixer_source(app: AppHandle, source: MediaSource, quality: Option<u32>, width: Option<u32>, height: Option<u32>) -> Result<(), String> {
+pub async fn set_mixer_source(app: AppHandle, source: MediaSource) -> Result<(), String> {
     log_msg(&app, &format!("Command: set_mixer_source ({})", source.name));
-    
-    // 1. Clear the old frame buffer immediately so we don't show a "stuck" frame
-    {
-        let mut shared = SHARED_FRAME.lock();
-        shared.clear();
-    }
-
-    // 2. Fully tear down old pipeline and release hardware
-    // We take the pipeline and drop the lock BEFORE we sleep or setup new ones
-    let mut old_pipeline = None;
-    {
-        let mut engine = MEDIA_ENGINE.lock();
-        old_pipeline = engine.pipeline.take();
-        engine.compositor = None;
-        engine.is_running = false;
-        engine.sources.clear();
-    }
-
-    if let Some(p) = old_pipeline {
-        log_msg(&app, "Mixer: Shutting down old pipeline...");
-        let _ = p.set_state(gstreamer::State::Null);
-        // Small delay to allow the OS driver to fully release the camera
-        // IMPORTANT: Must be outside the lock!
-        std::thread::sleep(std::time::Duration::from_millis(150));
-    }
-
     let mut engine = MEDIA_ENGINE.lock();
     
-    // 3. Build fresh pipeline
-    let w = width.unwrap_or(1920);
-    let h = height.unwrap_or(1080);
-    engine.setup_pipeline(app.clone(), quality.unwrap_or(85), w, h)?;
-    engine.add_source(&app, source, w, h)?;
-    engine.start(&app)?;
-    
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn stop_mixer(app: AppHandle) -> Result<(), String> {
-    log_msg(&app, "Command: stop_mixer - Releasing hardware");
-    
-    {
-        let mut shared = SHARED_FRAME.lock();
-        shared.clear();
-    }
-
-    let mut engine = MEDIA_ENGINE.lock();
+    // 1. Fully tear down old pipeline
     if let Some(p) = engine.pipeline.take() {
         let _ = p.set_state(gstreamer::State::Null);
     }
-    engine.is_running = false;
     engine.compositor = None;
+    engine.is_running = false;
     engine.sources.clear();
+    
+    // 2. Build fresh pipeline
+    engine.setup_pipeline(app.clone())?;
+    engine.add_source(&app, source)?;
+    engine.start(&app)?;
+    
     Ok(())
 }

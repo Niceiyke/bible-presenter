@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
  * A hook that pulls video frames from the Rust backend using standard Tauri IPC.
  * This is 100% compatible with Windows WebView2 security restrictions.
  */
-export function useNativeStream(active: boolean, quality?: number) {
+export function useNativeStream(active: boolean) {
   const [frameUrl, setFrameUrl] = useState<string>("");
   const lastUrlRef = useRef<string>("");
 
@@ -22,7 +22,7 @@ export function useNativeStream(active: boolean, quality?: number) {
         if (bytes && bytes.length > 0) {
           // Log occasionally to confirm arrival
           if (Math.random() < 0.01) {
-            console.log(`IPC Bridge: Received frame of ${bytes.length} bytes at quality ${quality || 'default'}`);
+            console.log(`IPC Bridge: Received frame of ${bytes.length} bytes`);
           }
 
           const blob = new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' });
@@ -57,7 +57,7 @@ export function useNativeStream(active: boolean, quality?: number) {
         lastUrlRef.current = "";
       }
     };
-  }, [active, quality]);
+  }, [active]);
 
   return frameUrl;
 }

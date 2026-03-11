@@ -284,15 +284,6 @@ pub struct PresentationSettings {
     /// Base font size for scripture text (in pt or similar units used by frontend).
     #[serde(default = "default_font_size")]
     pub font_size: f64,
-    /// JPEG quality for native camera streaming (1-100). Defaults to 85.
-    #[serde(default = "default_camera_quality")]
-    pub native_camera_quality: u32,
-    /// Width for native camera streaming. Defaults to 1920.
-    #[serde(default = "default_camera_res_width")]
-    pub native_camera_res_width: u32,
-    /// Height for native camera streaming. Defaults to 1080.
-    #[serde(default = "default_camera_res_height")]
-    pub native_camera_res_height: u32,
     /// Slide transition animation type: "fade" | "slide-up" | "slide-left" | "zoom" | "none"
     #[serde(default = "default_transition")]
     pub slide_transition: String,
@@ -362,11 +353,13 @@ fn default_highlight_color() -> String { "#ef4444".to_string() }
 fn default_version_font() -> String { "Arial, sans-serif".to_string() }
 fn default_version_size() -> f64 { 24.0 }
 
-fn default_font_size() -> f64 { 72.0 }
-fn default_camera_quality() -> u32 { 85 }
-fn default_camera_res_width() -> u32 { 1920 }
-fn default_camera_res_height() -> u32 { 1080 }
-fn default_transition() -> String { "fade".to_string() }
+fn default_font_size() -> f64 {
+    72.0
+}
+
+fn default_transition() -> String {
+    "fade".to_string()
+}
 
 fn default_transition_duration() -> f32 {
     0.4
@@ -411,9 +404,6 @@ impl Default for PresentationSettings {
             auto_split_verses: default_auto_split_verses(),
             verse_split_threshold: default_verse_split_threshold(),
             ndi_enabled: false,
-            native_camera_quality: default_camera_quality(),
-            native_camera_res_width: default_camera_res_width(),
-            native_camera_res_height: default_camera_res_height(),
             preferred_monitor: None,
             highlight_divine_words: default_highlight_divine_words(),
             highlight_color: default_highlight_color(),
