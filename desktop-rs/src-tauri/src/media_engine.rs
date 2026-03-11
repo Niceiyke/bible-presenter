@@ -8,6 +8,12 @@ use crate::store::log_msg;
 use nokhwa::utils::CameraIndex;
 
 pub fn init_bundled_gstreamer(app: &AppHandle) -> Result<(), String> {
+    // Check if already initialized to avoid double-init crashes
+    static INIT_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if INIT_ONCE.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
+
     let resource_dir = app.path().resource_dir()
         .map_err(|e| format!("Failed to get resource dir: {}", e))?;
     
@@ -39,6 +45,7 @@ pub fn init_bundled_gstreamer(app: &AppHandle) -> Result<(), String> {
     }
 
     gstreamer::init().map_err(|e| e.to_string())?;
+    INIT_ONCE.store(true, std::sync::atomic::Ordering::SeqCst);
     Ok(())
 }
 
@@ -333,17 +340,24 @@ pub async fn start_mixer(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn set_mixer_source(app: AppHandle, source: MediaSource) -> Result<(), String> {
     log_msg(&app, &format!("Command: set_mixer_source ({})", source.name));
-    let mut engine = MEDIA_ENGINE.lock();
     
-    // 1. Fully tear down old pipeline
-    if let Some(p) = engine.pipeline.take() {
-        let _ = p.set_state(gstreamer::State::Null);
+    // 1. Fully tear down old pipeline and release hardware
+    {
+        let mut engine = MEDIA_ENGINE.lock();
+        if let Some(p) = engine.pipeline.take() {
+            let _ = p.set_state(gstreamer::State::Null);
+        }
+        engine.compositor = None;
+        engine.is_running = false;
+        engine.sources.clear();
     }
-    engine.compositor = None;
-    engine.is_running = false;
-    engine.sources.clear();
-    
-    // 2. Build fresh pipeline
+
+    // 2. Safety Delay: Give OS drivers time to release the hardware device.
+    // Rapid toggling is the #1 cause of native camera crashes.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // 3. Build fresh pipeline
+    let mut engine = MEDIA_ENGINE.lock();
     engine.setup_pipeline(app.clone())?;
     engine.add_source(&app, source)?;
     engine.start(&app)?;
