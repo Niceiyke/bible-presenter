@@ -5,6 +5,7 @@
   "windows": ["main", "stage", "design", "studio"],
   "permissions": [
     "core:default",
+    "core:webview:allow-internal-toggle-devtools",
     "dialog:allow-open",
     "dialog:allow-save",
     "dialog:allow-confirm",

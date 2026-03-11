@@ -3,5 +3,8 @@
   "identifier": "output",
   "description": "Capabilities for Wordlyte output window",
   "windows": ["output"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:webview:allow-internal-toggle-devtools"
+  ]
 }
