@@ -62,7 +62,6 @@ export function ContentBrowser({
           }}
         />
       )}
-      {activeTab === "camera" && <CameraTab onStage={stageItem} onLive={sendLive} />}
       {activeTab === "studio" && (
         <StudioTab
           onStage={stageItem} onLive={sendLive}

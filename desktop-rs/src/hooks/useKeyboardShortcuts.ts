@@ -48,7 +48,7 @@ export function useKeyboardShortcuts(props: Props): void {
         case "F2": setActiveTab("songs"); break;
         case "F3": setActiveTab("media"); break;
         case "F4": invoke("toggle_studio_window"); break;
-        case "F5": setActiveTab("camera"); break;
+        case "F5": setActiveTab("media"); useAppStore.getState().setMediaFilter("camera"); break;
         case "F6": setActiveTab("scenes"); break;
         case "F7": setActiveTab("scene-builder"); break;
         case "F8": setActiveTab("props"); break;

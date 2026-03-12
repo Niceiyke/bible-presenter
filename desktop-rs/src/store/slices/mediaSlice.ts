@@ -17,11 +17,12 @@ export interface MediaSlice {
       ids: string[],
       tagsToAdd: string[],
       tagsToRemove: string[],
-      category: string | undefined
-    ) => Promise<void>;
-  mediaFilter: "image" | "video";
-  setMediaFilter: (v: "image" | "video") => void;
-  showLogoPicker: boolean;
+          category: string | undefined
+        ) => Promise<void>;
+        mediaFilter: "image" | "video" | "camera";
+        setMediaFilter: (v: "image" | "video" | "camera") => void;
+        showLogoPicker: boolean;
+      
   setShowLogoPicker: (v: boolean) => void;
   showGlobalBgPicker: boolean;
   setShowGlobalBgPicker: (v: boolean) => void;

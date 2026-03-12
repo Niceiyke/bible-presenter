@@ -1,9 +1,10 @@
 import React from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { Upload, Trash2, Tag, BookOpen, X } from "lucide-react";
+import { Upload, Trash2, Tag, BookOpen, X, Camera } from "lucide-react";
 import { useAppStore } from "../store";
 import type { DisplayItem, MediaFitMode, MediaItem } from "../types";
 import { EditMediaModal } from "./EditMediaModal";
+import { CameraTab } from "./CameraTab";
 
 interface MediaTabProps {
   onStage: (item: DisplayItem) => void;
@@ -132,7 +133,7 @@ export function MediaTab({
       {/* Header + upload */}
       <div className="flex justify-between items-center">
         <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Media Library</h2>
-        {(
+        {mediaFilter !== "camera" && (
           <button onClick={onLoadMedia} className="text-[10px] bg-amber-500 hover:bg-amber-600 text-black font-bold px-3 py-1.5 rounded transition-all flex items-center gap-1.5">
             <Upload size={11} /> UPLOAD
           </button>
@@ -141,25 +142,30 @@ export function MediaTab({
 
       {/* Filter tabs */}
       <div className="flex gap-0.5 bg-slate-900/60 rounded-lg p-0.5 border border-slate-800">
-        {(["image", "video"] as const).map((f) => (
+        {(["image", "video", "camera"] as const).map((f) => (
           <button
             key={f}
             onClick={() => setMediaFilter(f)}
-            className={`flex-1 py-1.5 rounded text-[9px] font-bold uppercase tracking-wide transition-all ${
+            className={`flex-1 py-1.5 rounded text-[9px] font-bold uppercase tracking-wide transition-all flex items-center justify-center gap-1.5 ${
               mediaFilter === f
                 ? "bg-amber-500 text-black shadow"
                 : "text-slate-500 hover:text-slate-300"
             }`}
           >
-            {f === "image"
-              ? `Images (${media.filter((m) => m.media_type === "Image").length})`
-              : `Videos (${media.filter((m) => m.media_type === "Video").length})`}
+            {f === "image" && `Images (${media.filter((m) => m.media_type === "Image").length})`}
+            {f === "video" && `Videos (${media.filter((m) => m.media_type === "Video").length})`}
+            {f === "camera" && <><Camera size={10} /> Camera</>}
           </button>
         ))}
       </div>
 
+      {/* Camera View */}
+      {mediaFilter === "camera" && (
+        <CameraTab onStage={onStage} onLive={onLive} />
+      )}
+
       {/* Bulk action bar */}
-      {selectedMediaItems.length > 0 && (
+      {selectedMediaItems.length > 0 && mediaFilter !== "camera" && (
         <div className="flex flex-col gap-2 p-2 bg-slate-800/50 border border-slate-700 rounded-lg">
           <p className="text-xs text-slate-400 font-bold">Selected: {selectedMediaItems.length} items</p>
           <div className="flex gap-2">
