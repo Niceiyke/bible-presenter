@@ -1,14 +1,7 @@
 // Wordlyte Main Entry Point
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod ndi;
-mod media_engine;
-
 use wordlyte_lib::{audio, engine, store};
-use media_engine::{
-    list_native_cameras, start_camera_stream, stop_camera_stream,
-    list_ndi_sources, start_mixer, check_media_dependencies, set_mixer_source, get_mixer_frame
-};
 use store::log_msg;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -28,7 +21,6 @@ use engine::model_manager::{
     TranscriptionConfig,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri::http::{Response, header::*};
 
 // ---------------------------------------------------------------------------
 // Semantic Index management
@@ -261,8 +253,6 @@ pub struct AppState {
     /// None when local Whisper or REST cloud mode is active.
     pub operator_cloud_stream_handle: Arc<Mutex<Option<engine::cloud_stream::CloudStreamHandle>>>,
     pub preacher_cloud_stream_handle: Arc<Mutex<Option<engine::cloud_stream::CloudStreamHandle>>>,
-    /// NDI Streaming Manager.
-    pub ndi_manager: Arc<ndi::NdiManager>,
     /// Whether the operator recording pipeline is currently active.
     pub operator_is_active: Arc<AtomicBool>,
     /// Whether the preacher recording pipeline is currently active.
@@ -307,7 +297,6 @@ impl Clone for AppState {
             context_buffer: self.context_buffer.clone(),
             operator_cloud_stream_handle: self.operator_cloud_stream_handle.clone(),
             preacher_cloud_stream_handle: self.preacher_cloud_stream_handle.clone(),
-            ndi_manager: self.ndi_manager.clone(),
             operator_is_active: self.operator_is_active.clone(),
             preacher_is_active: self.preacher_is_active.clone(),
             studio_is_active: self.studio_is_active.clone(),
@@ -1150,18 +1139,6 @@ async fn get_audio_devices(
     audio
         .list_devices()
         .map_err(|e: anyhow::Error| e.to_string())
-}
-
-#[tauri::command]
-async fn toggle_ndi(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
-    let mut config = state.ndi_manager.config.lock();
-    config.enabled = enabled;
-    Ok(())
-}
-
-#[tauri::command]
-async fn get_ndi_config(state: State<'_, AppState>) -> Result<ndi::NdiConfig, String> {
-    Ok(state.ndi_manager.config.lock().clone())
 }
 
 #[tauri::command]
@@ -2940,49 +2917,12 @@ async fn save_studio_recording_transcript(state: State<'_, AppState>, id: String
 
 fn main() {
     tauri::Builder::default()
-        .register_asynchronous_uri_scheme_protocol("wordlyte-stream", |_app, _request, responder| {
-            // Unconditionally provide the latest frame for any request to this protocol
-            let frame = {
-                let locked = media_engine::SHARED_FRAME.lock();
-                if locked.is_empty() {
-                    None
-                } else {
-                    Some(locked.clone())
-                }
-            };
-            
-            if let Some(final_frame) = frame {
-                let response = Response::builder()
-                    .header(CONTENT_TYPE, "image/jpeg")
-                    .header(CONTENT_LENGTH, final_frame.len().to_string())
-                    .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                    .header(CACHE_CONTROL, "no-cache, no-store, must-revalidate")
-                    .header("Pragma", "no-cache")
-                    .header("Expires", "0")
-                    .body(final_frame)
-                    .unwrap();
-                responder.respond(response);
-            } else {
-                // Return 404 if no frame is available yet
-                let response = Response::builder()
-                    .status(404)
-                    .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                    .body(Vec::new())
-                    .unwrap();
-                responder.respond(response);
-            }
-        })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
             let resolver = app.path();
             
-            // Initialize Bundled GStreamer
-            if let Err(e) = media_engine::init_bundled_gstreamer(app.handle()) {
-                log_msg(app, &format!("Bundled GStreamer Init Error: {}", e));
-            }
-
             // Resolve resource directory with a fallback to the executable's own directory.
             // On corporate Windows systems the standard resource_dir() path may be
             // inaccessible (e.g. redirected Roaming profile, AppLocker policy), so we
@@ -3133,18 +3073,11 @@ fn main() {
                 context_buffer: Arc::new(Mutex::new(Vec::new())),
                 operator_cloud_stream_handle: Arc::new(Mutex::new(None)),
                 preacher_cloud_stream_handle: Arc::new(Mutex::new(None)),
-                ndi_manager: Arc::new(ndi::NdiManager::new()),
                 operator_is_active: Arc::new(AtomicBool::new(false)),
                 preacher_is_active: Arc::new(AtomicBool::new(false)),
                 studio_is_active: Arc::new(AtomicBool::new(false)),
                 session_start_ms: Arc::new(Mutex::new(0)),
             };
-
-            // Sync NDI state from persisted settings
-            {
-                let mut ndi_config = state.ndi_manager.config.lock();
-                ndi_config.enabled = initial_settings.ndi_enabled;
-            }
 
             app.manage(state);
 
@@ -3196,8 +3129,6 @@ fn main() {
             get_audio_devices,
             set_operator_device,
             set_preacher_device,
-            toggle_ndi,
-            get_ndi_config,
             set_operator_ptt,
             get_bible_versions,
             set_bible_version,
@@ -3298,14 +3229,6 @@ fn main() {
             set_confidence_threshold,
             get_startup_status,
             list_transcripts,
-            list_native_cameras,
-            start_camera_stream,
-            stop_camera_stream,
-            list_ndi_sources,
-            check_media_dependencies,
-            start_mixer,
-            get_mixer_frame,
-            set_mixer_source,
             save_recovery,
             load_recovery,
             clear_recovery,

@@ -319,7 +319,6 @@ export interface PresentationSettings {
   version_color?: string;
   auto_split_verses: boolean;
   verse_split_threshold: number;
-  ndi_enabled: boolean;
   preferred_monitor?: string;
   custom_theme_colors?: Partial<ThemeColors>;
   highlight_divine_words?: boolean;
@@ -382,7 +381,6 @@ export const DEFAULT_SETTINGS: PresentationSettings = {
   disabled_bible_versions: [],
   auto_split_verses: true,
   verse_split_threshold: 200,
-  ndi_enabled: false,
 };
 
 export interface StartupStatus {

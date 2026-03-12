@@ -105,12 +105,6 @@ export function AppHeader({
 
       {/* Right system controls */}
       <div className="flex items-center gap-1.5">
-        {settings.ndi_enabled && (
-          <div className="px-2 py-0.5 bg-teal-500/10 border border-teal-500/30 rounded flex items-center gap-1 animate-pulse">
-            <span className="w-1.5 h-1.5 rounded-full bg-teal-500" />
-            <span className="text-[8px] font-black text-teal-500 uppercase tracking-widest">NDI</span>
-          </div>
-        )}
         <button onClick={() => { invoke("toggle_output_window"); setOutputVisible((v: boolean) => !v); }}
           className={`p-1.5 rounded-md transition-all ${outputVisible ? "bg-green-500/20 text-green-400" : "text-slate-500 hover:text-green-400 hover:bg-slate-800"}`}
           title="Toggle Output Window (Ctrl+O)"><Monitor size={15} /></button>

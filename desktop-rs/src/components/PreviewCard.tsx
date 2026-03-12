@@ -1,7 +1,7 @@
 import React, { useRef, useState, useCallback, useEffect } from "react";
 import { emit } from "@tauri-apps/api/event";
-import { invoke, convertFileSrc } from "@tauri-apps/api/core";
-import { motion, AnimatePresence } from "framer-motion";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { motion } from "framer-motion";
 import {
   Play, Pause, RotateCcw, Volume2, VolumeX, SkipBack, SkipForward,
 } from "lucide-react";
@@ -11,7 +11,6 @@ import {
   SongSlideRenderer,
 } from "./shared/Renderers";
 import { useAppStore } from "../store";
-import { useNativeStream } from "../hooks/useNativeStream";
 import type { DisplayItem, MediaItem } from "../types";
 import { getItemUid } from "../utils";
 
@@ -36,10 +35,7 @@ export function PreviewCard({
   accent: string;
   badge: React.ReactNode;
   empty: string;
-  /** When true, video controls act on the local preview element only (stage panel).
-   *  When false (default), controls emit media-control events to the output window. */
   isLocalPreview?: boolean;
-  /** When true, suppresses the label/badge header row entirely. */
   hideHeader?: boolean;
 }) {
   const { appDataDir } = useAppStore();
@@ -47,11 +43,8 @@ export function PreviewCard({
   const isCamera = item?.type === "Camera";
   const showControls = isVideo;
 
-  // Local preview video state
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cameraPreviewRef = useRef<HTMLVideoElement | null>(null);
-  const [useNativePreview, setUseNativePreview] = useState(false);
-  const nativeFrameUrl = useNativeStream(useNativePreview);
   const videoCleanupRef = useRef<(() => void) | null>(null);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(true);
@@ -59,7 +52,6 @@ export function PreviewCard({
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1);
 
-  // Reset playback state when item changes
   useEffect(() => {
     setPlaying(false);
     setCurrentTime(0);
@@ -68,10 +60,8 @@ export function PreviewCard({
     setVolume(1);
   }, [item]);
 
-  // Manage camera preview stream
   useEffect(() => {
     let activeStream: MediaStream | null = null;
-    let frameLoopActive = false;
 
     const startBrowser = async (deviceId: string) => {
       try {
@@ -79,7 +69,6 @@ export function PreviewCard({
           video: { deviceId: { exact: deviceId } } 
         });
         activeStream = stream;
-        setUseNativePreview(false);
         if (cameraPreviewRef.current) {
           cameraPreviewRef.current.srcObject = stream;
         }
@@ -88,36 +77,19 @@ export function PreviewCard({
       }
     };
 
-    const startNative = async (id: string) => {
-      const isNdi = id.startsWith("ndi:");
-      const val = id.split(":")[1];
-      if (!isNdi) {
-        await invoke("start_camera_stream", { index: parseInt(val) });
-      }
-      setUseNativePreview(true);
-    };
-
-    if (isCamera && item?.data.deviceId) {
-      if (item.data.deviceId.startsWith("native:") || item.data.deviceId.startsWith("ndi:")) {
-        startNative(item.data.deviceId);
-      } else {
-        startBrowser(item.data.deviceId);
-      }
+    if (isCamera && item?.data.deviceId && !item.data.deviceId.startsWith("native:") && !item.data.deviceId.startsWith("ndi:")) {
+      startBrowser(item.data.deviceId);
     }
 
     return () => {
       if (activeStream) {
         activeStream.getTracks().forEach(t => t.stop());
       }
-      // Stop the native mixer when the card is unmounted or switches away from camera
-      invoke("stop_camera_stream").catch(() => {});
     };
   }, [isCamera, item?.type === "Camera" ? item.data.deviceId : null]);
 
-  // Callback ref — attaches DOM event listeners for local preview; cleans up on unmount/swap
   const setVideoRefCallback = useCallback(
     (el: HTMLVideoElement | null) => {
-      // Tear down previous listeners
       if (videoCleanupRef.current) {
         videoCleanupRef.current();
         videoCleanupRef.current = null;
@@ -125,7 +97,6 @@ export function PreviewCard({
       videoRef.current = el;
       if (!el || !isLocalPreview) return;
 
-      // Start muted
       el.muted = true;
 
       const onPlay = () => setPlaying(true);
@@ -152,8 +123,6 @@ export function PreviewCard({
     },
     [isLocalPreview],
   );
-
-  // ── Controls ────────────────────────────────────────────────────────────────
 
   const handlePlayPause = () => {
     if (isLocalPreview && videoRef.current) {
@@ -197,8 +166,6 @@ export function PreviewCard({
     videoRef.current.currentTime = t;
     setCurrentTime(t);
   };
-
-  // ── Render ──────────────────────────────────────────────────────────────────
 
   const videoPath = isVideo ? convertFileSrc((item!.data as MediaItem).path) : "";
 
@@ -260,30 +227,19 @@ export function PreviewCard({
               </div>
             ) : item.type === "Camera" ? (
               <div className="w-full h-full relative border border-slate-800 rounded-lg overflow-hidden bg-black">
-                {useNativePreview ? (
-                  <img
-                    src={nativeFrameUrl}
-                    crossOrigin="anonymous"
-                    className="w-full h-full object-contain"
-                    style={{ transform: item.data.mirrored ? "scaleX(-1)" : "none" }}
-                    alt="Native Preview"
-                  />
-                ) : (
-                  <video
-                    ref={cameraPreviewRef}
-                    autoPlay
-                    playsInline
-                    className="w-full h-full object-contain"
-                    style={{ transform: item.data.mirrored ? "scaleX(-1)" : "none" }}
-                  />
-                )}
+                <video
+                  ref={cameraPreviewRef}
+                  autoPlay
+                  playsInline
+                  className="w-full h-full object-contain"
+                  style={{ transform: item.data.mirrored ? "scaleX(-1)" : "none" }}
+                />
                 <div className="absolute top-2 left-2 px-1.5 py-0.5 bg-red-500/80 rounded text-[8px] font-black text-white flex items-center gap-1 animate-pulse">
                   <div className="w-1.5 h-1.5 rounded-full bg-white" />
                   LIVE CAMERA
                 </div>
               </div>
             ) : (
-              /* Media (image or video) */
               <div className="w-full h-full overflow-hidden relative">
                 {(item.data as MediaItem).media_type === "Image" ? (
                   <img
@@ -292,7 +248,6 @@ export function PreviewCard({
                     alt={(item.data as MediaItem).name}
                   />
                 ) : (
-                  /* Video — key forces remount when src changes so ref fires fresh */
                   <video
                     key={videoPath}
                     ref={setVideoRefCallback}
@@ -301,7 +256,6 @@ export function PreviewCard({
                     preload={isLocalPreview ? "auto" : "metadata"}
                   />
                 )}
-                {/* Filename label — hidden when local preview controls cover the bottom */}
                 {!(isLocalPreview && isVideo) && (
                   <p className="text-slate-400 text-[10px] font-bold uppercase truncate max-w-full absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/60 px-2 py-0.5 rounded backdrop-blur-sm">
                     {(item.data as MediaItem).name}
@@ -310,16 +264,12 @@ export function PreviewCard({
               </div>
             )}
 
-            {/* ── Controls overlay ── */}
             {showControls && (
               isLocalPreview && isVideo ? (
-                /* Rich overlay for operator stage preview */
                 <div className="absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-3 pb-2 pt-10 flex flex-col gap-1.5">
-                  {/* Filename */}
                   <p className="text-[9px] text-slate-400 font-bold uppercase truncate text-center mb-0.5">
                     {(item.data as MediaItem).name}
                   </p>
-                  {/* Scrubber */}
                   <div className="flex items-center gap-2">
                     <span className="text-[9px] text-slate-400 font-mono w-8 text-right shrink-0">
                       {formatTime(currentTime)}
@@ -337,7 +287,6 @@ export function PreviewCard({
                       {formatTime(duration)}
                     </span>
                   </div>
-                  {/* Buttons */}
                   <div className="flex items-center justify-center gap-1.5">
                     <button
                       onClick={() => handleSkip(-10)}
@@ -392,7 +341,6 @@ export function PreviewCard({
                   </div>
                 </div>
               ) : (
-                /* Pill controls for live card */
                 <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-slate-900/90 backdrop-blur-md border border-slate-700 p-1.5 rounded-full shadow-2xl transition-all z-20">
                   {isVideo && (
                     <>

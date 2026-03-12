@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback, useLayoutEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
-import { useNativeStream } from "../hooks/useNativeStream";
 import type { DisplayItem, PropItem, PresentationSettings, LowerThirdData, LowerThirdTemplate } from "../types";
 import { THEMES } from "../types";
 import {
@@ -35,7 +34,6 @@ export function OutputWindow() {
     disabled_bible_versions: [],
     auto_split_verses: true,
     verse_split_threshold: 200,
-    ndi_enabled: true,
   });
   const [appDataDir, setAppDataDir] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -45,17 +43,6 @@ export function OutputWindow() {
   const mainCameraRef = useRef<HTMLVideoElement>(null);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [mainCameraStream, setMainCameraStream] = useState<MediaStream | null>(null);
-  const isNativeLive = liveItem?.type === "Camera" && (liveItem.data.deviceId.startsWith("native:") || liveItem.data.deviceId.startsWith("ndi:"));
-  const isNativeBg = settings.background.type === "Camera" && (settings.background.value.deviceId.startsWith("native:") || settings.background.value.deviceId.startsWith("ndi:"));
-  
-  const [useNativeOutput, setUseNativeOutput] = useState(isNativeLive || isNativeBg);
-  
-  useEffect(() => {
-    setUseNativeOutput(isNativeLive || isNativeBg);
-  }, [isNativeLive, isNativeBg]);
-
-  const nativeFrameUrl = useNativeStream(isNativeLive);
-  const nativeBgUrl = useNativeStream(isNativeBg);
 
   const [windowScale, setWindowScale] = useState(1);
   const isMounted = useRef(true);
@@ -63,8 +50,6 @@ export function OutputWindow() {
   // Auto-fit font size when verse splitting is disabled
   const verseContainerRef = useRef<HTMLDivElement>(null);
   const [fittedFontPt, setFittedFontPt] = useState<number | null>(null);
-
-  // Cursor is hidden via CSS cursor-none on the root element
 
   // Calculate font scale based on current window height relative to 1080p reference
   useEffect(() => {
@@ -124,7 +109,6 @@ export function OutputWindow() {
     }
 
     container.removeChild(probe);
-    // Only apply if the text actually needs shrinking
     setFittedFontPt(best < maxPt ? Math.floor(best) : null);
   }, [
     liveItem,
@@ -141,7 +125,6 @@ export function OutputWindow() {
   }, []);
 
   useEffect(() => {
-    // Attach ALL listeners first, before any async work, to avoid missing events
     const unlistenTrans = listen("preacher-transcription-update", (event: any) => {
       const { detected_item, source } = event.payload;
       if (source === "manual") {
@@ -167,8 +150,6 @@ export function OutputWindow() {
 
     const unlistenMedia = listen("media-control", (event: any) => {
       const { action, volume } = event.payload as { action: string; volume?: number };
-      console.log("OutputWindow: received media-control", action);
-
       if (action === "video-play-pause") {
         if (videoRef.current) {
           if (videoRef.current.paused) videoRef.current.play();
@@ -194,7 +175,6 @@ export function OutputWindow() {
       setPropItems((event.payload as PropItem[]) ?? []);
     });
 
-    // Load initial state in parallel
     Promise.all([
       invoke("get_current_item").then((v: any) => { if (v) setLiveItem(v); }).catch(() => {}),
       invoke("get_current_lower_third").then((lt: any) => { if (lt) setLowerThird(lt); }).catch(() => {}),
@@ -204,7 +184,6 @@ export function OutputWindow() {
     ]);
 
     return () => {
-      // reconnect timer managed by useSignaling hook
       unlistenTrans.then((f) => f());
       unlistenSettings.then((f) => f());
       unlistenStaged.then((f) => f());
@@ -231,14 +210,12 @@ export function OutputWindow() {
 
     const t = lowerThird.template;
     
-    // Setup scroll count
     if (t.scrollEnabled && t.scrollCount > 0) {
       remainingScrolls.current = t.scrollCount;
     } else {
       remainingScrolls.current = 0;
     }
 
-    // Setup auto-hide timer (only if not infinite scrolling)
     if (t.autoHideSeconds > 0 && !(t.scrollEnabled && t.scrollCount === 0)) {
       autoHideTimer.current = setTimeout(() => {
         if (isMounted.current) {
@@ -264,10 +241,9 @@ export function OutputWindow() {
   const videoBg = getVideoBackground(settings, liveItem);
   const cameraBg = getCameraBackground(settings, liveItem);
 
-  // Manage camera stream lifecycle
+  // Browser-only camera stream lifecycle
   useEffect(() => {
     let activeStream: MediaStream | null = null;
-    let bgLoopActive = false;
     
     const startBrowserCamera = async (deviceId: string) => {
       try {
@@ -281,30 +257,8 @@ export function OutputWindow() {
       }
     };
 
-    const startNativeBg = async (id: string) => {
-      const isNdi = id.startsWith("ndi:");
-      const val = id.split(":")[1];
-      try {
-        await invoke("start_mixer");
-        await invoke("set_mixer_source", {
-          source: {
-            id: `bg-${val}`,
-            name: `Background ${val}`,
-            source_type: isNdi ? { NDI: { source_name: val } } : { Camera: { index: parseInt(val) } },
-            z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
-          }
-        });
-      } catch (err) {
-        console.error("Failed to start native bg mixer source:", err);
-      }
-    };
-
-    if (cameraBg?.deviceId) {
-      if (cameraBg.deviceId.startsWith("native:") || cameraBg.deviceId.startsWith("ndi:")) {
-        startNativeBg(cameraBg.deviceId);
-      } else {
-        startBrowserCamera(cameraBg.deviceId);
-      }
+    if (cameraBg?.deviceId && !cameraBg.deviceId.startsWith("native:") && !cameraBg.deviceId.startsWith("ndi:")) {
+      startBrowserCamera(cameraBg.deviceId);
     } else {
       if (cameraStream) {
         cameraStream.getTracks().forEach(track => track.stop());
@@ -319,10 +273,9 @@ export function OutputWindow() {
     };
   }, [cameraBg?.deviceId]);
 
-  // Manage independent main camera stream
+  // Main camera stream
   useEffect(() => {
     let activeStream: MediaStream | null = null;
-    let frameLoopActive = false;
     
     const startBrowserCamera = async (deviceId: string) => {
       try {
@@ -331,47 +284,13 @@ export function OutputWindow() {
         });
         activeStream = stream;
         setMainCameraStream(stream);
-        setUseNativeOutput(false);
       } catch (err) {
         console.error("Failed to get main camera stream:", err);
       }
     };
 
-    const startNativeStream = async (id: string) => {
-      const isNdi = id.startsWith("ndi:");
-      const val = id.split(":")[1];
-      
-      try {
-        await invoke("start_mixer");
-        if (isNdi) {
-          await invoke("set_mixer_source", {
-            source: {
-              id: `ndi-${val}`,
-              name: `NDI: ${val}`,
-              source_type: { NDI: { source_name: val } },
-              z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
-            }
-          });
-        } else {
-          await invoke("set_mixer_source", {
-            source: {
-              id: `native-${val}`,
-              name: `Camera ${val}`,
-                          source_type: { Camera: { index: parseInt(val) } },
-                          z_index: 0, opacity: 1, x: 0, y: 0, w: 100, h: 100
-                          }
-                        });
-                      }
-                    } catch (err) {
-                      console.error("Failed to start native mixer source:", err);
-                    }
-                  };
-    if (liveItem?.type === "Camera" && liveItem.data.deviceId) {
-      if (liveItem.data.deviceId.startsWith("native:") || liveItem.data.deviceId.startsWith("ndi:")) {
-        startNativeStream(liveItem.data.deviceId);
-      } else {
-        startBrowserCamera(liveItem.data.deviceId);
-      }
+    if (liveItem?.type === "Camera" && liveItem.data.deviceId && !liveItem.data.deviceId.startsWith("native:") && !liveItem.data.deviceId.startsWith("ndi:")) {
+      startBrowserCamera(liveItem.data.deviceId);
     } else {
       if (mainCameraStream) {
         mainCameraStream.getTracks().forEach(track => track.stop());
@@ -386,14 +305,12 @@ export function OutputWindow() {
     };
   }, [liveItem?.type === "Camera" ? liveItem.data.deviceId : null]);
 
-  // Sync playback rate when it changes without unmounting the video element
   useEffect(() => {
     if (bgVideoRef.current && videoBg) {
       bgVideoRef.current.playbackRate = videoBg.playbackRate;
     }
   }, [videoBg?.playbackRate]);
 
-  // Reload video when source path changes
   useEffect(() => {
     if (bgVideoRef.current) {
       bgVideoRef.current.load();
@@ -455,7 +372,6 @@ export function OutputWindow() {
           : { ...bgStyle, color: colors.verseText }
       }
     >
-      {/* Background logo overlay - topmost level below props */}
       {settings.show_background_logo && settings.background_logo_path && (
         <div className="absolute inset-0 z-50 bg-black">
           {settings.background_logo_path.toLowerCase().match(/\.(mp4|webm|mov|mkv|avi)$/) ? (
@@ -479,40 +395,23 @@ export function OutputWindow() {
       )}
 
       {/* Background camera element */}
-      {nativeBgUrl ? (
-        <img
-          src={nativeBgUrl}
-          crossOrigin="anonymous"
-          className="absolute inset-0 w-full h-full pointer-events-none"
-          style={{
-            zIndex: 0,
-            objectFit: cameraBg?.objectFit ?? "cover",
-            opacity: cameraBg?.opacity ?? 1,
-            visibility: cameraBg?.deviceId ? "visible" : "hidden",
-            transform: cameraBg?.mirrored ? "scaleX(-1)" : "none",
-          }}
-          alt="Native Background"
-        />
-      ) : (
-        <video
-          ref={(el) => {
-            if (el && cameraStream) el.srcObject = cameraStream;
-            cameraRef.current = el;
-          }}
-          className="absolute inset-0 w-full h-full pointer-events-none"
-          style={{
-            zIndex: 0,
-            objectFit: cameraBg?.objectFit ?? "cover",
-            opacity: cameraBg?.opacity ?? 1,
-            visibility: cameraBg?.deviceId ? "visible" : "hidden",
-            transform: cameraBg?.mirrored ? "scaleX(-1)" : "none",
-          }}
-          autoPlay
-          playsInline
-        />
-      )}
+      <video
+        ref={(el) => {
+          if (el && cameraStream) el.srcObject = cameraStream;
+          cameraRef.current = el;
+        }}
+        className="absolute inset-0 w-full h-full pointer-events-none"
+        style={{
+          zIndex: 0,
+          objectFit: cameraBg?.objectFit ?? "cover",
+          opacity: cameraBg?.opacity ?? 1,
+          visibility: cameraBg?.deviceId ? "visible" : "hidden",
+          transform: cameraBg?.mirrored ? "scaleX(-1)" : "none",
+        }}
+        autoPlay
+        playsInline
+      />
 
-      {/* Background video element — rendered at z-0, below all content */}
       <video
         ref={bgVideoRef}
         className="absolute inset-0 w-full h-full pointer-events-none"
@@ -581,38 +480,20 @@ export function OutputWindow() {
               </div>
             ) : liveItem.type === "Camera" ? (
               <div className="absolute inset-0">
-                {useNativeOutput ? (
-                  <img
-                    src={nativeFrameUrl}
-                    crossOrigin="anonymous"
-                    className="w-full h-full object-contain bg-black"
-                    style={{
-                      opacity: liveItem.data.opacity ?? 1,
-                      transform: liveItem.data.mirrored ? "scaleX(-1)" : "none",
-                    }}
-                    alt="Native Stream"
-                    onError={(e) => {
-                      if (nativeFrameUrl) {
-                        console.error("Native stream image failed to load:", nativeFrameUrl);
-                      }
-                    }}
-                  />
-                ) : (
-                  <video
-                    ref={(el) => {
-                      if (el && mainCameraStream) el.srcObject = mainCameraStream;
-                      mainCameraRef.current = el;
-                    }}
-                    autoPlay
-                    playsInline
-                    className="w-full h-full"
-                    style={{
-                      objectFit: (liveItem.data.objectFit as any) ?? "cover",
-                      opacity: liveItem.data.opacity ?? 1,
-                      transform: liveItem.data.mirrored ? "scaleX(-1)" : "none",
-                    }}
-                  />
-                )}
+                <video
+                  ref={(el) => {
+                    if (el && mainCameraStream) el.srcObject = mainCameraStream;
+                    mainCameraRef.current = el;
+                  }}
+                  autoPlay
+                  playsInline
+                  className="w-full h-full"
+                  style={{
+                    objectFit: (liveItem.data.objectFit as any) ?? "cover",
+                    opacity: liveItem.data.opacity ?? 1,
+                    transform: liveItem.data.mirrored ? "scaleX(-1)" : "none",
+                  }}
+                />
               </div>
             ) : liveItem.type === "CustomSlide" ? (
               <div className="absolute inset-0">

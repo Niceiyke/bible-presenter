@@ -320,9 +320,6 @@ pub struct PresentationSettings {
     /// Character limit before splitting a verse (if auto_split is enabled).
     #[serde(default = "default_verse_split_threshold")]
     pub verse_split_threshold: usize,
-    /// Whether NDI streaming is enabled on startup.
-    #[serde(default)]
-    pub ndi_enabled: bool,
     /// Monitor name to send output to; None = auto (first secondary monitor).
     #[serde(default)]
     pub preferred_monitor: Option<String>,
@@ -403,7 +400,6 @@ impl Default for PresentationSettings {
             version_color: String::new(),
             auto_split_verses: default_auto_split_verses(),
             verse_split_threshold: default_verse_split_threshold(),
-            ndi_enabled: false,
             preferred_monitor: None,
             highlight_divine_words: default_highlight_divine_words(),
             highlight_color: default_highlight_color(),
