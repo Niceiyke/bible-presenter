@@ -1,33 +1,16 @@
-# Node
 node_modules/
 dist/
-release/
+target/
+src-tauri/target/
+.old-desktop/
 
-# Python
-__pycache__/
-*.pyc
-venv/
-.venv/
+# Large model files — must be provided separately (not stored in git)
+src-tauri/models/*.bin
+src-tauri/models/*.onnx
 
-# Desktop Build Artifacts
-out/
-release/
+# Large data files — must be provided separately (not stored in git)
+src-tauri/bible_data/*.db
+src-tauri/bible_data/*.npy
 
-# Electron
-dist/
-
-# Large AI Models
-src/core-engine/models/
-*.bin
-*.pt
-*.onnx
-
-# SQLite
-*.db-journal
-*.db-wal
-*.db-shm
-
-# OS
-.DS_Store
-Thumbs.db
-desktop/src/core-engine/models/
+# tokenizer.json is small (~2MB) and is committed
+!src-tauri/models/tokenizer.json
