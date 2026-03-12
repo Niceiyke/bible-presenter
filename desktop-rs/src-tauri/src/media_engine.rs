@@ -187,12 +187,17 @@ impl MediaEngine {
                     let s = gstreamer::ElementFactory::make("v4l2src").build()
                         .map_err(|e| format!("Could not create v4l2src: {}", e))?;
                     s.set_property("device", format!("/dev/video{}", index));
+                    // io-mode=2 (mmap) is much more stable for Linux V4L2 drivers
+                    s.set_property("io-mode", 2i32);
                     s
                 } else if cfg!(target_os = "windows") {
-                    // mfvideosrc (Media Foundation) is much more stable on modern Windows than ksvideosrc
+                    // mfvideosrc (Media Foundation) is much more stable on modern Windows than ksvideosrc.
+                    // However, we must ensure it doesn't try to use 'do-stats' or other features
+                    // that might cause crashes in headless (appsink) environments.
                     let s = gstreamer::ElementFactory::make("mfvideosrc").build()
                         .map_err(|e| format!("Could not create mfvideosrc (Media Foundation): {}", e))?;
                     s.set_property("device-index", *index as i32);
+                    s.set_property("do-stats", false);
                     s
                 } else {
                     // Fallback for macOS (avfvideosrc) or other OSs
@@ -257,7 +262,7 @@ impl MediaEngine {
         Ok(())
     }
 
-    pub fn start(&mut self, app: &AppHandle) -> Result<(), String> {
+    pub fn start(&mut self, app: &AppHandle) -> Result<gstreamer::Pipeline, String> {
         if let Some(p) = &self.pipeline {
             // Add a bus watcher to catch errors before they cause crashes
             let bus = p.bus().ok_or("Failed to get pipeline bus")?;
@@ -276,18 +281,11 @@ impl MediaEngine {
                 gstreamer::glib::ControlFlow::Continue
             }).map_err(|e| format!("Failed to add bus watch: {}", e))?;
 
-            log_msg(app, "GStreamer: Starting pipeline...");
-            p.set_state(gstreamer::State::Playing).map_err(|e| {
-                let err = format!("GStreamer: Failed to set pipeline to Playing: {}", e);
-                log_msg(app, &err);
-                err
-            })?;
-            log_msg(app, "GStreamer: Pipeline state set to Playing.");
-            self.is_running = true;
+            log_msg(app, "GStreamer: Preparing pipeline activation...");
+            Ok(p.clone())
         } else {
-            log_msg(app, "GStreamer: No pipeline to start!");
+            Err("GStreamer: No pipeline to start!".to_string())
         }
-        Ok(())
     }
 }
 
@@ -369,12 +367,22 @@ pub async fn list_ndi_sources() -> Result<Vec<String>, String> {
 pub async fn start_mixer(app: AppHandle) -> Result<(), String> {
     let _guard = MIXER_SERIALIZER.lock().await;
     log_msg(&app, "Command: start_mixer");
-    let mut engine = MEDIA_ENGINE.lock();
-    if engine.is_running {
-        return Ok(());
-    }
-    engine.setup_pipeline(app.clone())?;
-    engine.start(&app)?;
+    
+    let pipeline = {
+        let mut engine = MEDIA_ENGINE.lock();
+        if engine.is_running {
+            return Ok(());
+        }
+        engine.setup_pipeline(app.clone())?;
+        engine.start(&app)?
+    };
+
+    // Perform state transition outside the MEDIA_ENGINE lock to prevent UI freezing
+    tokio::task::spawn_blocking(move || {
+        pipeline.set_state(gstreamer::State::Playing).map_err(|e| e.to_string())
+    }).await.map_err(|e| format!("Thread panic: {}", e))??;
+
+    MEDIA_ENGINE.lock().is_running = true;
     Ok(())
 }
 
@@ -394,22 +402,37 @@ pub async fn set_mixer_source(app: AppHandle, source: MediaSource) -> Result<(),
 
     // 2. Stop the old pipeline outside the lock and wait for hardware release
     if let Some(p) = old_pipeline {
-        let _ = p.set_state(gstreamer::State::Null);
-        // Ensure state change to Null is actually complete
+        // Perform state transition to Null inside spawn_blocking to avoid blocking the executor
+        // and to handle COM requirements on Windows safely.
         let _ = tokio::task::spawn_blocking(move || {
-            p.state(gstreamer::ClockTime::from_seconds(1))
+            let _ = p.set_state(gstreamer::State::Null);
+            p.state(gstreamer::ClockTime::from_seconds(2))
         }).await;
     }
 
-    // 3. Safety Delay: Give OS drivers more time to release the hardware device.
-    // 300ms is safer for Linux v4l2src or Windows ksvideosrc.
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // 3. Safety Delay: Give Windows/OS drivers more time to release the hardware device.
+    // Windows Media Foundation can be slow to release handles.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // 4. Build fresh pipeline
-    let mut engine = MEDIA_ENGINE.lock();
-    engine.setup_pipeline(app.clone())?;
-    engine.add_source(&app, source)?;
-    engine.start(&app)?;
+    let pipeline = {
+        let mut engine = MEDIA_ENGINE.lock();
+        engine.setup_pipeline(app.clone())?;
+        engine.add_source(&app, source)?;
+        engine.start(&app)?
+    };
+
+    // 5. Start new pipeline outside the MEDIA_ENGINE lock
+    log_msg(&app, "GStreamer: Setting pipeline state to Playing...");
+    tokio::task::spawn_blocking(move || {
+        pipeline.set_state(gstreamer::State::Playing).map_err(|e| e.to_string())
+    }).await.map_err(|e| format!("Thread panic: {}", e))??;
+    
+    {
+        let mut engine = MEDIA_ENGINE.lock();
+        engine.is_running = true;
+    }
+    log_msg(&app, "GStreamer: Pipeline active.");
     
     Ok(())
 }
@@ -425,9 +448,9 @@ pub async fn stop_mixer() -> Result<(), String> {
         engine.pipeline.take()
     };
     if let Some(p) = old_pipeline {
-        let _ = p.set_state(gstreamer::State::Null);
         let _ = tokio::task::spawn_blocking(move || {
-            p.state(gstreamer::ClockTime::from_seconds(1))
+            let _ = p.set_state(gstreamer::State::Null);
+            p.state(gstreamer::ClockTime::from_seconds(2))
         }).await;
     }
     SHARED_FRAME.lock().clear();

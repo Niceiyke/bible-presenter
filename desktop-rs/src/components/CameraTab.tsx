@@ -109,15 +109,47 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     }
   };
 
+  const [isTransitioning, setIsTransitioning] = useState(false);
+
+  const handleSwitchEngine = async (useNative: boolean) => {
+    setIsTransitioning(true);
+    
+    // Cleanup browser stream before switching
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
+    setUseNativeEngine(useNative);
+    setSelectedCameraId(null);
+    setSelectedNativeIndex(null);
+    setSelectedNdi(null);
+
+    // Give time for the OS to release hardware locks
+    await new Promise(resolve => setTimeout(resolve, 600));
+    setIsTransitioning(false);
+  };
+
   const handleSelectNative = async (index: number) => {
-    setSelectedCameraId(null); // Force browser camera release immediately
+    setIsTransitioning(true);
+    setSelectedCameraId(null);
     setUseNativeEngine(true);
     
-    // Give Windows/Browser time to release hardware lock before NativePreview mounts
-    setTimeout(() => {
-      setSelectedNativeIndex(index);
-      setSelectedNdi(null);
-    }, 500); 
+    // Explicit browser cleanup
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+
+    // Await OS release
+    await new Promise(resolve => setTimeout(resolve, 400));
+    
+    setSelectedNativeIndex(index);
+    setSelectedNdi(null);
+    setIsTransitioning(false);
   };
 
   const handleSelectNdi = async (name: string) => {
@@ -174,25 +206,41 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
   };
 
   useEffect(() => {
-    if (selectedCameraId) {
-      navigator.mediaDevices.getUserMedia({ 
-        video: { deviceId: { exact: selectedCameraId } } 
-      }).then(stream => {
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-      }).catch(err => {
-        console.error("CameraTab: failed to get stream", err);
-      });
+    // If native engine is active, do NOT attempt to get browser stream
+    if (useNativeEngine || !selectedCameraId) {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+      return;
     }
+
+    // Always cleanup existing stream before starting a new one
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+
+    navigator.mediaDevices.getUserMedia({ 
+      video: { deviceId: { exact: selectedCameraId } } 
+    }).then(stream => {
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+    }).catch(err => {
+      console.error("CameraTab: failed to get stream", err);
+    });
 
     return () => {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
     };
-  }, [selectedCameraId]);
+  }, [selectedCameraId, useNativeEngine]);
 
   const setAsGlobalBg = () => {
     const data = getCameraData();
@@ -224,14 +272,14 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
           
           <div className="flex items-center bg-slate-900 rounded-lg p-1 border border-slate-800">
             <button 
-              onClick={() => setUseNativeEngine(false)}
+              onClick={() => handleSwitchEngine(false)}
               className={`px-3 py-1 rounded text-[10px] font-black transition-all ${!useNativeEngine ? "bg-amber-500 text-black shadow-lg" : "text-slate-500 hover:text-slate-300"}`}
             >
               BROWSER ENGINE
             </button>
             <button 
-              onClick={() => { setUseNativeEngine(true); refreshNative(); }}
-              disabled={!depStatus?.gstreamer_ok}
+              onClick={() => handleSwitchEngine(true)}
+              disabled={!depStatus?.gstreamer_ok || isTransitioning}
               className={`px-3 py-1 rounded text-[10px] font-black transition-all flex items-center gap-1.5 disabled:opacity-30 disabled:grayscale ${useNativeEngine ? "bg-amber-500 text-black shadow-lg" : "text-slate-500 hover:text-slate-300"}`}
             >
               <Zap size={10} fill="currentColor" />
@@ -271,7 +319,13 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
         {/* Preview Area */}
         <div className="flex-1 flex flex-col gap-4">
           <div className="aspect-video bg-black rounded-xl overflow-hidden border border-slate-800 relative group">
-            {useNativeEngine && selectedNativeIndex !== null ? (
+            {isTransitioning ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/80 backdrop-blur-sm z-50">
+                <RefreshCw className="text-amber-500 animate-spin mb-3" size={32} />
+                <p className="text-sm font-bold text-amber-500 text-center px-4">Initializing Hardware Engine...</p>
+                <p className="text-[10px] text-slate-500 mt-1">Please wait for device handle release</p>
+              </div>
+            ) : useNativeEngine && selectedNativeIndex !== null ? (
               <NativePreview index={selectedNativeIndex} mirrored={false} />
             ) : (
               <video 
@@ -324,8 +378,10 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                 availableCameras.map(cam => (
                   <button
                     key={cam.deviceId}
-                    onClick={() => {
-                      setUseNativeEngine(false);
+                    onClick={async () => {
+                      if (useNativeEngine) {
+                        await handleSwitchEngine(false);
+                      }
                       setSelectedCameraId(cam.deviceId);
                       setSelectedNativeIndex(null);
                       setSelectedNdi(null);
