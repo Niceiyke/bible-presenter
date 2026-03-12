@@ -219,11 +219,23 @@ impl MediaEngine {
             .map_err(|e| format!("Missing 'videoconvert' for source: {}", e))?;
         let scale = gstreamer::ElementFactory::make("videoscale").build()
             .map_err(|e| format!("Missing 'videoscale' for source: {}", e))?;
+        let decodebin = gstreamer::ElementFactory::make("decodebin").build()
+            .map_err(|e| format!("Missing 'decodebin': {}", e))?;
         
-        pipeline.add_many(&[&src_element, &videoconvert, &scale])
+        pipeline.add_many(&[&src_element, &decodebin, &videoconvert, &scale])
             .map_err(|e| format!("Failed to add source elements: {}", e))?;
             
-        src_element.link(&videoconvert).map_err(|e| format!("Link error (src -> convert): {}", e))?;
+        src_element.link(&decodebin).map_err(|e| format!("Link error (src -> decodebin): {}", e))?;
+
+        // Dynamically link decodebin to videoconvert once the format is resolved
+        let vc_clone = videoconvert.clone();
+        decodebin.connect_pad_added(move |_, src_pad| {
+            let sink_pad = vc_clone.static_pad("sink").expect("videoconvert has no sink pad");
+            if !sink_pad.is_linked() {
+                let _ = src_pad.link(&sink_pad);
+            }
+        });
+
         videoconvert.link(&scale).map_err(|e| format!("Link error (convert -> scale): {}", e))?;
 
         // Link to compositor and set position/z-order/scaling
@@ -384,7 +396,9 @@ pub async fn set_mixer_source(app: AppHandle, source: MediaSource) -> Result<(),
     if let Some(p) = old_pipeline {
         let _ = p.set_state(gstreamer::State::Null);
         // Ensure state change to Null is actually complete
-        let _ = p.state(gstreamer::ClockTime::from_seconds(1));
+        let _ = tokio::task::spawn_blocking(move || {
+            p.state(gstreamer::ClockTime::from_seconds(1))
+        }).await;
     }
 
     // 3. Safety Delay: Give OS drivers more time to release the hardware device.
@@ -403,14 +417,19 @@ pub async fn set_mixer_source(app: AppHandle, source: MediaSource) -> Result<(),
 #[tauri::command]
 pub async fn stop_mixer() -> Result<(), String> {
     let _guard = MIXER_SERIALIZER.lock().await;
-    let mut engine = MEDIA_ENGINE.lock();
-    if let Some(p) = engine.pipeline.take() {
+    let old_pipeline = {
+        let mut engine = MEDIA_ENGINE.lock();
+        engine.compositor = None;
+        engine.is_running = false;
+        engine.sources.clear();
+        engine.pipeline.take()
+    };
+    if let Some(p) = old_pipeline {
         let _ = p.set_state(gstreamer::State::Null);
-        let _ = p.state(gstreamer::ClockTime::from_seconds(1));
+        let _ = tokio::task::spawn_blocking(move || {
+            p.state(gstreamer::ClockTime::from_seconds(1))
+        }).await;
     }
-    engine.compositor = None;
-    engine.is_running = false;
-    engine.sources.clear();
     SHARED_FRAME.lock().clear();
     Ok(())
 }
