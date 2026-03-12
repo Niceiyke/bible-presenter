@@ -101,6 +101,11 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
   };
 
   const refreshNative = async () => {
+    // CRITICAL: Do NOT attempt to query hardware devices while a stream is active.
+    // Media Foundation on Windows often crashes the entire process if nokhwa queries 
+    // a device while GStreamer is using it.
+    if (useNativeEngine) return;
+    
     try {
       const cams: any = await invoke("list_native_cameras");
       setNativeCameras(cams);

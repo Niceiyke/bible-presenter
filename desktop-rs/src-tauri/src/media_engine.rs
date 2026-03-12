@@ -156,13 +156,6 @@ impl MediaEngine {
                         shared.clear();
                         shared.extend_from_slice(map.as_slice());
                     }
-
-                    // Log frame arrival every 300 frames (~10 seconds at 30fps)
-                    static FRAME_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-                    let count = FRAME_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    if count % 300 == 0 {
-                        log_msg(&app_clone, &format!("Camera Mixer: Streaming active ({} bytes, frame {})", map.len(), count));
-                    }
                     
                     Ok(gstreamer::FlowSuccess::Ok)
                 })
@@ -178,8 +171,6 @@ impl MediaEngine {
         let pipeline = self.pipeline.as_ref().ok_or("Pipeline not initialized")?;
         let compositor = self.compositor.as_ref().ok_or("Compositor not initialized")?;
 
-        log_msg(app, &format!("Mixer: Adding source {} ({:?})", source.name, source.source_type));
-
         let src_element = match &source.source_type {
             SourceType::Camera { index } => {
                 // Select platform-specific source and set the correct camera device/index
@@ -192,10 +183,8 @@ impl MediaEngine {
                     s
                 } else if cfg!(target_os = "windows") {
                     // mfvideosrc (Media Foundation) is much more stable on modern Windows than ksvideosrc.
-                    // However, we must ensure it doesn't try to use 'do-stats' or other features
-                    // that might cause crashes in headless (appsink) environments.
                     let s = gstreamer::ElementFactory::make("mfvideosrc").build()
-                        .map_err(|e| format!("Could not create mfvideosrc (Media Foundation): {}", e))?;
+                        .map_err(|e| format!("Could not create mfvideosrc: {}", e))?;
                     s.set_property("device-index", *index as i32);
                     s.set_property("do-stats", false);
                     s
@@ -224,24 +213,32 @@ impl MediaEngine {
             .map_err(|e| format!("Missing 'videoconvert' for source: {}", e))?;
         let scale = gstreamer::ElementFactory::make("videoscale").build()
             .map_err(|e| format!("Missing 'videoscale' for source: {}", e))?;
-        let decodebin = gstreamer::ElementFactory::make("decodebin").build()
-            .map_err(|e| format!("Missing 'decodebin': {}", e))?;
         
-        pipeline.add_many(&[&src_element, &decodebin, &videoconvert, &scale])
-            .map_err(|e| format!("Failed to add source elements: {}", e))?;
+        // For Camera sources, we prefer a direct raw link to avoid decodebin overhead/races.
+        // For Video files, we still need decodebin.
+        if let SourceType::VideoFile { .. } = &source.source_type {
+            let decodebin = gstreamer::ElementFactory::make("decodebin").build()
+                .map_err(|e| format!("Missing 'decodebin': {}", e))?;
             
-        src_element.link(&decodebin).map_err(|e| format!("Link error (src -> decodebin): {}", e))?;
+            pipeline.add_many(&[&src_element, &decodebin, &videoconvert, &scale])
+                .map_err(|e| format!("Failed to add source elements: {}", e))?;
+                
+            src_element.link(&decodebin).map_err(|e| format!("Link error (src -> decodebin): {}", e))?;
 
-        // Dynamically link decodebin to videoconvert once the format is resolved
-        let vc_clone = videoconvert.clone();
-        decodebin.connect_pad_added(move |_, src_pad| {
-            let sink_pad = vc_clone.static_pad("sink").expect("videoconvert has no sink pad");
-            if !sink_pad.is_linked() {
-                let _ = src_pad.link(&sink_pad);
-            }
-        });
-
-        videoconvert.link(&scale).map_err(|e| format!("Link error (convert -> scale): {}", e))?;
+            let vc_clone = videoconvert.clone();
+            decodebin.connect_pad_added(move |_, src_pad| {
+                let sink_pad = vc_clone.static_pad("sink").expect("videoconvert has no sink pad");
+                if !sink_pad.is_linked() {
+                    let _ = src_pad.link(&sink_pad);
+                }
+            });
+        } else {
+            pipeline.add_many(&[&src_element, &videoconvert, &scale])
+                .map_err(|e| format!("Failed to add source elements: {}", e))?;
+                
+            gstreamer::Element::link_many(&[&src_element, &videoconvert, &scale])
+                .map_err(|e| format!("Link error (src -> scale): {}", e))?;
+        }
 
         // Link to compositor and set position/z-order/scaling
         let pad = compositor.request_pad_simple("sink_%u")
@@ -389,9 +386,10 @@ pub async fn start_mixer(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn set_mixer_source(app: AppHandle, source: MediaSource) -> Result<(), String> {
     let _guard = MIXER_SERIALIZER.lock().await;
-    log_msg(&app, &format!("Command: set_mixer_source ({})", source.name));
+    let source_name = source.name.clone();
     
-    // 1. Take the pipeline out of the engine so we can drop the lock while it shuts down
+    // 1. Take the pipeline out of the engine
+ so we can drop the lock while it shuts down
     let old_pipeline = {
         let mut engine = MEDIA_ENGINE.lock();
         engine.compositor = None;
@@ -432,7 +430,7 @@ pub async fn set_mixer_source(app: AppHandle, source: MediaSource) -> Result<(),
         let mut engine = MEDIA_ENGINE.lock();
         engine.is_running = true;
     }
-    log_msg(&app, "GStreamer: Pipeline active.");
+    log_msg(&app, &format!("GStreamer: New source active: {}", source_name));
     
     Ok(())
 }

@@ -20,8 +20,10 @@ export function useNativeStream(active: boolean) {
     const updateInterval = setInterval(() => {
       // We append a timestamp to force the browser to request a new frame
       // from the 'wordlyte-stream' protocol handler in main.rs
-      setFrameUrl(`wordlyte-stream://mixer?t=${Date.now()}`);
-    }, 40); // ~25fps is plenty for preview and saves CPU
+      // We use a shorter timestamp (modulo) to keep the URL length consistent
+      const ts = Date.now() % 1000000;
+      setFrameUrl(`wordlyte-stream://mixer?t=${ts}`);
+    }, 45); // ~22fps is a sweet spot for smooth preview without saturating the IPC bridge
 
     return () => clearInterval(updateInterval);
   }, [active]);
