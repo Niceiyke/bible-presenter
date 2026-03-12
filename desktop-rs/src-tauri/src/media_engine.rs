@@ -261,7 +261,7 @@ impl MediaEngine {
                     }
                     _ => (),
                 }
-                glib::ControlFlow::Continue
+                gstreamer::glib::ControlFlow::Continue
             }).map_err(|e| format!("Failed to add bus watch: {}", e))?;
 
             log_msg(app, "GStreamer: Starting pipeline...");

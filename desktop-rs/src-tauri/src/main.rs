@@ -2940,7 +2940,7 @@ async fn save_studio_recording_transcript(state: State<'_, AppState>, id: String
 
 fn main() {
     tauri::Builder::default()
-        .register_asynchronous_uri_scheme_protocol("wordlyte-stream", |app, _request, responder| {
+        .register_asynchronous_uri_scheme_protocol("wordlyte-stream", |_app, _request, responder| {
             // Unconditionally provide the latest frame for any request to this protocol
             let frame = {
                 let locked = media_engine::SHARED_FRAME.lock();
