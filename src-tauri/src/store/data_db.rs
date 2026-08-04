@@ -8,8 +8,34 @@ pub struct DataDb {
 
 impl DataDb {
     pub fn open(db_path: &PathBuf) -> Result<Self, String> {
+        match Self::try_open(db_path) {
+            Ok(db) => Ok(db),
+            Err(first_err) => {
+                // The database may have been left corrupt/empty by a crash mid-migration.
+                // Remove it (and any WAL/journal sidecars) and recreate from scratch.
+                let _ = std::fs::remove_file(db_path);
+                let _ = std::fs::remove_file(db_path.with_extension("db-wal"));
+                let _ = std::fs::remove_file(db_path.with_extension("db-shm"));
+                Self::try_open(db_path).map_err(|e| format!("{}; recovery failed: {}", first_err, e))
+            }
+        }
+    }
+
+    fn try_open(db_path: &PathBuf) -> Result<Self, String> {
         let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+        // Avoid WAL mode: on some Windows setups it is flaky (AV locking -wal/-shm
+        // files). All access is serialised behind a mutex, so the default journal
+        // mode is fine and more reliable here.
+        conn.execute_batch("PRAGMA foreign_keys=ON;")
+            .map_err(|e| e.to_string())?;
+        let db = Self { conn: Mutex::new(conn) };
+        db.migrate()?;
+        Ok(db)
+    }
+
+    pub fn open_in_memory() -> Result<Self, String> {
+        let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")
             .map_err(|e| e.to_string())?;
         let db = Self { conn: Mutex::new(conn) };
         db.migrate()?;

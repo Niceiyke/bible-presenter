@@ -13,6 +13,33 @@ use tauri::Manager;
 use state::{AppState, AudioState, ModelState, PresentationState, PipelineState};
 
 fn main() {
+    std::panic::set_hook(Box::new(|info| {
+        use std::io::Write;
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown panic payload".to_string()
+        };
+        let loc = info.location().map(|l| l.to_string()).unwrap_or_default();
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let text = format!("[{}] PANIC: {} (at {})\n{}\n", stamp, payload, loc, backtrace);
+        let dir = std::env::var("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_default()
+            .join("io.wordlyte.app")
+            .join("logs");
+        let _ = std::fs::create_dir_all(&dir);
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("panic.log")) {
+            let _ = f.write_all(text.as_bytes());
+        }
+    }));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -94,10 +121,19 @@ fn main() {
             let preacher_audio = Arc::new(Mutex::new(audio::AudioEngine::new()));
             log_msg(app, "Audio Engines initialized.");
 
-            let media_schedule = Arc::new(
-                store::MediaScheduleStore::new(app_data_dir.clone()).map_err(|e| e.to_string())?
-            );
-            log_msg(app, "Media Schedule Store initialized.");
+            let media_schedule = match store::MediaScheduleStore::new(app_data_dir.clone()) {
+                Ok(ms) => {
+                    log_msg(app, "Media Schedule Store initialized.");
+                    Arc::new(ms)
+                }
+                Err(e) => {
+                    log_msg(app, &format!(
+                        "Warning: Media Schedule Store failed to initialize: {}. Using in-memory fallback.",
+                        e
+                    ));
+                    Arc::new(store::MediaScheduleStore::in_memory(app_data_dir.clone())?)
+                }
+            };
 
             let initial_settings = media_schedule
                 .load_settings()

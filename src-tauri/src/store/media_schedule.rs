@@ -461,6 +461,16 @@ impl MediaScheduleStore {
         Ok(store)
     }
 
+    pub fn in_memory(app_data_dir: PathBuf) -> Result<Self> {
+        let media_dir = app_data_dir.join("media");
+        let thumbnails_dir = app_data_dir.join("thumbnails");
+        for d in [&media_dir, &thumbnails_dir] {
+            if !d.exists() { fs::create_dir_all(d)?; }
+        }
+        let data_db = Arc::new(DataDb::open_in_memory().map_err(|e| anyhow::anyhow!(e))?);
+        Ok(Self { app_data_dir, media_dir, thumbnails_dir, data_db })
+    }
+
     fn try_migrate_from_json(&self) -> Result<()> {
         let migrated = self.data_db.kv_get("__migrated__").map_err(|e| anyhow::anyhow!(e))?;
         if migrated.as_deref() == Some("1") { return Ok(()); }
