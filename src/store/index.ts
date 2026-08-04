@@ -3,30 +3,22 @@ import { createAppSlice, AppSlice } from "./slices/appSlice";
 import { createLiveSlice, LiveSlice } from "./slices/liveSlice";
 import { createBibleSlice, BibleSlice } from "./slices/bibleSlice";
 import { createMediaSlice, MediaSlice } from "./slices/mediaSlice";
-import { createStudioSlice, StudioSlice } from "./slices/studioSlice";
 import { createAudioStudioSlice, AudioStudioSlice } from "./slices/audioStudioSlice";
 import { createLowerThirdSlice, LowerThirdSlice } from "./slices/lowerThirdSlice";
 import { createServiceSlice, ServiceSlice } from "./slices/serviceSlice";
-import { createTimerSlice, TimerSlice } from "./slices/timerSlice";
-import { createSceneSlice, SceneSlice } from "./slices/sceneSlice";
 import { createSessionSlice, SessionSlice } from "./slices/sessionSlice";
 import { createModelSlice, ModelSlice } from "./slices/modelSlice";
-import { createLogSlice, LogSlice } from "./slices/logSlice";
 import { createCameraSlice, CameraSlice } from "./slices/cameraSlice";
 
 export type AppStore = AppSlice &
   LiveSlice &
   BibleSlice &
   MediaSlice &
-  StudioSlice &
   AudioStudioSlice &
   LowerThirdSlice &
   ServiceSlice &
-  TimerSlice &
-  SceneSlice &
   SessionSlice &
   ModelSlice &
-  LogSlice &
   CameraSlice;
 
 export const useAppStore = create<AppStore>()((...a) => ({
@@ -34,14 +26,10 @@ export const useAppStore = create<AppStore>()((...a) => ({
   ...createLiveSlice(...a),
   ...createBibleSlice(...a),
   ...createMediaSlice(...a),
-  ...createStudioSlice(...a),
   ...createAudioStudioSlice(...a),
   ...createLowerThirdSlice(...a),
   ...createServiceSlice(...a),
-  ...createTimerSlice(...a),
-  ...createSceneSlice(...a),
   ...createSessionSlice(...a),
   ...createModelSlice(...a),
-  ...createLogSlice(...a),
   ...createCameraSlice(...a),
 }));
