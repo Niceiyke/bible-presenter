@@ -12,6 +12,7 @@ use usearch::Index;
 use tauri::{Emitter, Manager};
 
 pub mod media_schedule;
+pub mod data_db;
 pub use media_schedule::*;
 
 #[derive(Clone, Serialize)]

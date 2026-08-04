@@ -1,6 +1,12 @@
 import { StateCreator } from "zustand";
 import { AppStore } from "../index";
-import { DEFAULT_SETTINGS, PresentationSettings } from "../../types";
+import { DEFAULT_SETTINGS, PresentationSettings, CustomPresentation, CustomSlide, SceneData } from "../../types";
+
+export interface LogEntry {
+  level: string;
+  message: string;
+  timestamp: number;
+}
 
 export interface AppSlice {
   label: string;
@@ -33,6 +39,43 @@ export interface AppSlice {
   setOutputVisible: (v: boolean | ((prev: boolean) => boolean)) => void;
   showShortcuts: boolean;
   setShowShortcuts: (v: boolean | ((prev: boolean) => boolean)) => void;
+  // Merged from logSlice
+  logs: LogEntry[];
+  addLog: (entry: LogEntry) => void;
+  clearLogs: () => void;
+  isLogOpen: boolean;
+  setIsLogOpen: (v: boolean) => void;
+  // Merged from sceneSlice
+  workingScene: SceneData;
+  setWorkingScene: (v: SceneData | ((prev: SceneData) => SceneData)) => void;
+  activeLayerId: string | null;
+  setActiveLayerId: (v: string | null) => void;
+  savedScenes: SceneData[];
+  setSavedScenes: (v: SceneData[]) => void;
+  // Merged from timerSlice
+  timerType: "countdown" | "countup" | "clock";
+  setTimerType: (v: "countdown" | "countup" | "clock") => void;
+  timerHours: number;
+  setTimerHours: (v: number | ((prev: number) => number)) => void;
+  timerMinutes: number;
+  setTimerMinutes: (v: number | ((prev: number) => number)) => void;
+  timerSeconds: number;
+  setTimerSeconds: (v: number | ((prev: number) => number)) => void;
+  timerLabel: string;
+  setTimerLabel: (v: string) => void;
+  timerRunning: boolean;
+  setTimerRunning: (v: boolean) => void;
+  // Merged from studioSlice
+  studioList: { id: string; name: string; slide_count: number; updated_at?: number }[];
+  setStudioList: (v: { id: string; name: string; slide_count: number; updated_at?: number }[] | ((prev: { id: string; name: string; slide_count: number; updated_at?: number }[]) => { id: string; name: string; slide_count: number; updated_at?: number }[])) => void;
+  editorPresId: string | null;
+  setEditorPresId: (v: string | null) => void;
+  editorPres: CustomPresentation | null;
+  setEditorPres: (v: CustomPresentation | null) => void;
+  expandedStudioPresId: string | null;
+  setExpandedStudioPresId: (v: string | null) => void;
+  studioSlides: Record<string, CustomSlide[]>;
+  setStudioSlides: (v: Record<string, CustomSlide[]> | ((prev: Record<string, CustomSlide[]>) => Record<string, CustomSlide[]>)) => void;
 }
 
 export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) => ({
@@ -66,4 +109,41 @@ export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) =>
   setOutputVisible: (v) => set((s) => ({ outputVisible: typeof v === "function" ? v(s.outputVisible) : v })),
   showShortcuts: false,
   setShowShortcuts: (v) => set((s) => ({ showShortcuts: typeof v === "function" ? v(s.showShortcuts) : v })),
+  // Log slice (merged)
+  logs: [],
+  addLog: (entry) => set((s) => ({ logs: [entry, ...s.logs].slice(0, 500) })),
+  clearLogs: () => set({ logs: [] }),
+  isLogOpen: false,
+  setIsLogOpen: (v) => set({ isLogOpen: v }),
+  // Scene slice (merged)
+  workingScene: { id: crypto.randomUUID(), name: "New Scene", layers: [] },
+  setWorkingScene: (v) => set((s) => ({ workingScene: typeof v === "function" ? v(s.workingScene) : v })),
+  activeLayerId: null,
+  setActiveLayerId: (v) => set({ activeLayerId: v }),
+  savedScenes: [],
+  setSavedScenes: (v) => set({ savedScenes: v }),
+  // Timer slice (merged)
+  timerType: "countdown",
+  setTimerType: (v) => set({ timerType: v }),
+  timerHours: 0,
+  setTimerHours: (v) => set((s) => ({ timerHours: typeof v === "function" ? v(s.timerHours) : v })),
+  timerMinutes: 5,
+  setTimerMinutes: (v) => set((s) => ({ timerMinutes: typeof v === "function" ? v(s.timerMinutes) : v })),
+  timerSeconds: 0,
+  setTimerSeconds: (v) => set((s) => ({ timerSeconds: typeof v === "function" ? v(s.timerSeconds) : v })),
+  timerLabel: "",
+  setTimerLabel: (v) => set({ timerLabel: v }),
+  timerRunning: false,
+  setTimerRunning: (v) => set({ timerRunning: v }),
+  // Studio slice (merged)
+  studioList: [],
+  setStudioList: (v) => set((s) => ({ studioList: typeof v === "function" ? v(s.studioList) : v })),
+  editorPresId: null,
+  setEditorPresId: (v) => set({ editorPresId: v }),
+  editorPres: null,
+  setEditorPres: (v) => set({ editorPres: v }),
+  expandedStudioPresId: null,
+  setExpandedStudioPresId: (v) => set({ expandedStudioPresId: v }),
+  studioSlides: {},
+  setStudioSlides: (v) => set((s) => ({ studioSlides: typeof v === "function" ? v(s.studioSlides) : v })),
 });

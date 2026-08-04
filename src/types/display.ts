@@ -1,0 +1,34 @@
+import type { Verse } from "./verse";
+import type { MediaItem } from "./media";
+import type { CustomSlideDisplayData } from "./slides";
+import type { SceneData } from "./scene";
+import type { TimerData } from "./timer";
+import type { SongSlideData } from "./song";
+import type { CameraBackground } from "./settings";
+
+export type DisplayItem =
+  | { type: "Verse"; data: Verse }
+  | { type: "Media"; data: MediaItem }
+  | { type: "Camera"; data: CameraBackground }
+  | { type: "CustomSlide"; data: CustomSlideDisplayData }
+  | { type: "Scene"; data: SceneData }
+  | { type: "Timer"; data: TimerData }
+  | { type: "Song"; data: SongSlideData };
+
+export interface ScheduleEntry {
+  id: string;
+  item: DisplayItem;
+}
+
+export interface Schedule {
+  id: string;
+  name: string;
+  items: ScheduleEntry[];
+}
+
+export interface ServiceMeta {
+  id: string;
+  name: string;
+  item_count: number;
+  updated_at: number;
+}
