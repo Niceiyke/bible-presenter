@@ -70,7 +70,7 @@ export function ContentBrowser({
               const pres = data as CustomPresentation;
               setStudioSlides({ ...studioSlides, [id]: pres.slides });
               setEditingPres(pres);
-            });
+            }).catch(() => {});
           }}
           onNewPresentation={() => {
             const id = stableId();
@@ -81,7 +81,7 @@ export function ContentBrowser({
               emit("studio-sync", nextList);
               setStudioSlides({ ...studioSlides, [id]: newPres.slides });
               setEditingPres(newPres);
-            });
+            }).catch(() => {});
           }}
         />
       )}

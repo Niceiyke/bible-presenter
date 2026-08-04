@@ -23,6 +23,7 @@ import { SlideEditor } from "./components/editors/SlideEditor";
 import { LogViewer } from "./components/LogViewer";
 
 import { OutputWindow, StageWindow, DesignHub, AudioStudio } from "./windows";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 import type { CustomPresentation } from "./types";
 
@@ -178,10 +179,10 @@ export default function App() {
   }, []);
 
   // ── Window Routing (after all hooks) ──────────────────────────────────────
-  if (label === "output") return <OutputWindow />;
-  if (label === "stage") return <StageWindow />;
-  if (label === "design") return <DesignHub />;
-  if (label === "studio") return <AudioStudio />;
+  if (label === "output") return <ErrorBoundary windowLabel="output"><OutputWindow /></ErrorBoundary>;
+  if (label === "stage") return <ErrorBoundary windowLabel="stage"><StageWindow /></ErrorBoundary>;
+  if (label === "design") return <ErrorBoundary windowLabel="design"><DesignHub /></ErrorBoundary>;
+  if (label === "studio") return <ErrorBoundary windowLabel="studio"><AudioStudio /></ErrorBoundary>;
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (

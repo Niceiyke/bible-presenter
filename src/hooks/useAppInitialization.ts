@@ -69,7 +69,8 @@ export function useAppInitialization() {
 
       setMedia(mediaRes);
       setStudioList(studioRes);
-      setScheduleEntries(scheduleRes.items.map((e: any) => ({ id: e.id || stableId(), item: e.item ?? e })));
+      const scheduleItems = Array.isArray(scheduleRes?.items) ? scheduleRes.items : [];
+      setScheduleEntries(scheduleItems.map((e: any) => ({ id: e.id || stableId(), item: e.item ?? e })));
       setSongs(songsRes);
       setHymnLibrary(hymnLibraryRes);
 

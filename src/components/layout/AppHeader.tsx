@@ -105,12 +105,12 @@ export function AppHeader({
 
       {/* Right system controls */}
       <div className="flex items-center gap-1.5">
-        <button onClick={() => { invoke("toggle_output_window"); setOutputVisible((v: boolean) => !v); }}
+        <button onClick={() => { invoke("toggle_output_window").catch(() => {}); setOutputVisible((v: boolean) => !v); }}
           className={`p-1.5 rounded-md transition-all ${outputVisible ? "bg-green-500/20 text-green-400" : "text-slate-500 hover:text-green-400 hover:bg-slate-800"}`}
           title="Toggle Output Window (Ctrl+O)"><Monitor size={15} /></button>
-        <button onClick={() => invoke("toggle_design_window")}
+        <button onClick={() => invoke("toggle_design_window").catch(() => {})}
           className="p-1.5 text-slate-500 hover:text-purple-400 hover:bg-slate-800 rounded-md transition-all" title="Design Hub"><Layout size={15} /></button>
-        <button onClick={() => invoke("toggle_studio_window")}
+        <button onClick={() => invoke("toggle_studio_window").catch(() => {})}
           className="p-1.5 text-slate-500 hover:text-indigo-400 hover:bg-slate-800 rounded-md transition-all" title="Audio Studio"><Mic size={15} /></button>
         <div className="w-px h-4 bg-slate-800 mx-0.5" />
         <button onClick={() => setIsLogOpen(!isLogOpen)}

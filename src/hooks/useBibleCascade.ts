@@ -39,9 +39,10 @@ export function useBibleCascade() {
     if (!isReady || !selectedBook) return;
     invoke("get_chapters", { book: selectedBook, version: bibleVersion })
       .then((c: any) => {
-        setChapters(c);
-        if (!c.includes(selectedChapter)) {
-          setSelectedChapter(c.length > 0 ? c[0] : 0);
+        const chapters = Array.isArray(c) ? c : [];
+        setChapters(chapters);
+        if (!chapters.includes(selectedChapter)) {
+          setSelectedChapter(chapters.length > 0 ? chapters[0] : 0);
         }
       })
       .catch((err: any) => setAudioError(`Failed to load chapters: ${err}`));
