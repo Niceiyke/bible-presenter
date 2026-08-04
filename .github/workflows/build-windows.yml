@@ -15,7 +15,7 @@ jobs:
       - name: check if version tag already exists
         id: tag_check
         run: |
-          VERSION=$(node -p "require('./desktop-rs/src-tauri/tauri.conf.json').version")
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
           echo "Version: $VERSION"
           if git ls-remote --tags origin | grep -q "refs/tags/v$VERSION$"; then
             echo "Tag v$VERSION already exists — skipping build"
@@ -43,16 +43,14 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: install frontend dependencies
-        run: |
-          cd desktop-rs
-          npm install
+        run: npm install
 
       - name: create data directories
         shell: bash
         run: |
-          mkdir -p desktop-rs/src-tauri/models
-          mkdir -p desktop-rs/src-tauri/bible_data
-          echo "[]" > desktop-rs/src-tauri/bible_data/hymns.json
+          mkdir -p src-tauri/models
+          mkdir -p src-tauri/bible_data
+          echo "[]" > src-tauri/bible_data/hymns.json
 
       - name: build and publish release
         uses: tauri-apps/tauri-action@v0.5
@@ -63,7 +61,6 @@ jobs:
           RUSTFLAGS: "-C target-feature=-crt-static"
           MSVC_RUNTIME_LIBRARY: "MultiThreadedDLL"
         with:
-          projectPath: desktop-rs
           tagName: ${{ github.event_name == 'workflow_dispatch' && format('v__VERSION__-manual-{0}', github.run_number) || 'v__VERSION__' }}
           releaseName: ${{ github.event_name == 'workflow_dispatch' && format('Bible Presenter v__VERSION__ (Manual Build {0})', github.run_number) || 'Bible Presenter v__VERSION__' }}
           releaseBody: "See the assets below to download this version. Note: Core Bible assets and AI models are now downloaded within the app after installation."
