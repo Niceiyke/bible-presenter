@@ -8,8 +8,6 @@ import { MediaTab } from "../MediaTab";
 import { SongsTab } from "../SongsTab";
 import { CameraTab } from "../CameraTab";
 import { StudioTab } from "../StudioTab";
-import { SceneComposerTab } from "../SceneComposerTab";
-import { ScenesTab } from "../ScenesTab";
 import { ScheduleTab } from "../ScheduleTab";
 import { SettingsTab } from "../SettingsTab";
 import { PropsTab } from "../PropsTab";
@@ -84,10 +82,6 @@ export function ContentBrowser({
             }).catch(() => {});
           }}
         />
-      )}
-      {activeTab === "scenes" && <ScenesTab onStage={stageItem} onLive={sendLive} onAddToSchedule={addToSchedule} />}
-      {activeTab === "scene-builder" && (
-        <SceneComposerTab onSetToast={setToast} onStage={stageItem} onLive={sendLive} onAddToSchedule={addToSchedule} />
       )}
       {activeTab === "songs" && (
         <SongsTab

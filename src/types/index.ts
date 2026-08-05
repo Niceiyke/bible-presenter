@@ -5,7 +5,6 @@ export type { SlideZone, TextZone, SlideElement, SlideElementKind, CustomSlide, 
 export type { TimerData } from "./timer";
 export type { PropItem } from "./props";
 export type { LyricSection, SongStyle, Song, SongSlideData } from "./song";
-export type { LayerSource, LayerContent, SceneLayer, SceneData } from "./scene";
 export type { LowerThirdData, LtPreset, LowerThirdTemplate } from "./lowerThird";
 export type {
   ThemeColors, VideoBackground, CameraBackground, BackgroundSetting,

@@ -3,7 +3,6 @@ pub mod media;
 pub mod schedule;
 pub mod display;
 pub mod studio_pres;
-pub mod scenes;
 pub mod songs;
 pub mod lower_third;
 pub mod windows;

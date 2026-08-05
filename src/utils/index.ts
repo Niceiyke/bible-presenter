@@ -8,7 +8,6 @@ import type {
   LowerThirdData,
   LowerThirdTemplate,
   ThemeColors,
-  LayerContent,
   SlideTemplate,
   PresentationExport,
 } from "../types";
@@ -29,9 +28,6 @@ export function getItemUid(item: DisplayItem | null): string {
   }
   if (item.type === "Media") {
     return `media-${item.data.id}`;
-  }
-  if (item.type === "Scene") {
-    return `scene-${item.data.id}`;
   }
   if (item.type === "Timer") {
     return `timer-${item.data.timer_type}-${item.data.started_at ?? "idle"}`;
@@ -55,9 +51,6 @@ export function displayItemLabel(item: DisplayItem): string {
   if (item.type === "CustomSlide") {
     return `${item.data.presentation_name} – Slide ${item.data.slide_index + 1}`;
   }
-  if (item.type === "Scene") {
-    return `Scene: ${item.data.name}`;
-  }
   if (item.type === "Timer") {
     return `Timer: ${item.data.timer_type}`;
   }
@@ -72,23 +65,9 @@ export function describeDisplayItem(item: DisplayItem): string {
   if (item.type === "Media") return item.data.name;
   if (item.type === "Camera") return "Live Camera";
   if (item.type === "CustomSlide") return `${item.data.presentation_name} (S${item.data.slide_index + 1})`;
-  if (item.type === "Scene") return `Scene: ${item.data.name}`;
   if (item.type === "Timer") return `Timer: ${item.data.timer_type}`;
   if (item.type === "Song") return `${item.data.title} (${item.data.section_label})`;
   return "Unknown";
-}
-
-export function describeLayerContent(c: LayerContent): string {
-  if (c.kind === "empty") return "Empty";
-  if (c.kind === "lower-third") return `Lower Third (${c.ltData.kind})`;
-  if (c.kind === "static-color") return `Color: ${c.color}`;
-  if (c.kind === "static-image") return `Image: ${c.path.split(/[\\/]/).pop() ?? c.path}`;
-  if (c.kind === "source") {
-    const s = c.source;
-    if (s.type === "live-output") return "SOURCE: Live Output";
-    if (s.type === "lower-third") return "SOURCE: Lower Third";
-  }
-  return describeDisplayItem((c as any).item);
 }
 
 export function hexToRgba(hex: string, opacity: number): string {

@@ -1,6 +1,6 @@
 import { StateCreator } from "zustand";
 import { AppStore } from "../index";
-import { DEFAULT_SETTINGS, PresentationSettings, CustomPresentation, CustomSlide, SceneData, PresentationSummary, SlideTemplate } from "../../types";
+import { DEFAULT_SETTINGS, PresentationSettings, CustomPresentation, CustomSlide, PresentationSummary, SlideTemplate } from "../../types";
 
 export interface LogEntry {
   level: string;
@@ -13,8 +13,8 @@ export interface AppSlice {
   setLabel: (v: string) => void;
   settings: PresentationSettings;
   setSettings: (v: PresentationSettings | ((prev: PresentationSettings) => PresentationSettings)) => void;
-  activeTab: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "scenes" | "scene-builder" | "camera";
-  setActiveTab: (v: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "scenes" | "scene-builder" | "camera") => void;
+  activeTab: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "camera";
+  setActiveTab: (v: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "camera") => void;
   toast: string | null;
   setToast: (v: string | null) => void;
   sidebarWidth: number;
@@ -44,12 +44,6 @@ export interface AppSlice {
   clearLogs: () => void;
   isLogOpen: boolean;
   setIsLogOpen: (v: boolean) => void;
-  workingScene: SceneData;
-  setWorkingScene: (v: SceneData | ((prev: SceneData) => SceneData)) => void;
-  activeLayerId: string | null;
-  setActiveLayerId: (v: string | null) => void;
-  savedScenes: SceneData[];
-  setSavedScenes: (v: SceneData[]) => void;
   timerType: "countdown" | "countup" | "clock";
   setTimerType: (v: "countdown" | "countup" | "clock") => void;
   timerHours: number;
@@ -114,12 +108,6 @@ export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) =>
   clearLogs: () => set({ logs: [] }),
   isLogOpen: false,
   setIsLogOpen: (v) => set({ isLogOpen: v }),
-  workingScene: { id: crypto.randomUUID(), name: "New Scene", layers: [] },
-  setWorkingScene: (v) => set((s) => ({ workingScene: typeof v === "function" ? v(s.workingScene) : v })),
-  activeLayerId: null,
-  setActiveLayerId: (v) => set({ activeLayerId: v }),
-  savedScenes: [],
-  setSavedScenes: (v) => set({ savedScenes: v }),
   timerType: "countdown",
   setTimerType: (v) => set({ timerType: v }),
   timerHours: 0,

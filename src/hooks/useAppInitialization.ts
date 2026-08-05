@@ -6,7 +6,7 @@ import { useAppStore } from "../store";
 import { stableId } from "../utils";
 import {
   MediaItem, Song, LowerThirdTemplate,
-  PresentationSettings, PropItem, SceneData, ServiceMeta,
+  PresentationSettings, PropItem, ServiceMeta,
   DisplayItem
 } from "../types";
 
@@ -15,7 +15,7 @@ export function useAppInitialization() {
     setLabel, setMedia, setStudioList, setStudioSlides,
     setScheduleEntries, setSongs, setHymnLibrary, setLtSavedTemplates,
     setLtTemplate, setSettings, setAvailableVersions, setBibleVersion,
-    setPropItems, setSavedScenes, setServices, setLiveItem,
+    setPropItems, setServices, setLiveItem,
     setLtVisible, setCurrentLowerThird,
     setStagedItem, setStartupIssues, setIsInitialized,
     setAppDataDir,
@@ -45,7 +45,7 @@ export function useAppInitialization() {
       const [
         versionsRes, mediaRes, studioRes, scheduleRes, songsRes, hymnLibraryRes,
         ltRes, settingsRes, propsRes,
-        scenesRes, servicesRes, currentLtRes, appDirRes
+        servicesRes, currentLtRes, appDirRes
       ] = await Promise.all([
         invoke<string[]>("get_bible_versions").catch(() => []),
         invoke<MediaItem[]>("list_media").catch(() => []),
@@ -56,7 +56,6 @@ export function useAppInitialization() {
         invoke<LowerThirdTemplate[]>("load_lt_templates").catch(() => []),
         invoke<PresentationSettings>("get_settings").catch(() => null),
         invoke<PropItem[]>("get_props").catch(() => []),
-        invoke<SceneData[]>("list_scenes").catch(() => []),
         invoke<ServiceMeta[]>("list_services").catch(() => []),
         invoke<any>("get_current_lower_third").catch(() => null),
         invoke<string>("get_app_data_dir").catch(() => null),
@@ -84,7 +83,6 @@ export function useAppInitialization() {
       setBibleVersion(localStorage.getItem("pref_bibleVersion") || (versionsRes.length > 0 ? versionsRes[0] : ""));
 
       setPropItems(propsRes);
-      setSavedScenes(scenesRes);
       setServices(servicesRes.length ? servicesRes : [{ id: "default", name: "Sunday Service", item_count: 0, updated_at: Date.now() }]);
 
       invoke("get_current_item").then((v: any) => { if (v) setLiveItem(v); }).catch(() => {});
@@ -119,7 +117,6 @@ export function useAppInitialization() {
         if (active) setLtTemplate(active);
       }
     });
-    const unlistenScenesSync = listen<SceneData[]>("scenes-sync", (ev) => { setSavedScenes(ev.payload); });
     const unlistenSongsSync = listen<Song[]>("songs-sync", (ev) => { setSongs(ev.payload); });
     const unlistenStudioSync = listen<any[]>("studio-sync", (ev) => { setStudioList(ev.payload); });
     const unlistenStudioSlidesSync = listen<{ id: string; slides: any[] }>("studio-slides-sync", (ev) => {
@@ -135,7 +132,6 @@ export function useAppInitialization() {
       unlistenSettings.then(f => f());
       unlistenLtUpdate.then(f => f());
       unlistenLtSync.then(f => f());
-      unlistenScenesSync.then(f => f());
       unlistenSongsSync.then(f => f());
       unlistenStudioSync.then(f => f());
       unlistenStudioSlidesSync.then(f => f());

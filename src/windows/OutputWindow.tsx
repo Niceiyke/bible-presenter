@@ -12,7 +12,6 @@ import {
 } from "../utils";
 import {
   CustomSlideRenderer,
-  SceneRenderer,
   TimerRenderer,
   SongSlideRenderer,
   LowerThirdOverlay,
@@ -522,21 +521,6 @@ export function OutputWindow() {
                     loop
                   />
                 )}
-              </div>
-            ) : liveItem.type === "Scene" ? (
-              <div className="absolute inset-0">
-                <SceneRenderer
-                  scene={liveItem.data}
-                  scale={windowScale}
-                  outputMode={true}
-                  appDataDir={appDataDir}
-                  settings={settings}
-                  liveContext={{
-                    liveItem,
-                    lowerThird,
-                    outputWsRef: { current: null } as React.RefObject<WebSocket | null>,
-                  } as any}
-                />
               </div>
             ) : liveItem.type === "Timer" ? (
               <TimerRenderer data={liveItem.data} />

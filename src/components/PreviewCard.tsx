@@ -7,7 +7,6 @@ import {
 } from "lucide-react";
 import {
   CustomSlideRenderer,
-  SceneRenderer,
   SongSlideRenderer,
 } from "./shared/Renderers";
 import { useAppStore } from "../store";
@@ -179,7 +178,7 @@ export function PreviewCard({
       )}
       <div
         className={`flex-1 flex flex-col items-center justify-center bg-black/40 rounded-2xl border border-slate-800 text-center min-h-0 relative group ${
-          item?.type === "Media" || item?.type === "Scene" ? "p-0 overflow-hidden" : "p-6"
+          item?.type === "Media" ? "p-0 overflow-hidden" : "p-6"
         }`}
       >
         {item ? (
@@ -202,10 +201,6 @@ export function PreviewCard({
             ) : item.type === "CustomSlide" ? (
               <div className="w-full" style={{ aspectRatio: "16/9" }}>
                 <CustomSlideRenderer slide={item.data} scale={0.25} appDataDir={appDataDir} />
-              </div>
-            ) : item.type === "Scene" ? (
-              <div className="w-full h-full relative border border-slate-800 rounded-lg overflow-hidden">
-                <SceneRenderer scene={item.data} scale={0.25} appDataDir={appDataDir} />
               </div>
             ) : item.type === "Timer" ? (
               <div className="flex flex-col items-center justify-center gap-2">

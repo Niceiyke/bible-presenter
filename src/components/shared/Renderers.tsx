@@ -7,8 +7,6 @@ import {
   CustomSlide,
   CustomSlideDisplayData,
   DisplayItem,
-  SceneData,
-  LayerContent,
   LowerThirdData,
   LowerThirdTemplate,
   TimerData,
@@ -18,17 +16,6 @@ import {
   DEFAULT_LT_TEMPLATE
 } from "../../types";
   
-  // ─── Live Context (for OBS-style source layers in Scene Renderer) ─────────────
-  
-
-export interface SceneLiveContext {
-  liveItem: DisplayItem | null;
-  lowerThird: { data: LowerThirdData; template: LowerThirdTemplate } | null;
-  outputWsRef: React.RefObject<WebSocket | null>;
-  hubRelayStreamA?: MediaStream | null;
-  hubRelayStreamB?: MediaStream | null;
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 export function hexToRgba(hex: string, opacity: number): string {
@@ -285,70 +272,6 @@ export function SongSlideRenderer({
   );
 }
 
-// ─── Scene Renderer ──────────────────────────────────────────────────────────
-
-export function SceneRenderer({
-  scene,
-  scale = 1,
-  activeLayerId,
-  onLayerClick,
-  outputMode = false,
-  liveContext,
-  appDataDir = null,
-  settings,
-}: {
-  scene: SceneData;
-  scale?: number;
-  activeLayerId?: string | null;
-  onLayerClick?: (id: string) => void;
-  outputMode?: boolean;
-  liveContext?: SceneLiveContext;
-  appDataDir?: string | null;
-  settings?: PresentationSettings;
-}) {
-  const bg = scene.background;
-  const resolvedBg = bg?.type === "Image" ? resolvePath(bg.value, appDataDir) : null;
-  
-  return (
-    <div
-      style={{
-        position: "relative",
-        overflow: "hidden",
-        width: "100%",
-        height: "100%",
-        backgroundColor: bg?.type === "Color" ? bg.value : "#000000",
-        backgroundImage: resolvedBg ? `url(${convertFileSrc(resolvedBg)})` : undefined,
-        backgroundSize: "cover",
-        backgroundPosition: "center",
-      }}
-    >
-      {(scene.layers ?? []).filter(l => l.visible).map((layer, i) => (
-        <div
-          key={layer.id}
-          onClick={(e) => { e.stopPropagation(); onLayerClick?.(layer.id); }}
-          style={{
-            position: "absolute",
-            left: `${layer.x}%`,
-            top: `${layer.y}%`,
-            width: `${layer.w}%`,
-            height: `${layer.h}%`,
-            opacity: layer.opacity,
-            zIndex: i,
-            outline: (!outputMode && activeLayerId === layer.id) ? "2px solid #3b82f6" : "none",
-            cursor: outputMode ? "none" : "pointer",
-            overflow: "hidden",
-          }}
-        >
-          <LayerContentRenderer content={layer.content} scale={scale} outputMode={outputMode} liveContext={liveContext} appDataDir={appDataDir} settings={settings} />
-          {!outputMode && activeLayerId === layer.id && (
-            <div className="absolute top-1 right-1 bg-blue-500 text-white text-[8px] font-black px-1 rounded shadow-lg pointer-events-none">ACTIVE</div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 // ─── Reference Tag ───────────────────────────────────────────────────────────
 
 function ReferenceTag({
@@ -405,156 +328,7 @@ function ReferenceTag({
     </div>
   );
 }
-
-export function LayerContentRenderer({
-  content,
-  scale = 1,
-  outputMode = false,
-  liveContext,
-  appDataDir = null,
-  settings,
-}: {
-  content: LayerContent;
-  scale?: number;
-  outputMode?: boolean;
-  liveContext?: SceneLiveContext;
-  appDataDir?: string | null;
-  settings?: PresentationSettings;
-}) {
-  if (content.kind === "empty") {
-    if (outputMode) return null;
-    return (
-      <div className="w-full h-full flex items-center justify-center"
-        style={{ background: "repeating-conic-gradient(#1e293b 0% 25%, #0f172a 0% 50%) 0 0 / 16px 16px" }}>
-        <span className="text-slate-600 text-xs">+</span>
-      </div>
-    );
-  }
-  if (content.kind === "lower-third") {
-    return (
-      <div className="absolute inset-0">
-        <LowerThirdOverlay data={content.ltData} template={content.template} />
-      </div>
-    );
-  }
-  if (content.kind === "static-color") {
-    return <div style={{ background: content.color }} className="w-full h-full" />;
-  }
-  if (content.kind === "static-image") {
-    const resolved = resolvePath(content.path, appDataDir);
-    return <img src={convertFileSrc(resolved)} className="w-full h-full object-cover" alt="" />;
-  }
-  if (content.kind === "source") {
-    const src = content.source;
-    if (src.type === "live-output") {
-      const li = liveContext?.liveItem;
-      if (li && li.type !== "Scene") {
-        return <LayerContentRenderer content={{ kind: "item", item: li }} scale={scale} outputMode={outputMode} liveContext={liveContext} settings={settings} />;
-      }
-      return (
-        <div className="w-full h-full flex flex-col items-center justify-center gap-1"
-          style={{ background: "repeating-conic-gradient(#1e293b 0% 25%, #0f172a 0% 50%) 0 0 / 16px 16px" }}>
-          <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">LIVE OUTPUT</span>
-        </div>
-      );
-    }
-    if (src.type === "lower-third") {
-      const lt = liveContext?.lowerThird;
-      if (lt) {
-        return (
-          <div className="absolute inset-0">
-            <LowerThirdOverlay data={lt.data} template={lt.template} />
-          </div>
-        );
-      }
-      return (
-        <div className="w-full h-full flex flex-col items-center justify-center gap-1 bg-gradient-to-b from-transparent to-black/60">
-          <span className="text-[10px] font-black text-amber-400 uppercase tracking-widest">LOWER THIRD</span>
-        </div>
-      );
-    }
-    return null;
-  }
-
-  const { item } = content as { kind: "item"; item: any };
-  switch (item.type) {
-    case "Verse":
-      const applyDynamicStyling = (text: string) => {
-        if (!settings?.highlight_divine_words) return text;
-        const color = settings.highlight_color || "#ef4444";
-        // Simple regex to find quoted text (assumed to be spoken by Christ in many Bible versions)
-        // or specific divine names if we wanted to expand.
-        // This is a basic implementation that can be refined with specific word lists.
-        return text.replace(/"([^"]*)"/g, `<span style="color: ${color}">"$1"</span>`);
-      };
-
-      const displayText = item.data.text;
-      const isHtml = settings?.highlight_divine_words && displayText.includes('"');
-
-      return (
-        <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center">
-          <div className="relative w-full flex flex-col items-center">
-            {isHtml && outputMode ? (
-              <div 
-                className={outputMode ? "font-serif text-5xl text-white leading-snug drop-shadow-2xl" : "text-xs font-serif line-clamp-3 mb-1 opacity-80"}
-                style={outputMode ? { fontSize: `${(settings?.font_size ?? 48) * scale}pt`, fontFamily: settings?.verse_font_family } : undefined}
-                dangerouslySetInnerHTML={{ __html: applyDynamicStyling(displayText) }}
-              />
-            ) : (
-              <p className={outputMode ? "font-serif text-5xl text-white leading-snug drop-shadow-2xl" : "text-xs font-serif line-clamp-3 mb-1 opacity-80"}
-                 style={outputMode ? { fontSize: `${(settings?.font_size ?? 48) * scale}pt`, fontFamily: settings?.verse_font_family } : undefined}>
-                {displayText}
-              </p>
-            )}
-            {outputMode && item.data.split_index !== undefined && item.data.total_splits !== undefined && (
-              <p 
-                className="absolute -bottom-6 right-0 font-black opacity-30 text-[8px] tracking-widest uppercase"
-                style={{ fontSize: `${10 * scale}pt` }}
-              >
-                Part {item.data.split_index + 1} / {item.data.total_splits}
-              </p>
-            )}
-          </div>
-          {outputMode ? (
-            <ReferenceTag book={item.data.book} chapter={item.data.chapter} verse={item.data.verse} version={item.data.version} settings={settings} scale={scale} />
-          ) : (
-            <p className="text-[8px] font-black text-amber-500 uppercase">
-              {item.data.book} {item.data.chapter}:{item.data.verse} ({item.data.version})
-            </p>
-          )}
-        </div>
-      );
-    case "Media":
-      return item.data.media_type === "Image" ? (
-        <img src={convertFileSrc(item.data.path)} className="w-full h-full object-cover" alt={item.data.name} />
-      ) : (
-        <video
-          src={convertFileSrc(item.data.path)}
-          className="w-full h-full object-cover"
-          autoPlay={outputMode}
-          loop={outputMode}
-          muted={!outputMode}
-        />
-      );
-    case "CustomSlide":
-      return <CustomSlideRenderer slide={item.data} scale={outputMode ? scale : 0.1} appDataDir={appDataDir} />;
-    case "PresentationSlide":
-      return (
-        <div className="w-full h-full bg-orange-900/20 flex items-center justify-center text-[10px] font-bold text-orange-500">
-          PPTX SLIDE
-        </div>
-      );
-    case "Scene":
-      return <SceneRenderer scene={item.data} scale={scale} outputMode={outputMode} />;
-    case "Timer":
-      return <TimerRenderer data={item.data} />;
-    case "Song":
-      return <SongSlideRenderer data={item.data} scale={outputMode ? scale : 0.2} />;
-    default:
-      return null;
-  }
-}
-
+  
 // ─── Lower Third Overlay ──────────────────────────────────────────────────────
 
 const substituteTokens = (text: string) => {
@@ -960,8 +734,6 @@ export function SmallItemPreview({
       );
     case "CustomSlide":
       return <CustomSlideRenderer slide={item.data} scale={0.1} appDataDir={appDataDir} />;
-    case "Scene":
-      return <SceneRenderer scene={item.data} />;
     case "Timer":
       return <TimerRenderer data={item.data} />;
     case "Song":

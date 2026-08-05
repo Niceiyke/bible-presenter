@@ -163,7 +163,6 @@ pub enum DisplayItem {
     Media(MediaItem),
     Camera(CameraBackground),
     CustomSlide(CustomSlideData),
-    Scene(serde_json::Value),
     Timer(TimerData),
     Song(SongSlideData),
 }
@@ -175,7 +174,6 @@ impl DisplayItem {
             DisplayItem::Media(m) => m.name.clone(),
             DisplayItem::Camera(_) => "Live Camera Feed".to_string(),
             DisplayItem::CustomSlide(c) => format!("{} – slide {}", c.presentation_name, c.slide_index + 1),
-            DisplayItem::Scene(s) => s.get("name").and_then(|v| v.as_str()).unwrap_or("Scene").to_string(),
             DisplayItem::Timer(t) => t.label.as_ref().filter(|l| !l.is_empty()).cloned().unwrap_or_else(|| format!("Timer: {}", t.timer_type)),
             DisplayItem::Song(s) => format!("{} ({})", s.title, s.section_label),
         }
@@ -592,26 +590,6 @@ impl MediaScheduleStore {
             }
         }
 
-        // Migrate scenes
-        let scenes_dir = self.app_data_dir.join("scenes");
-        if scenes_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&scenes_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().map_or(false, |e| e == "json") {
-                        if let Ok(json) = fs::read_to_string(&path) {
-                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json) {
-                                let id = val.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                                if !id.is_empty() {
-                                    let _ = self.data_db.hash_set("scenes", id, &json);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         // Migrate services
         let services_dir = self.app_data_dir.join("services");
         if services_dir.exists() {
@@ -961,28 +939,5 @@ impl MediaScheduleStore {
         let json = serde_json::to_string_pretty(&presets)?;
         self.data_db.kv_set("lt_presets", &json).map_err(|e| anyhow::anyhow!(e))?;
         Ok(presets)
-    }
-
-    // ---- Scenes ----
-
-    pub fn list_scenes(&self) -> Result<Vec<serde_json::Value>> {
-        let rows = self.data_db.hash_list("scenes").map_err(|e| anyhow::anyhow!(e))?;
-        let mut items: Vec<serde_json::Value> = rows.iter().filter_map(|(_, data)| serde_json::from_str(data).ok()).collect();
-        items.sort_by(|a, b| {
-            let na = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let nb = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            na.to_lowercase().cmp(&nb.to_lowercase())
-        });
-        Ok(items)
-    }
-
-    pub fn save_scene(&self, data: &serde_json::Value) -> Result<()> {
-        let id = data.get("id").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("Scene JSON missing 'id' field"))?;
-        let json = serde_json::to_string_pretty(data)?;
-        self.data_db.hash_set("scenes", id, &json).map_err(|e| anyhow::anyhow!(e))
-    }
-
-    pub fn delete_scene(&self, id: &str) -> Result<()> {
-        self.data_db.hash_delete("scenes", id).map_err(|e| anyhow::anyhow!(e))
     }
 }

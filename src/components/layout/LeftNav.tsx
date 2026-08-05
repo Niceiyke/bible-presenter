@@ -1,7 +1,7 @@
 import React from "react";
 import {
   BookOpen, CalendarDays, Camera, Image as ImageIcon,
-  Layers, Layout, Mic, Monitor, Settings, Zap
+  Layers, Mic, Monitor, Settings, Zap
 } from "lucide-react";
 import { useAppStore } from "../../store";
 
@@ -15,10 +15,8 @@ export function LeftNav() {
         { id: "media",         icon: ImageIcon,   title: "Media (F3)" },
         { id: "songs",         icon: Mic,         title: "Songs (F2)" },
         { id: "studio",        icon: Layers,      title: "Studio (F4)" },
-        { id: "scenes",        icon: Layout,      title: "Scenes (F6)" },
-        { id: "scene-builder", icon: Layout,      title: "Scene Builder (F7)" },
         { id: "schedule",      icon: CalendarDays,title: "Service" },
-        { id: "props",         icon: Monitor,     title: "Props (F8)" },
+        { id: "props",         icon: Monitor,     title: "Props (F5)" },
       ] as const).map(({ id, icon: Icon, title }) => (
         <button key={id} onClick={() => setActiveTab(id)} title={title}
           className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all ${

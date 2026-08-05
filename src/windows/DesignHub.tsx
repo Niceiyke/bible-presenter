@@ -2,10 +2,9 @@ import React, { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { AnimatePresence } from "framer-motion";
-import { Layers, Monitor, Sliders, Wand2, Clapperboard, LayoutDashboard, Loader2 } from "lucide-react";
+import { Layers, Monitor, Sliders, Wand2, Clapperboard, Loader2 } from "lucide-react";
 import { useAppStore } from "../store";
 import { SlideEditor } from "../components/editors/SlideEditor";
-import { SceneComposerTab } from "../components/SceneComposerTab";
 import { LtDesignerTab } from "../components/LtDesignerTab";
 import { StudioTab } from "../components/StudioTab";
 import { PropsTab } from "../components/PropsTab";
@@ -17,7 +16,6 @@ import type {
   CustomPresentation,
   MediaItem,
   LowerThirdTemplate,
-  SceneData,
   PropItem,
   PresentationSettings,
   DisplayItem,
@@ -31,7 +29,6 @@ export function DesignHub() {
     media, setMedia,
     setLtTemplate,
     setLtSavedTemplates,
-    setSavedScenes,
     setPropItems,
     settings, setSettings,
     toast, setToast,
@@ -44,7 +41,7 @@ export function DesignHub() {
     setTemplates,
   } = useAppStore();
 
-  const [hubTab, setHubTab] = useState<"studio" | "lt-designer" | "scene" | "props" | "settings">("studio");
+  const [hubTab, setHubTab] = useState<"studio" | "lt-designer" | "props" | "settings">("studio");
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -57,12 +54,11 @@ export function DesignHub() {
       const errors: string[] = [];
 
       try {
-        const [studioRes, mediaRes, ltRes, propsRes, scenesRes, settingsRes, appDirRes, templatesRes] = await Promise.all([
+        const [studioRes, mediaRes, ltRes, propsRes, settingsRes, appDirRes, templatesRes] = await Promise.all([
           invoke<PresentationSummary[]>("list_studio_presentations").catch((e) => { errors.push("Presentations: " + String(e)); return []; }),
           invoke<MediaItem[]>("list_media").catch((e) => { errors.push("Media: " + String(e)); return []; }),
           invoke<LowerThirdTemplate[]>("load_lt_templates").catch((e) => { errors.push("LT Templates: " + String(e)); return []; }),
           invoke<PropItem[]>("get_props").catch((e) => { errors.push("Props: " + String(e)); return []; }),
-          invoke<SceneData[]>("list_scenes").catch((e) => { errors.push("Scenes: " + String(e)); return []; }),
           invoke<PresentationSettings>("get_settings").catch((e) => { errors.push("Settings: " + String(e)); return null; }),
           invoke<string>("get_app_data_dir").catch((e) => { errors.push("App data dir: " + String(e)); return null; }),
           invoke<SlideTemplate[]>("list_slide_templates").catch((e) => { errors.push("Templates: " + String(e)); return []; }),
@@ -79,7 +75,6 @@ export function DesignHub() {
         setLtTemplate(active);
 
         setPropItems(propsRes);
-        setSavedScenes(scenesRes);
         if (settingsRes) setSettings(settingsRes);
         if (appDirRes) setAppDataDir(appDirRes);
 
@@ -175,7 +170,6 @@ export function DesignHub() {
   const tabs = [
     { id: "studio" as const, label: "Studio", icon: <Clapperboard size={14} /> },
     { id: "lt-designer" as const, label: "LT Designer", icon: <Wand2 size={14} /> },
-    { id: "scene" as const, label: "Scene Builder", icon: <LayoutDashboard size={14} /> },
     { id: "props" as const, label: "Props", icon: <Layers size={14} /> },
     { id: "settings" as const, label: "Preferences", icon: <Sliders size={14} /> },
   ];
@@ -219,14 +213,6 @@ export function DesignHub() {
 
       <div className="flex-1 overflow-hidden">
         {hubTab === "lt-designer" && <LtDesignerTab onSetToast={setToast} onLoadMedia={async () => {}} />}
-        {hubTab === "scene" && (
-          <SceneComposerTab
-            onSetToast={setToast}
-            onStage={stageItem}
-            onLive={sendLive}
-            onAddToSchedule={addToSchedule}
-          />
-        )}
         {(hubTab === "studio" || hubTab === "props" || hubTab === "settings") && (
           <div className="h-full overflow-y-auto p-4 custom-scrollbar">
             {hubTab === "studio" && <StudioTab onOpenEditor={handleOpenEditor} onNewPresentation={handleNewPresentation} />}
