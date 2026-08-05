@@ -1,7 +1,6 @@
 use crate::state::AppState;
 use crate::store;
-use store::log_msg;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
 pub async fn get_bible_versions(state: State<'_, AppState>) -> Result<Vec<String>, String> {

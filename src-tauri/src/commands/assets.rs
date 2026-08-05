@@ -4,7 +4,7 @@ use serde::{Serialize, Deserialize};
 use crate::state::AppState;
 use crate::store;
 use store::log_msg;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 // ---------------------------------------------------------------------------
 // Constants
