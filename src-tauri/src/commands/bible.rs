@@ -1,6 +1,7 @@
 use crate::state::AppState;
 use crate::store;
-use tauri::{AppHandle, Manager, State};
+use store::log_msg;
+use tauri::{AppHandle, State};
 
 #[tauri::command]
 pub async fn get_bible_versions(state: State<'_, AppState>) -> Result<Vec<String>, String> {
@@ -49,8 +50,8 @@ pub async fn search_manual(state: State<'_, AppState>, query: String, version: S
 }
 
 #[tauri::command]
-pub async fn search_semantic_query(app: AppHandle, state: State<'_, AppState>, query: String) -> Result<store::SearchResponse, String> {
-    state.search_bible(&app, &query).await
+pub async fn search_semantic_query(state: State<'_, AppState>, query: String) -> Result<store::SearchResponse, String> {
+    state.store.search_all(&query).map_err(|e: anyhow::Error| e.to_string())
 }
 
 #[tauri::command]
@@ -100,12 +101,12 @@ pub async fn get_verse(state: State<'_, AppState>, book: String, chapter: i32, v
 
 #[tauri::command]
 pub async fn get_next_verse(state: State<'_, AppState>, book: String, chapter: i32, verse: i32, version: String) -> Result<Option<store::Verse>, String> {
-    state.store.get_next_verse(&book, chapter, verse, &version).map_err(|e| e.to_string())
+    state.store.get_next_verse(&book, chapter, verse, &version).map_err(|e: anyhow::Error| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_prev_verse(state: State<'_, AppState>, book: String, chapter: i32, verse: i32, version: String) -> Result<Option<store::Verse>, String> {
-    state.store.get_prev_verse(&book, chapter, verse, &version).map_err(|e| e.to_string())
+    state.store.get_prev_verse(&book, chapter, verse, &version).map_err(|e: anyhow::Error| e.to_string())
 }
 
 #[cfg(test)]

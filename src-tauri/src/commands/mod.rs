@@ -1,4 +1,3 @@
-pub mod session;
 pub mod bible;
 pub mod media;
 pub mod schedule;
@@ -7,8 +6,7 @@ pub mod studio_pres;
 pub mod scenes;
 pub mod songs;
 pub mod lower_third;
-pub mod audio_studio;
 pub mod windows;
-pub mod models;
 pub mod props;
 pub mod misc;
+pub mod assets;

@@ -19,14 +19,10 @@ export interface AppSlice {
   setToast: (v: string | null) => void;
   sidebarWidth: number;
   setSidebarWidth: (v: number | ((prev: number) => number)) => void;
-  isTranscriptionCollapsed: boolean;
-  setIsTranscriptionCollapsed: (v: boolean) => void;
-  isSchedulePersistent: boolean;
-  setIsSchedulePersistent: (v: boolean) => void;
   bottomDeckOpen: boolean;
   setBottomDeckOpen: (v: boolean) => void;
-  bottomDeckMode: "live-lt" | "timer" | "transcript" | "audio";
-  setBottomDeckMode: (v: "live-lt" | "timer" | "transcript" | "audio") => void;
+  bottomDeckMode: "live-lt" | "timer";
+  setBottomDeckMode: (v: "live-lt" | "timer") => void;
   topPanelPct: number;
   setTopPanelPct: (v: number | ((prev: number) => number)) => void;
   stagePct: number;
@@ -35,24 +31,25 @@ export interface AppSlice {
   setAppDataDir: (v: string | null) => void;
   isInitialized: boolean;
   setIsInitialized: (v: boolean) => void;
+  startupIssues: string[];
+  setStartupIssues: (v: string[]) => void;
+  isSchedulePersistent: boolean;
+  setIsSchedulePersistent: (v: boolean) => void;
   outputVisible: boolean;
   setOutputVisible: (v: boolean | ((prev: boolean) => boolean)) => void;
   showShortcuts: boolean;
   setShowShortcuts: (v: boolean | ((prev: boolean) => boolean)) => void;
-  // Merged from logSlice
   logs: LogEntry[];
   addLog: (entry: LogEntry) => void;
   clearLogs: () => void;
   isLogOpen: boolean;
   setIsLogOpen: (v: boolean) => void;
-  // Merged from sceneSlice
   workingScene: SceneData;
   setWorkingScene: (v: SceneData | ((prev: SceneData) => SceneData)) => void;
   activeLayerId: string | null;
   setActiveLayerId: (v: string | null) => void;
   savedScenes: SceneData[];
   setSavedScenes: (v: SceneData[]) => void;
-  // Merged from timerSlice
   timerType: "countdown" | "countup" | "clock";
   setTimerType: (v: "countdown" | "countup" | "clock") => void;
   timerHours: number;
@@ -65,7 +62,6 @@ export interface AppSlice {
   setTimerLabel: (v: string) => void;
   timerRunning: boolean;
   setTimerRunning: (v: boolean) => void;
-  // Merged from studioSlice
   studioList: { id: string; name: string; slide_count: number; updated_at?: number }[];
   setStudioList: (v: { id: string; name: string; slide_count: number; updated_at?: number }[] | ((prev: { id: string; name: string; slide_count: number; updated_at?: number }[]) => { id: string; name: string; slide_count: number; updated_at?: number }[])) => void;
   editorPresId: string | null;
@@ -89,10 +85,6 @@ export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) =>
   setToast: (v) => set({ toast: v }),
   sidebarWidth: 320,
   setSidebarWidth: (v) => set((s) => ({ sidebarWidth: typeof v === "function" ? v(s.sidebarWidth) : v })),
-  isTranscriptionCollapsed: false,
-  setIsTranscriptionCollapsed: (v) => set({ isTranscriptionCollapsed: v }),
-  isSchedulePersistent: true,
-  setIsSchedulePersistent: (v) => set({ isSchedulePersistent: v }),
   bottomDeckOpen: false,
   setBottomDeckOpen: (v) => set({ bottomDeckOpen: v }),
   bottomDeckMode: "live-lt",
@@ -105,24 +97,25 @@ export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) =>
   setAppDataDir: (v) => set({ appDataDir: v }),
   isInitialized: false,
   setIsInitialized: (v) => set({ isInitialized: v }),
+  startupIssues: [],
+  setStartupIssues: (v) => set({ startupIssues: v }),
+  isSchedulePersistent: true,
+  setIsSchedulePersistent: (v) => set({ isSchedulePersistent: v }),
   outputVisible: false,
   setOutputVisible: (v) => set((s) => ({ outputVisible: typeof v === "function" ? v(s.outputVisible) : v })),
   showShortcuts: false,
   setShowShortcuts: (v) => set((s) => ({ showShortcuts: typeof v === "function" ? v(s.showShortcuts) : v })),
-  // Log slice (merged)
   logs: [],
   addLog: (entry) => set((s) => ({ logs: [entry, ...s.logs].slice(0, 500) })),
   clearLogs: () => set({ logs: [] }),
   isLogOpen: false,
   setIsLogOpen: (v) => set({ isLogOpen: v }),
-  // Scene slice (merged)
   workingScene: { id: crypto.randomUUID(), name: "New Scene", layers: [] },
   setWorkingScene: (v) => set((s) => ({ workingScene: typeof v === "function" ? v(s.workingScene) : v })),
   activeLayerId: null,
   setActiveLayerId: (v) => set({ activeLayerId: v }),
   savedScenes: [],
   setSavedScenes: (v) => set({ savedScenes: v }),
-  // Timer slice (merged)
   timerType: "countdown",
   setTimerType: (v) => set({ timerType: v }),
   timerHours: 0,
@@ -135,7 +128,6 @@ export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) =>
   setTimerLabel: (v) => set({ timerLabel: v }),
   timerRunning: false,
   setTimerRunning: (v) => set({ timerRunning: v }),
-  // Studio slice (merged)
   studioList: [],
   setStudioList: (v) => set((s) => ({ studioList: typeof v === "function" ? v(s.studioList) : v })),
   editorPresId: null,

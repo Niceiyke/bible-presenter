@@ -15,10 +15,6 @@ export interface LiveSlice {
   setPreviousItem: (v: DisplayItem | null) => void;
   stagedItem: DisplayItem | null;
   setStagedItem: (v: DisplayItem | null) => void;
-  suggestedItem: DisplayItem | null;
-  setSuggestedItem: (v: DisplayItem | null) => void;
-  suggestedConfidence: number;
-  setSuggestedConfidence: (v: number) => void;
   nextVerse: Verse | null;
   setNextVerse: (v: Verse | null) => void;
   recentItems: RecentItems;
@@ -36,10 +32,6 @@ export const createLiveSlice: StateCreator<AppStore, [], [], LiveSlice> = (set) 
   setPreviousItem: (v) => set({ previousItem: v }),
   stagedItem: null,
   setStagedItem: (v) => set({ stagedItem: v }),
-  suggestedItem: null,
-  setSuggestedItem: (v) => set({ suggestedItem: v }),
-  suggestedConfidence: 0,
-  setSuggestedConfidence: (v) => set({ suggestedConfidence: v }),
   nextVerse: null,
   setNextVerse: (v) => set({ nextVerse: v }),
   recentItems: { bible: [], media: [], presentation: [] },

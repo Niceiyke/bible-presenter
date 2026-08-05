@@ -1,13 +1,11 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { AnimatePresence } from "framer-motion";
-import { AlertCircle, X } from "lucide-react";
 
 import { useAppStore } from "./store";
 import { useAppInitialization } from "./hooks/useAppInitialization";
 import { useBibleCascade } from "./hooks/useBibleCascade";
-import { useSessionTimer } from "./hooks/useSessionTimer";
 import { useItemActions } from "./hooks/useItemActions";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 
@@ -22,7 +20,7 @@ import { ShortcutsModal } from "./components/ShortcutsModal";
 import { SlideEditor } from "./components/editors/SlideEditor";
 import { LogViewer } from "./components/LogViewer";
 
-import { OutputWindow, StageWindow, DesignHub, AudioStudio } from "./windows";
+import { OutputWindow, StageWindow, DesignHub } from "./windows";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
 import type { CustomPresentation } from "./types";
@@ -33,42 +31,30 @@ export default function App() {
     liveItem, setLiveItem,
     nextVerse, setNextVerse,
     bibleVersion,
-    suggestedItem, setSuggestedItem,
     scheduleEntries, setScheduleEntries,
     activeServiceId, setActiveServiceId,
     songs, ltSongId,
-    operatorMuted, setOperatorMuted,
-    preacherMuted, setPreacherMuted,
     media, studioSlides,
     setStudioSlides,
     toast, setToast,
     showShortcuts,
-    audioError, setAudioError,
-    deviceError,
     startupIssues, setStartupIssues,
     isLogOpen,
   } = useAppStore();
 
-  const [isPttActive, setIsPttActive] = useState(false);
   const [editingPres, setEditingPres] = useState<CustomPresentation | null>(null);
   const [bottomDeckH, setBottomDeckH] = React.useState(() => Number(localStorage.getItem("pref_bottomDeckH") || 280));
   const [cockpitWidth, setCockpitWidth] = React.useState(() => Number(localStorage.getItem("pref_cockpitWidth") || 340));
 
-  // Initialization & listeners
   useAppInitialization();
   useBibleCascade();
 
-  // Session timer
-  const { sessionSecs, fmtTime } = useSessionTimer();
-
-  // Item action handlers (stage, go live, send live, etc.)
   const {
     nextLiveItem, stageItem, goLive, sendLive, getNextItem,
     addToSchedule, persistSchedule, handleFileUpload, handleDeleteMedia,
     updateSettings, updateProps,
   } = useItemActions();
 
-  // ltFlatLines for keyboard shortcuts
   const ltFlatLines = useMemo((): { text: string; sectionLabel: string }[] => {
     const song = songs.find(s => s.id === ltSongId);
     if (!song) return [];
@@ -86,53 +72,8 @@ export default function App() {
     return flat;
   }, [songs, ltSongId]);
 
-  // Keyboard shortcuts
   useKeyboardShortcuts({ stageItem, goLive, sendLive, getNextItem, ltFlatLines });
 
-  // ── PTT Spacebar ──────────────────────────────────────────────────────────
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === "Space" && !isPttActive && (e.target as HTMLElement).tagName !== "INPUT" && (e.target as HTMLElement).tagName !== "TEXTAREA") {
-        e.preventDefault();
-        setIsPttActive(true);
-        invoke("set_operator_ptt", { active: true }).catch(console.error);
-      }
-    };
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.code === "Space" && isPttActive) {
-        setIsPttActive(false);
-        invoke("set_operator_ptt", { active: false }).catch(console.error);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup", handleKeyUp);
-    };
-  }, [isPttActive]);
-
-  const handlePttDown = () => {
-    setIsPttActive(true);
-    invoke("set_operator_ptt", { active: true }).catch(console.error);
-  };
-  const handlePttUp = () => {
-    setIsPttActive(false);
-    invoke("set_operator_ptt", { active: false }).catch(console.error);
-  };
-
-  const handleToggleOperatorMute = () => {
-    const next = !operatorMuted;
-    setOperatorMuted(next);
-    invoke("set_operator_muted", { muted: next }).catch(console.error);
-  };
-  const handleTogglePreacherMute = () => {
-    const next = !preacherMuted;
-    setPreacherMuted(next);
-    invoke("set_preacher_muted", { muted: next }).catch(console.error);
-  };
-
-  // ── Next verse sync ────────────────────────────────────────────────────────
   useEffect(() => {
     if (liveItem?.type === "Verse") {
       const v = liveItem.data;
@@ -141,15 +82,6 @@ export default function App() {
     } else setNextVerse(null);
   }, [liveItem, bibleVersion, setNextVerse]);
 
-  // ── Auto-dismiss suggested item (AI peel) after 5 seconds ─────────────────
-  useEffect(() => {
-    if (suggestedItem) {
-      const t = setTimeout(() => { setSuggestedItem(null); }, 5000);
-      return () => clearTimeout(t);
-    }
-  }, [suggestedItem, setSuggestedItem]);
-
-  // ── Recovery Save ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (activeServiceId && scheduleEntries.length > 0) {
       const timer = setTimeout(() => {
@@ -161,7 +93,6 @@ export default function App() {
     }
   }, [scheduleEntries, activeServiceId]);
 
-  // ── Recovery Check on Mount ────────────────────────────────────────────────
   useEffect(() => {
     const checkRecovery = async () => {
       const data = await invoke<any>("load_recovery").catch(() => null);
@@ -178,47 +109,27 @@ export default function App() {
     setTimeout(checkRecovery, 1500);
   }, []);
 
-  // ── Window Routing (after all hooks) ──────────────────────────────────────
   if (label === "output") return <ErrorBoundary windowLabel="output"><OutputWindow /></ErrorBoundary>;
   if (label === "stage") return <ErrorBoundary windowLabel="stage"><StageWindow /></ErrorBoundary>;
   if (label === "design") return <ErrorBoundary windowLabel="design"><DesignHub /></ErrorBoundary>;
-  if (label === "studio") return <ErrorBoundary windowLabel="studio"><AudioStudio /></ErrorBoundary>;
 
-  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden select-none">
 
-      <AppHeader
-        sessionSecs={sessionSecs}
-        fmtTime={fmtTime}
-        handleToggleOperatorMute={handleToggleOperatorMute}
-        handleTogglePreacherMute={handleTogglePreacherMute}
-        isPttActive={isPttActive}
-        handlePttDown={handlePttDown}
-        handlePttUp={handlePttUp}
-      />
+      <AppHeader />
 
-      {/* Error / Startup banners */}
-      {(audioError || deviceError) && (
-        <div className="bg-red-600/90 text-white px-4 py-1.5 flex items-center justify-between text-[10px] font-bold uppercase tracking-wider z-50">
-          <div className="flex items-center gap-2"><AlertCircle size={14} /><span>{audioError || deviceError}</span></div>
-          <button onClick={() => setAudioError(null)}><X size={14} /></button>
-        </div>
-      )}
       {startupIssues.length > 0 && (
         <div className="bg-amber-900/90 border-b border-amber-600 px-4 py-2 flex items-start gap-2 text-sm text-amber-200 z-50">
-          <AlertCircle size={14} className="mt-0.5 shrink-0 text-amber-400" />
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="mt-0.5 shrink-0 text-amber-400"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
           <div className="flex-1"><span className="font-bold text-amber-300">Setup Issues: </span>{startupIssues.join(" | ")}</div>
-          <button onClick={() => setStartupIssues([])} className="text-amber-400 hover:text-white shrink-0"><X size={14} /></button>
+          <button onClick={() => setStartupIssues([])} className="text-amber-400 hover:text-white shrink-0"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
       )}
 
-      {/* ── BODY ─────────────────────────────────────────────────────────── */}
       <div className="flex-1 flex overflow-hidden">
 
         <LeftNav />
 
-        {/* ── CENTER — Content Browser + Bottom Drawer ───────────────────── */}
         <div className="flex-1 flex flex-col overflow-hidden bg-slate-950">
           <ContentBrowser
             stageItem={stageItem}
@@ -239,11 +150,6 @@ export default function App() {
             sendLive={sendLive}
             handleFileUpload={handleFileUpload}
             updateSettings={updateSettings}
-            isPttActive={isPttActive}
-            handlePttDown={handlePttDown}
-            handlePttUp={handlePttUp}
-            handleToggleOperatorMute={handleToggleOperatorMute}
-            handleTogglePreacherMute={handleTogglePreacherMute}
           />
         </div>
 
@@ -259,7 +165,6 @@ export default function App() {
         />
       </div>
 
-      {/* ── OVERLAYS ──────────────────────────────────────────────────────── */}
       <AnimatePresence>
         {toast && <Toast key={toast} message={toast} onDone={() => setToast(null)} />}
       </AnimatePresence>

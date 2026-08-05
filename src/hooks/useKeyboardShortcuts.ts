@@ -47,7 +47,7 @@ export function useKeyboardShortcuts(props: Props): void {
         case "F1": setActiveTab("bible"); break;
         case "F2": setActiveTab("songs"); break;
         case "F3": setActiveTab("media"); break;
-        case "F4": invoke("toggle_studio_window"); break;
+        case "F4": invoke("toggle_design_window"); break;
         case "F5": setActiveTab("media"); useAppStore.getState().setMediaFilter("camera"); break;
         case "F6": setActiveTab("scenes"); break;
         case "F7": setActiveTab("scene-builder"); break;
@@ -108,11 +108,6 @@ export function useKeyboardShortcuts(props: Props): void {
               }
             }
           }
-          else if (liveItem?.type === "Verse") {
-            if (liveItem.data.split_index !== undefined && liveItem.data.split_index > 0) {
-              // Navigate via sendLive with split index - 1 (verseSplitsRef not available here, skip)
-            }
-          }
           break;
         case " ":
           if (e.ctrlKey) {
@@ -147,7 +142,6 @@ export function useKeyboardShortcuts(props: Props): void {
         case "k": emit("media-control", { action: "video-play-pause" }); break;
         case "r": emit("media-control", { action: "video-restart" }); break;
         case "m": emit("media-control", { action: "video-mute-toggle" }); break;
-        // EasyWorship-style shortcuts
         case "g": if (e.ctrlKey) { e.preventDefault(); if (stagedItem) goLive(); } break;
         case "l": if (e.ctrlKey) { e.preventDefault(); invoke("clear_live"); } break;
         case "s": if (e.ctrlKey) { e.preventDefault(); setActiveTab("settings"); } break;

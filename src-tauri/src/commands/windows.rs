@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use crate::events::{MonitorInfo, TranscriptionUpdate};
+use crate::events::{MonitorInfo, LiveItemUpdate};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 #[tauri::command]
@@ -32,12 +32,10 @@ pub async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) ->
 
             let live = state.presentation.live_item.lock().clone();
             if let Some(item) = live {
-                let update = TranscriptionUpdate {
-                    text: item.to_label(), detected_item: Some(item), confidence: 1.0,
-                    source: "manual".to_string(), is_partial: false,
+                let update = LiveItemUpdate {
+                    detected_item: Some(item),
                 };
-                let _ = app.emit("operator-transcription-update", &update);
-                let _ = app.emit("preacher-transcription-update", &update);
+                let _ = app.emit("live-item-update", &update);
             }
 
             let lt = state.presentation.lower_third.lock().clone();
@@ -64,12 +62,10 @@ pub async fn toggle_stage_window(app: AppHandle, state: State<'_, AppState>) -> 
 
             let live = state.presentation.live_item.lock().clone();
             if let Some(item) = live {
-                let update = TranscriptionUpdate {
-                    text: item.to_label(), detected_item: Some(item), confidence: 1.0,
-                    source: "manual".to_string(), is_partial: false,
+                let update = LiveItemUpdate {
+                    detected_item: Some(item),
                 };
-                let _ = app.emit("operator-transcription-update", &update);
-                let _ = app.emit("preacher-transcription-update", &update);
+                let _ = app.emit("live-item-update", &update);
             }
             let staged = state.presentation.staged_item.lock().clone();
             let _ = app.emit("item-staged", staged.as_ref());

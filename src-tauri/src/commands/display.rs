@@ -1,7 +1,6 @@
 use crate::state::AppState;
-use crate::events::TranscriptionUpdate;
+use crate::events::LiveItemUpdate;
 use crate::store;
-use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, State};
 
 #[tauri::command]
@@ -25,39 +24,20 @@ pub async fn go_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), S
 pub async fn go_live_item(app: AppHandle, state: State<'_, AppState>, item: store::DisplayItem) -> Result<(), String> {
     *state.presentation.live_item.lock() = Some(item.clone());
 
-    let mut is_media = false;
-    if let store::DisplayItem::Media(ref m) = item {
-        if matches!(m.media_type, store::MediaItemType::Video) { is_media = true; }
-    }
-    state.audio.operator.lock().media_playing.store(is_media, Ordering::Relaxed);
-    state.audio.preacher.lock().media_playing.store(is_media, Ordering::Relaxed);
-
-    let update = TranscriptionUpdate {
-        text: item.to_label(),
+    let update = LiveItemUpdate {
         detected_item: Some(item.clone()),
-        confidence: 1.0,
-        source: "manual".to_string(),
-        is_partial: false,
     };
-    let _ = app.emit("operator-transcription-update", &update);
-    let _ = app.emit("preacher-transcription-update", &update);
+    let _ = app.emit("live-item-update", &update);
     Ok(())
 }
 
 #[tauri::command]
 pub async fn clear_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     *state.presentation.live_item.lock() = None;
-    state.audio.operator.lock().media_playing.store(false, Ordering::Relaxed);
-    state.audio.preacher.lock().media_playing.store(false, Ordering::Relaxed);
-    let update = TranscriptionUpdate {
-        text: "".to_string(),
+    let update = LiveItemUpdate {
         detected_item: None,
-        confidence: 1.0,
-        source: "manual".to_string(),
-        is_partial: false,
     };
-    let _ = app.emit("operator-transcription-update", &update);
-    let _ = app.emit("preacher-transcription-update", &update);
+    let _ = app.emit("live-item-update", &update);
     let _ = app.emit("stage-update", Option::<store::DisplayItem>::None);
     Ok(())
 }
@@ -69,15 +49,10 @@ pub async fn update_timer(app: AppHandle, state: State<'_, AppState>, started_at
         t.started_at = started_at;
         let item = live.clone().unwrap();
         drop(live);
-        let update = TranscriptionUpdate {
-            text: item.to_label(),
+        let update = LiveItemUpdate {
             detected_item: Some(item),
-            confidence: 1.0,
-            source: "manual".to_string(),
-            is_partial: false,
         };
-        let _ = app.emit("operator-transcription-update", &update);
-        let _ = app.emit("preacher-transcription-update", &update);
+        let _ = app.emit("live-item-update", &update);
     }
     Ok(())
 }

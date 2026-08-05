@@ -10,7 +10,7 @@ export function useBibleCascade() {
     selectedBook, setSelectedBook,
     selectedChapter, setSelectedChapter,
     setBooks, setChapters, setVerses,
-    setAudioError
+    setToast
   } = useAppStore();
 
   // isOperator: only operator windows load Bible data.
@@ -31,8 +31,8 @@ export function useBibleCascade() {
           return b.length > 0 ? b[0] : "";
         });
       })
-      .catch((err: any) => setAudioError(`Failed to load books: ${err}`));
-  }, [bibleVersion, isReady, setBooks, setSelectedBook, setAudioError]);
+      .catch((err: any) => setToast(`Failed to load books: ${err}`));
+  }, [bibleVersion, isReady, setBooks, setSelectedBook, setToast]);
 
   // 2. Book change -> Load Chapters
   useEffect(() => {
@@ -45,8 +45,8 @@ export function useBibleCascade() {
           setSelectedChapter(chapters.length > 0 ? chapters[0] : 0);
         }
       })
-      .catch((err: any) => setAudioError(`Failed to load chapters: ${err}`));
-  }, [selectedBook, bibleVersion, isReady, setChapters, setSelectedChapter, setAudioError, selectedChapter]);
+      .catch((err: any) => setToast(`Failed to load chapters: ${err}`));
+  }, [selectedBook, bibleVersion, isReady, setChapters, setSelectedChapter, setToast, selectedChapter]);
 
   // 3. Chapter change -> Load Verses count
   useEffect(() => {
@@ -55,6 +55,6 @@ export function useBibleCascade() {
       .then((v: any) => {
         setVerses(v);
       })
-      .catch((err: any) => setAudioError(`Failed to load verses: ${err}`));
-  }, [selectedBook, selectedChapter, bibleVersion, isReady, setVerses, setAudioError]);
+      .catch((err: any) => setToast(`Failed to load verses: ${err}`));
+  }, [selectedBook, selectedChapter, bibleVersion, isReady, setVerses, setToast]);
 }

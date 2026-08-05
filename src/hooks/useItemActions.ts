@@ -16,7 +16,7 @@ const getVerseKey = (v: any) => `${v.book}-${v.chapter}-${v.verse}-${v.version}`
 export function useItemActions() {
   const {
     liveItem, setLiveItem, stagedItem, setStagedItem,
-    previousItem, setPreviousItem, setManualOverrideUntil,
+    previousItem, setPreviousItem,
     nextVerse, recentItems, setRecentItems,
     settings, setSettings,
     ltVisible, setLtVisible, ltTemplate, ltMode, ltLineIndex, ltLinesPerDisplay,
@@ -24,10 +24,9 @@ export function useItemActions() {
     activeServiceId, services,
     media, setMedia,
     songs, studioSlides,
-    setToast, setPropItems, setAudioError,
+    setToast, setPropItems,
   } = useAppStore();
 
-  // Memory of split verses so we don't have to re-split as often
   const verseSplitsRef = useRef<Record<string, any[]>>({});
 
   const updateSettings = useCallback(async (next: PresentationSettings) => {
@@ -40,7 +39,6 @@ export function useItemActions() {
     await invoke("set_props", { props: items });
   }, [setPropItems]);
 
-  // ── Next item after what's currently live ──────────────────────────────────
   const nextLiveItem = useMemo((): DisplayItem | null => {
     if (!liveItem) return null;
     if (liveItem.type === "Verse") {
@@ -95,7 +93,6 @@ export function useItemActions() {
   const stageItem = useCallback(async (item: DisplayItem) => {
     let finalItem = item;
 
-    // Auto-split long verses
     if (item.type === "Verse" && item.data.split_index === undefined && settings.auto_split_verses) {
       const key = getVerseKey(item.data);
       let splits = verseSplitsRef.current[key];
@@ -172,10 +169,7 @@ export function useItemActions() {
     const staged = stagedItem;
     await invoke("go_live");
     if (current) setPreviousItem(current);
-    // Operator explicitly chose this item — suppress auto-detection for 30 s
-    setManualOverrideUntil(Date.now() + 30_000);
 
-    // Auto-trigger lower third if staged song is set to LowerThird style
     if (staged?.type === "Song" && staged.data.style === "LowerThird") {
       const payload = {
         kind: "Lyrics",
@@ -192,12 +186,10 @@ export function useItemActions() {
       useAppStore.getState().setLtMode("lyrics");
     }
 
-    // If bg logo is on, clear it
     if (settings.show_background_logo) {
       updateSettings({ ...settings, show_background_logo: false });
     }
 
-    // After going live, if there's a next item, stage it automatically
     if (nextLiveItem) {
       stageItem(nextLiveItem);
     }
@@ -208,9 +200,7 @@ export function useItemActions() {
     await stageItem(item);
     await invoke("go_live");
     if (current) setPreviousItem(current);
-    setManualOverrideUntil(Date.now() + 30_000);
 
-    // Auto-trigger lower third if song is set to LowerThird style
     if (item.type === "Song" && item.data.style === "LowerThird") {
       const payload = {
         kind: "Lyrics",
@@ -227,14 +217,12 @@ export function useItemActions() {
       useAppStore.getState().setLtMode("lyrics");
     }
 
-    // If bg logo is on, clear it
     if (settings.show_background_logo) {
       updateSettings({ ...settings, show_background_logo: false });
     }
 
     const lbl = displayItemLabel(item);
 
-    // Categorical History
     setRecentItems((prev) => {
       const next = { ...prev };
       if (item.type === "Verse" || item.type === "Song") {
@@ -247,7 +235,6 @@ export function useItemActions() {
       return next;
     });
 
-    // Calculate next item
     const next = getNextItem(item);
     if (next) {
       stageItem(next);

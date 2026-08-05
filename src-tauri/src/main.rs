@@ -1,16 +1,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use wordlyte_lib::{audio, engine, state, store};
+use wordlyte_lib::{store, state};
 use store::log_msg;
 use parking_lot::Mutex;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use engine::model_manager::TranscriptionConfig;
 use tauri::Manager;
 
-use state::{AppState, AudioState, ModelState, PresentationState, PipelineState};
+use state::{AppState, PresentationState};
+use wordlyte_lib::commands::assets;
 
 fn main() {
     std::panic::set_hook(Box::new(|info| {
@@ -77,49 +77,30 @@ fn main() {
                     .map_err(|e| format!("Cannot create data dir {:?}: {}", app_data_dir, e))?;
             }
 
-            let embedding_model_path = engine::model_manager::bge_model_path(&app_data_dir, &resource_path);
-            let tokenizer_path = engine::model_manager::bge_tokenizer_path(&app_data_dir, &resource_path);
-            let reranker_model_path = engine::model_manager::reranker_model_path(&app_data_dir, &resource_path);
-            let reranker_tokenizer_path = engine::model_manager::reranker_tokenizer_path(&app_data_dir, &resource_path);
-            let db_path = engine::model_manager::bible_db_path(&app_data_dir, &resource_path);
-            let embeddings_path = engine::model_manager::semantic_index_path(&app_data_dir, &resource_path);
+            let db_path = assets::bible_db_path(&app_data_dir, &resource_path);
 
-            for (label, path) in [
-                ("ONNX model", &embedding_model_path),
-                ("Tokenizer", &tokenizer_path),
-                ("Reranker model", &reranker_model_path),
-                ("Reranker Tokenizer", &reranker_tokenizer_path),
-                ("Bible Database", &db_path),
-            ] {
-                if path.exists() {
-                    log_msg(app, &format!("{} found at {:?}", label, path));
-                } else {
-                    log_msg(app, &format!("{} not found at {:?}", label, path));
-                }
+            log_msg(app, &format!("Bible Database path: {:?}", db_path));
+            if db_path.exists() {
+                log_msg(app, "Bible database found.");
+            } else {
+                log_msg(app, "Bible database not found — download in Settings.");
             }
 
             let db_path_str = db_path.to_str()
                 .ok_or_else(|| format!("Bible DB path contains non-UTF-8 characters: {:?}", db_path))?;
-            let embeddings_path_str = embeddings_path.as_ref().and_then(|p| p.to_str());
 
-            let store = match store::BibleStore::new(app.handle(), db_path_str, embeddings_path_str) {
+            let store = match store::BibleStore::new(app.handle(), db_path_str) {
                 Ok(s) => {
-                    if s.is_embeddings_loaded() {
-                        log_msg(app, "Bible Store: Semantic search index loaded.");
-                    }
+                    log_msg(app, "Bible Store initialized.");
                     Arc::new(s)
                 }
                 Err(e) => {
                     log_msg(app, &format!(
-                        "Warning: Could not connect to Bible Database: {}. (Expected if not yet downloaded)", e
+                        "Warning: Could not connect to Bible Database: {}. Using empty placeholder.", e
                     ));
                     Arc::new(store::BibleStore::new_empty(app.handle()))
                 }
             };
-
-            let operator_audio = Arc::new(Mutex::new(audio::AudioEngine::new()));
-            let preacher_audio = Arc::new(Mutex::new(audio::AudioEngine::new()));
-            log_msg(app, "Audio Engines initialized.");
 
             let media_schedule = match store::MediaScheduleStore::new(app_data_dir.clone()) {
                 Ok(ms) => {
@@ -139,36 +120,7 @@ fn main() {
                 .load_settings()
                 .unwrap_or_else(|_| store::PresentationSettings::default());
 
-            let transcription_config = TranscriptionConfig::load(&app_data_dir);
-            let _ = fs::create_dir_all(engine::model_manager::user_models_dir(&app_data_dir));
-            let initial_whisper = engine::model_manager::resolve_whisper_path(&transcription_config, &app_data_dir, &resource_path);
-            if let Some(ref p) = initial_whisper {
-                log_msg(app, &format!("Whisper model resolved: {:?}", p));
-            } else {
-                log_msg(app, "No Whisper model found — user must download one in Settings.");
-            }
-            log_msg(app, "AI models will be loaded on the first START LIVE click (lazy load).");
-
             let state = AppState {
-                audio: AudioState {
-                    operator: operator_audio,
-                    preacher: preacher_audio,
-                    studio: Arc::new(Mutex::new(audio::AudioEngine::new())),
-                    operator_ptt_active: Arc::new(AtomicBool::new(false)),
-                    operator_muted: Arc::new(AtomicBool::new(false)),
-                    preacher_muted: Arc::new(AtomicBool::new(false)),
-                    operator_is_active: Arc::new(AtomicBool::new(false)),
-                    preacher_is_active: Arc::new(AtomicBool::new(false)),
-                    studio_is_active: Arc::new(AtomicBool::new(false)),
-                },
-                model: ModelState {
-                    engine: Arc::new(Mutex::new(None)),
-                    whisper_path: Arc::new(Mutex::new(initial_whisper)),
-                    embedding_model_path,
-                    tokenizer_path,
-                    reranker_model_path,
-                    reranker_tokenizer_path,
-                },
                 presentation: PresentationState {
                     live_item: Arc::new(Mutex::new(None)),
                     staged_item: Arc::new(Mutex::new(None)),
@@ -176,20 +128,8 @@ fn main() {
                     lower_third: Arc::new(Mutex::new(None)),
                     props_layer: Arc::new(Mutex::new(Vec::new())),
                 },
-                pipeline: PipelineState {
-                    is_running: Arc::new(Mutex::new(false)),
-                    transcription_window: Arc::new(Mutex::new(16000)),
-                    transcription_paused: Arc::new(AtomicBool::new(false)),
-                    inference_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
-                    session_transcript: Arc::new(Mutex::new(Vec::new())),
-                    context_buffer: Arc::new(Mutex::new(Vec::new())),
-                    session_start_ms: Arc::new(Mutex::new(0)),
-                    operator_cloud_stream: Arc::new(Mutex::new(None)),
-                    preacher_cloud_stream: Arc::new(Mutex::new(None)),
-                },
                 store,
                 media_schedule,
-                transcription_config: Arc::new(Mutex::new(transcription_config)),
                 app_data_dir,
                 download_in_progress: Arc::new(AtomicBool::new(false)),
             };
@@ -214,37 +154,11 @@ fn main() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 if window.label() == "main" {
-                    let app = window.app_handle();
-                    if let Some(state) = app.try_state::<AppState>() {
-                        if let Some(handle) = state.pipeline.operator_cloud_stream.lock().take() {
-                            handle.stop();
-                        }
-                        if let Some(handle) = state.pipeline.preacher_cloud_stream.lock().take() {
-                            handle.stop();
-                        }
-                        state.audio.operator.lock().stop();
-                        state.audio.preacher.lock().stop();
-                        *state.pipeline.is_running.lock() = false;
-                    }
-                    app.exit(0);
+                    window.app_handle().exit(0);
                 }
             }
         })
         .invoke_handler(tauri::generate_handler![
-            wordlyte_lib::commands::session::start_session,
-            wordlyte_lib::commands::session::stop_session,
-            wordlyte_lib::commands::session::start_operator_recording,
-            wordlyte_lib::commands::session::stop_operator_recording,
-            wordlyte_lib::commands::session::start_preacher_recording,
-            wordlyte_lib::commands::session::stop_preacher_recording,
-            wordlyte_lib::commands::session::set_transcription_window,
-            wordlyte_lib::commands::session::set_transcription_paused,
-            wordlyte_lib::commands::session::set_operator_muted,
-            wordlyte_lib::commands::session::set_preacher_muted,
-            wordlyte_lib::commands::session::set_operator_ptt,
-            wordlyte_lib::commands::session::get_session_transcript,
-            wordlyte_lib::commands::session::clear_session_transcript,
-            wordlyte_lib::commands::session::export_transcript,
             wordlyte_lib::commands::bible::get_bible_versions,
             wordlyte_lib::commands::bible::set_bible_version,
             wordlyte_lib::commands::bible::split_verse,
@@ -303,47 +217,17 @@ fn main() {
             wordlyte_lib::commands::lower_third::save_lt_preset,
             wordlyte_lib::commands::lower_third::delete_lt_preset,
             wordlyte_lib::commands::lower_third::show_lt_preset,
-            wordlyte_lib::commands::audio_studio::list_studio_recordings,
-            wordlyte_lib::commands::audio_studio::set_studio_device,
-            wordlyte_lib::commands::audio_studio::delete_studio_recording,
-            wordlyte_lib::commands::audio_studio::rename_studio_recording,
-            wordlyte_lib::commands::audio_studio::get_studio_recording_transcript,
-            wordlyte_lib::commands::audio_studio::save_studio_recording_transcript,
-            wordlyte_lib::commands::audio_studio::transcribe_studio_recording,
-            wordlyte_lib::commands::audio_studio::trim_studio_recording,
-            wordlyte_lib::commands::audio_studio::start_studio_recording,
-            wordlyte_lib::commands::audio_studio::stop_studio_recording,
-            wordlyte_lib::commands::audio_studio::import_studio_audio,
-            wordlyte_lib::commands::audio_studio::get_recording_peaks,
             wordlyte_lib::commands::windows::toggle_output_window,
             wordlyte_lib::commands::windows::toggle_stage_window,
             wordlyte_lib::commands::windows::toggle_design_window,
             wordlyte_lib::commands::windows::toggle_studio_window,
             wordlyte_lib::commands::windows::get_available_monitors,
-            wordlyte_lib::commands::models::list_whisper_models,
-            wordlyte_lib::commands::models::get_hardware_info,
-            wordlyte_lib::commands::models::download_whisper_model,
-            wordlyte_lib::commands::models::cancel_whisper_download,
-            wordlyte_lib::commands::models::set_active_whisper_model,
-            wordlyte_lib::commands::models::set_gpu_enabled,
-            wordlyte_lib::commands::models::delete_whisper_model,
-            wordlyte_lib::commands::models::get_semantic_index_status,
-            wordlyte_lib::commands::models::get_verse_index_status,
-            wordlyte_lib::commands::models::download_bible_db_cmd,
-            wordlyte_lib::commands::models::download_core_search_models_cmd,
-            wordlyte_lib::commands::models::get_transcription_config,
-            wordlyte_lib::commands::models::set_cloud_config,
-            wordlyte_lib::commands::models::test_cloud_connection,
-            wordlyte_lib::commands::models::set_confidence_threshold,
-            wordlyte_lib::commands::models::get_startup_status,
-            wordlyte_lib::commands::models::list_transcripts,
             wordlyte_lib::commands::props::get_props,
             wordlyte_lib::commands::props::set_props,
-            wordlyte_lib::commands::misc::get_audio_devices,
-            wordlyte_lib::commands::misc::set_operator_device,
-            wordlyte_lib::commands::misc::set_preacher_device,
             wordlyte_lib::commands::misc::get_app_data_dir,
             wordlyte_lib::commands::misc::get_hymn_library,
+            wordlyte_lib::commands::assets::get_startup_status,
+            wordlyte_lib::commands::assets::download_bible_db_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

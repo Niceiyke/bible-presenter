@@ -1,38 +1,7 @@
 use crate::state::AppState;
 use crate::store;
 use std::path::PathBuf;
-use tauri::{AppHandle, Emitter, Manager, State};
-
-#[tauri::command]
-pub async fn get_audio_devices(state: State<'_, AppState>) -> Result<Vec<(String, String)>, String> {
-    let audio = state.audio.operator.lock();
-    audio.list_devices().map_err(|e: anyhow::Error| e.to_string())
-}
-
-#[tauri::command]
-pub async fn set_operator_device(state: State<'_, AppState>, device_name: String) -> Result<(), String> {
-    if *state.pipeline.is_running.lock() {
-        state.audio.operator.lock().hot_swap_device(&device_name).map_err(|e: anyhow::Error| e.to_string())
-    } else {
-        state.audio.operator.lock().select_device(&device_name).map_err(|e: anyhow::Error| e.to_string())
-    }
-}
-
-#[tauri::command]
-pub async fn set_preacher_device(app: AppHandle, state: State<'_, AppState>, device_name: String) -> Result<(), String> {
-    let is_running = *state.pipeline.is_running.lock();
-    let is_active = state.audio.preacher.lock().session_active();
-
-    if is_running && is_active {
-        state.audio.preacher.lock().hot_swap_device(&device_name).map_err(|e: anyhow::Error| e.to_string())
-    } else if is_running && !is_active {
-        state.audio.preacher.lock().select_device(&device_name).map_err(|e: anyhow::Error| e.to_string())?;
-        let _ = app.emit("session-toast", "Preacher mic change takes effect on next session start");
-        Ok(())
-    } else {
-        state.audio.preacher.lock().select_device(&device_name).map_err(|e: anyhow::Error| e.to_string())
-    }
-}
+use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
 pub async fn get_app_data_dir(app: AppHandle) -> Result<String, String> {

@@ -30,14 +30,10 @@ export function StageWindow() {
   }, []);
 
   useEffect(() => {
-    const unlisten1 = listen<{ text: string; detected_item: DisplayItem | null; source: string }>(
-      "preacher-transcription-update",
+    const unlisten1 = listen<{ detected_item: DisplayItem | null }>(
+      "live-item-update",
       (ev) => {
-        if (ev.payload.source === "manual" && ev.payload.detected_item) {
-          setLiveItem(ev.payload.detected_item);
-        } else if (ev.payload.source === "manual" && !ev.payload.detected_item) {
-          setLiveItem(null);
-        }
+        setLiveItem(ev.payload.detected_item ?? null);
       }
     );
     const unlisten2 = listen<DisplayItem | null>("item-staged", (ev) => {

@@ -125,11 +125,9 @@ export function OutputWindow() {
   }, []);
 
   useEffect(() => {
-    const unlistenTrans = listen("preacher-transcription-update", (event: any) => {
-      const { detected_item, source } = event.payload;
-      if (source === "manual") {
-        setLiveItem(detected_item ?? null);
-      }
+    const unlistenTrans = listen("live-item-update", (event: any) => {
+      const { detected_item } = event.payload;
+      setLiveItem(detected_item ?? null);
     });
 
     const unlistenSettings = listen("settings-changed", (event: any) => {
