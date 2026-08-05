@@ -136,6 +136,8 @@ export function CustomSlideRenderer({
                       fontFamily: el.font_family ?? "Arial",
                       fontSize: `${(el.font_size ?? 32) * scale}pt`,
                       color: el.color ?? "#ffffff",
+                      fontWeight: el.bold ? "bold" : "normal",
+                      fontStyle: el.italic ? "italic" : "normal",
                       textAlign: (el.align ?? "left") as React.CSSProperties["textAlign"],
                       textShadow: el.shadow === false ? "none" : `0 2px 8px ${el.shadow_color || "rgba(0,0,0,0.6)"}`,
                       lineHeight: 1.3,

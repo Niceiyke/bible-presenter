@@ -78,17 +78,29 @@ function InlineTextEditor({
       sel?.addRange(range);
     }
 
-    if (!range) return;
+    if (!range || range.collapsed) return;
 
-    if (cmd === "fontSize") {
-      const span = document.createElement("span");
-      span.style.fontSize = `${value}pt`;
-      try { range.surroundContents(span); } catch { }
+    const frag = range.extractContents();
+    const wrapper = document.createElement("span");
+
+    if (cmd === "bold") {
+      wrapper.style.fontWeight = "700";
+    } else if (cmd === "italic") {
+      wrapper.style.fontStyle = "italic";
+    } else if (cmd === "underline") {
+      wrapper.style.textDecoration = "underline";
     } else if (cmd === "foreColor" && value) {
-      document.execCommand("foreColor", false, value);
+      wrapper.style.color = value;
+    } else if (cmd === "fontSize" && value) {
+      wrapper.style.fontSize = `${value}pt`;
     } else {
-      document.execCommand(cmd, false, value);
+      // unknown command — restore content unchanged
+      range.insertNode(frag);
+      return;
     }
+
+    wrapper.appendChild(frag);
+    range.insertNode(wrapper);
 
     savedSelRef.current = null;
     toolbarHoveredRef.current = false;
