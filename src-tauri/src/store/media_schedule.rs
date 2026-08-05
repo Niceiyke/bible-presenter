@@ -336,6 +336,10 @@ pub struct Song {
     pub title: String,
     #[serde(default)]
     pub author: Option<String>,
+    #[serde(default)]
+    pub copyright: Option<String>,
+    #[serde(default)]
+    pub ccli: Option<String>,
     pub sections: Vec<LyricSection>,
     #[serde(default)]
     pub arrangement: Vec<String>,

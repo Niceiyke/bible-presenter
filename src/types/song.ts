@@ -3,6 +3,7 @@ export type SongStyle = "FullSlide" | "LowerThird";
 
 export interface Song {
   id: string; title: string; author?: string;
+  copyright?: string; ccli?: string;
   sections: LyricSection[];
   arrangement?: string[];
   style?: SongStyle;

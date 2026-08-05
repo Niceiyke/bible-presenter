@@ -4,6 +4,7 @@ import { emit } from "@tauri-apps/api/event";
 import { useAppStore } from "../store";
 import { FONTS } from "../types";
 import type { Song, LyricSection, DisplayItem } from "../types";
+import { detectAndParse, type ParsedSong } from "../utils/songImporter";
 
 interface SongsTabProps {
   onOpenLyricsMode: (songId: string) => void;
@@ -91,39 +92,29 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
 
       {/* Import text area */}
       {showSongImport && activeSubTab === "mine" && (
-        <div className="flex flex-col gap-2 bg-slate-900 border border-slate-700 rounded-xl p-3">
-          <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">Paste lyrics — every line becomes a new slide</p>
-          <textarea
-            className="w-full h-32 bg-slate-950 text-slate-200 text-xs rounded-lg p-2 border border-slate-700 resize-none font-mono"
-            placeholder={"Line 1\nLine 2\nLine 3..."}
-            value={songImportText}
-            onChange={(e) => setSongImportText(e.target.value)}
-          />
-          <div className="flex gap-2">
-            <input
-              className="flex-1 bg-slate-800 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700"
-              placeholder="Song title"
-              id="import-song-title"
-            />
-            <button
-              className="text-[10px] font-bold uppercase bg-amber-600 hover:bg-amber-500 text-white px-3 py-1 rounded"
-              onClick={async () => {
-                const titleEl = document.getElementById("import-song-title") as HTMLInputElement;
-                const title = titleEl?.value.trim() || "Untitled";
-                const lines = songImportText.split("\n").map(l => l.trim()).filter(l => l !== "");
-                const sections: LyricSection[] = lines.map(line => ({ label: "", lines: [line] }));
-                
-                if (sections.length === 0) return;
-                const saved = await invoke<Song>("save_song", { song: { id: "", title, author: "", sections, style: "LowerThird" } });
-                const next = [...songs, saved].sort((a, b) => a.title.localeCompare(b.title));
-                setSongs(next);
-                emit("songs-sync", next);
-                setSongImportText("");
-                setShowSongImport(false);
-              }}
-            >Save</button>
-          </div>
-        </div>
+        <SongImportDialog
+          onComplete={async (parsed) => {
+            const song: Song = {
+              id: "",
+              title: parsed.title || "Untitled",
+              author: parsed.author,
+              copyright: parsed.copyright,
+              ccli: parsed.ccli,
+              sections: parsed.sections.length > 0
+                ? parsed.sections
+                : [{ label: "Verse 1", lines: [""] }],
+              arrangement: [],
+              style: "LowerThird",
+            };
+            const saved = await invoke<Song>("save_song", { song });
+            const next = [...songs, saved].sort((a, b) => a.title.localeCompare(b.title));
+            setSongs(next);
+            emit("songs-sync", next);
+            setSongImportText("");
+            setShowSongImport(false);
+          }}
+          onCancel={() => { setShowSongImport(false); setSongImportText(""); }}
+        />
       )}
 
       {/* Search */}
@@ -436,6 +427,105 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
               >Save Song</button>
             </div>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SongImportDialog({ onComplete, onCancel }: { onComplete: (parsed: ParsedSong) => void; onCancel: () => void; }) {
+  const [text, setText] = React.useState("");
+  const [parsed, setParsed] = React.useState<ParsedSong | null>(null);
+  const [title, setTitle] = React.useState("");
+  const [author, setAuthor] = React.useState("");
+
+  const handleParse = () => {
+    const { detected, result } = detectAndParse(text);
+    setParsed(result);
+    setTitle(result.title || "");
+    setAuthor(result.author || "");
+  };
+
+  const hasChords = text.includes("[") && /\[[A-G]/.test(text);
+
+  return (
+    <div className="bg-slate-900 border border-slate-700 rounded-xl p-3 flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-[10px] font-bold uppercase text-slate-300">Import Song</p>
+          <p className="text-[9px] text-slate-600">
+            Paste from EasyWorship, OpenLP, ChordPro, or plain text with section labels
+          </p>
+        </div>
+        <button onClick={onCancel} className="text-slate-500 hover:text-red-400 text-lg leading-none">×</button>
+      </div>
+
+      <textarea
+        className="w-full h-40 bg-slate-950 text-slate-200 text-xs rounded-lg p-3 border border-slate-700 resize-none font-mono"
+        placeholder={`Amazing Grace\n\nVerse 1\nAmazing grace how sweet the sound\nThat saved a wretch like me\n\nChorus\nAmazing grace how sweet the sound\n...`}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+      />
+
+      <button
+        onClick={handleParse}
+        disabled={!text.trim()}
+        className="text-[10px] font-bold uppercase bg-purple-600/40 hover:bg-purple-600 text-purple-300 px-3 py-2 rounded-lg transition-all disabled:opacity-30"
+      >
+        Preview Parse
+      </button>
+
+      {parsed && parsed.sections.length > 0 && (
+        <div className="bg-slate-950 border border-slate-700 rounded-lg p-3 flex flex-col gap-3">
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700"
+              placeholder="Song Title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+            <input
+              className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700"
+              placeholder="Author"
+              value={author}
+              onChange={(e) => setAuthor(e.target.value)}
+            />
+          </div>
+          {parsed.copyright && (
+            <div className="flex items-center gap-2 text-[9px]">
+              <span className="text-slate-600 font-bold">©</span>
+              <span className="text-slate-400">{parsed.copyright}</span>
+              {parsed.ccli && <span className="text-slate-600 ml-auto">CCLI #{parsed.ccli}</span>}
+            </div>
+          )}
+          <div>
+            <p className="text-[9px] font-bold uppercase text-slate-600 mb-2">
+              {parsed.sections.length} section{parsed.sections.length !== 1 ? "s" : ""} detected
+              {hasChords && <span className="text-amber-500 ml-2">· Chords detected</span>}
+              <span className="text-slate-600 ml-2">({parsed.format})</span>
+            </p>
+            <div className="flex flex-col gap-2 max-h-40 overflow-y-auto custom-scrollbar">
+              {parsed.sections.map((sec, i) => (
+                <div key={i} className="bg-slate-900 rounded-lg p-2">
+                  <p className="text-[9px] font-black uppercase text-amber-500 mb-1">{sec.label || `Section ${i + 1}`}</p>
+                  {sec.lines.slice(0, 4).map((line, j) => (
+                    <p key={j} className="text-[10px] text-slate-400 font-mono leading-snug">
+                      {hasChords ? <span className="text-purple-400/70">{line.replace(/\[(.*?)\]/g, (_, c) => `[${c}]`)}</span> : line}
+                    </p>
+                  ))}
+                  {sec.lines.length > 4 && (
+                    <p className="text-[8px] text-slate-700 mt-1">+ {sec.lines.length - 4} more lines</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+          <button
+            onClick={() => onComplete({ ...parsed, title, author })}
+            className="text-[10px] font-bold uppercase bg-amber-600 hover:bg-amber-500 text-white px-4 py-2 rounded-lg"
+          >
+            Import Song
+          </button>
         </div>
       )}
     </div>
