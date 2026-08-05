@@ -95,8 +95,8 @@ export function CustomSlideRenderer({
     margin: 0,
   });
 
-  // Modern Elements Rendering
-  if (elements && elements.length > 0) {
+  // Modern Elements Rendering — also handles empty-elements slides with bg video
+  if (elements) {
     const resolvedBgVideo = resolvePath(bgVideo, appDataDir);
     return (
       <div className="w-full h-full relative overflow-hidden" style={bgStyle}>
@@ -198,10 +198,23 @@ export function CustomSlideRenderer({
   }
 
   // Legacy fallback rendering
+  const resolvedBgVideo = resolvePath(bgVideo, appDataDir);
+  const bgVideoEl = resolvedBgVideo ? (
+    <video
+      src={convertFileSrc(resolvedBgVideo)}
+      className="absolute inset-0 w-full h-full object-cover z-0"
+      autoPlay
+      loop={bgVideoLoop !== false}
+      muted={bgVideoMuted !== false}
+      playsInline
+    />
+  ) : null;
+
   if (headerEnabled === false) {
     return (
       <div className="w-full h-full relative overflow-hidden flex flex-col" style={bgStyle}>
-        <div className="flex items-center justify-center flex-1" style={{ padding: `${14 * scale}px ${24 * scale}px` }}>
+        {bgVideoEl}
+        <div className="flex items-center justify-center flex-1 relative z-10" style={{ padding: `${14 * scale}px ${24 * scale}px` }}>
           {body && <p style={zoneStyle(body)}>{body.text}</p>}
         </div>
       </div>
@@ -210,11 +223,12 @@ export function CustomSlideRenderer({
 
   return (
     <div className="w-full h-full relative overflow-hidden flex flex-col" style={bgStyle}>
-      <div className="flex items-center justify-center" style={{ flex: `0 0 ${headerHeightPct}%`, padding: `${14 * scale}px ${24 * scale}px` }}>
+      {bgVideoEl}
+      <div className="flex items-center justify-center relative z-10" style={{ flex: `0 0 ${headerHeightPct}%`, padding: `${14 * scale}px ${24 * scale}px` }}>
         {header && <p style={zoneStyle(header)}>{header.text}</p>}
       </div>
-      <div style={{ height: `${Math.max(1, scale)}px`, backgroundColor: "rgba(255,255,255,0.15)", margin: `0 ${24 * scale}px` }} />
-      <div className="flex items-center justify-center flex-1" style={{ padding: `${14 * scale}px ${24 * scale}px` }}>
+      <div className="relative z-10" style={{ height: `${Math.max(1, scale)}px`, backgroundColor: "rgba(255,255,255,0.15)", margin: `0 ${24 * scale}px` }} />
+      <div className="flex items-center justify-center flex-1 relative z-10" style={{ padding: `${14 * scale}px ${24 * scale}px` }}>
         {body && <p style={zoneStyle(body)}>{body.text}</p>}
       </div>
     </div>

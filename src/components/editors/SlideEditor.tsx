@@ -603,23 +603,31 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose }: SlideE
 
   // ── Slide reordering via drag ───────────────────────────────────────────────
   const draggedRef = useRef(false);
+  const dragOverIdxRef = useRef<number | null>(null);
 
   const handleSlideDragStart = (e: React.DragEvent, idx: number) => {
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", String(idx));
     setDragSlideIdx(idx);
+    dragOverIdxRef.current = null;
   };
   const handleSlideDragOver = (e: React.DragEvent, idx: number) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
-    if (dragOverSlideIdx !== idx) setDragOverSlideIdx(idx);
+    if (dragOverIdxRef.current !== idx) {
+      dragOverIdxRef.current = idx;
+      setDragOverSlideIdx(idx);
+    }
   };
   const handleSlideDragEnd = () => {
-    if (dragSlideIdx !== null && dragOverSlideIdx !== null && dragSlideIdx !== dragOverSlideIdx) {
-      handleMoveSlide(dragSlideIdx, dragOverSlideIdx);
+    const from = dragSlideIdx;
+    const to = dragOverIdxRef.current;
+    if (from !== null && to !== null && from !== to) {
+      handleMoveSlide(from, to);
     }
     setDragSlideIdx(null);
     setDragOverSlideIdx(null);
+    dragOverIdxRef.current = null;
     draggedRef.current = true;
     setTimeout(() => { draggedRef.current = false; }, 50);
   };
@@ -947,7 +955,6 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose }: SlideE
                 onDragStart={(e) => handleSlideDragStart(e, i)}
                 onDragOver={(e) => handleSlideDragOver(e, i)}
                 onDragEnd={handleSlideDragEnd}
-                onDragLeave={() => { if (dragOverSlideIdx === i) setDragOverSlideIdx(null); }}
                 onClick={() => handleSlideClick(i)}
                 className={`relative aspect-video rounded-xl overflow-hidden border-2 transition-all shrink-0 group ${
                   i === activeSlideIdx
