@@ -18,6 +18,7 @@ export function useAppInitialization() {
     setPropItems, setSavedScenes, setServices, setLiveItem,
     setLtVisible, setCurrentLowerThird,
     setStagedItem, setStartupIssues, setIsInitialized,
+    setAppDataDir,
   } = useAppStore();
 
   useEffect(() => {
@@ -44,7 +45,7 @@ export function useAppInitialization() {
       const [
         versionsRes, mediaRes, studioRes, scheduleRes, songsRes, hymnLibraryRes,
         ltRes, settingsRes, propsRes,
-        scenesRes, servicesRes, currentLtRes
+        scenesRes, servicesRes, currentLtRes, appDirRes
       ] = await Promise.all([
         invoke<string[]>("get_bible_versions").catch(() => []),
         invoke<MediaItem[]>("list_media").catch(() => []),
@@ -58,10 +59,12 @@ export function useAppInitialization() {
         invoke<SceneData[]>("list_scenes").catch(() => []),
         invoke<ServiceMeta[]>("list_services").catch(() => []),
         invoke<any>("get_current_lower_third").catch(() => null),
+        invoke<string>("get_app_data_dir").catch(() => null),
       ]);
 
       setMedia(mediaRes);
       setStudioList(studioRes);
+      if (appDirRes) setAppDataDir(appDirRes);
       const scheduleItems = Array.isArray(scheduleRes?.items) ? scheduleRes.items : [];
       setScheduleEntries(scheduleItems.map((e: any) => ({ id: e.id || stableId(), item: e.item ?? e })));
       setSongs(songsRes);
