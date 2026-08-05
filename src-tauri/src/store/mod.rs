@@ -408,7 +408,7 @@ impl BibleStore {
             })
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
-            .join(" ");
+            .join(" OR ");
 
         if cleaned_query.is_empty() {
             return Ok(Vec::new());
@@ -526,7 +526,7 @@ impl BibleStore {
             })
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
-            .join(" ");
+            .join(" OR ");
 
         if cleaned_query.is_empty() {
             return Ok(Vec::new());
