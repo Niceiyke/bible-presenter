@@ -93,6 +93,9 @@ export function useAppInitialization() {
     loadAll();
 
     const unlistenStaged = listen("item-staged", (ev: any) => setStagedItem(ev.payload as DisplayItem));
+    const unlistenLive = listen<{ detected_item: DisplayItem | null }>("live-item-update", (ev) => {
+      if (ev.payload.detected_item) setLiveItem(ev.payload.detected_item);
+    });
     const unlistenSettings = listen("settings-changed", (ev: any) => setSettings(ev.payload as PresentationSettings));
     const unlistenLtUpdate = listen("lower-third-update", (ev: any) => {
       const payload = ev.payload;
@@ -129,6 +132,7 @@ export function useAppInitialization() {
 
     return () => {
       unlistenStaged.then(f => f());
+      unlistenLive.then(f => f());
       unlistenSettings.then(f => f());
       unlistenLtUpdate.then(f => f());
       unlistenLtSync.then(f => f());
