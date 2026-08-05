@@ -66,6 +66,8 @@ function InlineTextEditor({
   }, []);
 
   const execStyle = useCallback((cmd: string, value?: string) => {
+    ref.current?.focus();
+
     const sel = window.getSelection();
     let range: Range | undefined;
     if (sel && !sel.isCollapsed && ref.current?.contains(sel.anchorNode)) {
@@ -87,7 +89,7 @@ function InlineTextEditor({
     } else {
       document.execCommand(cmd, false, value);
     }
-    ref.current?.focus();
+
     savedSelRef.current = null;
     toolbarHoveredRef.current = false;
     setSelToolbar(null);

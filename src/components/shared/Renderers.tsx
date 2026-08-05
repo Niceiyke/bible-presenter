@@ -125,7 +125,7 @@ export function CustomSlideRenderer({
 
           if (el.kind === "text") {
             const vAlign = el.v_align === "middle" ? "center" : el.v_align === "bottom" ? "flex-end" : "flex-start";
-            const isHtml = el.content.trim().startsWith("<");
+            const isHtml = el.content.includes("<");
             
             return (
               <div key={el.id} style={{ ...elStyle, display: "flex", flexDirection: "column", justifyContent: vAlign }}>
