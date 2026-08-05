@@ -601,16 +601,33 @@ export function SlideEditor({ initialPres, mediaImages, onClose }: SlideEditorPr
   };
 
   // ── Slide reordering via drag ───────────────────────────────────────────────
-  const handleSlideDragStart = (idx: number) => { setDragSlideIdx(idx); };
+  const draggedRef = useRef(false);
+
+  const handleSlideDragStart = (e: React.DragEvent, idx: number) => {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", String(idx));
+    setDragSlideIdx(idx);
+  };
   const handleSlideDragOver = (e: React.DragEvent, idx: number) => {
     e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
     if (dragOverSlideIdx !== idx) setDragOverSlideIdx(idx);
   };
   const handleSlideDragEnd = () => {
     if (dragSlideIdx !== null && dragOverSlideIdx !== null && dragSlideIdx !== dragOverSlideIdx) {
       handleMoveSlide(dragSlideIdx, dragOverSlideIdx);
     }
-    setDragSlideIdx(null); setDragOverSlideIdx(null);
+    setDragSlideIdx(null);
+    setDragOverSlideIdx(null);
+    draggedRef.current = true;
+    setTimeout(() => { draggedRef.current = false; }, 50);
+  };
+
+  const handleSlideClick = (i: number) => {
+    if (draggedRef.current) return;
+    setActiveSlideIdx(i);
+    setActiveElementIds([]);
+    setEditingElementId(null);
   };
 
   // ── Element drag (supports multi-select) ────────────────────────────────────
@@ -926,11 +943,11 @@ export function SlideEditor({ initialPres, mediaImages, onClose }: SlideEditorPr
               <button
                 key={s.id}
                 draggable
-                onDragStart={() => handleSlideDragStart(i)}
+                onDragStart={(e) => handleSlideDragStart(e, i)}
                 onDragOver={(e) => handleSlideDragOver(e, i)}
                 onDragEnd={handleSlideDragEnd}
                 onDragLeave={() => { if (dragOverSlideIdx === i) setDragOverSlideIdx(null); }}
-                onClick={() => { setActiveSlideIdx(i); setActiveElementIds([]); setEditingElementId(null); }}
+                onClick={() => handleSlideClick(i)}
                 className={`relative aspect-video rounded-xl overflow-hidden border-2 transition-all shrink-0 group ${
                   i === activeSlideIdx
                     ? "border-indigo-500 shadow-lg shadow-indigo-500/20"
@@ -939,7 +956,7 @@ export function SlideEditor({ initialPres, mediaImages, onClose }: SlideEditorPr
                       : dragSlideIdx === i
                         ? "border-white/20 opacity-50"
                         : "border-white/8 hover:border-white/20"
-                } ${dragSlideIdx !== null ? "cursor-grabbing" : ""} ${focusedSlidePanel && i === activeSlideIdx ? "ring-1 ring-indigo-400/50" : ""}`}
+                } ${dragSlideIdx !== null ? "cursor-grabbing" : "cursor-grab"} ${focusedSlidePanel && i === activeSlideIdx ? "ring-1 ring-indigo-400/50" : ""}`}
               >
                 <CustomSlideRenderer slide={s} scale={0.07} appDataDir={appDataDir} />
                 <span className={`absolute top-1.5 left-1.5 w-5 h-5 rounded flex items-center justify-center text-[8px] font-black ${
@@ -947,7 +964,7 @@ export function SlideEditor({ initialPres, mediaImages, onClose }: SlideEditorPr
                 }`}>
                   {i + 1}
                 </span>
-                <div className="absolute bottom-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity text-white/30">
+                <div className="absolute bottom-1 right-1 text-white/20 group-hover:text-white/40 transition-colors">
                   <GripVertical size={10} />
                 </div>
                 {dragOverSlideIdx === i && dragSlideIdx !== i && (
