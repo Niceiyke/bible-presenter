@@ -98,6 +98,12 @@ pub struct CustomSlideData {
     pub slide_count: u32,
     pub background_color: String,
     pub background_image: Option<String>,
+    #[serde(rename = "background_video", default)]
+    pub background_video: Option<String>,
+    #[serde(rename = "background_video_loop", default)]
+    pub background_video_loop: Option<bool>,
+    #[serde(rename = "background_video_muted", default)]
+    pub background_video_muted: Option<bool>,
     #[serde(default)]
     pub header_enabled: Option<bool>,
     #[serde(default)]
