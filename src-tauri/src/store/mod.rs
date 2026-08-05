@@ -403,8 +403,8 @@ impl BibleStore {
         let cleaned_query = words
             .iter()
             .map(|w| {
-                let sanitized = w.chars().filter(|c| c.is_alphanumeric()).collect::<String>();
-                if sanitized.is_empty() { String::new() } else { format!("\"{}\"*", sanitized) }
+                let sanitized: String = w.chars().filter(|c| c.is_alphanumeric()).collect();
+                if sanitized.is_empty() { String::new() } else { format!("{}*", sanitized) }
             })
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
@@ -415,55 +415,55 @@ impl BibleStore {
         }
 
         let conn = self.conn.lock();
-        let mut stmt = conn.prepare_cached(
+
+        // Try FTS5; fallback to LIKE if no rows
+        let mut results = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let active_version = self.get_active_version();
+
+        if let Ok(mut stmt) = conn.prepare_cached(
             "SELECT b.title, b.text, b.version, b.chapter, b.verse FROM wordlyte_bible b \
              JOIN wordlyte_bible_fts f ON b.rowid = f.rowid \
              WHERE wordlyte_bible_fts MATCH ?1 \
              ORDER BY rank \
              LIMIT 100"
-        )?;
+        ) {
+            let rows = stmt.query_map(params![cleaned_query], |row| {
+                let text: Option<String> = row.get(1)?;
+                Ok(Verse {
+                    book: row.get(0)?,
+                    text: text.unwrap_or_default(),
+                    version: row.get(2)?,
+                    chapter: row.get(3)?,
+                    verse: row.get(4)?,
+                    split_index: None,
+                    total_splits: None,
+                    score: None,
+                })
+            })?;
 
-        let active_version = self.get_active_version();
-        let mut seen = std::collections::HashSet::new();
-        let mut results = Vec::new();
-
-        let rows = stmt.query_map(params![cleaned_query], |row| {
-            let text: Option<String> = row.get(1)?;
-            Ok(Verse {
-                book: row.get(0)?,
-                text: text.unwrap_or_default(),
-                version: row.get(2)?,
-                chapter: row.get(3)?,
-                verse: row.get(4)?,
-                split_index: None,
-                total_splits: None,
-                score: None,
-            })
-        })?;
-
-        let mut matched_verses = Vec::new();
-        for row in rows {
-            if let Ok(v) = row {
-                matched_verses.push(v);
+            let mut matched_verses = Vec::new();
+            for row in rows {
+                if let Ok(v) = row { matched_verses.push(v); }
             }
-        }
 
-        for verse in &matched_verses {
-            if verse.version == active_version {
-                let key = (verse.book.clone(), verse.chapter, verse.verse);
-                if seen.insert(key) {
-                    results.push(verse.clone());
-                    if results.len() >= 20 { break; }
+            for verse in &matched_verses {
+                if verse.version == active_version {
+                    let key = (verse.book.clone(), verse.chapter, verse.verse);
+                    if seen.insert(key) {
+                        results.push(verse.clone());
+                        if results.len() >= 20 { break; }
+                    }
                 }
             }
-        }
 
-        if results.len() < 20 {
-            for verse in &matched_verses {
-                let key = (verse.book.clone(), verse.chapter, verse.verse);
-                if seen.insert(key) {
-                    results.push(verse.clone());
-                    if results.len() >= 20 { break; }
+            if results.len() < 20 {
+                for verse in &matched_verses {
+                    let key = (verse.book.clone(), verse.chapter, verse.verse);
+                    if seen.insert(key) {
+                        results.push(verse.clone());
+                        if results.len() >= 20 { break; }
+                    }
                 }
             }
         }
@@ -521,8 +521,8 @@ impl BibleStore {
         let cleaned_query = words
             .iter()
             .map(|w| {
-                let sanitized = w.chars().filter(|c| c.is_alphanumeric()).collect::<String>();
-                if sanitized.is_empty() { String::new() } else { format!("\"{}\"*", sanitized) }
+                let sanitized: String = w.chars().filter(|c| c.is_alphanumeric()).collect();
+                if sanitized.is_empty() { String::new() } else { format!("{}*", sanitized) }
             })
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
