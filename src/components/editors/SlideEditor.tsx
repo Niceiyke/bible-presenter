@@ -30,6 +30,8 @@ function InlineTextEditor({
   onCommit: (html: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const savedSelRef = useRef<Range | null>(null);
+  const toolbarHoveredRef = useRef(false);
   const [selToolbar, setSelToolbar] = useState<{ x: number; y: number } | null>(null);
   const [selColor, setSelColor] = useState("#ffffff");
   const [selFontSize, setSelFontSize] = useState(32);
@@ -50,7 +52,7 @@ function InlineTextEditor({
   const getSelectionInfo = useCallback(() => {
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !ref.current) {
-      setSelToolbar(null);
+      if (!toolbarHoveredRef.current) setSelToolbar(null);
       return;
     }
     if (!ref.current.contains(sel.anchorNode)) {
@@ -58,27 +60,49 @@ function InlineTextEditor({
       return;
     }
     const range = sel.getRangeAt(0);
+    savedSelRef.current = range.cloneRange();
     const rect = range.getBoundingClientRect();
     setSelToolbar({ x: rect.left + rect.width / 2, y: rect.top - 44 });
-    setSelColor("#ffffff");
-    setSelFontSize(32);
   }, []);
 
   const execStyle = useCallback((cmd: string, value?: string) => {
     const sel = window.getSelection();
-    if (!sel || sel.isCollapsed) return;
+    let range: Range | undefined;
+    if (sel && !sel.isCollapsed && ref.current?.contains(sel.anchorNode)) {
+      range = sel.getRangeAt(0);
+    } else if (savedSelRef.current) {
+      range = savedSelRef.current;
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    }
+
+    if (!range) return;
+
     if (cmd === "fontSize") {
-      const range = sel.getRangeAt(0);
       const span = document.createElement("span");
       span.style.fontSize = `${value}pt`;
-      try { range.surroundContents(span); } catch { /* mixed selection – skip */ }
+      try { range.surroundContents(span); } catch { }
     } else if (cmd === "foreColor" && value) {
       document.execCommand("foreColor", false, value);
     } else {
       document.execCommand(cmd, false, value);
     }
     ref.current?.focus();
+    savedSelRef.current = null;
+    toolbarHoveredRef.current = false;
     setSelToolbar(null);
+  }, []);
+
+  const commit = useCallback(() => {
+    toolbarHoveredRef.current = false;
+    savedSelRef.current = null;
+    setSelToolbar(null);
+    if (ref.current) onCommit(ref.current.innerHTML);
+  }, [onCommit]);
+
+  const handleToolbarMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    toolbarHoveredRef.current = true;
   }, []);
 
   const justifyContent =
@@ -91,13 +115,12 @@ function InlineTextEditor({
         ref={ref}
         contentEditable
         suppressContentEditableWarning
-        onBlur={() => { setSelToolbar(null); if (ref.current) onCommit(ref.current.innerHTML); }}
+        onBlur={() => { if (!toolbarHoveredRef.current) commit(); }}
         onKeyDown={(e) => {
           e.stopPropagation();
           if (e.key === "Escape") {
             e.preventDefault();
-            setSelToolbar(null);
-            if (ref.current) onCommit(ref.current.innerHTML);
+            commit();
           }
         }}
         onMouseUp={() => { setTimeout(getSelectionInfo, 10); }}
@@ -125,25 +148,27 @@ function InlineTextEditor({
         <div
           className="fixed z-[250] flex items-center gap-1 bg-[#1a1a2e] border border-white/15 rounded-xl px-2 py-1.5 shadow-2xl shadow-black/80"
           style={{ left: selToolbar.x, top: selToolbar.y, transform: "translate(-50%, -100%)" }}
-          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={handleToolbarMouseDown}
+          onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); toolbarHoveredRef.current = true; }}
         >
-          <button onClick={() => execStyle("bold")} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white/8 hover:bg-white/16 text-slate-300 hover:text-white text-xs font-black transition-all" title="Bold">B</button>
-          <button onClick={() => execStyle("italic")} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white/8 hover:bg-white/16 text-slate-300 hover:text-white text-xs font-serif italic transition-all" title="Italic">I</button>
-          <button onClick={() => execStyle("underline")} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white/8 hover:bg-white/16 text-slate-300 hover:text-white text-xs underline transition-all" title="Underline">U</button>
+          <button onMouseDown={(e) => { e.preventDefault(); execStyle("bold"); }} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white/8 hover:bg-white/16 text-slate-300 hover:text-white text-xs font-black transition-all" title="Bold">B</button>
+          <button onMouseDown={(e) => { e.preventDefault(); execStyle("italic"); }} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white/8 hover:bg-white/16 text-slate-300 hover:text-white text-xs font-serif italic transition-all" title="Italic">I</button>
+          <button onMouseDown={(e) => { e.preventDefault(); execStyle("underline"); }} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white/8 hover:bg-white/16 text-slate-300 hover:text-white text-xs underline transition-all" title="Underline">U</button>
           <div className="w-px h-5 bg-white/10 mx-0.5" />
-          <div className="relative">
+          <div onMouseDown={(e) => { e.preventDefault(); toolbarHoveredRef.current = true; }}>
             <input
               type="color"
               value={selColor}
+              onMouseDown={(e) => { e.preventDefault(); toolbarHoveredRef.current = true; }}
               onChange={e => { setSelColor(e.target.value); execStyle("foreColor", e.target.value); }}
               className="w-7 h-7 rounded-lg cursor-pointer border border-white/20 bg-transparent"
               title="Text Color"
             />
           </div>
           <div className="w-px h-5 bg-white/10 mx-0.5" />
-          <button onClick={() => execStyle("fontSize", String(selFontSize - 4))} className="w-6 h-7 flex items-center justify-center rounded-lg bg-white/8 hover:bg-white/16 text-slate-400 hover:text-white text-[10px] font-bold transition-all" title="Smaller">A⁻</button>
+          <button onMouseDown={(e) => { e.preventDefault(); execStyle("fontSize", String(selFontSize - 4)); }} className="w-6 h-7 flex items-center justify-center rounded-lg bg-white/8 hover:bg-white/16 text-slate-400 hover:text-white text-[10px] font-bold transition-all" title="Smaller">A⁻</button>
           <span className="text-[9px] text-slate-500 tabular-nums w-5 text-center">{selFontSize}</span>
-          <button onClick={() => { setSelFontSize(s => s + 4); execStyle("fontSize", String(selFontSize + 4)); }} className="w-6 h-7 flex items-center justify-center rounded-lg bg-white/8 hover:bg-white/16 text-slate-400 hover:text-white text-[10px] font-bold transition-all" title="Larger">A⁺</button>
+          <button onMouseDown={(e) => { e.preventDefault(); setSelFontSize(s => s + 4); execStyle("fontSize", String(selFontSize + 4)); }} className="w-6 h-7 flex items-center justify-center rounded-lg bg-white/8 hover:bg-white/16 text-slate-400 hover:text-white text-[10px] font-bold transition-all" title="Larger">A⁺</button>
         </div>
       )}
     </>
