@@ -173,6 +173,7 @@ export default function App() {
         <SlideEditor
           initialPres={editingPres}
           mediaImages={media.filter(m => m.media_type === "Image")}
+          media={media}
           onClose={(saved) => {
             if (saved) {
               invoke("list_studio_presentations").then((list: any) => {

@@ -155,6 +155,7 @@ export function DesignHub() {
       <SlideEditor
         initialPres={editorPres}
         mediaImages={mediaImages}
+        media={media}
         onClose={handleEditorClose}
       />
     );

@@ -225,10 +225,11 @@ const HANDLES: Record<string, React.CSSProperties> = {
 interface SlideEditorProps {
   initialPres: CustomPresentation;
   mediaImages: MediaItem[];
+  media: MediaItem[];
   onClose: (saved: boolean) => void;
 }
 
-export function SlideEditor({ initialPres, mediaImages, onClose }: SlideEditorProps) {
+export function SlideEditor({ initialPres, media, mediaImages, onClose }: SlideEditorProps) {
   const { appDataDir, stagedItem, setToast, setIsDirty, templates, setTemplates } = useAppStore();
 
   const init = () => migratePresentation(JSON.parse(JSON.stringify(initialPres)));
@@ -1327,7 +1328,7 @@ export function SlideEditor({ initialPres, mediaImages, onClose }: SlideEditorPr
         />
       )}
       {showBgVideoPicker && (
-        <MediaPickerModal images={mediaImages} onSelect={handleBgVideoSelect} onClose={() => setShowBgVideoPicker(false)} mode="video"
+        <MediaPickerModal images={media} onSelect={handleBgVideoSelect} onClose={() => setShowBgVideoPicker(false)} mode="video"
           onUpload={async () => { try { const s = await openDialog({ multiple: false, filters: [{ name: "Videos", extensions: ["mp4","webm","mov","avi","mkv"] }] }); if (typeof s === "string") await invoke("add_media", { path: s }); } catch {} }}
         />
       )}
@@ -1337,7 +1338,7 @@ export function SlideEditor({ initialPres, mediaImages, onClose }: SlideEditorPr
         />
       )}
       {showVideoPicker && (
-        <MediaPickerModal images={mediaImages} onSelect={handleVideoSelect} onClose={() => setShowVideoPicker(false)} mode="video"
+        <MediaPickerModal images={media} onSelect={handleVideoSelect} onClose={() => setShowVideoPicker(false)} mode="video"
           onUpload={async () => { try { const s = await openDialog({ multiple: false, filters: [{ name: "Videos", extensions: ["mp4","webm","mov","avi","mkv"] }] }); if (typeof s === "string") await invoke("add_media", { path: s }); } catch {} }}
         />
       )}
