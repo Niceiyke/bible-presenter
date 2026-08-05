@@ -1,7 +1,7 @@
 export type { Verse } from "./verse";
 export type { MediaItem, MediaItemType, MediaFitMode } from "./media";
 export type { DisplayItem, ScheduleEntry, Schedule, ServiceMeta } from "./display";
-export type { SlideZone, TextZone, SlideElement, CustomSlide, CustomPresentation, CustomSlideDisplayData } from "./slides";
+export type { SlideZone, TextZone, SlideElement, SlideElementKind, CustomSlide, CustomPresentation, CustomSlideDisplayData, PresentationSummary, SlideTemplate, PresentationExport } from "./slides";
 export type { TimerData } from "./timer";
 export type { PropItem } from "./props";
 export type { LyricSection, SongStyle, Song, SongSlideData } from "./song";

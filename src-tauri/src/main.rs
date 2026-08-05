@@ -202,6 +202,9 @@ fn main() {
             wordlyte_lib::commands::studio_pres::save_studio_presentation,
             wordlyte_lib::commands::studio_pres::load_studio_presentation,
             wordlyte_lib::commands::studio_pres::delete_studio_presentation,
+            wordlyte_lib::commands::studio_pres::list_slide_templates,
+            wordlyte_lib::commands::studio_pres::save_slide_template,
+            wordlyte_lib::commands::studio_pres::delete_slide_template,
             wordlyte_lib::commands::scenes::list_scenes,
             wordlyte_lib::commands::scenes::save_scene,
             wordlyte_lib::commands::scenes::delete_scene,
@@ -226,6 +229,8 @@ fn main() {
             wordlyte_lib::commands::props::set_props,
             wordlyte_lib::commands::misc::get_app_data_dir,
             wordlyte_lib::commands::misc::get_hymn_library,
+            wordlyte_lib::commands::misc::write_text_file,
+            wordlyte_lib::commands::misc::read_text_file,
             wordlyte_lib::commands::assets::get_startup_status,
             wordlyte_lib::commands::assets::download_bible_db_cmd,
         ])

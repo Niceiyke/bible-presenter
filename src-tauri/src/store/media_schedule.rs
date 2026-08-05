@@ -82,6 +82,12 @@ pub struct SlideElement {
     pub shadow: Option<bool>,
     #[serde(default)]
     pub shadow_color: Option<String>,
+    #[serde(rename = "groupId", alias = "group_id", default)]
+    pub group_id: Option<String>,
+    #[serde(default)]
+    pub loop_video: Option<bool>,
+    #[serde(default)]
+    pub muted: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -406,7 +412,17 @@ pub struct CustomSlide {
     pub background_color: String,
     #[serde(rename = "backgroundImage", alias = "background_image", default)]
     pub background_image: Option<String>,
+    #[serde(rename = "backgroundVideo", alias = "background_video", default)]
+    pub background_video: Option<String>,
+    #[serde(rename = "backgroundVideoLoop", alias = "background_video_loop", default)]
+    pub background_video_loop: Option<bool>,
+    #[serde(rename = "backgroundVideoMuted", alias = "background_video_muted", default)]
+    pub background_video_muted: Option<bool>,
     pub elements: Vec<SlideElement>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(rename = "groupId", alias = "group_id", default)]
+    pub group_id: Option<String>,
     #[serde(rename = "headerEnabled", alias = "header_enabled", default)]
     pub header_enabled: Option<bool>,
     #[serde(rename = "headerHeightPct", alias = "header_height_pct", default)]
@@ -424,6 +440,24 @@ pub struct CustomPresentation {
     pub slides: Vec<CustomSlide>,
     #[serde(default)]
     pub version: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PresentationSummary {
+    pub id: String,
+    pub name: String,
+    pub slide_count: u32,
+    pub version: u32,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SlideTemplate {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub slide: CustomSlide,
+    pub created_at: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -791,21 +825,22 @@ impl MediaScheduleStore {
 
     // ---- Studio presentations ----
 
-    pub fn list_studio_presentations(&self) -> Result<Vec<serde_json::Value>> {
+    pub fn list_studio_presentations(&self) -> Result<Vec<PresentationSummary>> {
         let rows = self.data_db.hash_list("presentations").map_err(|e| anyhow::anyhow!(e))?;
         let mut items = Vec::new();
         for (id, data) in rows {
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
                 let name = val.get("name").and_then(|v| v.as_str()).unwrap_or("Untitled");
-                let slide_count = val.get("slides").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
-                items.push(serde_json::json!({"id": id, "name": name, "slide_count": slide_count}));
+                let slide_count = val.get("slides").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0) as u32;
+                let version = val.get("version").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let updated_at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                items.push(PresentationSummary { id, name: name.to_string(), slide_count, version, updated_at });
             }
         }
-        items.sort_by(|a, b| {
-            let na = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let nb = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            na.to_lowercase().cmp(&nb.to_lowercase())
-        });
+        items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         Ok(items)
     }
 
@@ -823,6 +858,26 @@ impl MediaScheduleStore {
 
     pub fn delete_studio_presentation(&self, id: &str) -> Result<()> {
         self.data_db.hash_delete("presentations", id).map_err(|e| anyhow::anyhow!(e))
+    }
+
+    // ---- Slide templates ----
+
+    pub fn list_templates(&self) -> Result<Vec<SlideTemplate>> {
+        let rows = self.data_db.hash_list("slide_templates").map_err(|e| anyhow::anyhow!(e))?;
+        let mut templates: Vec<SlideTemplate> = rows.iter().filter_map(|(_, data)| serde_json::from_str(data).ok()).collect();
+        templates.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        Ok(templates)
+    }
+
+    pub fn save_template(&self, mut template: SlideTemplate) -> Result<SlideTemplate> {
+        if template.id.is_empty() { template.id = Uuid::new_v4().to_string(); }
+        let json = serde_json::to_string_pretty(&template)?;
+        self.data_db.hash_set("slide_templates", &template.id, &json).map_err(|e| anyhow::anyhow!(e))?;
+        Ok(template)
+    }
+
+    pub fn delete_template(&self, id: &str) -> Result<()> {
+        self.data_db.hash_delete("slide_templates", id).map_err(|e| anyhow::anyhow!(e))
     }
 
     // ---- Songs ----

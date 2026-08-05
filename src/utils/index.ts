@@ -8,7 +8,9 @@ import type {
   LowerThirdData,
   LowerThirdTemplate,
   ThemeColors,
-  LayerContent
+  LayerContent,
+  SlideTemplate,
+  PresentationExport,
 } from "../types";
 import { THEMES } from "../types";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -100,9 +102,7 @@ export function hexToRgba(hex: string, opacity: number): string {
 export function resolvePath(path: string | undefined, baseDir: string | null): string {
   if (!path) return "";
   if (!baseDir) return path;
-  // If it's already absolute (starts with / or C:\ etc), return as is
   if (path.startsWith("/") || /^[a-zA-Z]:\\/.test(path)) return path;
-  // Otherwise, join with baseDir/media
   const separator = baseDir.includes("\\") ? "\\" : "/";
   return `${baseDir}${separator}media${separator}${path}`;
 }
@@ -164,6 +164,17 @@ export function newBlankSlide(): CustomSlide {
   };
 }
 
+export function deepCloneSlide(slide: CustomSlide): CustomSlide {
+  return JSON.parse(JSON.stringify(slide));
+}
+
+export function cloneSlideAsTemplate(slide: CustomSlide): CustomSlide {
+  const cloned = deepCloneSlide(slide);
+  cloned.id = stableId();
+  cloned.elements.forEach(e => (e.id = stableId()));
+  return cloned;
+}
+
 export function ltBuildLyricsPayload(
   ltFlatLines: { text: string; sectionLabel: string }[],
   lineIndex: number,
@@ -194,27 +205,30 @@ export function buildCustomSlideItem(
       slide_count: slides.length,
       background_color: slide.backgroundColor,
       background_image: slide.backgroundImage,
+      background_video: slide.backgroundVideo,
+      background_video_loop: slide.backgroundVideoLoop,
+      background_video_muted: slide.backgroundVideoMuted,
       elements: slide.elements,
-      // Legacy fields
+      notes: slide.notes,
       header_enabled: slide.headerEnabled ?? true,
       header_height_pct: slide.headerHeightPct ?? 35,
-      header: slide.header ? { 
-        text: slide.header.text, 
-        font_size: slide.header.fontSize, 
-        font_family: slide.header.fontFamily, 
-        color: slide.header.color, 
-        bold: slide.header.bold, 
-        italic: slide.header.italic, 
-        align: slide.header.align 
+      header: slide.header ? {
+        text: slide.header.text,
+        font_size: slide.header.fontSize,
+        font_family: slide.header.fontFamily,
+        color: slide.header.color,
+        bold: slide.header.bold,
+        italic: slide.header.italic,
+        align: slide.header.align
       } : undefined,
-      body: slide.body ? { 
-        text: slide.body.text,   
-        font_size: slide.body.fontSize,   
-        font_family: slide.body.fontFamily,   
-        color: slide.body.color,   
-        bold: slide.body.bold,   
-        italic: slide.body.italic,   
-        align: slide.body.align 
+      body: slide.body ? {
+        text: slide.body.text,
+        font_size: slide.body.fontSize,
+        font_family: slide.body.fontFamily,
+        color: slide.body.color,
+        bold: slide.body.bold,
+        italic: slide.body.italic,
+        align: slide.body.align
       } : undefined,
     },
   };
@@ -224,8 +238,8 @@ export function computeOutputBackground(
   settings: PresentationSettings,
   colors: ThemeColors
 ): React.CSSProperties {
-  const effectiveColors = settings.custom_theme_colors 
-    ? { ...colors, ...settings.custom_theme_colors } 
+  const effectiveColors = settings.custom_theme_colors
+    ? { ...colors, ...settings.custom_theme_colors }
     : colors;
 
   if (settings.background.type === "Color") {
@@ -242,7 +256,6 @@ export function computeOutputBackground(
       };
     }
   }
-  // Video backgrounds are rendered as a separate <video> element
   if (settings.background.type === "Video") {
     return {};
   }
@@ -269,7 +282,6 @@ export function computePreviewBackground(settings: PresentationSettings, themeCo
   return { backgroundColor: color };
 }
 
-/** Returns the VideoBackground config if the effective background for the current item is a video, otherwise null. */
 export function getVideoBackground(
   settings: PresentationSettings,
   item: DisplayItem | null
@@ -284,7 +296,6 @@ export function getVideoBackground(
   return null;
 }
 
-/** Returns the CameraBackground config if the effective background for the current item is a camera, otherwise null. */
 export function getCameraBackground(
   settings: PresentationSettings,
   item: DisplayItem | null
@@ -350,13 +361,33 @@ export function getTransitionVariants(type: string, duration: number) {
         exit:    { opacity: 1 },
         transition: { duration: 0 },
       };
-    default: // "fade"
+    default:
       return {
         initial: { opacity: 0 },
         animate: { opacity: 1 },
         exit:    { opacity: 0 },
         transition: d,
       };
+  }
+}
+
+export function exportPresentation(pres: { presentation: any }): PresentationExport {
+  return {
+    version: 1,
+    presentation: pres.presentation,
+    exported_at: Date.now(),
+  };
+}
+
+export function importPresentation(data: unknown): { success: boolean; presentation?: any; error?: string } {
+  try {
+    const exp = data as PresentationExport;
+    if (!exp.presentation || !exp.presentation.id || !exp.presentation.slides) {
+      return { success: false, error: "Invalid presentation file: missing required fields" };
+    }
+    return { success: true, presentation: exp.presentation };
+  } catch (e) {
+    return { success: false, error: "Failed to parse presentation file" };
   }
 }
 

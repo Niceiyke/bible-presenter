@@ -1,6 +1,6 @@
 import { StateCreator } from "zustand";
 import { AppStore } from "../index";
-import { DEFAULT_SETTINGS, PresentationSettings, CustomPresentation, CustomSlide, SceneData } from "../../types";
+import { DEFAULT_SETTINGS, PresentationSettings, CustomPresentation, CustomSlide, SceneData, PresentationSummary, SlideTemplate } from "../../types";
 
 export interface LogEntry {
   level: string;
@@ -62,16 +62,20 @@ export interface AppSlice {
   setTimerLabel: (v: string) => void;
   timerRunning: boolean;
   setTimerRunning: (v: boolean) => void;
-  studioList: { id: string; name: string; slide_count: number; updated_at?: number }[];
-  setStudioList: (v: { id: string; name: string; slide_count: number; updated_at?: number }[] | ((prev: { id: string; name: string; slide_count: number; updated_at?: number }[]) => { id: string; name: string; slide_count: number; updated_at?: number }[])) => void;
+  studioList: PresentationSummary[];
+  setStudioList: (v: PresentationSummary[] | ((prev: PresentationSummary[]) => PresentationSummary[])) => void;
   editorPresId: string | null;
   setEditorPresId: (v: string | null) => void;
   editorPres: CustomPresentation | null;
   setEditorPres: (v: CustomPresentation | null) => void;
+  isDirty: boolean;
+  setIsDirty: (v: boolean) => void;
   expandedStudioPresId: string | null;
   setExpandedStudioPresId: (v: string | null) => void;
   studioSlides: Record<string, CustomSlide[]>;
   setStudioSlides: (v: Record<string, CustomSlide[]> | ((prev: Record<string, CustomSlide[]>) => Record<string, CustomSlide[]>)) => void;
+  templates: SlideTemplate[];
+  setTemplates: (v: SlideTemplate[] | ((prev: SlideTemplate[]) => SlideTemplate[])) => void;
 }
 
 export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) => ({
@@ -134,8 +138,12 @@ export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) =>
   setEditorPresId: (v) => set({ editorPresId: v }),
   editorPres: null,
   setEditorPres: (v) => set({ editorPres: v }),
+  isDirty: false,
+  setIsDirty: (v) => set({ isDirty: v }),
   expandedStudioPresId: null,
   setExpandedStudioPresId: (v) => set({ expandedStudioPresId: v }),
   studioSlides: {},
   setStudioSlides: (v) => set((s) => ({ studioSlides: typeof v === "function" ? v(s.studioSlides) : v })),
+  templates: [],
+  setTemplates: (v) => set((s) => ({ templates: typeof v === "function" ? v(s.templates) : v })),
 });

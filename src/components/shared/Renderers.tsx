@@ -66,6 +66,9 @@ export function CustomSlideRenderer({
   
   const bgColor = isDisplayData ? (slide as CustomSlideDisplayData).background_color : (slide as CustomSlide).backgroundColor;
   const bgImage = isDisplayData ? (slide as CustomSlideDisplayData).background_image : (slide as CustomSlide).backgroundImage;
+  const bgVideo = isDisplayData ? (slide as CustomSlideDisplayData).background_video : (slide as CustomSlide).backgroundVideo;
+  const bgVideoLoop = isDisplayData ? (slide as CustomSlideDisplayData).background_video_loop : (slide as CustomSlide).backgroundVideoLoop;
+  const bgVideoMuted = isDisplayData ? (slide as CustomSlideDisplayData).background_video_muted : (slide as CustomSlide).backgroundVideoMuted;
   const elements = isDisplayData ? (slide as CustomSlideDisplayData).elements : (slide as CustomSlide).elements;
 
   // Fallback to legacy structure if elements are missing
@@ -94,8 +97,19 @@ export function CustomSlideRenderer({
 
   // Modern Elements Rendering
   if (elements && elements.length > 0) {
+    const resolvedBgVideo = resolvePath(bgVideo, appDataDir);
     return (
       <div className="w-full h-full relative overflow-hidden" style={bgStyle}>
+        {resolvedBgVideo && (
+          <video
+            src={convertFileSrc(resolvedBgVideo)}
+            className="absolute inset-0 w-full h-full object-cover z-0"
+            autoPlay
+            loop={bgVideoLoop !== false}
+            muted={bgVideoMuted !== false}
+            playsInline
+          />
+        )}
         {elements.map((el) => {
           if (hiddenElementIds.includes(el.id)) return null;
 
@@ -153,6 +167,20 @@ export function CustomSlideRenderer({
             return (
               <div key={el.id} style={elStyle}>
                 <img src={convertFileSrc(resolvedImg)} className="w-full h-full object-contain" alt="" />
+              </div>
+            );
+          } else if (el.kind === "video") {
+            const resolvedVideo = resolvePath(el.content, appDataDir);
+            return (
+              <div key={el.id} style={elStyle}>
+                <video
+                  src={convertFileSrc(resolvedVideo)}
+                  className="w-full h-full object-contain"
+                  autoPlay
+                  loop={el.loop !== false}
+                  muted={el.muted !== false}
+                  playsInline
+                />
               </div>
             );
           } else if (el.kind === "shape") {

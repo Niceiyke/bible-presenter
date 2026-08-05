@@ -3,7 +3,7 @@ use crate::store;
 use tauri::State;
 
 #[tauri::command]
-pub async fn list_studio_presentations(state: State<'_, AppState>) -> Result<Vec<serde_json::Value>, String> {
+pub async fn list_studio_presentations(state: State<'_, AppState>) -> Result<Vec<store::PresentationSummary>, String> {
     state.media_schedule.list_studio_presentations().map_err(|e| e.to_string())
 }
 
@@ -20,4 +20,19 @@ pub async fn load_studio_presentation(state: State<'_, AppState>, id: String) ->
 #[tauri::command]
 pub async fn delete_studio_presentation(state: State<'_, AppState>, id: String) -> Result<(), String> {
     state.media_schedule.delete_studio_presentation(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_slide_templates(state: State<'_, AppState>) -> Result<Vec<store::SlideTemplate>, String> {
+    state.media_schedule.list_templates().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn save_slide_template(state: State<'_, AppState>, template: store::SlideTemplate) -> Result<store::SlideTemplate, String> {
+    state.media_schedule.save_template(template).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_slide_template(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.media_schedule.delete_template(&id).map_err(|e| e.to_string())
 }

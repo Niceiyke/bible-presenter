@@ -5,7 +5,7 @@ import { Plus, Edit2, Trash2, ChevronDown, ChevronUp, Search, Presentation } fro
 import { useAppStore } from "../store";
 import { SlideThumbnail } from "./shared/Renderers";
 import { buildCustomSlideItem } from "../utils";
-import type { CustomPresentation, CustomSlide, DisplayItem } from "../types";
+import type { CustomPresentation, CustomSlide, DisplayItem, PresentationSummary } from "../types";
 
 interface StudioTabProps {
   onStage?: (item: DisplayItem) => void;
@@ -19,7 +19,7 @@ export function StudioTab({ onStage, onLive, onOpenEditor, onNewPresentation }: 
     studioList, setStudioList,
     expandedStudioPresId, setExpandedStudioPresId,
     studioSlides, setStudioSlides,
-    appDataDir,
+    appDataDir, setToast,
   } = useAppStore();
 
   const [search, setSearch] = useState("");
@@ -31,11 +31,10 @@ export function StudioTab({ onStage, onLive, onOpenEditor, onNewPresentation }: 
     }
     if (!studioSlides[id]) {
       try {
-        const data: any = await invoke("load_studio_presentation", { id });
-        const pres = data as CustomPresentation;
-        setStudioSlides({ ...studioSlides, [id]: pres.slides });
+        const data = await invoke<CustomPresentation>("load_studio_presentation", { id });
+        setStudioSlides({ ...studioSlides, [id]: data.slides });
       } catch (err) {
-        console.error("Failed to load slides:", err);
+        setToast("Failed to load presentation slides");
         return;
       }
     }
@@ -51,17 +50,16 @@ export function StudioTab({ onStage, onLive, onOpenEditor, onNewPresentation }: 
       emit("studio-sync", next);
       if (expandedStudioPresId === id) setExpandedStudioPresId(null);
     } catch (err) {
-      console.error("Delete failed:", err);
+      setToast("Failed to delete presentation");
     }
   };
 
-  const filtered = search.trim()
+  const filtered: PresentationSummary[] = search.trim()
     ? studioList.filter(p => p.name.toLowerCase().includes(search.toLowerCase()))
     : studioList;
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Header */}
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-bold text-slate-200">Presentations</h2>
@@ -75,7 +73,6 @@ export function StudioTab({ onStage, onLive, onOpenEditor, onNewPresentation }: 
         </button>
       </div>
 
-      {/* Search */}
       {studioList.length > 3 && (
         <div className="relative">
           <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 pointer-events-none" />
@@ -88,7 +85,6 @@ export function StudioTab({ onStage, onLive, onOpenEditor, onNewPresentation }: 
         </div>
       )}
 
-      {/* List */}
       <div className="flex flex-col gap-2">
         {filtered.map((pres) => {
           const isExpanded = expandedStudioPresId === pres.id;
@@ -99,9 +95,7 @@ export function StudioTab({ onStage, onLive, onOpenEditor, onNewPresentation }: 
                 isExpanded ? "border-purple-600/40 shadow-lg shadow-purple-900/10" : "border-slate-800 hover:border-slate-700"
               }`}
             >
-              {/* Presentation row */}
               <div className="flex items-center gap-3 p-3">
-                {/* Icon */}
                 <div
                   className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 transition-all ${
                     isExpanded ? "bg-purple-600 text-white" : "bg-slate-800 text-slate-500"
@@ -110,7 +104,6 @@ export function StudioTab({ onStage, onLive, onOpenEditor, onNewPresentation }: 
                   <Presentation size={18} />
                 </div>
 
-                {/* Meta */}
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-slate-200 truncate leading-tight">{pres.name}</p>
                   <p className="text-[10px] text-slate-600 mt-0.5">
@@ -118,7 +111,6 @@ export function StudioTab({ onStage, onLive, onOpenEditor, onNewPresentation }: 
                   </p>
                 </div>
 
-                {/* Actions */}
                 <div className="flex items-center gap-1">
                   <button
                     onClick={() => onOpenEditor(pres.id)}
@@ -148,7 +140,6 @@ export function StudioTab({ onStage, onLive, onOpenEditor, onNewPresentation }: 
                 </div>
               </div>
 
-              {/* Slide grid */}
               {isExpanded && studioSlides[pres.id] && (
                 <div className="px-3 pb-3 border-t border-slate-800/50">
                   <p className="text-[9px] font-black uppercase tracking-widest text-slate-600 pt-2.5 pb-2">Slides</p>

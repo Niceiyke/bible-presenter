@@ -76,7 +76,7 @@ export function ContentBrowser({
             const id = stableId();
             const newPres: CustomPresentation = { id, name: "New Presentation", slides: [newDefaultSlide()], version: 1 };
             invoke("save_studio_presentation", { presentation: newPres }).then(() => {
-              const nextList = [...studioList, { id, name: newPres.name, slide_count: 1, updated_at: Date.now() }];
+              const nextList = [...studioList, { id, name: newPres.name, slide_count: 1, version: 1, updated_at: Date.now() }];
               setStudioList(nextList);
               emit("studio-sync", nextList);
               setStudioSlides({ ...studioSlides, [id]: newPres.slides });

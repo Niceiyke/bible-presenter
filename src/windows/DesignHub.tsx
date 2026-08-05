@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { AnimatePresence } from "framer-motion";
-import { Layers, Monitor, Sliders, Wand2, Clapperboard, LayoutDashboard } from "lucide-react";
+import { Layers, Monitor, Sliders, Wand2, Clapperboard, LayoutDashboard, Loader2 } from "lucide-react";
 import { useAppStore } from "../store";
 import { SlideEditor } from "../components/editors/SlideEditor";
 import { SceneComposerTab } from "../components/SceneComposerTab";
@@ -12,14 +12,16 @@ import { PropsTab } from "../components/PropsTab";
 import { SettingsTab } from "../components/SettingsTab";
 import { Toast } from "../components/Toast";
 import { stableId, newDefaultSlide } from "../utils";
-import type { 
-  CustomPresentation, 
-  MediaItem, 
-  LowerThirdTemplate, 
-  SceneData, 
-  PropItem, 
+import type {
+  PresentationSummary,
+  CustomPresentation,
+  MediaItem,
+  LowerThirdTemplate,
+  SceneData,
+  PropItem,
   PresentationSettings,
-  DisplayItem
+  DisplayItem,
+  SlideTemplate,
 } from "../types";
 
 export function DesignHub() {
@@ -37,41 +39,58 @@ export function DesignHub() {
     setStagedItem,
     setLiveItem,
     scheduleEntries, setScheduleEntries,
+    editorPresId, setEditorPresId,
+    editorPres, setEditorPres,
+    setTemplates,
   } = useAppStore();
 
   const [hubTab, setHubTab] = useState<"studio" | "lt-designer" | "scene" | "props" | "settings">("studio");
-  const [editorPresId, setEditorPresId] = useState<string | null>(null);
-  const [editorPres, setEditorPres] = useState<CustomPresentation | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const mediaImages = media.filter(i => i.media_type === "Image");
 
   useEffect(() => {
     const loadAll = async () => {
-      const [studioRes, mediaRes, ltRes, propsRes, scenesRes, settingsRes, appDirRes] = await Promise.all([
-        invoke<{ id: string; name: string; slide_count: number }[]>("list_studio_presentations").catch(() => []),
-        invoke<MediaItem[]>("list_media").catch(() => []),
-        invoke<LowerThirdTemplate[]>("load_lt_templates").catch(() => []),
-        invoke<PropItem[]>("get_props").catch(() => []),
-        invoke<SceneData[]>("list_scenes").catch(() => []),
-        invoke<PresentationSettings>("get_settings").catch(() => null),
-        invoke<string>("get_app_data_dir").catch(() => null),
-      ]);
+      setIsLoading(true);
+      setLoadError(null);
+      const errors: string[] = [];
 
-      setStudioList(studioRes);
-      setMedia(mediaRes);
+      try {
+        const [studioRes, mediaRes, ltRes, propsRes, scenesRes, settingsRes, appDirRes, templatesRes] = await Promise.all([
+          invoke<PresentationSummary[]>("list_studio_presentations").catch((e) => { errors.push("Presentations: " + String(e)); return []; }),
+          invoke<MediaItem[]>("list_media").catch((e) => { errors.push("Media: " + String(e)); return []; }),
+          invoke<LowerThirdTemplate[]>("load_lt_templates").catch((e) => { errors.push("LT Templates: " + String(e)); return []; }),
+          invoke<PropItem[]>("get_props").catch((e) => { errors.push("Props: " + String(e)); return []; }),
+          invoke<SceneData[]>("list_scenes").catch((e) => { errors.push("Scenes: " + String(e)); return []; }),
+          invoke<PresentationSettings>("get_settings").catch((e) => { errors.push("Settings: " + String(e)); return null; }),
+          invoke<string>("get_app_data_dir").catch((e) => { errors.push("App data dir: " + String(e)); return null; }),
+          invoke<SlideTemplate[]>("list_slide_templates").catch((e) => { errors.push("Templates: " + String(e)); return []; }),
+        ]);
 
-      // Handle LT templates loading with fallback to default
-      const savedTpls = ltRes.length ? ltRes : [useAppStore.getState().ltTemplate];
-      setLtSavedTemplates(savedTpls);
-      const activeId = localStorage.getItem("activeLtTemplateId");
-      const active = savedTpls.find(t => t.id === activeId) || savedTpls[0];
-      setLtTemplate(active);
+        setStudioList(studioRes);
+        setMedia(mediaRes);
+        setTemplates(templatesRes);
 
-      setPropItems(propsRes);
-      setSavedScenes(scenesRes);
-      if (settingsRes) setSettings(settingsRes);
-      if (appDirRes) setAppDataDir(appDirRes);
+        const savedTpls = ltRes.length ? ltRes : [useAppStore.getState().ltTemplate];
+        setLtSavedTemplates(savedTpls);
+        const activeId = localStorage.getItem("activeLtTemplateId");
+        const active = savedTpls.find(t => t.id === activeId) || savedTpls[0];
+        setLtTemplate(active);
 
+        setPropItems(propsRes);
+        setSavedScenes(scenesRes);
+        if (settingsRes) setSettings(settingsRes);
+        if (appDirRes) setAppDataDir(appDirRes);
+
+        if (errors.length > 0) {
+          setLoadError("Some data failed to load: " + errors.join("; "));
+        }
+      } catch (e) {
+        setLoadError("Failed to initialize: " + String(e));
+      } finally {
+        setIsLoading(false);
+      }
     };
     loadAll();
   }, []);
@@ -98,17 +117,27 @@ export function DesignHub() {
   const handleNewPresentation = async () => {
     const pres: CustomPresentation = { id: stableId(), name: "Untitled Presentation", slides: [newDefaultSlide()] };
     await invoke("save_studio_presentation", { presentation: pres });
-    const list: any[] = await invoke("list_studio_presentations");
+    const list = await invoke<PresentationSummary[]>("list_studio_presentations");
     setStudioList(list);
     emit("studio-sync", list);
-    setEditorPres(pres);
     setEditorPresId(pres.id);
+    setEditorPres(pres);
   };
 
   const handleOpenEditor = async (id: string) => {
-    const data = await invoke<any>("load_studio_presentation", { id });
-    setEditorPres(data);
+    const data = await invoke<CustomPresentation>("load_studio_presentation", { id });
     setEditorPresId(id);
+    setEditorPres(data);
+  };
+
+  const handleEditorClose = async (saved: boolean) => {
+    setEditorPresId(null);
+    setEditorPres(null);
+    if (saved) {
+      const list = await invoke<PresentationSummary[]>("list_studio_presentations");
+      setStudioList(list);
+      emit("studio-sync", list);
+    }
   };
 
   const updateSettings = async (next: PresentationSettings) => {
@@ -126,26 +155,19 @@ export function DesignHub() {
       <SlideEditor
         initialPres={editorPres}
         mediaImages={mediaImages}
-        onClose={async (saved) => {
-          setEditorPresId(null);
-          setEditorPres(null);
-          if (saved) {
-            const list: any[] = await invoke("list_studio_presentations");
-            setStudioList(list);
-            emit("studio-sync", list);
-            
-            // Sync slides too
-            const data: any = await invoke("load_studio_presentation", { id: editorPresId });
-            const slides = data.slides;
-            setStudioSlides((prev) => {
-               const n = { ...prev };
-               n[editorPresId] = slides;
-               return n;
-            });
-            emit("studio-slides-sync", { id: editorPresId, slides });
-          }
-        }}
+        onClose={handleEditorClose}
       />
+    );
+  }
+
+  if (isLoading) {
+    return (
+      <div className="h-screen bg-slate-950 flex items-center justify-center font-sans">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 size={32} className="text-purple-500 animate-spin" />
+          <p className="text-sm text-slate-400">Loading design tools…</p>
+        </div>
+      </div>
     );
   }
 
@@ -160,7 +182,6 @@ export function DesignHub() {
   return (
     <div className="h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden">
       <header className="flex items-center gap-0 px-0 border-b border-slate-800 bg-slate-900 shrink-0">
-        {/* Branding */}
         <div className="flex items-center gap-2.5 px-4 py-3 border-r border-slate-800 shrink-0">
           <div className="w-7 h-7 bg-gradient-to-br from-purple-600 to-purple-800 rounded-lg flex items-center justify-center shadow-lg">
             <Clapperboard size={14} className="text-white" />
@@ -170,7 +191,6 @@ export function DesignHub() {
             <p className="text-[8px] text-purple-500 font-semibold leading-tight">Presentation Tools</p>
           </div>
         </div>
-        {/* Tabs */}
         <div className="flex flex-1 h-full">
           {tabs.map(({ id, label, icon }) => (
             <button
@@ -189,8 +209,14 @@ export function DesignHub() {
         </div>
       </header>
 
+      {loadError && (
+        <div className="bg-red-900/40 border-b border-red-500/30 px-4 py-2 text-[11px] text-red-400 font-medium flex items-center gap-2 shrink-0">
+          <span className="text-red-500">&#x26A0;</span> {loadError}
+          <button onClick={() => setLoadError(null)} className="ml-auto text-red-500 hover:text-red-300 text-[11px] font-bold">Dismiss</button>
+        </div>
+      )}
+
       <div className="flex-1 overflow-hidden">
-        {/* Full-height fill tabs — no padding wrapper */}
         {hubTab === "lt-designer" && <LtDesignerTab onSetToast={setToast} onLoadMedia={async () => {}} />}
         {hubTab === "scene" && (
           <SceneComposerTab
@@ -200,7 +226,6 @@ export function DesignHub() {
             onAddToSchedule={addToSchedule}
           />
         )}
-        {/* Scrollable tabs — padded, overflow-y-auto */}
         {(hubTab === "studio" || hubTab === "props" || hubTab === "settings") && (
           <div className="h-full overflow-y-auto p-4 custom-scrollbar">
             {hubTab === "studio" && <StudioTab onOpenEditor={handleOpenEditor} onNewPresentation={handleNewPresentation} />}

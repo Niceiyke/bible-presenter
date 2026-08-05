@@ -1,30 +1,42 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { MediaItem } from "../types";
+import { Film } from "lucide-react";
 
 export function MediaPickerModal({
   images,
   onSelect,
   onClose,
   onUpload,
+  mode = "image",
 }: {
   images: MediaItem[];
   onSelect: (path: string) => void;
   onClose: () => void;
   onUpload: () => Promise<void>;
+  mode?: "image" | "video";
 }) {
   const [uploading, setUploading] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => { setRefreshKey(k => k + 1); }, [images]);
+
+  const items = mode === "video"
+    ? images.filter(i => i.media_type === "Video")
+    : images;
 
   const handleUpload = async () => {
     setUploading(true);
     try { await onUpload(); } finally { setUploading(false); }
   };
 
+  const label = mode === "video" ? "Video" : "Image";
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-8" style={{ backgroundColor: "rgba(0,0,0,0.75)" }}>
       <div className="bg-slate-900 rounded-xl border border-slate-700 flex flex-col w-full max-w-2xl" style={{ maxHeight: "80vh" }}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 shrink-0">
-          <span className="text-sm font-bold text-slate-200">Media Library — Pick Image</span>
+          <span className="text-sm font-bold text-slate-200">Media Library — Pick {label}</span>
           <div className="flex gap-2">
             <button
               onClick={handleUpload}
@@ -37,19 +49,25 @@ export function MediaPickerModal({
           </div>
         </div>
         <div className="flex-1 overflow-y-auto p-4">
-          {images.length === 0 ? (
+          {items.length === 0 ? (
             <p className="text-slate-600 text-xs italic text-center py-12">
-              No images in library yet. Click "+ Upload New" to add images.
+              No {label.toLowerCase()}s in library yet. Click "+ Upload New" to add {label.toLowerCase()}s.
             </p>
           ) : (
             <div className="grid grid-cols-3 gap-2">
-              {images.map((img) => (
+              {items.map((img) => (
                 <button
                   key={img.id}
                   onClick={() => { onSelect(img.path); onClose(); }}
                   className="aspect-video rounded-lg overflow-hidden border border-slate-700 hover:border-amber-500 transition-all group relative"
                 >
-                  <img src={convertFileSrc(img.path)} className="w-full h-full object-cover" alt={img.name} />
+                  {img.media_type === "Video" ? (
+                    <div className="w-full h-full bg-slate-800 flex items-center justify-center">
+                      <Film size={24} className="text-slate-500" />
+                    </div>
+                  ) : (
+                    <img src={convertFileSrc(img.path)} className="w-full h-full object-cover" alt={img.name} />
+                  )}
                   <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center">
                     <span className="text-white text-[10px] font-bold">SELECT</span>
                   </div>
