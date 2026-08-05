@@ -63,7 +63,7 @@ export function ContentBrowser({
       )}
       {activeTab === "studio" && (
         <StudioTab
-          onStage={stageItem} onLive={sendLive}
+          onStage={stageItem} onLive={sendLive} onAddToSchedule={addToSchedule}
           onOpenEditor={(id) => {
             invoke("load_studio_presentation", { id }).then((data: any) => {
               const pres = data as CustomPresentation;

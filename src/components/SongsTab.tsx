@@ -166,8 +166,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
                     )}
                     <button
                       onClick={() => onAddToSchedule(getSongDisplayItem(song, 0))}
-                      className="text-[9px] font-black uppercase bg-slate-800 hover:bg-slate-700 text-slate-400 px-2 py-1 rounded border border-slate-700"
-                    >+ Queue</button>
+                      className="text-[9px] font-black uppercase bg-purple-600/40 hover:bg-purple-600 text-purple-300 px-2 py-1 rounded border border-purple-500/20">+ SERVICE</button>
                     <button
                       onClick={() => setEditingSong(JSON.parse(JSON.stringify(song)))}
                       className="text-[9px] font-black uppercase bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-1 rounded"

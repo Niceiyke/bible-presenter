@@ -286,7 +286,7 @@ export function MediaTab({
                       <>
                         <button onClick={() => onStage({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-white text-[7px] font-bold py-1.5 rounded transition-all" title="Stage">STG</button>
                         <button onClick={() => onLive({ type: "Media", data: item })} className="bg-amber-500 hover:bg-amber-400 text-black text-[7px] font-bold py-1.5 rounded transition-all" title="Display Live">LIVE</button>
-                        <button onClick={() => onAddToSchedule({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-amber-400 text-[7px] font-bold py-1.5 rounded transition-all" title="Add to Queue">+Q</button>
+                        <button onClick={() => onAddToSchedule({ type: "Media", data: item })} className="bg-purple-600/40 hover:bg-purple-600 text-purple-300 text-[7px] font-bold py-1.5 rounded transition-all" title="Add to Service">+SVC</button>
                         <button onClick={() => onSetAsBackgroundLogo(item.path)} className="bg-purple-900/50 hover:bg-purple-700 text-purple-300 text-[7px] font-bold py-1.5 rounded transition-all" title="Set as Background Logo">BG LOGO</button>
                         <button onClick={() => onSetAsLogo(item.path)} className="bg-teal-900/50 hover:bg-teal-700 text-teal-300 text-[7px] font-bold py-1.5 rounded transition-all" title="Set as Corner Logo">CORNER</button>
                         <button onClick={() => { setSelectedMediaItem(item); setShowEditModal(true); }} className="bg-blue-900/50 hover:bg-blue-700 text-blue-300 text-[7px] font-bold py-1.5 rounded transition-all" title="Edit Metadata">EDIT</button>
@@ -359,7 +359,7 @@ export function MediaTab({
                       <>
                         <button onClick={() => onStage({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-white text-[7px] font-bold py-1.5 rounded transition-all" title="Stage">STG</button>
                         <button onClick={() => onLive({ type: "Media", data: item })} className="bg-amber-500 hover:bg-amber-400 text-black text-[7px] font-bold py-1.5 rounded transition-all" title="Display Live">LIVE</button>
-                        <button onClick={() => onAddToSchedule({ type: "Media", data: item })} className="bg-slate-700 hover:bg-slate-600 text-amber-400 text-[7px] font-bold py-1.5 rounded transition-all" title="Add to Queue">+Q</button>
+                        <button onClick={() => onAddToSchedule({ type: "Media", data: item })} className="bg-purple-600/40 hover:bg-purple-600 text-purple-300 text-[7px] font-bold py-1.5 rounded transition-all" title="Add to Service">+SVC</button>
                         <button onClick={() => onSetAsBackgroundLogo(item.path)} className="bg-purple-900/50 hover:bg-purple-700 text-purple-300 text-[7px] font-bold py-1.5 rounded transition-all" title="Set as Background Logo">BG LOGO</button>
                         <button onClick={() => onSetAsLogo(item.path)} className="bg-teal-900/50 hover:bg-teal-700 text-teal-300 text-[7px] font-bold py-1.5 rounded transition-all" title="Set as Corner Logo">CORNER</button>
                         <button onClick={() => { setSelectedMediaItem(item); setShowEditModal(true); }} className="bg-blue-900/50 hover:bg-blue-700 text-blue-300 text-[7px] font-bold py-1.5 rounded transition-all" title="Edit Metadata">EDIT</button>

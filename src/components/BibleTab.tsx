@@ -539,7 +539,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                   <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-all">
                     <button onClick={() => onStage({ type: "Verse", data: v })} className="flex-1 bg-slate-800 hover:bg-slate-700 text-white text-[10px] font-bold py-1 rounded transition-all">STAGE</button>
                     <button onClick={() => onLive({ type: "Verse", data: v })} className="flex-1 bg-amber-500 hover:bg-amber-400 text-black text-[10px] font-bold py-1 rounded transition-all">DISPLAY</button>
-                    <button onClick={() => onAddToSchedule({ type: "Verse", data: v })} className="px-2 bg-slate-800 hover:bg-slate-700 text-amber-500 text-[10px] font-bold py-1 rounded transition-all flex items-center" title="Add to schedule"><Plus size={11} /></button>
+                    <button onClick={() => onAddToSchedule({ type: "Verse", data: v })} className="flex-1 bg-purple-600/40 hover:bg-purple-600 text-purple-300 text-[10px] font-bold py-1 rounded transition-all" title="Add to service">+ SERVICE</button>
                   </div>
                 </div>
               ))}

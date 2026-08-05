@@ -10,11 +10,12 @@ import type { CustomPresentation, CustomSlide, DisplayItem, PresentationSummary 
 interface StudioTabProps {
   onStage?: (item: DisplayItem) => void;
   onLive?: (item: DisplayItem) => void;
+  onAddToSchedule?: (item: DisplayItem) => void;
   onOpenEditor: (id: string) => void;
   onNewPresentation: () => void;
 }
 
-export function StudioTab({ onStage, onLive, onOpenEditor, onNewPresentation }: StudioTabProps) {
+export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNewPresentation }: StudioTabProps) {
   const {
     studioList, setStudioList,
     expandedStudioPresId, setExpandedStudioPresId,
@@ -153,6 +154,7 @@ export function StudioTab({ onStage, onLive, onOpenEditor, onNewPresentation }: 
                           index={idx}
                           onStage={onStage ? (() => onStage(displayItem)) : undefined}
                           onLive={onLive ? (() => onLive(displayItem)) : undefined}
+                          onAddToSchedule={onAddToSchedule ? (() => onAddToSchedule(displayItem)) : undefined}
                           appDataDir={appDataDir}
                         />
                       );

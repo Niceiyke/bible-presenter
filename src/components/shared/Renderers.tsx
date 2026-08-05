@@ -748,15 +748,17 @@ export function SlideThumbnail({
   index,
   onStage,
   onLive,
+  onAddToSchedule,
   appDataDir = null,
 }: {
   slide: CustomSlide;
   index: number;
   onStage?: () => void;
   onLive?: () => void;
+  onAddToSchedule?: () => void;
   appDataDir?: string | null;
 }) {
-  const showOverlay = onStage || onLive;
+  const showOverlay = onStage || onLive || onAddToSchedule;
   
   return (
     <div
@@ -783,6 +785,14 @@ export function SlideThumbnail({
               className="w-full bg-amber-500 hover:bg-amber-400 text-black text-[9px] font-bold py-1 rounded"
             >
               DISPLAY
+            </button>
+          )}
+          {onAddToSchedule && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onAddToSchedule(); }}
+              className="w-full bg-purple-600/40 hover:bg-purple-600 text-purple-300 text-[9px] font-bold py-1 rounded"
+            >
+              + SERVICE
             </button>
           )}
         </div>
