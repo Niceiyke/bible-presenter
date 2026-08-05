@@ -136,7 +136,7 @@ fn main() {
 
             app.manage(state);
 
-            for label in ["output", "stage", "design", "studio"] {
+            for label in ["output", "stage", "studio"] {
                 if let Some(win) = app.get_webview_window(label) {
                     let win2 = win.clone();
                     win.on_window_event(move |event| {
@@ -219,7 +219,6 @@ fn main() {
             wordlyte_lib::commands::lower_third::show_lt_preset,
             wordlyte_lib::commands::windows::toggle_output_window,
             wordlyte_lib::commands::windows::toggle_stage_window,
-            wordlyte_lib::commands::windows::toggle_design_window,
             wordlyte_lib::commands::windows::toggle_studio_window,
             wordlyte_lib::commands::windows::get_available_monitors,
             wordlyte_lib::commands::props::get_props,

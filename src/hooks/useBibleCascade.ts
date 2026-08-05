@@ -16,7 +16,7 @@ export function useBibleCascade() {
   // isOperator: only operator windows load Bible data.
   // isReady: don't fire until useAppInitialization has confirmed the backend is up
   //          (availableVersions is populated only after get_bible_versions succeeds).
-  const isOperator = label === "main" || label === "design";
+  const isOperator = label === "main";
   const isReady = isOperator && availableVersions.length > 0;
 
   // 1. Version change -> Load Books

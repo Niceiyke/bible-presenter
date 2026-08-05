@@ -15,6 +15,7 @@ export function LeftNav() {
         { id: "media",         icon: ImageIcon,   title: "Media (F3)" },
         { id: "songs",         icon: Mic,         title: "Songs (F2)" },
         { id: "studio",        icon: Layers,      title: "Studio (F4)" },
+        { id: "lt-designer",   icon: Zap,         title: "LT Designer (F5)" },
         { id: "schedule",      icon: CalendarDays,title: "Service" },
         { id: "props",         icon: Monitor,     title: "Props (F5)" },
       ] as const).map(({ id, icon: Icon, title }) => (

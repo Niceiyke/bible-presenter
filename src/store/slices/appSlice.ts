@@ -13,8 +13,8 @@ export interface AppSlice {
   setLabel: (v: string) => void;
   settings: PresentationSettings;
   setSettings: (v: PresentationSettings | ((prev: PresentationSettings) => PresentationSettings)) => void;
-  activeTab: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "camera";
-  setActiveTab: (v: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "camera") => void;
+  activeTab: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "lt-designer" | "camera";
+  setActiveTab: (v: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "lt-designer" | "camera") => void;
   toast: string | null;
   setToast: (v: string | null) => void;
   sidebarWidth: number;

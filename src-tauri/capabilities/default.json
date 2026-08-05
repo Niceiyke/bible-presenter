@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capabilities for Wordlyte",
-  "windows": ["main", "stage", "design", "studio"],
+  "windows": ["main", "stage", "studio"],
   "permissions": [
     "core:default",
     "core:webview:allow-internal-toggle-devtools",

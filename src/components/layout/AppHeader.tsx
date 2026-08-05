@@ -1,6 +1,6 @@
 import React from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Monitor, Layout, Repeat, Keyboard } from "lucide-react";
+import { Monitor, Repeat, Keyboard } from "lucide-react";
 import { useAppStore } from "../../store";
 
 export function AppHeader() {
@@ -23,8 +23,6 @@ export function AppHeader() {
         <button onClick={() => { invoke("toggle_output_window").catch(() => {}); setOutputVisible((v: boolean) => !v); }}
           className={`p-1.5 rounded-md transition-all ${outputVisible ? "bg-green-500/20 text-green-400" : "text-slate-500 hover:text-green-400 hover:bg-slate-800"}`}
           title="Toggle Output Window (Ctrl+O)"><Monitor size={15} /></button>
-        <button onClick={() => invoke("toggle_design_window").catch(() => {})}
-          className="p-1.5 text-slate-500 hover:text-purple-400 hover:bg-slate-800 rounded-md transition-all" title="Design Hub"><Layout size={15} /></button>
         <div className="w-px h-4 bg-slate-800 mx-0.5" />
         <button onClick={() => setIsLogOpen(!isLogOpen)}
           className={`p-1.5 rounded-md transition-all ${isLogOpen ? "bg-slate-800 text-amber-500" : "text-slate-500 hover:text-white hover:bg-slate-800"}`} title="System Logs"><Repeat size={15} className="rotate-90" /></button>

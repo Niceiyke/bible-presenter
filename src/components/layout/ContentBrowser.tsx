@@ -7,6 +7,7 @@ import { BibleTab } from "../BibleTab";
 import { MediaTab } from "../MediaTab";
 import { SongsTab } from "../SongsTab";
 import { CameraTab } from "../CameraTab";
+import { LtDesignerTab } from "../LtDesignerTab";
 import { StudioTab } from "../StudioTab";
 import { ScheduleTab } from "../ScheduleTab";
 import { SettingsTab } from "../SettingsTab";
@@ -83,6 +84,7 @@ export function ContentBrowser({
           }}
         />
       )}
+      {activeTab === "lt-designer" && <LtDesignerTab onSetToast={setToast} onLoadMedia={async () => {}} />}
       {activeTab === "songs" && (
         <SongsTab
           onStage={stageItem} onLive={sendLive} onAddToSchedule={addToSchedule}

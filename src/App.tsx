@@ -20,7 +20,7 @@ import { ShortcutsModal } from "./components/ShortcutsModal";
 import { SlideEditor } from "./components/editors/SlideEditor";
 import { LogViewer } from "./components/LogViewer";
 
-import { OutputWindow, StageWindow, DesignHub } from "./windows";
+import { OutputWindow, StageWindow } from "./windows";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
 import type { CustomPresentation } from "./types";
@@ -111,7 +111,6 @@ export default function App() {
 
   if (label === "output") return <ErrorBoundary windowLabel="output"><OutputWindow /></ErrorBoundary>;
   if (label === "stage") return <ErrorBoundary windowLabel="stage"><StageWindow /></ErrorBoundary>;
-  if (label === "design") return <ErrorBoundary windowLabel="design"><DesignHub /></ErrorBoundary>;
 
   return (
     <div className="h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden select-none">
