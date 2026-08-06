@@ -425,7 +425,13 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
   const commitInline = (id: string, html: string) => {
     // P1.6: consecutive text-edit commits on the same element within
     // COALESCE_WINDOW_MS fold into one history entry.
-    updateElement(id, { content: html }, true, textCoalesceKey(id));
+    //
+    // The inline editor now represents bold/italic as Tiptap marks (it seeds
+    // them across the whole doc on open and drops the box-level fontWeight/
+    // fontStyle force). Clearing `el.bold`/`el.italic` here makes the
+    // projection renderer stop force-bolding the whole element, so per-word
+    // <strong>/<em> marks (and their absence after un-bold) are honoured.
+    updateElement(id, { content: html, bold: false, italic: false }, true, textCoalesceKey(id));
     setEditingElementId(null);
   };
 

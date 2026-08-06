@@ -24,14 +24,13 @@
  * CSS (so what you see is what the audience gets).
  */
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Underline from "@tiptap/extension-underline";
 import { TextStyle } from "@tiptap/extension-text-style";
 import Color from "@tiptap/extension-color";
 import TextAlign from "@tiptap/extension-text-align";
-import FontFamily from "@tiptap/extension-font-family";
 import {
   Bold, Italic, Underline as UnderlineIcon,
   AlignLeft, AlignCenter, AlignRight,
@@ -92,7 +91,6 @@ export function InlineTextEditor({ el, canvasScale, onCommit }: InlineTextEditor
       Underline,
       TextStyle,
       Color,
-      FontFamily,
       TextAlign.configure({ types: ["heading", "paragraph"] }),
       FontFamilyInline,
       FontSizeInline,
@@ -132,6 +130,28 @@ export function InlineTextEditor({ el, canvasScale, onCommit }: InlineTextEditor
     };
   }, [editor]);
 
+  // Migrate whole-element bold/italic (legacy box-level `el.bold`/`el.italic`)
+  // into actual Tiptap marks on the whole document once, when editing begins.
+  // We used to render `fontWeight: el.bold ? "bold" : "normal"` as box CSS on
+  // the editor (and the renderer still does). That FORCES every word bold, so
+  // `<strong>` marks become redundant and `toggleBold` on a bold-looking word
+  // actually *adds* a mark (because at the mark level the word isn't bold) —
+  // making it impossible to UN-bold a single word. Seeding the mark across the
+  // whole doc (and dropping the box-CSS force below + clearing `el.bold` on
+  // commit) lets per-word `toggleBold`/`toggleItalic` add AND remove.
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (!editor || seededRef.current) return;
+    seededRef.current = true;
+    const end = editor.state.doc.content.size;
+    const tr = editor.state.tr;
+    let changed = false;
+    const schema = editor.schema as any;
+    if (el.bold && schema.marks.bold) { tr.addMark(0, end, schema.marks.bold.create()); changed = true; }
+    if (el.italic && schema.marks.italic) { tr.addMark(0, end, schema.marks.italic.create()); changed = true; }
+    if (changed) editor.view.dispatch(tr);
+  }, [editor, el]);
+
   // Focus + caret-to-end on mount.
   useEffect(() => {
     if (!editor) return;
@@ -159,6 +179,26 @@ export function InlineTextEditor({ el, canvasScale, onCommit }: InlineTextEditor
     const base = el.font_size ?? 32;
     const next = Math.max(8, base + delta);
     editor.chain().focus().setFontSize(`${next}pt`).run();
+  };
+
+  // Change the case of the current text selection. `insertText` replaces the
+  // selection and inherits the surrounding marks, so a bold selection stays
+  // bold after re-casing. No-op when the selection is collapsed.
+  const [caseMode, setCaseMode] = useState("");
+  const applyCase = (mode: "upper" | "lower" | "title") => {
+    const { state, view } = editor;
+    const { from, to } = state.selection;
+    if (from === to) return;
+    const txt = state.doc.textBetween(from, to, " ");
+    const out =
+      mode === "upper" ? txt.toUpperCase() :
+      mode === "lower" ? txt.toLowerCase() :
+      txt.replace(/\b\w/g, (c) => c.toUpperCase());
+    // Use the ProseMirror transaction directly: tr.insertText replaces the
+    // [from,to) range with `out` and inherits the marks at `from`, so a bold
+    // selection stays bold after re-casing.
+    const tr = state.tr.insertText(out, from, to);
+    view.dispatch(tr.setMeta("addToHistory", true));
   };
 
   return (
@@ -242,6 +282,28 @@ export function InlineTextEditor({ el, canvasScale, onCommit }: InlineTextEditor
             {b.icon}
           </ToolbarButton>
         ))}
+        <ToolbarDivider />
+        <label
+          className="flex items-center cursor-pointer"
+          title="Change case"
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          <select
+            value={caseMode}
+            onChange={(e) => {
+              const m = e.target.value as "upper" | "lower" | "title" | "";
+              setCaseMode("");
+              if (m) applyCase(m);
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="bg-white/8 border border-white/10 rounded px-1 py-0.5 text-[10px] text-slate-200 outline-none"
+          >
+            <option value="">Aa</option>
+            <option value="upper">UPPERCASE</option>
+            <option value="lower">lowercase</option>
+            <option value="title">Title Case</option>
+          </select>
+        </label>
       </div>
 
       {/* The actual editor body fills the element's box exactly so its
@@ -255,8 +317,9 @@ export function InlineTextEditor({ el, canvasScale, onCommit }: InlineTextEditor
             fontFamily: el.font_family ?? "Arial",
             fontSize: `${(el.font_size ?? 32) * canvasScale}pt`,
             color: el.color ?? "#ffffff",
-            fontWeight: el.bold ? "bold" : "normal",
-            fontStyle: el.italic ? "italic" : "normal",
+            // NOTE: bold/italic are no longer forced here — they are
+            // represented as Tiptap marks (see the seeding effect above) so
+            // per-word toggleBold/toggleItalic can add AND remove them.
             textAlign: (el.align ?? "center") as React.CSSProperties["textAlign"],
             lineHeight: 1.3,
             width: "100%",
