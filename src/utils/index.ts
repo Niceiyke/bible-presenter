@@ -1,6 +1,8 @@
 import type {
   DisplayItem,
   CustomSlide,
+  SlideElement,
+  TextElement,
   BackgroundSetting,
   VideoBackground,
   CameraBackground,
@@ -106,16 +108,16 @@ export function newDefaultSlide(): CustomSlide {
         kind: "text",
         x: 10, y: 10, w: 80, h: 20, z_index: 1,
         content: "Header Text",
-        font_size: 48, font_family: "Arial", color: "#ffffff", align: "center", v_align: "middle", bold: true, italic: false
+        font_size: 48, font_family: "Arial", color: "#ffffff", align: "center", v_align: "middle", bold: true, italic: false,
       },
       {
         id: stableId(),
         kind: "text",
         x: 10, y: 35, w: 80, h: 50, z_index: 2,
         content: "Body Content Goes Here",
-        font_size: 32, font_family: "Arial", color: "#ffffff", align: "center", v_align: "middle", bold: false, italic: false
-      }
-    ]
+        font_size: 32, font_family: "Arial", color: "#ffffff", align: "center", v_align: "middle", bold: false, italic: false,
+      },
+    ],
   };
 }
 
@@ -129,9 +131,9 @@ export function newTitleSlide(): CustomSlide {
         kind: "text",
         x: 10, y: 35, w: 80, h: 30, z_index: 1,
         content: "Presentation Title",
-        font_size: 72, font_family: "Georgia", color: "#ffffff", align: "center", v_align: "middle", bold: true, italic: false
-      }
-    ]
+        font_size: 72, font_family: "Georgia", color: "#ffffff", align: "center", v_align: "middle", bold: true, italic: false,
+      },
+    ],
   };
 }
 
@@ -139,7 +141,7 @@ export function newBlankSlide(): CustomSlide {
   return {
     id: stableId(),
     backgroundColor: "#1a1a2e",
-    elements: []
+    elements: [],
   };
 }
 
@@ -152,6 +154,55 @@ export function cloneSlideAsTemplate(slide: CustomSlide): CustomSlide {
   cloned.id = stableId();
   cloned.elements.forEach(e => (e.id = stableId()));
   return cloned;
+}
+
+// ─── Text-element factories ──────────────────────────────────────────────────
+// Centralizing these means future callers (Bible picker, image picker, video
+// picker, "duplicate", etc.) build a SlideElement that satisfies the
+// discriminated-union contract instead of a loose bag of optional fields.
+
+export function newTextElement(opts: Partial<Omit<TextElement, "id" | "kind">> = {}): TextElement {
+  return {
+    id: stableId(),
+    kind: "text",
+    x: 20, y: 35, w: 60, h: 30, z_index: 1,
+    content: "Double-click to edit",
+    font_size: 48, font_family: "Arial", color: "#ffffff",
+    align: "center", v_align: "middle",
+    bold: false, italic: false, shadow: true, shadow_color: "#000000",
+    ...opts,
+  };
+}
+
+export function newImageElement(opts: Partial<Omit<Extract<SlideElement, { kind: "image" }>, "id" | "kind">> = {}): Extract<SlideElement, { kind: "image" }> {
+  return {
+    id: stableId(),
+    kind: "image",
+    x: 20, y: 15, w: 60, h: 70, z_index: 1,
+    content: "",
+    ...opts,
+  };
+}
+
+export function newVideoElement(opts: Partial<Omit<Extract<SlideElement, { kind: "video" }>, "id" | "kind">> = {}): Extract<SlideElement, { kind: "video" }> {
+  return {
+    id: stableId(),
+    kind: "video",
+    x: 15, y: 10, w: 70, h: 80, z_index: 1,
+    content: "",
+    loop: true, muted: true,
+    ...opts,
+  };
+}
+
+export function newShapeElement(opts: Partial<Omit<Extract<SlideElement, { kind: "shape" }>, "id" | "kind">> = {}): Extract<SlideElement, { kind: "shape" }> {
+  return {
+    id: stableId(),
+    kind: "shape",
+    x: 25, y: 25, w: 50, h: 50, z_index: 1,
+    color: "#6366f1", opacity: 0.85,
+    ...opts,
+  };
 }
 
 export function ltBuildLyricsPayload(

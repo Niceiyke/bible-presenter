@@ -71,6 +71,8 @@ pub struct SlideElement {
     #[serde(default)]
     pub align: Option<String>,
     #[serde(default)]
+    pub v_align: Option<String>,
+    #[serde(default)]
     pub bold: Option<bool>,
     #[serde(default)]
     pub italic: Option<bool>,
@@ -84,7 +86,9 @@ pub struct SlideElement {
     pub shadow_color: Option<String>,
     #[serde(rename = "groupId", alias = "group_id", default)]
     pub group_id: Option<String>,
-    #[serde(default)]
+    // P1.3: renamed `loop_video` -> `loop` to match the frontend contract.
+    // The `alias` keeps older saved presentations loadable.
+    #[serde(rename = "loop", alias = "loop_video", default)]
     pub loop_video: Option<bool>,
     #[serde(default)]
     pub muted: Option<bool>,

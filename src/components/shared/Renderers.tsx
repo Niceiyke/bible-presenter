@@ -1,7 +1,8 @@
-import React, { useRef, useEffect, useState } from "react";
+import React, { useRef, useEffect, useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { resolvePath } from "../../utils";
+import { sanitizeSlideHtml } from "../../utils/sanitize";
 import { useAppStore } from "../../store";
 import {
   CustomSlide,
@@ -13,9 +14,10 @@ import {
   PropItem,
   SongSlideData,
   PresentationSettings,
-  DEFAULT_LT_TEMPLATE
+  DEFAULT_LT_TEMPLATE,
+  SlideElement,
 } from "../../types";
-  
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 export function hexToRgba(hex: string, opacity: number): string {
@@ -50,13 +52,13 @@ export function CustomSlideRenderer({
   hiddenElementIds?: string[];
 }) {
   const isDisplayData = "background_color" in slide;
-  
+
   const bgColor = isDisplayData ? (slide as CustomSlideDisplayData).background_color : (slide as CustomSlide).backgroundColor;
   const bgImage = isDisplayData ? (slide as CustomSlideDisplayData).background_image : (slide as CustomSlide).backgroundImage;
   const bgVideo = isDisplayData ? (slide as CustomSlideDisplayData).background_video : (slide as CustomSlide).backgroundVideo;
   const bgVideoLoop = isDisplayData ? (slide as CustomSlideDisplayData).background_video_loop : (slide as CustomSlide).backgroundVideoLoop;
   const bgVideoMuted = isDisplayData ? (slide as CustomSlideDisplayData).background_video_muted : (slide as CustomSlide).backgroundVideoMuted;
-  const elements = isDisplayData ? (slide as CustomSlideDisplayData).elements : (slide as CustomSlide).elements;
+  const elements = (isDisplayData ? (slide as CustomSlideDisplayData).elements : (slide as CustomSlide).elements) ?? [];
 
   // Fallback to legacy structure if elements are missing
   const headerEnabled = isDisplayData ? (slide as CustomSlideDisplayData).header_enabled : (slide as CustomSlide).headerEnabled;
@@ -69,7 +71,7 @@ export function CustomSlideRenderer({
     ? { backgroundImage: `url(${convertFileSrc(resolvedBgImage)})`, backgroundSize: "cover", backgroundPosition: "center" }
     : { backgroundColor: bgColor };
 
-  const zoneStyle = (z: any): React.CSSProperties => ({
+  const zoneStyle = (z: { text?: string; fontSize?: number; fontFamily?: string; font_size?: number; font_family?: string; color?: string; bold?: boolean; italic?: boolean; align?: string }): React.CSSProperties => ({
     fontFamily: z.fontFamily ?? z.font_family ?? "Arial",
     fontSize: `${(z.fontSize ?? z.font_size ?? 32) * scale}pt`,
     color: z.color ?? "#ffffff",
@@ -82,8 +84,105 @@ export function CustomSlideRenderer({
     margin: 0,
   });
 
+  // Memoize per-element render so PropsRenderer Southbank-build churn doesn't
+  // re-serialize every slide change.
+  const renderedElements = useMemo(() => elements.map((el) => {
+    if (hiddenElementIds.includes(el.id)) return null;
+
+    const elStyle: React.CSSProperties = {
+      position: "absolute",
+      left: `${el.x}%`,
+      top: `${el.y}%`,
+      width: `${el.w}%`,
+      height: `${el.h}%`,
+      zIndex: el.z_index,
+      opacity: el.opacity ?? 1,
+    };
+
+    switch (el.kind) {
+      case "text": {
+        const vAlign = el.v_align === "middle" ? "center" : el.v_align === "bottom" ? "flex-end" : "flex-start";
+        const isHtml = el.content.includes("<");
+
+        return (
+          <div key={el.id} style={{ ...elStyle, display: "flex", flexDirection: "column", justifyContent: vAlign }}>
+            {isHtml ? (
+              <div
+                className="tiptap-rendered-content"
+                style={{
+                  fontFamily: el.font_family ?? "Arial",
+                  fontSize: `${(el.font_size ?? 32) * scale}pt`,
+                  color: el.color ?? "#ffffff",
+                  fontWeight: el.bold ? "bold" : "normal",
+                  fontStyle: el.italic ? "italic" : "normal",
+                  textAlign: (el.align ?? "left") as React.CSSProperties["textAlign"],
+                  textShadow: el.shadow === false ? "none" : `0 2px 8px ${el.shadow_color || "rgba(0,0,0,0.6)"}`,
+                  lineHeight: 1.3,
+                  width: "100%",
+                }}
+                dangerouslySetInnerHTML={{ __html: sanitizeSlideHtml(el.content) }}
+              />
+            ) : (
+              <p style={{
+                fontFamily: el.font_family ?? "Arial",
+                fontSize: `${(el.font_size ?? 32) * scale}pt`,
+                color: el.color ?? "#ffffff",
+                fontWeight: el.bold ? "bold" : "normal",
+                fontStyle: el.italic ? "italic" : "normal",
+                textAlign: (el.align ?? "left") as React.CSSProperties["textAlign"],
+                textShadow: el.shadow === false ? "none" : `0 2px 8px ${el.shadow_color || "rgba(0,0,0,0.6)"}`,
+                whiteSpace: "pre-wrap",
+                lineHeight: 1.3,
+                margin: 0,
+                width: "100%",
+              }}>
+                {el.content}
+              </p>
+            )}
+          </div>
+        );
+      }
+      case "image": {
+        const resolvedImg = resolvePath(el.content, appDataDir);
+        return (
+          <div key={el.id} style={elStyle}>
+            <img src={convertFileSrc(resolvedImg)} className="w-full h-full object-contain" alt="" />
+          </div>
+        );
+      }
+      case "video": {
+        const resolvedVideo = resolvePath(el.content, appDataDir);
+        return (
+          <div key={el.id} style={elStyle}>
+            <video
+              src={convertFileSrc(resolvedVideo)}
+              className="w-full h-full object-contain"
+              autoPlay
+              loop={el.loop !== false}
+              muted={el.muted !== false}
+              playsInline
+            />
+          </div>
+        );
+      }
+      case "shape": {
+        return (
+          <div key={el.id} style={{ ...elStyle, backgroundColor: el.color ?? "#ffffff" }} />
+        );
+      }
+      default: {
+        // Exhaustiveness check — TS errors if a new kind is added without a
+        // branch above. We still render nothing for an unknown kind so a
+        // future renderer doesn't crash the projection window.
+        const _exhaustive: never = el;
+        void _exhaustive;
+        return null;
+      }
+    }
+  }), [elements, hiddenElementIds, scale, appDataDir]);
+
   // Modern Elements Rendering — also handles empty-elements slides with bg video
-  if (elements) {
+  if (elements && elements.length > 0) {
     const resolvedBgVideo = resolvePath(bgVideo, appDataDir);
     return (
       <div className="w-full h-full relative overflow-hidden" style={bgStyle}>
@@ -97,89 +196,7 @@ export function CustomSlideRenderer({
             playsInline
           />
         )}
-        {elements.map((el) => {
-          if (hiddenElementIds.includes(el.id)) return null;
-
-          const elStyle: React.CSSProperties = {
-            position: "absolute",
-            left: `${el.x}%`,
-            top: `${el.y}%`,
-            width: `${el.w}%`,
-            height: `${el.h}%`,
-            zIndex: el.z_index,
-            opacity: el.opacity ?? 1,
-          };
-
-          if (el.kind === "text") {
-            const vAlign = el.v_align === "middle" ? "center" : el.v_align === "bottom" ? "flex-end" : "flex-start";
-            const isHtml = el.content.includes("<");
-            
-            return (
-              <div key={el.id} style={{ ...elStyle, display: "flex", flexDirection: "column", justifyContent: vAlign }}>
-                {isHtml ? (
-                  <div 
-                    className="tiptap-rendered-content"
-                    style={{
-                      fontFamily: el.font_family ?? "Arial",
-                      fontSize: `${(el.font_size ?? 32) * scale}pt`,
-                      color: el.color ?? "#ffffff",
-                      fontWeight: el.bold ? "bold" : "normal",
-                      fontStyle: el.italic ? "italic" : "normal",
-                      textAlign: (el.align ?? "left") as React.CSSProperties["textAlign"],
-                      textShadow: el.shadow === false ? "none" : `0 2px 8px ${el.shadow_color || "rgba(0,0,0,0.6)"}`,
-                      lineHeight: 1.3,
-                      width: "100%",
-                    }}
-                    dangerouslySetInnerHTML={{ __html: el.content }}
-                  />
-                ) : (
-                  <p style={{
-                    fontFamily: el.font_family ?? "Arial",
-                    fontSize: `${(el.font_size ?? 32) * scale}pt`,
-                    color: el.color ?? "#ffffff",
-                    fontWeight: el.bold ? "bold" : "normal",
-                    fontStyle: el.italic ? "italic" : "normal",
-                    textAlign: (el.align ?? "left") as React.CSSProperties["textAlign"],
-                    textShadow: el.shadow === false ? "none" : `0 2px 8px ${el.shadow_color || "rgba(0,0,0,0.6)"}`,
-                    whiteSpace: "pre-wrap",
-                    lineHeight: 1.3,
-                    margin: 0,
-                    width: "100%",
-                  }}>
-                    {el.content}
-                  </p>
-                )}
-              </div>
-            );
-          } else if (el.kind === "image") {
-            const resolvedImg = resolvePath(el.content, appDataDir);
-            return (
-              <div key={el.id} style={elStyle}>
-                <img src={convertFileSrc(resolvedImg)} className="w-full h-full object-contain" alt="" />
-              </div>
-            );
-          } else if (el.kind === "video") {
-            const resolvedVideo = resolvePath(el.content, appDataDir);
-            return (
-              <div key={el.id} style={elStyle}>
-                <video
-                  src={convertFileSrc(resolvedVideo)}
-                  className="w-full h-full object-contain"
-                  autoPlay
-                  loop={el.loop !== false}
-                  muted={el.muted !== false}
-                  playsInline
-                />
-              </div>
-            );
-          } else if (el.kind === "shape") {
-            // Basic support for shapes (e.g., color blocks)
-            return (
-              <div key={el.id} style={{ ...elStyle, backgroundColor: el.color ?? "#ffffff" }} />
-            );
-          }
-          return null;
-        })}
+        {renderedElements}
       </div>
     );
   }
