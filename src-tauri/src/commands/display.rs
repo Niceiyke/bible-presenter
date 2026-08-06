@@ -85,7 +85,7 @@ pub async fn update_timer(app: AppHandle, state: State<'_, AppState>, started_at
         t.started_at = started_at;
         let item = live.clone();
         drop(live);
-        let update = LiveItemUpdate { detected_item: Some(item) };
+        let update = LiveItemUpdate { detected_item: item };
         emit_checked(&app, "live-item-update", &update);
     }
     Ok(())
