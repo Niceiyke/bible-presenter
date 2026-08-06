@@ -20,6 +20,21 @@ html, body, #root {
   line-height: 1.3;
 }
 
+/* The operator app shell sets `user-select: none` (App.tsx root) so that
+   clicking buttons/panels doesn't accidentally select UI chrome. That
+   value INHERITS into the Tiptap/ProseMirror contentEditable, which makes
+   drag-to-highlight text impossible in Chromium — the caret can be placed
+   by clicking but a drag selection is suppressed. ProseMirror leaves text
+   selection to the browser (it only preventDefaults for node clicks), so
+   we must re-enable selection on the editable element itself. Forcing it
+   via a stylesheet rule (rather than the editor's attributes.class) makes
+   the fix apply even to editor instances created during a HMR before this
+   rule existed, and survives Fast Refresh reusing the same instance. */
+.ProseMirror {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 .tiptap-editor-content .tiptap p,
 .tiptap-rendered-content p {
   margin: 0;
