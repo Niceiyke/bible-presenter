@@ -104,7 +104,7 @@ export function InlineTextEditor({ el, canvasScale, onCommit }: InlineTextEditor
         },
       },
       attributes: {
-        class: "tiptap-inline-editor prose prose-invert focus:outline-none max-w-none h-full",
+        class: "tiptap-inline-editor prose prose-invert focus:outline-none max-w-none h-full select-text",
       },
     },
   });
