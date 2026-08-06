@@ -2,19 +2,21 @@ import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { useAppStore } from "../store";
-import { buildCustomSlideItem, ltBuildLyricsPayload } from "../utils";
+import { ltBuildLyricsPayload } from "../utils";
+import { itemNav, type ItemLookup } from "../items/registry";
+import { useKeyboardBinding } from "./keyboardRegistry";
 import type { DisplayItem } from "../types";
 
 interface Props {
   stageItem: (item: DisplayItem) => Promise<void>;
   goLive: () => Promise<void>;
   sendLive: (item: DisplayItem) => Promise<void>;
-  getNextItem: (item: DisplayItem) => DisplayItem | null;
+  clearAll: () => Promise<void>;
   ltFlatLines: { text: string; sectionLabel: string }[];
 }
 
 export function useKeyboardShortcuts(props: Props): void {
-  const { stageItem, goLive, sendLive, getNextItem, ltFlatLines } = props;
+  const { stageItem, goLive, sendLive, clearAll, ltFlatLines } = props;
 
   const {
     label, stagedItem, liveItem, studioSlides, nextVerse,
@@ -25,20 +27,24 @@ export function useKeyboardShortcuts(props: Props): void {
     showShortcuts, setShowShortcuts,
     outputVisible, setOutputVisible,
     songs, scheduleEntries, activeScheduleIdx, setActiveScheduleIdx,
+    setBackendError,
   } = useAppStore();
 
-  useEffect(() => {
-    const handleKD = (e: KeyboardEvent) => {
-      if (label && label !== "main") return;
-      if (document.activeElement?.tagName === "INPUT" || document.activeElement?.tagName === "TEXTAREA") {
-        if (e.key === "Escape") invoke("clear_live");
-        return;
-      }
+  useKeyboardBinding(
+    "operator-default",
+    0,
+    () => {
+      if (label && label !== "main") return false;
+      const tgt = document.activeElement;
+      if (tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA")) return false;
+      return true;
+    },
+    (e) => {
       switch (e.key) {
         case "?": setShowShortcuts((v: boolean) => !v); break;
         case "Escape":
           if (showShortcuts) { setShowShortcuts(false); return; }
-          invoke("clear_live");
+          invoke("clear_live").catch((err: any) => setBackendError(`Clear failed: ${err?.message ?? err}`));
           break;
         case "Enter": if (stagedItem) goLive(); break;
         case "o": if (e.ctrlKey) { invoke("toggle_output_window"); setOutputVisible((v: boolean) => !v); } break;
@@ -54,61 +60,18 @@ export function useKeyboardShortcuts(props: Props): void {
         case "F8": setActiveTab("media"); useAppStore.getState().setMediaFilter("camera"); break;
         case "F9": setActiveTab("settings"); break;
         case "n": if (nextVerse) { const it: DisplayItem = { type: "Verse", data: nextVerse }; if (e.ctrlKey) sendLive(it); else stageItem(it); } break;
-        case "ArrowRight":
-          if (liveItem?.type === "CustomSlide") {
-            const slides = studioSlides[liveItem.data.presentation_id];
-            if (slides && liveItem.data.slide_index < slides.length - 1) {
-              const ni = liveItem.data.slide_index + 1;
-              sendLive(buildCustomSlideItem({ id: liveItem.data.presentation_id, name: liveItem.data.presentation_name, slide_count: slides.length }, slides, ni));
-            }
-          }
-          else if (liveItem?.type === "Song") {
-            const next = getNextItem(liveItem);
-            if (next) sendLive(next);
-          }
-          else if (liveItem?.type === "Verse") {
-            const next = getNextItem(liveItem);
-            if (next) sendLive(next);
-          }
+        case "ArrowRight": {
+          const lookup: ItemLookup = { studioSlides, songs, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold };
+          const nav = liveItem ? itemNav(liveItem, lookup) : null;
+          if (nav?.next) sendLive(nav.next);
           break;
-        case "ArrowLeft":
-          if (liveItem?.type === "CustomSlide") {
-            const slides = studioSlides[liveItem.data.presentation_id];
-            if (slides && liveItem.data.slide_index > 0) {
-              const ni = liveItem.data.slide_index - 1;
-              sendLive(buildCustomSlideItem({ id: liveItem.data.presentation_id, name: liveItem.data.presentation_name, slide_count: slides.length }, slides, ni));
-            }
-          }
-          else if (liveItem?.type === "Song") {
-            if (liveItem.data.slide_index > 0) {
-              const song = songs.find(s => s.id === liveItem.data.song_id);
-              if (song) {
-                const flat: { label: string; lines: string[] }[] = [];
-                if (song.arrangement && song.arrangement.length > 0) {
-                  for (const lbl of song.arrangement) {
-                    const sec = song.sections.find((s) => s.label === lbl);
-                    if (sec) flat.push(sec);
-                  }
-                } else {
-                  flat.push(...song.sections);
-                }
-                const prevIdx = liveItem.data.slide_index - 1;
-                const prev = flat[prevIdx];
-                if (prev) {
-                  sendLive({
-                    type: "Song",
-                    data: {
-                      ...liveItem.data,
-                      section_label: prev.label,
-                      lines: prev.lines,
-                      slide_index: prevIdx
-                    }
-                  });
-                }
-              }
-            }
-          }
+        }
+        case "ArrowLeft": {
+          const lookup: ItemLookup = { studioSlides, songs, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold };
+          const nav = liveItem ? itemNav(liveItem, lookup) : null;
+          if (nav?.prev) sendLive(nav.prev);
           break;
+        }
         case " ":
           if (e.ctrlKey) {
             e.preventDefault();
@@ -143,7 +106,8 @@ export function useKeyboardShortcuts(props: Props): void {
         case "r": emit("media-control", { action: "video-restart" }); break;
         case "m": emit("media-control", { action: "video-mute-toggle" }); break;
         case "g": if (e.ctrlKey) { e.preventDefault(); if (stagedItem) goLive(); } break;
-        case "l": if (e.ctrlKey) { e.preventDefault(); invoke("clear_live"); } break;
+        case "l": if (e.ctrlKey) { e.preventDefault(); invoke("clear_live").catch((err: any) => setBackendError(`Clear failed: ${err?.message ?? err}`)); } break;
+        case "x": if (e.ctrlKey && e.shiftKey) { e.preventDefault(); clearAll(); } break;
         case "s": if (e.ctrlKey) { e.preventDefault(); setActiveTab("settings"); } break;
         case "ArrowDown": {
           e.preventDefault();
@@ -164,48 +128,19 @@ export function useKeyboardShortcuts(props: Props): void {
           break;
         }
         case "Home": {
-          e.preventDefault();
-          if (liveItem?.type === "CustomSlide") {
-            const slides = studioSlides[liveItem.data.presentation_id];
-            if (slides && slides.length > 0) {
-              sendLive(buildCustomSlideItem({ id: liveItem.data.presentation_id, name: liveItem.data.presentation_name, slide_count: slides.length }, slides, 0));
-            }
-          } else if (liveItem?.type === "Song") {
-            const song = songs.find(s => s.id === liveItem.data.song_id);
-            if (song) {
-              const flat = song.arrangement && song.arrangement.length > 0
-                ? song.arrangement.map(lbl => song.sections.find(s => s.label === lbl)).filter(Boolean) as { label: string; lines: string[] }[]
-                : song.sections;
-              if (flat.length > 0) sendLive({ type: "Song", data: { ...liveItem.data, section_label: flat[0].label, lines: flat[0].lines, slide_index: 0 } });
-            }
-          }
+          const lookup: ItemLookup = { studioSlides, songs, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold };
+          const nav = liveItem ? itemNav(liveItem, lookup) : null;
+          if (nav?.first) { e.preventDefault(); sendLive(nav.first); }
           break;
         }
         case "End": {
-          e.preventDefault();
-          if (liveItem?.type === "CustomSlide") {
-            const slides = studioSlides[liveItem.data.presentation_id];
-            if (slides && slides.length > 0) {
-              const last = slides.length - 1;
-              sendLive(buildCustomSlideItem({ id: liveItem.data.presentation_id, name: liveItem.data.presentation_name, slide_count: slides.length }, slides, last));
-            }
-          } else if (liveItem?.type === "Song") {
-            const song = songs.find(s => s.id === liveItem.data.song_id);
-            if (song) {
-              const flat = song.arrangement && song.arrangement.length > 0
-                ? song.arrangement.map(lbl => song.sections.find(s => s.label === lbl)).filter(Boolean) as { label: string; lines: string[] }[]
-                : song.sections;
-              if (flat.length > 0) {
-                const last = flat.length - 1;
-                sendLive({ type: "Song", data: { ...liveItem.data, section_label: flat[last].label, lines: flat[last].lines, slide_index: last } });
-              }
-            }
-          }
+          const lookup: ItemLookup = { studioSlides, songs, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold };
+          const nav = liveItem ? itemNav(liveItem, lookup) : null;
+          if (nav?.last) { e.preventDefault(); sendLive(nav.last); }
           break;
         }
       }
-    };
-    window.addEventListener("keydown", handleKD);
-    return () => window.removeEventListener("keydown", handleKD);
-  }, [label, stagedItem, goLive, liveItem, studioSlides, nextVerse, ltVisible, ltFlatLines, ltLineIndex, ltTemplate, settings, bottomDeckOpen, setSettings, setIsBlackout, setActiveTab, setBottomDeckOpen, sendLive, stageItem, setLtVisible, ltLinesPerDisplay, ltMode, setLtLineIndex, showShortcuts, setShowShortcuts, outputVisible, setOutputVisible, songs, getNextItem, scheduleEntries, activeScheduleIdx, setActiveScheduleIdx]);
+    },
+  );
 }
+

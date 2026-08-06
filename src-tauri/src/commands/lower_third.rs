@@ -1,6 +1,7 @@
 use crate::state::AppState;
 use crate::store;
-use tauri::{AppHandle, Emitter, State};
+use crate::events::emit_checked;
+use tauri::{AppHandle, State};
 
 #[tauri::command]
 pub async fn show_lower_third(
@@ -11,14 +12,14 @@ pub async fn show_lower_third(
 ) -> Result<(), String> {
     let payload = serde_json::json!({ "data": data, "template": template });
     *state.presentation.lower_third.lock() = Some(payload.clone());
-    let _ = app.emit("lower-third-update", Some(payload.clone()));
+    emit_checked(&app, "lower-third-update", &Some(payload));
     Ok(())
 }
 
 #[tauri::command]
 pub async fn hide_lower_third(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     *state.presentation.lower_third.lock() = None;
-    let _ = app.emit("lower-third-update", Option::<serde_json::Value>::None);
+    emit_checked(&app, "lower-third-update", &Option::<serde_json::Value>::None);
     Ok(())
 }
 
@@ -79,6 +80,6 @@ pub async fn show_lt_preset(
 
     let payload = serde_json::json!({ "data": preset.data, "template": tpl });
     *state.presentation.lower_third.lock() = Some(payload.clone());
-    let _ = app.emit("lower-third-update", Some(payload.clone()));
+    emit_checked(&app, "lower-third-update", &Some(payload));
     Ok(())
 }

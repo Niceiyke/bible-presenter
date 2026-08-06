@@ -1,6 +1,7 @@
+use crate::state::AppState;
 use crate::store;
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
 pub async fn get_app_data_dir(app: AppHandle) -> Result<String, String> {
@@ -40,4 +41,16 @@ pub async fn write_text_file(path: String, content: String) -> Result<(), String
 #[tauri::command]
 pub async fn read_text_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+/// Persist an arbitrary JSON blob (operator workspace: recents, schedule
+/// undo/redo stacks) under a named key in the data DB.
+#[tauri::command]
+pub async fn save_workspace(state: State<'_, AppState>, key: String, value: serde_json::Value) -> Result<(), String> {
+    state.media_schedule.save_workspace_blob(&key, &value).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn load_workspace(state: State<'_, AppState>, key: String) -> Result<Option<serde_json::Value>, String> {
+    state.media_schedule.load_workspace_blob(&key).map_err(|e| e.to_string())
 }

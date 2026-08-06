@@ -4,7 +4,8 @@ import { Settings, Edit2, Trash2, Repeat, Zap, GripVertical, Undo2, Redo2 } from
 import { Reorder } from "framer-motion";
 import { useAppStore } from "../store";
 import { stableId } from "../utils";
-import type { DisplayItem, MediaItem, Schedule } from "../types";
+import { ScheduleTile } from "../items/registry";
+import type { DisplayItem, Schedule } from "../types";
 
 interface ScheduleTabProps {
   onSendItem: (item: DisplayItem, idx: number) => void;
@@ -248,22 +249,7 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
                   {idx + 1}
                 </div>
                 <div className="flex-1 min-w-0" onClick={() => stageItem(entry.item)}>
-                  {entry.item.type === "Verse" ? (
-                    <>
-                      <p className="text-amber-500 text-[10px] font-bold uppercase truncate">{entry.item.data.book} {entry.item.data.chapter}:{entry.item.data.verse}</p>
-                      <p className="text-slate-400 text-[10px] truncate">{entry.item.data.text}</p>
-                    </>
-                  ) : entry.item.type === "CustomSlide" ? (
-                    <p className="text-purple-400 text-[10px] font-bold uppercase truncate">
-                      STUDIO: {entry.item.data.presentation_name} — Slide {entry.item.data.slide_index + 1}
-                    </p>
-                  ) : entry.item.type === "Timer" ? (
-                    <p className="text-cyan-400 text-[10px] font-bold uppercase truncate">TIMER: {entry.item.data.timer_type}{entry.item.data.label ? ` · ${entry.item.data.label}` : ""}</p>
-                  ) : entry.item.type === "Song" ? (
-                    <p className="text-pink-400 text-[10px] font-bold uppercase truncate">SONG: {entry.item.data.title} ({entry.item.data.section_label})</p>
-                  ) : (
-                    <p className="text-blue-400 text-[10px] font-bold uppercase truncate">{(entry.item.data as MediaItem).media_type}: {(entry.item.data as MediaItem).name}</p>
-                  )}
+                  <ScheduleTile item={entry.item} />
                 </div>
                 <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all shrink-0">
                   <button onClick={() => sendAndMaybeRemove(entry.item, idx, entry.id)} className="p-1 bg-amber-500 hover:bg-amber-400 text-black rounded text-[10px] font-bold">▶</button>

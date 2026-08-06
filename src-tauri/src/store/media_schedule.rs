@@ -274,6 +274,15 @@ pub struct PresentationSettings {
     #[serde(default = "default_highlight_color")]
     pub highlight_color: String,
     pub custom_theme_colors: Option<ThemeColors>,
+    /// When true, sending an item live automatically hides the pre-service
+    /// background logo. Exposed as a setting so the operator can keep the
+    /// logo on during slides if desired. Defaults to true (legacy behaviour).
+    #[serde(default = "default_auto_clear_background_logo")]
+    pub auto_clear_background_logo: bool,
+    /// When true, the stage monitor renders with the active theme instead of
+    /// the hardcoded slate palette. Defaults to false (legacy behaviour).
+    #[serde(default)]
+    pub stage_uses_theme: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -289,6 +298,7 @@ fn default_verse_split_threshold() -> usize { 200 }
 fn default_fit_mode() -> String { "contain".to_string() }
 fn default_highlight_divine_words() -> bool { false }
 fn default_highlight_color() -> String { "#ef4444".to_string() }
+fn default_auto_clear_background_logo() -> bool { true }
 fn default_version_font() -> String { "Arial, sans-serif".to_string() }
 fn default_version_size() -> f64 { 24.0 }
 fn default_font_size() -> f64 { 72.0 }
@@ -316,6 +326,8 @@ impl Default for PresentationSettings {
             verse_split_threshold: default_verse_split_threshold(), preferred_monitor: None,
             highlight_divine_words: default_highlight_divine_words(),
             highlight_color: default_highlight_color(), custom_theme_colors: None,
+            auto_clear_background_logo: default_auto_clear_background_logo(),
+            stage_uses_theme: false,
         }
     }
 }
@@ -382,6 +394,24 @@ pub struct LtPreset {
     pub label: String,
     pub template_id: Option<String>,
     pub data: LowerThirdData,
+}
+
+// ---------------------------------------------------------------------------
+// Scenes (recallable bundles of settings + props + lower-third)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Scene {
+    pub id: String,
+    pub name: String,
+    pub settings: PresentationSettings,
+    pub props: Vec<PropItem>,
+    /// Stored lower-third content (Nameplate/Lyrics/FreeText). The template
+    /// is stored separately as a raw JSON value to avoid a hard dependency on
+    /// the frontend's template schema.
+    pub lower_third_data: Option<LowerThirdData>,
+    pub lower_third_template: Option<serde_json::Value>,
+    pub created_at: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -485,6 +515,20 @@ pub struct MediaScheduleStore {
     media_dir: PathBuf,
     thumbnails_dir: PathBuf,
     data_db: Arc<DataDb>,
+}
+
+// Derive Clone manually since the struct stores an Arc (cheap clone) plus
+// PathBufs; the command layer clones it into `spawn_blocking` tasks for
+// streaming imports + offloaded thumbnail generation.
+impl Clone for MediaScheduleStore {
+    fn clone(&self) -> Self {
+        Self {
+            app_data_dir: self.app_data_dir.clone(),
+            media_dir: self.media_dir.clone(),
+            thumbnails_dir: self.thumbnails_dir.clone(),
+            data_db: self.data_db.clone(),
+        }
+    }
 }
 
 impl MediaScheduleStore {
@@ -648,11 +692,26 @@ impl MediaScheduleStore {
         for (id, filename, path, media_type, fit_mode, description, tags, category) in rows {
             let media_type = match media_type.as_str() { "Image" => MediaItemType::Image, _ => MediaItemType::Video };
             let tags: Vec<String> = serde_json::from_str(&tags).unwrap_or_default();
+            // Resolve stored path: if it's already absolute, use as-is (legacy
+            // records); otherwise treat it as relative to the media dir.
+            let resolved_path = if PathBuf::from(&path).is_absolute() {
+                path
+            } else {
+                self.media_dir.join(&path).to_string_lossy().to_string()
+            };
+            // Thumbnail generation (image decode + Lanczos resize) is CPU-
+            // heavy; offload per-item to a blocking thread so a large library
+            // scan doesn't stall the async runtime.
             let thumbnail_path = if matches!(media_type, MediaItemType::Image) {
-                Self::get_or_create_thumbnail_static(&self.thumbnails_dir, &path, &id)
+                let thumb_dir = self.thumbnails_dir.clone();
+                let rp = resolved_path.clone();
+                let idc = id.clone();
+                std::thread::spawn(move || {
+                    Self::get_or_create_thumbnail_static(&thumb_dir, &rp, &idc)
+                }).join().unwrap_or(None)
             } else { None };
             items.push(MediaItem {
-                id, name: filename, path, media_type, thumbnail_path, fit_mode,
+                id, name: filename, path: resolved_path, media_type, thumbnail_path, fit_mode,
                 tags, description: if description.is_empty() { None } else { Some(description) },
                 category: if category.is_empty() { None } else { Some(category) },
             });
@@ -714,17 +773,108 @@ impl MediaScheduleStore {
         let id = Uuid::new_v4().to_string();
         let mt_str = match media_type { MediaItemType::Image => "Image", MediaItemType::Video => "Video" };
         let created_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        self.data_db.insert_media(&id, &dest_name, &dest_path.to_string_lossy(), mt_str, &created_at)
+        // Store the path RELATIVE to the media dir so the DB is portable across
+        // machines (different AppData roots). `list_media` resolves it back to
+        // an absolute path for the frontend's `convertFileSrc`.
+        let stored_path = dest_name.clone();
+        self.data_db.insert_media(&id, &dest_name, &stored_path, mt_str, &created_at)
             .map_err(|e| anyhow::anyhow!(e))?;
 
-        Ok(MediaItem { id, name: dest_name, path: dest_path.to_string_lossy().to_string(), media_type, thumbnail_path: None, fit_mode: default_fit_mode(), tags: vec![], description: None, category: None })
+        Ok(MediaItem {
+            id,
+            name: dest_name,
+            path: self.media_dir.join(&stored_path).to_string_lossy().to_string(),
+            media_type,
+            thumbnail_path: None,
+            fit_mode: default_fit_mode(),
+            tags: vec![],
+            description: None,
+            category: None,
+        })
+    }
+
+    /// Streaming variant: copies the source in 1 MiB chunks, invoking
+    /// `on_progress(fraction 0.0..1.0)` after each chunk so the command layer
+    /// can emit a progress event. Keeps large video imports from freezing the
+    /// async runtime thread.
+    pub fn add_media_streaming<F: FnMut(f64)>(
+        &self,
+        source_path: PathBuf,
+        mut on_progress: F,
+    ) -> Result<MediaItem> {
+        let original_name = source_path.file_name().ok_or_else(|| anyhow::anyhow!("Invalid source path"))?.to_string_lossy().to_string();
+        let ext_str = source_path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+        let media_type = classify_extension(&ext_str).ok_or_else(|| anyhow::anyhow!("Unsupported media type: .{}", ext_str))?;
+
+        let stem = source_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        let dot_ext = source_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+
+        let mut dest_path = self.media_dir.join(&original_name);
+        let mut dest_name = original_name.clone();
+        let mut counter = 2u32;
+
+        let mut dest_file = loop {
+            match fs::OpenOptions::new().write(true).create_new(true).open(&dest_path) {
+                Ok(f) => break f,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    dest_name = format!("{}_{}{}", stem, counter, dot_ext); dest_path = self.media_dir.join(&dest_name); counter += 1;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        };
+
+        let mut source_file = fs::File::open(&source_path)?;
+        let total = source_file.metadata().map(|m| m.len()).unwrap_or(0);
+        let mut copied: u64 = 0;
+        let mut buf = vec![0u8; 1024 * 1024];
+        loop {
+            let n = match std::io::Read::read(&mut source_file, &mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) => {
+                    let _ = fs::remove_file(&dest_path);
+                    return Err(e.into());
+                }
+            };
+            if let Err(e) = std::io::Write::write_all(&mut dest_file, &buf[..n]) {
+                let _ = fs::remove_file(&dest_path);
+                return Err(e.into());
+            }
+            copied += n as u64;
+            let frac = if total > 0 { (copied as f64) / (total as f64) } else { 0.0 };
+            on_progress(frac.min(1.0));
+        }
+
+        let id = Uuid::new_v4().to_string();
+        let mt_str = match media_type { MediaItemType::Image => "Image", MediaItemType::Video => "Video" };
+        let created_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let stored_path = dest_name.clone();
+        self.data_db.insert_media(&id, &dest_name, &stored_path, mt_str, &created_at)
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        Ok(MediaItem {
+            id,
+            name: dest_name,
+            path: self.media_dir.join(&stored_path).to_string_lossy().to_string(),
+            media_type,
+            thumbnail_path: None,
+            fit_mode: default_fit_mode(),
+            tags: vec![],
+            description: None,
+            category: None,
+        })
     }
 
     pub fn delete_media(&self, id: String) -> Result<()> {
         if let Some(path) = self.data_db.get_media_path(&id).map_err(|e| anyhow::anyhow!(e))? {
-            let p = PathBuf::from(&path);
+            // Resolve relative stored paths to the media dir before deleting.
+            let resolved = if PathBuf::from(&path).is_absolute() {
+                PathBuf::from(&path)
+            } else {
+                self.media_dir.join(&path)
+            };
             let thumb = self.thumbnails_dir.join(format!("{}.jpg", id));
-            let _ = fs::remove_file(&p);
+            let _ = fs::remove_file(&resolved);
             let _ = fs::remove_file(&thumb);
         }
         self.data_db.delete_media(&id).map_err(|e| anyhow::anyhow!(e))
@@ -733,8 +883,13 @@ impl MediaScheduleStore {
     pub fn bulk_delete_media(&self, ids: Vec<String>) -> Result<()> {
         for id in &ids {
             if let Ok(Some(path)) = self.data_db.get_media_path(id) {
+                let resolved = if PathBuf::from(&path).is_absolute() {
+                    PathBuf::from(&path)
+                } else {
+                    self.media_dir.join(&path)
+                };
                 let thumb = self.thumbnails_dir.join(format!("{}.jpg", id));
-                let _ = fs::remove_file(PathBuf::from(&path));
+                let _ = fs::remove_file(&resolved);
                 let _ = fs::remove_file(&thumb);
             }
         }
@@ -788,15 +943,40 @@ impl MediaScheduleStore {
         let rows = self.data_db.hash_list("services").map_err(|e| anyhow::anyhow!(e))?;
         let mut out = Vec::new();
         for (_, data) in rows {
-            if let Ok(sched) = serde_json::from_str::<Schedule>(&data) {
-                out.push(ServiceMeta { id: sched.id.clone(), name: sched.name.clone(), item_count: sched.items.len(), updated_at: 0 });
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
+                let id = val.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let name = val.get("name").and_then(|v| v.as_str()).unwrap_or("Untitled").to_string();
+                let item_count = val.get("items").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+                // Use a stored updated_at if present, otherwise fall back to 0
+                // rather than overwriting with now() on every read.
+                let updated_at = val.get("updated_at").and_then(|v| v.as_u64()).unwrap_or(0);
+                out.push(ServiceMeta { id, name, item_count, updated_at });
             }
         }
+        out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         Ok(out)
     }
 
     pub fn save_service(&self, schedule: &Schedule) -> Result<()> {
-        let json = serde_json::to_string_pretty(schedule)?;
+        // Wrap with an updated_at timestamp so list_services can show a real
+        // last-edit time instead of the read time.
+        #[derive(Serialize)]
+        struct StampedSchedule<'a> {
+            id: &'a str,
+            name: &'a str,
+            items: &'a Vec<ScheduleEntry>,
+            updated_at: u64,
+        }
+        let stamped = StampedSchedule {
+            id: &schedule.id,
+            name: &schedule.name,
+            items: &schedule.items,
+            updated_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        };
+        let json = serde_json::to_string_pretty(&stamped)?;
         self.data_db.hash_set("services", &schedule.id, &json).map_err(|e| anyhow::anyhow!(e))
     }
 
@@ -821,10 +1001,10 @@ impl MediaScheduleStore {
                 let name = val.get("name").and_then(|v| v.as_str()).unwrap_or("Untitled");
                 let slide_count = val.get("slides").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0) as u32;
                 let version = val.get("version").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                let updated_at = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
+                // Use a stored updated_at if present; otherwise 0. Previously
+                // this was set to now() on every read, which made the field
+                // meaningless for sorting.
+                let updated_at = val.get("updated_at").and_then(|v| v.as_u64()).unwrap_or(0);
                 items.push(PresentationSummary { id, name: name.to_string(), slide_count, version, updated_at });
             }
         }
@@ -833,7 +1013,25 @@ impl MediaScheduleStore {
     }
 
     pub fn save_studio_presentation(&self, presentation: &CustomPresentation) -> Result<()> {
-        let json = serde_json::to_string_pretty(presentation)?;
+        #[derive(Serialize)]
+        struct StampedPres<'a> {
+            id: &'a str,
+            name: &'a str,
+            slides: &'a Vec<CustomSlide>,
+            version: Option<u32>,
+            updated_at: u64,
+        }
+        let stamped = StampedPres {
+            id: &presentation.id,
+            name: &presentation.name,
+            slides: &presentation.slides,
+            version: presentation.version,
+            updated_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        };
+        let json = serde_json::to_string_pretty(&stamped)?;
         self.data_db.hash_set("presentations", &presentation.id, &json).map_err(|e| anyhow::anyhow!(e))
     }
 
@@ -943,5 +1141,46 @@ impl MediaScheduleStore {
         let json = serde_json::to_string_pretty(&presets)?;
         self.data_db.kv_set("lt_presets", &json).map_err(|e| anyhow::anyhow!(e))?;
         Ok(presets)
+    }
+
+    // ---- Scenes ----
+
+    pub fn list_scenes(&self) -> Result<Vec<Scene>> {
+        let rows = self.data_db.hash_list("scenes").map_err(|e| anyhow::anyhow!(e))?;
+        let mut scenes: Vec<Scene> = rows.iter().filter_map(|(_, data)| serde_json::from_str(data).ok()).collect();
+        scenes.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        Ok(scenes)
+    }
+
+    pub fn save_scene(&self, mut scene: Scene) -> Result<Scene> {
+        if scene.id.is_empty() { scene.id = Uuid::new_v4().to_string(); }
+        if scene.created_at == 0 {
+            scene.created_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+        }
+        let json = serde_json::to_string_pretty(&scene)?;
+        self.data_db.hash_set("scenes", &scene.id, &json).map_err(|e| anyhow::anyhow!(e))?;
+        Ok(scene)
+    }
+
+    pub fn delete_scene(&self, id: &str) -> Result<()> {
+        self.data_db.hash_delete("scenes", id).map_err(|e| anyhow::anyhow!(e))
+    }
+
+    // ---- Operator workspace persistence (recents, schedule undo/redo) ----
+    // Stored as opaque JSON blobs in kv_store so the frontend owns the shape.
+
+    pub fn save_workspace_blob(&self, key: &str, value: &serde_json::Value) -> Result<()> {
+        let json = serde_json::to_string_pretty(value)?;
+        self.data_db.kv_set(key, &json).map_err(|e| anyhow::anyhow!(e))
+    }
+
+    pub fn load_workspace_blob(&self, key: &str) -> Result<Option<serde_json::Value>> {
+        match self.data_db.kv_get(key).map_err(|e| anyhow::anyhow!(e))? {
+            Some(json) => Ok(Some(serde_json::from_str(&json)?)),
+            None => Ok(None),
+        }
     }
 }

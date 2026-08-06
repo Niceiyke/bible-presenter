@@ -40,7 +40,8 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose 
         { key: "Enter", desc: "Go Live with staged item" },
         { key: "Ctrl + G", desc: "Go Live with staged item" },
         { key: "Ctrl + B", desc: "Toggle Blackout (black screen)" },
-        { key: "Ctrl + L", desc: "Clear output (logo screen)" },
+        { key: "Ctrl + L", desc: "Clear live output only" },
+        { key: "Ctrl + Shift + X", desc: "Clear All (live + staged + LT + props)" },
         { key: "Ctrl + O", desc: "Toggle Output Window" },
       ]
     },

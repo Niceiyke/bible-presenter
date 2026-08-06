@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useMemo, useCallback, useState } from "react"
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store";
 import { ltBuildLyricsPayload } from "../utils";
+import { useKeyboardBinding } from "../hooks/keyboardRegistry";
 import type { LowerThirdData, LtPreset, LowerThirdTemplate } from "../types";
 
 interface LowerThirdTabProps {
@@ -325,29 +326,28 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
     if (ltVisible) await ltSendCurrent(next);
   }, [ltFlatLines, ltLinesPerDisplay, ltLineIndex, ltVisible, ltSendCurrent]);
 
-  useEffect(() => {
-    if (activeTab !== "lower-third" || ltMode !== "lyrics") return;
-    const handler = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement).tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if (e.key === " " || e.key === "ArrowRight") { e.preventDefault(); ltAdvance(1); }
-      if (e.key === "ArrowLeft") { e.preventDefault(); ltAdvance(-1); }
-      if (e.key === "h" || e.key === "H") {
-        if (ltVisible) {
-          invoke("hide_lower_third").then(() => setLtVisible(false)).catch(console.error);
-        } else {
-          if (!ltSongId || ltFlatLines.length === 0) return;
-          const payload = ltBuildLyricsPayload(ltFlatLines, ltLineIndex, ltLinesPerDisplay);
-          if (!payload) return;
-          invoke("show_lower_third", { data: payload, template: ltTemplate })
-            .then(() => setLtVisible(true))
-            .catch(console.error);
-        }
+  // ── Lyrics-mode keyboard shortcuts (priority 10 — overrides operator defaults) ──
+  useKeyboardBinding("lt-lyrics", 10, () => {
+    if (activeTab !== "lower-third" || ltMode !== "lyrics") return false;
+    const tag = (document.activeElement as HTMLElement | null)?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return false;
+    return true;
+  }, (e) => {
+    if (e.key === " " || e.key === "ArrowRight") { e.preventDefault(); ltAdvance(1); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); ltAdvance(-1); }
+    else if (e.key === "h" || e.key === "H") {
+      if (ltVisible) {
+        invoke("hide_lower_third").then(() => setLtVisible(false)).catch(console.error);
+      } else {
+        if (!ltSongId || ltFlatLines.length === 0) return;
+        const payload = ltBuildLyricsPayload(ltFlatLines, ltLineIndex, ltLinesPerDisplay);
+        if (!payload) return;
+        invoke("show_lower_third", { data: payload, template: ltTemplate })
+          .then(() => setLtVisible(true))
+          .catch(console.error);
       }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [activeTab, ltMode, ltAdvance, ltVisible, ltSongId, ltFlatLines, ltLineIndex, ltLinesPerDisplay, ltTemplate]);
+    }
+  });
 
   useEffect(() => {
     if (ltAutoRef.current) clearInterval(ltAutoRef.current);

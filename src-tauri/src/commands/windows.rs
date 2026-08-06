@@ -1,6 +1,6 @@
 use crate::state::AppState;
-use crate::events::{MonitorInfo, LiveItemUpdate};
-use tauri::{AppHandle, Emitter, Manager, State};
+use crate::events::{emit_checked, MonitorInfo, LiveItemUpdate};
+use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
 pub async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
@@ -27,25 +27,22 @@ pub async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) ->
             window.show().map_err(|e: tauri::Error| e.to_string())?;
             window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
 
+            // Re-broadcast all current state so a freshly-revealed window can
+            // hydrate even if it missed events while hidden.
             let current_settings = state.presentation.settings.lock().clone();
-            let _ = app.emit("settings-changed", current_settings);
+            emit_checked(&app, "settings-changed", &current_settings);
 
             let live = state.presentation.live_item.lock().clone();
-            if let Some(item) = live {
-                let update = LiveItemUpdate {
-                    detected_item: Some(item),
-                };
-                let _ = app.emit("live-item-update", &update);
-            }
+            emit_checked(&app, "live-item-update", &LiveItemUpdate { detected_item: live });
 
             let lt = state.presentation.lower_third.lock().clone();
-            let _ = app.emit("lower-third-update", lt);
+            emit_checked(&app, "lower-third-update", &lt);
 
             let props = state.presentation.props_layer.lock().clone();
-            let _ = app.emit("props-update", &props);
+            emit_checked(&app, "props-update", &props);
 
             let staged = state.presentation.staged_item.lock().clone();
-            let _ = app.emit("item-staged", staged.as_ref());
+            emit_checked(&app, "item-staged", &staged);
         }
     }
     Ok(())
@@ -61,14 +58,16 @@ pub async fn toggle_stage_window(app: AppHandle, state: State<'_, AppState>) -> 
             window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
 
             let live = state.presentation.live_item.lock().clone();
-            if let Some(item) = live {
-                let update = LiveItemUpdate {
-                    detected_item: Some(item),
-                };
-                let _ = app.emit("live-item-update", &update);
-            }
+            emit_checked(&app, "live-item-update", &LiveItemUpdate { detected_item: live });
             let staged = state.presentation.staged_item.lock().clone();
-            let _ = app.emit("item-staged", staged.as_ref());
+            emit_checked(&app, "item-staged", &staged);
+
+            // Stage monitor also wants settings + lower-third so it can show a
+            // countdown and a "lower-third is on air" indicator.
+            let settings = state.presentation.settings.lock().clone();
+            emit_checked(&app, "settings-changed", &settings);
+            let lt = state.presentation.lower_third.lock().clone();
+            emit_checked(&app, "lower-third-update", &lt);
         }
     }
     Ok(())

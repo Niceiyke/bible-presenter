@@ -11,6 +11,7 @@ interface CockpitProps {
   stageItem: (item: DisplayItem) => Promise<void>;
   goLive: () => Promise<void>;
   sendLive: (item: DisplayItem) => Promise<void>;
+  clearAll: () => Promise<void>;
   persistSchedule: () => Promise<void>;
   updateSettings: (s: PresentationSettings) => Promise<void>;
   cockpitWidth: number;
@@ -22,6 +23,7 @@ export function Cockpit({
   stageItem,
   goLive,
   sendLive,
+  clearAll,
   persistSchedule,
   updateSettings,
   cockpitWidth,
@@ -39,7 +41,18 @@ export function Cockpit({
   return (
     <>
       {/* Drag handle */}
-      <div className="w-1 bg-slate-800 hover:bg-amber-500/40 cursor-col-resize transition-colors shrink-0"
+      <div
+        className="w-1 bg-slate-800 hover:bg-amber-500/40 cursor-col-resize transition-colors shrink-0 focus:outline-none focus:bg-amber-500/60"
+        role="slider"
+        tabIndex={0}
+        aria-label="Cockpit width"
+        aria-valuemin={280}
+        aria-valuemax={480}
+        aria-valuenow={cockpitWidth}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowLeft") { e.preventDefault(); const n = Math.min(480, cockpitWidth + 16); setCockpitWidth(n); localStorage.setItem("pref_cockpitWidth", String(Math.round(n))); }
+          else if (e.key === "ArrowRight") { e.preventDefault(); const n = Math.max(280, cockpitWidth - 16); setCockpitWidth(n); localStorage.setItem("pref_cockpitWidth", String(Math.round(n))); }
+        }}
         onMouseDown={(e) => {
           const startX = e.clientX; const startW = cockpitWidth;
           const move = (em: MouseEvent) => {
@@ -101,7 +114,7 @@ export function Cockpit({
                   <Clock size={9} /> Prev
                 </button>
               )}
-              <button onClick={() => invoke("clear_live")}
+              <button onClick={() => { invoke("clear_live").catch((e: any) => useAppStore.getState().setBackendError(`Clear failed: ${e?.message ?? e}`)); setLiveItem(null); }}
                 className="px-2 py-0.5 bg-red-900/40 hover:bg-red-600 text-red-300 text-[8px] font-black uppercase rounded border border-red-900/50 transition-all">
                 CLEAR
               </button>
@@ -114,7 +127,7 @@ export function Cockpit({
 
         {/* Quick Actions */}
         <div className="px-3 py-2 border-b border-slate-800 grid grid-cols-3 gap-1.5 shrink-0">
-          <button onClick={() => { const nb = !settings.is_blanked; setSettings({ ...settings, is_blanked: nb }); setIsBlackout(nb); invoke("save_settings", { settings: { ...settings, is_blanked: nb } }); }}
+          <button onClick={() => { const nb = !settings.is_blanked; updateSettings({ ...settings, is_blanked: nb }); setIsBlackout(nb); }}
             className={`py-1.5 rounded-md text-[9px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1 ${settings.is_blanked ? "bg-red-600 text-white" : "bg-slate-800 text-slate-500 hover:text-slate-300"}`}>
             <EyeOff size={11} />{settings.is_blanked ? "UNBLK" : "BLKOUT"}
           </button>
@@ -122,7 +135,7 @@ export function Cockpit({
             className={`py-1.5 rounded-md text-[9px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1 ${settings.show_background_logo ? "bg-purple-600 text-white" : "bg-slate-800 text-slate-500 hover:text-slate-300"}`}>
             <Layers size={11} />BG LOGO
           </button>
-          <button onClick={() => { invoke("clear_live").catch(console.error); invoke("hide_lower_third").catch(console.error); setLiveItem(null); setLtVisible(false); }}
+          <button onClick={clearAll}
             className="py-1.5 rounded-md text-[9px] font-black uppercase tracking-wider bg-slate-800 text-slate-500 hover:text-red-400 hover:bg-red-900/20 transition-all flex items-center justify-center gap-1">
             <X size={11} />CLEAR ALL
           </button>

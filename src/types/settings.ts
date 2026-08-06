@@ -57,6 +57,8 @@ export interface PresentationSettings {
   custom_theme_colors?: Partial<ThemeColors>;
   highlight_divine_words?: boolean;
   highlight_color?: string;
+  auto_clear_background_logo?: boolean;
+  stage_uses_theme?: boolean;
 }
 
 export interface MonitorInfo {
@@ -76,6 +78,7 @@ export const DEFAULT_SETTINGS: PresentationSettings = {
   reference_color: "", reference_font_family: "Arial, sans-serif",
   chapter_verse_font_size: undefined, chapter_verse_font_family: undefined, chapter_verse_color: undefined,
   disabled_bible_versions: [], auto_split_verses: true, verse_split_threshold: 200,
+  auto_clear_background_logo: true, stage_uses_theme: false,
 };
 
 export const THEMES: Record<string, { label: string; colors: ThemeColors }> = {

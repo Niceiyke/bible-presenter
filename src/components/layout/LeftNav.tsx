@@ -1,7 +1,7 @@
 import React from "react";
 import {
   BookOpen, CalendarDays, Camera, Image as ImageIcon,
-  Layers, Mic, Monitor, Settings, Zap
+  Layers, Mic, Monitor, Settings, Zap, Sparkles
 } from "lucide-react";
 import { useAppStore } from "../../store";
 
@@ -17,14 +17,21 @@ export function LeftNav() {
         { id: "studio",        icon: Layers,      title: "Studio (F4)" },
         { id: "lt-designer",   icon: Zap,         title: "LT Designer (F5)" },
         { id: "schedule",      icon: CalendarDays,title: "Service" },
+        { id: "scenes",        icon: Sparkles,    title: "Scenes" },
         { id: "props",         icon: Monitor,     title: "Props (F5)" },
       ] as const).map(({ id, icon: Icon, title }) => (
-        <button key={id} onClick={() => setActiveTab(id)} title={title}
+        <button
+          key={id}
+          onClick={() => setActiveTab(id)}
+          title={title}
+          aria-label={title}
+          aria-current={activeTab === id ? "page" : undefined}
           className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all ${
             activeTab === id
               ? "bg-amber-500/10 text-amber-400 border-l-2 border-amber-400"
               : "text-slate-600 hover:text-slate-300 hover:bg-slate-800"
-          }`}>
+          }`}
+        >
           <Icon size={16} />
         </button>
       ))}

@@ -1,6 +1,6 @@
 import { StateCreator } from "zustand";
 import { AppStore } from "../index";
-import { DEFAULT_SETTINGS, PresentationSettings, CustomPresentation, CustomSlide, PresentationSummary, SlideTemplate } from "../../types";
+import { DEFAULT_SETTINGS, PresentationSettings, CustomPresentation, CustomSlide, PresentationSummary, SlideTemplate, Scene } from "../../types";
 
 export interface LogEntry {
   level: string;
@@ -13,8 +13,8 @@ export interface AppSlice {
   setLabel: (v: string) => void;
   settings: PresentationSettings;
   setSettings: (v: PresentationSettings | ((prev: PresentationSettings) => PresentationSettings)) => void;
-  activeTab: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "lt-designer" | "camera";
-  setActiveTab: (v: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "lt-designer" | "camera") => void;
+  activeTab: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "lt-designer" | "camera" | "scenes";
+  setActiveTab: (v: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "lt-designer" | "camera" | "scenes") => void;
   toast: string | null;
   setToast: (v: string | null) => void;
   sidebarWidth: number;
@@ -70,6 +70,10 @@ export interface AppSlice {
   setStudioSlides: (v: Record<string, CustomSlide[]> | ((prev: Record<string, CustomSlide[]>) => Record<string, CustomSlide[]>)) => void;
   templates: SlideTemplate[];
   setTemplates: (v: SlideTemplate[] | ((prev: SlideTemplate[]) => SlideTemplate[])) => void;
+  scenes: Scene[];
+  setScenes: (v: Scene[] | ((prev: Scene[]) => Scene[])) => void;
+  backendError: string | null;
+  setBackendError: (v: string | null) => void;
 }
 
 export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) => ({
@@ -134,4 +138,8 @@ export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) =>
   setStudioSlides: (v) => set((s) => ({ studioSlides: typeof v === "function" ? v(s.studioSlides) : v })),
   templates: [],
   setTemplates: (v) => set((s) => ({ templates: typeof v === "function" ? v(s.templates) : v })),
+  scenes: [],
+  setScenes: (v) => set((s) => ({ scenes: typeof v === "function" ? v(s.scenes) : v })),
+  backendError: null,
+  setBackendError: (v) => set({ backendError: v }),
 });

@@ -18,6 +18,20 @@ import {
   PropsRenderer,
 } from "../components/shared/Renderers";
 import { AnimatePresence, motion } from "framer-motion";
+import { ErrorBoundary } from "../components/ErrorBoundary";
+import { signalOperatorWarning } from "../hooks/useAppInitialization";
+
+function ProjectionErrorFallback() {
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black text-center px-8">
+      <div className="w-14 h-14 rounded-full bg-red-500/20 flex items-center justify-center mb-4">
+        <span className="text-red-400 text-3xl font-black">!</span>
+      </div>
+      <p className="text-red-300 text-2xl font-bold mb-1">Projection Error</p>
+      <p className="text-slate-400 text-sm">See operator console. Output will recover on the next slide.</p>
+    </div>
+  );
+}
 
 export function OutputWindow() {
   const [liveItem, setLiveItem] = useState<DisplayItem | null>(null);
@@ -173,11 +187,11 @@ export function OutputWindow() {
     });
 
     Promise.all([
-      invoke("get_current_item").then((v: any) => { if (v) setLiveItem(v); }).catch(() => {}),
-      invoke("get_current_lower_third").then((lt: any) => { if (lt) setLowerThird(lt); }).catch(() => {}),
-      invoke("get_settings").then((s: any) => { if (s) setSettings(s); }).catch(() => {}),
-      invoke<string>("get_app_data_dir").then(setAppDataDir).catch(() => {}),
-      invoke<PropItem[]>("get_props").then(setPropItems).catch(() => {}),
+      invoke("get_current_item").then((v: any) => { if (v) setLiveItem(v); }).catch((e: any) => signalOperatorWarning(`Output hydrate (live): ${e?.message ?? e}`)),
+      invoke("get_current_lower_third").then((lt: any) => { if (lt) setLowerThird(lt); }).catch((e: any) => signalOperatorWarning(`Output hydrate (LT): ${e?.message ?? e}`)),
+      invoke("get_settings").then((s: any) => { if (s) setSettings(s); }).catch((e: any) => signalOperatorWarning(`Output hydrate (settings): ${e?.message ?? e}`)),
+      invoke<string>("get_app_data_dir").then(setAppDataDir).catch((e: any) => signalOperatorWarning(`Output hydrate (appdir): ${e?.message ?? e}`)),
+      invoke<PropItem[]>("get_props").then(setPropItems).catch((e: any) => signalOperatorWarning(`Output hydrate (props): ${e?.message ?? e}`)),
     ]);
 
     return () => {
@@ -443,6 +457,7 @@ export function OutputWindow() {
               settings.slide_transition_duration ?? 0.4
             )}
           >
+            <ErrorBoundary fallback={<ProjectionErrorFallback />}>
             {liveItem.type === "Verse" ? (
               <div ref={verseContainerRef} className="absolute inset-0 flex flex-col items-center justify-center p-16 text-center">
                 <motion.div
@@ -535,6 +550,7 @@ export function OutputWindow() {
                 />
               ) : null
             ) : null}
+            </ErrorBoundary>
           </motion.div>
         ) : (
           <motion.div

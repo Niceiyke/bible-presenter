@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppStore } from "../store";
 import { stableId } from "../utils";
@@ -10,6 +10,12 @@ import {
   DisplayItem
 } from "../types";
 
+/** Helper for windows that can't reach the operator store directly
+ *  (e.g. the output window) to surface hydration/emit failures. */
+export function signalOperatorWarning(message: string) {
+  emit("operator-warning", { level: "warn", message, timestamp: Date.now() }).catch(() => {});
+}
+
 export function useAppInitialization() {
   const {
     setLabel, setMedia, setStudioList, setStudioSlides,
@@ -18,7 +24,8 @@ export function useAppInitialization() {
     setPropItems, setServices, setLiveItem,
     setLtVisible, setCurrentLowerThird,
     setStagedItem, setStartupIssues, setIsInitialized,
-    setAppDataDir,
+    setAppDataDir, setRecentItems,
+    setBackendError, addLog, setScenes,
   } = useAppStore();
 
   useEffect(() => {
@@ -87,6 +94,22 @@ export function useAppInitialization() {
 
       invoke("get_current_item").then((v: any) => { if (v) setLiveItem(v); }).catch(() => {});
 
+      // P1.5 — Restore persisted recents and schedule undo/redo stacks.
+      invoke<any>("load_workspace", { key: "recents" }).then((r) => {
+        if (r) setRecentItems(r);
+      }).catch(() => {});
+      invoke<any>("load_workspace", { key: "schedule_history" }).then((h) => {
+        if (h && Array.isArray(h.past) && Array.isArray(h.future)) {
+          useAppStore.setState({
+            pastScheduleStates: h.past,
+            futureScheduleStates: h.future,
+          });
+        }
+      }).catch(() => {});
+
+      // P1.6 — Load scenes.
+      invoke<any[]>("list_scenes").then(setScenes).catch(() => {});
+
       setIsInitialized(true);
     };
 
@@ -127,7 +150,16 @@ export function useAppInitialization() {
       setStudioSlides({ ...useAppStore.getState().studioSlides, [id]: slides });
     });
     const unlistenLog = listen<any>("system-log", (ev) => {
-      useAppStore.getState().addLog(ev.payload);
+      const entry = ev.payload;
+      addLog(entry);
+      if (entry?.level === "warn" || entry?.level === "error") {
+        setBackendError(entry.message ?? "Backend warning");
+      }
+    });
+    // P0.3 — Warnings signalled from other windows (output/stage).
+    const unlistenOpWarn = listen<{ message: string; level?: string }>("operator-warning", (ev) => {
+      addLog({ level: ev.payload.level ?? "warn", message: ev.payload.message, timestamp: Date.now() });
+      setBackendError(ev.payload.message);
     });
 
     return () => {
@@ -140,6 +172,7 @@ export function useAppInitialization() {
       unlistenStudioSync.then(f => f());
       unlistenStudioSlidesSync.then(f => f());
       unlistenLog.then(f => f());
+      unlistenOpWarn.then(f => f());
     };
   }, []);
 

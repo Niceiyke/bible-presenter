@@ -1,6 +1,27 @@
 use crate::state::AppState;
 use crate::store;
-use tauri::{AppHandle, Emitter, State};
+use crate::events::emit_checked;
+use tauri::{AppHandle, State};
+
+/// Reject prop paths that fall outside the app data directory (or are not
+/// already-relative to it). This keeps the output window from rendering
+/// arbitrary files on disk and makes prop libraries portable across machines.
+fn validate_prop_path(path: &str, app_data_dir: &std::path::Path) -> Result<(), String> {
+    // Relative paths (stored by relativizePath on the frontend) are always OK.
+    let is_absolute = path.starts_with('/')
+        || (path.len() >= 2 && path.as_bytes()[1] == b'\\')
+        || (path.len() >= 2 && path.as_bytes()[1] == b':');
+    if !is_absolute {
+        return Ok(());
+    }
+    let canonical = std::fs::canonicalize(path).map_err(|e| format!("Prop path not accessible: {}", e))?;
+    let base = std::fs::canonicalize(app_data_dir).unwrap_or_else(|_| app_data_dir.to_path_buf());
+    if canonical.starts_with(&base) {
+        Ok(())
+    } else {
+        Err(format!("Prop path must be inside the app data folder: {}", path))
+    }
+}
 
 #[tauri::command]
 pub async fn get_props(state: State<'_, AppState>) -> Result<Vec<store::PropItem>, String> {
@@ -18,8 +39,16 @@ pub async fn get_props(state: State<'_, AppState>) -> Result<Vec<store::PropItem
 
 #[tauri::command]
 pub async fn set_props(app: AppHandle, state: State<'_, AppState>, props: Vec<store::PropItem>) -> Result<(), String> {
+    // Validate any image prop paths before accepting the batch.
+    for p in &props {
+        if let Some(path) = &p.path {
+            if p.kind == "image" && !path.is_empty() {
+                validate_prop_path(path, &state.app_data_dir)?;
+            }
+        }
+    }
     *state.presentation.props_layer.lock() = props.clone();
-    let _ = app.emit("props-update", &props);
+    emit_checked(&app, "props-update", &props);
     let _ = state.media_schedule.save_props(&props);
     Ok(())
 }

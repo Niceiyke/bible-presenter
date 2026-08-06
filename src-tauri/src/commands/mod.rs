@@ -9,3 +9,4 @@ pub mod windows;
 pub mod props;
 pub mod misc;
 pub mod assets;
+pub mod scenes;

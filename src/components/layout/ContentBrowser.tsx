@@ -12,7 +12,8 @@ import { StudioTab } from "../StudioTab";
 import { ScheduleTab } from "../ScheduleTab";
 import { SettingsTab } from "../SettingsTab";
 import { PropsTab } from "../PropsTab";
-import type { DisplayItem, PresentationSettings, PropItem, CustomPresentation } from "../../types";
+import { ScenesTab } from "../ScenesTab";
+import type { DisplayItem, PresentationSettings, PropItem, CustomPresentation, Scene } from "../../types";
 
 interface ContentBrowserProps {
   stageItem: (item: DisplayItem) => Promise<void>;
@@ -24,6 +25,10 @@ interface ContentBrowserProps {
   updateProps: (items: PropItem[]) => Promise<void>;
   setEditingPres: (pres: CustomPresentation | null) => void;
   persistSchedule: () => Promise<void>;
+  saveScene: (scene: Scene) => Promise<void>;
+  deleteScene: (id: string) => Promise<void>;
+  applyScene: (id: string) => Promise<void>;
+  captureScene: (name: string) => Promise<void>;
 }
 
 export function ContentBrowser({
@@ -36,6 +41,10 @@ export function ContentBrowser({
   updateProps,
   setEditingPres,
   persistSchedule,
+  saveScene,
+  deleteScene,
+  applyScene,
+  captureScene,
 }: ContentBrowserProps) {
   const {
     activeTab,
@@ -99,6 +108,14 @@ export function ContentBrowser({
       {activeTab === "schedule" && <ScheduleTab onSendItem={sendLive} onPersist={persistSchedule} stageItem={stageItem} />}
       {activeTab === "settings" && <SettingsTab onUpdateSettings={updateSettings} onUploadMedia={handleFileUpload} />}
       {activeTab === "props" && <PropsTab onUpdateProps={updateProps} />}
+      {activeTab === "scenes" && (
+        <ScenesTab
+          saveScene={saveScene}
+          deleteScene={deleteScene}
+          applyScene={applyScene}
+          captureScene={captureScene}
+        />
+      )}
     </div>
   );
 }

@@ -679,6 +679,34 @@ export function DisplaySection({ onUpdateSettings, onUploadMedia }: DisplaySecti
             Toggle
           </button>
         </div>
+        <label className="flex items-center justify-between gap-3 cursor-pointer mt-3">
+          <div>
+            <span className="text-xs text-slate-300 font-medium">Use active theme on stage monitor</span>
+            <p className="text-[10px] text-slate-600">When off, stage uses a fixed dark palette.</p>
+          </div>
+          <input
+            type="checkbox"
+            checked={settings.stage_uses_theme ?? false}
+            onChange={(e) => onUpdateSettings({ ...settings, stage_uses_theme: e.target.checked })}
+            className="accent-amber-500 w-4 h-4"
+          />
+        </label>
+      </div>
+
+      <div className="border-t border-slate-800 pt-5">
+        <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Operator Behaviour</h2>
+        <label className="flex items-center justify-between gap-3 cursor-pointer">
+          <div>
+            <span className="text-xs text-slate-300 font-medium">Auto-hide background logo when going live</span>
+            <p className="text-[10px] text-slate-600">Clears the pre-service splash automatically on first slide. Turn off to keep it visible.</p>
+          </div>
+          <input
+            type="checkbox"
+            checked={settings.auto_clear_background_logo ?? true}
+            onChange={(e) => onUpdateSettings({ ...settings, auto_clear_background_logo: e.target.checked })}
+            className="accent-amber-500 w-4 h-4"
+          />
+        </label>
       </div>
     </div>
   );

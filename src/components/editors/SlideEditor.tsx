@@ -14,6 +14,7 @@ import { MediaPickerModal } from "../MediaPickerModal";
 import { BiblePickerModal } from "../BiblePickerModal";
 import { newDefaultSlide, newTitleSlide, newBlankSlide, stableId, relativizePath, exportPresentation, importPresentation, deepCloneSlide } from "../../utils";
 import { useAppStore } from "../../store";
+import { useKeyboardBinding } from "../../hooks/keyboardRegistry";
 import type { CustomPresentation, CustomSlide, MediaItem, SlideElement, SlideTemplate } from "../../types";
 import { FONTS } from "../../types";
 
@@ -359,51 +360,48 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose }: SlideE
     return el?.locked;
   });
 
-  // ── Global keyboard shortcuts ───────────────────────────────────────────────
-  useEffect(() => {
-    const down = (e: KeyboardEvent) => {
-      const tgt = e.target as HTMLElement;
-      const typing =
-        tgt.tagName === "INPUT" ||
-        tgt.tagName === "TEXTAREA" ||
-        tgt.tagName === "SELECT" ||
-        tgt.contentEditable === "true";
+  // ── Global keyboard shortcuts (priority 20 — overrides operator defaults) ──
+  useKeyboardBinding("slide-editor", 20, () => true, (e) => {
+    const tgt = e.target as HTMLElement;
+    const typing =
+      tgt.tagName === "INPUT" ||
+      tgt.tagName === "TEXTAREA" ||
+      tgt.tagName === "SELECT" ||
+      tgt.contentEditable === "true";
 
-      if (typing) return;
+    if (typing) return;
 
-      // Slide panel keyboard navigation
-      if (focusedSlidePanel) {
-        if (e.key === "ArrowUp") {
-          e.preventDefault(); setActiveSlideIdx(i => Math.max(0, i - 1));
-        } else if (e.key === "ArrowDown") {
-          e.preventDefault(); setActiveSlideIdx(i => Math.min(pres.slides.length - 1, i + 1));
-        } else if (e.key === "Delete") {
-          e.preventDefault(); handleDeleteSlide();
-        }
+    // Slide panel keyboard navigation
+    if (focusedSlidePanel) {
+      if (e.key === "ArrowUp") {
+        e.preventDefault(); setActiveSlideIdx(i => Math.max(0, i - 1));
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault(); setActiveSlideIdx(i => Math.min(pres.slides.length - 1, i + 1));
+      } else if (e.key === "Delete") {
+        e.preventDefault(); handleDeleteSlide();
       }
+    }
 
-      if ((e.ctrlKey || e.metaKey) && e.key === "z") {
-        e.preventDefault(); e.shiftKey ? redo() : undo();
-      } else if ((e.ctrlKey || e.metaKey) && e.key === "y") {
-        e.preventDefault(); redo();
-      } else if (e.key === "Escape") {
-        setActiveElementIds([]); setEditingElementId(null);
-      } else if (e.key === "Delete" || e.key === "Backspace") {
-        if (activeElementIds.length > 0) deleteSelectedElements();
-      } else if ((e.ctrlKey || e.metaKey) && e.key === "d") {
-        e.preventDefault();
-        if (activeElementIds.length > 0) duplicateSelectedElements();
-      } else if ((e.ctrlKey || e.metaKey) && e.key === "g") {
-        e.preventDefault();
-        if (activeElementIds.length > 1) groupSelectedElements();
-      } else if ((e.ctrlKey || e.metaKey) && e.key === "u") {
-        e.preventDefault();
-        ungroupSelectedElements();
-      }
-    };
-    window.addEventListener("keydown", down);
-    return () => window.removeEventListener("keydown", down);
-  }, [undo, redo, activeElementIds, slide.elements, focusedSlidePanel, pres.slides.length]);
+    if ((e.ctrlKey || e.metaKey) && e.key === "z") {
+      e.preventDefault(); e.shiftKey ? redo() : undo();
+    } else if ((e.ctrlKey || e.metaKey) && e.key === "y") {
+      e.preventDefault(); redo();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setActiveElementIds([]); setEditingElementId(null);
+    } else if (e.key === "Delete" || e.key === "Backspace") {
+      if (activeElementIds.length > 0) { e.preventDefault(); deleteSelectedElements(); }
+    } else if ((e.ctrlKey || e.metaKey) && e.key === "d") {
+      e.preventDefault();
+      if (activeElementIds.length > 0) duplicateSelectedElements();
+    } else if ((e.ctrlKey || e.metaKey) && e.key === "g") {
+      e.preventDefault();
+      if (activeElementIds.length > 1) groupSelectedElements();
+    } else if ((e.ctrlKey || e.metaKey) && e.key === "u") {
+      e.preventDefault();
+      ungroupSelectedElements();
+    }
+  });
 
   // ── Element helper: get all selected elements ───────────────────────────────
   const getSelectedElements = (): SlideElement[] =>

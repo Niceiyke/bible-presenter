@@ -19,11 +19,12 @@ import { Toast } from "./components/Toast";
 import { ShortcutsModal } from "./components/ShortcutsModal";
 import { SlideEditor } from "./components/editors/SlideEditor";
 import { LogViewer } from "./components/LogViewer";
+import { RecoveryModal } from "./components/RecoveryModal";
 
 import { OutputWindow, StageWindow } from "./windows";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
-import type { CustomPresentation } from "./types";
+import type { CustomPresentation, ScheduleEntry } from "./types";
 
 export default function App() {
   const {
@@ -40,19 +41,24 @@ export default function App() {
     showShortcuts,
     startupIssues, setStartupIssues,
     isLogOpen,
+    recentItems, setRecentItems,
+    pastScheduleStates, futureScheduleStates,
+    isInitialized,
   } = useAppStore();
 
   const [editingPres, setEditingPres] = useState<CustomPresentation | null>(null);
   const [bottomDeckH, setBottomDeckH] = React.useState(() => Number(localStorage.getItem("pref_bottomDeckH") || 280));
   const [cockpitWidth, setCockpitWidth] = React.useState(() => Number(localStorage.getItem("pref_cockpitWidth") || 340));
+  const [recovery, setRecovery] = useState<{ activeServiceId: string; scheduleEntries: ScheduleEntry[]; lastUpdate: number } | null>(null);
 
   useAppInitialization();
   useBibleCascade();
 
   const {
-    nextLiveItem, stageItem, goLive, sendLive, getNextItem,
+    nextLiveItem, stageItem, goLive, sendLive, clearAll, getNextItem,
     addToSchedule, persistSchedule, handleFileUpload, handleDeleteMedia,
     updateSettings, updateProps,
+    loadScenes, saveScene, deleteScene, applyScene, captureScene,
   } = useItemActions();
 
   const ltFlatLines = useMemo((): { text: string; sectionLabel: string }[] => {
@@ -72,7 +78,7 @@ export default function App() {
     return flat;
   }, [songs, ltSongId]);
 
-  useKeyboardShortcuts({ stageItem, goLive, sendLive, getNextItem, ltFlatLines });
+  useKeyboardShortcuts({ stageItem, goLive, sendLive, clearAll, ltFlatLines });
 
   useEffect(() => {
     if (liveItem?.type === "Verse") {
@@ -93,21 +99,47 @@ export default function App() {
     }
   }, [scheduleEntries, activeServiceId]);
 
+  // P1.7 — Recovery prompt as an in-app modal (replaces window.confirm).
   useEffect(() => {
     const checkRecovery = async () => {
       const data = await invoke<any>("load_recovery").catch(() => null);
       if (data && data.scheduleEntries?.length > 0) {
-        const timeStr = new Date(data.lastUpdate).toLocaleTimeString();
-        if (window.confirm(`An unsaved session from ${timeStr} was found. Would you like to restore it?`)) {
-          setScheduleEntries(data.scheduleEntries);
-          setActiveServiceId(data.activeServiceId);
-          setToast("Session restored successfully");
-        }
-        await invoke("clear_recovery").catch(() => {});
+        setRecovery({
+          activeServiceId: data.activeServiceId,
+          scheduleEntries: data.scheduleEntries,
+          lastUpdate: data.lastUpdate,
+        });
       }
     };
-    setTimeout(checkRecovery, 1500);
+    const t = setTimeout(checkRecovery, 1500);
+    return () => clearTimeout(t);
   }, []);
+
+  // P1.5 — Persist recent items across restarts (debounced).
+  useEffect(() => {
+    if (!isInitialized) return;
+    const t = setTimeout(() => {
+      invoke("save_workspace", { key: "recents", value: recentItems }).catch(() => {});
+    }, 800);
+    return () => clearTimeout(t);
+  }, [recentItems, isInitialized]);
+
+  // P1.5 — Persist schedule undo/redo stacks across restarts (debounced).
+  useEffect(() => {
+    if (!isInitialized) return;
+    const t = setTimeout(() => {
+      invoke("save_workspace", {
+        key: "schedule_history",
+        value: { entries: scheduleEntries, past: pastScheduleStates, future: futureScheduleStates }
+      }).catch(() => {});
+    }, 800);
+    return () => clearTimeout(t);
+  }, [scheduleEntries, pastScheduleStates, futureScheduleStates, isInitialized]);
+
+  // P1.6 — Load scenes once on init.
+  useEffect(() => {
+    if (isInitialized) loadScenes();
+  }, [isInitialized, loadScenes]);
 
   if (label === "output") return <ErrorBoundary windowLabel="output"><OutputWindow /></ErrorBoundary>;
   if (label === "stage") return <ErrorBoundary windowLabel="stage"><StageWindow /></ErrorBoundary>;
@@ -140,6 +172,10 @@ export default function App() {
             updateProps={updateProps}
             setEditingPres={setEditingPres}
             persistSchedule={persistSchedule}
+            saveScene={saveScene}
+            deleteScene={deleteScene}
+            applyScene={applyScene}
+            captureScene={captureScene}
           />
 
           <BottomDrawer
@@ -157,6 +193,7 @@ export default function App() {
           stageItem={stageItem}
           goLive={goLive}
           sendLive={sendLive}
+          clearAll={clearAll}
           persistSchedule={persistSchedule}
           updateSettings={updateSettings}
           cockpitWidth={cockpitWidth}
@@ -167,6 +204,23 @@ export default function App() {
       <AnimatePresence>
         {toast && <Toast key={toast} message={toast} onDone={() => setToast(null)} />}
       </AnimatePresence>
+
+      {recovery && (
+        <RecoveryModal
+          recovery={recovery}
+          onRestore={() => {
+            setScheduleEntries(recovery.scheduleEntries);
+            setActiveServiceId(recovery.activeServiceId);
+            setToast("Session restored successfully");
+            setRecovery(null);
+            invoke("clear_recovery").catch(() => {});
+          }}
+          onDiscard={() => {
+            setRecovery(null);
+            invoke("clear_recovery").catch(() => {});
+          }}
+        />
+      )}
 
       {editingPres && (
         <SlideEditor
