@@ -67,6 +67,17 @@ const ALIGN_BTNS: { cmd: string; title: string; icon: React.ReactNode }[] = [
 
 export function InlineTextEditor({ el, canvasScale, onCommit }: InlineTextEditorProps) {
   const committedRef = useRef(false);
+  // `onCommit` is rebuilt on every parent render (SlideCanvas constructs
+  // `html => onCommit(el.id, html)` inline in its `.map` body). Keeping it
+  // in the commit-cleanup effect's deps would re-run that cleanup on any
+  // re-render while editing — e.g. the overlay's `onClick` calling
+  // `setActiveElementIds` after a drag-select. The cleanup would then
+  // commit, `commitInline` clears `editingElementId`, and the editor
+  // unmounts mid-edit (seen as "the editor loses focus the moment I try
+  // to highlight a word"). So we capture the latest `onCommit` in a ref
+  // and key the cleanup effect on `[editor]` only.
+  const onCommitRef = useRef(onCommit);
+  onCommitRef.current = onCommit;
 
   const editor = useEditor({
     extensions: [
@@ -117,9 +128,9 @@ export function InlineTextEditor({ el, canvasScale, onCommit }: InlineTextEditor
     return () => {
       if (committedRef.current || !editor) return;
       committedRef.current = true;
-      onCommit(editor.getHTML());
+      onCommitRef.current(editor.getHTML());
     };
-  }, [editor, onCommit]);
+  }, [editor]);
 
   // Focus + caret-to-end on mount.
   useEffect(() => {
@@ -157,6 +168,7 @@ export function InlineTextEditor({ el, canvasScale, onCommit }: InlineTextEditor
       onPointerDown={(e) => e.stopPropagation()}
       onPointerMove={(e) => e.stopPropagation()}
       onPointerUp={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
     >
       {/* Floating toolbar — above the content, never stealing pointer events
           from the editor unless the user is interacting with a control. */}
