@@ -8,11 +8,11 @@ import React from "react";
 import {
   Type, Image as ImageIcon, Copy, Square,
   AlignCenter, AlignLeft, AlignRight, Trash2,
-  BookOpen, Layers, Video,
+  BookOpen, Layers, Video, Grid3x3, Play,
 } from "lucide-react";
-import { Btn, ToggleBtn, Div } from "./components";
+import { Btn, ToggleBtn, Div, FontPicker } from "./components";
 import type { SlideElement } from "../../../types";
-import { FONTS } from "../../../types";
+import { useFonts } from "../../../hooks/useFonts";
 
 export interface EditorToolbarProps {
   activeEl: SlideElement | null;
@@ -21,9 +21,12 @@ export interface EditorToolbarProps {
   hasGroup: boolean;
   insertVerseEnabled: boolean;
   canDeleteSlide: boolean;
+  /** P3.2: current snap-to-grid size (0 disables snapping). */
+  gridSize: number;
+  onSetGridSize: (n: number) => void;
   onInsertVerse: () => void;
   onAddText: () => void;
-  onAddShape: () => void;
+  onAddShape: (shape: "rect" | "rounded" | "circle" | "line" | "triangle") => void;
   onAddVideo: () => void;
   onOpenImgPicker: () => void;
   onOpenVideoPicker: () => void;
@@ -35,6 +38,9 @@ export interface EditorToolbarProps {
   onUpdateElement: (id: string, updates: Partial<SlideElement>) => void;
   onDuplicateSlide: () => void;
   onDeleteSlide: () => void;
+  /** P4.7: in-editor live preview PIP toggle (Space). */
+  previewOpen: boolean;
+  onTogglePreview: () => void;
 }
 
 export function EditorToolbar({
@@ -44,6 +50,8 @@ export function EditorToolbar({
   hasGroup,
   insertVerseEnabled,
   canDeleteSlide,
+  gridSize,
+  onSetGridSize,
   onInsertVerse,
   onAddText,
   onAddShape,
@@ -58,7 +66,11 @@ export function EditorToolbar({
   onUpdateElement,
   onDuplicateSlide,
   onDeleteSlide,
+  previewOpen,
+  onTogglePreview,
 }: EditorToolbarProps) {
+  // P2.5: merge user-installed @font-face families with the built-in list.
+  const { availableFonts } = useFonts();
   return (
     <div className="h-11 border-b border-white/8 flex items-center px-3 gap-1 bg-[#131326] shrink-0 overflow-x-auto">
 
@@ -68,7 +80,31 @@ export function EditorToolbar({
         <Btn onClick={onAddText} icon={<Type size={13} />}>Text</Btn>
         <Btn onClick={onOpenImgPicker} icon={<ImageIcon size={13} />}>Image</Btn>
         <Btn onClick={onOpenVideoPicker} icon={<Video size={13} />}>Video</Btn>
-        <Btn onClick={onAddShape} icon={<Square size={13} />}>Shape</Btn>
+        {/* P3.5: Insert Shape dropdown — surface rect/rounded/circle/line/triangle.
+            A small hover popover sits next to the Btn so inserting any
+            shape is one click + pick. */}
+        <div className="relative group shrink-0">
+          <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white/8 hover:bg-white/14 text-slate-300 hover:text-white text-[11px] font-semibold rounded-lg transition-all shrink-0">
+            <Square size={13} /> Shape
+          </div>
+          <div className="absolute left-0 top-full mt-1 hidden group-hover:flex flex-col bg-[#1a1a2e] border border-white/10 rounded-lg p-1 z-[80] shadow-2xl min-w-[110px]">
+            {([
+              { s: "rect", label: "Rectangle" },
+              { s: "rounded", label: "Rounded" },
+              { s: "circle", label: "Circle" },
+              { s: "line", label: "Line" },
+              { s: "triangle", label: "Triangle" },
+            ] as const).map(o => (
+              <button
+                key={o.s}
+                onClick={() => onAddShape(o.s)}
+                className="px-2 py-1 text-[10px] font-bold rounded text-left text-slate-400 hover:text-white hover:bg-white/10 transition-all"
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="w-px h-5 bg-white/10 mx-1 shrink-0" />
         <Btn onClick={onOpenBiblePicker} icon={<BookOpen size={13} />} className="bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/20">
           Bible
@@ -92,14 +128,37 @@ export function EditorToolbar({
 
       {/* ── Text element selected ── */}
       {activeEl?.kind === "text" && selectedCount === 1 && <>
-        <select value={activeEl.font_family} onChange={e => onUpdateElement(activeEl.id, { font_family: e.target.value })} onKeyDown={e => e.stopPropagation()} className="bg-white/8 border border-white/10 rounded-lg px-2 py-1 text-[11px] text-slate-300 outline-none max-w-[130px] shrink-0">
-          {FONTS.map(f => <option key={f} value={f}>{f}</option>)}
-        </select>
-        <div className="flex items-center bg-white/8 border border-white/10 rounded-lg shrink-0 overflow-hidden">
-          <button onClick={() => onUpdateElement(activeEl.id, { font_size: Math.max(8, (activeEl.font_size ?? 32) - 2) })} className="px-2 py-1 text-slate-400 hover:text-white hover:bg-white/10 text-sm font-bold">−</button>
-          <input type="number" value={activeEl.font_size ?? 32} onChange={e => onUpdateElement(activeEl.id, { font_size: Number(e.target.value) })} onKeyDown={e => e.stopPropagation()} className="w-10 bg-transparent py-1 text-xs text-white text-center outline-none tabular-nums" />
-          <button onClick={() => onUpdateElement(activeEl.id, { font_size: (activeEl.font_size ?? 32) + 2 })} className="px-2 py-1 text-slate-400 hover:text-white hover:bg-white/10 text-sm font-bold">+</button>
+        <div className="relative shrink-0">
+          <FontPicker
+            fonts={availableFonts}
+            value={typeof activeEl.font_family === "string" ? activeEl.font_family : "inherit"}
+            canInherit
+            onSelect={f => onUpdateElement(activeEl.id, { font_family: f === "inherit" ? "inherit" : f })}
+          />
         </div>
+        {(() => {
+          const baseFs = typeof activeEl.font_size === "number" ? activeEl.font_size : null;
+          return (
+            <div className="flex items-center bg-white/8 border border-white/10 rounded-lg shrink-0 overflow-hidden">
+              <button
+                onClick={() => onUpdateElement(activeEl.id, { font_size: Math.max(8, (baseFs ?? 32) - 2) })}
+                disabled={baseFs === null}
+                className="px-2 py-1 text-slate-400 hover:text-white hover:bg-white/10 text-sm font-bold disabled:opacity-30">−</button>
+              <input
+                type="number"
+                value={baseFs ?? ""}
+                placeholder="—"
+                disabled={baseFs === null}
+                onChange={e => onUpdateElement(activeEl.id, { font_size: Number(e.target.value) })}
+                onKeyDown={e => e.stopPropagation()}
+                className="w-10 bg-transparent py-1 text-xs text-white text-center outline-none tabular-nums disabled:opacity-30 placeholder:text-slate-600" />
+              <button
+                onClick={() => onUpdateElement(activeEl.id, { font_size: (baseFs ?? 32) + 2 })}
+                disabled={baseFs === null}
+                className="px-2 py-1 text-slate-400 hover:text-white hover:bg-white/10 text-sm font-bold disabled:opacity-30">+</button>
+            </div>
+          );
+        })()}
         <Div /><ToggleBtn active={!!activeEl.bold} onClick={() => onUpdateElement(activeEl.id, { bold: !activeEl.bold })} title="Bold"><span className="font-black text-sm">B</span></ToggleBtn>
         <ToggleBtn active={!!activeEl.italic} onClick={() => onUpdateElement(activeEl.id, { italic: !activeEl.italic })} title="Italic"><span className="font-serif italic text-sm">I</span></ToggleBtn>
         <Div />
@@ -113,8 +172,13 @@ export function EditorToolbar({
 
       {/* ── Shape selected ── */}
       {activeEl?.kind === "shape" && selectedCount === 1 && <>
-        <span className="text-[9px] text-slate-500 shrink-0">Fill</span><input type="color" value={activeEl.color} onChange={e => onUpdateElement(activeEl.id, { color: e.target.value })} className="w-8 h-8 rounded-lg cursor-pointer border border-white/20 bg-transparent shrink-0" />
-        <Div /><span className="text-[9px] text-slate-500 shrink-0">Opacity</span><input type="range" min={0} max={1} step={0.05} value={activeEl.opacity ?? 1} onChange={e => onUpdateElement(activeEl.id, { opacity: Number(e.target.value) })} className="w-20 accent-indigo-500 shrink-0" />
+        <span className="text-[9px] text-slate-500 shrink-0">Fill</span>
+        <input type="color" value={activeEl.fillColor ?? activeEl.color ?? "#6366f1"} onChange={e => onUpdateElement(activeEl.id, { fillColor: e.target.value })} className="w-8 h-8 rounded-lg cursor-pointer border border-white/20 bg-transparent shrink-0" />
+        <Div /><span className="text-[9px] text-slate-500 shrink-0">Stroke</span>
+        <input type="color" value={activeEl.strokeColor ?? "#000000"} onChange={e => onUpdateElement(activeEl.id, { strokeColor: e.target.value })} className="w-8 h-8 rounded-lg cursor-pointer border border-white/20 bg-transparent shrink-0" />
+        <input type="number" min={0} max={50} value={Math.round(activeEl.strokeWidth ?? 0)} onChange={e => onUpdateElement(activeEl.id, { strokeWidth: Number(e.target.value) })} onKeyDown={e => e.stopPropagation()} className="w-12 bg-white/8 border border-white/10 rounded-lg px-2 py-1 text-xs text-white outline-none shrink-0" />
+        <Div /><span className="text-[9px] text-slate-500 shrink-0">Opacity</span>
+        <input type="range" min={0} max={1} step={0.05} value={activeEl.opacity ?? 1} onChange={e => onUpdateElement(activeEl.id, { opacity: Number(e.target.value) })} className="w-20 accent-indigo-500 shrink-0" />
         <span className="text-[10px] text-slate-400 font-mono shrink-0 w-8">{Math.round((activeEl.opacity ?? 1) * 100)}%</span>
       </>}
 
@@ -133,8 +197,46 @@ export function EditorToolbar({
 
       <div className="flex-1" />
       <div className="flex items-center gap-1 border-l border-white/8 pl-2 shrink-0">
+        {/* P3.2: snap-to-grid. Clicking the icon cycles
+            0 (off) → 4 → 8 → 16 → 0; hold the dropdown for an explicit pick. */}
+        <div className="relative group shrink-0">
+          <button
+            onClick={() => onSetGridSize(gridSize === 0 ? 4 : gridSize === 4 ? 8 : gridSize === 8 ? 16 : 0)}
+            title={`Snap to grid: ${gridSize === 0 ? "Off" : gridSize + "%"}`}
+            className={`flex items-center gap-1 px-2 py-1.5 rounded-lg transition-all ${gridSize > 0 ? "bg-indigo-500/30 text-white" : "bg-white/6 hover:bg-white/12 text-slate-400 hover:text-white"}`}
+          >
+            <Grid3x3 size={13} />
+            <span className="text-[10px] font-bold tabular-nums w-5 text-center">{gridSize === 0 ? "—" : gridSize}</span>
+          </button>
+          <div className="absolute right-0 top-full mt-1 hidden group-hover:flex flex-col bg-[#1a1a2e] border border-white/10 rounded-lg p-1 z-[80] shadow-2xl min-w-[80px]">
+            {[
+              { v: 0, label: "Off" },
+              { v: 4, label: "4%" },
+              { v: 8, label: "8%" },
+              { v: 16, label: "16%" },
+            ].map(o => (
+              <button
+                key={o.v}
+                onClick={() => onSetGridSize(o.v)}
+                className={`px-2 py-1 text-[10px] font-bold rounded text-left transition-all ${gridSize === o.v ? "bg-indigo-500 text-white" : "text-slate-400 hover:text-white hover:bg-white/10"}`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <Div />
         <Btn onClick={onDuplicateSlide} icon={<Copy size={13} />}>Dupe</Btn>
         <button onClick={onDeleteSlide} disabled={!canDeleteSlide} className="p-2 bg-white/6 hover:bg-red-500/20 text-slate-500 hover:text-red-400 rounded-lg transition-all disabled:opacity-20" title="Delete slide"><Trash2 size={13} /></button>
+        <div className="flex-1" />
+        <button
+          onClick={onTogglePreview}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all ${previewOpen ? "bg-emerald-500/30 text-emerald-300" : "bg-white/6 hover:bg-white/12 text-slate-400 hover:text-white"}`}
+          title="Live preview (Space) — plays entrance animation, nothing is broadcast"
+        >
+          <Play size={13} />
+          <span className="text-[10px] font-bold">{previewOpen ? "Previewing" : "Preview"}</span>
+        </button>
       </div>
     </div>
   );

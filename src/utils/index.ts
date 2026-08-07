@@ -12,12 +12,32 @@ import type {
   ThemeColors,
   SlideTemplate,
   PresentationExport,
+  SlideBackground,
+  ProseMirrorJSON,
+  SlideTheme,
 } from "../types";
 import { THEMES } from "../types";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 export function stableId(): string {
   return crypto.randomUUID();
+}
+
+/**
+ * Build a minimal ProseMirror JSON doc wrapping plain text. Used by the
+ * element factories (`newTextElement`, `newTitleSlide`, …) so a freshly
+ * inserted element already ships as a JSON document (Phase 2.2) and the
+ * renderer never has to take the legacy-HTML-string sanitization path
+ * for newly authored content. Multi-line text becomes multiple paragraphs.
+ */
+export function textToDoc(text: string): ProseMirrorJSON {
+  const lines = String(text ?? "").split(/\r?\n/);
+  const paragraphs = lines.map((line) =>
+    line
+      ? { type: "paragraph", content: [{ type: "text", text: line }] }
+      : { type: "paragraph" },
+  );
+  return { type: "doc", content: paragraphs.length ? paragraphs : [{ type: "paragraph" }] } as ProseMirrorJSON;
 }
 
 export function getItemUid(item: DisplayItem | null): string {
@@ -101,20 +121,20 @@ export function relativizePath(path: string | undefined, baseDir: string | null)
 export function newDefaultSlide(): CustomSlide {
   return {
     id: stableId(),
-    backgroundColor: "#1a1a2e",
+    background: { type: "color", value: "#1a1a2e" },
     elements: [
       {
         id: stableId(),
         kind: "text",
         x: 10, y: 10, w: 80, h: 20, z_index: 1,
-        content: "Header Text",
+        content: textToDoc("Header Text"),
         font_size: 48, font_family: "Arial", color: "#ffffff", align: "center", v_align: "middle", bold: true, italic: false,
       },
       {
         id: stableId(),
         kind: "text",
         x: 10, y: 35, w: 80, h: 50, z_index: 2,
-        content: "Body Content Goes Here",
+        content: textToDoc("Body Content Goes Here"),
         font_size: 32, font_family: "Arial", color: "#ffffff", align: "center", v_align: "middle", bold: false, italic: false,
       },
     ],
@@ -124,13 +144,13 @@ export function newDefaultSlide(): CustomSlide {
 export function newTitleSlide(): CustomSlide {
   return {
     id: stableId(),
-    backgroundColor: "#1a1a2e",
+    background: { type: "color", value: "#1a1a2e" },
     elements: [
       {
         id: stableId(),
         kind: "text",
         x: 10, y: 35, w: 80, h: 30, z_index: 1,
-        content: "Presentation Title",
+        content: textToDoc("Presentation Title"),
         font_size: 72, font_family: "Georgia", color: "#ffffff", align: "center", v_align: "middle", bold: true, italic: false,
       },
     ],
@@ -140,7 +160,7 @@ export function newTitleSlide(): CustomSlide {
 export function newBlankSlide(): CustomSlide {
   return {
     id: stableId(),
-    backgroundColor: "#1a1a2e",
+    background: { type: "color", value: "#1a1a2e" },
     elements: [],
   };
 }
@@ -166,11 +186,15 @@ export function newTextElement(opts: Partial<Omit<TextElement, "id" | "kind">> =
     id: stableId(),
     kind: "text",
     x: 20, y: 35, w: 60, h: 30, z_index: 1,
-    content: "Double-click to edit",
+    content: textToDoc("Double-click to edit"),
     font_size: 48, font_family: "Arial", color: "#ffffff",
     align: "center", v_align: "middle",
     bold: false, italic: false, shadow: true, shadow_color: "#000000",
+    autoSize: "fixed",
     ...opts,
+    // Allow callers to pass a *string* prototype (verse text, header
+    // text) and have it normalized to a JSON doc automatically.
+    ...(opts.content && typeof opts.content === "string" ? { content: textToDoc(opts.content as string) } : {}),
   };
 }
 
@@ -180,6 +204,10 @@ export function newImageElement(opts: Partial<Omit<Extract<SlideElement, { kind:
     kind: "image",
     x: 20, y: 15, w: 60, h: 70, z_index: 1,
     content: "",
+    objectFit: "contain",
+    objectPosition: "center",
+    filter: "none",
+    filterValue: 0,
     ...opts,
   };
 }
@@ -200,7 +228,8 @@ export function newShapeElement(opts: Partial<Omit<Extract<SlideElement, { kind:
     id: stableId(),
     kind: "shape",
     x: 25, y: 25, w: 50, h: 50, z_index: 1,
-    color: "#6366f1", opacity: 0.85,
+    shape: "rect",
+    fillColor: "#6366f1", opacity: 0.85,
     ...opts,
   };
 }
@@ -223,7 +252,14 @@ export function ltBuildLyricsPayload(
 export function buildCustomSlideItem(
   presItem: { id: string; name: string; slide_count: number },
   slides: CustomSlide[],
-  slideIdx: number
+  slideIdx: number,
+  /** Optional `SlideTheme` (P2.4 cascade). Emitted on the on-wire
+   *  payload so the output / stage windows can resolve element styles
+   *  carrying the `"inherit"` sentinel without an extra presentation
+   *  lookup. Callers that already hold the presentation pass it
+   *  through; bare registry lookups fall back to `undefined` and the
+   *  renderer applies its hardcoded defaults. */
+  theme?: SlideTheme,
 ): DisplayItem {
   const slide = slides[slideIdx];
   return {
@@ -233,33 +269,10 @@ export function buildCustomSlideItem(
       presentation_name: presItem.name,
       slide_index: slideIdx,
       slide_count: slides.length,
-      background_color: slide.backgroundColor,
-      background_image: slide.backgroundImage,
-      background_video: slide.backgroundVideo,
-      background_video_loop: slide.backgroundVideoLoop,
-      background_video_muted: slide.backgroundVideoMuted,
+      background: slide.background,
       elements: slide.elements,
       notes: slide.notes,
-      header_enabled: slide.headerEnabled ?? true,
-      header_height_pct: slide.headerHeightPct ?? 35,
-      header: slide.header ? {
-        text: slide.header.text,
-        font_size: slide.header.fontSize,
-        font_family: slide.header.fontFamily,
-        color: slide.header.color,
-        bold: slide.header.bold,
-        italic: slide.header.italic,
-        align: slide.header.align
-      } : undefined,
-      body: slide.body ? {
-        text: slide.body.text,
-        font_size: slide.body.fontSize,
-        font_family: slide.body.fontFamily,
-        color: slide.body.color,
-        bold: slide.body.bold,
-        italic: slide.body.italic,
-        align: slide.body.align
-      } : undefined,
+      theme,
     },
   };
 }
@@ -403,7 +416,7 @@ export function getTransitionVariants(type: string, duration: number) {
 
 export function exportPresentation(pres: { presentation: any }): PresentationExport {
   return {
-    version: 1,
+    version: 2,
     presentation: pres.presentation,
     exported_at: Date.now(),
   };
@@ -423,4 +436,76 @@ export function importPresentation(data: unknown): { success: boolean; presentat
 
 export const FONTS = [
   "Arial", "Georgia", "Times New Roman", "Verdana", "Courier New", "Montserrat", "Oswald", "Playfair Display", "Roboto", "Open Sans"
+];
+
+// ─── P4.1: built-in starter templates ───────────────────────────────────────
+// Deterministic deck templates offered in the gallery alongside user-saved
+// single-slide templates. Each factory returns a fresh deck with new ids on
+// every call, and the caller re-keys slides/elements on insert anyway
+// (`handleInsertTemplate`), so id stability here is not required.
+function textEl(text: string, extra: Partial<SlideElement> = {}): SlideElement {
+  return newTextElement({
+    x: 10, y: 35, w: 80, h: 30,
+    font_size: 48, font_family: "Arial", color: "#ffffff",
+    align: "center", v_align: "middle", bold: false,
+    ...extra,
+    content: text,
+  } as any);
+}
+
+/** P4.1: named built-in deck templates the gallery always offers. */
+export const BUILTIN_DECKS: { name: string; category: string; slides: () => CustomSlide[] }[] = [
+  {
+    name: "Sermon Series (3 slides)",
+    category: "Starter",
+    slides: () => [
+      { id: stableId(), background: { type: "color", value: "#1a1a2e" }, elements: [
+        textEl("Sermon Series", { y: 30, h: 25, font_size: 88 }),
+        textEl("Title Goes Here", { y: 60, h: 15, font_size: 40, bold: false }),
+      ]},
+      { id: stableId(), background: { type: "color", value: "#0f2438" }, elements: [
+        textEl("Main Point", { y: 25, h: 20, font_size: 64 }),
+        textEl("Supporting passage / notes", { y: 55, h: 30, font_size: 36, bold: false }),
+      ]},
+      { id: stableId(), background: { type: "color", value: "#2a0f0f" }, elements: [
+        textEl("Closing & Call to Action", { y: 35, h: 25, font_size: 52 }),
+        textEl("Repeated line", { y: 65, h: 15, font_size: 32, bold: false }),
+      ]},
+    ],
+  },
+  {
+    name: "Worship Set (4 slides)",
+    category: "Starter",
+    slides: () => [
+      { id: stableId(), background: { type: "color", value: "#132a13" }, elements: [
+        textEl("Song Title", { y: 30, h: 25, font_size: 72 }),
+        textEl("Key · Tempo info", { y: 62, h: 12, font_size: 28, bold: false }),
+      ]},
+      { id: stableId(), background: { type: "color", value: "#132a13" }, elements: [
+        textEl("Verse 1", { y: 20, h: 15, font_size: 40 }),
+        textEl("Lines of the first verse", { y: 40, h: 45, font_size: 34, bold: false }),
+      ]},
+      { id: stableId(), background: { type: "color", value: "#132a13" }, elements: [
+        textEl("Verse 2", { y: 20, h: 15, font_size: 40 }),
+        textEl("Lines of the second verse", { y: 40, h: 45, font_size: 34, bold: false }),
+      ]},
+      { id: stableId(), background: { type: "color", value: "#132a13" }, elements: [
+        textEl("Bridge / Outro", { y: 30, h: 30, font_size: 52 }),
+      ]},
+    ],
+  },
+  {
+    name: "Announcement Loop (2 slides)",
+    category: "Starter",
+    slides: () => [
+      { id: stableId(), background: { type: "color", value: "#1a1a2e" }, elements: [
+        textEl("Upcoming Event", { y: 25, h: 20, font_size: 56 }),
+        textEl("Date · Time · Location", { y: 55, h: 30, font_size: 34, bold: false }),
+      ]},
+      { id: stableId(), background: { type: "color", value: "#241a2e" }, elements: [
+        textEl("Ministry Spotlight", { y: 30, h: 25, font_size: 48 }),
+        textEl("How to get involved", { y: 62, h: 20, font_size: 30, bold: false }),
+      ]},
+    ],
+  },
 ];

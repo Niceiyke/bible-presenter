@@ -1,5 +1,7 @@
 import React from "react";
+import { X } from "lucide-react";
 import { useSlideEditor } from "./slide/useSlideEditor";
+import { CustomSlideRenderer } from "../shared/Renderers";
 import { AppHeader } from "./slide/AppHeader";
 import { SlideListPanel } from "./slide/SlideListPanel";
 import { EditorToolbar } from "./slide/EditorToolbar";
@@ -33,15 +35,17 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose }: SlideE
     showUnsavedConfirm, setShowUnsavedConfirm,
     showTemplateGallery, setShowTemplateGallery,
     dragSlideIdx, dragOverSlideIdx,
+    gridSize, setGridSize,
+    guides,
     canvasRef, canvasScale, isDirtyRef,
     slideDragDrop, handleSlidePointerDown, handleSlidePointerUp, handleSlideClick,
-    handleDrag, handleResize,
+    handleDrag, handleResize, handleRotate,
     handleCanvasClick, handleElementClick, handleDblClick, commitInline,
     handleCloseRequest, handleSaveAndClose, handleDiscardChanges,
     handleImport, handleExport,
     handleAddSlide, handleDuplicateSlide, handleDeleteSlide,
     handleSaveAsTemplate, handleInsertTemplate, handleDeleteTemplate,
-    handleImageSelect, handleVideoSelect, handleBgVideoSelect, handleBgImageSelect, handleAddVerse,
+handleImageSelect, handleVideoSelect, handleBgVideoSelect, handleBgImageSelect, handleAddVerse,
     handleInsertVerse,
     addTextElement, addShapeElement,
     updateSlide, updateElement,
@@ -49,6 +53,12 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose }: SlideE
     duplicateSelectedElements, duplicateElement,
     deleteElement, deleteSelectedElements,
     alignElement, updateZOrder,
+    setSlideBackground,
+    updateTheme,
+    editingMasterId, enterMasterEdit, exitMasterEdit,
+    handleCreateMaster, handleApplyMasterToSlide, handleDeleteMaster,
+    previewOpen, setPreviewOpen,
+    // global / store data
     appDataDir, templates, stagedItem,
   } = useSlideEditor({ initialPres, onClose });
 
@@ -100,6 +110,8 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose }: SlideE
             hasGroup={hasGroup}
             insertVerseEnabled={stagedItem?.type === "Verse"}
             canDeleteSlide={pres.slides.length > 1}
+            gridSize={gridSize}
+            onSetGridSize={setGridSize}
             onInsertVerse={handleInsertVerse}
             onAddText={addTextElement}
             onAddShape={addShapeElement}
@@ -114,6 +126,8 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose }: SlideE
             onUpdateElement={updateElement}
             onDuplicateSlide={handleDuplicateSlide}
             onDeleteSlide={handleDeleteSlide}
+            previewOpen={previewOpen}
+            onTogglePreview={() => setPreviewOpen(p => !p)}
           />
 
           <SlideCanvas
@@ -125,11 +139,15 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose }: SlideE
             editingElementId={editingElementId}
             slideIndex={activeSlideIdx}
             slideCount={pres.slides.length}
+            gridSize={gridSize}
+            guides={guides}
+            theme={pres.theme}
             onCanvasClick={handleCanvasClick}
             onElementClick={handleElementClick}
             onDblClick={handleDblClick}
             onDrag={handleDrag}
             onResize={handleResize}
+            onRotate={handleRotate}
             onCommit={commitInline}
             onNavigate={delta => { setActiveSlideIdx(i => i + delta); setActiveElementIds([]); }}
           />
@@ -141,10 +159,15 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose }: SlideE
           selectedCount={selectedCount}
           hasGroup={hasGroup}
           slide={slide}
+          theme={pres.theme}
+          masters={pres.masters}
+          editingMasterId={editingMasterId}
           onUpdateSlide={updateSlide}
+          onUpdateTheme={updateTheme}
           onUpdateElement={updateElement}
           onOpenBgPicker={() => setShowBgPicker(true)}
           onOpenBgVideoPicker={() => setShowBgVideoPicker(true)}
+          onSetBackground={setSlideBackground}
           onSaveAsTemplate={handleSaveAsTemplate}
           onAlign={alignElement}
           onZOrder={updateZOrder}
@@ -153,6 +176,11 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose }: SlideE
           onDeleteElement={() => activeEl && deleteElement(activeEl.id)}
           onGroup={groupSelectedElements}
           onUngroup={ungroupSelectedElements}
+          onEnterMasterEdit={enterMasterEdit}
+          onExitMasterEdit={exitMasterEdit}
+          onCreateMaster={handleCreateMaster}
+          onApplyMaster={handleApplyMasterToSlide}
+          onDeleteMaster={handleDeleteMaster}
         />
       </div>
 
@@ -188,6 +216,34 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose }: SlideE
         onVideoSelect={handleVideoSelect}
         onAddVerse={handleAddVerse}
       />
+
+      {/* ══ LIVE PREVIEW PIP (P4.7) ═══════════════════════════════════════ */}
+      {previewOpen && (
+        <div
+          className="absolute bottom-4 right-4 w-[420px] aspect-video rounded-xl overflow-hidden shadow-2xl shadow-black/60 border border-white/20 z-[80]"
+          title="Live preview (Space) — not broadcast"
+        >
+          {pres.slides[activeSlideIdx] ? (
+            <CustomSlideRenderer
+              slide={pres.slides[activeSlideIdx]}
+              scale={0.5}
+              appDataDir={appDataDir}
+              theme={pres.theme}
+              entranceEnabled
+            />
+          ) : null}
+          <button
+            onClick={() => setPreviewOpen(false)}
+            className="absolute top-1.5 right-1.5 p-1 bg-black/60 hover:bg-black/80 text-white rounded-full"
+            title="Close preview (Esc)"
+          >
+            <X size={12} />
+          </button>
+          <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 bg-black/60 text-[8px] text-emerald-300 rounded">
+            ● Preview — not broadcast
+          </span>
+        </div>
+      )}
     </div>
   );
 }

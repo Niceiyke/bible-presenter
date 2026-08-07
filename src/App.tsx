@@ -5,6 +5,7 @@ import { AnimatePresence } from "framer-motion";
 
 import { useAppStore } from "./store";
 import { useAppInitialization } from "./hooks/useAppInitialization";
+import { useFonts } from "./hooks/useFonts";
 import { useBibleCascade } from "./hooks/useBibleCascade";
 import { useItemActions } from "./hooks/useItemActions";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
@@ -53,6 +54,7 @@ export default function App() {
 
   useAppInitialization();
   useBibleCascade();
+  useFonts(); // P2.5: inject @font-face for user-installed fonts.
 
   const {
     nextLiveItem, stageItem, goLive, sendLive, clearAll, getNextItem,

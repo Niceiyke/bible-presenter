@@ -9,6 +9,7 @@ import { CustomSlideRenderer } from "../components/shared/Renderers";
 import { useAppStore } from "../store";
 import { useT } from "../i18n";
 import { signalOperatorWarning } from "../hooks/useAppInitialization";
+import { useFonts } from "../hooks/useFonts";
 
 function formatClock(d: Date) {
   const h = d.getHours().toString().padStart(2, "0");
@@ -40,6 +41,7 @@ function computeTimerDisplay(data: TimerData, now: number): string {
 }
 
 export function StageWindow() {
+  useFonts(); // P2.5: inject @font-face for user-installed fonts.
   const { appDataDir, setAppDataDir } = useAppStore();
   const t = useT();
   const [liveItem, setLiveItem] = useState<DisplayItem | null>(null);
@@ -146,7 +148,7 @@ export function StageWindow() {
           <div className="text-4xl font-serif leading-snug flex-1 overflow-hidden" style={{ color: textCol }}>
             {liveItem?.type === "CustomSlide" ? (
               <div className="w-full h-full relative border rounded-lg overflow-hidden" style={{ borderColor: useTheme ? "rgba(255,255,255,0.08)" : "#1e293b" }}>
-                <CustomSlideRenderer slide={liveItem.data} scale={0.2} appDataDir={appDataDir} />
+                <CustomSlideRenderer slide={liveItem.data} scale={0.2} appDataDir={appDataDir} theme={liveItem.data.theme} />
               </div>
             ) : liveItem?.type === "Timer" ? (
               <div className="flex items-center justify-center h-full">
@@ -166,7 +168,7 @@ export function StageWindow() {
           <div className="text-4xl font-serif leading-snug flex-1 overflow-hidden" style={{ color: useTheme ? "rgba(255,255,255,0.9)" : "#fef3c7" }}>
             {stagedItem?.type === "CustomSlide" ? (
               <div className="w-full h-full relative border rounded-lg overflow-hidden" style={{ borderColor: useTheme ? "rgba(255,255,255,0.08)" : "#1e293b" }}>
-                <CustomSlideRenderer slide={stagedItem.data} scale={0.2} appDataDir={appDataDir} />
+                <CustomSlideRenderer slide={stagedItem.data} scale={0.2} appDataDir={appDataDir} theme={stagedItem.data.theme} />
               </div>
             ) : stagedItem?.type === "Timer" ? (
               <div className="flex items-center justify-center h-full">

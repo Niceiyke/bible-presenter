@@ -20,6 +20,7 @@ import {
 import { AnimatePresence, motion } from "framer-motion";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { signalOperatorWarning } from "../hooks/useAppInitialization";
+import { useFonts } from "../hooks/useFonts";
 
 function ProjectionErrorFallback() {
   return (
@@ -34,6 +35,7 @@ function ProjectionErrorFallback() {
 }
 
 export function OutputWindow() {
+  useFonts(); // P2.5: inject @font-face for user-installed fonts.
   const [liveItem, setLiveItem] = useState<DisplayItem | null>(null);
   const [stagedItem, setStagedItem] = useState<DisplayItem | null>(null);
   const [lowerThird, setLowerThird] = useState<{ data: LowerThirdData; template: LowerThirdTemplate } | null>(null);
@@ -509,7 +511,7 @@ export function OutputWindow() {
               </div>
             ) : liveItem.type === "CustomSlide" ? (
               <div className="absolute inset-0">
-                <CustomSlideRenderer slide={liveItem.data} scale={windowScale} appDataDir={appDataDir} />
+                <CustomSlideRenderer slide={liveItem.data} scale={windowScale} appDataDir={appDataDir} theme={liveItem.data.theme} entranceEnabled />
               </div>
             ) : liveItem.type === "Media" ? (
               <div className="absolute inset-0">

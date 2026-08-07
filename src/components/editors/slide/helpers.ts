@@ -8,15 +8,24 @@
  * - `alignElement`         — multi-element canvas alignment
  * - `adjustZOrder`         — bring-forward / send-backward swaps (atomic)
  * - `groupOps`              — group-id mutation helpers
- * - `migratePresentation`  — convert legacy header/body slides to elements[]
+ * - `migratePresentation`  — convert legacy header/body slides to elements[],
+ *                            rebuild the `SlideBackground` union from the
+ *                            pre-v2 flat background fields, swap
+ *                            `TextElement.content` from HTML-string to
+ *                            ProseMirror JSON, and synthesize a default
+ *                            `SlideTheme` for the cascade (P2.1+P2.2+P2.3+P2.4).
  *
  * Each helper returns a *delta* (an `updates` map or a fresh `elements`
  * array) rather than directly mutating state. Callers own the actual
  * `setPres` commit, so the helpers can be memoized independently.
  */
 
-import type { CustomPresentation, SlideElement, SlideZone } from "../../../types";
+import type {
+  CustomPresentation, SlideElement, SlideZone, SlideBackground, SlideTheme,
+  CustomSlide,
+} from "../../../types";
 import { newTextElement, stableId } from "../../../utils";
+import { migrateHtmlContentToJSON } from "./slideTextExtensions";
 
 // Re-exported for ergonomic imports from the editor modules.
 export { stableId };
@@ -91,34 +100,146 @@ export function collectGroupMembers(elements: SlideElement[], groupId: string): 
   return elements.filter((e) => e.groupId === groupId).map((e) => e.id);
 }
 
+// ─── Theme master synthesis (P2.4) ─────────────────────────────────────────
+
+/**
+ * Build a sensible default `SlideTheme` for a presentation that has none.
+ * Used by `migratePresentation` so v0/v1 decks restored from disk inherit
+ * a cascade even when their authors never touched the theme tab.
+ */
+export function synthesizeDefaultTheme(): SlideTheme {
+  return {
+    id: stableId(),
+    name: "Default",
+    defaultFontFamily: "Arial",
+    defaultFontSize: 32,
+    titleStyle: { font_family: "Arial", font_size: 60, color: "#ffffff", bold: true },
+    bodyStyle: { font_family: "Arial", font_size: 32, color: "#ffffff" },
+    textColor: "#ffffff",
+    accentColor: "#f59e0b",
+    background: { type: "color", value: "#1a1a2e" },
+    // P4.3 — sensible built-in paragraph styles for the inline editor's
+    // dropdown. Slide authors can override these in the theme tab; decks
+    // saved before P4.3 get these defaults via `migratePresentation`.
+    paragraphStyles: {
+      Body: { font_size: 32, color: "#ffffff" },
+      Quote: { font_family: "Georgia", font_size: 28, italic: true, color: "#e2e8f0", indent: "1.2em" },
+      Header: { font_size: 48, bold: true, color: "#ffffff" },
+    },
+  };
+}
+
 // ─── Migration ────────────────────────────────────────────────────────────────
 
 /**
- * Convert a legacy (pre-`elements[]`) `CustomPresentation` into the
- * modern `elements[]` model. Slides with empty `elements` arrays have
- * their `header` and `body` zones converted into separate text
- * elements using `newTextElement` so the resulting shape stays
- * type-safe with the discriminated-union `SlideElement` contract.
+ * Convert a legacy (pre-v2) `CustomPresentation` into the current shape.
  *
- * Idempotent — `presentation.version >= 1` is returned unchanged.
+ * Upgrades performed:
+ *
+ *   v0 → v1  Legacy `header`/`body` zones (if any) become individual
+ *            `TextElement`s inside `elements[]`.
+ *   v1 → v2  The flat `backgroundColor`/`backgroundImage`/`backgroundVideo`/
+ *            `backgroundVideoLoop`/`backgroundVideoMuted` fields are folded
+ *            into the single `background: SlideBackground` union (priority:
+ *            video > image > colour, matching the legacy renderer's
+ *            behaviour).
+ *            Every `TextElement.content` carrying a string (HTML) is
+ *            migrated to ProseMirror JSON via `generateJSON`.
+ *            The presentation gets a synthesized default `SlideTheme` if
+ *            none exists, so the P2.4 cascade has a base to inherit from.
+ *
+ * Idempotent — presentations already at `version >= 2` are returned unchanged.
  */
 export function migratePresentation(p: CustomPresentation): CustomPresentation {
-  if (p.version && p.version >= 1) return p;
+  if (p.version && p.version >= 2) return p;
+
+  const theme = p.theme ?? synthesizeDefaultTheme();
+
   return {
     ...p,
-    version: 1,
-    slides: p.slides.map((s) => {
-      if (s.elements && s.elements.length > 0) return s;
-      const elements: SlideElement[] = [];
-      if (s.headerEnabled !== false && s.header) {
-        elements.push(zoneToTextElement(s.header, s.headerHeightPct ?? 35, 1));
-      }
-      if (s.body) {
-        elements.push(zoneToTextElement(s.body, (s.headerHeightPct ?? 35) + 15, 2));
-      }
-      return { ...s, elements };
-    }),
+    version: 2,
+    theme,
+    masters: p.masters,
+    slides: p.slides.map((s) => migrateSlide(s)),
   };
+}
+
+/**
+ * Migrate a single `CustomSlide` from the v0/v1 shape to the current v2
+ * shape. Exposed as a separate function so the slide editor can re-migrate
+ * a single slide (e.g. an imported template) without touching the rest
+ * of the presentation.
+ */
+export function migrateSlide(raw: any): CustomSlide {
+  // ── background union ───────────────────────────────────────────────────
+  let background: SlideBackground | undefined = raw?.background;
+  if (!background) {
+    background = buildBackgroundFromLegacy(raw);
+  }
+
+  // ── elements[] (v0 → v1) ────────────────────────────────────────────────
+  let elements: SlideElement[] = Array.isArray(raw?.elements) ? (raw.elements as SlideElement[]) : [];
+  if (elements.length === 0) {
+    elements = buildElementsFromLegacyZones(raw);
+  }
+
+  // ── content string → JSON (v1 → v2) ──────────────────────────────────────
+  elements = elements.map(migrateElementContent);
+
+  return {
+    id: raw.id,
+    background,
+    elements,
+    notes: raw.notes,
+    masterRef: raw.masterRef,
+  };
+}
+
+function buildBackgroundFromLegacy(s: any): SlideBackground {
+  const bgVideo = s?.backgroundVideo ?? s?.background_video;
+  const bgImage = s?.backgroundImage ?? s?.background_image;
+  const bgColor = s?.backgroundColor ?? s?.background_color ?? "#1a1a2e";
+  const bgVideoLoop = s?.backgroundVideoLoop ?? s?.background_video_loop;
+  const bgVideoMuted = s?.backgroundVideoMuted ?? s?.background_video_muted;
+
+  if (bgVideo) {
+    return { type: "video", value: bgVideo, loop: bgVideoLoop !== false, muted: bgVideoMuted !== false };
+  }
+  if (bgImage) {
+    return { type: "image", value: bgImage, objectFit: "cover" };
+  }
+  return { type: "color", value: bgColor };
+}
+
+function buildElementsFromLegacyZones(s: any): SlideElement[] {
+  const out: SlideElement[] = [];
+  if (s?.headerEnabled !== false && s?.header) {
+    out.push(zoneToTextElement(s.header, s.headerHeightPct ?? 35, 1));
+  }
+  if (s?.body) {
+    out.push(zoneToTextElement(s.body, (s.headerHeightPct ?? 35) + 15, 2));
+  }
+  return out;
+}
+
+function migrateElementContent(el: SlideElement): SlideElement {
+  // P3.5 — shape taxonomy: backfill `shape: "rect"` and copy the
+  // legacy `color` into `fillColor` so old decks round-trip cleanly.
+  if (el.kind === "shape") {
+    const shapeEl = el as any;
+    return {
+      ...shapeEl,
+      shape: shapeEl.shape ?? "rect",
+      fillColor: shapeEl.fillColor ?? shapeEl.color,
+    } as SlideElement;
+  }
+  if (el.kind !== "text") return el;
+  const content = (el as any).content;
+  if (typeof content !== "string") return el;
+  return {
+    ...el,
+    content: migrateHtmlContentToJSON(content),
+  } as SlideElement;
 }
 
 function zoneToTextElement(zone: SlideZone, yPct: number, zIndex: number) {

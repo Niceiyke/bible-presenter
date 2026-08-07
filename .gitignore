@@ -14,3 +14,8 @@ src-tauri/bible_data/*.npy
 
 # tokenizer.json is small (~2MB) and is committed
 !src-tauri/models/tokenizer.json
+
+# Stray build/cargo log artifacts
+src-tauri/*.log
+src-tauri/*.err.log
+src-tauri/check_*.log

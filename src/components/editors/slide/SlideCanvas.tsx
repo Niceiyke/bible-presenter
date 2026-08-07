@@ -9,7 +9,26 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { CustomSlideRenderer } from "../../shared/Renderers";
 import { InlineTextEditor } from "./InlineTextEditor";
 import type { Handle } from "./useElementDragResize";
-import type { CustomSlide, SlideElement } from "../../../types";
+import type { GuideLine } from "./useElementDragResize";
+import type { CustomSlide, SlideElement, ProseMirrorJSON, SlideBackground, SlideTheme } from "../../../types";
+
+/**
+ * Resolve the canvas backing colour — used for the editor surface behind
+ * the renderer, so dragging shows a sensible background rather than a
+ * transparent ring. The actual slide background paints on top via the
+ * `CustomSlideRenderer`. Image/video backgrounds fall back to a neutral
+ * dark colour rather than reading the (no-longer-present) flat
+ * `backgroundColor` field (Phase 2.1 collapsed those into the union).
+ */
+function backingBackgroundColor(bg: SlideBackground): string {
+  switch (bg.type) {
+    case "color": return bg.value;
+    case "image": return "#000000";
+    case "video": return "#000000";
+    case "gradient": return bg.from;
+    default: return "#1a1a2e";
+  }
+}
 
 const HANDLES: Record<Handle, React.CSSProperties> = {
   nw: { top: -5, left: -5, cursor: "nwse-resize" },
@@ -31,12 +50,20 @@ export interface SlideCanvasProps {
   editingElementId: string | null;
   slideIndex: number;
   slideCount: number;
+  /** P3.2: snap grid size in canvas-% units; 0 disables the overlay. */
+  gridSize: number;
+  /** P3.1: active smart-guide overlay. `null` means nothing is
+   *  snapping; the SVG overlay renders nothing in that case. */
+  guides: GuideLine[] | null;
+  /** P4.3: cascade theme used for the paragraph-style dropdown. */
+  theme?: SlideTheme;
   onCanvasClick: (e: React.MouseEvent) => void;
   onElementClick: (id: string, e: React.MouseEvent) => void;
   onDblClick: (id: string, e: React.MouseEvent) => void;
   onDrag: (id: string, e: React.PointerEvent) => void;
   onResize: (id: string, e: React.PointerEvent, h: Handle) => void;
-  onCommit: (id: string, html: string) => void;
+  onRotate: (id: string, e: React.PointerEvent) => void;
+  onCommit: (id: string, doc: ProseMirrorJSON) => void;
   onNavigate: (delta: 1 | -1) => void;
 }
 
@@ -49,11 +76,15 @@ export function SlideCanvas({
   editingElementId,
   slideIndex,
   slideCount,
+  gridSize,
+  guides,
+  theme,
   onCanvasClick,
   onElementClick,
   onDblClick,
   onDrag,
   onResize,
+  onRotate,
   onCommit,
   onNavigate,
 }: SlideCanvasProps) {
@@ -63,8 +94,43 @@ export function SlideCanvas({
       style={{ background: "radial-gradient(circle, #252540 1px, transparent 1px)", backgroundSize: "22px 22px", backgroundColor: "#0b0b18" }}
       onClick={onCanvasClick}
     >
-      <div ref={canvasRef} className="relative shadow-2xl shadow-black/80 ring-1 ring-white/8" style={{ aspectRatio: "16/9", backgroundColor: slide.backgroundColor, width: "min(100%, calc((100vh - 140px) * 16 / 9))" }}>
+      <div ref={canvasRef} className="relative shadow-2xl shadow-black/80 ring-1 ring-white/8" style={{ aspectRatio: "16/9", backgroundColor: backingBackgroundColor(slide.background), width: "min(100%, calc((100vh - 140px) * 16 / 9))" }}>
         <CustomSlideRenderer slide={slide} scale={canvasScale} appDataDir={appDataDir} hiddenElementIds={editingElementId ? [editingElementId] : []} />
+
+        {/* P3.2: visual grid overlay — shown only when snapping is on.
+            Pointer-events:none so it never intercepts canvas clicks. */}
+        {gridSize > 0 && (
+          <div
+            className="absolute inset-0 z-[1] pointer-events-none"
+            style={{
+              backgroundImage:
+                `linear-gradient(to right, rgba(255,255,255,0.10) 1px, transparent 1px),` +
+                `linear-gradient(to bottom, rgba(255,255,255,0.10) 1px, transparent 1px)`,
+              backgroundSize: `${gridSize}% ${gridSize}%`,
+            }}
+          />
+        )}
+
+        {/* P3.1: smart-guide overlay — dashed red lines drawn while the
+            dragged element is aligning to a static sibling or the
+            canvas center/edges. SVG keeps the lines crisp at any
+            canvas scale; `pointer-events:none` is set on the svg so
+            the overlay never intercepts drag pointer events. */}
+        {guides && guides.length > 0 && (
+          <svg
+            className="absolute inset-0 z-[201] pointer-events-none"
+            width="100%"
+            height="100%"
+            viewBox="0 0 100 100"
+            preserveAspectRatio="none"
+          >
+            {guides.map((g, i) =>
+              g.orientation === "vertical"
+                ? <line key={`v${i}`} x1={g.pos} y1={0} x2={g.pos} y2={100} stroke="#ef4444" strokeWidth={0.15} strokeDasharray="1 1" vectorEffect="non-scaling-stroke" />
+                : <line key={`h${i}`} x1={0} y1={g.pos} x2={100} y2={g.pos} stroke="#ef4444" strokeWidth={0.15} strokeDasharray="1 1" vectorEffect="non-scaling-stroke" />
+            )}
+          </svg>
+        )}
 
         <div className="absolute inset-0 z-50">
           {slide.elements.slice().sort((a, b) => a.z_index - b.z_index).map(el => {
@@ -88,10 +154,21 @@ export function SlideCanvas({
                 onPointerDown={e => { if (!isEditing) onDrag(el.id, e); }}
                 onDoubleClick={e => onDblClick(el.id, e)}
               >
-                {isEditing && el.kind === "text" && <InlineTextEditor el={el} canvasScale={canvasScale} onCommit={html => onCommit(el.id, html)} />}
+                {isEditing && el.kind === "text" && <InlineTextEditor el={el} canvasScale={canvasScale} theme={theme} onCommit={doc => onCommit(el.id, doc)} />}
                 {isActive && !isEditing && Object.entries(HANDLES).map(([h, style]) => (
                   <div key={h} onPointerDown={e => onResize(el.id, e, h as Handle)} className="absolute w-2.5 h-2.5 bg-white border-2 border-indigo-400 rounded-full shadow-md" style={{ position: "absolute", ...style }} />
                 ))}
+                {/* P3.4: rotation grabber — a circular handle mounted
+                    above the element's top-center, slightly away from
+                    the box so it doesn't interfere with the n-handle. */}
+                {isActive && !isEditing && (
+                  <div
+                    onPointerDown={e => onRotate(el.id, e)}
+                    title="Rotate"
+                    className="absolute left-1/2 -translate-x-1/2 -top-7 w-5 h-5 bg-amber-500 border-2 border-white rounded-full shadow-md cursor-grab hover:bg-amber-400 transition-all"
+                    style={{ position: "absolute" }}
+                  />
+                )}
                 {isActive && !isEditing && el.kind === "text" && (
                   <span className="absolute top-full left-0 mt-1 px-1.5 py-0.5 bg-indigo-500 text-white text-[7px] font-bold rounded whitespace-nowrap pointer-events-none z-[200]">↕ drag · double-click to edit</span>
                 )}

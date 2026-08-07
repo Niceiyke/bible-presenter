@@ -33,6 +33,7 @@ const ALLOWED_STYLE_PROPS = new Set([
   "letter-spacing",
   "margin",
   "padding",
+  "text-indent",
 ]);
 
 const ALLOWED_CLASS_VALUES = new Set(["tiptap-rendered-content"]);

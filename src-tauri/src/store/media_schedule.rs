@@ -61,7 +61,28 @@ pub struct SlideElement {
     pub w: f64,
     pub h: f64,
     pub z_index: i32,
-    pub content: String,
+    /// P3.4: rotation (degrees, clockwise), flip flags. Stored as loose
+    /// numbers/booleans so the renderer can apply `transform: rotate(…) /
+    /// scaleX(-1) / scaleY(-1)` without touching Rust when new transform
+    /// variants are added.
+    #[serde(default, rename = "rotation")]
+    pub rotation: Option<f64>,
+    #[serde(default, rename = "flipX")]
+    pub flip_x: Option<bool>,
+    #[serde(default, rename = "flipY")]
+    pub flip_y: Option<bool>,
+    /// P4.5: per-element entrance animation recipe (type/duration/delay).
+    /// Stored loosely so the renderer reads `entrance` without Rust owning
+    /// the shape; mirrors `content`'s escape-hatch approach.
+    #[serde(default)]
+    pub entrance: Option<serde_json::Value>,
+    /// Phase 2.2: TextElement.content is a ProseMirror JSON doc on the
+    /// frontend; the legacy HTML-string escape hatch stays a JSON string
+    /// for one release cycle. Image/video elements carry a plain path
+    /// string. Storing the field as `serde_json::Value` lets both shapes
+    /// round-trip through Rust without any per-kind marshalling here.
+    #[serde(default = "default_content")]
+    pub content: serde_json::Value,
     #[serde(default)]
     pub font_size: Option<f64>,
     #[serde(default)]
@@ -92,6 +113,55 @@ pub struct SlideElement {
     pub loop_video: Option<bool>,
     #[serde(default)]
     pub muted: Option<bool>,
+    /// P2.4: optional master-placeholder role ("title" | "body" | "footer").
+    /// Stored as a loose string (one of the allowed literals) so Rust's
+    /// serde layer doesn't need to model the enum when round-tripping.
+    #[serde(default, rename = "role")]
+    pub role: Option<String>,
+    /// Phase 3.3 — auto-fit behaviour. One of `"grow"` / `"shrink"` /
+    /// `"fixed"`. Stored as a loose string so future modes don't require
+    /// a Rust change.
+    #[serde(default, rename = "autoSize")]
+    pub auto_size: Option<String>,
+    /// P3.5 — ShapeElement taxonomy. `shape` is one of `rect`/`rounded`/
+    /// `circle`/`line`/`triangle`. Stroke and border-radius ride along
+    /// as loose scalars; the frontend rehydrates per-kind.
+    #[serde(default, rename = "shape")]
+    pub shape: Option<String>,
+    #[serde(default, rename = "fillColor", alias = "fill_color")]
+    pub fill_color: Option<String>,
+    #[serde(default, rename = "strokeColor")]
+    pub stroke_color: Option<String>,
+    #[serde(default, rename = "strokeWidth")]
+    pub stroke_width: Option<f64>,
+    #[serde(default, rename = "borderRadius")]
+    pub border_radius: Option<f64>,
+    /// P3.6 — image-specific presentation props. `filter` is one of
+    /// the frontend's "none"/"grayscale"/"sepia"/"blur"/"brightness"
+    /// literals stored as a loose string; `filterValue` is the 0–100
+    /// strength; `objectFit`/`objectPosition` map straight to the
+    /// corresponding CSS properties. `border` is a small inline
+    /// {color,width} object the frontend emits as a single CSS rule.
+    #[serde(default, rename = "objectFit")]
+    pub object_fit: Option<String>,
+    #[serde(default, rename = "objectPosition")]
+    pub object_position: Option<String>,
+    #[serde(default, rename = "filter")]
+    pub filter: Option<String>,
+    #[serde(default, rename = "filterValue")]
+    pub filter_value: Option<f64>,
+    // borderRadius is shared between ShapeElement (P3.5) and
+    // ImageElement (P3.6) — declared once above, so no redeclaration.
+    #[serde(default, rename = "border")]
+    pub border: Option<serde_json::Value>,
+}
+
+/// `serde` default for `SlideElement.content`. Empty value; the real
+/// content always arrives from the frontend. Picking `Value::Null`
+/// would silently substitute the legacy-string contract many places
+/// still touch, so we use an empty JSON string instead.
+fn default_content() -> serde_json::Value {
+    serde_json::Value::String(String::new())
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -100,13 +170,21 @@ pub struct CustomSlideData {
     pub presentation_name: String,
     pub slide_index: u32,
     pub slide_count: u32,
-    pub background_color: String,
+    /// P2.1: discriminated-union background. The legacy flat fields
+    /// below remain on the Rust struct only for back-compat with old
+    /// on-wire payloads; the renderer side reads `background` first
+    /// and falls back to them when this is `None`.
+    #[serde(default, rename = "background")]
+    pub background: Option<serde_json::Value>,
+    #[serde(rename = "backgroundColor", alias = "background_color", default)]
+    pub background_color: Option<String>,
+    #[serde(rename = "backgroundImage", alias = "background_image", default)]
     pub background_image: Option<String>,
-    #[serde(rename = "background_video", default)]
+    #[serde(rename = "backgroundVideo", alias = "background_video", default)]
     pub background_video: Option<String>,
-    #[serde(rename = "background_video_loop", default)]
+    #[serde(rename = "backgroundVideoLoop", alias = "background_video_loop", default)]
     pub background_video_loop: Option<bool>,
-    #[serde(rename = "background_video_muted", default)]
+    #[serde(rename = "backgroundVideoMuted", alias = "background_video_muted", default)]
     pub background_video_muted: Option<bool>,
     #[serde(default)]
     pub header_enabled: Option<bool>,
@@ -118,6 +196,15 @@ pub struct CustomSlideData {
     pub body: Option<CustomSlideZone>,
     #[serde(default)]
     pub elements: Vec<SlideElement>,
+    /// P2.4: optional cascade theme carried by the on-wire slide payload
+    /// for the output window. The frontend embeds the presentation
+    /// theme here when broadcasting a live custom slide so the renderer
+    /// can resolve "inherit" element styles even though it does not
+    /// have a presentation handle of its own.
+    #[serde(default, rename = "theme")]
+    pub theme: Option<serde_json::Value>,
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -450,7 +537,14 @@ pub struct PropItem {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CustomSlide {
     pub id: String,
-    #[serde(rename = "backgroundColor", alias = "background_color")]
+    /// P2.1: discriminated-union background. The flat legacy fields
+    /// below remain (defaulted) for back-compat with on-disk v0/v1
+    /// presentations and round-trip through old builders; new saves
+    /// set this and the frontend's `migratePresentation` repopulates
+    /// it on load if it's missing.
+    #[serde(default, rename = "background")]
+    pub background: Option<serde_json::Value>,
+    #[serde(rename = "backgroundColor", alias = "background_color", default = "default_background_color")]
     pub background_color: String,
     #[serde(rename = "backgroundImage", alias = "background_image", default)]
     pub background_image: Option<String>,
@@ -473,7 +567,17 @@ pub struct CustomSlide {
     pub header: Option<CustomSlideZone>,
     #[serde(default)]
     pub body: Option<CustomSlideZone>,
+    /// P2.4: optional master layout reference. Round-trips as a loose
+    /// string so the frontend's cascade logic can trace dependent
+    /// slides back to their `SlideMaster` definition.
+    #[serde(default, rename = "masterRef")]
+    pub master_ref: Option<String>,
 }
+
+/// `serde` default for the legacy `background_color` field. Empty string
+/// rather than the historical "#1a1a2e" because new presentations set
+/// the `background` union directly and never reach this fallback.
+fn default_background_color() -> String { String::new() }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CustomPresentation {
@@ -482,6 +586,16 @@ pub struct CustomPresentation {
     pub slides: Vec<CustomSlide>,
     #[serde(default)]
     pub version: Option<u32>,
+    /// P2.4: theme defaults applied to elements whose own style props
+    /// carry the `"inherit"` sentinel. Loose `serde_json::Value` so new
+    /// `SlideTheme` fields round-trip without re-publishing the Rust
+    /// types on every extension.
+    #[serde(default, rename = "theme")]
+    pub theme: Option<serde_json::Value>,
+    /// P2.4: optional reusable master layouts. Same permissive
+    /// `serde_json::Value` for round-tripping.
+    #[serde(default, rename = "masters")]
+    pub masters: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -498,7 +612,12 @@ pub struct SlideTemplate {
     pub id: String,
     pub name: String,
     pub category: String,
-    pub slide: CustomSlide,
+    /// Single-slide template. One of `slide` / `slides` is set (P4.1).
+    #[serde(default)]
+    pub slide: Option<CustomSlide>,
+    /// Deck template (P4.1): a sequence of slides inserted together.
+    #[serde(default)]
+    pub slides: Option<Vec<CustomSlide>>,
     pub created_at: u64,
 }
 
@@ -1023,6 +1142,8 @@ impl MediaScheduleStore {
             name: &'a str,
             slides: &'a Vec<CustomSlide>,
             version: Option<u32>,
+            theme: &'a Option<serde_json::Value>,
+            masters: &'a Option<serde_json::Value>,
             updated_at: u64,
         }
         let stamped = StampedPres {
@@ -1030,6 +1151,8 @@ impl MediaScheduleStore {
             name: &presentation.name,
             slides: &presentation.slides,
             version: presentation.version,
+            theme: &presentation.theme,
+            masters: &presentation.masters,
             updated_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())

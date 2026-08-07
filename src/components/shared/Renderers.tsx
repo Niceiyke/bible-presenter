@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { resolvePath } from "../../utils";
+import { resolvePath, getTransitionVariants } from "../../utils";
 import { sanitizeSlideHtml } from "../../utils/sanitize";
 import { useAppStore } from "../../store";
 import {
@@ -16,7 +16,12 @@ import {
   PresentationSettings,
   DEFAULT_LT_TEMPLATE,
   SlideElement,
+  SlideBackground,
+  SlideTheme,
+  TextElement,
 } from "../../types";
+import { renderDocToHtml, isJsonContent } from "../editors/slide/slideTextExtensions";
+import { useAutoSizeText, resolveAutoSizeInputs, docToPlainText } from "./useAutoSizeText";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -40,52 +45,249 @@ export function hexToRgba(hex: string, opacity: number): string {
 
 // ─── Custom Slide Renderer ───────────────────────────────────────────────────
 
+/**
+ * Resolve a `SlideBackground` discriminated union into a CSS style object
+ * for the container div. Video backgrounds return an empty style — the
+ * `<video>` element rendered separately covers the slide. Image
+ * backgrounds optionally respect an `objectFit` override (Phase 2.1
+ * added the field; defaults to `cover` for back-compat with v0/v1).
+ */
+function backgroundToStyle(
+  bg: SlideBackground,
+  appDataDir: string | null,
+): React.CSSProperties {
+  switch (bg.type) {
+    case "color": {
+      return { backgroundColor: bg.value };
+    }
+    case "image": {
+      const resolved = resolvePath(bg.value, appDataDir);
+      return {
+        backgroundImage: `url(${convertFileSrc(resolved)})`,
+        backgroundSize: bg.objectFit ?? "cover",
+        backgroundPosition: "center",
+      };
+    }
+    case "video": {
+      // The `<video>` overlay below covers the slide; the container just
+      // paints a neutral colour underneath in case the video is still
+      // loading. Use the canvas default so flash is dark, not white.
+      return { backgroundColor: "#000000" };
+    }
+    case "gradient": {
+      return {
+        background: `linear-gradient(${bg.angle}deg, ${bg.from}, ${bg.to})`,
+      };
+    }
+    default: {
+      // Exhaustiveness — adding a new background variant is a compile
+      // error here so the renderer never silently drops a new type.
+      const _exhaustive: never = bg;
+      void _exhaustive;
+      return {};
+    }
+  }
+}
+
+/**
+ * If the slide carries a non-null video background, render the autoplay
+ * loop that covers the slide. Memoized so changing other slide props
+ * doesn't reload the underlying video element.
+ */
+function BackgroundVideoEl({ value, loop, muted, appDataDir }: {
+  value: string; loop?: boolean; muted?: boolean; appDataDir: string | null;
+}) {
+  const resolved = resolvePath(value, appDataDir);
+  if (!resolved) return null;
+  return (
+    <video
+      src={convertFileSrc(resolved)}
+      className="absolute inset-0 w-full h-full object-cover z-0"
+      autoPlay
+      loop={loop !== false}
+      muted={muted !== false}
+      playsInline
+    />
+  );
+}
+
+/**
+ * Resolve a `TextElement` style prop with the theme cascade (P2.4):
+ * "inherit" pulls from the supplied `SlideTheme` rather than the
+ * element's own override. Concrete values win; absent defaults fall
+ * back to the historical "Arial/32pt/white" so the renderer never
+ * produces invisible text on an un-themed slide.
+ */
+function resolveTextFont(el: TextElement, theme: SlideTheme | undefined) {
+  const fontFamily =
+    el.font_family === "inherit" || el.font_family === undefined
+      ? theme?.defaultFontFamily ?? "Arial"
+      : el.font_family;
+  const fontSize =
+    el.font_size === "inherit" || el.font_size === undefined
+      ? theme?.defaultFontSize ?? 32
+      : el.font_size;
+  const color = el.color === "inherit" || el.color === undefined
+    ? theme?.textColor ?? "#ffffff"
+    : el.color;
+  return { fontFamily, fontSize, color };
+}
+
+/**
+ * Single text-element renderer used by `CustomSlideRenderer` so the
+ * auto-size algorithm (P3.3) can own its own DOM ref and probe element
+ * without the parent's per-slide memo re-running on every binary-search
+ * iteration. Honors both `mode: "shrink"` (binary-search down) and
+ * `mode: "grow"` (ResizeObserver-driven box expansion).
+ */
+function SlideTextElement({
+  el, scale, theme, elStyle, vAlign,
+}: {
+  el: TextElement;
+  scale: number;
+  theme?: SlideTheme;
+  elStyle: React.CSSProperties;
+  vAlign: "flex-start" | "center" | "flex-end";
+}) {
+  const { fontFamily, fontSize, color } = resolveTextFont(el, theme);
+  const html = isJsonContent(el.content)
+    ? renderDocToHtml(el.content)
+    : sanitizeSlideHtml(String(el.content ?? ""));
+  const textPlain = docToPlainText(el.content);
+  const autosize = el.autoSize ?? "fixed";
+
+  // ── shrink: binary-search the largest pt that fits inside the box. ─────
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [boxPx, setBoxPx] = useState<{ w: number; h: number } | null>(null);
+  useLayout(() => {
+    const node = boxRef.current;
+    if (!node || autosize !== "shrink") { setBoxPx(null); return; }
+    // 2px each side so a long paragraph does not render flush against
+    // the element border (matches the editor's outline + handle inset).
+    setBoxPx({ w: node.clientWidth - 4, h: node.clientHeight - 4 });
+  }, [el.w, el.h, autosize, html, scale]);
+  const shrinkPt = useAutoSizeText(
+    autosize === "shrink" && boxPx !== null,
+    boxPx ? resolveAutoSizeInputs(el, theme, scale, textPlain, boxPx.h, boxPx.w) : null,
+  );
+  const effectivePt = shrinkPt ?? fontSize * scale;
+
+  // ── grow: ResizeObserver-driven box expansion below content height. ─────
+  // `min-h` is the declared `h` percentage; the box grows past it inline.
+  const growChildRef = useRef<HTMLDivElement>(null);
+  const [growOverrideH, setGrowOverrideH] = useState<string | null>(null);
+  useLayout(() => {
+    if (autosize !== "grow") { setGrowOverrideH(null); return; }
+    const child = growChildRef.current;
+    if (!child) return;
+    const sync = () => {
+      const measured = child.scrollHeight;
+      // Convert to % of the slide's height. The parent box is sized
+      // in %, so we express the override in the same unit; the slide
+      // container's height is the 100% reference.
+      const parentH = (child.parentElement?.parentElement?.clientHeight) ?? 0;
+      if (parentH <= 0) return;
+      const pct = (measured / parentH) * 100;
+      // The declared `el.h` is the floor; only grow past it.
+      if (pct > (el.h + 0.05)) setGrowOverrideH(`${pct}%`);
+      else setGrowOverrideH(null);
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(child);
+    return () => ro.disconnect();
+  }, [autosize, html, el.h, scale]);
+
+  const heightStyle = growOverrideH ?? undefined;
+
+  return (
+    <div
+      ref={boxRef}
+      key={el.id}
+      style={{
+        ...elStyle,
+        height: heightStyle ?? elStyle.height,
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: vAlign,
+      }}
+    >
+      <div
+        ref={growChildRef}
+        className="tiptap-rendered-content"
+        style={{
+          fontFamily,
+          fontSize: `${effectivePt}pt`,
+          color,
+          fontWeight: el.bold ? "bold" : "normal",
+          fontStyle: el.italic ? "italic" : "normal",
+          textAlign: (el.align ?? "left") as React.CSSProperties["textAlign"],
+          textShadow: el.shadow === false ? "none" : `0 2px 8px ${el.shadow_color || "rgba(0,0,0,0.6)"}`,
+          lineHeight: 1.3,
+          width: "100%",
+        }}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    </div>
+  );
+}
+
+/** Tiny alias so the text-renderer's `useLayoutEffect` reads cleanly —
+ *  hoisted here so the rest of the file can keep using the React prime
+ *  when we want suspense-free development. */
+import { useLayoutEffect as useLayout } from "react";
+
+export interface CustomSlideRendererProps {
+  slide: CustomSlide | CustomSlideDisplayData;
+  scale?: number;
+  appDataDir?: string | null;
+  hiddenElementIds?: string[];
+  /** Optional cascade theme. Inherited only for elements with
+   *  `font_family|font_size|color === "inherit"` (P2.4). The output
+   *  window may omit it if the calling side does not know the
+   *  presentation's theme. */
+  theme?: SlideTheme;
+  /** P4.5: when true, elements carrying an `entrance` recipe animate in
+   *  (fade/slide/zoom) on first mount. Only the live/projection path
+   *  passes this; the editor canvas + thumbnails keep `false` so the
+   *  authoring surface never animates. */
+  entranceEnabled?: boolean;
+}
+
 export function CustomSlideRenderer({
   slide,
   scale = 1,
   appDataDir = null,
   hiddenElementIds = [],
-}: {
-  slide: CustomSlide | CustomSlideDisplayData;
-  scale?: number;
-  appDataDir?: string | null;
-  hiddenElementIds?: string[];
-}) {
-  const isDisplayData = "background_color" in slide;
+  theme,
+  entranceEnabled = false,
+}: CustomSlideRendererProps) {
+  // Both `CustomSlide` and `CustomSlideDisplayData` carry the same
+  // `background` union + `elements` array (P2.3 collapsed the dual
+  // access path); the only structural difference is the metadata
+  // fields packed next to the slide content on the on-wire shape.
+  const background: SlideBackground = (slide as any).background;
+  const elements: SlideElement[] = ((slide as any).elements as SlideElement[]) ?? [];
 
-  const bgColor = isDisplayData ? (slide as CustomSlideDisplayData).background_color : (slide as CustomSlide).backgroundColor;
-  const bgImage = isDisplayData ? (slide as CustomSlideDisplayData).background_image : (slide as CustomSlide).backgroundImage;
-  const bgVideo = isDisplayData ? (slide as CustomSlideDisplayData).background_video : (slide as CustomSlide).backgroundVideo;
-  const bgVideoLoop = isDisplayData ? (slide as CustomSlideDisplayData).background_video_loop : (slide as CustomSlide).backgroundVideoLoop;
-  const bgVideoMuted = isDisplayData ? (slide as CustomSlideDisplayData).background_video_muted : (slide as CustomSlide).backgroundVideoMuted;
-  const elements = (isDisplayData ? (slide as CustomSlideDisplayData).elements : (slide as CustomSlide).elements) ?? [];
+  const bgStyle = useMemo(() => backgroundToStyle(background, appDataDir), [background, appDataDir]);
 
-  // Fallback to legacy structure if elements are missing
-  const headerEnabled = isDisplayData ? (slide as CustomSlideDisplayData).header_enabled : (slide as CustomSlide).headerEnabled;
-  const headerHeightPct = (isDisplayData ? (slide as CustomSlideDisplayData).header_height_pct : (slide as CustomSlide).headerHeightPct) ?? 35;
-  const header = isDisplayData ? (slide as CustomSlideDisplayData).header : (slide as CustomSlide).header;
-  const body = isDisplayData ? (slide as CustomSlideDisplayData).body : (slide as CustomSlide).body;
-
-  const resolvedBgImage = resolvePath(bgImage, appDataDir);
-  const bgStyle: React.CSSProperties = resolvedBgImage
-    ? { backgroundImage: `url(${convertFileSrc(resolvedBgImage)})`, backgroundSize: "cover", backgroundPosition: "center" }
-    : { backgroundColor: bgColor };
-
-  const zoneStyle = (z: { text?: string; fontSize?: number; fontFamily?: string; font_size?: number; font_family?: string; color?: string; bold?: boolean; italic?: boolean; align?: string }): React.CSSProperties => ({
-    fontFamily: z.fontFamily ?? z.font_family ?? "Arial",
-    fontSize: `${(z.fontSize ?? z.font_size ?? 32) * scale}pt`,
-    color: z.color ?? "#ffffff",
-    fontWeight: z.bold ? "bold" : "normal",
-    fontStyle: z.italic ? "italic" : "normal",
-    textAlign: (z.align ?? "center") as React.CSSProperties["textAlign"],
-    textShadow: "0 2px 8px rgba(0,0,0,0.6)",
-    whiteSpace: "pre-wrap",
-    lineHeight: 1.3,
-    margin: 0,
-  });
+  // Render the video background only when the union covers a video.
+  const bgVideoEl = useMemo(() => {
+    if (background.type !== "video") return null;
+    return (
+      <BackgroundVideoEl
+        value={background.value}
+        loop={background.loop}
+        muted={background.muted}
+        appDataDir={appDataDir}
+      />
+    );
+  }, [background, appDataDir]);
 
   // Memoize per-element render so PropsRenderer Southbank-build churn doesn't
-  // re-serialize every slide change.
+  // re-serialize every slide change. `JSON.stringify` content keys are
+  // memoized further inside `renderDocToHtml`, so a banner that toggles
+  // background colour every frame does not reparse its neighbour.
   const renderedElements = useMemo(() => elements.map((el) => {
     if (hiddenElementIds.includes(el.id)) return null;
 
@@ -97,56 +299,65 @@ export function CustomSlideRenderer({
       height: `${el.h}%`,
       zIndex: el.z_index,
       opacity: el.opacity ?? 1,
+      // P3.4: rotation about the element's box center; flip mirroring
+      // along the X / Y axis. `transform-box: fill-box` doesn't matter
+      // here because the box is sized in % of the parent — the default
+      // transform-origin is the element's center, which is what we
+      // want.
+      transform: [
+        el.rotation ? `rotate(${el.rotation}deg)` : "",
+        el.flipX ? "scaleX(-1)" : "",
+        el.flipY ? "scaleY(-1)" : "",
+      ].filter(Boolean).join(" ") || undefined,
     };
 
     switch (el.kind) {
       case "text": {
         const vAlign = el.v_align === "middle" ? "center" : el.v_align === "bottom" ? "flex-end" : "flex-start";
-        const isHtml = el.content.includes("<");
-
         return (
-          <div key={el.id} style={{ ...elStyle, display: "flex", flexDirection: "column", justifyContent: vAlign }}>
-            {isHtml ? (
-              <div
-                className="tiptap-rendered-content"
-                style={{
-                  fontFamily: el.font_family ?? "Arial",
-                  fontSize: `${(el.font_size ?? 32) * scale}pt`,
-                  color: el.color ?? "#ffffff",
-                  fontWeight: el.bold ? "bold" : "normal",
-                  fontStyle: el.italic ? "italic" : "normal",
-                  textAlign: (el.align ?? "left") as React.CSSProperties["textAlign"],
-                  textShadow: el.shadow === false ? "none" : `0 2px 8px ${el.shadow_color || "rgba(0,0,0,0.6)"}`,
-                  lineHeight: 1.3,
-                  width: "100%",
-                }}
-                dangerouslySetInnerHTML={{ __html: sanitizeSlideHtml(el.content) }}
-              />
-            ) : (
-              <p style={{
-                fontFamily: el.font_family ?? "Arial",
-                fontSize: `${(el.font_size ?? 32) * scale}pt`,
-                color: el.color ?? "#ffffff",
-                fontWeight: el.bold ? "bold" : "normal",
-                fontStyle: el.italic ? "italic" : "normal",
-                textAlign: (el.align ?? "left") as React.CSSProperties["textAlign"],
-                textShadow: el.shadow === false ? "none" : `0 2px 8px ${el.shadow_color || "rgba(0,0,0,0.6)"}`,
-                whiteSpace: "pre-wrap",
-                lineHeight: 1.3,
-                margin: 0,
-                width: "100%",
-              }}>
-                {el.content}
-              </p>
-            )}
-          </div>
+          <SlideTextElement
+            key={el.id}
+            el={el}
+            scale={scale}
+            theme={theme}
+            elStyle={elStyle}
+            vAlign={vAlign}
+          />
         );
       }
       case "image": {
         const resolvedImg = resolvePath(el.content, appDataDir);
+        // P3.6: image presentation — fit, position, filter chain,
+        // border, radius. Filter strength comes through as a 0–100
+        // value; translate to the right CSS unit for each filter.
+        const fit = el.objectFit ?? "contain";
+        const position = el.objectPosition ?? "center";
+        let cssFilter = "none";
+        if (el.filter && el.filter !== "none") {
+          const v = el.filterValue ?? 100;
+          cssFilter =
+            el.filter === "grayscale" ? `grayscale(${v}%)` :
+            el.filter === "sepia" ? `sepia(${v}%)` :
+            el.filter === "brightness" ? `brightness(${(100 + v) / 100})` :
+            el.filter === "blur" ? `blur(${v / 4}px)` :
+            "none";
+        }
+        const border = el.border;
+        const style: React.CSSProperties = {
+          objectFit: fit,
+          objectPosition: position,
+          filter: cssFilter,
+          borderRadius: el.borderRadius ? `${el.borderRadius}px` : undefined,
+          border: border ? `${border.width}px solid ${border.color}` : undefined,
+        };
         return (
           <div key={el.id} style={elStyle}>
-            <img src={convertFileSrc(resolvedImg)} className="w-full h-full object-contain" alt="" />
+            <img
+              src={convertFileSrc(resolvedImg)}
+              className="w-full h-full"
+              alt=""
+              style={style}
+            />
           </div>
         );
       }
@@ -166,8 +377,34 @@ export function CustomSlideRenderer({
         );
       }
       case "shape": {
+        // P3.5: render shapes via inline SVG. The container div retains
+        // the element's box; the SVG fills it 100% × 100% so the shape
+        // scales crisp at any canvas size (vector rather than raster).
+        // `preserveAspectRatio="none"` lets the element's box stretch
+        // the shape; the strokeWidth uses `non-scaling-stroke` so the
+        // stroke remains a constant visual weight regardless of the
+        // element's aspect ratio.
+        const shape = el.shape ?? "rect";
+        const fill = el.fillColor ?? el.color ?? "#ffffff";
+        const stroke = el.strokeColor ?? "none";
+        const sw = el.strokeWidth ?? 0;
+        // `borderRadius` lives in CSS px at 1080p reference height;
+        // SVG `viewBox` is 100×100 so normalise the radius to viewbox
+        // units by dividing by 10.8 (1080/100). Rounded rect uses `rx`.
+        const rx = shape === "rounded" ? Math.max(0, (el.borderRadius ?? 12)) / 10.8 : shape === "rect" ? 0 : 0;
+        const common = { fill, stroke, strokeWidth: sw / 10.8, vectorEffect: "non-scaling-stroke" as const };
         return (
-          <div key={el.id} style={{ ...elStyle, backgroundColor: el.color ?? "#ffffff" }} />
+          <div key={el.id} style={elStyle}>
+            <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">
+              {shape === "rect" && <rect x={0} y={0} width={100} height={100} {...common} />}
+              {shape === "rounded" && <rect x={0} y={0} width={100} height={100} rx={rx} ry={rx} {...common} />}
+              {shape === "circle" && <circle cx={50} cy={50} r={50} {...common} />}
+              {shape === "triangle" && <polygon points="50,4 96,96 4,96" {...common} />}
+              {shape === "line" && (
+                <line x1={2} y1={50} x2={98} y2={50} stroke={stroke === "none" ? fill : stroke} strokeWidth={(sw || 4) / 10.8} vectorEffect="non-scaling-stroke" />
+              )}
+            </svg>
+          </div>
         );
       }
       default: {
@@ -179,62 +416,37 @@ export function CustomSlideRenderer({
         return null;
       }
     }
-  }), [elements, hiddenElementIds, scale, appDataDir]);
+  }).map((node) => node), [elements, hiddenElementIds, scale, appDataDir, theme, entranceEnabled]);
 
-  // Modern Elements Rendering — also handles empty-elements slides with bg video
-  if (elements && elements.length > 0) {
-    const resolvedBgVideo = resolvePath(bgVideo, appDataDir);
-    return (
-      <div className="w-full h-full relative overflow-hidden" style={bgStyle}>
-        {resolvedBgVideo && (
-          <video
-            src={convertFileSrc(resolvedBgVideo)}
-            className="absolute inset-0 w-full h-full object-cover z-0"
-            autoPlay
-            loop={bgVideoLoop !== false}
-            muted={bgVideoMuted !== false}
-            playsInline
-          />
-        )}
-        {renderedElements}
-      </div>
-    );
-  }
-
-  // Legacy fallback rendering
-  const resolvedBgVideo = resolvePath(bgVideo, appDataDir);
-  const bgVideoEl = resolvedBgVideo ? (
-    <video
-      src={convertFileSrc(resolvedBgVideo)}
-      className="absolute inset-0 w-full h-full object-cover z-0"
-      autoPlay
-      loop={bgVideoLoop !== false}
-      muted={bgVideoMuted !== false}
-      playsInline
-    />
-  ) : null;
-
-  if (headerEnabled === false) {
-    return (
-      <div className="w-full h-full relative overflow-hidden flex flex-col" style={bgStyle}>
-        {bgVideoEl}
-        <div className="flex items-center justify-center flex-1 relative z-10" style={{ padding: `${14 * scale}px ${24 * scale}px` }}>
-          {body && <p style={zoneStyle(body)}>{body.text}</p>}
-        </div>
-      </div>
-    );
-  }
+  // P4.5 — after computing each element's node, apply the entrance
+  // animation wrapper when the caller enabled it (projection path only).
+  const animatedElements = entranceEnabled
+    ? elements
+        .map((el, i) => {
+          if (hiddenElementIds.includes(el.id)) return null;
+          const ent = el.entrance;
+          if (!ent || ent.type === "none") return renderedElements[i] ?? null;
+          const v = getTransitionVariants(ent.type, ent.duration / 1000);
+          return (
+            <motion.div
+              key={`${(slide as any).id}-${el.id}`}
+              className="absolute inset-0"
+              style={{ zIndex: el.z_index }}
+              initial={v.initial}
+              animate={v.animate}
+              exit={v.exit}
+              transition={{ ...v.transition, delay: (ent.delay ?? 0) / 1000 }}
+            >
+              {renderedElements[i]}
+            </motion.div>
+          );
+        })
+    : renderedElements;
 
   return (
-    <div className="w-full h-full relative overflow-hidden flex flex-col" style={bgStyle}>
+    <div className="w-full h-full relative overflow-hidden" style={bgStyle}>
       {bgVideoEl}
-      <div className="flex items-center justify-center relative z-10" style={{ flex: `0 0 ${headerHeightPct}%`, padding: `${14 * scale}px ${24 * scale}px` }}>
-        {header && <p style={zoneStyle(header)}>{header.text}</p>}
-      </div>
-      <div className="relative z-10" style={{ height: `${Math.max(1, scale)}px`, backgroundColor: "rgba(255,255,255,0.15)", margin: `0 ${24 * scale}px` }} />
-      <div className="flex items-center justify-center flex-1 relative z-10" style={{ padding: `${14 * scale}px ${24 * scale}px` }}>
-        {body && <p style={zoneStyle(body)}>{body.text}</p>}
-      </div>
+      {entranceEnabled ? animatedElements : renderedElements}
     </div>
   );
 }

@@ -19,13 +19,14 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { useSlideHistory, textCoalesceKey } from "./useSlideHistory";
 import { useAutoSave } from "./useAutoSave";
 import { useCanvasScale } from "./useCanvasScale";
-import { useElementDrag, useElementResize } from "./useElementDragResize";
+import { useElementDrag, useElementResize, useElementRotation } from "./useElementDragResize";
+import type { GuideLine } from "./useElementDragResize";
 import { useSlideDragDrop } from "./useSlideDragDrop";
-import { migratePresentation, alignElements, adjustZOrder, collectGroupMembers, type AlignmentAxis, type ZDirection } from "./helpers";
+import { migratePresentation, alignElements, adjustZOrder, collectGroupMembers, synthesizeDefaultTheme, type AlignmentAxis, type ZDirection } from "./helpers";
 import { newDefaultSlide, newTitleSlide, newBlankSlide, stableId, relativizePath, exportPresentation, importPresentation, deepCloneSlide, newTextElement, newImageElement, newVideoElement, newShapeElement } from "../../../utils";
 import { useAppStore } from "../../../store";
 import { useKeyboardBinding } from "../../../hooks/keyboardRegistry";
-import type { CustomPresentation, CustomSlide, MediaItem, SlideElement, SlideTemplate } from "../../../types";
+import type { CustomPresentation, CustomSlide, MediaItem, SlideElement, SlideMaster, SlideTemplate, ProseMirrorJSON, SlideBackground } from "../../../types";
 
 export interface UseSlideEditorArgs {
   initialPres: CustomPresentation;
@@ -55,6 +56,14 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
   const [dragOverSlideIdx, setDragOverSlideIdx] = useState<number | null>(null);
   const [dragSlideIdx, setDragSlideIdx] = useState<number | null>(null);
 
+  // P3.2: snap-to-grid size in canvas-% units. `0` disables snapping.
+  // Choices surfaced in the toolbar: 0 (off), 4, 8, 16.
+  const [gridSize, setGridSize] = useState<number>(0);
+
+  // P3.1: active-smart-guide overlay. Updated from inside the drag
+  // lifecycle; `null` means no guides are snapping.
+  const [guides, setGuides] = useState<GuideLine[] | null>(null);
+
   const canvasRef = useRef<HTMLDivElement>(null);
   const canvasScale = useCanvasScale(canvasRef);
 
@@ -64,7 +73,40 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
 
   const activeElementId = activeElementIds.length === 1 ? activeElementIds[0] : null;
 
-  const slide = pres.slides[activeSlideIdx] ?? pres.slides[0];
+  // P4.2 — master editing. When `editingMasterId` is set the hook routes
+  // every element mutation at the matching `pres.masters[...]` layout
+  // instead of the active slide. The `slide` object the canvas/property
+  // panel receive is a projection of the master so the existing editor
+  // UI (drag/resize/properties/inline text) works unchanged.
+  const [editingMasterId, setEditingMasterId] = useState<string | null>(null);
+  const editingMaster = editingMasterId ? pres.masters?.find(m => m.id === editingMasterId) ?? null : null;
+  const editingIsMaster = !!editingMasterId && !!editingMaster;
+  const slide = editingIsMaster
+    ? { id: editingMaster!.id, background: editingMaster!.background, elements: editingMaster!.elements } as CustomSlide
+    : pres.slides[activeSlideIdx] ?? pres.slides[0];
+
+  // P4.7 — in-editor live preview PIP. Toggled by `Space`; shows the active
+  // slide animating with its configured entrance transitions without ever
+  // broadcasting to the audience/output window.
+  const [previewOpen, setPreviewOpen] = useState(false);
+
+  // Commit an element-list mutation against whichever target is active
+  // (master layout or the current slide). Returns the new element list.
+  const commitElements = useCallback((fn: (els: SlideElement[]) => SlideElement[]): void => {
+    setPres(prev => {
+      if (editingMasterId) {
+        const masters = [...(prev.masters ?? [])];
+        const idx = masters.findIndex(m => m.id === editingMasterId);
+        if (idx < 0) return prev;
+        masters[idx] = { ...masters[idx], elements: fn(masters[idx].elements) };
+        return { ...prev, masters };
+      }
+      const slides = [...prev.slides];
+      const si = prev.slides[activeSlideIdx] ? activeSlideIdx : 0;
+      slides[si] = { ...slides[si], elements: fn(slides[si].elements) };
+      return { ...prev, slides };
+    });
+  }, [activeSlideIdx, editingMasterId]);
 
   // ── Auto-save debounce (P1.4) ───────────────────────────────────────────────
   useAutoSave({
@@ -105,6 +147,34 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
     getGroupIds(id).forEach(gid => allSelectedIds.add(gid));
   });
 
+  // ── P4.4 ───────────────────────────────────────────────────────────────────
+  // Bump font-size of every selected *text* element by `delta` points,
+  // clamped to a sane floor so text never collapses to an unreadable size.
+  const bumpSelectedFontSize = (delta: number) => {
+    for (const el of getSelectedElements()) {
+      if (el.kind !== "text" || el.locked) continue;
+      const base = typeof el.font_size === "number" ? el.font_size : 32;
+      updateElement(el.id, { font_size: Math.max(8, base + delta) }, true, "font-size");
+    }
+  };
+
+  // Nudge selected elements by a canvas-% delta. P4.4 distinguishes grid-step
+  // (`Ctrl+arrow`, gridSize or 1) from fine 1px (`Ctrl+Shift+arrow`, computed
+  // from the on-screen canvas width so 1 editor px ≈ 1 design px).
+  const nudgeSelected = (dx: number, dy: number) => {
+    const els = getSelectedElements().filter(e => !e.locked);
+    if (els.length === 0) return;
+    for (const el of els) {
+      updateElement(el.id, { x: Math.round((el.x + dx) * 100) / 100, y: Math.round((el.y + dy) * 100) / 100 });
+    }
+  };
+
+  // 1 editor-pixel in canvas-% units (canvas scales with the viewport).
+  const pxToCanvas = () => {
+    const w = canvasRef.current?.clientWidth ?? 800;
+    return 100 / w;
+  };
+
   // ── Global keyboard shortcuts (priority 20 — overrides operator defaults) ──
   useKeyboardBinding("slide-editor", 20, () => true, (e) => {
     const tgt = e.target as HTMLElement;
@@ -117,7 +187,7 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
     if (typing) return;
 
     // Slide panel keyboard navigation
-    if (focusedSlidePanel) {
+    if (focusedSlidePanel && !(e.ctrlKey || e.metaKey)) {
       if (e.key === "ArrowUp") {
         e.preventDefault(); setActiveSlideIdx(i => Math.max(0, i - 1));
       } else if (e.key === "ArrowDown") {
@@ -133,6 +203,7 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
       e.preventDefault(); handleRedo();
     } else if (e.key === "Escape") {
       e.preventDefault();
+      if (previewOpen) { setPreviewOpen(false); return; }
       setActiveElementIds([]); setEditingElementId(null);
     } else if (e.key === "Delete" || e.key === "Backspace") {
       if (activeElementIds.length > 0) { e.preventDefault(); deleteSelectedElements(); }
@@ -145,6 +216,48 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
     } else if ((e.ctrlKey || e.metaKey) && e.key === "u") {
       e.preventDefault();
       ungroupSelectedElements();
+    } else if (e.key === "r" || e.key === "R") {
+      // P3.4: rotate the active element(s) by ±15°. `R` = clockwise
+      // (Shift held), `r` = counter-clockwise.
+      if (activeElementIds.length === 0) return;
+      e.preventDefault();
+      const delta = e.shiftKey ? 15 : -15;
+      for (const id of activeElementIds) {
+        const el = slide.elements.find(x => x.id === id);
+        if (el && !el.locked) updateElement(id, { rotation: ((el.rotation ?? 0) + delta + 540) % 360 - 180 });
+      }
+    }
+    // ── P4.4 keyboard productivity ──────────────────────────────────────────
+    else if ((e.ctrlKey || e.metaKey) && (e.key === ">" || e.key === ".") && e.shiftKey) {
+      e.preventDefault(); bumpSelectedFontSize(2);
+    } else if ((e.ctrlKey || e.metaKey) && (e.key === "<" || e.key === ",") && e.shiftKey) {
+      e.preventDefault(); bumpSelectedFontSize(-2);
+    } else if ((e.ctrlKey || e.metaKey) && (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      e.preventDefault();
+      const step = e.shiftKey ? pxToCanvas() : (gridSize > 0 ? gridSize : 1);
+      const dir = e.key === "ArrowUp" ? [0, -step] : e.key === "ArrowDown" ? [0, step] : e.key === "ArrowLeft" ? [-step, 0] : [step, 0];
+      nudgeSelected(dir[0], dir[1]);
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      const mediaEls = slide.elements.slice().sort((a, b) => (a.z_index ?? 0) - (b.z_index ?? 0));
+      if (mediaEls.length === 0) return;
+      if (e.key === "Tab") {
+        const curIdx = mediaEls.findIndex(el => activeElementIds.includes(el.id));
+        const step = e.shiftKey ? -1 : 1;
+        const next = mediaEls[(curIdx + step + mediaEls.length) % mediaEls.length];
+        setActiveElementIds([next.id]);
+        setEditingElementId(null);
+      } else {
+        // Enter → start inline editing the first selected *text* element.
+        const t = mediaEls.find(el => activeElementIds.includes(el.id) && el.kind === "text");
+        if (t) setEditingElementId(t.id);
+      }
+    } else if (e.code === "Space" && !(e.ctrlKey || e.metaKey || e.altKey)) {
+      // P4.7 — live preview: toggle the in-editor PIP that plays the
+      // current slide's entrance transitions. Nothing goes to the
+      // audience/output window.
+      e.preventDefault();
+      setPreviewOpen(p => !p);
     }
   });
 
@@ -153,8 +266,22 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
     slide.elements.filter(e => activeElementIds.some(id => allSelectedIds.has(id)) || activeElementIds.includes(e.id)) as SlideElement[];
 
   // ── Slide/element helpers ───────────────────────────────────────────────────
-  const updateSlide = (next: CustomSlide) =>
+  const updateSlide = (next: CustomSlide) => {
+    if (editingIsMaster) {
+      const master = editingMaster;
+      // When editing a master, the only "slide-level" mutation reachable via
+      // the panel is background styling. Route to the master layout.
+      setPres(prev => {
+        const masters = [...(prev.masters ?? [])];
+        const idx = masters.findIndex(m => m.id === master.id);
+        if (idx < 0) return prev;
+        masters[idx] = { ...masters[idx], background: next.background };
+        return { ...prev, masters };
+      });
+      return;
+    }
     setPres(prev => { const s = [...prev.slides]; s[activeSlideIdx] = next; return { ...prev, slides: s }; });
+  };
 
   // `Partial<SlideElement>` widens `kind` (the discriminator) so a literal
   // spread `{ ...e, ...updates }` is no longer a `SlideElement`. Callers
@@ -163,6 +290,24 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
   // site. Phase 2 can introduce a per-kind contract if needed.
   const updateElement = (id: string, updates: Partial<SlideElement>, save = true, coalesceKey: string | null = null) =>
     setPres(prev => {
+      if (editingMasterId) {
+        const masters = [...(prev.masters ?? [])];
+        const mi = masters.findIndex(m => m.id === editingMasterId);
+        if (mi < 0) return prev;
+        // Find the touched master element to learn its role for cascading.
+        const touched = masters[mi].elements.find(e => e.id === id);
+        const role = touched?.kind === "text" ? touched.role : undefined;
+        let nextMasters = masters;
+        nextMasters[mi] = { ...masters[mi], elements: masters[mi].elements.map(e => e.id === id ? ({ ...e, ...updates } as SlideElement) : e) };
+        // P4.2 cascade: when a master element is edited, dependent slides
+        // with the same role inherit geometry + style but keep their text.
+        const slides = prev.slides.map(s =>
+          s.masterRef === editingMasterId && role
+            ? { ...s, elements: s.elements.map(e => e.kind === "text" && e.role === role ? ({ ...e, ...updates } as SlideElement) : e) }
+            : s
+        );
+        return { ...prev, masters: nextMasters, slides };
+      }
       const cs = prev.slides[activeSlideIdx];
       const ns = [...prev.slides];
       ns[activeSlideIdx] = { ...cs, elements: cs.elements.map(e => e.id === id ? ({ ...e, ...updates } as SlideElement) : e) };
@@ -171,6 +316,13 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
 
   const updateElements = (ids: string[], updates: Partial<SlideElement>, save = true) =>
     setPres(prev => {
+      if (editingMasterId) {
+        const masters = [...(prev.masters ?? [])];
+        const mi = masters.findIndex(m => m.id === editingMasterId);
+        if (mi < 0) return prev;
+        masters[mi] = { ...masters[mi], elements: masters[mi].elements.map(e => ids.includes(e.id) ? ({ ...e, ...updates } as SlideElement) : e) };
+        return { ...prev, masters };
+      }
       const cs = prev.slides[activeSlideIdx];
       const ns = [...prev.slides];
       ns[activeSlideIdx] = { ...cs, elements: cs.elements.map(e => ids.includes(e.id) ? ({ ...e, ...updates } as SlideElement) : e) };
@@ -178,22 +330,12 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
     }, { save });
 
   const deleteElement = (id: string) => {
-    setPres(prev => {
-      const cs = prev.slides[activeSlideIdx];
-      const ns = [...prev.slides];
-      ns[activeSlideIdx] = { ...cs, elements: cs.elements.filter(e => e.id !== id) };
-      return { ...prev, slides: ns };
-    });
+    commitElements(els => els.filter(e => e.id !== id));
     setActiveElementIds(prev => prev.filter(i => i !== id));
   };
 
   const deleteSelectedElements = () => {
-    setPres(prev => {
-      const cs = prev.slides[activeSlideIdx];
-      const ns = [...prev.slides];
-      ns[activeSlideIdx] = { ...cs, elements: cs.elements.filter(e => !allSelectedIds.has(e.id)) };
-      return { ...prev, slides: ns };
-    });
+    commitElements(els => els.filter(e => !allSelectedIds.has(e.id)));
     setActiveElementIds([]);
   };
 
@@ -213,23 +355,13 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
       z_index: z++,
     }));
     const newIds = newEls.map(e => e.id);
-    setPres(prev => {
-      const cs = prev.slides[activeSlideIdx];
-      const ns = [...prev.slides];
-      ns[activeSlideIdx] = { ...cs, elements: [...cs.elements, ...newEls] };
-      return { ...prev, slides: ns };
-    });
+    commitElements(els => [...els, ...newEls]);
     setActiveElementIds(newIds);
   };
 
   const duplicateElement = (el: SlideElement) => {
     const n: SlideElement = { ...(el as SlideElement), id: stableId(), x: el.x + 3, y: el.y + 3, z_index: slide.elements.length + 1 };
-    setPres(prev => {
-      const cs = prev.slides[activeSlideIdx];
-      const ns = [...prev.slides];
-      ns[activeSlideIdx] = { ...cs, elements: [...cs.elements, n] };
-      return { ...prev, slides: ns };
-    });
+    commitElements(els => [...els, n]);
     setActiveElementIds([n.id]);
   };
 
@@ -256,18 +388,16 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
   // can do so without reading stale slide state. See P1.2 race fix on
   // `handleVideoSelect`.
   const addEl = (el: SlideElement): SlideElement => {
-    setPres(prev => {
-      const cs = prev.slides[activeSlideIdx];
-      const ns = [...prev.slides];
-      ns[activeSlideIdx] = { ...cs, elements: [...cs.elements, el] };
-      return { ...prev, slides: ns };
-    });
+    commitElements(els => [...els, el]);
     setActiveElementIds([el.id]);
     return el;
   };
 
   const addTextElement = () => addEl(newTextElement({ z_index: slide.elements.length + 1 }));
-  const addShapeElement = () => addEl(newShapeElement({ z_index: slide.elements.length + 1 }));
+  // P3.5: shape insertion now accepts a kind so the toolbar dropdown
+  // can stub `rect`/`circle`/… directly into the new element.
+  const addShapeElement = (shape: "rect" | "rounded" | "circle" | "line" | "triangle" = "rect") =>
+    addEl(newShapeElement({ z_index: slide.elements.length + 1, shape }));
 
   const handleInsertVerse = () => {
     if (stagedItem?.type !== "Verse") return;
@@ -384,18 +514,59 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
     setEditingElementId(null);
   };
 
-  // ── Element drag / resize (P1.4 + P1.5 AbortController) ─────────────────────
+  // ── Element drag / resize (P1.4 + P1.5 AbortController + P3.2 snap + P3.1 guides) ──
   const handleDrag = useElementDrag({
     canvasRef,
     activeElementIds,
     elements: slide.elements,
     onMoved: (id, updates) => updateElement(id, updates, false),
     onCommitted: (id, updates) => updateElement(id, updates, true),
+    gridSize,
+    onGuides: setGuides,
+    // P4.4 — Alt+drag: duplicate the clicked element first, then drag the
+    // copy. The hook commits the copy through `onMoved`/`onCommitted`, so
+    // the duplicate becomes part of the drag's single history entry.
+    altDuplicate: (id) => {
+      const el = slide.elements.find(e => e.id === id);
+      if (!el || el.locked) return null;
+      const n: SlideElement = {
+        ...(el as SlideElement),
+        id: stableId(),
+        x: el.x,
+        y: el.y,
+        z_index: slide.elements.length + 1,
+      };
+      setPres(prev => {
+        if (editingMasterId) {
+          const masters = [...(prev.masters ?? [])];
+          const mi = masters.findIndex(m => m.id === editingMasterId);
+          if (mi < 0) return prev;
+          masters[mi] = { ...masters[mi], elements: [...masters[mi].elements, n] };
+          return { ...prev, masters };
+        }
+        const cs = prev.slides[activeSlideIdx];
+        const ns = [...prev.slides];
+        ns[activeSlideIdx] = { ...cs, elements: [...cs.elements, n] };
+        return { ...prev, slides: ns };
+      }, { save: false });
+      setActiveElementIds([n.id]);
+      setEditingElementId(null);
+      return { id: n.id, x: n.x, y: n.y };
+    },
   });
 
   const handleResize = useElementResize({
     canvasRef,
     activeElementIds,
+    elements: slide.elements,
+    onMoved: (id, updates) => updateElement(id, updates, false),
+    onCommitted: (id, updates) => updateElement(id, updates, true),
+    gridSize,
+  });
+
+  // P3.4 — rotation hook
+  const handleRotate = useElementRotation({
+    canvasRef,
     elements: slide.elements,
     onMoved: (id, updates) => updateElement(id, updates, false),
     onCommitted: (id, updates) => updateElement(id, updates, true),
@@ -422,16 +593,18 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
     if (el?.kind === "text" && !el.locked) setEditingElementId(id);
   };
 
-  const commitInline = (id: string, html: string) => {
+  const commitInline = (id: string, doc: ProseMirrorJSON) => {
     // P1.6: consecutive text-edit commits on the same element within
     // COALESCE_WINDOW_MS fold into one history entry.
     //
-    // The inline editor now represents bold/italic as Tiptap marks (it seeds
-    // them across the whole doc on open and drops the box-level fontWeight/
-    // fontStyle force). Clearing `el.bold`/`el.italic` here makes the
-    // projection renderer stop force-bolding the whole element, so per-word
-    // <strong>/<em> marks (and their absence after un-bold) are honoured.
-    updateElement(id, { content: html, bold: false, italic: false }, true, textCoalesceKey(id));
+    // P2.2: content is now a ProseMirror JSON doc (Tiptap `getJSON`).
+    // The inline editor still represents bold/italic as Tiptap marks
+    // (seeded across the doc on open and dropped from the box-level
+    // font-weight force). Clearing `el.bold`/`el.italic` here makes the
+    // projection renderer stop force-bolding the whole element, so
+    // per-word <strong>/<em> marks (and their absence after un-bold)
+    // are honoured.
+    updateElement(id, { content: doc, bold: false, italic: false }, true, textCoalesceKey(id));
     setEditingElementId(null);
   };
 
@@ -516,8 +689,7 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
       category: "Custom",
       slide: templateSlide,
       created_at: Date.now(),
-    };
-    try {
+    };    try {
       const saved = await invoke<SlideTemplate>("save_slide_template", { template: tpl });
       setTemplates(prev => [...prev, saved]);
       setToast("Slide saved as template");
@@ -525,15 +697,22 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
   };
 
   const handleInsertTemplate = (tpl: SlideTemplate) => {
-    const cloned = deepCloneSlide(tpl.slide);
-    cloned.id = stableId();
-    cloned.elements.forEach(e => (e.id = stableId()));
+    // P4.1: templates may be single-slide (`slide`) or a deck (`slides`).
+    // Inserting a deck splice-clones every slide into the presentation
+    // right after the active slide, each with fresh IDs.
+    const slides = tpl.slides && tpl.slides.length > 0 ? tpl.slides : tpl.slide ? [tpl.slide] : [];
+    const clones = slides.map(s => {
+      const cloned = deepCloneSlide(s);
+      cloned.id = stableId();
+      cloned.elements.forEach(e => (e.id = stableId()));
+      return cloned;
+    });
     setPres(prev => {
       const ns = [...prev.slides];
-      ns.splice(activeSlideIdx + 1, 0, cloned);
+      ns.splice(activeSlideIdx + 1, 0, ...clones);
       return { ...prev, slides: ns };
     });
-    setActiveSlideIdx(i => i + 1);
+    setActiveSlideIdx(i => i + clones.length);
     setActiveElementIds([]);
     setShowTemplateGallery(false);
     setToast(`Inserted template: ${tpl.name}`);
@@ -582,12 +761,93 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
 
   const handleBgVideoSelect = (path: string) => {
     const rel = relativizePath(path, appDataDir);
-    updateSlide({ ...slide, backgroundVideo: rel, backgroundVideoLoop: true, backgroundVideoMuted: true });
+    updateSlide({ ...slide, background: { type: "video", value: rel, loop: true, muted: true } });
     setShowBgVideoPicker(false);
   };
 
   const handleBgImageSelect = (path: string) => {
-    updateSlide({ ...slide, backgroundImage: relativizePath(path, appDataDir) });
+    updateSlide({ ...slide, background: { type: "image", value: relativizePath(path, appDataDir), objectFit: "cover" } });
+  };
+
+  /** P2.1: builder for any kind of background swap from the PropertiesPanel.
+   *  Single source of truth so the panel UI's "one type at a time"
+   *  invariant stays atomic in the history stack. */
+  const setSlideBackground = (bg: SlideBackground) => updateSlide({ ...slide, background: bg });
+
+  /**
+   * P2.4: patch the presentation-level `SlideTheme`. Single-entry-commit
+   * so theme edits produce one history entry each (no per-element array
+   * stamping). Callers pass a partial `SlideTheme` to update specific
+   * fields; missing fields stay inherited-as-before.
+   */
+  const updateTheme = (next: Partial<CustomPresentation["theme"]>) =>
+    setPres(prev => ({ ...prev, theme: { ...(prev.theme ?? synthesizeDefaultTheme()), ...next } as CustomPresentation["theme"] }));
+
+  // ── P4.2 — Master slide editing ─────────────────────────────────────────────
+  // The master is a reusable layout (`pres.masters[]`). Editing it in-place
+  // routes every element mutation through the shared `updateElement` /
+  // `commitElements` above (they target the master when `editingMasterId`
+  // is set). Dependent slides — those with `masterRef === master.id` and an
+  // element carrying the same `role` — receive style/geometry updates from
+  // the master element while keeping their own text content.
+  const enterMasterEdit = (masterId: string) => {
+    setEditingMasterId(masterId);
+    setActiveElementIds([]);
+    setEditingElementId(null);
+  };
+
+  const exitMasterEdit = () => {
+    setEditingMasterId(null);
+    setActiveElementIds([]);
+    setEditingElementId(null);
+  };
+
+  /** P4.2: build a `SlideMaster` from the current slide. Text elements get
+   *  an auto-assigned role (title → first text, body → rest, footer → last)
+   *  so dependent slides can later be styled by the cascade. */
+  const handleCreateMaster = (name: string) => {
+    const src = pres.slides[activeSlideIdx];
+    if (!src) return;
+    const textEls = src.elements.filter(e => e.kind === "text");
+    const roles = new Map<string, "title" | "body" | "footer">();
+    textEls.forEach((el, i) => {
+      roles.set(el.id, i === 0 ? "title" : i === textEls.length - 1 && textEls.length > 2 ? "footer" : "body");
+    });
+    const master: SlideMaster = {
+      id: stableId(),
+      name: name || `${pres.name} Master ${(pres.masters?.length ?? 0) + 1}`,
+      background: deepCloneSlide(src).background,
+      elements: src.elements.map(e => {
+        const el = deepCloneSlide(src).elements.find(x => x.id === e.id)!;
+        const r = roles.get(e.id);
+        return r ? { ...el, role: r } : el;
+      }),
+    };
+    setPres(prev => ({ ...prev, masters: [...(prev.masters ?? []), master] }));
+    setEditingMasterId(master.id);
+    setActiveElementIds([]);
+    setToast("Master created — editing it now (styles cascade to slides)");
+  };
+
+  /** P4.2: copy the master layout onto the active slide as editable
+   *  placeholders, tagging each with its `role` so later master edits
+   *  cascade into it. The slide keeps its own background/text. */
+  const handleApplyMasterToSlide = (masterId: string) => {
+    const master = pres.masters?.find(m => m.id === masterId);
+    if (!master) return;
+    const clones: SlideElement[] = master.elements.map(e => ({ ...JSON.parse(JSON.stringify(e)) as SlideElement, id: stableId() }));
+    commitElements(els => [...els.filter(el => el.kind !== "text" || !(el as any).role), ...clones]);
+    setPres(prev => {
+      const slides = [...prev.slides];
+      slides[activeSlideIdx] = { ...slides[activeSlideIdx], masterRef: masterId };
+      return { ...prev, slides };
+    });
+    setToast("Master applied to this slide");
+  };
+
+  const handleDeleteMaster = (masterId: string) => {
+    setPres(prev => ({ ...prev, masters: (prev.masters ?? []).filter(m => m.id !== masterId) }));
+    if (editingMasterId === masterId) setEditingMasterId(null);
   };
 
   const handleAddVerse = (verse: { text: string; book: string; chapter: number; verse: number; version: string }) => {
@@ -618,11 +878,13 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
     showUnsavedConfirm, setShowUnsavedConfirm,
     showTemplateGallery, setShowTemplateGallery,
     dragSlideIdx, dragOverSlideIdx,
+    gridSize, setGridSize,
+    guides,
     // refs / scale
     canvasRef, canvasScale, isDirtyRef,
     // interactions
     slideDragDrop, handleSlidePointerDown, handleSlidePointerUp, handleSlideClick,
-    handleDrag, handleResize,
+    handleDrag, handleResize, handleRotate,
     handleCanvasClick, handleElementClick, handleDblClick, commitInline,
     handleCloseRequest, handleSaveAndClose, handleDiscardChanges,
     handleImport, handleExport,
@@ -636,6 +898,13 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
     duplicateSelectedElements, duplicateElement,
     deleteElement, deleteSelectedElements,
     alignElement, updateZOrder,
+    setSlideBackground,
+    updateTheme,
+    // P4.2 — master editing
+    editingMasterId, enterMasterEdit, exitMasterEdit,
+    handleCreateMaster, handleApplyMasterToSlide, handleDeleteMaster,
+    // P4.7 — in-editor live preview
+    previewOpen, setPreviewOpen,
     // global / store data
     appDataDir, templates, stagedItem,
   };

@@ -117,10 +117,31 @@ const customSlideKind: ItemKind<Extract<DisplayItem, { type: "CustomSlide" }>> =
   describe: (i) => `${i.data.presentation_name} (S${i.data.slide_index + 1})`,
   accent: "purple",
   stageDetail: (i) => {
-    if (i.data.elements && i.data.elements.length > 0) {
-      return i.data.elements.filter((e) => e.kind === "text").map((e) => e.content).join("\n");
-    }
-    return i.data.body?.text || "";
+    const els = (i.data.elements ?? []).filter((e) => e.kind === "text");
+    // P2.2: text content is a ProseMirror JSON doc; fall back to the
+    // sanitized HTML render for label purposes. For elements whose
+    // content is still a string (mid-migration), it degrades to the
+    // stripped plain text on its own.
+    return els
+      .map((e) => {
+        const c = (e as { content: unknown }).content;
+        if (typeof c === "string") return c;
+        // Lightweight text extraction from the JSON doc — no need to
+        // round-trip through generateHTML just to label a tile.
+        try {
+          const json = c as { content?: unknown };
+          const walk = (node: any): string => {
+            if (!node) return "";
+            if (typeof node === "string") return node;
+            if (Array.isArray(node.content)) return node.content.map(walk).join("");
+            return (node.text ?? "") as string;
+          };
+          return walk(json) || "";
+        } catch {
+          return "";
+        }
+      })
+      .join("\n");
   },
   ScheduleTile: ({ item }) => (
     <p className="text-purple-400 text-[10px] font-bold uppercase truncate">

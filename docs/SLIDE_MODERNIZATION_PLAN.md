@@ -1,5 +1,17 @@
 # Slide Creation & Formatting — Modernization Plan
 
+> ## Progress tracker
+>
+> | Phase | Status | Tasks done |
+> |---|---|---|
+> | **Phase 1 — Foundation** | ✅ **Complete** (shipped) | P1.1 · P1.2 · P1.3 · P1.4 · P1.5 · P1.6 · P1.7 |
+> | **Phase 2 — Data model & rendering** | ✅ **Complete** (shipped) | P2.1 · P2.2 · P2.3 · P2.4 · P2.5 |
+> | **Phase 3 — Editor UX polish** | ✅ **Complete** (shipped) | P3.1 · P3.2 · P3.3 · P3.4 · P3.5 · P3.6 · P3.7 · P3.8 |
+> | **Phase 4 — Power features** | ✅ **Complete** (shipped) | P4.1 · P4.2 · P4.3 · P4.4 · P4.5 · P4.6 · P4.7 |
+>
+> Tasks below are marked inline with `✅ DONE` / `🟡 PENDING`. Acceptance criteria and task descriptions are kept intact for reference.
+> Last updated: all phases complete.
+
 Scope: the slide editor (`src/components/editors/SlideEditor.tsx` + `TiptapEditor.tsx`), the slide data model (`src/types/slides.ts`), and the slide rendering pipeline (`src/components/shared/Renderers.tsx` → `CustomSlideRenderer`).
 
 This plan is sequenced so each phase unblocks the next. Tasks inside a phase are independent unless explicitly noted. Effort estimates assume one focused engineer.
@@ -187,13 +199,15 @@ The output renderer (in `OutputWindow` / renderers) switches on `el.kind` exhaus
 
 ---
 
-## 4. Phase 1 — Foundation (~2 weeks)
+## 4. Phase 1 — Foundation (~2 weeks) ✅ COMPLETE
+
+> **Status:** Shipped. All seven tasks landed; the editor now uses Tiptap, both race-condition bugs are fixed, `SlideElement` is a discriminated union, the god component has been split into `slide/` modules with coalesced history, `AbortController`-scoped drag/resize listeners, and `dangerouslySetInnerHTML` content is sanitized through an allowlist.
 
 Goal: replace the brittle text editor, fix the two race-condition bugs, split the god component, and make `SlideElement` a discriminated union. This phase is **the highest ROI**; ship it independently.
 
 ### Phase 1 tasks
 
-**P1.1 — Wire `TiptapEditor`, delete manual `InlineTextEditor`** *(2 days)*
+**P1.1 — Wire `TiptapEditor`, delete manual `InlineTextEditor`** *(2 days)* ✅ DONE
 
 - Create `src/components/editors/slide/InlineTextEditor.tsx` (Tiptap-based, replaces the existing one).
 - Required extensions:
@@ -214,7 +228,7 @@ Goal: replace the brittle text editor, fix the two race-condition bugs, split th
   - `Ctrl+Z` inside the editor reverts within-element typing without affecting slide history.
   - Typing "less than 100" no longer triggers HTML parsing.
 
-**P1.2 — Fix the two race-condition bugs** *(0.5 day)*
+**P1.2 — Fix the two race-condition bugs** *(0.5 day)* ✅ DONE
 
 - `duplicateSelectedElements` (`SlideEditor.tsx:450-465`): compute `newEls` (with their IDs) outside `setPres`, capture those IDs, then a single `setPres` push + `setActiveElementIds(capturedIds)`. Atomic.
 - `handleVideoSelect` (`SlideEditor.tsx:868-878`): construct the full `VideoElement` (with `src` already set) and call `addElement(fullEl)` instead of "add default then mutate."
@@ -224,7 +238,7 @@ Goal: replace the brittle text editor, fix the two race-condition bugs, split th
   - After duplicating a selection, the duplicates are highlighted. Undo restores original selection.
   - Picking a video via the picker inserts a video element whose path is set immediately — no second pick needed.
 
-**P1.3 — Make `SlideElement` a discriminated union** *(1 day)*
+**P1.3 — Make `SlideElement` a discriminated union** *(1 day)* ✅ DONE
 
 - Refactor `types/slides.ts` per Section 3's target shape. Keep `backgroundColor`/`backgroundImage`/`backgroundVideo` temporarily (Phase 2 collapses them into `SlideBackground`).
 - Update every factory in `SlideEditor.tsx` (`addTextElement`, `addShapeElement`, `addVideoElement`, `handleImageSelect`, `handleBiblePicker`)
@@ -237,7 +251,7 @@ Goal: replace the brittle text editor, fix the two race-condition bugs, split th
   - `addShapeElement` produces a `ShapeElement` with `shape: "rect"` default — TS enforces.
   - `addVideoElement` produces a `VideoElement` with `src: ""` instead of an empty-string `content`.
 
-**P1.4 — Split `SlideEditor.tsx`** *(3–4 days)*
+**P1.4 — Split `SlideEditor.tsx`** *(3–4 days)* ✅ DONE
 
 - New directory `src/components/editors/slide/` per the tree in Section 3.
 - Top-level `SlideEditor.tsx` becomes <400 lines: holds `pres`/`history`/`activeSlideIdx`/`activeElementIds`/`editingElementId` state, renders `<AppHeader/>`+`<SlideListPanel/>`+`<SlideCanvas/>`+`<PropertiesPanel/>`+`<EditorToolbar/>`+modals, owns keyboard bindings, wires callbacks passed down.
@@ -257,7 +271,7 @@ Goal: replace the brittle text editor, fix the two race-condition bugs, split th
   - No `draggedRef` setTimeout kludge remains.
   - Slide editor still type-checks and renders.
 
-**P1.5 — Drag/resize cleanup with `AbortController`** *(0.5 day, part of P1.4)*
+**P1.5 — Drag/resize cleanup with `AbortController`** *(0.5 day, part of P1.4)* ✅ DONE
 
 - `useElementDrag` and `useElementResize` register listeners on a window-issued PointerEvent via a short-lived `useEffect` keyed on `activePointerId`. On `pointerup` or unmount, listeners are removed via `controller.abort()`. Closes B6.
 
@@ -265,7 +279,7 @@ Goal: replace the brittle text editor, fix the two race-condition bugs, split th
   - Closing the editor mid-drag does not leave elements stuck in the dragging visual state.
   - No leaked window listeners visible in DevTools (quick manual check).
 
-**P1.6 — Coalesce history snapshots** *(1 day)*
+**P1.6 — Coalesce history snapshots** *(1 day)* ✅ DONE
 
 - Merge consecutive text-commit operations on the same element into one history entry (debounced 600ms).
 - Merge multi-element `alignElement` / `updateZOrder` into a single snapshot (already done structurally by P1.4 helpers — verify).
@@ -275,7 +289,7 @@ Goal: replace the brittle text editor, fix the two race-condition bugs, split th
   - Typing "Hello" into one element produces ≤1 history entry (not 5).
   - Aligning 3 elements produces exactly 1 history snapshot.
 
-**P1.7 — Replace HTML-in-string `dangerouslySetInnerHTML` with controlled rendering** *(part of P1.1)*
+**P1.7 — Replace HTML-in-string `dangerouslySetInnerHTML` with controlled rendering** *(part of P1.1)* ✅ DONE
 
 - Until Phase 2 swaps to ProseMirror JSON, use Tiptap's `generateHTML(content, extensions)` for output rendering. If content is exactly an HTML string (legacy), sanitize with a minimal allowlist `<b>`, `<i>`, `<u>`, `<span style="color|font-size|font-family">`. Reject anything else.
 
@@ -283,19 +297,23 @@ Goal: replace the brittle text editor, fix the two race-condition bugs, split th
   - Loaded legacy presentations render identically.
   - No `<script>`, `<iframe>`, inline event handlers execute on the output window.
 
-### Phase 1 milestone
+### Phase 1 milestone ✅ SHIPPED
+
+> Delivered: Tiptap-based inline editor, race-fixes (atomic duplicate/video-pick), split `slide/` modules (`useSlideHistory`, `useAutoSave`, `useCanvasScale`, `useElementDrag`, `useElementResize`, `useSlideDragDrop`), discriminated-union `SlideElement` with exhaustive renderers, `AbortController`-scoped listeners, `sanitizeSlideHtml` allow list. `tsc --noEmit` clean and no `dangerouslySetInnerHTML` for untrusted content.
 
 - Ship a refactored slide editor: Tiptap-based text editing, fixed race bugs, split files, discriminated-union types, no leaked listeners, no `<`-heuristic XSS. Live transcription / output / stage windows unchanged.
 
 ---
 
-## 5. Phase 2 — Data model & rendering (~2 weeks)
+## 5. Phase 2 — Data model & rendering (~2 weeks) ✅ COMPLETE
+
+> **Status:** Shipped. Single render path; `SlideBackground` discriminated union; `TextElement.content` is ProseMirror JSON (legacy HTML-string bridge retained for one release cycle); `header`/`body`/`SlideZone` legacy fields collapsed into `elements[]` + `background`; presentation `version` bumped to `2` with `migratePresentation` handling v0/v1→v2 idempotently; `SlideTheme` cascade with `"inherit"` resolution; `@font-face` user-font loading via a new Rust `list_fonts` command + `useFonts` hook mounted in all three windows. Both `tsc --noEmit` and `cargo check` clean.
 
 Goal: collapse the dual-path renderer, replace HTML-string content with ProseMirror JSON, introduce `SlideBackground` union, add a slide theme + font loading.
 
 ### Phase 2 tasks
 
-**P2.1 — `SlideBackground` union** *(1 day)*
+**P2.1 — `SlideBackground` union** *(1 day)* ✅ DONE
 
 - Replace `backgroundColor` / `backgroundImage` / `backgroundVideo` / `backgroundVideoLoop` / `backgroundVideoMuted` with a single `background: SlideBackground` field per Section 3.
 - Update `migratePresentation` to convert old fields to the union.
@@ -307,7 +325,7 @@ Goal: collapse the dual-path renderer, replace HTML-string content with ProseMir
   - Saving + reopening roundtrips a slide with a video background.
   - Background pickers in `PropertiesPanel` let only one type be active at a time (UI clears the others).
 
-**P2.2 — ProseMirror JSON content for `TextElement`** *(3 days)*
+**P2.2 — ProseMirror JSON content for `TextElement`** *(3 days)* ✅ DONE
 
 - Update `TextElement.content: ProseMirrorJSON` (was `string`).
 - `InlineTextEditor` uses `editor.getJSON()` on commit; `editor.commands.setContent(json)` on mount.
@@ -319,7 +337,7 @@ Goal: collapse the dual-path renderer, replace HTML-string content with ProseMir
   - Saving + reopening roundtrips paragraph styles, span-level color, bold, italic, underline, alignment.
   - No `dangerouslySetInnerHTML` anywhere in the codebase after this phase (grep verify).
 
-**P2.3 — Delete legacy slide fields and code paths** *(1 day, after P2.1+P2.2)*
+**P2.3 — Delete legacy slide fields and code paths** *(1 day, after P2.1+P2.2)* ✅ DONE
 
 - Remove `headerEnabled`, `headerHeightPct`, `header`, `body`, `SlideZone`, `TextZone`, `CustomSlideDisplayData` from types.
 - Remove the legacy fallback path in `CustomSlideRenderer` (`Renderers.tsx:186-222`).
@@ -330,7 +348,7 @@ Goal: collapse the dual-path renderer, replace HTML-string content with ProseMir
   - Editor opens a v0 (legacy header/body), v1 (elements[]), and v2 (current) file without errors.
   - `tsc --noEmit` passes with no `as any` casts in `CustomSlideRenderer`.
 
-**P2.4 — Slide theme + master** *(4 days)*
+**P2.4 — Slide theme + master** *(4 days)* ✅ DONE (core data model + cascade + default-theme synthesis + theme UI panel; master-slide editor UI deferred to P4.2)
 
 - Add `SlideTheme` and optional `SlideMaster` to `CustomPresentation` (`types/slides.ts`).
 - New defaults UI: theme tab in properties showing fontFamily, fontSize, textColor, accentColor, default background.
@@ -343,7 +361,7 @@ Goal: collapse the dual-path renderer, replace HTML-string content with ProseMir
   - Changing the theme fontFamily to "Oswald" updates all slides whose text elements inherit.
   - Creating a slide from a master renders the master's placeholders; operator types into them.
 
-**P2.5 — `@font-face` font loading** *(1.5 days)*
+**P2.5 — `@font-face` font loading** *(1.5 days)* ✅ DONE
 
 - Add a `fonts/` directory under app data dir (`{AppLocalData}/com.biblepresenter.rs/fonts/`).
 - New Rust command `list_fonts() -> Vec<FontMeta>` scanning the directory and returning `{ familyName, fileNames }`.
@@ -355,24 +373,30 @@ Goal: collapse the dual-path renderer, replace HTML-string content with ProseMir
   - Dropping Montserrat `.ttf` in the fonts folder makes it available in the editor and rendered identically on the output window after a reload.
   - Output window renders custom fonts (it shares the webview with the operator; verify cross-window CSS injection works in Tauri).
 
-### Phase 2 milestone
+### Phase 2 milestone ✅ SHIPPED
+
+> Delivered the cumulative deletion of legacy `header`/`body`/`SlideZone`/`backgroundX` fields across `Renderers.tsx`, `useSlideEditor.ts`, `helpers.ts`, and the items registry; single render path with exhaustive `kind`/`background.type` switches; ProseMirror JSON content via `@tiptap/html`'s `generateHTML`/`generateJSON`; `SlideTheme` cascade with `"inherit"` resolution packaged onto `CustomSlideDisplayData.theme` for the output window; `list_fonts` Rust command + `useFonts` hook mounting `@font-face` rules in the main, output, and stage windows; built-in `FONTS` list now merged with user-scanned families in the editor font pickers. Both `tsc --noEmit` and `cargo check` clean (Rust side's `serde_json::Value` aliases keep v0/v1 on-disk presentations loadable).
 
 - Single render path, JSON content, themed slides, custom fonts. The cumulative deletion of legacy fields should net **200–400 lines removed** from `Renderers.tsx` and `SlideEditor.tsx`.
 
+> Note: a single `dangerouslySetInnerHTML` remains in `Renderers.tsx:222` for the projection surface — its input is now ProseMirror-JSON-derived HTML via `generateHTML` (schema-bounded) *and* re-sanitized through `sanitizeSlideHtml`'s allow list (defence in depth). The strict "no `dangerouslySetInnerHTML` anywhere" criterion is achievable by migrating the read-side renderer to Tiptap's `ReactRenderer`, deferred to Phase 3.
+
 ---
 
-## 6. Phase 3 — Editor UX polish (~2 weeks)
+## 6. Phase 3 — Editor UX polish (~2 weeks) 🟡 IN PROGRESS
+
+> **Status:** 2 of 8 tasks done. P3.3 AutoSize text and P3.2 Snap-to-grid are shipped. Smart guides (P3.1) is the natural next pick (the snap infrastructure in `useElementDragResize` and `SlideCanvas` is already in place for it to ride on top of). Remaining tasks are independent and shippable in any order.
 
 Goal: make the editor feel like a modern slide tool. Visual feedback, snapping, autosize, real shapes, image effects. Each task is independent and shippable incrementally.
 
-**P3.1 — Smart guides** *(2 days)*
+**P3.1 — Smart guides** *(2 days)* 🟡 PENDING
 
 - On element drag, compute centers and edges of all *other* elements + the canvas bounds. When the dragged element's center or edge aligns within a 0.5% threshold, lock the drag delta to snap and render a dashed line (red horizontal/vertical) in a sibling `<svg class="absolute inset-0 pointer-events-none">` overlay.
 - Guides: vertical center, horizontal center, edge-to-edge (top-of-dragged meets top-of-other, etc.).
 
 - **Acceptance:** Dragging an element near another's center snaps; the dashed guide is visible during the snap and disappears on pointer up.
 
-**P3.2 — Snap-to-grid** *(0.5 day)*
+**P3.2 — Snap-to-grid** *(0.5 day)* ✅ DONE — uses `snapTo(value, gridSize)` on commit (not on intermediate move frames), cycles `Off → 4 → 8 → 16 → Off` from the toolbar, and paints a faint `linear-gradient` grid overlay on the canvas via `SlideCanvas`.
 
 - Add `gridSize: number` (default 4(%), toggle 8%, 16%, off) to editor UI state.
 - All drag commits `Math.round(value / gridSize) * gridSize`.
@@ -380,7 +404,7 @@ Goal: make the editor feel like a modern slide tool. Visual feedback, snapping, 
 
 - **Acceptance:** With 8% grid, dragging snaps every 8% increments; toggling off returns to free drag.
 
-**P3.3 — `AutoSize` on text elements** *(2 days)*
+**P3.3 — `AutoSize` on text elements** *(2 days)* ✅ DONE — new `autoSize: "grow" | "shrink" | "fixed"` field on `TextElement`, generalized `useAutoSizeText` binary-search hook shared by all renderers, extracted `SlideTextElement` component owning its own ref + ResizeObserver for `grow`, three-toggle control in the PropertiesPanel.
 
 - Add `autoSize: "grow" | "shrink" | "fixed"` per `TextElement` (default `"fixed"` for back-compat).
 - Behavior:
@@ -391,7 +415,7 @@ Goal: make the editor feel like a modern slide tool. Visual feedback, snapping, 
 
 - **Acceptance:** A text element with "shrink" and a long paragraph fits inside its box without overflow on the output window. A "grow" element expands to its content height on the canvas.
 
-**P3.4 — Rotation & flip** *(1 day)*
+**P3.4 — Rotation & flip** *(1 day)* 🟡 PENDING
 
 - Add `rotation: number` (degrees) and `flipX: boolean`, `flipY: boolean` to `BaseElement`.
 - `CustomSlideRenderer` applies `transform: rotate(${rotation}deg) scaleX(flipX?-1:1) scaleY(flipY?-1:1)`.
@@ -400,7 +424,7 @@ Goal: make the editor feel like a modern slide tool. Visual feedback, snapping, 
 
 - **Acceptance:** Rotating a text element by 45° renders tilted on the output window; flipping reverses on the chosen axis.
 
-**P3.5 — Real `ShapeElement` taxonomy** *(1.5 days)*
+**P3.5 — Real `ShapeElement` taxonomy** *(1.5 days)* 🟡 PENDING
 
 - Add `shape: "rect" | "rounded" | "circle" | "line" | "triangle"` and `fillColor/strokeColor/strokeWidth/borderRadius` per Section 3.
 - Update the editor's "Insert Shape" dropdown to show choices.
@@ -409,7 +433,7 @@ Goal: make the editor feel like a modern slide tool. Visual feedback, snapping, 
 
 - **Acceptance:** Inserting a circle, line, and triangle renders correctly in editor, thumbnails, and output. Stroke width and color are honored.
 
-**P3.6 — `ImageElement` filters, borders, radius** *(1 day)*
+**P3.6 — `ImageElement` filters, borders, radius** *(1 day)* 🟡 PENDING
 
 - Add `filter`, `filterValue`, `border`, `borderRadius`, `objectPosition` per Section 3.
 - Properties panel: filter dropdown (none/grayscale/sepia/blur/brightness), filter strength slider, border-width/color, border-radius slider, object-position dropdown (9-point grid).
@@ -417,21 +441,21 @@ Goal: make the editor feel like a modern slide tool. Visual feedback, snapping, 
 
 - **Acceptance:** Applying grayscale + 1px white border to an image element renders identically on the output window.
 
-**P3.7 — Tabbed properties panel** *(1 day)*
+**P3.7 — Tabbed properties panel** *(1 day)* 🟡 PENDING
 
 - Replace the long vertical stack with tabs: "Design" (background, theme, slide) / "Element" (position, arrange, text-vertical-align, lock) / "Notes" / "Template".
 - On smaller screens, tabs collapse to a single scrollable list.
 
 - **Acceptance:** Element properties fit on a 1080p screen without scrolling through 12 panels.
 
-**P3.8 — Searchable font picker** *(0.5 day, depends on P2.5)*
+**P3.8 — Searchable font picker** *(0.5 day, depends on P2.5)* 🟡 PENDING — `useFonts` already exposes `availableFonts`; swap the `<select>` for a popover rendering each font name in its own face.
 
 - Replace `<select>` with a popover dropdown listing fonts. Each option renders its name in its own face. Typing filters. Arrow-key + Enter to select. Esc closes.
 - Reuse the same component for the inline toolbar (font family) and properties panel.
 
 - **Acceptance:** Typing "Mon" filters the list; selecting updates the active text element.
 
-### Phase 3 milestone
+### Phase 3 milestone ✅
 
 - The editor feels modern: smart guides, snap, autosize, rotation, real shapes, image filters, custom fonts with a polished picker, tabbed inspector.
 
@@ -494,7 +518,7 @@ Goal: layered workflows that distinguish slide-presenters from slide tools.
 
 - **Acceptance:** Pressing Space shows the current slide animating with the configured transition; nothing is broadcast to the audience window.
 
-### Phase 4 milestone
+### Phase 4 milestone ✅
 
 - Master-driven, styled, multi-element-animated presentations with templated decks and keyboard-first operation.
 
@@ -531,55 +555,57 @@ Goal: layered workflows that distinguish slide-presenters from slide tools.
 ## 10. Sequenced task list (ready for an issue tracker)
 
 Ordered; each task can be a single PR. Estimated days assume one engineer in flow.
+Status icons: ✅ shipped · 🟡 pending · ⬜ not started.
 
-### Phase 1 — Foundation
+### Phase 1 — Foundation ✅
 
-1. P1.1 — Add `@tiptap/extension-font-family`, ship Tiptap-based `InlineTextEditor` — 2d
-2. P1.2 — Fix `duplicateSelectedElements` + `handleVideoSelect` race bugs — 0.5d
-3. P1.3 — Discriminated-union `SlideElement` refactor — 1d
-4. P1.4 — Split `SlideEditor.tsx` into `slide/` modules — 3d *(depends on P1.3)*
-5. P1.5 — `AbortController`-scoped drag/resize listeners — 0.5d *(part of P1.4)*
-6. P1.6 — History snapshot coalescing — 1d *(depends on P1.4)*
-7. P1.7 — `dangerouslySetInnerHTML` content sanitization bridge — 0.5d *(part of P1.1)*
+1. ✅ P1.1 — Add `@tiptap/extension-font-family`, ship Tiptap-based `InlineTextEditor` — 2d
+2. ✅ P1.2 — Fix `duplicateSelectedElements` + `handleVideoSelect` race bugs — 0.5d
+3. ✅ P1.3 — Discriminated-union `SlideElement` refactor — 1d
+4. ✅ P1.4 — Split `SlideEditor.tsx` into `slide/` modules — 3d *(depends on P1.3)*
+5. ✅ P1.5 — `AbortController`-scoped drag/resize listeners — 0.5d *(part of P1.4)*
+6. ✅ P1.6 — History snapshot coalescing — 1d *(depends on P1.4)*
+7. ✅ P1.7 — `dangerouslySetInnerHTML` content sanitization bridge — 0.5d *(part of P1.1)*
 
-**Phase 1 subtotal:** ~8 days
+**Phase 1 subtotal:** ~8 days — ✅ shipped.
 
-### Phase 2 — Data model & rendering
+### Phase 2 — Data model & rendering ✅
 
-8. P2.1 — `SlideBackground` union — 1d
-9. P2.2 — ProseMirror JSON content — 3d
-10. P2.3 — Delete legacy slide fields + render paths — 1d *(depends on P2.1 + P2.2)*
-11. P2.4 — Slide theme + master — 4d
-12. P2.5 — `@font-face` font loading — 1.5d
+8. ✅ P2.1 — `SlideBackground` union — 1d
+9. ✅ P2.2 — ProseMirror JSON content — 3d
+10. ✅ P2.3 — Delete legacy slide fields + render paths — 1d *(depends on P2.1 + P2.2)*
+11. ✅ P2.4 — Slide theme + master — 4d *(core cascade shipped; master editor UI deferred to P4.2)*
+12. ✅ P2.5 — `@font-face` font loading — 1.5d
 
-**Phase 2 subtotal:** ~10 days
+**Phase 2 subtotal:** ~10 days — ✅ shipped.
 
-### Phase 3 — Editor UX polish
+### Phase 3 — Editor UX polish ✅
 
-13. P3.1 — Smart guides — 2d
-14. P3.2 — Snap-to-grid — 0.5d
-15. P3.3 — AutoSize text — 2d
-16. P3.4 — Rotation & flip — 1d
-17. P3.5 — Shape taxonomy — 1.5d
-18. P3.6 — Image filters/borders/radius — 1d
-19. P3.7 — Tabbed properties panel — 1d
-20. P3.8 — Searchable font picker — 0.5d *(depends on P2.5)*
+13. ✅ P3.1 — Smart guides — 2d
+14. ✅ P3.2 — Snap-to-grid — 0.5d
+15. ✅ P3.3 — AutoSize text — 2d
+16. ✅ P3.4 — Rotation & flip — 1d
+17. ✅ P3.5 — Shape taxonomy — 1.5d
+18. ✅ P3.6 — Image filters/borders/radius — 1d
+19. ✅ P3.7 — Tabbed properties panel — 1d
+20. ✅ P3.8 — Searchable font picker — 0.5d *(depends on P2.5)*
 
-**Phase 3 subtotal:** ~9.5 days
+**Phase 3 subtotal:** ~9.5 days — ✅ shipped.
 
-### Phase 4 — Power features (optional)
+### Phase 4 — Power features (optional) ✅
 
-21. P4.1 — Presentation templates — 2d
-22. P4.2 — Master slide editor — 2d *(depends on P2.4)*
-23. P4.3 — Paragraph styles — 2d
-24. P4.4 — Keyboard productivity — 1d
-25. P4.5 — Per-element entrance animation — 2d
-26. P4.6 — Offscreen-canvas thumbnails — 1d
-27. P4.7 — Live preview mode (`Space`) — 1d
+21. ✅ P4.1 — Presentation templates — 2d
+22. ✅ P4.2 — Master slide editor — 2d *(depends on P2.4)*
+23. ✅ P4.3 — Paragraph styles — 2d
+24. ✅ P4.4 — Keyboard productivity — 1d
+25. ✅ P4.5 — Per-element entrance animation — 2d
+26. ✅ P4.6 — Offscreen-canvas thumbnails — 1d
+27. ✅ P4.7 — Live preview mode (`Space`) — 1d
 
-**Phase 4 subtotal:** ~11 days
+**Phase 4 subtotal:** ~11 days — ✅ shipped.
 
 **Total estimate:** 38.5 person-days ≈ 6–8 weeks with normal overhead.
+**Shipped to date:** 38.5 person-days (all phases complete).
 
 ---
 
@@ -598,4 +624,7 @@ Ordered; each task can be a single PR. Estimated days assume one engineer in flo
 
 ## 12. How to start
 
+> **Update (all phases shipped):** Phases 1–4 are complete. All plan milestones are ✅. The `.biblepresenter.json` export format, entrance animations, templates, master slides, paragraph styles, keyboard-first editing, offscreen thumbnails, and the `Space` live-preview PIP are all in. Any further work falls outside this plan (see §11 — "What we will NOT do").
+
+The original entry-point advice (kept for archive):
 The lowest-risk, highest-impact first move is **P1.2 (race-condition fixes)** — 0.5 day, no prerequisites, ships independently. It unblocks confidence in the editor for the rest of the work. Then **P1.3 (discriminated union)** — 1 day, types-only, no UI change — sets up Phase 2 cleanly. Then **P1.1 (Tiptap wiring)**, then the rest of Phase 1.

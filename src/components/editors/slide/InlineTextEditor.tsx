@@ -24,32 +24,35 @@
  * CSS (so what you see is what the audience gets).
  */
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Underline from "@tiptap/extension-underline";
-import { TextStyle } from "@tiptap/extension-text-style";
+import { TextStyle as TipTapTextStyle } from "@tiptap/extension-text-style";
 import Color from "@tiptap/extension-color";
 import TextAlign from "@tiptap/extension-text-align";
 import {
   Bold, Italic, Underline as UnderlineIcon,
   AlignLeft, AlignCenter, AlignRight,
-  Type, AArrowUp, AArrowDown,
+  Type, AArrowUp, AArrowDown, Pilcrow,
 } from "lucide-react";
 
-import type { TextElement } from "../../../types";
-import { FONTS } from "../../../types";
+import type { TextElement, ProseMirrorJSON, SlideTheme, TextStyle as TextStyleType } from "../../../types";
+import { useFonts } from "../../../hooks/useFonts";
 import {
   FontSizeInline,
   FontFamilyInline,
   LineHeightInline,
+  ParagraphStyleInline,
 } from "./slideTextExtensions";
 
 interface InlineTextEditorProps {
   el: TextElement;
   canvasScale: number;
-  /** Called with `editor.getHTML()` when the user finishes editing (blur/Esc). */
-  onCommit: (html: string) => void;
+  /** Optional cascade theme (P4.3) for the paragraph-style dropdown. */
+  theme?: SlideTheme;
+  /** Called with `editor.getJSON()` when the user finishes editing (blur/Esc). */
+  onCommit: (doc: ProseMirrorJSON) => void;
 }
 
 const TOOLBAR_BTNS: { cmd: string; title: string; icon: React.ReactNode }[] = [
@@ -64,7 +67,29 @@ const ALIGN_BTNS: { cmd: string; title: string; icon: React.ReactNode }[] = [
   { cmd: "right", title: "Align right", icon: <AlignRight size={13} /> },
 ];
 
-export function InlineTextEditor({ el, canvasScale, onCommit }: InlineTextEditorProps) {
+/** P4.3 — resolve a theme-defined paragraph style recipe to an inline CSS
+ *  string the paragraph node stores (font, size, color, italic, indent). */
+export function paragraphStyleCss(
+  name: string,
+  recipe: Partial<TextStyleType> & { indent?: string },
+  theme?: SlideTheme,
+): string {
+  const parts: string[] = [];
+  const fam = recipe.font_family ?? theme?.defaultFontFamily ?? "Arial";
+  const size = recipe.font_size ?? theme?.defaultFontSize ?? 32;
+  parts.push(`font-family: ${fam}`);
+  parts.push(`font-size: ${size}pt`);
+  if (recipe.color) parts.push(`color: ${recipe.color}`);
+  if (recipe.bold) parts.push("font-weight: bold");
+  if (recipe.italic) parts.push("font-style: italic");
+  if (recipe.align) parts.push(`text-align: ${recipe.align}`);
+  if (recipe.indent) parts.push(`text-indent: ${recipe.indent}`);
+  return parts.join("; ");
+}
+
+export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTextEditorProps) {
+  // P2.5: user-installed @font-face families merged with built-ins.
+  const { availableFonts } = useFonts();
   const committedRef = useRef(false);
   // `onCommit` is rebuilt on every parent render (SlideCanvas constructs
   // `html => onCommit(el.id, html)` inline in its `.map` body). Keeping it
@@ -89,14 +114,19 @@ export function InlineTextEditor({ el, canvasScale, onCommit }: InlineTextEditor
         undoRedo: { depth: 200, newGroupDelay: 600 },
       }),
       Underline,
-      TextStyle,
+      TipTapTextStyle,
       Color,
       TextAlign.configure({ types: ["heading", "paragraph"] }),
       FontFamilyInline,
       FontSizeInline,
       LineHeightInline,
+      ParagraphStyleInline,
     ],
-    content: el.content || "",
+    // P2.2: content is now a ProseMirror JSON doc (Tiptap's
+    // `useEditor` `content` accepts both an HTML string and a JSON
+    // object, so the legacy HTML-string escape hatch continues to
+    // work while `migratePresentation` upgrades older decks).
+    content: (el.content ?? "") as any,
     editorProps: {
       // Stop ALL keydown events from bubbling up — the slide editor's
       // global shortcut listener would otherwise intercept Space, Delete,
@@ -126,7 +156,7 @@ export function InlineTextEditor({ el, canvasScale, onCommit }: InlineTextEditor
     return () => {
       if (committedRef.current || !editor) return;
       committedRef.current = true;
-      onCommitRef.current(editor.getHTML());
+      onCommitRef.current(editor.getJSON() as unknown as ProseMirrorJSON);
     };
   }, [editor]);
 
@@ -167,7 +197,7 @@ export function InlineTextEditor({ el, canvasScale, onCommit }: InlineTextEditor
   const commitNow = () => {
     if (committedRef.current) return;
     committedRef.current = true;
-    onCommit(editor.getHTML());
+    onCommit(editor.getJSON() as unknown as ProseMirrorJSON);
   };
 
   // Apply per-selection font-size delta: `delta` in points.
@@ -175,10 +205,35 @@ export function InlineTextEditor({ el, canvasScale, onCommit }: InlineTextEditor
     // Tiptap's setFontSize takes an absolute pt value. We start from the
     // element's default font_size and add the delta, so each press is a
     // predictable step (±4pt) rather than reading whatever inline span
-    // the cursor is currently on.
-    const base = el.font_size ?? 32;
+    // the cursor is currently on. Inherit ("inherit") elements fall back
+    // to 32pt here; the cascade is reapplied on commit if the user does
+    // not explicitly set a font-size on the selection.
+    const base = typeof el.font_size === "number" ? el.font_size : 32;
     const next = Math.max(8, base + delta);
     editor.chain().focus().setFontSize(`${next}pt`).run();
+  };
+
+  // P4.3 — current paragraph style, resolved by comparing the paragraph
+  // node's stored `data-style` CSS against each theme recipe. The recipe
+  // wins when the CSS strings match, so selecting the same style again
+  // leaves the node untouched.
+  const currentStyleName = useMemo(() => {
+    const css = (editor.getAttributes("paragraph") as any)?.dataStyle ?? null;
+    if (!css) return "";
+    for (const [name, recipe] of Object.entries(theme?.paragraphStyles ?? {})) {
+      if (paragraphStyleCss(name, recipe, theme) === css) return name;
+    }
+    return "";
+  }, [editor, theme]);
+
+  const applyParagraphStyle = (name: string) => {
+    if (!name) {
+      editor.chain().focus().setParagraphStyle(null).run();
+      return;
+    }
+    const recipe = theme?.paragraphStyles?.[name];
+    if (!recipe) return;
+    editor.chain().focus().setParagraphStyle(paragraphStyleCss(name, recipe, theme)).run();
   };
 
   // Change the case of the current text selection. `insertText` replaces the
@@ -244,7 +299,7 @@ export function InlineTextEditor({ el, canvasScale, onCommit }: InlineTextEditor
             onMouseDown={(e) => e.stopPropagation()}
             className="bg-white/8 border border-white/10 rounded px-1 py-0.5 text-[10px] text-slate-200 outline-none max-w-[110px]"
           >
-            {FONTS.map((f) => <option key={f} value={f}>{f}</option>)}
+            {availableFonts.map((f) => <option key={f} value={f}>{f}</option>)}
           </select>
         </label>
         <ToolbarDivider />
@@ -284,6 +339,25 @@ export function InlineTextEditor({ el, canvasScale, onCommit }: InlineTextEditor
         ))}
         <ToolbarDivider />
         <label
+          className="flex items-center gap-1 px-1 cursor-pointer"
+          onMouseDown={(e) => e.preventDefault()}
+          title="Paragraph style"
+        >
+          <Pilcrow size={11} className="text-slate-400" />
+          <select
+            value={currentStyleName}
+            onChange={(e) => applyParagraphStyle(e.target.value)}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="bg-white/8 border border-white/10 rounded px-1 py-0.5 text-[10px] text-slate-200 outline-none max-w-[100px]"
+          >
+            <option value="">Plain</option>
+            {(theme?.paragraphStyles ? Object.keys(theme.paragraphStyles) : []).map(name => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+        </label>
+        <ToolbarDivider />
+        <label
           className="flex items-center cursor-pointer"
           title="Change case"
           onMouseDown={(e) => e.preventDefault()}
@@ -314,9 +388,9 @@ export function InlineTextEditor({ el, canvasScale, onCommit }: InlineTextEditor
         <EditorContent
           editor={editor}
           style={{
-            fontFamily: el.font_family ?? "Arial",
-            fontSize: `${(el.font_size ?? 32) * canvasScale}pt`,
-            color: el.color ?? "#ffffff",
+            fontFamily: typeof el.font_family === "string" ? el.font_family : "Arial",
+            fontSize: `${(typeof el.font_size === "number" ? el.font_size : 32) * canvasScale}pt`,
+            color: typeof el.color === "string" ? el.color : "#ffffff",
             // NOTE: bold/italic are no longer forced here — they are
             // represented as Tiptap marks (see the seeding effect above) so
             // per-word toggleBold/toggleItalic can add AND remove them.

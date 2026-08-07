@@ -227,6 +227,7 @@ fn main() {
             wordlyte_lib::commands::props::get_props,
             wordlyte_lib::commands::props::set_props,
             wordlyte_lib::commands::misc::get_app_data_dir,
+            wordlyte_lib::commands::misc::list_fonts,
             wordlyte_lib::commands::misc::get_hymn_library,
             wordlyte_lib::commands::misc::write_text_file,
             wordlyte_lib::commands::misc::read_text_file,

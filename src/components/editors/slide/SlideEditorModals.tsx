@@ -8,9 +8,10 @@ import React from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Trash2, X, Plus } from "lucide-react";
-import { CustomSlideRenderer } from "../../shared/Renderers";
+import { SlideThumbnail } from "./SlideThumbnail";
 import { MediaPickerModal } from "../../MediaPickerModal";
 import { BiblePickerModal } from "../../BiblePickerModal";
+import { BUILTIN_DECKS, stableId } from "../../../utils";
 import type { CustomPresentation, CustomSlide, MediaItem, SlideTemplate } from "../../../types";
 
 export interface SlideEditorModalsProps {
@@ -87,13 +88,38 @@ export function SlideEditorModals({
               <button onClick={() => setShowTemplateGallery(false)} className="text-slate-400 hover:text-white"><X size={16} /></button>
             </div>
             <div className="flex-1 overflow-y-auto custom-scrollbar">
-              {templates.length === 0 ? (
+              {/* P4.1: built-in starter decks are always offered. */}
+              {BUILTIN_DECKS.length + templates.length === 0 ? (
                 <p className="text-slate-600 text-xs text-center py-8">No templates yet. Save a slide as template from the right panel.</p>
               ) : (
                 <div className="grid grid-cols-2 gap-3">
+                  {BUILTIN_DECKS.map((deck, di) => (
+                    <div key={`builtin-${di}`} className="group relative rounded-xl border border-white/8 bg-white/4 overflow-hidden">
+                      <div className="flex gap-1 p-1 bg-black/30">
+                        {deck.slides().slice(0, 3).map(s => (
+                          <div key={s.id} className="flex-1 min-w-0">
+                            <SlideThumbnail slide={s} width={60} height={34} appDataDir={appDataDir} alt={s.id} />
+                          </div>
+                        ))}
+                      </div>
+                      <div className="p-2 flex items-center justify-between bg-white/4">
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-bold text-slate-300 truncate">{deck.name}</p>
+                          <p className="text-[8px] text-slate-600">{deck.category} · {deck.slides().length} slides</p>
+                        </div>
+                        <button
+                          onClick={() => onInsertTemplate({ id: stableId(), name: deck.name, category: deck.category, slides: deck.slides(), created_at: Date.now() })}
+                          className="p-1.5 bg-purple-600/30 hover:bg-purple-600 text-purple-300 hover:text-white rounded-lg transition-all shrink-0 ml-2"
+                          title="Insert deck"
+                        >
+                          <Plus size={11} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                   {templates.map(tpl => (
                     <div key={tpl.id} className="group relative rounded-xl border border-white/8 bg-white/4 overflow-hidden">
-                      <CustomSlideRenderer slide={tpl.slide} scale={0.1} appDataDir={appDataDir} />
+                      <SlideThumbnail slide={(tpl.slides ?? [tpl.slide].filter(Boolean))[0] ?? { id: "x", background: { type: "color", value: "#1a1a2e" }, elements: [] }} width={120} height={68} appDataDir={appDataDir} alt={tpl.name} />
                       <div className="p-2 flex items-center justify-between bg-white/4">
                         <div className="min-w-0">
                           <p className="text-[10px] font-bold text-slate-300 truncate">{tpl.name}</p>

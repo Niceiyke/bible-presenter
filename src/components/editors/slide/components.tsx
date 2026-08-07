@@ -84,3 +84,117 @@ export function TextBtn({ onClick, title, children }: {
     </button>
   );
 }
+
+/**
+ * FontPicker (P3.8) — a searchable popover that replaces the `<select>`
+ * font picker. The trigger shows the current family (rendered in that
+ * face when possible); opening it reveals a filterable list where every
+ * family name is drawn in its own font so the operator can see the type.
+ */
+export function FontPicker({
+  fonts,
+  value,
+  inheritLabel = "— Inherit theme —",
+  canInherit = false,
+  onSelect,
+}: {
+  fonts: string[];
+  value: string;
+  /** Show an "inherit" entry at the top? */
+  canInherit?: boolean;
+  inheritLabel?: string;
+  onSelect: (family: string) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [query, setQuery] = React.useState("");
+  const [anchorEl, setAnchorEl] = React.useState<HTMLButtonElement | null>(null);
+
+  // Close on outside click.
+  React.useEffect(() => {
+    if (!open) return;
+    const onDocMouse = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (anchorEl && anchorEl.contains(t)) return;
+      if (t instanceof Element && t.closest("[data-font-popover]")) return;
+      setOpen(false);
+    };
+    const onDocKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocMouse);
+    document.addEventListener("keydown", onDocKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocMouse);
+      document.removeEventListener("keydown", onDocKey);
+    };
+  }, [open, anchorEl]);
+
+  // Reset the search each time the popover opens.
+  React.useEffect(() => {
+    if (open) setQuery("");
+  }, [open]);
+
+  const q = query.trim().toLowerCase();
+  const filtered = fonts.filter(f => f.toLowerCase().includes(q));
+
+  const pick = (family: string) => {
+    setOpen(false);
+    onSelect(family);
+  };
+
+  return (
+    <>
+      <button
+        ref={setAnchorEl}
+        onClick={e => { e.stopPropagation(); setOpen(o => !o); }}
+        title="Font family"
+        className="bg-white/8 hover:bg-white/14 border border-white/10 rounded-lg px-2 py-1 text-[11px] text-slate-300 outline-none max-w-[150px] shrink-0 truncate text-left transition-all"
+        style={{ fontFamily: value && canInherit ? value : undefined }}
+      >
+        {value}
+      </button>
+
+      {open && (
+        <div
+          data-font-popover
+          className="absolute z-[90] mt-1 w-52 max-h-72 overflow-hidden rounded-lg border border-white/10 bg-[#1a1a2e] shadow-2xl flex flex-col"
+          style={{ top: "100%", left: 0 }}
+        >
+          <div className="p-1.5 border-b border-white/8 shrink-0">
+            <input
+              autoFocus
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              onKeyDown={e => e.stopPropagation()}
+              placeholder="Search fonts…"
+              className="w-full bg-white/6 border border-white/10 rounded-md px-2 py-1 text-[11px] text-white outline-none focus:border-indigo-500/50 transition-colors placeholder:text-slate-600"
+            />
+          </div>
+          <div className="overflow-y-auto custom-scrollbar">
+            {canInherit && q.length === 0 && (
+              <button
+                onClick={() => pick("inherit")}
+                className={`w-full px-2 py-1.5 text-left text-[11px] font-bold rounded transition-all ${value === "inherit" ? "bg-indigo-500 text-white" : "text-slate-400 hover:text-white hover:bg-white/10"}`}
+              >
+                {inheritLabel}
+              </button>
+            )}
+            {filtered.length === 0 && (
+              <p className="px-2 py-3 text-[10px] text-slate-600 text-center">No matches</p>
+            )}
+            {filtered.map(f => (
+              <button
+                key={f}
+                onClick={() => pick(f)}
+                className={`w-full px-2 py-1.5 text-left text-[11px] rounded transition-all ${value !== "inherit" && value === f ? "bg-white/10 text-white" : "text-slate-300 hover:text-white hover:bg-white/10"}`}
+                style={{ fontFamily: f }}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}

@@ -82,9 +82,28 @@ export function ContentBrowser({
           }}
           onNewPresentation={() => {
             const id = stableId();
-            const newPres: CustomPresentation = { id, name: "New Presentation", slides: [newDefaultSlide()], version: 1 };
+            // P2.4: new presentations get a synthesized default theme so
+            // text elements authored with `font_family: "inherit"` resolve
+            // against the cascade from the very first save.
+            const newPres: CustomPresentation = {
+              id,
+              name: "New Presentation",
+              slides: [newDefaultSlide()],
+              version: 2,
+              theme: {
+                id: stableId(),
+                name: "Default",
+                defaultFontFamily: "Arial",
+                defaultFontSize: 32,
+                titleStyle: { font_family: "Arial", font_size: 60, color: "#ffffff", bold: true },
+                bodyStyle: { font_family: "Arial", font_size: 32, color: "#ffffff" },
+                textColor: "#ffffff",
+                accentColor: "#f59e0b",
+                background: { type: "color", value: "#1a1a2e" },
+              },
+            };
             invoke("save_studio_presentation", { presentation: newPres }).then(() => {
-              const nextList = [...studioList, { id, name: newPres.name, slide_count: 1, version: 1, updated_at: Date.now() }];
+              const nextList = [...studioList, { id, name: newPres.name, slide_count: 1, version: 2, updated_at: Date.now() }];
               setStudioList(nextList);
               emit("studio-sync", nextList);
               setStudioSlides({ ...studioSlides, [id]: newPres.slides });

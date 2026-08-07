@@ -5,7 +5,7 @@
 
 import React, { useRef } from "react";
 import { GripVertical, Library } from "lucide-react";
-import { CustomSlideRenderer } from "../../shared/Renderers";
+import { SlideThumbnail } from "./SlideThumbnail";
 import type { CustomSlide } from "../../../types";
 
 export interface SlideListPanelProps {
@@ -73,7 +73,7 @@ export function SlideListPanel({
                     : "border-white/8 hover:border-white/20"
             } ${dragSlideIdx !== null ? "cursor-grabbing" : "cursor-grab"}`}
           >
-            <CustomSlideRenderer slide={s} scale={0.07} appDataDir={appDataDir} />
+            <SlideThumbnail slide={s} width={100} height={56} appDataDir={appDataDir} alt={`Slide ${i + 1}`} />
             <span className={`absolute top-1.5 left-1.5 w-5 h-5 rounded flex items-center justify-center text-[8px] font-black ${
               i === activeSlideIdx ? "bg-indigo-500 text-white" : "bg-black/60 text-white/50"
             }`}>
