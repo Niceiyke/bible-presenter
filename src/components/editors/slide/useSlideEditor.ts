@@ -573,11 +573,20 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
   });
 
   const handleCanvasClick = (e: React.MouseEvent) => {
+    // Clicking empty canvas clears the selection AND ends inline editing
+    // (the green ring). Ending editing here unmounts the InlineTextEditor,
+    // whose cleanup effect commits its content — so further text changes
+    // aren't lost.
     setActiveElementIds([]);
+    setEditingElementId(null);
   };
 
   const handleElementClick = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    // Clicking a (possibly different) element also ends inline editing,
+    // committing the active editor. `editingElementId` is cleared so the
+    // green editing ring doesn't linger under the new selection.
+    setEditingElementId(null);
     if (e.ctrlKey || e.metaKey) {
       setActiveElementIds(prev =>
         prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]

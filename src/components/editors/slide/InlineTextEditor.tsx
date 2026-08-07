@@ -258,7 +258,7 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
 
   return (
     <div
-      className="absolute inset-0 outline-none overflow-hidden ring-2 ring-emerald-400/60 flex flex-col"
+      className="absolute inset-0 outline-none ring-2 ring-emerald-400/60 flex flex-col"
       style={{ justifyContent }}
       onPointerDown={(e) => e.stopPropagation()}
       onPointerMove={(e) => e.stopPropagation()}
@@ -272,9 +272,22 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
         // Mousedown handlers call preventDefault() so the editor doesn't
         // collapse its selection when the user mouses down on a toolbar
         // button. Pointer-down is also stopped so drag/resize doesn't
-        // engage from the toolbar.
-        onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
-        onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+        // engage from the toolbar. Native `<select>` / `<input type=color>`
+        // MUST keep their default behavior or their dropdowns won't open —
+        // so we only preventDefault for the editable text content, never
+        // for the form controls.
+        onMouseDown={(e) => {
+          const t = e.target as HTMLElement;
+          if (t.closest("select, input[type=color]")) return;
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onPointerDown={(e) => {
+          const t = e.target as HTMLElement;
+          if (t.closest("select, input[type=color]")) return;
+          e.preventDefault();
+          e.stopPropagation();
+        }}
         style={{ pointerEvents: "auto" }}
       >
         {TOOLBAR_BTNS.map((b) => (
@@ -290,7 +303,7 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
         <ToolbarDivider />
         <label
           className="flex items-center gap-1 px-1 cursor-pointer"
-          onMouseDown={(e) => e.preventDefault()}
+          onMouseDown={(e) => e.stopPropagation()}
         >
           <Type size={11} className="text-slate-400" />
           <select
@@ -340,7 +353,7 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
         <ToolbarDivider />
         <label
           className="flex items-center gap-1 px-1 cursor-pointer"
-          onMouseDown={(e) => e.preventDefault()}
+          onMouseDown={(e) => e.stopPropagation()}
           title="Paragraph style"
         >
           <Pilcrow size={11} className="text-slate-400" />
@@ -360,7 +373,7 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
         <label
           className="flex items-center cursor-pointer"
           title="Change case"
-          onMouseDown={(e) => e.preventDefault()}
+          onMouseDown={(e) => e.stopPropagation()}
         >
           <select
             value={caseMode}
@@ -384,7 +397,7 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
           geometry matches the renderer. We render with the same
           fontFamily/fontSize/colour defaults the element would render
           with so the operator sees roughly what the audience will. */}
-      <div className="flex-1 flex flex-col" style={{ justifyContent }}>
+      <div className="flex-1 flex flex-col overflow-hidden" style={{ justifyContent }}>
         <EditorContent
           editor={editor}
           style={{

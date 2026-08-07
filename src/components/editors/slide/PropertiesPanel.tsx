@@ -377,6 +377,7 @@ export function PropertiesPanel({
                 }}
                 onKeyDown={e => e.stopPropagation()}
                 className="w-full bg-white/8 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-indigo-500/50"
+                style={{ colorScheme: "dark" }}
               >
                 <option value="none">None</option>
                 <option value="fade">Fade</option>
@@ -533,6 +534,7 @@ export function PropertiesPanel({
                   onChange={e => onUpdateElement(activeEl.id, { objectFit: e.target.value as "contain" | "cover" | "fill" })}
                   onKeyDown={e => e.stopPropagation()}
                   className="flex-1 bg-white/6 border border-white/10 rounded-lg px-2 py-1 text-[11px] text-white outline-none"
+                  style={{ colorScheme: "dark" }}
                 >
                   <option value="contain">Contain</option>
                   <option value="cover">Cover</option>
@@ -546,6 +548,7 @@ export function PropertiesPanel({
                   onChange={e => onUpdateElement(activeEl.id, { objectPosition: e.target.value })}
                   onKeyDown={e => e.stopPropagation()}
                   className="flex-1 bg-white/6 border border-white/10 rounded-lg px-2 py-1 text-[11px] text-white outline-none"
+                  style={{ colorScheme: "dark" }}
                 >
                   {["top left","top center","top right","center left","center","center right","bottom left","bottom center","bottom right"].map(p => <option key={p} value={p}>{p}</option>)}
                 </select>
@@ -557,6 +560,7 @@ export function PropertiesPanel({
                   onChange={e => onUpdateElement(activeEl.id, { filter: e.target.value as "none" | "grayscale" | "sepia" | "blur" | "brightness" })}
                   onKeyDown={e => e.stopPropagation()}
                   className="flex-1 bg-white/6 border border-white/10 rounded-lg px-2 py-1 text-[11px] text-white outline-none"
+                  style={{ colorScheme: "dark" }}
                 >
                   <option value="none">None</option>
                   <option value="grayscale">Grayscale</option>

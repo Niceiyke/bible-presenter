@@ -99,6 +99,7 @@ handleImageSelect, handleVideoSelect, handleBgVideoSelect, handleBgImageSelect, 
           onAddSlide={handleAddSlide}
           onOpenTemplates={() => setShowTemplateGallery(true)}
           appDataDir={appDataDir}
+          theme={pres.theme}
         />
 
         {/* ══ CENTER: TOOLBAR + CANVAS ═════════════════════════════════════════ */}
@@ -218,32 +219,38 @@ handleImageSelect, handleVideoSelect, handleBgVideoSelect, handleBgImageSelect, 
       />
 
       {/* ══ LIVE PREVIEW PIP (P4.7) ═══════════════════════════════════════ */}
-      {previewOpen && (
-        <div
-          className="absolute bottom-4 right-4 w-[420px] aspect-video rounded-xl overflow-hidden shadow-2xl shadow-black/60 border border-white/20 z-[80]"
-          title="Live preview (Space) — not broadcast"
-        >
-          {pres.slides[activeSlideIdx] ? (
-            <CustomSlideRenderer
-              slide={pres.slides[activeSlideIdx]}
-              scale={0.5}
-              appDataDir={appDataDir}
-              theme={pres.theme}
-              entranceEnabled
-            />
-          ) : null}
-          <button
-            onClick={() => setPreviewOpen(false)}
-            className="absolute top-1.5 right-1.5 p-1 bg-black/60 hover:bg-black/80 text-white rounded-full"
-            title="Close preview (Esc)"
+      {previewOpen && (() => {
+        // The renderer authors font sizes against a 1080p reference; the
+        // 16:9 box is ~236px tall at 420px wide, so the scale must match
+        // (height/1080) or text renders 2× too large and overflows.
+        const pipScale = (420 * 9 / 16) / 1080;
+        return (
+          <div
+            className="absolute bottom-4 right-4 w-[420px] aspect-video rounded-xl overflow-hidden shadow-2xl shadow-black/60 border border-white/20 z-[80]"
+            title="Live preview (Space) — not broadcast"
           >
-            <X size={12} />
-          </button>
-          <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 bg-black/60 text-[8px] text-emerald-300 rounded">
-            ● Preview — not broadcast
-          </span>
-        </div>
-      )}
+            {pres.slides[activeSlideIdx] ? (
+              <CustomSlideRenderer
+                slide={pres.slides[activeSlideIdx]}
+                scale={pipScale}
+                appDataDir={appDataDir}
+                theme={pres.theme}
+                entranceEnabled
+              />
+            ) : null}
+            <button
+              onClick={() => setPreviewOpen(false)}
+              className="absolute top-1.5 right-1.5 p-1 bg-black/60 hover:bg-black/80 text-white rounded-full"
+              title="Close preview (Esc)"
+            >
+              <X size={12} />
+            </button>
+            <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 bg-black/60 text-[8px] text-emerald-300 rounded">
+              ● Preview — not broadcast
+            </span>
+          </div>
+        );
+      })()}
     </div>
   );
 }

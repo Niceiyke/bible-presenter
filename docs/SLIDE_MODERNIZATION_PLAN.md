@@ -508,9 +508,18 @@ Goal: layered workflows that distinguish slide-presenters from slide tools.
 
 **P4.6 — Offscreen canvas thumbnails** *(1 day)*
 
-- Replace `CustomSlideRenderer` mounting at `scale={0.07}` for list thumbnails with an `OffscreenCanvas`-based renderer (or `html-to-image` / `modern-screenshot` lib). Thumbnails snapshot once and cache by slide ID.
+- ~~Replace `CustomSlideRenderer` mounting at `scale={0.07}` for list thumbnails with an `OffscreenCanvas`-based renderer (or `html-to-image` / `modern-screenshot` lib). Thumbnails snapshot once and cache by slide ID.~~ **Replaced with a live scaled render.**
 
-- **Acceptance:** Scrolling a 100-slide presentation is smooth; thumbnails render in <50ms each.
+> **Update (P4.6 shipped, but approach reverted x-post-release):** The `html-to-image`
+> `toPng` approach was removed. In the Tauri/WebView2 runtime `asset://localhost`
+> media and custom `@font-face` sources can't be cloned onto a canvas (CORS /
+> canvas taint), so every snapshot came out black. `SlideThumbnail` now renders
+> the live `CustomSlideRenderer` at `scale = height/1080` inside the rail slot —
+> content is always correct, at the cost of mounting a lightweight renderer per
+> slide (acceptable for deck-sized rails). The `html-to-image` dependency was
+> removed.
+
+- **Acceptance:** Thumbnails show real slide content (bg, text, shapes, images).
 
 **P4.7 — Live preview mode** *(1 day)*
 

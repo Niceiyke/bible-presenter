@@ -6,6 +6,8 @@
  */
 
 import React from "react";
+import { useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
 
 export function Btn({ onClick, icon, children, className = "" }: {
   onClick: () => void;
@@ -108,6 +110,17 @@ export function FontPicker({
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
   const [anchorEl, setAnchorEl] = React.useState<HTMLButtonElement | null>(null);
+  const [pos, setPos] = React.useState({ top: 0, left: 0 });
+
+  // Measure the trigger once the popover opens so we can anchor a portal
+  // with fixed coordinates — the toolbar list scrolls horizontally
+  // (`overflow-x-auto`), which would otherwise clip an absolutely-positioned
+  // child of the trigger.
+  useLayoutEffect(() => {
+    if (!open || !anchorEl) return;
+    const rect = anchorEl.getBoundingClientRect();
+    setPos({ top: rect.bottom + 4, left: rect.left });
+  }, [open, anchorEl]);
 
   // Close on outside click.
   React.useEffect(() => {
@@ -121,11 +134,19 @@ export function FontPicker({
     const onDocKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
     };
+    const onResize = () => {
+      if (open && anchorEl) {
+        const rect = anchorEl.getBoundingClientRect();
+        setPos({ top: rect.bottom + 4, left: rect.left });
+      }
+    };
     document.addEventListener("mousedown", onDocMouse);
     document.addEventListener("keydown", onDocKey);
+    window.addEventListener("resize", onResize);
     return () => {
       document.removeEventListener("mousedown", onDocMouse);
       document.removeEventListener("keydown", onDocKey);
+      window.removeEventListener("resize", onResize);
     };
   }, [open, anchorEl]);
 
@@ -154,11 +175,11 @@ export function FontPicker({
         {value}
       </button>
 
-      {open && (
+      {open && createPortal(
         <div
           data-font-popover
-          className="absolute z-[90] mt-1 w-52 max-h-72 overflow-hidden rounded-lg border border-white/10 bg-[#1a1a2e] shadow-2xl flex flex-col"
-          style={{ top: "100%", left: 0 }}
+          className="fixed z-[90] w-52 max-h-72 overflow-hidden rounded-lg border border-white/10 bg-[#1a1a2e] shadow-2xl flex flex-col"
+          style={{ top: pos.top, left: pos.left }}
         >
           <div className="p-1.5 border-b border-white/8 shrink-0">
             <input
@@ -193,7 +214,8 @@ export function FontPicker({
               </button>
             ))}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );
