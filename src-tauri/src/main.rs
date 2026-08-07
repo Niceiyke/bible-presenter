@@ -162,7 +162,6 @@ fn main() {
             wordlyte_lib::commands::bible::get_bible_versions,
             wordlyte_lib::commands::bible::set_bible_version,
             wordlyte_lib::commands::bible::split_verse,
-            wordlyte_lib::commands::bible::search_manual,
             wordlyte_lib::commands::bible::search_semantic_query,
             wordlyte_lib::commands::bible::read_file_base64,
             wordlyte_lib::commands::bible::get_books,

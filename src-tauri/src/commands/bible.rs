@@ -44,11 +44,6 @@ pub fn split_verse(verse: store::Verse, threshold: Option<usize>) -> Vec<store::
 }
 
 #[tauri::command]
-pub async fn search_manual(state: State<'_, AppState>, query: String, version: String) -> Result<Vec<store::Verse>, String> {
-    state.store.search_manual(&query, &version).map_err(|e: anyhow::Error| e.to_string())
-}
-
-#[tauri::command]
 pub async fn search_semantic_query(state: State<'_, AppState>, query: String) -> Result<store::SearchResponse, String> {
     state.store.search_all(&query).map_err(|e: anyhow::Error| e.to_string())
 }

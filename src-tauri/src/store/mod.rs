@@ -53,6 +53,12 @@ const STOP_WORDS: &[&str] = &[
     "which","he","she","they","we","i","you","me","him","us","them",
 ];
 
+/// Lowercases a query token and strips punctuation, returning None if nothing remains.
+fn clean_token(word: &str) -> Option<String> {
+    let sanitized: String = word.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect();
+    if sanitized.is_empty() { None } else { Some(sanitized) }
+}
+
 static RE_FULL: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)[:\s]+(\d+)").unwrap()
 });
@@ -120,11 +126,15 @@ impl BibleStore {
             log_msg(app, &format!("Warning: Could not set WAL mode: {}", e));
         }
 
-        const CURRENT_SCHEMA_VERSION: u32 = 1;
+        const CURRENT_SCHEMA_VERSION: u32 = 2;
         let schema_version: u32 = conn.query_row(
             "PRAGMA user_version", [], |r| r.get(0)
         ).unwrap_or(0);
         if schema_version < CURRENT_SCHEMA_VERSION {
+            // Drop the old FTS index so it is recreated below with the improved tokenizer/stemming.
+            if schema_version < 2 {
+                let _ = conn.execute_batch("DROP TABLE IF EXISTS wordlyte_bible_fts;");
+            }
             conn.execute_batch(&format!("PRAGMA user_version = {}", CURRENT_SCHEMA_VERSION))?;
             log_msg(app, &format!("BibleStore: schema migrated to version {}", CURRENT_SCHEMA_VERSION));
         }
@@ -134,15 +144,23 @@ impl BibleStore {
             text,
             version,
             content='wordlyte_bible',
-            content_rowid='rowid'
+            content_rowid='rowid',
+            tokenize='unicode61 remove_diacritics 2 porter'
         )", [])?;
 
+        // Keep the full-text index in sync with the source table. Rebuild whenever the
+        // row counts differ (e.g. a freshly downloaded/replaced bible.db) rather than only
+        // populating on the first launch, so the index can never go stale.
         let count_fts: i64 = conn.query_row("SELECT count(*) FROM wordlyte_bible_fts", [], |r| r.get(0))?;
-        if count_fts == 0 {
-            log_msg(app, "BibleStore: Initializing FTS5 index...");
-            conn.execute("INSERT INTO wordlyte_bible_fts(rowid, title, text, version)
-                         SELECT rowid, title, text, version FROM wordlyte_bible
-                         WHERE language = 'EN' AND text IS NOT NULL AND text != ''", [])?;
+        let count_src: i64 = conn.query_row(
+            "SELECT count(*) FROM wordlyte_bible WHERE language = 'EN' AND text IS NOT NULL AND text != ''",
+            [], |r| r.get(0)
+        )?;
+        if count_fts != count_src || count_fts == 0 {
+            log_msg(app, &format!(
+                "BibleStore: Rebuilding FTS5 index (fts={}, src={})...", count_fts, count_src
+            ));
+            conn.execute("INSERT INTO wordlyte_bible_fts(wordlyte_bible_fts) VALUES('rebuild')", [])?;
         }
 
         let books: Vec<String> = {
@@ -376,61 +394,108 @@ impl BibleStore {
     }
 
     pub fn search_all(&self, query: &str) -> anyhow::Result<SearchResponse> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(SearchResponse { results: Vec::new(), method: String::new() });
+        }
+
         let ref_results = self.detect_verses_by_ref(query);
-        if !ref_results.is_empty() {
+
+        // A clean reference ("John 3:16", "Psalms 23") short-circuits to the reference match.
+        // If the query has extra meaningful words beyond the reference ("John 3:16 love"),
+        // fall through to keyword search so a reference match never hijacks a phrase query.
+        if !ref_results.is_empty() && !self.query_has_extra_words(query) {
             return Ok(SearchResponse { results: ref_results, method: "reference".to_string() });
         }
 
-        let fts_results = self.search_manual_all_versions(query)?;
-        Ok(SearchResponse { results: fts_results.into_iter().take(20).collect(), method: "keyword".to_string() })
+        let mut results = self.search_fts_keyword(query);
+
+        // Still surface the explicit reference at the top of keyword results.
+        if let Some(r) = ref_results.first() {
+            if !results.iter().any(|v| v.book == r.book && v.chapter == r.chapter && v.verse == r.verse) {
+                results.insert(0, r.clone());
+            }
+        }
+
+        results.truncate(20);
+        Ok(SearchResponse { results, method: "keyword".to_string() })
     }
 
-    pub fn search_manual_all_versions(&self, query: &str) -> anyhow::Result<Vec<Verse>> {
-        if query.trim().is_empty() {
-            return Ok(Vec::new());
+    /// True when the query contains tokens beyond a Bible reference (book words + numbers),
+    /// i.e. real search terms. Stop words are ignored.
+    fn query_has_extra_words(&self, query: &str) -> bool {
+        query.split_whitespace().any(|tok| {
+            let base: String = tok.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect();
+            if base.is_empty() { return false; }
+            if base.parse::<i32>().is_ok() { return false; }
+            if self.book_map.contains_key(&base) { return false; }
+            !STOP_WORDS.contains(&base.as_str())
+        })
+    }
+
+    /// Tiered keyword search: exact phrase -> all terms (AND) -> any term (OR) -> LIKE fallback.
+    /// Results carry a normalized bm25 relevance score in `Verse.score` (0..1, higher = better).
+    fn search_fts_keyword(&self, query: &str) -> Vec<Verse> {
+        let tokens: Vec<String> = query.split_whitespace().filter_map(clean_token).collect();
+        if tokens.is_empty() {
+            return Vec::new();
         }
 
-        let words: Vec<String> = query
-            .split_whitespace()
-            .map(|w| w.to_lowercase())
-            .filter(|w| !STOP_WORDS.contains(&w.as_str()))
+        // Tier 1: exact phrase match, preserving all words (including stop words).
+        let escaped = query.replace('"', "\"\"");
+        let phrase = format!("\"{}\"", escaped);
+        let phrase_hits = self.run_fts_query(&phrase);
+        if !phrase_hits.is_empty() {
+            return phrase_hits;
+        }
+
+        // Tier 2: every token must appear. Stop words are matched exactly (no prefix) to
+        // avoid "the*" hitting "them/they/there"; content words use a prefix for stemming.
+        let and_terms: Vec<String> = tokens.iter().map(|t| {
+            if STOP_WORDS.contains(&t.as_str()) { t.clone() } else { format!("{}*", t) }
+        }).collect();
+        let and_hits = self.run_fts_query(&and_terms.join(" AND "));
+        if !and_hits.is_empty() {
+            return and_hits;
+        }
+
+        // Tier 3: any term (stop words dropped to reduce noise).
+        let or_terms: Vec<String> = tokens.iter()
+            .filter(|t| !STOP_WORDS.contains(&t.as_str()))
+            .map(|t| format!("{}*", t))
             .collect();
-
-        if words.is_empty() {
-            return Ok(Vec::new());
+        if !or_terms.is_empty() {
+            let or_hits = self.run_fts_query(&or_terms.join(" OR "));
+            if !or_hits.is_empty() {
+                return or_hits;
+            }
         }
 
-        let cleaned_query = words
-            .iter()
-            .map(|w| {
-                let sanitized: String = w.chars().filter(|c| c.is_alphanumeric()).collect();
-                if sanitized.is_empty() { String::new() } else { format!("{}*", sanitized) }
-            })
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join(" OR ");
+        // Final fallback: contiguous substring match via LIKE.
+        self.like_contiguous(query).unwrap_or_default()
+    }
 
-        if cleaned_query.is_empty() {
-            return Ok(Vec::new());
-        }
-
+    /// Runs an FTS5 query across all versions and returns verses ordered by bm25 relevance
+    /// with scores normalized to 0..1.
+    fn run_fts_query(&self, match_query: &str) -> Vec<Verse> {
         let conn = self.conn.lock();
+        let Ok(mut stmt) = conn.prepare_cached(
+            "SELECT b.title, b.text, b.version, b.chapter, b.verse,
+                    bm25(wordlyte_bible_fts) AS relevance
+             FROM wordlyte_bible b
+             JOIN wordlyte_bible_fts f ON b.rowid = f.rowid
+             WHERE wordlyte_bible_fts MATCH ?1
+             ORDER BY relevance
+             LIMIT 200"
+        ) else {
+            return Vec::new();
+        };
 
-        // Try FTS5; fallback to LIKE if no rows
-        let mut results = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        let active_version = self.get_active_version();
-
-        if let Ok(mut stmt) = conn.prepare_cached(
-            "SELECT b.title, b.text, b.version, b.chapter, b.verse FROM wordlyte_bible b \
-             JOIN wordlyte_bible_fts f ON b.rowid = f.rowid \
-             WHERE wordlyte_bible_fts MATCH ?1 \
-             ORDER BY rank \
-             LIMIT 100"
-        ) {
-            let rows = stmt.query_map(params![cleaned_query], |row| {
-                let text: Option<String> = row.get(1)?;
-                Ok(Verse {
+        let mut scored: Vec<(Verse, f32)> = Vec::new();
+        match stmt.query_map(params![match_query], |row| {
+            let text: Option<String> = row.get(1)?;
+            Ok((
+                Verse {
                     book: row.get(0)?,
                     text: text.unwrap_or_default(),
                     version: row.get(2)?,
@@ -439,109 +504,49 @@ impl BibleStore {
                     split_index: None,
                     total_splits: None,
                     score: None,
-                })
-            })?;
-
-            let mut matched_verses = Vec::new();
-            for row in rows {
-                if let Ok(v) = row { matched_verses.push(v); }
-            }
-
-            for verse in &matched_verses {
-                if verse.version == active_version {
-                    let key = (verse.book.clone(), verse.chapter, verse.verse);
-                    if seen.insert(key) {
-                        results.push(verse.clone());
-                        if results.len() >= 20 { break; }
+                },
+                row.get::<_, f32>(5)?,
+            ))
+        }) {
+            Ok(rows) => {
+                for r in rows {
+                    if let Ok(x) = r {
+                        scored.push(x);
                     }
                 }
             }
-
-            if results.len() < 20 {
-                for verse in &matched_verses {
-                    let key = (verse.book.clone(), verse.chapter, verse.verse);
-                    if seen.insert(key) {
-                        results.push(verse.clone());
-                        if results.len() >= 20 { break; }
-                    }
-                }
-            }
+            Err(_) => return Vec::new(),
         }
 
-        if results.len() < 5 {
-            let like_pattern = format!("%{}%", query.trim().replace(' ', "%"));
-            let mut stmt_like = conn.prepare_cached(
-                "SELECT title, text, version, chapter, verse FROM wordlyte_bible \
-                 WHERE text LIKE ?1 \
-                 ORDER BY (CASE WHEN version = ?2 THEN 0 ELSE 1 END), rowid \
-                 LIMIT 50"
-            )?;
-            let like_rows = stmt_like.query_map(params![like_pattern, active_version], |row| {
-                let text: Option<String> = row.get(1)?;
-                Ok(Verse {
-                    book: row.get(0)?,
-                    text: text.unwrap_or_default(),
-                    version: row.get(2)?,
-                    chapter: row.get(3)?,
-                    verse: row.get(4)?,
-                    split_index: None,
-                    total_splits: None,
-                    score: None,
-                })
-            })?;
-            for row in like_rows {
-                if let Ok(v) = row {
-                    let key = (v.book.clone(), v.chapter, v.verse);
-                    if seen.insert(key) {
-                        results.push(v);
-                        if results.len() >= 20 { break; }
-                    }
-                }
-            }
+        if scored.is_empty() {
+            return Vec::new();
         }
 
-        Ok(results)
+        // FTS5 bm25: lower is better. Normalize so the best hit maps to ~1.0.
+        let min = scored.iter().map(|(_, s)| *s).fold(f32::INFINITY, f32::min);
+        let max = scored.iter().map(|(_, s)| *s).fold(f32::NEG_INFINITY, f32::max);
+        let range = if (max - min).abs() > f32::EPSILON { max - min } else { 1.0 };
+
+        scored.into_iter()
+            .map(|(mut v, s)| {
+                v.score = Some(1.0 - ((s - min) / range));
+                v
+            })
+            .collect()
     }
 
-    pub fn search_manual(&self, query: &str, version: &str) -> anyhow::Result<Vec<Verse>> {
-        if query.trim().is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let words: Vec<String> = query
-            .split_whitespace()
-            .map(|w| w.to_lowercase())
-            .filter(|w| !STOP_WORDS.contains(&w.as_str()))
-            .collect();
-
-        if words.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let cleaned_query = words
-            .iter()
-            .map(|w| {
-                let sanitized: String = w.chars().filter(|c| c.is_alphanumeric()).collect();
-                if sanitized.is_empty() { String::new() } else { format!("{}*", sanitized) }
-            })
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join(" OR ");
-
-        if cleaned_query.is_empty() {
-            return Ok(Vec::new());
-        }
-
+    /// Contiguous-substring LIKE fallback, preferring the active version.
+    fn like_contiguous(&self, query: &str) -> anyhow::Result<Vec<Verse>> {
+        let pattern = format!("%{}%", query.trim().replace(' ', "%"));
+        let active_version = self.get_active_version();
         let conn = self.conn.lock();
         let mut stmt = conn.prepare_cached(
-            "SELECT b.title, b.text, b.version, b.chapter, b.verse FROM wordlyte_bible b \
-             JOIN wordlyte_bible_fts f ON b.rowid = f.rowid \
-             WHERE wordlyte_bible_fts MATCH ?1 AND b.version = ?2 \
-             ORDER BY rank \
-             LIMIT 50"
+            "SELECT title, text, version, chapter, verse FROM wordlyte_bible \
+             WHERE text LIKE ?1 \
+             ORDER BY (CASE WHEN version = ?2 THEN 0 ELSE 1 END), rowid \
+             LIMIT 20"
         )?;
-
-        let rows = stmt.query_map(params![cleaned_query, version], |row| {
+        let rows = stmt.query_map(params![pattern, active_version], |row| {
             let text: Option<String> = row.get(1)?;
             Ok(Verse {
                 book: row.get(0)?,
@@ -554,41 +559,12 @@ impl BibleStore {
                 score: None,
             })
         })?;
-
         let mut results = Vec::new();
         for row in rows {
             if let Ok(v) = row {
                 results.push(v);
             }
         }
-
-        if results.is_empty() {
-            let like_pattern = format!("%{}%", query.trim().replace(' ', "%"));
-            let mut stmt_like = conn.prepare_cached(
-                "SELECT title, text, version, chapter, verse FROM wordlyte_bible \
-                 WHERE text LIKE ?1 AND version = ?2 \
-                 ORDER BY rowid LIMIT 50"
-            )?;
-            let like_rows = stmt_like.query_map(params![like_pattern, version], |row| {
-                let text: Option<String> = row.get(1)?;
-                Ok(Verse {
-                    book: row.get(0)?,
-                    text: text.unwrap_or_default(),
-                    version: row.get(2)?,
-                    chapter: row.get(3)?,
-                    verse: row.get(4)?,
-                    split_index: None,
-                    total_splits: None,
-                    score: None,
-                })
-            })?;
-            for row in like_rows {
-                if let Ok(v) = row {
-                    results.push(v);
-                }
-            }
-        }
-
         Ok(results)
     }
 
