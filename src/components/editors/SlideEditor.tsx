@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useRef, useState, useLayoutEffect } from "react";
 import { X } from "lucide-react";
 import { useSlideEditor } from "./slide/useSlideEditor";
 import { CustomSlideRenderer } from "../shared/Renderers";
@@ -8,7 +8,7 @@ import { EditorToolbar } from "./slide/EditorToolbar";
 import { SlideCanvas } from "./slide/SlideCanvas";
 import { PropertiesPanel } from "./slide/PropertiesPanel";
 import { SlideEditorModals } from "./slide/SlideEditorModals";
-import type { CustomPresentation, MediaItem } from "../../types";
+import type { CustomPresentation, CustomSlide, MediaItem, SlideTheme } from "../../types";
 
 // ─── Main SlideEditor ────────────────────────────────────────────────────────
 // P1.4: this component is presentational. All state + mutation handlers live
@@ -219,38 +219,75 @@ handleImageSelect, handleVideoSelect, handleBgVideoSelect, handleBgImageSelect, 
       />
 
       {/* ══ LIVE PREVIEW PIP (P4.7) ═══════════════════════════════════════ */}
-      {previewOpen && (() => {
-        // The renderer authors font sizes against a 1080p reference; the
-        // 16:9 box is ~236px tall at 420px wide, so the scale must match
-        // (height/1080) or text renders 2× too large and overflows.
-        const pipScale = (420 * 9 / 16) / 1080;
-        return (
-          <div
-            className="absolute bottom-4 right-4 w-[420px] aspect-video rounded-xl overflow-hidden shadow-2xl shadow-black/60 border border-white/20 z-[80]"
-            title="Live preview (Space) — not broadcast"
-          >
-            {pres.slides[activeSlideIdx] ? (
-              <CustomSlideRenderer
-                slide={pres.slides[activeSlideIdx]}
-                scale={pipScale}
-                appDataDir={appDataDir}
-                theme={pres.theme}
-                entranceEnabled
-              />
-            ) : null}
-            <button
-              onClick={() => setPreviewOpen(false)}
-              className="absolute top-1.5 right-1.5 p-1 bg-black/60 hover:bg-black/80 text-white rounded-full"
-              title="Close preview (Esc)"
-            >
-              <X size={12} />
-            </button>
-            <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 bg-black/60 text-[8px] text-emerald-300 rounded">
-              ● Preview — not broadcast
-            </span>
-          </div>
-        );
-      })()}
+      {previewOpen && (
+        <LivePreviewPip
+          slide={pres.slides[activeSlideIdx]}
+          appDataDir={appDataDir}
+          theme={pres.theme}
+          onClose={() => setPreviewOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * LivePreviewPip — the in-editor "live preview" box (P4.7). Renders the
+ * active slide with its entrance animations. The renderer authors font
+ * sizes against a 1080p reference, so the scale is the box's *measured*
+ * height ratio — measuring the slot (ResizeObserver) instead of assuming
+ * a fixed width keeps text proportions identical to the main canvas and
+ * lets the box shrink on small windows without overflowing.
+ */
+function LivePreviewPip({
+  slide,
+  appDataDir,
+  theme,
+  onClose,
+}: {
+  slide?: CustomSlide;
+  appDataDir: string | null;
+  theme?: SlideTheme;
+  onClose: () => void;
+}) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [pipScale, setPipScale] = useState(0.2);
+
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const update = () => setPipScale(el.clientHeight / 1080);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  return (
+    <div
+      ref={boxRef}
+      className="absolute bottom-4 right-4 w-[min(420px,32vw)] aspect-video rounded-xl overflow-hidden shadow-2xl shadow-black/60 border border-white/20 z-[80]"
+      title="Live preview (Space) — not broadcast"
+    >
+      {slide ? (
+        <CustomSlideRenderer
+          slide={slide}
+          scale={pipScale}
+          appDataDir={appDataDir}
+          theme={theme}
+          entranceEnabled
+        />
+      ) : null}
+      <button
+        onClick={onClose}
+        className="absolute top-1.5 right-1.5 p-1 bg-black/60 hover:bg-black/80 text-white rounded-full"
+        title="Close preview (Esc)"
+      >
+        <X size={12} />
+      </button>
+      <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 bg-black/60 text-[8px] text-emerald-300 rounded">
+        ● Preview — not broadcast
+      </span>
     </div>
   );
 }

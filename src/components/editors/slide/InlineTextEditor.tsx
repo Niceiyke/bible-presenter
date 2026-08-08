@@ -202,14 +202,19 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
 
   // Apply per-selection font-size delta: `delta` in points.
   const bumpFontSize = (delta: number) => {
-    // Tiptap's setFontSize takes an absolute pt value. We start from the
-    // element's default font_size and add the delta, so each press is a
-    // predictable step (±4pt) rather than reading whatever inline span
-    // the cursor is currently on. Inherit ("inherit") elements fall back
-    // to 32pt here; the cascade is reapplied on commit if the user does
-    // not explicitly set a font-size on the selection.
-    const base = typeof el.font_size === "number" ? el.font_size : 32;
-    const next = Math.max(8, base + delta);
+    // Start from the *current* font size of the selection — an already-
+    // styled word keeps its size, and plain text falls back to the
+    // element's default. Previously we always based the step on
+    // `el.font_size`, so selecting a word and pressing A+/A- was "stuck"
+    // at the element default (re-applying the same absolute size every
+    // press) instead of stepping the selected text.
+    const selSize = (editor.getAttributes("textStyle") as any)?.fontSize;
+    let base = typeof el.font_size === "number" ? el.font_size : 32;
+    if (typeof selSize === "string" && selSize.trim().endsWith("pt")) {
+      const parsed = parseFloat(selSize);
+      if (!Number.isNaN(parsed)) base = parsed;
+    }
+    const next = Math.max(8, Math.round(base + delta));
     editor.chain().focus().setFontSize(`${next}pt`).run();
   };
 
@@ -320,7 +325,14 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
           <AArrowDown size={13} />
         </ToolbarButton>
         <span className="text-[10px] text-slate-500 tabular-nums w-7 text-center">
-          {String(el.font_size ?? 32)}
+          {(() => {
+            const selSize = (editor.getAttributes("textStyle") as any)?.fontSize;
+            if (typeof selSize === "string" && selSize.trim().endsWith("pt")) {
+              const parsed = parseFloat(selSize);
+              if (!Number.isNaN(parsed)) return Math.round(parsed);
+            }
+            return String(el.font_size ?? 32);
+          })()}
         </span>
         <ToolbarButton title="Larger (Alt+A⁺)" onClick={() => bumpFontSize(4)}>
           <AArrowUp size={13} />

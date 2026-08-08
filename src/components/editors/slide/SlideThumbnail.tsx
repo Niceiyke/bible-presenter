@@ -13,7 +13,7 @@
  * slide rail — each thumbnail is a few percent-sized nodes.
  */
 
-import React from "react";
+import React, { useLayoutEffect, useRef, useState } from "react";
 import { CustomSlideRenderer } from "../../shared/Renderers";
 import type { CustomSlide, SlideTheme } from "../../../types";
 
@@ -23,8 +23,11 @@ interface SlideThumbnailProps {
   theme?: SlideTheme;
   className?: string;
   alt?: string;
-  width: number;
-  height: number;
+  /** Optional explicit slot size. When omitted the thumbnail fills its
+   *  parent (`w-full h-full` via `className`), so it always matches the
+   *  actual slot — e.g. the rail button — instead of a fixed box. */
+  width?: number;
+  height?: number;
 }
 
 export function SlideThumbnail({
@@ -35,13 +38,28 @@ export function SlideThumbnail({
   width,
   height,
 }: SlideThumbnailProps) {
-  // The renderer authors font sizes against a 1080p reference (see
-  // `useCanvasScale`), so the thumbnail's scale is its height ratio —
-  // geometry is percentage-based so it already fills the box.
-  const scale = height / 1080;
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [boxH, setBoxH] = useState(0);
+
+  // Measure the rendered slot height (ResizeObserver, so it stays correct
+  // if the slot resizes) and scale against the 1080p reference — the same
+  // policy `useCanvasScale` uses for the editor canvas, so thumbnails and
+  // the main editor always agree on text proportions.
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const update = () => setBoxH(el.clientHeight);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const scale = (boxH > 0 ? boxH : (height ?? 1080)) / 1080;
 
   return (
     <div
+      ref={boxRef}
       className={className}
       style={{ width, height, background: "#0f0f1f", overflow: "hidden", pointerEvents: "none" }}
       aria-hidden

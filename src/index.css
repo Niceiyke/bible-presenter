@@ -5,6 +5,18 @@ html, body, #root {
   overflow: hidden;
 }
 
+/* Native `<select>` dropdowns (and their option lists) must follow the
+   app's dark theme. Without `color-scheme: dark` WebView2 paints the
+   popup list white while inherited text stays light, making options
+   invisible. This is the app-wide root fix — it also affects the
+   text-editor toolbar, settings, bible/song tabs, etc. */
+select {
+  color-scheme: dark;
+}
+select option {
+  color-scheme: dark;
+}
+
 @keyframes lt-scroll-rtl {
   0%   { transform: translateX(0); }
   100% { transform: translateX(-50%); }
