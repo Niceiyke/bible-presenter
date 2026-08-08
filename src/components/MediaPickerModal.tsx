@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import type { MediaItem } from "../types";
 import { Film } from "lucide-react";
+import { MediaThumb } from "./MediaThumb";
 
 export function MediaPickerModal({
   images,
@@ -14,7 +14,7 @@ export function MediaPickerModal({
   onSelect: (path: string) => void;
   onClose: () => void;
   onUpload: () => Promise<void>;
-  mode?: "image" | "video";
+  mode?: "image" | "video" | "audio";
 }) {
   const [uploading, setUploading] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -23,14 +23,16 @@ export function MediaPickerModal({
 
   const items = mode === "video"
     ? images.filter(i => i.media_type === "Video")
-    : images;
+    : mode === "audio"
+      ? images.filter(i => i.media_type === "Audio")
+      : images.filter(i => i.media_type === "Image");
 
   const handleUpload = async () => {
     setUploading(true);
     try { await onUpload(); } finally { setUploading(false); }
   };
 
-  const label = mode === "video" ? "Video" : "Image";
+  const label = mode === "video" ? "Video" : mode === "audio" ? "Audio" : "Image";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-8" style={{ backgroundColor: "rgba(0,0,0,0.75)" }}>
@@ -48,7 +50,7 @@ export function MediaPickerModal({
             <button onClick={onClose} className="text-slate-400 hover:text-white text-lg leading-none px-1">×</button>
           </div>
         </div>
-        <div className="flex-1 overflow-y-auto p-4">
+        <div className="flex-1 overflow-y-auto p-4" key={refreshKey}>
           {items.length === 0 ? (
             <p className="text-slate-600 text-xs italic text-center py-12">
               No {label.toLowerCase()}s in library yet. Click "+ Upload New" to add {label.toLowerCase()}s.
@@ -59,14 +61,17 @@ export function MediaPickerModal({
                 <button
                   key={img.id}
                   onClick={() => { onSelect(img.path); onClose(); }}
-                  className="aspect-video rounded-lg overflow-hidden border border-slate-700 hover:border-amber-500 transition-all group relative"
+                  className="aspect-video rounded-lg overflow-hidden border border-slate-700 hover:border-amber-500 transition-all group relative bg-slate-800"
                 >
-                  {img.media_type === "Video" ? (
-                    <div className="w-full h-full bg-slate-800 flex items-center justify-center">
-                      <Film size={24} className="text-slate-500" />
+                  {img.media_type === "Video" || img.media_type === "Audio" ? (
+                    <div className="w-full h-full relative">
+                      <MediaThumb item={img} className="w-full h-full" objectFit="contain" />
+                      <span className="absolute top-1 right-1 bg-black/70 text-white text-[8px] px-1 py-0.5 rounded flex items-center gap-1">
+                        <Film size={9} /> {img.media_type}
+                      </span>
                     </div>
                   ) : (
-                    <img src={convertFileSrc(img.path)} className="w-full h-full object-cover" alt={img.name} />
+                    <MediaThumb item={img} className="w-full h-full" />
                   )}
                   <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center">
                     <span className="text-white text-[10px] font-bold">SELECT</span>

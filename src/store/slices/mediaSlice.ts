@@ -6,6 +6,11 @@ import { invoke } from "@tauri-apps/api/core";
 export interface MediaSlice {
     media: MediaItem[];
     setMedia: (v: MediaItem[]) => void;
+    /** Merge a single updated/inserted item into the in-memory list (used by
+     *  `media-probed` / `media-updated` events so cards refresh live). */
+    upsertMediaItem: (item: MediaItem) => void;
+    setMediaPlayback: (id: string, loopPlayback: boolean, playbackRate: number, volume: number) => Promise<void>;
+    relinkMedia: (id: string, path: string) => Promise<void>;
     updateMediaItemMetadata: (
       id: string,
       description: string | undefined,
@@ -19,10 +24,10 @@ export interface MediaSlice {
       tagsToRemove: string[],
           category: string | undefined
         ) => Promise<void>;
-        mediaFilter: "image" | "video" | "camera";
-        setMediaFilter: (v: "image" | "video" | "camera") => void;
+        mediaFilter: "image" | "video" | "audio" | "camera";
+        setMediaFilter: (v: "image" | "video" | "audio" | "camera") => void;
         showLogoPicker: boolean;
-      
+
   setShowLogoPicker: (v: boolean) => void;
   showGlobalBgPicker: boolean;
   setShowGlobalBgPicker: (v: boolean) => void;
@@ -31,6 +36,37 @@ export interface MediaSlice {
 export const createMediaSlice: StateCreator<AppStore, [], [], MediaSlice> = (set, get) => ({
   media: [],
   setMedia: (v) => set({ media: v }),
+
+  upsertMediaItem: (item) =>
+    set((state) => {
+      const exists = state.media.some((m) => m.id === item.id);
+      return { media: exists ? state.media.map((m) => (m.id === item.id ? item : m)) : [item, ...state.media] };
+    }),
+
+  setMediaPlayback: async (id, loopPlayback, playbackRate, volume) => {
+    try {
+      await invoke("set_media_playback", { id, loopPlayback, playbackRate, volume });
+      set((state) => ({
+        media: state.media.map((item) =>
+          item.id === id ? { ...item, loop_playback: loopPlayback, playback_rate: playbackRate, volume } : item
+        ),
+      }));
+    } catch (error) {
+      console.error("Failed to update media playback:", error);
+    }
+  },
+
+  relinkMedia: async (id, path) => {
+    try {
+      const updated = await invoke<MediaItem>("relink_media", { id, path });
+      set((state) => ({
+        media: state.media.map((item) => (item.id === id ? updated : item)),
+      }));
+    } catch (error) {
+      console.error("Failed to relink media:", error);
+      throw error;
+    }
+  },
 
   updateMediaItemMetadata: async (id, description, tags, category) => {
     try {

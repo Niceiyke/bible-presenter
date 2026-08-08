@@ -6,6 +6,14 @@ pub struct DataDb {
     conn: Mutex<Connection>,
 }
 
+/// Row shape for `list_media`: (id, filename, path, media_type, fit_mode,
+/// description, tags, category, thumbnail_path, duration, width, height,
+/// content_hash, loop_playback, playback_rate, volume).
+pub type MediaRow = (
+    String, String, String, String, String, String, String, String,
+    String, Option<f64>, Option<i64>, Option<i64>, String, bool, f64, f64,
+);
+
 impl DataDb {
     pub fn open(db_path: &PathBuf) -> Result<Self, String> {
         match Self::try_open(db_path) {
@@ -54,7 +62,15 @@ impl DataDb {
                 description TEXT DEFAULT '',
                 tags TEXT DEFAULT '[]',
                 category TEXT DEFAULT '',
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                thumbnail_path TEXT DEFAULT '',
+                duration REAL,
+                width INTEGER,
+                height INTEGER,
+                content_hash TEXT DEFAULT '',
+                loop_playback INTEGER DEFAULT 0,
+                playback_rate REAL DEFAULT 1.0,
+                volume REAL DEFAULT 1.0
             );
             CREATE TABLE IF NOT EXISTS songs (
                 id TEXT PRIMARY KEY,
@@ -76,7 +92,33 @@ impl DataDb {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
-        ").map_err(|e| e.to_string())
+        ").map_err(|e| e.to_string())?;
+
+        // Forward-migrate older DBs that predate the P4.8 media columns.
+        // `PRAGMA table_info` is the portable existence check (there is no
+        // `ADD COLUMN IF NOT EXISTS` in SQLite).
+        let cols: Vec<String> = {
+            let mut stmt = conn.prepare("PRAGMA table_info(media)").map_err(|e| e.to_string())?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(1)).map_err(|e| e.to_string())?;
+            let mut v = Vec::new();
+            for r in rows { v.push(r.map_err(|e| e.to_string())?); }
+            v
+        };
+        for (col, ddl) in [
+            ("thumbnail_path", "ALTER TABLE media ADD COLUMN thumbnail_path TEXT DEFAULT ''"),
+            ("duration", "ALTER TABLE media ADD COLUMN duration REAL"),
+            ("width", "ALTER TABLE media ADD COLUMN width INTEGER"),
+            ("height", "ALTER TABLE media ADD COLUMN height INTEGER"),
+            ("content_hash", "ALTER TABLE media ADD COLUMN content_hash TEXT DEFAULT ''"),
+            ("loop_playback", "ALTER TABLE media ADD COLUMN loop_playback INTEGER DEFAULT 0"),
+            ("playback_rate", "ALTER TABLE media ADD COLUMN playback_rate REAL DEFAULT 1.0"),
+            ("volume", "ALTER TABLE media ADD COLUMN volume REAL DEFAULT 1.0"),
+        ] {
+            if !cols.iter().any(|c| c == col) {
+                conn.execute_batch(ddl).map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
     }
 
     // ---- Key-Value operations ----
@@ -104,10 +146,13 @@ impl DataDb {
 
     // ---- Media operations ----
 
-    pub fn list_media(&self) -> Result<Vec<(String, String, String, String, String, String, String, String)>, String> {
+    pub fn list_media(&self) -> Result<Vec<MediaRow>, String> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, filename, path, media_type, fit_mode, description, tags, category FROM media ORDER BY filename COLLATE NOCASE"
+            "SELECT id, filename, path, media_type, fit_mode, description, tags, category,
+                    thumbnail_path, duration, width, height, content_hash,
+                    loop_playback, playback_rate, volume
+             FROM media ORDER BY filename COLLATE NOCASE"
         ).map_err(|e| e.to_string())?;
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -119,6 +164,14 @@ impl DataDb {
                 row.get::<_, String>(5)?,
                 row.get::<_, String>(6)?,
                 row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, Option<f64>>(9)?,
+                row.get::<_, Option<i64>>(10)?,
+                row.get::<_, Option<i64>>(11)?,
+                row.get::<_, String>(12)?,
+                row.get::<_, bool>(13)?,
+                row.get::<_, f64>(14)?,
+                row.get::<_, f64>(15)?,
             ))
         }).map_err(|e| e.to_string())?;
         let mut items = Vec::new();
@@ -136,11 +189,63 @@ impl DataDb {
         Ok(count > 0)
     }
 
+    pub fn find_media_by_hash(&self, content_hash: &str) -> Result<Option<String>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare("SELECT id FROM media WHERE content_hash = ?1 LIMIT 1")
+            .map_err(|e| e.to_string())?;
+        match stmt.query_row(params![content_hash], |row| row.get::<_, String>(0)) {
+            Ok(id) => Ok(Some(id)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
     pub fn insert_media(&self, id: &str, filename: &str, path: &str, media_type: &str, created_at: &str) -> Result<(), String> {
         let conn = self.conn.lock();
         conn.execute(
             "INSERT INTO media (id, filename, path, media_type, fit_mode, description, tags, category, created_at) VALUES (?1,?2,?3,?4,'contain','','[]','',?5)",
             params![id, filename, path, media_type, created_at],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn set_media_hash(&self, id: &str, content_hash: &str) -> Result<(), String> {
+        let conn = self.conn.lock();
+        conn.execute("UPDATE media SET content_hash = ?1 WHERE id = ?2", params![content_hash, id])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn set_media_probe(
+        &self,
+        id: &str,
+        thumbnail_path: Option<&str>,
+        duration: Option<f64>,
+        width: Option<i64>,
+        height: Option<i64>,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "UPDATE media SET thumbnail_path = ?1, duration = ?2, width = ?3, height = ?4 WHERE id = ?5",
+            params![thumbnail_path.unwrap_or(""), duration, width, height, id],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn set_media_playback(&self, id: &str, loop_playback: bool, playback_rate: f64, volume: f64) -> Result<(), String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "UPDATE media SET loop_playback = ?1, playback_rate = ?2, volume = ?3 WHERE id = ?4",
+            params![loop_playback, playback_rate, volume, id],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn relink_media(&self, id: &str, filename: &str, path: &str) -> Result<(), String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "UPDATE media SET filename = ?1, path = ?2 WHERE id = ?3",
+            params![filename, path, id],
         ).map_err(|e| e.to_string())?;
         Ok(())
     }

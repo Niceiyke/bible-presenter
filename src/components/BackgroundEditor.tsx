@@ -3,7 +3,13 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { MediaPickerModal } from "./MediaPickerModal";
 import { useAppStore } from "../store";
 import { relativizePath } from "../utils";
-import type { BackgroundSetting, VideoBackground, CameraBackground, MediaItem } from "../types";
+import type { BackgroundSetting, VideoBackground, CameraBackground, AudioBackground, ImageBackground, MediaItem } from "../types";
+
+const DEFAULT_IMAGE_BG: ImageBackground = {
+  path: "",
+  objectFit: "cover",
+  opacity: 1,
+};
 
 const DEFAULT_VIDEO_BG: VideoBackground = {
   path: "",
@@ -19,6 +25,12 @@ const DEFAULT_CAMERA_BG: CameraBackground = {
   opacity: 1,
   objectFit: "cover",
   mirrored: false,
+};
+
+const DEFAULT_AUDIO_BG: AudioBackground = {
+  path: "",
+  loopAudio: true,
+  volume: 1,
 };
 
 export function BackgroundEditor({
@@ -40,12 +52,20 @@ export function BackgroundEditor({
 
   const vbg = current.type === "Video" ? (current as { type: "Video"; value: VideoBackground }).value : null;
   const cbg = current.type === "Camera" ? (current as { type: "Camera"; value: CameraBackground }).value : null;
+  const abg = current.type === "Audio" ? (current as { type: "Audio"; value: AudioBackground }).value : null;
+  const ibg = current.type === "Image" ? (current as { type: "Image"; value: ImageBackground }).value : null;
 
   const updateVbg = (patch: Partial<VideoBackground>) =>
     onChange({ type: "Video", value: { ...(vbg ?? DEFAULT_VIDEO_BG), ...patch } });
 
   const updateCbg = (patch: Partial<CameraBackground>) =>
     onChange({ type: "Camera", value: { ...(cbg ?? DEFAULT_CAMERA_BG), ...patch } });
+
+  const updateAbg = (patch: Partial<AudioBackground>) =>
+    onChange({ type: "Audio", value: { ...(abg ?? DEFAULT_AUDIO_BG), ...patch } });
+
+  const updateIbg = (patch: Partial<ImageBackground>) =>
+    onChange({ type: "Image", value: { ...(ibg ?? DEFAULT_IMAGE_BG), ...patch } });
 
   useEffect(() => {
     if (current.type === "Camera" && availableCameras.length === 0) {
@@ -65,20 +85,33 @@ export function BackgroundEditor({
     } catch {}
   };
 
+  const handlePickAudio = async () => {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        filters: [{ name: "Audio", extensions: ["mp3", "wav", "ogg", "flac", "m4a", "aac"] }],
+      });
+      if (typeof selected !== "string") return;
+      const rel = relativizePath(selected, appDataDir);
+      onChange({ type: "Audio", value: { ...(abg ?? DEFAULT_AUDIO_BG), path: rel } });
+    } catch {}
+  };
+
   return (
     <>
       <div>
         {label && <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1.5">{label}</p>}
         <div className="flex gap-1.5 mb-1.5 overflow-x-auto pb-1 no-scrollbar">
-          {(["None", "Color", "Image", "Video", "Camera"] as const).map((mode) => (
+          {(["None", "Color", "Image", "Video", "Camera", "Audio"] as const).map((mode) => (
             <button
               key={mode}
               onClick={() => {
                 if (mode === "None") onChange({ type: "None" });
                 else if (mode === "Color") onChange({ type: "Color", value: current.type === "Color" ? (current as any).value : "#000000" });
-                else if (mode === "Image") onChange({ type: "Image", value: current.type === "Image" ? (current as any).value : "" });
+                else if (mode === "Image") onChange({ type: "Image", value: current.type === "Image" ? (current as any).value : { path: "", objectFit: "cover", opacity: 1 } });
                 else if (mode === "Video") onChange({ type: "Video", value: current.type === "Video" ? (current as any).value : { ...DEFAULT_VIDEO_BG } });
-                else onChange({ type: "Camera", value: current.type === "Camera" ? (current as any).value : { ...DEFAULT_CAMERA_BG } });
+                else if (mode === "Camera") onChange({ type: "Camera", value: current.type === "Camera" ? (current as any).value : { ...DEFAULT_CAMERA_BG } });
+                else onChange({ type: "Audio", value: current.type === "Audio" ? (current as any).value : { ...DEFAULT_AUDIO_BG } });
               }}
               className={`flex-none px-3 py-1 rounded text-[9px] font-bold border transition-all ${
                 current.type === mode ? "border-amber-500 bg-amber-500/10 text-amber-400" : "border-slate-700 bg-slate-800/50 text-slate-500 hover:border-slate-600"
@@ -102,26 +135,62 @@ export function BackgroundEditor({
         )}
 
         {current.type === "Image" && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowPicker(true)}
-              className="flex-1 py-1 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-slate-300 transition-all"
-            >
-              {(current as { type: "Image"; value: string }).value ? "Change from Library..." : "Pick from Library..."}
-            </button>
-            {(current as { type: "Image"; value: string }).value && (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
               <button
-                onClick={() => onChange({ type: "Image", value: "" })}
-                className="text-red-500/70 hover:text-red-400 text-[10px] font-bold shrink-0"
-                title="Clear image"
-              >✕</button>
+                onClick={() => setShowPicker(true)}
+                className="flex-1 py-1 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-slate-300 transition-all"
+              >
+                {(current as { type: "Image"; value: ImageBackground }).value?.path ? "Change from Library..." : "Pick from Library..."}
+              </button>
+              {(current as { type: "Image"; value: ImageBackground }).value?.path && (
+                <button
+                  onClick={() => onChange({ type: "Image", value: { path: "", objectFit: "cover", opacity: 1 } })}
+                  className="text-red-500/70 hover:text-red-400 text-[10px] font-bold shrink-0"
+                  title="Clear image"
+                >✕</button>
+              )}
+            </div>
+            {(current as { type: "Image"; value: ImageBackground }).value?.path && (
+              <p className="text-[8px] text-slate-600 truncate -mt-1">
+                {(current as { type: "Image"; value: ImageBackground }).value.path.split(/[/\\]/).pop()}
+              </p>
             )}
+
+            {/* Fit */}
+            <div>
+              <p className="text-[8px] text-slate-600 uppercase font-bold mb-1">Fit</p>
+              <div className="flex gap-1">
+                {(["cover", "contain", "fill"] as const).map((fit) => (
+                  <button
+                    key={fit}
+                    onClick={() => updateIbg({ objectFit: fit })}
+                    className={`flex-1 py-0.5 rounded text-[8px] font-bold border transition-all capitalize ${
+                      ibg?.objectFit === fit
+                        ? "border-amber-500 bg-amber-500/10 text-amber-400"
+                        : "border-slate-700 bg-slate-800/50 text-slate-500"
+                    }`}
+                  >
+                    {fit === "contain" ? "Fit" : fit === "cover" ? "Crop" : "Stretch"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Opacity */}
+            <div>
+              <div className="flex justify-between mb-0.5">
+                <p className="text-[8px] text-slate-600 uppercase font-bold">Opacity</p>
+                <span className="text-[8px] text-slate-500">{Math.round((ibg?.opacity ?? 1) * 100)}%</span>
+              </div>
+              <input
+                type="range" min="0" max="1" step="0.05"
+                value={ibg?.opacity ?? 1}
+                onChange={(e) => updateIbg({ opacity: parseFloat(e.target.value) })}
+                className="w-full h-1 appearance-none bg-slate-700 rounded accent-amber-500 cursor-pointer"
+              />
+            </div>
           </div>
-        )}
-        {current.type === "Image" && (current as { type: "Image"; value: string }).value && (
-          <p className="text-[8px] text-slate-600 truncate mt-1">
-            {(current as { type: "Image"; value: string }).value.split(/[/\\]/).pop()}
-          </p>
         )}
 
         {vbg !== null && (
@@ -284,12 +353,62 @@ export function BackgroundEditor({
             </div>
           </div>
         )}
+
+        {abg !== null && (
+          <div className="flex flex-col gap-2">
+            {/* File picker */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handlePickAudio}
+                className="flex-1 py-1 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-slate-300 transition-all"
+              >
+                {abg.path ? "Change Audio..." : "Pick Audio File..."}
+              </button>
+              {abg.path && (
+                <button
+                  onClick={() => updateAbg({ path: "" })}
+                  className="text-red-500/70 hover:text-red-400 text-[10px] font-bold shrink-0"
+                  title="Clear audio"
+                >✕</button>
+              )}
+            </div>
+            {abg.path && (
+              <p className="text-[8px] text-slate-600 truncate -mt-1">
+                {abg.path.split(/[/\\]/).pop()}
+              </p>
+            )}
+
+            {/* Loop toggle */}
+            <button
+              onClick={() => updateAbg({ loopAudio: !abg.loopAudio })}
+              className={`py-1 rounded text-[9px] font-bold border transition-all ${
+                abg.loopAudio ? "border-amber-500 bg-amber-500/10 text-amber-400" : "border-slate-700 bg-slate-800/50 text-slate-500"
+              }`}
+            >
+              Loop: {abg.loopAudio ? "On" : "Off"}
+            </button>
+
+            {/* Volume */}
+            <div>
+              <div className="flex justify-between mb-0.5">
+                <p className="text-[8px] text-slate-600 uppercase font-bold">Volume</p>
+                <span className="text-[8px] text-slate-500">{Math.round(abg.volume * 100)}%</span>
+              </div>
+              <input
+                type="range" min="0" max="1" step="0.05"
+                value={abg.volume}
+                onChange={(e) => updateAbg({ volume: parseFloat(e.target.value) })}
+                className="w-full h-1 appearance-none bg-slate-700 rounded accent-amber-500 cursor-pointer"
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {showPicker && (
         <MediaPickerModal
           images={mediaImages}
-          onSelect={(path) => { onChange({ type: "Image", value: relativizePath(path, appDataDir) }); }}
+          onSelect={(path) => { onChange({ type: "Image", value: { ...(ibg ?? DEFAULT_IMAGE_BG), path: relativizePath(path, appDataDir) } }); }}
           onClose={() => setShowPicker(false)}
           onUpload={onUploadMedia}
         />

@@ -6,7 +6,7 @@ import { BackgroundEditor } from "../BackgroundEditor";
 import { MediaPickerModal } from "../MediaPickerModal";
 import { computePreviewBackground, relativizePath } from "../../utils";
 import { THEMES, FONTS } from "../../types";
-import type { PresentationSettings, BackgroundSetting, MonitorInfo } from "../../types";
+import type { PresentationSettings, BackgroundSetting, ImageBackground, MonitorInfo } from "../../types";
 
 interface DisplaySectionProps {
   onUpdateSettings: (s: PresentationSettings) => void;
@@ -58,7 +58,7 @@ export function DisplaySection({ onUpdateSettings, onUploadMedia }: DisplaySecti
       });
       if (typeof selected !== "string") return;
       const rel = relativizePath(selected, appDataDir);
-      onUpdateSettings({ ...settings, background: { type: "Image", value: rel } });
+      onUpdateSettings({ ...settings, background: { type: "Image", value: { path: rel, objectFit: "cover", opacity: 1 } } });
     } catch (err: any) {
       console.error("Failed to set background image:", err);
     }
@@ -539,7 +539,7 @@ export function DisplaySection({ onUpdateSettings, onUploadMedia }: DisplaySecti
                 let bg: BackgroundSetting;
                 if (mode === "None") bg = { type: "None" };
                 else if (mode === "Color") bg = { type: "Color", value: settings.background.type === "Color" ? (settings.background as any).value : "#1a1a2e" };
-                else bg = { type: "Image", value: settings.background.type === "Image" ? (settings.background as any).value : "" };
+                else bg = { type: "Image", value: settings.background.type === "Image" ? (settings.background as any).value : { path: "", objectFit: "cover", opacity: 1 } };
                 onUpdateSettings({ ...settings, background: bg });
               }}
               className={`flex-1 py-2 rounded-lg border text-xs font-bold transition-all ${
@@ -567,21 +567,79 @@ export function DisplaySection({ onUpdateSettings, onUploadMedia }: DisplaySecti
         )}
         {settings.background.type === "Image" && (
           <div className="flex flex-col gap-2">
-            <button
-              onClick={() => {
-                if (media.filter((m) => m.media_type === "Image").length > 0) setShowGlobalBgPicker(true);
-                else handlePickBackgroundImage();
-              }}
-              className="w-full py-2 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-all"
-            >
-              {(settings.background as { type: "Image"; value: string }).value ? "Change from Library..." : "Choose from Library..."}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  if (media.filter((m) => m.media_type === "Image").length > 0) setShowGlobalBgPicker(true);
+                  else handlePickBackgroundImage();
+                }}
+                className="flex-1 py-2 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-all"
+              >
+                {(settings.background as { type: "Image"; value: ImageBackground }).value?.path ? "Change from Library..." : "Choose from Library..."}
+              </button>
+              {(settings.background as { type: "Image"; value: ImageBackground }).value?.path && (
+                <button
+                  onClick={() => onUpdateSettings({ ...settings, background: { type: "Image", value: { path: "", objectFit: "cover", opacity: 1 } } })}
+                  className="text-red-500/70 hover:text-red-400 text-sm font-bold shrink-0"
+                  title="Clear image"
+                >✕</button>
+              )}
+            </div>
+            {(settings.background as { type: "Image"; value: ImageBackground }).value?.path && (
+              <p className="text-[9px] text-slate-600 truncate">
+                {(settings.background as { type: "Image"; value: ImageBackground }).value.path.split(/[/\\]/).pop()}
+              </p>
+            )}
+            {/* Fit + opacity for the global output image background */}
+            <div className="flex items-center gap-2">
+              <span className="text-[9px] text-slate-500 uppercase font-bold w-10">Fit</span>
+              <div className="flex gap-1 flex-1">
+                {(["cover", "contain", "fill"] as const).map((fit) => (
+                  <button
+                    key={fit}
+                    onClick={() => onUpdateSettings({
+                      ...settings,
+                      background: {
+                        type: "Image",
+                        value: { ...(settings.background as any).value, objectFit: fit },
+                      },
+                    })}
+                    className={`flex-1 py-1 rounded text-[9px] font-bold capitalize transition-all ${
+                      (settings.background as any).value.objectFit === fit
+                        ? "border-amber-500 bg-amber-500/10 text-amber-400"
+                        : "border-slate-700 bg-slate-800/50 text-slate-500"
+                    }`}
+                  >
+                    {fit === "contain" ? "Fit" : fit === "cover" ? "Crop" : "Stretch"}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[9px] text-slate-500 uppercase font-bold w-10">Opacity</span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={(settings.background as any).value.opacity ?? 1}
+                onChange={(e) => onUpdateSettings({
+                  ...settings,
+                  background: {
+                    type: "Image",
+                    value: { ...(settings.background as any).value, opacity: parseFloat(e.target.value) },
+                  },
+                })}
+                className="flex-1 h-1 appearance-none bg-slate-700 rounded accent-amber-500 cursor-pointer"
+              />
+              <span className="text-[9px] text-slate-500 w-9 text-right font-mono">{Math.round(((settings.background as any).value.opacity ?? 1) * 100)}%</span>
+            </div>
           </div>
         )}
         {showGlobalBgPicker && (
           <MediaPickerModal
             images={media.filter((m) => m.media_type === "Image")}
-            onSelect={(path) => onUpdateSettings({ ...settings, background: { type: "Image", value: relativizePath(path, appDataDir) } })}
+            onSelect={(path) => onUpdateSettings({ ...settings, background: { type: "Image", value: { path: relativizePath(path, appDataDir), objectFit: (settings.background as any).value?.objectFit ?? "cover", opacity: (settings.background as any).value?.opacity ?? 1 } } })}
             onClose={() => setShowGlobalBgPicker(false)}
             onUpload={onUploadMedia}
           />
@@ -615,7 +673,7 @@ export function DisplaySection({ onUpdateSettings, onUploadMedia }: DisplaySecti
         <p className="text-xs text-slate-400 font-bold uppercase mb-3">Preview</p>
         <div
           className="rounded-xl p-5 flex flex-col items-center text-center gap-3 border border-slate-800"
-          style={computePreviewBackground(settings, THEMES[settings.theme]?.colors.background ?? "#000")}
+          style={computePreviewBackground(settings, THEMES[settings.theme]?.colors.background ?? "#000", appDataDir)}
         >
           {settings.reference_position === "top" && (
             <p className="text-sm font-bold uppercase tracking-widest" style={{ color: THEMES[settings.theme]?.colors.referenceText }}>

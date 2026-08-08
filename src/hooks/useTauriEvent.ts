@@ -12,7 +12,8 @@ export interface EventMap {
   "settings-changed": import("../types").PresentationSettings;
   "lower-third-update": { data: any; template: any } | null;
   "props-update": import("../types").PropItem[];
-  "media-control": { action: string; volume?: number };
+  "media-control": { action: string; volume?: number; currentTime?: number; rate?: number };
+  "media-state": { playing: boolean; currentTime: number; duration: number; volume: number; muted: boolean; rate: number } | null;
   "songs-sync": import("../types").Song[];
   "studio-sync": any[];
   "studio-slides-sync": { id: string; slides: any[] };

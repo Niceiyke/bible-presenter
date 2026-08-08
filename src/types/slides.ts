@@ -27,8 +27,8 @@ export type ProseMirrorJSON = { type: string; [key: string]: unknown };
 
 export type SlideBackground =
   | { type: "color"; value: string }
-  | { type: "image"; value: string; objectFit?: "cover" | "contain" }
-  | { type: "video"; value: string; loop?: boolean; muted?: boolean }
+  | { type: "image"; value: string; objectFit?: "cover" | "contain" | "fill"; opacity?: number }
+  | { type: "video"; value: string; loop?: boolean; muted?: boolean; objectFit?: "cover" | "contain" | "fill"; opacity?: number }
   | { type: "gradient"; from: string; to: string; angle: number };
 
 /** Default fallback background when none is set on a slide. */
@@ -167,6 +167,10 @@ export interface VideoElement extends BaseElement {
   content: string;
   loop?: boolean;
   muted?: boolean;
+  /** P4.7: how the video fits its box. Defaults to `contain` for
+   *  back-compat with the pre-P4.7 renderer (which always applied
+   *  `object-contain`). */
+  objectFit?: "contain" | "cover" | "fill";
 }
 
 export interface ShapeElement extends BaseElement {

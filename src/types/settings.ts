@@ -19,12 +19,25 @@ export type CameraBackground = {
   mirrored: boolean;
 };
 
+export type AudioBackground = {
+  path: string;
+  loopAudio: boolean;
+  volume: number;
+};
+
+export type ImageBackground = {
+  path: string;
+  objectFit: "cover" | "contain" | "fill";
+  opacity: number;
+};
+
 export type BackgroundSetting =
   | { type: "None"; value?: string }
   | { type: "Color"; value: string }
-  | { type: "Image"; value: string }
+  | { type: "Image"; value: ImageBackground }
   | { type: "Video"; value: VideoBackground }
-  | { type: "Camera"; value: CameraBackground };
+  | { type: "Camera"; value: CameraBackground }
+  | { type: "Audio"; value: AudioBackground };
 
 export interface PresentationSettings {
   theme: string;

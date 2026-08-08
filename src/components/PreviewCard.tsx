@@ -3,13 +3,14 @@ import { emit } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { motion } from "framer-motion";
 import {
-  Play, Pause, RotateCcw, Volume2, VolumeX, SkipBack, SkipForward,
+  Play, Pause, RotateCcw, Volume2, VolumeX, SkipBack, SkipForward, Music,
 } from "lucide-react";
 import {
   CustomSlideRenderer,
   SongSlideRenderer,
 } from "./shared/Renderers";
 import { useAppStore } from "../store";
+import { useTauriEvent } from "../hooks/useTauriEvent";
 import type { DisplayItem, MediaItem } from "../types";
 import { getItemUid } from "../utils";
 
@@ -39,8 +40,9 @@ export function PreviewCard({
 }) {
   const { appDataDir } = useAppStore();
   const isVideo = item?.type === "Media" && (item.data as MediaItem).media_type === "Video";
+  const isAudio = item?.type === "Media" && (item.data as MediaItem).media_type === "Audio";
   const isCamera = item?.type === "Camera";
-  const showControls = isVideo;
+  const showControls = isVideo || isAudio;
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cameraPreviewRef = useRef<HTMLVideoElement | null>(null);
@@ -50,6 +52,17 @@ export function PreviewCard({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1);
+  const [rate, setRate] = useState(1);
+
+  // Live-mode state feedback from the output window's playback element.
+  useTauriEvent("media-state", (state) => {
+    if (isLocalPreview || !state) return;
+    setPlaying(state.playing);
+    setMuted(state.muted);
+    setCurrentTime(state.currentTime);
+    if (state.duration > 0) setDuration(state.duration);
+    setVolume(state.volume);
+  });
 
   useEffect(() => {
     setPlaying(false);
@@ -57,6 +70,7 @@ export function PreviewCard({
     setDuration(0);
     setMuted(true);
     setVolume(1);
+    setRate(1);
   }, [item]);
 
   useEffect(() => {
@@ -97,6 +111,9 @@ export function PreviewCard({
       if (!el || !isLocalPreview) return;
 
       el.muted = true;
+      el.playbackRate = (item as { data?: MediaItem }).data?.playback_rate ?? 1;
+      el.volume = (item as { data?: MediaItem }).data?.volume ?? 1;
+      setRate(el.playbackRate);
 
       const onPlay = () => setPlaying(true);
       const onPause = () => setPlaying(false);
@@ -152,18 +169,36 @@ export function PreviewCard({
   };
 
   const handleSkip = (secs: number) => {
-    if (!videoRef.current) return;
-    videoRef.current.currentTime = Math.max(
-      0,
-      Math.min(duration || 0, videoRef.current.currentTime + secs),
-    );
+    if (isLocalPreview && videoRef.current) {
+      videoRef.current.currentTime = Math.max(
+        0,
+        Math.min(duration || 0, videoRef.current.currentTime + secs),
+      );
+    } else {
+      emit("media-control", { action: "video-seek", currentTime: Math.max(0, Math.min(duration || 0, currentTime + secs)) });
+    }
   };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!videoRef.current) return;
     const t = parseFloat(e.target.value);
-    videoRef.current.currentTime = t;
+    if (isLocalPreview && videoRef.current) {
+      videoRef.current.currentTime = t;
+    } else {
+      emit("media-control", { action: "video-seek", currentTime: t });
+    }
     setCurrentTime(t);
+  };
+
+  const handleVolume = (v: number) => {
+    setVolume(v);
+    if (isLocalPreview && videoRef.current) videoRef.current.volume = v;
+    else emit("media-control", { action: "video-volume", volume: v });
+  };
+
+  const handleRate = (r: number) => {
+    setRate(r);
+    if (isLocalPreview && videoRef.current) videoRef.current.playbackRate = r;
+    else emit("media-control", { action: "video-rate", volume: undefined, currentTime: undefined, rate: r });
   };
 
   const videoPath = isVideo ? convertFileSrc((item!.data as MediaItem).path) : "";
@@ -242,6 +277,18 @@ export function PreviewCard({
                     className={`w-full h-full rounded shadow-xl ${({cover:"object-cover",fill:"object-fill"} as Record<string,string>)[(item.data as MediaItem).fit_mode ?? ""] ?? "object-contain"}`}
                     alt={(item.data as MediaItem).name}
                   />
+                ) : (item.data as MediaItem).media_type === "Audio" ? (
+                  <div className="w-full h-full flex flex-col items-center justify-center gap-3 bg-slate-900 rounded-xl">
+                    <div className="w-16 h-16 rounded-full bg-gradient-to-br from-amber-500/30 to-purple-500/30 border border-amber-500/40 flex items-center justify-center">
+                      <Music size={26} className="text-amber-300" />
+                    </div>
+                    <audio
+                      src={convertFileSrc((item.data as MediaItem).path)}
+                      controls
+                      autoPlay={isLocalPreview}
+                      className="w-4/5"
+                    />
+                  </div>
                 ) : (
                   <video
                     key={videoPath}
@@ -249,6 +296,7 @@ export function PreviewCard({
                     src={videoPath}
                     className={`w-full h-full rounded ${({cover:"object-cover",fill:"object-fill"} as Record<string,string>)[(item.data as MediaItem).fit_mode ?? ""] ?? "object-contain"}`}
                     preload={isLocalPreview ? "auto" : "metadata"}
+                    loop={(item.data as MediaItem).loop_playback ?? true}
                   />
                 )}
                 {!(isLocalPreview && isVideo) && (
@@ -325,26 +373,56 @@ export function PreviewCard({
                       max={1}
                       step={0.01}
                       value={volume}
-                      onChange={(e) => {
-                        const v = parseFloat(e.target.value);
-                        setVolume(v);
-                        if (isLocalPreview && videoRef.current) videoRef.current.volume = v;
-                        else emit("media-control", { action: "video-volume", volume: v });
-                      }}
+                      onChange={(e) => handleVolume(parseFloat(e.target.value))}
                       className="w-16 h-1 accent-slate-400 cursor-pointer rounded-full opacity-60 hover:opacity-100 transition-opacity"
                     />
+                    <div className="w-px h-4 bg-slate-600 mx-0.5" />
+                    <select
+                      value={rate}
+                      onChange={(e) => handleRate(parseFloat(e.target.value))}
+                      className="h-7 px-1.5 rounded bg-slate-800 text-slate-300 text-[9px] font-bold border border-slate-700"
+                      title="Playback speed"
+                    >
+                      {[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => (
+                        <option key={r} value={r}>{r}×</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
               ) : (
                 <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-slate-900/90 backdrop-blur-md border border-slate-700 p-1.5 rounded-full shadow-2xl transition-all z-20">
-                  {isVideo && (
+                  {(isVideo || (!isLocalPreview && isAudio)) && (
                     <>
                       <button
                         onClick={handlePlayPause}
                         className="w-8 h-8 flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full transition-colors"
                         title="Play / Pause"
                       >
-                        <Play size={14} />
+                        {playing ? <Pause size={14} /> : <Play size={14} />}
+                      </button>
+                      <button
+                        onClick={() => handleSkip(-10)}
+                        className="w-7 h-7 flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full transition-colors"
+                        title="Back 10s"
+                      >
+                        <SkipBack size={12} />
+                      </button>
+                      <input
+                        type="range"
+                        min={0}
+                        max={duration || 100}
+                        step={0.1}
+                        value={currentTime}
+                        onChange={handleSeek}
+                        className="w-20 h-1 accent-amber-500 cursor-pointer rounded-full"
+                        title="Seek"
+                      />
+                      <button
+                        onClick={() => handleSkip(10)}
+                        className="w-7 h-7 flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full transition-colors"
+                        title="Forward 10s"
+                      >
+                        <SkipForward size={12} />
                       </button>
                       <button
                         onClick={handleRestart}
@@ -358,8 +436,28 @@ export function PreviewCard({
                         className="w-8 h-8 flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full transition-colors"
                         title="Mute / Unmute"
                       >
-                        <VolumeX size={14} />
+                        {muted || volume === 0 ? <VolumeX size={14} /> : <Volume2 size={14} />}
                       </button>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={volume}
+                        onChange={(e) => handleVolume(parseFloat(e.target.value))}
+                        className="w-16 h-1 accent-slate-400 cursor-pointer rounded-full opacity-60 hover:opacity-100 transition-opacity"
+                        title="Volume"
+                      />
+                      <select
+                        value={rate}
+                        onChange={(e) => handleRate(parseFloat(e.target.value))}
+                        className="h-7 px-1 rounded bg-slate-800 text-slate-300 text-[9px] font-bold border border-slate-700"
+                        title="Playback speed"
+                      >
+                        {[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => (
+                          <option key={r} value={r}>{r}×</option>
+                        ))}
+                      </select>
                     </>
                   )}
                 </div>

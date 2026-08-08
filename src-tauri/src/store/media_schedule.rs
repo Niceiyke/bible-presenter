@@ -7,6 +7,7 @@ use crate::store::Verse;
 use crate::store::data_db::DataDb;
 use image::GenericImageView;
 use std::sync::Arc;
+use tauri::Emitter;
 
 // ---------------------------------------------------------------------------
 // Media types
@@ -16,6 +17,7 @@ use std::sync::Arc;
 pub enum MediaItemType {
     Image,
     Video,
+    Audio,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -33,9 +35,29 @@ pub struct MediaItem {
     pub description: Option<String>,
     #[serde(default)]
     pub category: Option<String>,
+    /// P4.8: probe metadata + playback config persisted per item. `duration`
+    /// is seconds (videos/audio), `width`/`height` are pixel dimensions,
+    /// `content_hash` is a sha256 of the imported file (used for dedup).
+    #[serde(default)]
+    pub duration: Option<f64>,
+    #[serde(default)]
+    pub width: Option<i64>,
+    #[serde(default)]
+    pub height: Option<i64>,
+    #[serde(default)]
+    pub content_hash: Option<String>,
+    #[serde(default = "default_loop_playback")]
+    pub loop_playback: bool,
+    #[serde(default = "default_playback_rate")]
+    pub playback_rate: f64,
+    #[serde(default = "default_media_volume")]
+    pub volume: f64,
 }
 
 fn default_media_fit_mode() -> String { "contain".to_string() }
+fn default_loop_playback() -> bool { true }
+fn default_playback_rate() -> f64 { 1.0 }
+fn default_media_volume() -> f64 { 1.0 }
 
 // ---------------------------------------------------------------------------
 // Custom studio slide types
@@ -302,12 +324,61 @@ fn vbg_default_cover() -> String { "cover".to_string() }
 fn vbg_default_one() -> f32 { 1.0 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioBackground {
+    pub path: String,
+    #[serde(default = "vbg_default_true")]
+    pub loop_audio: bool,
+    #[serde(default = "vbg_default_one")]
+    pub volume: f32,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageBackground {
+    pub path: String,
+    #[serde(default = "vbg_default_cover")]
+    pub object_fit: String,
+    #[serde(default = "vbg_default_one")]
+    pub opacity: f32,
+}
+
+/// Deserialize a legacy `"path"` string into an `ImageBackground` so old
+/// saved settings keep loading. Serde's tagged enums try the tagged
+/// variant first; a plain string value still needs this lenient path.
+impl<'de> serde::Deserialize<'de> for ImageBackground {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            New {
+                path: String,
+                #[serde(default = "vbg_default_cover", rename = "objectFit")]
+                object_fit: String,
+                #[serde(default = "vbg_default_one")]
+                opacity: f32,
+            },
+            Legacy(String),
+        }
+        match Repr::deserialize(d)? {
+            Repr::New { path, object_fit, opacity } => Ok(ImageBackground { path, object_fit, opacity }),
+            Repr::Legacy(path) => Ok(ImageBackground { path, object_fit: "cover".to_string(), opacity: 1.0 }),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", content = "value")]
 pub enum BackgroundSetting {
     None,
     Color(String),
-    Image(String),
+    Image(ImageBackground),
     Video(VideoBackground),
+    Camera(CameraBackground),
+    Audio(AudioBackground),
 }
 
 impl Default for BackgroundSetting {
@@ -629,6 +700,7 @@ fn classify_extension(ext: &str) -> Option<MediaItemType> {
     match ext {
         "jpg"|"jpeg"|"png"|"gif"|"webp"|"bmp"|"svg" => Some(MediaItemType::Image),
         "mp4"|"webm"|"mov"|"mkv"|"avi" => Some(MediaItemType::Video),
+        "mp3"|"wav"|"ogg"|"m4a"|"aac"|"flac" => Some(MediaItemType::Audio),
         _ => None,
     }
 }
@@ -792,7 +864,7 @@ impl MediaScheduleStore {
                             if !name.contains(".mediaid") && !name.contains(".mediafit") && !name.contains(".description") && !name.contains(".tags") && !name.contains(".category") {
                                 if let Some(mt) = classify_extension(&ext) {
                                     let id = Uuid::new_v4().to_string();
-                                    let media_type = match mt { MediaItemType::Image => "Image", MediaItemType::Video => "Video" };
+                                    let media_type = match mt { MediaItemType::Image => "Image", MediaItemType::Video => "Video", MediaItemType::Audio => "Audio" };
                                     let created_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
                                     let _ = self.data_db.insert_media(&id, &name, &path.to_string_lossy(), media_type, &created_at);
                                 }
@@ -812,8 +884,14 @@ impl MediaScheduleStore {
     pub fn list_media(&self) -> Result<Vec<MediaItem>> {
         let rows = self.data_db.list_media().map_err(|e| anyhow::anyhow!(e))?;
         let mut items = Vec::new();
-        for (id, filename, path, media_type, fit_mode, description, tags, category) in rows {
-            let media_type = match media_type.as_str() { "Image" => MediaItemType::Image, _ => MediaItemType::Video };
+        for (id, filename, path, media_type, fit_mode, description, tags, category,
+             thumbnail_path, duration, width, height, content_hash, loop_playback,
+             playback_rate, volume) in rows {
+            let media_type = match media_type.as_str() {
+                "Image" => MediaItemType::Image,
+                "Audio" => MediaItemType::Audio,
+                _ => MediaItemType::Video,
+            };
             let tags: Vec<String> = serde_json::from_str(&tags).unwrap_or_default();
             // Resolve stored path: if it's already absolute, use as-is (legacy
             // records); otherwise treat it as relative to the media dir.
@@ -822,21 +900,33 @@ impl MediaScheduleStore {
             } else {
                 self.media_dir.join(&path).to_string_lossy().to_string()
             };
-            // Thumbnail generation (image decode + Lanczos resize) is CPU-
-            // heavy; offload per-item to a blocking thread so a large library
-            // scan doesn't stall the async runtime.
-            let thumbnail_path = if matches!(media_type, MediaItemType::Image) {
-                let thumb_dir = self.thumbnails_dir.clone();
-                let rp = resolved_path.clone();
-                let idc = id.clone();
-                std::thread::spawn(move || {
-                    Self::get_or_create_thumbnail_static(&thumb_dir, &rp, &idc)
-                }).join().unwrap_or(None)
-            } else { None };
+            let thumb = if thumbnail_path.is_empty() { None } else {
+                // Stored thumbnail paths are absolute; resolve legacy relative
+                // entries (pre-P4.8) against the thumbnails dir.
+                let p = if PathBuf::from(&thumbnail_path).is_absolute() {
+                    thumbnail_path
+                } else {
+                    self.thumbnails_dir.join(&thumbnail_path).to_string_lossy().to_string()
+                };
+                Some(p)
+            };
             items.push(MediaItem {
-                id, name: filename, path: resolved_path, media_type, thumbnail_path, fit_mode,
-                tags, description: if description.is_empty() { None } else { Some(description) },
+                id,
+                name: filename,
+                path: resolved_path,
+                media_type,
+                thumbnail_path: thumb,
+                fit_mode,
+                tags,
+                description: if description.is_empty() { None } else { Some(description) },
                 category: if category.is_empty() { None } else { Some(category) },
+                duration,
+                width,
+                height,
+                content_hash: if content_hash.is_empty() { None } else { Some(content_hash) },
+                loop_playback,
+                playback_rate,
+                volume,
             });
         }
         Ok(items)
@@ -856,20 +946,96 @@ impl MediaScheduleStore {
         None
     }
 
-    pub fn set_media_fit(&self, id: &str, fit_mode: &str) -> Result<()> {
-        self.data_db.set_media_fit(id, fit_mode).map_err(|e| anyhow::anyhow!(e))
+    /// Best-effort video metadata + thumbnail extraction via ffmpeg. Returns
+    /// (thumbnail_path, duration_secs, width, height) where None values mean
+    /// "could not determine". ffmpeg is not bundled; if it isn't on PATH the
+    /// whole probe degrades to (None, None, None, None) instead of erroring.
+    fn probe_video(thumb_dir: &PathBuf, media_path: &str, id: &str) -> (Option<String>, Option<f64>, Option<i64>, Option<i64>) {
+        use std::process::Command;
+        let thumb_path = thumb_dir.join(format!("{}.jpg", id));
+
+        // 1) Frame extraction (thumbnail). -y overwrite, scale to 320w.
+        if !thumb_path.exists() {
+            let ok = Command::new("ffmpeg")
+                .args(["-y", "-ss", "1", "-i", media_path, "-frames:v", "1", "-vf", "scale=320:-1", "-q:v", "4"])
+                .arg(&thumb_path)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !ok {
+                let _ = fs::remove_file(&thumb_path);
+            }
+        }
+        let thumb = if thumb_path.exists() { Some(thumb_path.to_string_lossy().to_string()) } else { None };
+
+        // 2) Duration + dimensions via ffprobe (stream of first video track).
+        let mut duration: Option<f64> = None;
+        let mut width: Option<i64> = None;
+        let mut height: Option<i64> = None;
+        if let Ok(out) = Command::new("ffprobe")
+            .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "format=duration:stream=width,height", "-of", "json"])
+            .arg(media_path)
+            .output()
+        {
+            if out.status.success() {
+                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+                    duration = json.pointer("/format/duration").and_then(|v| v.as_str())
+                        .and_then(|s| s.parse::<f64>().ok()).or(duration);
+                    width = json.pointer("/streams/0/width").and_then(|v| v.as_i64());
+                    height = json.pointer("/streams/0/height").and_then(|v| v.as_i64());
+                }
+            }
+        }
+        (thumb, duration, width, height)
     }
 
-    pub fn update_media_metadata(&self, id: &str, description: Option<String>, tags: Vec<String>, category: Option<String>) -> Result<()> {
-        let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
-        self.data_db.update_media_metadata(id, &description, &tags_json, &category).map_err(|e| anyhow::anyhow!(e))
+    /// Best-effort audio duration via ffprobe (None if ffmpeg is unavailable).
+    fn probe_audio_duration(media_path: &str) -> Option<f64> {
+        use std::process::Command;
+        if let Ok(out) = Command::new("ffprobe")
+            .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1"])
+            .arg(media_path)
+            .output()
+        {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if let Ok(d) = s.parse::<f64>() { return Some(d); }
+            }
+        }
+        None
     }
 
-    pub fn add_media(&self, source_path: PathBuf) -> Result<MediaItem> {
+    fn media_type_str(mt: &MediaItemType) -> &'static str {
+        match mt { MediaItemType::Image => "Image", MediaItemType::Video => "Video", MediaItemType::Audio => "Audio" }
+    }
+
+    /// Compute a content hash for the media file. This is the dedup key —
+    /// importing the same source twice returns the existing record instead of
+    /// creating a copy. sha256 is fast enough on modern hardware for the
+    /// streaming chunk loop below.
+    fn content_hash(path: &std::path::Path) -> Option<String> {
+        use sha2::{Digest, Sha256};
+        use std::io::Read;
+        let file = std::fs::File::open(path).ok()?;
+        let mut hasher = Sha256::new();
+        let mut reader = std::io::BufReader::with_capacity(1024 * 1024, file);
+        let mut buf = vec![0u8; 1024 * 1024];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => { hasher.update(&buf[..n]); }
+                Err(_) => return None,
+            }
+        }
+        Some(format!("{:x}", hasher.finalize()))
+    }
+
+    /// Resolve the destination path for an import with a unique name, then
+    /// copy the source there (dedup on name handled by the caller loop).
+    fn copy_into_media_dir(&self, source_path: &std::path::Path) -> Result<(String, PathBuf), anyhow::Error> {
         let original_name = source_path.file_name().ok_or_else(|| anyhow::anyhow!("Invalid source path"))?.to_string_lossy().to_string();
-        let ext_str = source_path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
-        let media_type = classify_extension(&ext_str).ok_or_else(|| anyhow::anyhow!("Unsupported media type: .{}", ext_str))?;
-
         let stem = source_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
         let dot_ext = source_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
 
@@ -887,33 +1053,118 @@ impl MediaScheduleStore {
             }
         };
 
-        let mut source_file = fs::File::open(&source_path)?;
+        let mut source_file = fs::File::open(source_path)?;
         if let Err(e) = std::io::copy(&mut source_file, &mut dest_file) {
             let _ = fs::remove_file(&dest_path);
             return Err(e.into());
         }
+        Ok((dest_name, dest_path))
+    }
 
+    /// Shared tail of `add_media` / `add_media_streaming`. The destination
+    /// record the fresh copy is deleted and the existing item is returned
+    /// (dedup) — otherwise a new record is inserted and a background probe
+    /// (thumbnail + duration/dimensions) is spawned.
+    fn finalize_import(&self, app: Option<tauri::AppHandle>, dest_name: String, dest_path: PathBuf, media_type: MediaItemType, created_at: String) -> Result<MediaItem, anyhow::Error> {
         let id = Uuid::new_v4().to_string();
-        let mt_str = match media_type { MediaItemType::Image => "Image", MediaItemType::Video => "Video" };
-        let created_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        // Store the path RELATIVE to the media dir so the DB is portable across
-        // machines (different AppData roots). `list_media` resolves it back to
-        // an absolute path for the frontend's `convertFileSrc`.
         let stored_path = dest_name.clone();
-        self.data_db.insert_media(&id, &dest_name, &stored_path, mt_str, &created_at)
-            .map_err(|e| anyhow::anyhow!(e))?;
 
-        Ok(MediaItem {
-            id,
-            name: dest_name,
-            path: self.media_dir.join(&stored_path).to_string_lossy().to_string(),
-            media_type,
-            thumbnail_path: None,
-            fit_mode: default_fit_mode(),
-            tags: vec![],
-            description: None,
-            category: None,
-        })
+        // Dedup check before inserting the row so no orphan record is left.
+        if let Some(hash) = Self::content_hash(&dest_path) {
+            if let Ok(Some(existing_id)) = self.data_db.find_media_by_hash(&hash) {
+                let _ = fs::remove_file(&dest_path);
+                let _ = self.data_db.set_media_hash(&existing_id, &hash);
+                return self.get_media(&existing_id);
+            }
+            let _ = self.data_db.insert_media(&id, &dest_name, &stored_path, Self::media_type_str(&media_type), &created_at);
+            let _ = self.data_db.set_media_hash(&id, &hash);
+            if let Some(app) = app { self.spawn_probe(app, &id); }
+            return self.get_media(&id);
+        }
+
+        self.data_db.insert_media(&id, &dest_name, &stored_path, Self::media_type_str(&media_type), &created_at)
+            .map_err(|e| anyhow::anyhow!(e))?;
+        if let Some(app) = app { self.spawn_probe(app, &id); }
+        self.get_media(&id)
+    }
+
+    pub fn get_media(&self, id: &str) -> Result<MediaItem> {
+        let rows = self.list_media()?;
+        rows.into_iter().find(|m| m.id == id)
+            .ok_or_else(|| anyhow::anyhow!("Media '{}' not found", id))
+    }
+
+    pub fn set_media_fit(&self, id: &str, fit_mode: &str) -> Result<()> {
+        self.data_db.set_media_fit(id, fit_mode).map_err(|e| anyhow::anyhow!(e))
+    }
+
+    pub fn set_media_playback(&self, id: &str, loop_playback: bool, playback_rate: f64, volume: f64) -> Result<()> {
+        self.data_db.set_media_playback(id, loop_playback, playback_rate, volume).map_err(|e| anyhow::anyhow!(e))
+    }
+
+    pub fn update_media_metadata(&self, id: &str, description: Option<String>, tags: Vec<String>, category: Option<String>) -> Result<()> {
+        let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
+        self.data_db.update_media_metadata(id, &description, &tags_json, &category).map_err(|e| anyhow::anyhow!(e))
+    }
+
+    /// Relink a record to a new source file: copies the replacement in, updates
+    /// the stored path/name, clears the stale thumbnail and regenerates it.
+    pub fn relink_media(&self, id: &str, source_path: &std::path::Path) -> Result<MediaItem, anyhow::Error> {
+        let ext_str = source_path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+        let media_type = classify_extension(&ext_str).ok_or_else(|| anyhow::anyhow!("Unsupported media type: .{}", ext_str))?;
+        let (dest_name, dest_path) = self.copy_into_media_dir(source_path)?;
+        let _ = self.data_db.relink_media(id, &dest_name, &dest_name);
+        // Regenerate thumbnail: existing thumb was for the old file.
+        let thumb = self.thumbnails_dir.join(format!("{}.jpg", id));
+        let _ = fs::remove_file(&thumb);
+        let (thumb_path, duration, width, height) = match media_type {
+            MediaItemType::Image => (
+                Self::get_or_create_thumbnail_static(&self.thumbnails_dir, dest_path.to_string_lossy().as_ref(), id),
+                None, None, None,
+            ),
+            MediaItemType::Video => Self::probe_video(&self.thumbnails_dir, dest_path.to_string_lossy().as_ref(), id),
+            MediaItemType::Audio => (None, Self::probe_audio_duration(dest_path.to_string_lossy().as_ref()), None, None),
+        };
+        let _ = self.data_db.set_media_probe(id, thumb_path.as_deref(), duration, width, height);
+        self.get_media(id)
+    }
+
+    /// Spawn a background thread that generates a thumbnail + probes metadata
+    /// for a freshly imported item, persisting results to the DB. Emits
+    /// `media-probed` (with the updated item) so the frontend can refresh the
+    /// card without a full re-list.
+    pub fn spawn_probe(&self, app: tauri::AppHandle, id: &str) {
+        let store = self.clone();
+        let id = id.to_string();
+        let app2 = app.clone();
+        std::thread::spawn(move || {
+            let result = (|| -> Result<(), String> {
+                let item = store.get_media(&id).map_err(|e| e.to_string())?;
+                let (thumb_path, duration, width, height) = match item.media_type {
+                    MediaItemType::Image => (
+                        Self::get_or_create_thumbnail_static(&store.thumbnails_dir, &item.path, &id),
+                        None, None, None,
+                    ),
+                    MediaItemType::Video => Self::probe_video(&store.thumbnails_dir, &item.path, &id),
+                    MediaItemType::Audio => (None, Self::probe_audio_duration(&item.path), None, None),
+                };
+                store.data_db.set_media_probe(&id, thumb_path.as_deref(), duration, width, height)
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            })();
+            if let Ok(updated) = store.get_media(&id) {
+                let _ = app2.emit("media-probed", &updated);
+            }
+            let _ = result;
+        });
+    }
+
+    pub fn add_media(&self, app: Option<tauri::AppHandle>, source_path: PathBuf) -> Result<MediaItem> {
+        let ext_str = source_path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+        let media_type = classify_extension(&ext_str).ok_or_else(|| anyhow::anyhow!("Unsupported media type: .{}", ext_str))?;
+        let (dest_name, dest_path) = self.copy_into_media_dir(&source_path)?;
+        let created_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        self.finalize_import(app, dest_name, dest_path, media_type, created_at)
     }
 
     /// Streaming variant: copies the source in 1 MiB chunks, invoking
@@ -922,18 +1173,17 @@ impl MediaScheduleStore {
     /// async runtime thread.
     pub fn add_media_streaming<F: FnMut(f64)>(
         &self,
+        app: Option<tauri::AppHandle>,
         source_path: PathBuf,
         mut on_progress: F,
     ) -> Result<MediaItem> {
-        let original_name = source_path.file_name().ok_or_else(|| anyhow::anyhow!("Invalid source path"))?.to_string_lossy().to_string();
         let ext_str = source_path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
         let media_type = classify_extension(&ext_str).ok_or_else(|| anyhow::anyhow!("Unsupported media type: .{}", ext_str))?;
 
+        let mut dest_path = self.media_dir.join(&source_path.file_name().unwrap_or_default().to_string_lossy().to_string());
+        let mut dest_name = source_path.file_name().unwrap_or_default().to_string_lossy().to_string();
         let stem = source_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
         let dot_ext = source_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
-
-        let mut dest_path = self.media_dir.join(&original_name);
-        let mut dest_name = original_name.clone();
         let mut counter = 2u32;
 
         let mut dest_file = loop {
@@ -968,24 +1218,32 @@ impl MediaScheduleStore {
             on_progress(frac.min(1.0));
         }
 
-        let id = Uuid::new_v4().to_string();
-        let mt_str = match media_type { MediaItemType::Image => "Image", MediaItemType::Video => "Video" };
         let created_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        let stored_path = dest_name.clone();
-        self.data_db.insert_media(&id, &dest_name, &stored_path, mt_str, &created_at)
-            .map_err(|e| anyhow::anyhow!(e))?;
+        self.finalize_import(app, dest_name, dest_path, media_type, created_at)
+    }
 
-        Ok(MediaItem {
-            id,
-            name: dest_name,
-            path: self.media_dir.join(&stored_path).to_string_lossy().to_string(),
-            media_type,
-            thumbnail_path: None,
-            fit_mode: default_fit_mode(),
-            tags: vec![],
-            description: None,
-            category: None,
-        })
+    /// Scan the hash-backed stores (services, presentations, scenes) for
+    /// references to a media path so the operator can be warned before
+    /// deleting something that is still scheduled or embedded. Returns a list
+    /// of human-readable "where is it used" labels.
+    pub fn find_media_references(&self, path: &str) -> Vec<String> {
+        let mut refs = Vec::new();
+        let tables = ["services", "presentations", "scenes"];
+        for table in tables {
+            if let Ok(rows) = self.data_db.hash_list(table) {
+                for (_, data) in rows {
+                    if data.contains(path) {
+                        // Extract a friendly label: name field for the record.
+                        let name = serde_json::from_str::<serde_json::Value>(&data)
+                            .ok()
+                            .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()))
+                            .unwrap_or_else(|| table.to_string());
+                        refs.push(format!("{} · {}", table, name));
+                    }
+                }
+            }
+        }
+        refs
     }
 
     pub fn delete_media(&self, id: String) -> Result<()> {

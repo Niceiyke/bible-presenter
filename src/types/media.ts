@@ -1,4 +1,4 @@
-export type MediaItemType = "Image" | "Video";
+export type MediaItemType = "Image" | "Video" | "Audio";
 export type MediaFitMode = "contain" | "cover" | "fill";
 
 export interface MediaItem {
@@ -11,4 +11,12 @@ export interface MediaItem {
   tags: string[];
   description?: string;
   category?: string;
+  /** P4.8: probe metadata + playback config persisted per item. */
+  duration?: number;
+  width?: number;
+  height?: number;
+  content_hash?: string;
+  loop_playback?: boolean;
+  playback_rate?: number;
+  volume?: number;
 }

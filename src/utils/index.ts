@@ -6,6 +6,8 @@ import type {
   BackgroundSetting,
   VideoBackground,
   CameraBackground,
+  AudioBackground,
+  ImageBackground,
   PresentationSettings,
   LowerThirdData,
   LowerThirdTemplate,
@@ -279,7 +281,8 @@ export function buildCustomSlideItem(
 
 export function computeOutputBackground(
   settings: PresentationSettings,
-  colors: ThemeColors
+  colors: ThemeColors,
+  appDataDir?: string | null
 ): React.CSSProperties {
   const effectiveColors = settings.custom_theme_colors
     ? { ...colors, ...settings.custom_theme_colors }
@@ -289,11 +292,11 @@ export function computeOutputBackground(
     return { backgroundColor: settings.background.value };
   }
   if (settings.background.type === "Image") {
-    const imgPath = settings.background.value;
-    if (imgPath) {
+    const img = settings.background.value;
+    if (img?.path) {
       return {
-        backgroundImage: `url(${convertFileSrc(imgPath)})`,
-        backgroundSize: "cover",
+        backgroundImage: `url(${convertFileSrc(resolvePath(img.path, appDataDir ?? null))})`,
+        backgroundSize: img.objectFit === "contain" ? "contain" : img.objectFit === "fill" ? "100% 100%" : "cover",
         backgroundPosition: "center",
         backgroundRepeat: "no-repeat",
       };
@@ -305,18 +308,18 @@ export function computeOutputBackground(
   return { backgroundColor: effectiveColors.background };
 }
 
-export function computePreviewBackground(settings: PresentationSettings, themeColor: string): React.CSSProperties {
+export function computePreviewBackground(settings: PresentationSettings, themeColor: string, appDataDir?: string | null): React.CSSProperties {
   const color = settings.custom_theme_colors?.background || themeColor;
 
   if (settings.background.type === "Color") {
     return { backgroundColor: settings.background.value };
   }
   if (settings.background.type === "Image") {
-    const imgPath = settings.background.value;
-    if (imgPath) {
+    const img = settings.background.value;
+    if (img?.path) {
       return {
-        backgroundImage: `url(${convertFileSrc(imgPath)})`,
-        backgroundSize: "cover",
+        backgroundImage: `url(${convertFileSrc(resolvePath(img.path, appDataDir ?? null))})`,
+        backgroundSize: img.objectFit === "contain" ? "contain" : img.objectFit === "fill" ? "100% 100%" : "cover",
         backgroundPosition: "center",
         backgroundRepeat: "no-repeat",
       };
@@ -353,14 +356,43 @@ export function getCameraBackground(
   return null;
 }
 
+export function getAudioBackground(
+  settings: PresentationSettings,
+  item: DisplayItem | null
+): AudioBackground | null {
+  let bg: BackgroundSetting | undefined;
+  if (item?.type === "Verse") bg = settings.bible_background;
+  else if (item?.type === "Media") bg = settings.media_background;
+  else if (item?.type === "CustomSlide")
+    bg = settings.background;
+  const effective = (bg && bg.type !== "None") ? bg : settings.background;
+  if (effective?.type === "Audio" && effective.value.path) return effective.value;
+  return null;
+}
+
+export function getImageBackground(
+  settings: PresentationSettings,
+  item: DisplayItem | null
+): ImageBackground | null {
+  let bg: BackgroundSetting | undefined;
+  if (item?.type === "Verse") bg = settings.bible_background;
+  else if (item?.type === "Media") bg = settings.media_background;
+  else if (item?.type === "CustomSlide")
+    bg = settings.background;
+  const effective = (bg && bg.type !== "None") ? bg : settings.background;
+  if (effective?.type === "Image" && effective.value?.path) return effective.value;
+  return null;
+}
+
 export function getEffectiveBackground(
   settings: PresentationSettings,
   item: DisplayItem | null,
-  colors: ThemeColors
+  colors: ThemeColors,
+  appDataDir?: string | null
 ): React.CSSProperties {
   const pick = (bg: BackgroundSetting | undefined) => {
     if (!bg || bg.type === "None") return null;
-    return computeOutputBackground({ ...settings, background: bg }, colors);
+    return computeOutputBackground({ ...settings, background: bg }, colors, appDataDir);
   };
   if (item?.type === "Verse") {
     const s = pick(settings.bible_background);
@@ -370,7 +402,7 @@ export function getEffectiveBackground(
     const s = pick(settings.media_background);
     if (s) return s;
   }
-  return computeOutputBackground(settings, colors);
+  return computeOutputBackground(settings, colors, appDataDir);
 }
 
 export function getTransitionVariants(type: string, duration: number) {

@@ -238,6 +238,7 @@ export function useItemActions() {
         filters: [
           { name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"] },
           { name: "Videos", extensions: ["mp4", "webm", "mov", "mkv", "avi"] },
+          { name: "Audio", extensions: ["mp3", "wav", "ogg", "m4a", "aac", "flac"] },
         ],
       });
       if (!selected || typeof selected !== "string") return;

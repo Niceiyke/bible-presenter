@@ -18,7 +18,7 @@ export function signalOperatorWarning(message: string) {
 
 export function useAppInitialization() {
   const {
-    setLabel, setMedia, setStudioList, setStudioSlides,
+    setLabel, setMedia, upsertMediaItem, setStudioList, setStudioSlides,
     setScheduleEntries, setSongs, setHymnLibrary, setLtSavedTemplates,
     setLtTemplate, setSettings, setAvailableVersions, setBibleVersion,
     setPropItems, setServices, setLiveItem,
@@ -162,6 +162,11 @@ export function useAppInitialization() {
       setBackendError(ev.payload.message);
     });
 
+    // P4.8 — Async media probes (thumbnail/duration) complete in the
+    // background; merge the updated item so the library card refreshes live.
+    const unlistenMediaProbed = listen<MediaItem>("media-probed", (ev) => { upsertMediaItem(ev.payload); });
+    const unlistenMediaUpdated = listen<MediaItem>("media-updated", (ev) => { upsertMediaItem(ev.payload); });
+
     return () => {
       unlistenStaged.then(f => f());
       unlistenLive.then(f => f());
@@ -173,6 +178,8 @@ export function useAppInitialization() {
       unlistenStudioSlidesSync.then(f => f());
       unlistenLog.then(f => f());
       unlistenOpWarn.then(f => f());
+      unlistenMediaProbed.then(f => f());
+      unlistenMediaUpdated.then(f => f());
     };
   }, []);
 

@@ -21,6 +21,7 @@ import { ShortcutsModal } from "./components/ShortcutsModal";
 import { SlideEditor } from "./components/editors/SlideEditor";
 import { LogViewer } from "./components/LogViewer";
 import { RecoveryModal } from "./components/RecoveryModal";
+import { MusicPlayer } from "./components/MusicPlayer";
 
 import { OutputWindow, StageWindow } from "./windows";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -202,6 +203,8 @@ export default function App() {
           setCockpitWidth={setCockpitWidth}
         />
       </div>
+
+      <MusicPlayer />
 
       <AnimatePresence>
         {toast && <Toast key={toast} message={toast} onDone={() => setToast(null)} />}

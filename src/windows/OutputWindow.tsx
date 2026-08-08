@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback, useLayoutEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import type { DisplayItem, PropItem, PresentationSettings, LowerThirdData, LowerThirdTemplate } from "../types";
 import { THEMES } from "../types";
@@ -7,8 +7,11 @@ import {
   getEffectiveBackground,
   getVideoBackground,
   getCameraBackground,
+  getAudioBackground,
+  getImageBackground,
   getTransitionVariants,
-  getItemUid
+  getItemUid,
+  resolvePath,
 } from "../utils";
 import {
   CustomSlideRenderer,
@@ -18,6 +21,7 @@ import {
   PropsRenderer,
 } from "../components/shared/Renderers";
 import { AnimatePresence, motion } from "framer-motion";
+import { Music } from "lucide-react";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { signalOperatorWarning } from "../hooks/useAppInitialization";
 import { useFonts } from "../hooks/useFonts";
@@ -38,7 +42,8 @@ export function OutputWindow() {
   useFonts(); // P2.5: inject @font-face for user-installed fonts.
   const [liveItem, setLiveItem] = useState<DisplayItem | null>(null);
   const [stagedItem, setStagedItem] = useState<DisplayItem | null>(null);
-  const [lowerThird, setLowerThird] = useState<{ data: LowerThirdData; template: LowerThirdTemplate } | null>(null);
+  const liveItemRef = useRef<DisplayItem | null>(null);
+  liveItemRef.current = liveItem;  const [lowerThird, setLowerThird] = useState<{ data: LowerThirdData; template: LowerThirdTemplate } | null>(null);
   const [propItems, setPropItems] = useState<PropItem[]>([]);
   const [settings, setSettings] = useState<PresentationSettings>({
     theme: "dark",
@@ -54,6 +59,7 @@ export function OutputWindow() {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const bgVideoRef = useRef<HTMLVideoElement>(null);
+  const bgAudioRef = useRef<HTMLAudioElement>(null);
   const cameraRef = useRef<HTMLVideoElement>(null);
   const mainCameraRef = useRef<HTMLVideoElement>(null);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
@@ -162,27 +168,71 @@ export function OutputWindow() {
     });
 
     const unlistenMedia = listen("media-control", (event: any) => {
-      const { action, volume } = event.payload as { action: string; volume?: number };
+      const { action, volume, currentTime, rate } = event.payload as { action: string; volume?: number; currentTime?: number; rate?: number };
+      const liveAudio = (window as any).__liveAudio as HTMLAudioElement | undefined;
       if (action === "video-play-pause") {
         if (videoRef.current) {
           if (videoRef.current.paused) videoRef.current.play();
           else videoRef.current.pause();
+        } else if (liveAudio) {
+          if (liveAudio.paused) liveAudio.play();
+          else liveAudio.pause();
         }
       } else if (action === "video-restart") {
         if (videoRef.current) {
           videoRef.current.currentTime = 0;
           videoRef.current.play();
+        } else if (liveAudio) {
+          liveAudio.currentTime = 0;
+          liveAudio.play();
+        }
+      } else if (action === "video-seek") {
+        if (videoRef.current && currentTime !== undefined) {
+          videoRef.current.currentTime = currentTime;
+        } else if (liveAudio && currentTime !== undefined) {
+          liveAudio.currentTime = currentTime;
         }
       } else if (action === "video-mute-toggle") {
         if (videoRef.current) {
           videoRef.current.muted = !videoRef.current.muted;
+        } else if (liveAudio) {
+          liveAudio.muted = !liveAudio.muted;
         }
       } else if (action === "video-volume") {
         if (videoRef.current && volume !== undefined) {
           videoRef.current.volume = volume;
+        } else if (liveAudio && volume !== undefined) {
+          liveAudio.volume = volume;
+        }
+      } else if (action === "video-rate") {
+        if (videoRef.current && rate !== undefined) {
+          videoRef.current.playbackRate = rate;
         }
       }
     });
+
+    // Stateful transport feedback: broadcast live playback state to the
+    // operator console so the compact live transport reflects real state
+    // instead of a fire-and-forget guess.
+    let mediaStateTimer: ReturnType<typeof setInterval> | null = null;
+    const broadcastMediaState = () => {
+      const live = liveItemRef.current;
+      const target = (videoRef.current ?? (window as any).__liveAudio) as HTMLMediaElement | undefined;
+      const el = target;
+      if (!el || !(live?.type === "Media") || !["Video", "Audio"].includes(live.data.media_type)) {
+        return;
+      }
+      emit("media-state", {
+        playing: !el.paused,
+        currentTime: el.currentTime,
+        duration: isFinite(el.duration) ? el.duration : 0,
+        volume: el.volume,
+        muted: el.muted,
+        rate: el.playbackRate,
+      });
+    };
+    mediaStateTimer = setInterval(broadcastMediaState, 500);
+    emit("media-state", null);
 
     const unlistenProps = listen("props-update", (event: any) => {
       setPropItems((event.payload as PropItem[]) ?? []);
@@ -197,6 +247,7 @@ export function OutputWindow() {
     ]);
 
     return () => {
+      if (mediaStateTimer) clearInterval(mediaStateTimer);
       unlistenTrans.then((f) => f());
       unlistenSettings.then((f) => f());
       unlistenStaged.then((f) => f());
@@ -253,6 +304,8 @@ export function OutputWindow() {
 
   const videoBg = getVideoBackground(settings, liveItem);
   const cameraBg = getCameraBackground(settings, liveItem);
+  const audioBg = getAudioBackground(settings, liveItem);
+  const bgImage = getImageBackground(settings, liveItem);
 
   // Browser-only camera stream lifecycle
   useEffect(() => {
@@ -331,13 +384,35 @@ export function OutputWindow() {
     }
   }, [videoBg?.path]);
 
+  // Background audio: play the settings audio background under verses/media.
+  // Auto-pause when the live item is itself an Audio media item (its own
+  // playback takes over via __liveAudio).
+  useEffect(() => {
+    const bgAudio = bgAudioRef.current;
+    if (!bgAudio) return;
+    const isLiveAudio = liveItem?.type === "Media" && liveItem.data.media_type === "Audio";
+    if (audioBg?.path && !isLiveAudio) {
+      const src = convertFileSrc(resolvePath(audioBg.path, appDataDir));
+      if (bgAudio.getAttribute("src") !== src) {
+        bgAudio.src = src;
+        bgAudio.volume = audioBg.volume ?? 1;
+        bgAudio.loop = audioBg.loopAudio ?? true;
+        bgAudio.play().catch(() => {});
+      } else if (bgAudio.paused) {
+        bgAudio.play().catch(() => {});
+      }
+    } else {
+      bgAudio.pause();
+    }
+  }, [audioBg?.path, audioBg?.volume, audioBg?.loopAudio, liveItem?.type, appDataDir]);
+
   if (settings.is_blanked) {
     return <div className="fixed inset-0 bg-black cursor-none pointer-events-none select-none" />;
   }
 
   const { colors } = THEMES[settings.theme] ?? THEMES.dark;
   const isTop = settings.reference_position === "top";
-  const bgStyle = getEffectiveBackground(settings, liveItem, colors);
+  const bgStyle = getEffectiveBackground(settings, liveItem, colors, appDataDir);
 
   const refColor = settings.reference_color && settings.reference_color !== ""
     ? settings.reference_color
@@ -380,7 +455,7 @@ export function OutputWindow() {
     <div
       className="fixed inset-0 overflow-hidden cursor-none pointer-events-none select-none"
       style={
-        (videoBg || cameraBg)
+        (videoBg || cameraBg || bgImage)
           ? { color: colors.verseText }
           : { ...bgStyle, color: colors.verseText }
       }
@@ -389,7 +464,7 @@ export function OutputWindow() {
         <div className="absolute inset-0 z-50 bg-black">
           {settings.background_logo_path.toLowerCase().match(/\.(mp4|webm|mov|mkv|avi)$/) ? (
             <video
-              src={convertFileSrc(settings.background_logo_path)}
+              src={convertFileSrc(resolvePath(settings.background_logo_path, appDataDir))}
               className="w-full h-full"
               style={{ objectFit: settings.background_logo_fit ?? "cover" }}
               autoPlay
@@ -398,7 +473,7 @@ export function OutputWindow() {
             />
           ) : (
             <img
-              src={convertFileSrc(settings.background_logo_path)}
+              src={convertFileSrc(resolvePath(settings.background_logo_path, appDataDir))}
               className="w-full h-full"
               style={{ objectFit: settings.background_logo_fit ?? "cover" }}
               alt="Background Logo"
@@ -434,16 +509,36 @@ export function OutputWindow() {
           opacity: videoBg?.opacity ?? 1,
           visibility: videoBg?.path ? "visible" : "hidden",
         }}
-        src={videoBg?.path ? convertFileSrc(videoBg.path) : undefined}
+        src={videoBg?.path ? convertFileSrc(resolvePath(videoBg.path, appDataDir)) : undefined}
         autoPlay
         loop={videoBg?.loopVideo ?? true}
         muted={videoBg?.muted ?? true}
         playsInline
       />
 
+      {/* Background audio (settings audio background, e.g. ambient bed under
+          verses). Playback is driven by the effect above. */}
+      <audio ref={bgAudioRef} className="hidden" />
+
+      {/* Background image layer (settings image background). Rendered as its
+          own element so fit + opacity apply to the image alone without
+          affecting the verse/reference text on top. */}
+      {bgImage && (
+        <div
+          className="absolute inset-0 z-0 pointer-events-none"
+          style={{
+            backgroundImage: `url(${convertFileSrc(resolvePath(bgImage.path, appDataDir))})`,
+            backgroundSize: bgImage.objectFit === "contain" ? "contain" : bgImage.objectFit === "fill" ? "100% 100%" : "cover",
+            backgroundPosition: "center",
+            backgroundRepeat: "no-repeat",
+            opacity: bgImage.opacity ?? 1,
+          }}
+        />
+      )}
+
       {settings.logo_path && (
         <img
-          src={convertFileSrc(settings.logo_path)}
+          src={convertFileSrc(resolvePath(settings.logo_path, appDataDir))}
           className="absolute bottom-8 right-8 w-24 h-24 object-contain opacity-50 z-60"
           alt="Logo"
         />
@@ -525,9 +620,38 @@ export function OutputWindow() {
                     }`}
                     alt={liveItem.data.name}
                   />
+                ) : liveItem.data.media_type === "Audio" ? (
+                  // Audio items have no visible frame — show a tasteful full-
+                  // screen audio card and play the file through the hidden
+                  // audio element below. Transparent background so the
+                  // effective media background shows through.
+                  <div
+                    className="absolute inset-0 flex flex-col items-center justify-center gap-6"
+                  >
+                    <div
+                      className="w-32 h-32 rounded-full flex items-center justify-center"
+                      style={{
+                        backgroundColor: colors.background + "66",
+                        border: `1px solid ${colors.referenceText}66`,
+                        boxShadow: `0 0 80px ${colors.referenceText}33`,
+                      }}
+                    >
+                      <Music size={48} style={{ color: colors.referenceText }} className="animate-pulse" />
+                    </div>
+                    <p className="text-3xl font-bold drop-shadow-lg" style={{ color: colors.verseText }}>{liveItem.data.name}</p>
+                    <p className="text-sm uppercase tracking-widest" style={{ color: colors.referenceText }}>
+                      Now Playing
+                    </p>
+                  </div>
                 ) : (
                   <video
-                    ref={videoRef}
+                    ref={(el) => {
+                      videoRef.current = el;
+                      if (el) {
+                        el.playbackRate = liveItem.data.playback_rate ?? 1;
+                        el.volume = liveItem.data.volume ?? 1;
+                      }
+                    }}
                     src={convertFileSrc(liveItem.data.path)}
                     className={`w-full h-full ${
                       liveItem.data.fit_mode === "cover" ? "object-cover"
@@ -535,7 +659,15 @@ export function OutputWindow() {
                       : "object-contain"
                     }`}
                     autoPlay
-                    loop
+                    loop={liveItem.data.loop_playback ?? true}
+                  />
+                )}
+                {liveItem.data.media_type === "Audio" && (
+                  <audio
+                    src={convertFileSrc(liveItem.data.path)}
+                    ref={(el) => { (window as any).__liveAudio = el; if (el) el.volume = liveItem.data.volume ?? 1; }}
+                    autoPlay
+                    loop={liveItem.data.loop_playback ?? true}
                   />
                 )}
               </div>

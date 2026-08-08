@@ -17,7 +17,7 @@ export function MusicPlayer() {
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const audioFiles = media.filter(m => m.path.toLowerCase().match(/\.(mp3|wav|ogg|m4a|flac)$/));
+  const audioFiles = media.filter(m => m.media_type === "Audio");
 
   useEffect(() => {
     if (audioRef.current) {

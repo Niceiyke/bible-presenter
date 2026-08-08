@@ -164,10 +164,39 @@ export function PropertiesPanel({
               {bg.value ? "Change Image…" : "Set Image…"}
             </button>
             {bg.value && (
-              <div className="flex items-center justify-between bg-white/4 p-2 rounded-lg border border-white/8 mt-1">
-                <span className="text-[9px] text-slate-500 truncate">{bg.value.split(/[/\\]/).pop()}</span>
-                <button onClick={() => onSetBackground({ type: "color", value: "#1a1a2e" })} className="text-red-400 text-[9px] font-bold ml-2 shrink-0 hover:text-red-300">✕</button>
-              </div>
+              <>
+                <div className="flex items-center justify-between bg-white/4 p-2 rounded-lg border border-white/8 mt-1">
+                  <span className="text-[9px] text-slate-500 truncate">{bg.value.split(/[/\\]/).pop()}</span>
+                  <button onClick={() => onSetBackground({ type: "color", value: "#1a1a2e" })} className="text-red-400 text-[9px] font-bold ml-2 shrink-0 hover:text-red-300">✕</button>
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-[9px] text-slate-500 w-10">Fit</span>
+                  <div className="flex gap-1 flex-1">
+                    {(["cover", "contain", "fill"] as const).map(fit => (
+                      <button
+                        key={fit}
+                        onClick={() => onSetBackground({ ...bg, objectFit: fit })}
+                        className={`flex-1 py-1 text-[9px] font-bold rounded-lg capitalize transition-all ${(bg.objectFit ?? "cover") === fit ? "bg-indigo-500 text-white" : "bg-white/6 text-slate-500 hover:text-white hover:bg-white/10"}`}
+                      >
+                        {fit === "contain" ? "Fit" : fit === "cover" ? "Crop" : "Stretch"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-[9px] text-slate-500 w-10">Opacity</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={bg.opacity ?? 1}
+                    onChange={e => onSetBackground({ ...bg, opacity: Number(e.target.value) })}
+                    className="flex-1 accent-indigo-500"
+                  />
+                  <span className="text-[9px] text-slate-400 tabular-nums w-8 text-right">{Math.round((bg.opacity ?? 1) * 100)}%</span>
+                </div>
+              </>
             )}
           </>}
 
@@ -180,6 +209,33 @@ export function PropertiesPanel({
                 <div className="flex items-center justify-between">
                   <span className="text-[9px] text-slate-500 truncate">{bg.value.split(/[/\\]/).pop()}</span>
                   <button onClick={() => onSetBackground({ type: "color", value: "#1a1a2e" })} className="text-red-400 text-[9px] font-bold ml-2 shrink-0 hover:text-red-300">✕</button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[9px] text-slate-500 w-10">Fit</span>
+                  <div className="flex gap-1 flex-1">
+                    {(["cover", "contain", "fill"] as const).map(fit => (
+                      <button
+                        key={fit}
+                        onClick={() => onSetBackground({ ...bg, objectFit: fit })}
+                        className={`flex-1 py-1 text-[9px] font-bold rounded-lg capitalize transition-all ${(bg.objectFit ?? "cover") === fit ? "bg-purple-500 text-white" : "bg-white/6 text-slate-500 hover:text-white hover:bg-white/10"}`}
+                      >
+                        {fit === "contain" ? "Fit" : fit === "cover" ? "Crop" : "Stretch"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[9px] text-slate-500 w-10">Opacity</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={bg.opacity ?? 1}
+                    onChange={e => onSetBackground({ ...bg, opacity: Number(e.target.value) })}
+                    className="flex-1 accent-purple-500"
+                  />
+                  <span className="text-[9px] text-slate-400 tabular-nums w-8 text-right">{Math.round((bg.opacity ?? 1) * 100)}%</span>
                 </div>
                 <label className="flex items-center gap-1.5 cursor-pointer">
                   <input type="checkbox" checked={bg.loop !== false} onChange={e => onSetBackground({ ...bg, loop: e.target.checked })} className="accent-purple-500" />
@@ -528,6 +584,19 @@ export function PropertiesPanel({
           {activeEl.kind === "image" && (
             <Panel label="Image">
               <label className="flex items-center gap-2 cursor-pointer">
+                <span className="text-[9px] text-slate-500 w-16">Opacity</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={activeEl.opacity ?? 1}
+                  onChange={e => onUpdateElement(activeEl.id, { opacity: Number(e.target.value) })}
+                  className="flex-1 accent-indigo-500"
+                />
+                <span className="text-[9px] text-slate-400 tabular-nums w-6 text-right">{Math.round((activeEl.opacity ?? 1) * 100)}%</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
                 <span className="text-[9px] text-slate-500 w-16">Fit</span>
                 <select
                   value={activeEl.objectFit ?? "contain"}
@@ -614,6 +683,40 @@ export function PropertiesPanel({
                 />
                 <span className="text-[9px] text-slate-600">px</span>
               </div>
+            </Panel>
+          )}
+
+          {/* P4.7 — video-specific fields: fit + opacity. Loop/mute stay on
+              the toolbar for quick access. */}
+          {activeEl.kind === "video" && (
+            <Panel label="Video">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <span className="text-[9px] text-slate-500 w-16">Opacity</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={activeEl.opacity ?? 1}
+                  onChange={e => onUpdateElement(activeEl.id, { opacity: Number(e.target.value) })}
+                  className="flex-1 accent-indigo-500"
+                />
+                <span className="text-[9px] text-slate-400 tabular-nums w-6 text-right">{Math.round((activeEl.opacity ?? 1) * 100)}%</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer mt-1">
+                <span className="text-[9px] text-slate-500 w-16">Fit</span>
+                <select
+                  value={activeEl.objectFit ?? "contain"}
+                  onChange={e => onUpdateElement(activeEl.id, { objectFit: e.target.value as "contain" | "cover" | "fill" })}
+                  onKeyDown={e => e.stopPropagation()}
+                  className="flex-1 bg-white/6 border border-white/10 rounded-lg px-2 py-1 text-[11px] text-white outline-none"
+                  style={{ colorScheme: "dark" }}
+                >
+                  <option value="contain">Contain</option>
+                  <option value="cover">Cover</option>
+                  <option value="fill">Fill</option>
+                </select>
+              </label>
             </Panel>
           )}
         </>}

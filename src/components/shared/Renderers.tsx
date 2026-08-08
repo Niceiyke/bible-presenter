@@ -64,8 +64,9 @@ function backgroundToStyle(
       const resolved = resolvePath(bg.value, appDataDir);
       return {
         backgroundImage: `url(${convertFileSrc(resolved)})`,
-        backgroundSize: bg.objectFit ?? "cover",
+        backgroundSize: bg.objectFit === "contain" ? "contain" : bg.objectFit === "fill" ? "100% 100%" : "cover",
         backgroundPosition: "center",
+        opacity: bg.opacity ?? 1,
       };
     }
     case "video": {
@@ -94,15 +95,18 @@ function backgroundToStyle(
  * loop that covers the slide. Memoized so changing other slide props
  * doesn't reload the underlying video element.
  */
-function BackgroundVideoEl({ value, loop, muted, appDataDir }: {
-  value: string; loop?: boolean; muted?: boolean; appDataDir: string | null;
+function BackgroundVideoEl({ value, loop, muted, objectFit, opacity, appDataDir }: {
+  value: string; loop?: boolean; muted?: boolean;
+  objectFit?: "cover" | "contain" | "fill"; opacity?: number;
+  appDataDir: string | null;
 }) {
   const resolved = resolvePath(value, appDataDir);
   if (!resolved) return null;
   return (
     <video
       src={convertFileSrc(resolved)}
-      className="absolute inset-0 w-full h-full object-cover z-0"
+      className="absolute inset-0 w-full h-full z-0"
+      style={{ objectFit: objectFit ?? "cover", opacity: opacity ?? 1 }}
       autoPlay
       loop={loop !== false}
       muted={muted !== false}
@@ -279,6 +283,8 @@ export function CustomSlideRenderer({
         value={background.value}
         loop={background.loop}
         muted={background.muted}
+        objectFit={background.objectFit}
+        opacity={background.opacity}
         appDataDir={appDataDir}
       />
     );
@@ -363,11 +369,13 @@ export function CustomSlideRenderer({
       }
       case "video": {
         const resolvedVideo = resolvePath(el.content, appDataDir);
+        const fit = el.objectFit ?? "contain";
         return (
           <div key={el.id} style={elStyle}>
             <video
               src={convertFileSrc(resolvedVideo)}
-              className="w-full h-full object-contain"
+              className="w-full h-full"
+              style={{ objectFit: fit }}
               autoPlay
               loop={el.loop !== false}
               muted={el.muted !== false}

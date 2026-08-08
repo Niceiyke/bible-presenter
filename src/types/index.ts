@@ -8,7 +8,7 @@ export type { PropItem } from "./props";
 export type { LyricSection, SongStyle, Song, SongSlideData } from "./song";
 export type { LowerThirdData, LtPreset, LowerThirdTemplate } from "./lowerThird";
 export type {
-  ThemeColors, VideoBackground, CameraBackground, BackgroundSetting,
+  ThemeColors, VideoBackground, CameraBackground, AudioBackground, ImageBackground, BackgroundSetting,
   PresentationSettings, MonitorInfo
 } from "./settings";
 export type { StartupStatus } from "./status";
