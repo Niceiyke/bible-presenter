@@ -16,7 +16,7 @@
         "height": 800,
         "label": "main",
         "create": false,
-        "additionalBrowserArgs": "--enable-gpu-rasterization --enable-zero-copy --ignore-gpu-blocklist --enable-accelerated-video-decode --enable-features=MediaFoundationVideoCapture"
+        "additionalBrowserArgs": "--disable-accelerated-video-decode"
       },
       {
         "title": "Wordlyte - Output",
