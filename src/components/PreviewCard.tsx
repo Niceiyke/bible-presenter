@@ -47,6 +47,7 @@ export function PreviewCard({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cameraPreviewRef = useRef<HTMLVideoElement | null>(null);
   const videoCleanupRef = useRef<(() => void) | null>(null);
+  const videoItemRef = useRef<MediaItem | null>(null);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
@@ -72,6 +73,12 @@ export function PreviewCard({
     setVolume(1);
     setRate(1);
   }, [item]);
+
+  // The video element's ref callback is stable across renders (keyed on
+  // `isLocalPreview` only), so it can't capture `item` directly. Keep the
+  // current media item in a ref so the callback always reads live data and
+  // never sees a stale (null) item during the initial stage/live mount.
+  videoItemRef.current = item?.type === "Media" ? (item.data as MediaItem) : null;
 
   useEffect(() => {
     let activeStream: MediaStream | null = null;
@@ -111,8 +118,8 @@ export function PreviewCard({
       if (!el || !isLocalPreview) return;
 
       el.muted = true;
-      el.playbackRate = (item as { data?: MediaItem }).data?.playback_rate ?? 1;
-      el.volume = (item as { data?: MediaItem }).data?.volume ?? 1;
+      el.playbackRate = videoItemRef.current?.playback_rate ?? 1;
+      el.volume = videoItemRef.current?.volume ?? 1;
       setRate(el.playbackRate);
 
       const onPlay = () => setPlaying(true);
