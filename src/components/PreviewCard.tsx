@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback, useEffect } from "react";
+import React, { useRef, useState, useCallback, useEffect, useLayoutEffect } from "react";
 import { emit } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { motion } from "framer-motion";
@@ -38,11 +38,28 @@ export function PreviewCard({
   isLocalPreview?: boolean;
   hideHeader?: boolean;
 }) {
-  const { appDataDir } = useAppStore();
+  const { appDataDir, settings } = useAppStore();
   const isVideo = item?.type === "Media" && (item.data as MediaItem).media_type === "Video";
   const isAudio = item?.type === "Media" && (item.data as MediaItem).media_type === "Audio";
   const isCamera = item?.type === "Camera";
   const showControls = isVideo || isAudio;
+
+  // Measure the 16:9 slide box and scale slide/song fonts against the
+  // 1080p reference — the same policy `useCanvasScale` uses, so the
+  // preview always matches the output proportions regardless of the
+  // cockpit's resizable width.
+  const slideBoxRef = useRef<HTMLDivElement | null>(null);
+  const [slideScale, setSlideScale] = useState(0.25);
+
+  useLayoutEffect(() => {
+    const el = slideBoxRef.current;
+    if (!el) return;
+    const update = () => setSlideScale(el.clientHeight / 1080);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [item]);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cameraPreviewRef = useRef<HTMLVideoElement | null>(null);
@@ -241,8 +258,8 @@ export function PreviewCard({
                 </p>
               </div>
             ) : item.type === "CustomSlide" ? (
-              <div className="w-full" style={{ aspectRatio: "16/9" }}>
-                <CustomSlideRenderer slide={item.data} scale={0.25} appDataDir={appDataDir} />
+              <div ref={slideBoxRef} className="w-full" style={{ aspectRatio: "16/9" }}>
+                <CustomSlideRenderer slide={item.data} scale={slideScale} appDataDir={appDataDir} />
               </div>
             ) : item.type === "Timer" ? (
               <div className="flex flex-col items-center justify-center gap-2">
@@ -259,8 +276,8 @@ export function PreviewCard({
                 )}
               </div>
             ) : item.type === "Song" ? (
-              <div className="w-full" style={{ aspectRatio: "16/9" }}>
-                <SongSlideRenderer data={item.data} scale={0.25} fontSize={48} />
+              <div ref={slideBoxRef} className="w-full" style={{ aspectRatio: "16/9" }}>
+                <SongSlideRenderer data={item.data} scale={slideScale} fontSize={settings.font_size} />
               </div>
             ) : item.type === "Camera" ? (
               <div className="w-full h-full relative border border-slate-800 rounded-lg overflow-hidden bg-black">
