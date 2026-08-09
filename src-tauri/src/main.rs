@@ -136,6 +136,15 @@ fn main() {
 
             app.manage(state);
 
+            // Windows are declared with `create: false`, so they are only
+            // built here — after state is managed. Config-declared windows
+            // load their webviews immediately and fire hydrate invokes
+            // before `.manage()` runs; building them here guarantees the
+            // `AppState` exists for any command the webviews call on mount.
+            for window_config in app.config().app.windows.iter() {
+                tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?.build()?;
+            }
+
             for label in ["output", "stage", "studio"] {
                 if let Some(win) = app.get_webview_window(label) {
                     let win2 = win.clone();

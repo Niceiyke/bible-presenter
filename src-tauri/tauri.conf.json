@@ -1,6 +1,6 @@
 {
   "productName": "Wordlyte",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "identifier": "io.wordlyte.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -14,7 +14,8 @@
         "title": "Wordlyte - Operator",
         "width": 1200,
         "height": 800,
-        "label": "main"
+        "label": "main",
+        "create": false
       },
       {
         "title": "Wordlyte - Output",
@@ -25,7 +26,8 @@
         "transparent": true,
         "alwaysOnTop": true,
         "fullscreen": false,
-        "visible": false
+        "visible": false,
+        "create": false
       },
       {
         "title": "Wordlyte - Stage",
@@ -36,7 +38,8 @@
         "transparent": false,
         "alwaysOnTop": true,
         "visible": false,
-        "resizable": true
+        "resizable": true,
+        "create": false
       },
       {
         "title": "Wordlyte - Design Hub",
@@ -47,7 +50,8 @@
         "transparent": false,
         "alwaysOnTop": false,
         "visible": false,
-        "resizable": true
+        "resizable": true,
+        "create": false
       },
       {
         "title": "Wordlyte - Audio Studio",
@@ -58,7 +62,8 @@
         "transparent": false,
         "alwaysOnTop": false,
         "visible": false,
-        "resizable": true
+        "resizable": true,
+        "create": false
       }
     ],
     "security": {
