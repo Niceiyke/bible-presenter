@@ -32,7 +32,7 @@ export function PropsTab({ onUpdateProps }: PropsTabProps) {
               const newProp: PropItem = { id: stableId(), kind: "image", path: rel, x: 2, y: 2, w: 20, h: 15, opacity: 1, visible: true };
               await updateAndSave([...propItems, newProp]);
             }}
-            className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded border border-slate-700 transition-all flex items-center gap-1"
+            className="px-2 py-1 bg-white/[0.05] hover:bg-white/[0.1] text-slate-300 text-xs rounded border border-white/[0.08] transition-all flex items-center gap-1"
           >
             <Image size={10} /> Image
           </button>
@@ -41,7 +41,7 @@ export function PropsTab({ onUpdateProps }: PropsTabProps) {
               const newProp: PropItem = { id: stableId(), kind: "clock", text: "HH:mm:ss", color: "#ffffff", x: 35, y: 2, w: 30, h: 10, opacity: 1, visible: true };
               await updateAndSave([...propItems, newProp]);
             }}
-            className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded border border-slate-700 transition-all flex items-center gap-1"
+            className="px-2 py-1 bg-white/[0.05] hover:bg-white/[0.1] text-slate-300 text-xs rounded border border-white/[0.08] transition-all flex items-center gap-1"
           >
             <Clock size={10} /> Clock
           </button>
@@ -64,9 +64,9 @@ export function PropsTab({ onUpdateProps }: PropsTabProps) {
       ) : (
         <div className="flex flex-col gap-3">
           {propItems.map((prop) => (
-            <div key={prop.id} className="bg-slate-800/40 border border-slate-700/40 rounded-lg p-3 flex flex-col gap-2">
+            <div key={prop.id} className="bg-white/[0.03] border border-white/[0.06] rounded-lg p-3 flex flex-col gap-2">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-slate-900 rounded flex items-center justify-center shrink-0">
+                <div className="w-8 h-8 bg-black/40 rounded flex items-center justify-center shrink-0">
                   {prop.kind === "image" ? <Image size={14} className="text-slate-500" /> : <Clock size={14} className="text-slate-500" />}
                 </div>
                 <div className="flex-1 min-w-0">
@@ -79,7 +79,7 @@ export function PropsTab({ onUpdateProps }: PropsTabProps) {
                   onClick={async () => {
                     await updateAndSave(propItems.map((p) => p.id === prop.id ? { ...p, visible: !p.visible } : p));
                   }}
-                  className={`p-1.5 rounded transition-all ${prop.visible ? "text-amber-500 bg-amber-500/10" : "text-slate-600 bg-slate-800"}`}
+                  className={`p-1.5 rounded transition-all ${prop.visible ? "text-amber-500 bg-amber-500/10" : "text-slate-600 bg-white/[0.05]"}`}
                 >
                   {prop.visible ? <Eye size={12} /> : <EyeOff size={12} />}
                 </button>
@@ -87,7 +87,7 @@ export function PropsTab({ onUpdateProps }: PropsTabProps) {
                   onClick={async () => {
                     await updateAndSave(propItems.filter((p) => p.id !== prop.id));
                   }}
-                  className="p-1.5 text-red-700 hover:text-red-400 bg-slate-800 rounded transition-all"
+                  className="p-1.5 text-red-700 hover:text-red-400 bg-white/[0.05] rounded transition-all"
                 >
                   <X size={12} />
                 </button>
@@ -107,7 +107,7 @@ export function PropsTab({ onUpdateProps }: PropsTabProps) {
                     onClick={async () => {
                       await updateAndSave(propItems.map((p) => p.id === prop.id ? { ...p, x, y } : p));
                     }}
-                    className="px-1.5 py-0.5 text-[9px] font-bold bg-slate-800 hover:bg-slate-700 text-slate-400 rounded border border-slate-700"
+                    className="px-1.5 py-0.5 text-[9px] font-bold bg-white/[0.05] hover:bg-white/[0.1] text-slate-400 rounded border border-white/[0.08]"
                   >
                     {label}
                   </button>
@@ -122,7 +122,7 @@ export function PropsTab({ onUpdateProps }: PropsTabProps) {
                   onChange={async (e) => {
                     await updateAndSave(propItems.map((p) => p.id === prop.id ? { ...p, opacity: parseFloat(e.target.value) } : p));
                   }}
-                  className="flex-1 accent-amber-500"
+                  className="flex-1 accent-indigo-400"
                 />
                 <span className="text-[10px] text-slate-500 w-8 text-right">{Math.round(prop.opacity * 100)}%</span>
               </div>
@@ -134,7 +134,7 @@ export function PropsTab({ onUpdateProps }: PropsTabProps) {
                     onChange={async (e) => {
                       await updateAndSave(propItems.map((p) => p.id === prop.id ? { ...p, text: e.target.value } : p));
                     }}
-                    className="flex-1 bg-slate-900 text-slate-300 text-xs rounded border border-slate-700 px-2 py-1"
+                    className="flex-1 bg-black/40 text-slate-300 text-xs rounded border border-white/[0.08] px-2 py-1"
                     placeholder="HH:mm:ss"
                   />
                   <input
@@ -143,7 +143,7 @@ export function PropsTab({ onUpdateProps }: PropsTabProps) {
                     onChange={async (e) => {
                       await updateAndSave(propItems.map((p) => p.id === prop.id ? { ...p, color: e.target.value } : p));
                     }}
-                    className="w-8 h-8 rounded border border-slate-700 bg-transparent cursor-pointer"
+                    className="w-8 h-8 rounded border border-white/[0.08] bg-transparent cursor-pointer"
                   />
                 </div>
               )}

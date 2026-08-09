@@ -205,14 +205,14 @@ export function MediaTab({
       <div className="flex justify-between items-center">
         <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Media Library</h2>
         {mediaFilter !== "camera" && (
-          <button onClick={onLoadMedia} className="text-[10px] bg-amber-500 hover:bg-amber-600 text-black font-bold px-3 py-1.5 rounded transition-all flex items-center gap-1.5">
+          <button onClick={onLoadMedia} className="text-[10px] bg-gradient-to-br from-amber-400 to-amber-600 hover:from-amber-300 hover:to-amber-500 text-black font-bold px-3 py-1.5 rounded-lg transition-all active:scale-95 shadow-lg shadow-amber-500/20 flex items-center gap-1.5">
             <Upload size={11} /> UPLOAD
           </button>
         )}
       </div>
 
       {/* Filter tabs */}
-      <div className="flex gap-0.5 bg-slate-900/60 rounded-lg p-0.5 border border-slate-800">
+      <div className="flex gap-0.5 bg-black/30 rounded-lg p-0.5 border border-white/[0.08] backdrop-blur-sm">
         {FILTER_TABS.map(({ f, label }) => (
           <button
             key={f}
@@ -231,7 +231,7 @@ export function MediaTab({
       {/* Search + sort (image/video/audio views) */}
       {mediaFilter !== "camera" && (
         <div className="flex gap-2 items-center">
-          <div className="flex-1 flex items-center gap-1.5 bg-slate-900/60 border border-slate-800 rounded-lg px-2 py-1.5">
+          <div className="flex-1 flex items-center gap-1.5 bg-black/30 border border-white/[0.08] rounded-lg px-2 py-1.5 focus-within:ring-1 focus-within:ring-indigo-400/50">
             <Search size={11} className="text-slate-500" />
             <input
               type="text"
@@ -245,7 +245,7 @@ export function MediaTab({
           <select
             value={sortKey}
             onChange={(e) => setSortKey(e.target.value as SortKey)}
-            className="bg-slate-900 border border-slate-800 rounded-lg text-[10px] text-slate-300 px-2 py-1.5 outline-none"
+            className="bg-black/30 border border-white/[0.08] rounded-lg text-[10px] text-slate-300 px-2 py-1.5 outline-none focus:ring-1 focus:ring-indigo-400/50"
           >
             <option value="name">Name A–Z</option>
             <option value="newest">Newest first</option>
@@ -262,18 +262,18 @@ export function MediaTab({
 
       {/* Bulk action bar */}
       {selectedMediaItems.length > 0 && mediaFilter !== "camera" && (
-        <div className="flex flex-col gap-2 p-2 bg-slate-800/50 border border-slate-700 rounded-lg">
+        <div className="flex flex-col gap-2 p-2.5 bg-white/[0.04] border border-white/[0.1] rounded-xl rise-in">
           <p className="text-xs text-slate-400 font-bold">Selected: {selectedMediaItems.length} items</p>
           <div className="flex gap-2">
             <button
               onClick={handleDeleteSelected}
-              className="flex-1 bg-red-900/50 hover:bg-red-800 text-red-300 text-[9px] font-bold py-2 rounded transition-all flex items-center justify-center gap-1"
+              className="flex-1 bg-red-500/15 hover:bg-red-600 text-red-300 text-[9px] font-bold py-2 rounded-lg transition-all active:scale-95 flex items-center justify-center gap-1"
             >
               <Trash2 size={11} /> DELETE SELECTED
             </button>
             <button
               onClick={() => setSelectedMediaItems([])}
-              className="flex-1 bg-slate-700 hover:bg-slate-600 text-slate-300 text-[9px] font-bold py-2 rounded transition-all flex items-center justify-center gap-1"
+              className="flex-1 bg-white/[0.06] hover:bg-white/[0.1] text-slate-300 text-[9px] font-bold py-2 rounded-lg transition-all active:scale-95 flex items-center justify-center gap-1"
             >
               <X size={11} /> CLEAR SELECTION
             </button>
@@ -284,18 +284,18 @@ export function MediaTab({
               placeholder="Tags (comma-separated)"
               value={bulkTagInput}
               onChange={(e) => setBulkTagInput(e.target.value)}
-              className="flex-1 rounded-md bg-slate-700 border-transparent text-white focus:border-amber-500 focus:ring-amber-500 text-sm h-8"
+              className="flex-1 rounded-md bg-black/30 border border-white/[0.08] text-white focus:border-indigo-400/60 focus:ring-1 focus:ring-indigo-400/60 text-sm h-8 outline-none"
             />
             <button
               onClick={handleAddBulkTags}
-              className="bg-blue-900/50 hover:bg-blue-700 text-blue-300 text-[9px] font-bold px-3 py-1.5 rounded transition-all flex items-center gap-1"
+              className="bg-indigo-500/20 hover:bg-indigo-500 text-indigo-200 text-[9px] font-bold px-3 py-1.5 rounded-lg transition-all active:scale-95 flex items-center gap-1"
               title="Add tags to selected"
             >
               <Tag size={11} /> ADD
             </button>
             <button
               onClick={handleRemoveBulkTags}
-              className="bg-purple-900/50 hover:bg-purple-700 text-purple-300 text-[9px] font-bold px-3 py-1.5 rounded transition-all flex items-center gap-1"
+              className="bg-violet-500/20 hover:bg-violet-500 text-violet-200 text-[9px] font-bold px-3 py-1.5 rounded-lg transition-all active:scale-95 flex items-center gap-1"
               title="Remove tags from selected"
             >
               <X size={11} /> REMOVE
@@ -307,18 +307,18 @@ export function MediaTab({
               placeholder="Set category"
               value={bulkCategoryInput}
               onChange={(e) => setBulkCategoryInput(e.target.value)}
-              className="flex-1 rounded-md bg-slate-700 border-transparent text-white focus:border-amber-500 focus:ring-amber-500 text-sm h-8"
+              className="flex-1 rounded-md bg-black/30 border border-white/[0.08] text-white focus:border-indigo-400/60 focus:ring-1 focus:ring-indigo-400/60 text-sm h-8 outline-none"
             />
             <button
               onClick={handleSetBulkCategory}
-              className="bg-green-900/50 hover:bg-green-700 text-green-300 text-[9px] font-bold px-3 py-1.5 rounded transition-all flex items-center gap-1"
+              className="bg-emerald-500/20 hover:bg-emerald-500 text-emerald-200 text-[9px] font-bold px-3 py-1.5 rounded-lg transition-all active:scale-95 flex items-center gap-1"
               title="Set category for selected"
             >
               <BookOpen size={11} /> SET
             </button>
             <button
               onClick={handleClearBulkCategory}
-              className="bg-orange-900/50 hover:bg-orange-700 text-orange-300 text-[9px] font-bold px-3 py-1.5 rounded transition-all flex items-center gap-1"
+              className="bg-amber-500/20 hover:bg-amber-500 text-amber-200 text-[9px] font-bold px-3 py-1.5 rounded-lg transition-all active:scale-95 flex items-center gap-1"
               title="Clear category for selected"
             >
               <X size={11} /> CLEAR
@@ -340,16 +340,16 @@ export function MediaTab({
               return (
                 <div
                   key={item.id}
-                  className={`relative flex flex-col bg-slate-800/60 rounded-xl overflow-hidden border transition-all group ${
+                  className={`relative flex flex-col bg-white/[0.04] rounded-xl overflow-hidden border transition-all group ${
                     selectedMediaItems.includes(item.id)
                       ? "border-amber-500/70 ring-1 ring-amber-500/30"
-                      : "border-slate-700/60 hover:border-slate-500 hover:shadow-lg hover:shadow-black/30"
+                      : "border-white/[0.08] hover:border-white/[0.25] hover:shadow-lg hover:shadow-black/30"
                   }`}
                 >
                   {/* Checkbox overlay */}
                   <input
                     type="checkbox"
-                    className="absolute top-2 left-2 z-20 w-4 h-4 text-amber-500 bg-slate-700 border-slate-600 rounded focus:ring-amber-500 focus:ring-2 cursor-pointer"
+                    className="absolute top-2 left-2 z-20 w-4 h-4 text-amber-500 bg-white/[0.12] border-white/[0.14] rounded focus:ring-indigo-400/70 focus:ring-2 cursor-pointer"
                     checked={selectedMediaItems.includes(item.id)}
                     onChange={() => handleToggleSelect(item.id)}
                   />
@@ -360,7 +360,7 @@ export function MediaTab({
                       {item.media_type}
                     </span>
                   )}
-                  <div className="aspect-video overflow-hidden bg-slate-900 shrink-0 relative">
+                  <div className="aspect-video overflow-hidden bg-black/40 shrink-0 relative">
                     <MediaThumb item={item} className="w-full h-full transition-transform duration-300 group-hover:scale-105" dimmed={missing} />
                     {/* Hover quick actions */}
                     {!missing && (
@@ -419,7 +419,7 @@ export function MediaTab({
                             className={`flex-1 text-[7px] font-bold py-1 rounded transition-all ${
                               (item.fit_mode ?? "contain") === mode
                                 ? "bg-blue-500 text-white"
-                                : "bg-slate-700/60 text-slate-400 hover:text-slate-200"
+                                : "bg-white/[0.12] text-slate-400 hover:text-slate-200"
                             }`}
                           >{label}</button>
                         ))}
@@ -432,14 +432,14 @@ export function MediaTab({
                         <button
                           onClick={() => setMediaPlayback(item.id, !(item.loop_playback ?? true), item.playback_rate ?? 1, item.volume ?? 1)}
                           title={item.loop_playback ?? true ? "Loop enabled — click to play once" : "Play once — click to loop"}
-                          className={`flex items-center gap-0.5 text-[7px] font-bold px-1.5 py-0.5 rounded transition-all ${item.loop_playback ?? true ? "bg-amber-500/20 text-amber-300" : "bg-slate-700 text-slate-400"}`}
+                          className={`flex items-center gap-0.5 text-[7px] font-bold px-1.5 py-0.5 rounded transition-all ${item.loop_playback ?? true ? "bg-amber-500/20 text-amber-300" : "bg-white/[0.12] text-slate-400"}`}
                         >
                           <Repeat size={8} /> {item.loop_playback ?? true ? "LOOP" : "ONCE"}
                         </button>
                         <select
                           value={item.playback_rate ?? 1}
                           onChange={(e) => setMediaPlayback(item.id, item.loop_playback ?? true, parseFloat(e.target.value), item.volume ?? 1)}
-                          className="bg-slate-700/60 text-[8px] text-slate-300 rounded px-1 py-0.5 outline-none"
+                          className="bg-white/[0.12] text-[8px] text-slate-300 rounded px-1 py-0.5 outline-none"
                           title="Playback speed"
                         >
                           {[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => <option key={r} value={r}>{r}×</option>)}
@@ -447,7 +447,7 @@ export function MediaTab({
                         <button
                           onClick={() => setMediaPlayback(item.id, item.loop_playback ?? true, item.playback_rate ?? 1, (item.volume ?? 1) > 0 ? 0 : 1)}
                           title={item.volume ?? 1 > 0 ? "Mute (persisted)" : "Unmute"}
-                          className="flex items-center gap-0.5 text-[7px] font-bold px-1.5 py-0.5 rounded transition-all bg-slate-700 text-slate-400"
+                          className="flex items-center gap-0.5 text-[7px] font-bold px-1.5 py-0.5 rounded transition-all bg-white/[0.12] text-slate-400"
                         >
                           <Volume2 size={8} /> {(item.volume ?? 1) > 0 ? "MUTE" : "UNMUTE"}
                         </button>
@@ -460,7 +460,7 @@ export function MediaTab({
                         <RotateCcw size={10} /> RELINK MISSING FILE
                       </button>
                     ) : (
-                      <div className="grid grid-cols-4 gap-1 border-t border-slate-700/40 pt-1.5 mt-auto">
+                      <div className="grid grid-cols-4 gap-1 border-t border-white/[0.06] pt-1.5 mt-auto">
                         <button onClick={() => { setSelectedMediaItem(item); setShowEditModal(true); }} className="bg-blue-900/40 hover:bg-blue-700 text-blue-300 text-[7px] font-bold py-1.5 rounded-lg transition-all" title="Edit Metadata">EDIT</button>
                         <button onClick={() => onSetAsBackgroundLogo(item.path)} className="bg-purple-900/40 hover:bg-purple-700 text-purple-300 text-[7px] font-bold py-1.5 rounded-lg transition-all" title="Set as Background Logo">BG LOGO</button>
                         <button onClick={() => onSetAsLogo(item.path)} className="bg-teal-900/40 hover:bg-teal-700 text-teal-300 text-[7px] font-bold py-1.5 rounded-lg transition-all" title="Set as Corner Logo">CORNER</button>

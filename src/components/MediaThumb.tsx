@@ -75,7 +75,7 @@ export function MediaThumb({
     );
   }
   return (
-    <div className={`w-full h-full flex items-center justify-center bg-slate-800 ${dim}`}>
+    <div className={`w-full h-full flex items-center justify-center bg-white/[0.05] ${dim}`}>
       <ImageIcon size={22} className="text-slate-600" />
     </div>
   );

@@ -82,7 +82,7 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
             setActiveServiceId(id);
             localStorage.setItem("activeServiceId", id);
           }}
-          className="flex-1 bg-slate-800 text-slate-200 text-xs rounded border border-slate-700 px-2 py-1.5 font-bold"
+          className="flex-1 bg-white/[0.05] text-slate-200 text-xs rounded border border-white/[0.08] px-2 py-1.5 font-bold"
         >
           {services.map((s) => (
             <option key={s.id} value={s.id}>{s.name} ({s.item_count})</option>
@@ -90,14 +90,14 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
         </select>
         <button
           onClick={() => setServiceManagerOpen(!serviceManagerOpen)}
-          className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 rounded border border-slate-700 transition-all"
+          className="p-1.5 bg-white/[0.05] hover:bg-white/[0.1] text-slate-400 hover:text-slate-200 rounded border border-white/[0.08] transition-all"
         >
           <Settings size={12} />
         </button>
       </div>
 
       {serviceManagerOpen && (
-        <div className="bg-slate-900 border border-slate-700 rounded-lg p-3 flex flex-col gap-2">
+        <div className="bg-black/40 border border-white/[0.08] rounded-lg p-3 flex flex-col gap-2">
           <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Manage Services</p>
           {services.map((s) => (
             <div key={s.id} className="flex items-center gap-2">
@@ -129,13 +129,13 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
               </button>
             </div>
           ))}
-          <hr className="border-slate-700" />
+          <hr className="border-white/[0.08]" />
           <div className="flex gap-2">
             <input
               value={newServiceName}
               onChange={(e) => setNewServiceName(e.target.value)}
               placeholder="New service name…"
-              className="flex-1 bg-slate-800 text-slate-200 text-xs rounded border border-slate-700 px-2 py-1"
+              className="flex-1 bg-white/[0.05] text-slate-200 text-xs rounded border border-white/[0.08] px-2 py-1"
               onKeyDown={async (e) => {
                 if (e.key !== "Enter" || !newServiceName.trim()) return;
                 const id = stableId();
@@ -186,7 +186,7 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
             {isSchedulePersistent ? "LOOP" : "ONCE"}
           </button>
           
-          <div className="h-3 w-px bg-slate-800 mx-1" />
+          <div className="h-3 w-px bg-white/[0.05] mx-1" />
           
           <button
             onClick={undoSchedule}
@@ -210,7 +210,7 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
             <button
               onClick={handlePrevItem}
               disabled={activeScheduleIdx === 0 || scheduleEntries.length === 0}
-              className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded border border-slate-700 disabled:opacity-30 transition-all"
+              className="px-2 py-1 bg-white/[0.05] hover:bg-white/[0.1] text-slate-300 text-xs rounded border border-white/[0.08] disabled:opacity-30 transition-all"
             >
               ← Prev
             </button>
@@ -238,14 +238,14 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
                 onDragEnd={handleReorderEnd}
                 className={`flex items-center gap-2 p-2.5 rounded-lg border transition-all group cursor-default select-none ${
                   isActive
-                    ? "bg-amber-500/10 border-amber-500/40"
-                    : "bg-slate-800/40 border-slate-700/40 hover:bg-slate-800 hover:border-slate-700"
+                    ? "bg-indigo-500/10 border-indigo-400/40"
+                    : "bg-white/[0.03] border-white/[0.06] hover:bg-white/[0.08] hover:border-white/[0.15]"
                 }`}
               >
                 <div className="cursor-grab active:cursor-grabbing p-1 -ml-1 text-slate-600 hover:text-slate-400 transition-colors">
                   <GripVertical size={14} />
                 </div>
-                <div className={`w-5 h-5 flex items-center justify-center rounded text-[9px] font-black shrink-0 ${isActive ? "bg-amber-500 text-black" : "bg-slate-700 text-slate-400"}`}>
+                <div className={`w-5 h-5 flex items-center justify-center rounded text-[9px] font-black shrink-0 ${isActive ? "bg-amber-500 text-black" : "bg-white/[0.12] text-slate-400"}`}>
                   {idx + 1}
                 </div>
                 <div className="flex-1 min-w-0" onClick={() => stageItem(entry.item)}>

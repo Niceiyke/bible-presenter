@@ -36,7 +36,7 @@ export function EditMediaModal({ isOpen, onClose, mediaItem }: EditMediaModalPro
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
-      <div className="bg-slate-800 rounded-lg p-6 w-96">
+      <div className="bg-white/[0.05] rounded-lg p-6 w-96">
         <h3 className="text-lg font-bold mb-4 text-white">Edit Media: {mediaItem.name}</h3>
         <div className="mb-4">
           <label htmlFor="description" className="block text-sm font-medium text-slate-400">Description</label>
@@ -44,7 +44,7 @@ export function EditMediaModal({ isOpen, onClose, mediaItem }: EditMediaModalPro
             id="description"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            className="mt-1 block w-full rounded-md bg-slate-700 border-transparent text-white focus:border-amber-500 focus:ring-amber-500 text-sm"
+            className="mt-1 block w-full rounded-md bg-white/[0.12] border-transparent text-white focus:border-indigo-400/70 focus:ring-indigo-400/70 text-sm"
             rows={3}
           ></textarea>
         </div>
@@ -55,7 +55,7 @@ export function EditMediaModal({ isOpen, onClose, mediaItem }: EditMediaModalPro
             id="tags"
             value={tags}
             onChange={(e) => setTags(e.target.value)}
-            className="mt-1 block w-full rounded-md bg-slate-700 border-transparent text-white focus:border-amber-500 focus:ring-amber-500 text-sm"
+            className="mt-1 block w-full rounded-md bg-white/[0.12] border-transparent text-white focus:border-indigo-400/70 focus:ring-indigo-400/70 text-sm"
           />
         </div>
         <div className="mb-4">
@@ -65,13 +65,13 @@ export function EditMediaModal({ isOpen, onClose, mediaItem }: EditMediaModalPro
             id="category"
             value={category}
             onChange={(e) => setCategory(e.target.value)}
-            className="mt-1 block w-full rounded-md bg-slate-700 border-transparent text-white focus:border-amber-500 focus:ring-amber-500 text-sm"
+            className="mt-1 block w-full rounded-md bg-white/[0.12] border-transparent text-white focus:border-indigo-400/70 focus:ring-indigo-400/70 text-sm"
           />
         </div>
         <div className="flex justify-end gap-2">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-slate-300 rounded-md border border-slate-700 hover:bg-slate-700"
+            className="px-4 py-2 text-sm font-medium text-slate-300 rounded-md border border-white/[0.08] hover:bg-white/[0.1]"
           >
             Cancel
           </button>

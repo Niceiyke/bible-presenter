@@ -236,7 +236,7 @@ export function PreviewCard({
         </div>
       )}
       <div
-        className={`flex-1 flex flex-col items-center justify-center bg-black/40 rounded-2xl border border-slate-800 text-center min-h-0 relative group ${
+        className={`flex-1 flex flex-col items-center justify-center bg-gradient-to-b from-black/50 to-black/70 rounded-xl border border-white/[0.08] text-center min-h-0 relative group shadow-float ${
           item?.type === "Media" ? "p-0 overflow-hidden" : "p-6"
         }`}
       >
@@ -250,12 +250,12 @@ export function PreviewCard({
           >
             {item.type === "Verse" ? (
               <div className="flex flex-col items-center justify-center gap-3">
-                <p className="text-xl font-serif text-slate-300 leading-snug line-clamp-5">
-                  {item.data.text}
-                </p>
-                <p className="text-amber-500 font-mono font-bold uppercase tracking-widest text-sm shrink-0">
-                  {item.data.book} {item.data.chapter}:{item.data.verse}
-                </p>
+                <p className="text-xl font-serif text-slate-100 leading-snug line-clamp-5 drop-shadow-lg">{item.data.text}</p>
+                <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 ring-1 ring-amber-500/30 backdrop-blur-sm">
+                  <p className="text-amber-400 font-mono font-bold uppercase tracking-widest text-sm shrink-0">
+                    {item.data.book} {item.data.chapter}:{item.data.verse}
+                  </p>
+                </div>
               </div>
             ) : item.type === "CustomSlide" ? (
               <div ref={slideBoxRef} className="w-full" style={{ aspectRatio: "16/9" }}>
@@ -348,7 +348,7 @@ export function PreviewCard({
                       step={0.1}
                       value={currentTime}
                       onChange={handleSeek}
-                      className="flex-1 h-1.5 accent-amber-500 cursor-pointer rounded-full"
+                      className="flex-1 h-1.5 accent-indigo-400 cursor-pointer rounded-full"
                     />
                     <span className="text-[9px] text-slate-400 font-mono w-8 shrink-0">
                       {formatTime(duration)}
@@ -438,7 +438,7 @@ export function PreviewCard({
                         step={0.1}
                         value={currentTime}
                         onChange={handleSeek}
-                        className="w-20 h-1 accent-amber-500 cursor-pointer rounded-full"
+                        className="w-20 h-1 accent-indigo-400 cursor-pointer rounded-full"
                         title="Seek"
                       />
                       <button
@@ -489,7 +489,7 @@ export function PreviewCard({
             )}
           </motion.div>
         ) : (
-          <p className="text-slate-800 font-serif italic text-sm">{empty}</p>
+          <p className="text-slate-600 font-serif italic text-sm">{empty}</p>
         )}
       </div>
     </div>

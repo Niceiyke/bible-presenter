@@ -81,7 +81,7 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search presentations..."
-            className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-8 pr-3 py-2 text-xs text-slate-300 placeholder-slate-600 outline-none focus:border-slate-600 transition-colors"
+            className="w-full bg-black/40 border border-white/[0.06] rounded-lg pl-8 pr-3 py-2 text-xs text-slate-300 placeholder-slate-600 outline-none focus:border-white/[0.14] transition-colors"
           />
         </div>
       )}
@@ -92,14 +92,14 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
           return (
             <div
               key={pres.id}
-              className={`flex flex-col bg-slate-900 border rounded-xl overflow-hidden transition-all ${
-                isExpanded ? "border-purple-600/40 shadow-lg shadow-purple-900/10" : "border-slate-800 hover:border-slate-700"
+              className={`flex flex-col bg-black/40 border rounded-xl overflow-hidden transition-all ${
+                isExpanded ? "border-purple-600/40 shadow-lg shadow-purple-900/10" : "border-white/[0.06] hover:border-white/[0.15]"
               }`}
             >
               <div className="flex items-center gap-3 p-3">
                 <div
                   className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 transition-all ${
-                    isExpanded ? "bg-purple-600 text-white" : "bg-slate-800 text-slate-500"
+                    isExpanded ? "bg-purple-600 text-white" : "bg-white/[0.05] text-slate-500"
                   }`}
                 >
                   <Presentation size={18} />
@@ -115,14 +115,14 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
                 <div className="flex items-center gap-1">
                   <button
                     onClick={() => onOpenEditor(pres.id)}
-                    className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-500 hover:text-slate-200 rounded-lg transition-all"
+                    className="p-2 bg-white/[0.05] hover:bg-white/[0.1] text-slate-500 hover:text-slate-200 rounded-lg transition-all"
                     title="Edit presentation"
                   >
                     <Edit2 size={13} />
                   </button>
                   <button
                     onClick={() => handleDelete(pres.id)}
-                    className="p-2 bg-slate-800 hover:bg-red-900/60 text-slate-500 hover:text-red-400 rounded-lg transition-all"
+                    className="p-2 bg-white/[0.05] hover:bg-red-900/60 text-slate-500 hover:text-red-400 rounded-lg transition-all"
                     title="Delete presentation"
                   >
                     <Trash2 size={13} />
@@ -132,7 +132,7 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
                     className={`p-2 rounded-lg transition-all ${
                       isExpanded
                         ? "bg-purple-600 text-white"
-                        : "bg-slate-800 hover:bg-slate-700 text-slate-500 hover:text-slate-200"
+                        : "bg-white/[0.05] hover:bg-white/[0.1] text-slate-500 hover:text-slate-200"
                     }`}
                     title={isExpanded ? "Collapse" : "Show slides"}
                   >
@@ -142,7 +142,7 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
               </div>
 
               {isExpanded && studioSlides[pres.id] && (
-                <div className="px-3 pb-3 border-t border-slate-800/50">
+                <div className="px-3 pb-3 border-t border-white/[0.06]">
                   <p className="text-[9px] font-black uppercase tracking-widest text-slate-600 pt-2.5 pb-2">Slides</p>
                   <div className="grid grid-cols-3 gap-2">
                     {studioSlides[pres.id].map((slide, idx) => {
@@ -172,7 +172,7 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
 
         {studioList.length === 0 && (
           <div className="flex flex-col items-center gap-3 py-12 text-center">
-            <div className="w-12 h-12 bg-slate-900 rounded-xl flex items-center justify-center border border-slate-800">
+            <div className="w-12 h-12 bg-black/40 rounded-xl flex items-center justify-center border border-white/[0.06]">
               <Presentation size={22} className="text-slate-700" />
             </div>
             <div>

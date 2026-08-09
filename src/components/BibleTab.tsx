@@ -164,10 +164,10 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
           <button
             key={v}
             onClick={() => { setBibleVersion(v); localStorage.setItem("pref_bibleVersion", v); }}
-            className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${
+            className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all active:scale-95 ${
               bibleVersion === v
-                ? "bg-amber-500 text-black"
-                : "bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-700"
+                ? "bg-gradient-to-br from-amber-400 to-amber-600 text-black shadow-lg shadow-amber-500/25"
+                : "bg-white/[0.04] text-slate-400 hover:text-slate-200 border border-white/[0.08]"
             }`}
           >
             {v}
@@ -175,7 +175,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
         ))}
       </div>
 
-      <hr className="border-slate-800" />
+      <hr className="border-white/[0.06]" />
 
       {/* Quick keyboard entry — collapsible */}
       <div>
@@ -196,7 +196,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
         )}
       </div>
 
-      <hr className="border-slate-800" />
+      <hr className="border-white/[0.06]" />
 
       {/* Manual selection — collapsible */}
       <div>
@@ -212,7 +212,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
             <select
               value={selectedBook}
               onChange={(e) => setSelectedBook(e.target.value)}
-              className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
+              className="bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-400/70 focus:border-indigo-400/50"
             >
               <option value="">Select Book</option>
               {books.map((b) => <option key={b} value={b}>{b}</option>)}
@@ -222,14 +222,14 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
               <select
                 value={selectedChapter}
                 onChange={(e) => setSelectedChapter(parseInt(e.target.value))}
-                className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                className="bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-400/70 focus:border-indigo-400/40"
               >
                 {chapters.map((c) => <option key={c} value={c}>Chap {c}</option>)}
               </select>
               <select
                 value={selectedVerse}
                 onChange={(e) => setSelectedVerse(parseInt(e.target.value))}
-                className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                className="bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-400/70 focus:border-indigo-400/40"
               >
                 {verses.map((v) => <option key={v} value={v}>Verse {v}</option>)}
               </select>
@@ -239,14 +239,14 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
               <button
                 onClick={handleDisplaySelection}
                 disabled={!selectedBook}
-                className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2 rounded-lg transition-all text-xs disabled:opacity-30"
+                className="bg-white/[0.06] hover:bg-white/[0.10] text-white font-bold py-2 rounded-lg transition-all text-xs disabled:opacity-30 active:scale-[0.98] border border-white/[0.08]"
               >
                 STAGE
               </button>
               <button
                 onClick={handleSendLivePicker}
                 disabled={!selectedBook}
-                className="bg-amber-500 hover:bg-amber-400 text-black font-bold py-2 rounded-lg transition-all text-xs disabled:opacity-30"
+                className="bg-gradient-to-br from-amber-400 to-amber-600 hover:from-amber-300 hover:to-amber-500 text-black font-bold py-2 rounded-lg transition-all text-xs disabled:opacity-30 shadow-lg shadow-amber-500/25 active:scale-[0.98]"
               >
                 DISPLAY
               </button>
@@ -259,7 +259,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                   if (v) onAddToSchedule({ type: "Verse", data: v });
                 }}
                 disabled={!selectedBook}
-                className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 border border-amber-500/30 font-bold py-2 rounded-lg transition-all text-xs disabled:opacity-30"
+                className="bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 font-bold py-2 rounded-lg transition-all text-xs disabled:opacity-30 active:scale-[0.98]"
               >
                 + QUEUE
               </button>
@@ -268,7 +268,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
         )}
       </div>
 
-      <hr className="border-slate-800" />
+      <hr className="border-white/[0.06]" />
 
       {/* Chapter View — Active staged chapter */}
       <div className="flex flex-col min-h-0">
@@ -288,7 +288,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                   setChapterViewFontSize(next);
                   localStorage.setItem("pref_chapterViewFontSize", String(next));
                 }}
-                className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 text-[10px] font-black flex items-center justify-center transition-colors"
+                className="w-5 h-5 rounded bg-white/[0.05] hover:bg-white/[0.1] text-slate-400 text-[10px] font-black flex items-center justify-center transition-colors"
                 title="Decrease font size"
               >A−</button>
               <span className="text-[9px] font-mono text-slate-600 w-5 text-center">{chapterViewFontSize}</span>
@@ -298,7 +298,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                   setChapterViewFontSize(next);
                   localStorage.setItem("pref_chapterViewFontSize", String(next));
                 }}
-                className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 text-[10px] font-black flex items-center justify-center transition-colors"
+                className="w-5 h-5 rounded bg-white/[0.05] hover:bg-white/[0.1] text-slate-400 text-[10px] font-black flex items-center justify-center transition-colors"
                 title="Increase font size"
               >A+</button>
             </div>
@@ -331,10 +331,10 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                         key={`${v.book}-${v.chapter}-${v.verse}`}
                         className={`p-2 rounded border transition-all group relative cursor-pointer ${
                           isStaged 
-                            ? "bg-amber-500/10 border-amber-500/50" 
+                            ? "bg-amber-500/10 border-amber-500/50 shadow-amber-500/10" 
                             : isLive
-                            ? "bg-red-500/10 border-red-500/50"
-                            : "bg-slate-800/40 border-transparent hover:border-slate-700"
+                            ? "bg-live-500/10 border-live-500/40"
+                            : "bg-white/[0.03] border-transparent hover:border-white/[0.12]"
                         }`}
                         onClick={() => onStage({ type: "Verse", data: v })}
                       >
@@ -356,7 +356,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                           {!isLive && (
                             <button
                               onClick={(e) => { e.stopPropagation(); onLive({ type: "Verse", data: v }); }}
-                              className="bg-amber-500 hover:bg-amber-400 text-black text-[9px] font-black px-2 py-0.5 rounded shadow-lg"
+                              className="bg-gradient-to-br from-amber-400 to-amber-600 hover:from-amber-300 hover:to-amber-500 text-black text-[9px] font-black px-2 py-0.5 rounded shadow-lg shadow-amber-500/25 active:scale-90"
                             >
                               GO LIVE
                             </button>
@@ -376,7 +376,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
         )}
       </div>
 
-      <hr className="border-slate-800" />
+      <hr className="border-white/[0.06]" />
 
       {/* Recent Items — categorical collapsible */}
       {(recentItems.bible.length > 0 || recentItems.media.length > 0 || recentItems.presentation.length > 0) && (
@@ -400,13 +400,13 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                   transition={{ duration: 0.2 }}
                   className="overflow-hidden flex flex-col gap-2"
                 >
-                  <div className="flex gap-1 bg-slate-900/50 p-0.5 rounded-lg border border-slate-800 shrink-0">
+                  <div className="flex gap-1 bg-black/40 p-0.5 rounded-lg border border-white/[0.06] shrink-0">
                     {(["bible", "media", "presentation"] as const).map((t) => (
                       <button
                         key={t}
                         onClick={() => setHistoryTab(t)}
                         className={`flex-1 py-1 rounded text-[9px] font-black uppercase transition-all ${
-                          historyTab === t ? "bg-slate-700 text-amber-500" : "text-slate-600 hover:text-slate-400"
+                          historyTab === t ? "bg-white/[0.12] text-amber-500" : "text-slate-600 hover:text-slate-400"
                         }`}
                       >
                         {t} ({recentItems[t].length})
@@ -419,35 +419,35 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                       <p className="text-center py-4 text-[10px] text-slate-700 italic">No recent {historyTab} items</p>
                     ) : (
                       recentItems[historyTab].map((item, i) => (
-                        <div
-                          key={i}
-                          className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-slate-800/40 border border-slate-800 group hover:border-slate-700 transition-all"
-                        >
-                          <div className="flex-1 min-w-0">
-                            {item.type === "Verse" ? (
-                              <p className="text-xs truncate">
-                                <span className="text-amber-500/80 font-mono font-bold">{item.data.book} {item.data.chapter}:{item.data.verse}</span>
-                                <span className="text-slate-600 ml-1 text-[10px]">{item.data.version}</span>
-                              </p>
-                            ) : (
-                              <p className="text-xs text-slate-400 truncate">{displayItemLabel(item)}</p>
-                            )}
-                          </div>
-                          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all shrink-0">
-                            <button
-                              onClick={() => onStage(item)}
-                              className="text-[9px] font-bold px-1.5 py-0.5 bg-slate-700 hover:bg-slate-600 text-white rounded transition-all"
-                            >
-                              STAGE
-                            </button>
-                            <button
-                              onClick={() => onLive(item)}
-                              className="text-[9px] font-bold px-1.5 py-0.5 bg-amber-500 hover:bg-amber-400 text-black rounded transition-all"
-                            >
-                              GO
-                            </button>
-                          </div>
+<div
+                        key={i}
+                        className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white/[0.03] border border-white/[0.06] group hover:border-indigo-400/30 hover:bg-white/[0.05] transition-all"
+                      >
+                        <div className="flex-1 min-w-0">
+                          {item.type === "Verse" ? (
+                            <p className="text-xs truncate">
+                              <span className="text-amber-400/90 font-mono font-bold">{item.data.book} {item.data.chapter}:{item.data.verse}</span>
+                              <span className="text-slate-500 ml-1 text-[10px]">{item.data.version}</span>
+                            </p>
+                          ) : (
+                            <p className="text-xs text-slate-400 truncate">{displayItemLabel(item)}</p>
+                          )}
                         </div>
+                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all shrink-0">
+                          <button
+                            onClick={() => onStage(item)}
+                            className="text-[9px] font-bold px-1.5 py-0.5 bg-white/[0.08] hover:bg-white/[0.14] text-white rounded transition-all active:scale-90"
+                          >
+                            STAGE
+                          </button>
+                          <button
+                            onClick={() => onLive(item)}
+                            className="text-[9px] font-bold px-1.5 py-0.5 bg-gradient-to-br from-amber-400 to-amber-600 hover:from-amber-300 hover:to-amber-500 text-black rounded transition-all active:scale-90"
+                          >
+                            GO
+                          </button>
+                        </div>
+                      </div>
                       ))
                     )}
                   </div>
@@ -455,7 +455,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
               )}
             </AnimatePresence>
           </div>
-          <hr className="border-slate-800" />
+          <hr className="border-white/[0.06]" />
         </>
       )}
 
@@ -476,12 +476,12 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                 placeholder="Search all versions..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-amber-500"
+                className="flex-1 bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-400/70 focus:border-indigo-400/40"
               />
               <button
                 type="submit"
                 disabled={isSearching}
-                className="bg-amber-500 hover:bg-amber-600 text-black font-bold px-3 py-2 rounded-lg text-sm transition-all disabled:opacity-50"
+                className="bg-gradient-to-br from-amber-400 to-amber-600 hover:from-amber-300 hover:to-amber-500 text-black font-bold px-3 py-2 rounded-lg text-sm transition-all disabled:opacity-50 shadow-lg shadow-amber-500/20 active:scale-95"
               >
                 {isSearching ? "..." : "Go"}
               </button>
@@ -499,7 +499,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                   <div className="flex items-center gap-2">
                     <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase tracking-widest ${
                       searchMethod === "reference" ? "bg-amber-500/20 text-amber-400 border border-amber-500/30" :
-                      "bg-slate-700/50 text-slate-400 border border-slate-600/30"
+                      "bg-white/[0.12] text-slate-400 border border-white/[0.14]"
                     }`}>
                       {searchMethod === "reference" ? "Reference Match" : "Keyword Match"}
                     </span>
@@ -520,14 +520,14 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                 </div>
               )}
               {searchResults.map((v: any) => (
-                <div key={`${v.version}-${v.book}-${v.chapter}-${v.verse}`} className="p-3 rounded-lg bg-slate-800/50 border border-transparent hover:border-slate-700 transition-all group">
+                <div key={`${v.version}-${v.book}-${v.chapter}-${v.verse}`} className="p-3 rounded-lg bg-white/[0.04] border border-white/[0.06] hover:border-indigo-400/30 transition-all group surface-card">
                   <div className="flex justify-between items-start mb-1">
-                    <p className="text-amber-500 font-mono text-xs font-bold uppercase">{v.book} {v.chapter}:{v.verse} <span className="text-slate-500 font-normal normal-case font-sans">{v.version}</span></p>
+                    <p className="text-amber-400 font-mono text-xs font-bold uppercase">{v.book} {v.chapter}:{v.verse} <span className="text-slate-500 font-normal normal-case font-sans">{v.version}</span></p>
                     {v.score !== undefined && (
                       <div className="flex items-center gap-1">
-                        <div className="w-12 h-1 bg-slate-700 rounded-full overflow-hidden">
+                        <div className="w-12 h-1 bg-white/10 rounded-full overflow-hidden">
                           <div 
-                            className={`h-full transition-all ${v.score > 0.8 ? "bg-emerald-500" : v.score > 0.6 ? "bg-amber-500" : "bg-red-500"}`}
+                            className={`h-full transition-all ${v.score > 0.8 ? "bg-emerald-400" : v.score > 0.6 ? "bg-amber-400" : "bg-rose-400"}`}
                             style={{ width: `${v.score * 100}%` }}
                           />
                         </div>
@@ -537,9 +537,9 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                   </div>
                   <p className="text-slate-300 text-xs mb-2 line-clamp-2">{v.text}</p>
                   <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-all">
-                    <button onClick={() => onStage({ type: "Verse", data: v })} className="flex-1 bg-slate-800 hover:bg-slate-700 text-white text-[10px] font-bold py-1 rounded transition-all">STAGE</button>
-                    <button onClick={() => onLive({ type: "Verse", data: v })} className="flex-1 bg-amber-500 hover:bg-amber-400 text-black text-[10px] font-bold py-1 rounded transition-all">DISPLAY</button>
-                    <button onClick={() => onAddToSchedule({ type: "Verse", data: v })} className="flex-1 bg-purple-600/40 hover:bg-purple-600 text-purple-300 text-[10px] font-bold py-1 rounded transition-all" title="Add to service">+ SERVICE</button>
+                    <button onClick={() => onStage({ type: "Verse", data: v })} className="flex-1 bg-white/[0.06] hover:bg-white/[0.12] text-white text-[10px] font-bold py-1 rounded transition-all active:scale-95">STAGE</button>
+                    <button onClick={() => onLive({ type: "Verse", data: v })} className="flex-1 bg-gradient-to-br from-amber-400 to-amber-600 hover:from-amber-300 hover:to-amber-500 text-black text-[10px] font-bold py-1 rounded transition-all active:scale-95">DISPLAY</button>
+                    <button onClick={() => onAddToSchedule({ type: "Verse", data: v })} className="flex-1 bg-indigo-500/20 hover:bg-indigo-500 text-indigo-200 text-[10px] font-bold py-1 rounded transition-all active:scale-95" title="Add to service">+ SERVICE</button>
                   </div>
                 </div>
               ))}

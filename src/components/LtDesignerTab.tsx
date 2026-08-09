@@ -29,10 +29,10 @@ function AccordionSection({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="border-b border-slate-800/60 last:border-b-0">
+    <div className="border-b border-white/[0.08] last:border-b-0">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-slate-800/30 transition-colors group"
+        className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-white/[0.08] transition-colors group"
       >
         <div className="flex items-center gap-2">
           <Icon size={12} className="text-slate-500 group-hover:text-slate-400 transition-colors" />
@@ -71,7 +71,7 @@ function SliderRow({ label, min, max, step = 1, value, onChange, unit = "" }: {
       <input
         type="range" min={min} max={max} step={step} value={value}
         onChange={e => onChange(step < 1 ? parseFloat(e.target.value) : parseInt(e.target.value))}
-        className="w-full h-1 accent-amber-500 cursor-pointer"
+        className="w-full h-1 accent-indigo-400 cursor-pointer"
       />
     </div>
   );
@@ -82,7 +82,7 @@ function ColorSwatch({ value, onChange, label }: { value: string; onChange: (v: 
   return (
     <label htmlFor={id} className="flex items-center gap-1.5 cursor-pointer group">
       <div
-        className="w-6 h-6 rounded border-2 border-slate-700 group-hover:border-amber-500/50 transition-colors shadow-inner shrink-0"
+        className="w-6 h-6 rounded border-2 border-white/[0.08] group-hover:border-indigo-400/60 transition-colors shadow-inner shrink-0"
         style={{ background: value }}
       />
       <span className="text-[9px] font-mono text-slate-500 group-hover:text-slate-400 transition-colors">{value.toUpperCase()}</span>
@@ -95,7 +95,7 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
   return (
     <button
       onClick={() => onChange(!checked)}
-      className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${checked ? "bg-amber-500" : "bg-slate-700 hover:bg-slate-600"}`}
+      className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${checked ? "bg-amber-500" : "bg-white/[0.12] hover:bg-white/[0.14]"}`}
     >
       <div
         className="absolute top-[3px] w-3.5 h-3.5 rounded-full bg-white shadow transition-all duration-150"
@@ -114,8 +114,8 @@ function StyleBtns({
   const cls = (active: boolean) =>
     `w-8 h-7 rounded border transition-all text-[11px] ${
       active
-        ? "bg-amber-500/15 border-amber-500/40 text-amber-400"
-        : "bg-slate-900 border-slate-700 text-slate-500 hover:text-white hover:border-slate-500"
+        ? "bg-indigo-500/15 border-indigo-400/50 text-indigo-300"
+        : "bg-black/40 border-white/[0.08] text-slate-500 hover:text-white hover:border-white/[0.25]"
     }`;
   return (
     <div className="flex gap-1">
@@ -149,13 +149,13 @@ function AlignmentGrid({
   return (
     <div className="space-y-1.5">
       <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wide">Position</span>
-      <div className="relative w-32 h-24 rounded-lg bg-slate-950 border border-slate-700 overflow-hidden">
+      <div className="relative w-32 h-24 rounded-lg bg-black border border-white/[0.08] overflow-hidden">
         {/* Grid lines */}
         <div className="absolute inset-0 pointer-events-none">
-          <div className="absolute inset-x-0 top-1/3 h-px bg-slate-800" />
-          <div className="absolute inset-x-0 top-2/3 h-px bg-slate-800" />
-          <div className="absolute inset-y-0 left-1/3 w-px bg-slate-800" />
-          <div className="absolute inset-y-0 left-2/3 w-px bg-slate-800" />
+          <div className="absolute inset-x-0 top-1/3 h-px bg-white/[0.05]" />
+          <div className="absolute inset-x-0 top-2/3 h-px bg-white/[0.05]" />
+          <div className="absolute inset-y-0 left-1/3 w-px bg-white/[0.05]" />
+          <div className="absolute inset-y-0 left-2/3 w-px bg-white/[0.05]" />
         </div>
         <div className="grid grid-cols-3 h-full">
           {cells.map(([v, h]) => {
@@ -193,14 +193,14 @@ function PillGroup<T extends string>({
   onChange: (v: T) => void;
 }) {
   return (
-    <div className="flex bg-slate-950 rounded-lg border border-slate-800 p-0.5 gap-0.5">
+    <div className="flex bg-black rounded-lg border border-white/[0.06] p-0.5 gap-0.5">
       {options.map(opt => (
         <button
           key={opt.value}
           onClick={() => onChange(opt.value)}
           className={`flex-1 py-1 px-2 rounded text-[9px] font-bold uppercase tracking-wide transition-all ${
             value === opt.value
-              ? "bg-slate-700 text-amber-400 shadow-inner"
+              ? "bg-white/[0.12] text-amber-400 shadow-inner"
               : "text-slate-600 hover:text-slate-300"
           }`}
         >
@@ -339,19 +339,19 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
       ? "bg-[#00b140]"
       : ltPreviewBg === "checkered"
       ? "bg-[length:20px_20px] [background-image:linear-gradient(45deg,#333_25%,transparent_25%),linear-gradient(-45deg,#333_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#333_75%),linear-gradient(-45deg,transparent_75%,#333_75%)] [background-position:0_0,0_10px,10px_-10px,-10px_0px] bg-[#1e1e1e]"
-      : "bg-slate-900";
+      : "bg-black/40";
 
   return (
     <div className="h-full flex overflow-hidden">
       {/* ── LEFT PANEL ───────────────────────────────────────────────────── */}
-      <div className="w-64 shrink-0 border-r border-slate-800 flex flex-col overflow-hidden bg-slate-900/20">
+      <div className="w-64 shrink-0 border-r border-white/[0.06] flex flex-col overflow-hidden bg-black/20">
 
         {/* Template Manager */}
-        <div className="px-3 py-3 border-b border-slate-800 space-y-2 bg-slate-900/50 shrink-0">
+        <div className="px-3 py-3 border-b border-white/[0.06] space-y-2 bg-black/40 shrink-0">
           <p className="text-[8px] font-black uppercase tracking-widest text-slate-600">Template</p>
           <div className="flex items-center gap-1.5">
             <select
-              className="flex-1 min-w-0 bg-slate-950 text-slate-200 text-[11px] rounded-lg px-2 py-1.5 border border-slate-800 outline-none focus:border-amber-500/50 transition-colors"
+              className="flex-1 min-w-0 bg-black text-slate-200 text-[11px] rounded-lg px-2 py-1.5 border border-white/[0.06] outline-none focus:border-indigo-400/70/50 transition-colors"
               value={ltTemplate.id}
               onChange={e => {
                 const t = ltSavedTemplates.find(t => t.id === e.target.value);
@@ -360,7 +360,7 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
             >
               {ltSavedTemplates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
-            <button onClick={handleDuplicate} className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition-all" title="Duplicate">
+            <button onClick={handleDuplicate} className="p-1.5 bg-white/[0.05] hover:bg-white/[0.1] rounded-lg text-slate-400 hover:text-white transition-all" title="Duplicate">
               <Copy size={12} />
             </button>
             <button onClick={handleSave} className="p-1.5 bg-amber-600 hover:bg-amber-500 rounded-lg text-white transition-all" title="Save">
@@ -372,12 +372,12 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
               value={ltTemplate.name}
               onChange={e => updateTpl({ name: e.target.value })}
               placeholder="Template name"
-              className="flex-1 min-w-0 bg-slate-950 text-slate-300 text-[10px] px-2 py-1 rounded-lg border border-slate-800 outline-none focus:border-amber-500/40"
+              className="flex-1 min-w-0 bg-black text-slate-300 text-[10px] px-2 py-1 rounded-lg border border-white/[0.06] outline-none focus:border-indigo-400/70/40"
             />
-            <button onClick={exportTemplate} title="Export" className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-500 hover:text-slate-300 transition-all">
+            <button onClick={exportTemplate} title="Export" className="p-1.5 bg-white/[0.05] hover:bg-white/[0.1] rounded-lg text-slate-500 hover:text-slate-300 transition-all">
               <Download size={12} />
             </button>
-            <button onClick={importTemplate} title="Import" className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-500 hover:text-slate-300 transition-all">
+            <button onClick={importTemplate} title="Import" className="p-1.5 bg-white/[0.05] hover:bg-white/[0.1] rounded-lg text-slate-500 hover:text-slate-300 transition-all">
               <Upload size={12} />
             </button>
           </div>
@@ -408,8 +408,8 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
                 onClick={() => updateTpl({ widthPct: 100, borderRadius: 0, hAlign: "center", offsetX: 0 })}
                 className={`px-2.5 py-1 rounded text-[9px] font-bold border transition-all ${
                   ltTemplate.widthPct >= 100
-                    ? "bg-amber-500/15 border-amber-500/40 text-amber-400"
-                    : "bg-slate-900 border-slate-700 text-slate-500 hover:text-white hover:border-slate-500"
+                    ? "bg-indigo-500/15 border-indigo-400/50 text-indigo-300"
+                    : "bg-black/40 border-white/[0.08] text-slate-500 hover:text-white hover:border-white/[0.25]"
                 }`}
               >
                 Apply
@@ -444,7 +444,7 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
             {ltTemplate.bgType === "image" && (
               <button
                 onClick={() => setShowLtImgPicker(true)}
-                className="w-full py-2 px-3 bg-slate-950 border border-slate-800 rounded-lg text-[10px] text-slate-400 flex items-center gap-2 hover:border-slate-600 transition-colors"
+                className="w-full py-2 px-3 bg-black border border-white/[0.06] rounded-lg text-[10px] text-slate-400 flex items-center gap-2 hover:border-white/[0.18] transition-colors"
               >
                 <ImageIcon size={11} />
                 <span className="truncate">{ltTemplate.bgImagePath ? ltTemplate.bgImagePath.split(/[/\\]/).pop() : "Choose image…"}</span>
@@ -458,10 +458,10 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
               <SliderRow label="Blur Amt" min={0} max={40} value={ltTemplate.bgBlurAmount} onChange={v => updateTpl({ bgBlurAmount: v })} unit="px" />
             )}
 
-            <div className="pt-2 border-t border-slate-800/40 space-y-2">
+            <div className="pt-2 border-t border-white/[0.06] space-y-2">
               <Row label="Box Shadow"><Toggle checked={ltTemplate.boxShadow} onChange={v => updateTpl({ boxShadow: v })} /></Row>
               {ltTemplate.boxShadow && (
-                <div className="space-y-2 pl-2 border-l-2 border-slate-800">
+                <div className="space-y-2 pl-2 border-l-2 border-white/[0.06]">
                   <Row label="Shadow Color">
                     <ColorSwatch value={ltTemplate.boxShadowColor} onChange={v => updateTpl({ boxShadowColor: v })} label="shadow-col" />
                   </Row>
@@ -475,7 +475,7 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
           <AccordionSection title="Borders & Accents" icon={Square}>
             <Row label="Accent Bar"><Toggle checked={ltTemplate.accentEnabled} onChange={v => updateTpl({ accentEnabled: v })} /></Row>
             {ltTemplate.accentEnabled && (
-              <div className="space-y-2 pl-2 border-l-2 border-slate-800">
+              <div className="space-y-2 pl-2 border-l-2 border-white/[0.06]">
                 <PillGroup
                   options={[
                     { value: "left", label: "L" },
@@ -493,10 +493,10 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
               </div>
             )}
 
-            <div className="pt-2 border-t border-slate-800/40 space-y-2">
+            <div className="pt-2 border-t border-white/[0.06] space-y-2">
               <Row label="Full Border"><Toggle checked={ltTemplate.borderEnabled} onChange={v => updateTpl({ borderEnabled: v })} /></Row>
               {ltTemplate.borderEnabled && (
-                <div className="space-y-2 pl-2 border-l-2 border-slate-800">
+                <div className="space-y-2 pl-2 border-l-2 border-white/[0.06]">
                   <Row label="Color">
                     <ColorSwatch value={ltTemplate.borderColor} onChange={v => updateTpl({ borderColor: v })} label="border-col" />
                   </Row>
@@ -514,7 +514,7 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
               <select
                 value={ltTemplate.primaryFont}
                 onChange={e => updateTpl({ primaryFont: e.target.value })}
-                className="w-full bg-slate-950 text-slate-300 text-[11px] p-1.5 rounded-lg border border-slate-800 outline-none"
+                className="w-full bg-black text-slate-300 text-[11px] p-1.5 rounded-lg border border-white/[0.06] outline-none"
               >
                 {FONTS.map(f => <option key={f} value={f}>{f}</option>)}
               </select>
@@ -533,12 +533,12 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
             </div>
 
             {/* Secondary */}
-            <div className="space-y-2 pt-3 border-t border-slate-800/40">
+            <div className="space-y-2 pt-3 border-t border-white/[0.06]">
               <p className="text-[9px] font-black uppercase tracking-widest text-amber-500/70">Secondary — Title / Line 2</p>
               <select
                 value={ltTemplate.secondaryFont}
                 onChange={e => updateTpl({ secondaryFont: e.target.value })}
-                className="w-full bg-slate-950 text-slate-300 text-[11px] p-1.5 rounded-lg border border-slate-800 outline-none"
+                className="w-full bg-black text-slate-300 text-[11px] p-1.5 rounded-lg border border-white/[0.06] outline-none"
               >
                 {FONTS.map(f => <option key={f} value={f}>{f}</option>)}
               </select>
@@ -557,10 +557,10 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
             </div>
 
             {/* Text Effects */}
-            <div className="pt-3 border-t border-slate-800/40 space-y-3">
+            <div className="pt-3 border-t border-white/[0.06] space-y-3">
               <Row label="Text Shadow"><Toggle checked={ltTemplate.textShadow} onChange={v => updateTpl({ textShadow: v })} /></Row>
               {ltTemplate.textShadow && (
-                <div className="space-y-2 pl-2 border-l-2 border-slate-800">
+                <div className="space-y-2 pl-2 border-l-2 border-white/[0.06]">
                   <Row label="Color"><ColorSwatch value={ltTemplate.textShadowColor} onChange={v => updateTpl({ textShadowColor: v })} label="tshadow-col" /></Row>
                   <SliderRow label="Blur" min={0} max={20} value={ltTemplate.textShadowBlur} onChange={v => updateTpl({ textShadowBlur: v })} unit="px" />
                 </div>
@@ -568,7 +568,7 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
 
               <Row label="Text Outline"><Toggle checked={ltTemplate.textOutline} onChange={v => updateTpl({ textOutline: v })} /></Row>
               {ltTemplate.textOutline && (
-                <div className="space-y-2 pl-2 border-l-2 border-slate-800">
+                <div className="space-y-2 pl-2 border-l-2 border-white/[0.06]">
                   <Row label="Color"><ColorSwatch value={ltTemplate.textOutlineColor} onChange={v => updateTpl({ textOutlineColor: v })} label="tout-col" /></Row>
                   <SliderRow label="Width" min={0.1} max={5} step={0.1} value={ltTemplate.textOutlineWidth} onChange={v => updateTpl({ textOutlineWidth: v })} unit="px" />
                 </div>
@@ -578,7 +578,7 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
                 <input
                   type="number" min={0} max={10} value={ltTemplate.maxLines}
                   onChange={e => updateTpl({ maxLines: parseInt(e.target.value) })}
-                  className="w-14 bg-slate-950 text-slate-300 text-[10px] px-2 py-1 rounded border border-slate-800 outline-none text-center"
+                  className="w-14 bg-black text-slate-300 text-[10px] px-2 py-1 rounded border border-white/[0.06] outline-none text-center"
                 />
               </Row>
             </div>
@@ -627,15 +627,15 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
                     type="text" value={ltTemplate.bannerBadgeText}
                     onChange={e => updateTpl({ bannerBadgeText: e.target.value })}
                     placeholder="LIVE"
-                    className="w-20 bg-slate-950 text-slate-300 text-[10px] px-2 py-1 rounded border border-slate-800 outline-none"
+                    className="w-20 bg-black text-slate-300 text-[10px] px-2 py-1 rounded border border-white/[0.06] outline-none"
                   />
                 </Row>
               )}
 
-              <div className="pt-2 border-t border-slate-800/40 space-y-2">
+              <div className="pt-2 border-t border-white/[0.06] space-y-2">
                 <Row label="Ticker Scroll"><Toggle checked={ltTemplate.scrollEnabled} onChange={v => updateTpl({ scrollEnabled: v })} /></Row>
                 {ltTemplate.scrollEnabled && (
-                  <div className="space-y-2 pl-2 border-l-2 border-slate-800">
+                  <div className="space-y-2 pl-2 border-l-2 border-white/[0.06]">
                     <Row label="Direction">
                       <PillGroup
                         options={[{ value: "rtl", label: "RTL" }, { value: "ltr", label: "LTR" }]}
@@ -648,14 +648,14 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
                       <input
                         type="text" value={ltTemplate.scrollSeparator}
                         onChange={e => updateTpl({ scrollSeparator: e.target.value })}
-                        className="w-20 bg-slate-950 text-slate-300 text-[10px] px-2 py-1 rounded border border-slate-800 outline-none"
+                        className="w-20 bg-black text-slate-300 text-[10px] px-2 py-1 rounded border border-white/[0.06] outline-none"
                       />
                     </Row>
                     <Row label="Cycles (0=∞)">
                       <input
                         type="number" min={0} max={100} value={ltTemplate.scrollCount}
                         onChange={e => updateTpl({ scrollCount: parseInt(e.target.value) })}
-                        className="w-14 bg-slate-950 text-slate-300 text-[10px] px-2 py-1 rounded border border-slate-800 outline-none text-center"
+                        className="w-14 bg-black text-slate-300 text-[10px] px-2 py-1 rounded border border-white/[0.06] outline-none text-center"
                       />
                     </Row>
                     <SliderRow label="Auto Hide" min={0} max={120} value={ltTemplate.autoHideSeconds} onChange={v => updateTpl({ autoHideSeconds: v })} unit="s" />
@@ -668,17 +668,17 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
       </div>
 
       {/* ── RIGHT: PREVIEW ───────────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col overflow-hidden bg-slate-950">
+      <div className="flex-1 flex flex-col overflow-hidden bg-black">
 
         {/* Preview toolbar */}
-        <div className="h-10 border-b border-slate-800 flex items-center justify-between px-4 shrink-0 bg-slate-900/30">
+        <div className="h-10 border-b border-white/[0.06] flex items-center justify-between px-4 shrink-0 bg-black/30">
           <div className="flex items-center gap-2">
             <Monitor size={13} className="text-slate-600" />
             <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Preview — 1920×1080</span>
           </div>
           <div className="flex items-center gap-3">
             {/* Preview mode */}
-            <div className="flex items-center gap-1 bg-slate-900 rounded-lg border border-slate-800 p-0.5">
+            <div className="flex items-center gap-1 bg-black/40 rounded-lg border border-white/[0.06] p-0.5">
               {([
                 { mode: "nameplate" as const, icon: User, label: "Nameplate" },
                 { mode: "lyrics" as const, icon: Music, label: "Lyrics" },
@@ -690,7 +690,7 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
                   title={label}
                   className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[9px] font-bold transition-all ${
                     previewMode === mode
-                      ? "bg-slate-700 text-amber-400"
+                      ? "bg-white/[0.12] text-amber-400"
                       : "text-slate-600 hover:text-slate-400"
                   }`}
                 >
@@ -701,13 +701,13 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
             </div>
 
             {/* Background */}
-            <div className="flex items-center gap-1 bg-slate-900 rounded-lg border border-slate-800 p-0.5">
+            <div className="flex items-center gap-1 bg-black/40 rounded-lg border border-white/[0.06] p-0.5">
               {(["dark", "green", "checkered"] as const).map(bg => (
                 <button
                   key={bg}
                   onClick={() => setLtPreviewBg(bg)}
                   className={`px-2.5 py-1 rounded text-[9px] font-bold uppercase transition-all ${
-                    ltPreviewBg === bg ? "bg-slate-700 text-amber-400" : "text-slate-600 hover:text-slate-400"
+                    ltPreviewBg === bg ? "bg-white/[0.12] text-amber-400" : "text-slate-600 hover:text-slate-400"
                   }`}
                 >
                   {bg}

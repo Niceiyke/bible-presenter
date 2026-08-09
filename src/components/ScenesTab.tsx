@@ -37,7 +37,7 @@ export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: 
             onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") handleCapture(); }}
             placeholder={t("scenes.namePlaceholder")}
-            className="flex-1 bg-slate-900 border border-slate-700 rounded-md px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-amber-500"
+            className="flex-1 bg-black/40 border border-white/[0.08] rounded-md px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-400/70"
           />
           <button
             onClick={handleCapture}
@@ -48,7 +48,7 @@ export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: 
         </div>
 
         {scenes.length === 0 ? (
-          <div className="text-center py-10 border border-dashed border-slate-800 rounded-lg">
+          <div className="text-center py-10 border border-dashed border-white/[0.06] rounded-lg">
             <Zap size={24} className="text-slate-700 mx-auto mb-2" />
             <p className="text-slate-600 text-sm">{t("scenes.empty")}</p>
             <p className="text-slate-700 text-xs mt-1">{t("scenes.emptyHint")}</p>
@@ -56,7 +56,7 @@ export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: 
         ) : (
           <div className="space-y-1.5">
             {scenes.map((s) => (
-              <div key={s.id} className="group flex items-center gap-3 px-3 py-2.5 rounded-lg bg-slate-950/60 border border-slate-800/60 hover:border-slate-700 transition-all">
+              <div key={s.id} className="group flex items-center gap-3 px-3 py-2.5 rounded-lg bg-black/30 border border-white/[0.08] hover:border-white/[0.15] transition-all">
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-bold text-slate-200 truncate">{s.name}</p>
                   <p className="text-[10px] text-slate-600 uppercase font-black">
@@ -75,7 +75,7 @@ export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: 
                   </button>
                   <button
                     onClick={() => deleteScene(s.id)}
-                    className="p-1.5 rounded-md bg-slate-800 hover:bg-red-900/40 text-slate-500 hover:text-red-300 transition-all"
+                    className="p-1.5 rounded-md bg-white/[0.05] hover:bg-red-500/20 text-slate-500 hover:text-red-300 transition-all"
                     title={t("scenes.delete")}
                   >
                     <Trash2 size={13} />

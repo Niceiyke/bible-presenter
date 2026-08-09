@@ -73,14 +73,14 @@ export function MusicPlayer() {
   const currentTrack = currentTrackIdx !== null ? audioFiles[currentTrackIdx] : null;
 
   return (
-    <div className="bg-slate-900 border-t border-slate-800 px-4 py-2 flex items-center gap-6 shadow-2xl h-14">
+    <div className="bg-black/50 backdrop-blur-xl border-t border-white/[0.06] px-4 py-2 flex items-center gap-6 h-14">
       {/* Track Info */}
       <div className="flex items-center gap-3 w-64 shrink-0 overflow-hidden">
-        <div className="w-10 h-10 bg-amber-500/10 rounded-lg flex items-center justify-center border border-amber-500/20">
-          <Music size={18} className="text-amber-500" />
+        <div className="w-10 h-10 bg-gradient-to-br from-amber-400/15 to-indigo-500/15 rounded-lg flex items-center justify-center border border-white/10 shadow-inner">
+          <Music size={18} className="text-amber-400" />
         </div>
         <div className="flex flex-col min-w-0">
-          <p className="text-xs font-bold text-slate-200 truncate">
+          <p className="text-xs font-semibold text-slate-200 truncate">
             {currentTrack?.name || "No track selected"}
           </p>
           <p className="text-[10px] text-slate-500 truncate">
@@ -94,7 +94,7 @@ export function MusicPlayer() {
         <div className="flex items-center justify-center gap-4">
           <button 
             onClick={() => setIsShuffle(!isShuffle)}
-            className={`p-1 transition-colors ${isShuffle ? "text-amber-500" : "text-slate-600 hover:text-slate-400"}`}
+            className={`p-1 transition-colors ${isShuffle ? "text-indigo-400" : "text-slate-600 hover:text-slate-400"}`}
             title="Shuffle"
           >
             <Shuffle size={14} />
@@ -104,7 +104,7 @@ export function MusicPlayer() {
           </button>
           <button 
             onClick={handleTogglePlay}
-            className="w-8 h-8 bg-amber-500 hover:bg-amber-400 text-black rounded-full flex items-center justify-center shadow-lg transition-all"
+            className="w-8 h-8 bg-gradient-to-br from-amber-400 to-amber-600 hover:from-amber-300 hover:to-amber-500 text-black rounded-full flex items-center justify-center shadow-lg shadow-amber-500/25 transition-all active:scale-90"
           >
             {isPlaying ? <Pause size={18} /> : <Play size={18} className="ml-0.5" />}
           </button>
@@ -113,7 +113,7 @@ export function MusicPlayer() {
           </button>
           <button 
             onClick={() => setIsLooping(!isLooping)}
-            className={`p-1 transition-colors ${isLooping ? "text-amber-500" : "text-slate-600 hover:text-slate-400"}`}
+            className={`p-1 transition-colors ${isLooping ? "text-indigo-400" : "text-slate-600 hover:text-slate-400"}`}
             title="Loop"
           >
             <Repeat size={14} />
@@ -130,7 +130,7 @@ export function MusicPlayer() {
             step="0.1"
             value={progress}
             onChange={handleSeek}
-            className="flex-1 h-1 bg-slate-800 accent-amber-500 rounded-full cursor-pointer"
+            className="flex-1 h-1 bg-white/[0.05] accent-indigo-400 rounded-full cursor-pointer"
           />
           <span className="text-[9px] font-mono text-slate-600 w-8">
             {audioRef.current && isFinite(audioRef.current.duration) ? Math.floor(audioRef.current.duration / 60) : 0}:{String(Math.floor((audioRef.current?.duration || 0) % 60)).padStart(2, '0')}
@@ -150,7 +150,7 @@ export function MusicPlayer() {
           step="0.01"
           value={volume}
           onChange={(e) => setVolume(parseFloat(e.target.value))}
-          className="flex-1 h-1 bg-slate-800 accent-slate-400 rounded-full cursor-pointer"
+          className="flex-1 h-1 bg-white/[0.05] accent-slate-400 rounded-full cursor-pointer"
         />
       </div>
 
@@ -169,12 +169,12 @@ export function MusicPlayer() {
 
       {/* Mini Playlist Trigger */}
       <div className="relative group">
-        <button className="p-2 text-slate-500 hover:text-white transition-colors border border-slate-800 rounded-lg bg-slate-900/50">
+        <button className="p-2 text-slate-500 hover:text-white transition-colors border border-white/[0.08] rounded-lg bg-white/[0.03] hover:bg-white/[0.06]">
           <Music size={16} />
         </button>
-        <div className="absolute bottom-full right-0 mb-2 w-64 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl overflow-hidden opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto transition-all translate-y-2 group-hover:translate-y-0 z-50">
-          <div className="p-3 border-b border-slate-800 bg-slate-950">
-            <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Audio Library</h4>
+        <div className="absolute bottom-full right-0 mb-2 w-64 bg-black/80 backdrop-blur-xl border border-white/10 rounded-xl shadow-float overflow-hidden opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto transition-all translate-y-2 group-hover:translate-y-0 z-50">
+          <div className="p-3 border-b border-white/[0.06] bg-white/[0.03]">
+            <h4 className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Audio Library</h4>
           </div>
           <div className="max-h-64 overflow-y-auto p-1 custom-scrollbar">
             {audioFiles.length === 0 ? (
@@ -185,12 +185,12 @@ export function MusicPlayer() {
                   key={track.id}
                   onClick={() => { setCurrentTrackIdx(i); setIsPlaying(true); }}
                   className={`w-full text-left px-3 py-2 rounded-lg text-[10px] transition-all flex items-center gap-2 ${
-                    currentTrackIdx === i ? "bg-amber-500/10 text-amber-500" : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                    currentTrackIdx === i ? "bg-indigo-500/15 text-indigo-300" : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
                   }`}
                 >
                   <span className="shrink-0 w-4 text-center text-slate-600">{i + 1}</span>
                   <span className="truncate flex-1">{track.name}</span>
-                  {currentTrackIdx === i && isPlaying && <div className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-pulse" />}
+                  {currentTrackIdx === i && isPlaying && <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full dot-flash" />}
                 </button>
               ))
             )}

@@ -97,8 +97,8 @@ export function PropertiesPanel({
   ];
 
   return (
-    <aside className="w-60 border-l border-white/8 bg-[#131326] flex flex-col overflow-hidden shrink-0">
-      <div className="px-3 py-2.5 border-b border-white/8 flex items-center justify-between shrink-0">
+    <aside className="w-60 border-l border-white/[0.06] bg-slate-900/70 backdrop-blur-xl flex flex-col overflow-hidden shrink-0">
+      <div className="px-3 py-2.5 border-b border-white/[0.06] flex items-center justify-between shrink-0">
         <span className="text-[8px] font-black uppercase tracking-widest text-slate-600">
           {editingMasterId ? "Master layout" : activeEl ? `${activeEl.kind} element` : selectedCount > 1 ? `${selectedCount} elements` : "Slide"}
         </span>
@@ -107,7 +107,7 @@ export function PropertiesPanel({
 
       {/* P4.2 — master edit banner */}
       {editingMasterId && (
-        <div className="px-3 py-2 border-b border-amber-500/20 bg-amber-500/10 flex items-center justify-between shrink-0">
+        <div className="px-3 py-2 border-b border-indigo-400/25 bg-indigo-500/10 flex items-center justify-between shrink-0">
           <span className="text-[9px] text-amber-300 font-bold">
             Editing master — style changes cascade to slides
           </span>
@@ -119,7 +119,7 @@ export function PropertiesPanel({
 
       {/* P3.7 — tab bar. Sticky under the header; the active tab content
           scrolls independently below. */}
-      <div className="flex border-b border-white/8 shrink-0">
+      <div className="flex border-b border-white/[0.06] shrink-0">
         {TABS.map(t => (
           <button
             key={t.id}
@@ -165,7 +165,7 @@ export function PropertiesPanel({
             </button>
             {bg.value && (
               <>
-                <div className="flex items-center justify-between bg-white/4 p-2 rounded-lg border border-white/8 mt-1">
+                <div className="flex items-center justify-between bg-white/4 p-2 rounded-lg border border-white/[0.06] mt-1">
                   <span className="text-[9px] text-slate-500 truncate">{bg.value.split(/[/\\]/).pop()}</span>
                   <button onClick={() => onSetBackground({ type: "color", value: "#1a1a2e" })} className="text-red-400 text-[9px] font-bold ml-2 shrink-0 hover:text-red-300">✕</button>
                 </div>
@@ -205,7 +205,7 @@ export function PropertiesPanel({
               {bg.value ? "Change Video…" : "Set Video…"}
             </button>
             {bg.value && (
-              <div className="flex flex-col gap-2 bg-white/4 p-2 rounded-lg border border-white/8 mt-1">
+              <div className="flex flex-col gap-2 bg-white/4 p-2 rounded-lg border border-white/[0.06] mt-1">
                 <div className="flex items-center justify-between">
                   <span className="text-[9px] text-slate-500 truncate">{bg.value.split(/[/\\]/).pop()}</span>
                   <button onClick={() => onSetBackground({ type: "color", value: "#1a1a2e" })} className="text-red-400 text-[9px] font-bold ml-2 shrink-0 hover:text-red-300">✕</button>
@@ -257,7 +257,7 @@ export function PropertiesPanel({
                 <input type="number" min={0} max={360} value={bg.angle} onChange={e => onSetBackground({ ...bg, angle: Number(e.target.value) })} onKeyDown={e => e.stopPropagation()} className="w-12 bg-white/6 border border-white/10 rounded-lg px-2 py-1 text-xs text-white outline-none focus:border-indigo-500/50 transition-colors" />
                 <span className="text-[9px] text-slate-600">°</span>
               </div>
-              <div className="h-6 rounded-lg border border-white/8" style={{ background: `linear-gradient(${bg.angle}deg, ${bg.from}, ${bg.to})` }} />
+              <div className="h-6 rounded-lg border border-white/[0.06]" style={{ background: `linear-gradient(${bg.angle}deg, ${bg.from}, ${bg.to})` }} />
             </div>
           )}
         </Panel>
@@ -333,7 +333,7 @@ export function PropertiesPanel({
         <Panel label="Create Master">
           <button
             onClick={() => { const name = window.prompt("Master name", `Master ${(masters?.length ?? 0) + 1}`); if (name !== null) onCreateMaster(name || `Master ${(masters?.length ?? 0) + 1}`); }}
-            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-amber-500/15 hover:bg-amber-500/25 text-amber-400 hover:text-amber-300 text-[10px] font-bold rounded-lg transition-all border border-amber-500/20"
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 hover:text-indigo-200 text-[10px] font-bold rounded-lg transition-all border border-indigo-400/25"
           >
             <Layers size={12} /> Create Master from this Slide
           </button>
@@ -343,7 +343,7 @@ export function PropertiesPanel({
         </Panel>
         <Panel label="Masters">
           {(masters && masters.length > 0) ? masters.map(m => (
-            <div key={m.id} className="flex items-center justify-between bg-white/4 p-2 rounded-lg border border-white/8">
+            <div key={m.id} className="flex items-center justify-between bg-white/4 p-2 rounded-lg border border-white/[0.06]">
               <div className="min-w-0">
                 <p className="text-[10px] font-bold text-slate-300 truncate">{m.name}</p>
                 <p className="text-[8px] text-slate-600">{m.elements.length} elements</p>
@@ -365,11 +365,11 @@ export function PropertiesPanel({
         {activeEl && selectedCount === 1 && <>
           <div className="flex gap-1.5">
             <button onClick={onLock}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[10px] font-bold transition-all border ${activeEl.locked ? "bg-amber-500/15 border-amber-500/30 text-amber-400" : "bg-white/6 border-white/8 text-slate-400 hover:text-white"}`}>
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[10px] font-bold transition-all border ${activeEl.locked ? "bg-indigo-500/15 border-indigo-400/35 text-indigo-300" : "bg-white/6 border-white/[0.06] text-slate-400 hover:text-white"}`}>
               {activeEl.locked ? <Lock size={11} /> : <Unlock size={11} />}{activeEl.locked ? "Locked" : "Lock"}
             </button>
-            <button onClick={onDuplicateElement} className="px-3 py-2 bg-white/6 hover:bg-white/12 border border-white/8 text-slate-400 hover:text-white rounded-xl transition-all" title="Duplicate"><Copy size={13} /></button>
-            <button onClick={onDeleteElement} className="px-3 py-2 bg-white/6 hover:bg-red-500/20 border border-white/8 text-slate-500 hover:text-red-400 rounded-xl transition-all" title="Delete"><Trash2 size={13} /></button>
+            <button onClick={onDuplicateElement} className="px-3 py-2 bg-white/6 hover:bg-white/12 border border-white/[0.06] text-slate-400 hover:text-white rounded-xl transition-all" title="Duplicate"><Copy size={13} /></button>
+            <button onClick={onDeleteElement} className="px-3 py-2 bg-white/6 hover:bg-red-500/20 border border-white/[0.06] text-slate-500 hover:text-red-400 rounded-xl transition-all" title="Delete"><Trash2 size={13} /></button>
           </div>
 
           <Panel label="Position & Size">
@@ -502,13 +502,13 @@ export function PropertiesPanel({
             <div className="grid grid-cols-2 gap-1 mt-1">
               <button
                 onClick={() => onUpdateElement(activeEl.id, { flipX: !activeEl.flipX })}
-                className={`py-2 text-[10px] font-bold rounded-lg transition-all ${activeEl.flipX ? "bg-amber-500/30 text-white" : "bg-white/6 text-slate-500 hover:text-white hover:bg-white/10"}`}
+                className={`py-2 text-[10px] font-bold rounded-lg transition-all ${activeEl.flipX ? "bg-indigo-500/30 text-white" : "bg-white/6 text-slate-500 hover:text-white hover:bg-white/10"}`}
               >
                 Flip H
               </button>
               <button
                 onClick={() => onUpdateElement(activeEl.id, { flipY: !activeEl.flipY })}
-                className={`py-2 text-[10px] font-bold rounded-lg transition-all ${activeEl.flipY ? "bg-amber-500/30 text-white" : "bg-white/6 text-slate-500 hover:text-white hover:bg-white/10"}`}
+                className={`py-2 text-[10px] font-bold rounded-lg transition-all ${activeEl.flipY ? "bg-indigo-500/30 text-white" : "bg-white/6 text-slate-500 hover:text-white hover:bg-white/10"}`}
               >
                 Flip V
               </button>
@@ -727,7 +727,7 @@ export function PropertiesPanel({
               <Layers size={12} /> Group ({selectedCount} elements)
             </button>
             {hasGroup && (
-              <button onClick={onUngroup} className="w-full flex items-center justify-center gap-1.5 py-2 bg-amber-500/15 hover:bg-amber-500/25 text-amber-400 text-[10px] font-bold rounded-lg transition-all border border-amber-500/20">
+              <button onClick={onUngroup} className="w-full flex items-center justify-center gap-1.5 py-2 bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 text-[10px] font-bold rounded-lg transition-all border border-indigo-400/25">
                 <Layers size={12} /> Ungroup
               </button>
             )}

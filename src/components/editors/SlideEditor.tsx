@@ -63,7 +63,7 @@ handleImageSelect, handleVideoSelect, handleBgVideoSelect, handleBgImageSelect, 
   } = useSlideEditor({ initialPres, onClose });
 
   return (
-    <div className="fixed inset-0 z-[60] bg-[#0e0e1c] flex flex-col font-sans">
+    <div className="fixed inset-0 z-[60] bg-[#0e0e1c] flex flex-col font-sans app-ambient">
 
       {/* ══ TOP BAR ══════════════════════════════════════════════════════════ */}
       <AppHeader
@@ -266,7 +266,7 @@ function LivePreviewPip({
   return (
     <div
       ref={boxRef}
-      className="absolute bottom-4 right-4 w-[min(420px,32vw)] aspect-video rounded-xl overflow-hidden shadow-2xl shadow-black/60 border border-white/20 z-[80]"
+      className="absolute bottom-4 right-4 w-[min(420px,32vw)] aspect-video rounded-xl overflow-hidden shadow-float ring-1 ring-white/20 z-[80]"
       title="Live preview (Space) — not broadcast"
     >
       {slide ? (
@@ -280,12 +280,12 @@ function LivePreviewPip({
       ) : null}
       <button
         onClick={onClose}
-        className="absolute top-1.5 right-1.5 p-1 bg-black/60 hover:bg-black/80 text-white rounded-full"
+        className="absolute top-1.5 right-1.5 p-1 bg-black/60 hover:bg-black/80 text-white rounded-full transition-all active:scale-90"
         title="Close preview (Esc)"
       >
         <X size={12} />
       </button>
-      <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 bg-black/60 text-[8px] text-emerald-300 rounded">
+      <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 bg-black/60 text-[8px] text-emerald-300 rounded backdrop-blur-sm">
         ● Preview — not broadcast
       </span>
     </div>

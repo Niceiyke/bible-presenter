@@ -428,9 +428,14 @@ export function OutputWindow() {
 
   const ReferenceTag = liveItem?.type === "Verse" ? (
     <p
-      className="uppercase tracking-widest font-bold shrink-0"
-      style={{ color: refColor, fontSize: `${refFontSize * windowScale}pt`, fontFamily: refFontFamily }}
+      className="uppercase tracking-[0.18em] font-bold shrink-0 flex items-center gap-3"
+      style={{
+        color: refColor, fontSize: `${refFontSize * windowScale}pt`, fontFamily: refFontFamily,
+        textShadow: "0 2px 10px rgba(0,0,0,0.4)",
+      }}
     >
+      <span aria-hidden className="w-8 lg:w-12 h-px shrink-0" style={{ background: `linear-gradient(90deg, transparent, ${refColor}80)` }} />
+      <span className="shrink-0">
       {liveItem.data.book}{" "}
       <span style={{ fontSize: `${cvFontSize}pt`, fontFamily: cvFontFamily, color: cvColor }}>
         {liveItem.data.chapter}:{liveItem.data.verse}
@@ -442,12 +447,14 @@ export function OutputWindow() {
             fontSize: `${(settings.version_font_size ?? Math.round(refFontSize * 0.65)) * windowScale}pt`,
             fontFamily: settings.version_font_family ?? refFontFamily,
             color: (settings.version_color && settings.version_color !== "") ? settings.version_color : undefined,
-            opacity: (settings.version_color && settings.version_color !== "") ? 1 : 0.6,
+            opacity: (settings.version_color && settings.version_color !== "") ? 1 : 0.5,
           }}
         >
           ({liveItem.data.version})
         </span>
       )}
+      </span>
+      <span aria-hidden className="w-8 lg:w-12 h-px shrink-0" style={{ background: `linear-gradient(90deg, ${refColor}80, transparent)` }} />
     </p>
   ) : null;
 
@@ -544,6 +551,11 @@ export function OutputWindow() {
         />
       )}
 
+      {/* Subtle vignette — keeps projected text legible on any background */}
+      <div className="absolute inset-0 z-[5] pointer-events-none"
+        style={{ background: "radial-gradient(ellipse 100% 90% at 50% 50%, transparent 58%, rgba(0,0,0,0.28) 100%)" }}
+      />
+
       <AnimatePresence mode="wait">
         {liveItem ? (
           <motion.div
@@ -566,11 +578,16 @@ export function OutputWindow() {
                   {isTop && ReferenceTag}
                   <div className="relative w-full flex flex-col items-center">
                     <h1
-                      className="leading-tight drop-shadow-2xl"
+                      className="leading-tight"
                       style={{
                         color: colors.verseText,
                         fontSize: `${(fittedFontPt ?? (settings.font_size * windowScale))}pt`,
                         fontFamily: settings.verse_font_family ?? "Georgia, serif",
+                        letterSpacing: "0.01em",
+                        textWrap: "balance",
+                        textShadow: settings.background?.type !== "None" && settings.background?.type !== "Color"
+                          ? "0 2px 24px rgba(0,0,0,0.55)"
+                          : "0 2px 12px rgba(0,0,0,0.25)",
                       }}
                     >
                       {liveItem.data.text}
@@ -695,7 +712,7 @@ export function OutputWindow() {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.4 }}
           >
-            <span className="font-serif text-2xl italic select-none" style={{ color: colors.waitingText }}>
+            <span className="font-serif text-2xl italic select-none px-6 py-3 rounded-full bg-black/20 backdrop-blur-sm ring-1 ring-white/5" style={{ color: colors.waitingText }}>
               Waiting for projection...
             </span>
           </motion.div>

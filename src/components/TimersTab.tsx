@@ -57,7 +57,7 @@ export function TimersTab({ onStage, onLive }: TimersTabProps) {
             <button
               key={t}
               onClick={() => setTimerType(t)}
-              className={`flex-1 py-1.5 text-[9px] font-black uppercase rounded-lg border transition-all ${timerType === t ? "bg-cyan-600 border-cyan-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500"}`}
+              className={`flex-1 py-1.5 text-[9px] font-black uppercase rounded-lg border transition-all ${timerType === t ? "bg-cyan-600 border-cyan-500 text-white" : "bg-white/[0.05] border-white/[0.08] text-slate-400 hover:border-white/[0.25]"}`}
             >
               {t}
             </button>
@@ -79,7 +79,7 @@ export function TimersTab({ onStage, onLive }: TimersTabProps) {
                 <input
                   type="number" min={0} max={max} value={val}
                   onChange={(e) => (setter as any)((prev: number) => parseInt(e.target.value) || 0)}
-                  className="w-full bg-slate-800 text-slate-200 text-center font-mono text-sm rounded border border-slate-700 py-1"
+                  className="w-full bg-white/[0.05] text-slate-200 text-center font-mono text-sm rounded border border-white/[0.08] py-1"
                 />
               </div>
             ))}
@@ -93,7 +93,7 @@ export function TimersTab({ onStage, onLive }: TimersTabProps) {
           value={timerLabel}
           onChange={(e) => setTimerLabel(e.target.value)}
           placeholder="Service Countdown, etc."
-          className="w-full bg-slate-800 text-slate-200 text-sm rounded border border-slate-700 px-3 py-2"
+          className="w-full bg-white/[0.05] text-slate-200 text-sm rounded border border-white/[0.08] px-3 py-2"
         />
       </div>
 
@@ -110,7 +110,7 @@ export function TimersTab({ onStage, onLive }: TimersTabProps) {
           </button>
           <button
             onClick={handleReset}
-            className="w-12 h-12 flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-xl border border-slate-700 transition-all"
+            className="w-12 h-12 flex items-center justify-center bg-white/[0.05] hover:bg-white/[0.1] text-slate-400 rounded-xl border border-white/[0.08] transition-all"
             title="Reset"
           >
             <RefreshCcw size={18} />
@@ -120,7 +120,7 @@ export function TimersTab({ onStage, onLive }: TimersTabProps) {
         <div className="grid grid-cols-2 gap-2 mt-2">
           <button
             onClick={() => onStage({ type: "Timer", data: makeTimerData(false) })}
-            className="py-2 bg-slate-700 hover:bg-slate-600 text-white text-[10px] font-bold rounded-lg transition-all"
+            className="py-2 bg-white/[0.12] hover:bg-white/[0.14] text-white text-[10px] font-bold rounded-lg transition-all"
           >
             STAGE PREVIEW
           </button>

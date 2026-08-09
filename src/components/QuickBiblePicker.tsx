@@ -88,7 +88,7 @@ export function QuickBiblePicker({
   return (
     <div className="flex flex-col gap-1.5">
       <div className="relative">
-        <div className={`flex items-center gap-1.5 bg-slate-800 border rounded-lg px-2 py-1.5 focus-within:ring-1 focus-within:ring-amber-500 transition-all ${suggestions.length > 0 ? "border-amber-500/50" : "border-slate-700"}`}>
+        <div className={`flex items-center gap-1.5 bg-white/[0.05] border rounded-lg px-2 py-1.5 focus-within:ring-1 focus-within:ring-indigo-400/70 transition-all ${suggestions.length > 0 ? "border-amber-500/50" : "border-white/[0.08]"}`}>
           {lockedBook ? (
             <>
               <span className="flex items-center gap-1 bg-amber-500/20 text-amber-400 text-xs font-bold px-2 py-0.5 rounded shrink-0">
@@ -118,12 +118,12 @@ export function QuickBiblePicker({
           )}
         </div>
         {suggestions.length > 0 && !lockedBook && (
-          <div className="absolute top-full left-0 right-0 mt-0.5 bg-slate-800 border border-slate-600 rounded-lg shadow-2xl z-30 overflow-hidden">
+          <div className="absolute top-full left-0 right-0 mt-0.5 bg-white/[0.05] border border-white/[0.14] rounded-lg shadow-2xl z-30 overflow-hidden">
             {suggestions.map((book, i) => (
               <button
                 key={book}
                 onMouseDown={(e) => { e.preventDefault(); confirmBook(book); }}
-                className={`w-full text-left px-3 py-2 text-xs transition-all ${i === activeSuggIdx ? "bg-amber-500/20 text-amber-400 font-bold" : "text-slate-300 hover:bg-slate-700"}`}
+                className={`w-full text-left px-3 py-2 text-xs transition-all ${i === activeSuggIdx ? "bg-indigo-500/20 text-indigo-300 font-bold" : "text-slate-300 hover:bg-white/[0.1]"}`}
               >
                 {book}
               </button>

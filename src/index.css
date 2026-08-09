@@ -1,8 +1,171 @@
 @import "tailwindcss";
 
+@theme {
+  /* Brand accent — indigo/violet, reserved for selection, nav + primary focus */
+  --color-brand-50: #eef2ff;
+  --color-brand-100: #e0e7ff;
+  --color-brand-200: #c7d2fe;
+  --color-brand-300: #a5b4fc;
+  --color-brand-400: #818cf8;
+  --color-brand-500: #6366f1;
+  --color-brand-600: #4f46e5;
+  --color-brand-700: #4338ca;
+  --color-brand-800: #3730a3;
+  --color-brand-900: #312e81;
+
+  /* Live accent — soft violet-blue used for "LIVE / ON AIR" */
+  --color-live-400: #67e8f9;
+  --color-live-500: #22d3ee;
+  --color-live-600: #0891b2;
+
+  /* Typography — modern system stack (no external fetch, CSP-safe) */
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Inter", sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+
+  /* Glow shadows — premium depth without heavy blur cost */
+  --shadow-glow-brand: 0 0 0 1px rgba(99, 102, 241, 0.15), 0 8px 30px -8px rgba(99, 102, 241, 0.45);
+  --shadow-glow-live: 0 0 0 1px rgba(34, 211, 238, 0.15), 0 8px 30px -8px rgba(34, 211, 238, 0.5);
+  --shadow-glow-amber: 0 0 0 1px rgba(245, 158, 11, 0.18), 0 8px 30px -8px rgba(245, 158, 11, 0.45);
+  --shadow-float: 0 12px 40px -12px rgba(0, 0, 0, 0.6);
+}
+
 html, body, #root {
   height: 100%;
   overflow: hidden;
+}
+
+body {
+  background: #020617;
+  color-scheme: dark;
+  -webkit-font-smoothing: antialiased;
+  font-family: var(--font-sans);
+}
+
+::selection {
+  background: rgba(129, 140, 248, 0.35);
+  color: #eef2ff;
+}
+
+/* Subtle ambient glow behind the operator surface */
+.app-ambient {
+  background:
+    radial-gradient(1200px 800px at 85% -10%, rgba(79, 70, 229, 0.14), transparent 55%),
+    radial-gradient(900px 700px at -10% 110%, rgba(8, 145, 178, 0.10), transparent 55%),
+    radial-gradient(700px 500px at 50% 120%, rgba(245, 158, 11, 0.05), transparent 60%),
+    #020617;
+}
+
+/* Premium focused panel surface */
+.surface-panel {
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.55), rgba(15, 23, 42, 0.85));
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  box-shadow: var(--shadow-float);
+  backdrop-filter: blur(10px);
+}
+
+.surface-card {
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.35), rgba(15, 23, 42, 0.55));
+  border: 1px solid rgba(148, 163, 184, 0.10);
+  backdrop-filter: blur(6px);
+}
+
+/* Spotlight frame — used on preview surfaces */
+.preview-frame {
+  position: relative;
+  border-radius: 0.65rem;
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.08);
+}
+.preview-frame--staged::after {
+  content: "";
+  position: absolute; inset: -4px; border-radius: inherit; pointer-events: none;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  filter: blur(2px);
+}
+.preview-frame--live::after {
+  content: "";
+  position: absolute; inset: -5px; border-radius: inherit; pointer-events: none;
+  border: 1px solid rgba(34, 211, 238, 0.5);
+  filter: blur(4px);
+  animation: preview-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes preview-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+/* Shiny hairline top edge */
+.hairline-top {
+  position: relative;
+}
+.hairline-top::before {
+  content: "";
+  position: absolute; top: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(129, 140, 248, 0.35), transparent);
+  pointer-events: none;
+}
+
+/* Gradient brand text (logo mark) */
+.text-grad-brand {
+  background: linear-gradient(120deg, #a5b4fc, #6366f1 45%, #22d3ee);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.text-grad-amber {
+  background: linear-gradient(120deg, #fcd34d, #f59e0b 60%, #fb923c);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Soft keyframe for labels/status */
+@keyframes dot-flash {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+.dot-flash { animation: dot-flash 1.6s ease-in-out infinite; }
+
+/* Fade-in for panel mounting */
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.rise-in { animation: rise-in 0.28s cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* Base polish inherited by every tab/panel (settings, songs, editor, etc.) */
+@layer base {
+  button:focus-visible,
+  a:focus-visible,
+  [role="button"]:focus-visible {
+    outline: 2px solid rgba(129, 140, 248, 0.6);
+    outline-offset: 2px;
+  }
+
+  input[type="text"],
+  input[type="search"],
+  input[type="number"],
+  input[type="email"],
+  input[type="url"],
+  input[type="password"],
+  textarea {
+    color-scheme: dark;
+  }
+
+  /* Sweep the default "hover-only" controls up to active-scale + glow on focus */
+  button {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* Range sliders — uniform premium track across the app */
+input[type="range"] {
+  accent-color: #f59e0b;
+  cursor: pointer;
+}
+input[type="range"]:focus-visible {
+  outline: 2px solid rgba(129, 140, 248, 0.55);
+  outline-offset: 2px;
 }
 
 /* Native `<select>` dropdowns (and their option lists) must follow the
@@ -105,4 +268,21 @@ select option {
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: rgba(100, 116, 139, 0.5);
+}
+
+/* Premium native scrollbar (matches all dark surfaces) */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.6);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.35);
+  border-radius: 10px;
+  border: 2px solid rgba(15, 23, 42, 0.6);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(129, 140, 248, 0.45);
 }

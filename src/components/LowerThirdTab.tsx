@@ -105,10 +105,10 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
   }
 
   return (
-    <div className="flex flex-col gap-1.5 border border-slate-700/60 rounded-xl overflow-hidden">
+    <div className="flex flex-col gap-1.5 border border-white/[0.08] rounded-xl overflow-hidden">
       {/* Header */}
       <button
-        className="flex items-center justify-between px-3 py-2 bg-slate-800/60 text-left"
+        className="flex items-center justify-between px-3 py-2 bg-white/[0.04] text-left"
         onClick={() => setCollapsed(p => !p)}
       >
         <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
@@ -136,7 +136,7 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
             return (
               <div
                 key={p.id}
-                className={`flex items-center gap-2 bg-slate-900 border rounded-lg px-2 py-1.5 transition-colors ${isActive ? "border-amber-500/50 bg-amber-500/5" : "border-slate-800"}`}
+                className={`flex items-center gap-2 bg-black/40 border rounded-lg px-2 py-1.5 transition-colors ${isActive ? "border-indigo-400/60 bg-indigo-500/10" : "border-white/[0.06]"}`}
               >
                 <span className={`shrink-0 text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${isNp ? "bg-blue-900/40 text-blue-400" : "bg-purple-900/40 text-purple-400"}`}>
                   {isNp ? "NP" : "FT"}
@@ -170,12 +170,12 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
           {!addOpen ? (
             <button
               onClick={() => setAddOpen(true)}
-              className="w-full text-[10px] font-bold text-slate-500 hover:text-slate-300 border border-dashed border-slate-700 rounded-lg py-1.5 transition-all"
+              className="w-full text-[10px] font-bold text-slate-500 hover:text-slate-300 border border-dashed border-white/[0.08] rounded-lg py-1.5 transition-all"
             >
               + New Preset
             </button>
           ) : (
-            <div className="flex flex-col gap-1.5 bg-slate-900 border border-slate-700 rounded-xl p-2.5">
+            <div className="flex flex-col gap-1.5 bg-black/40 border border-white/[0.08] rounded-xl p-2.5">
               <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">New Preset</p>
 
               <div className="flex gap-1">
@@ -183,7 +183,7 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
                   <button
                     key={m}
                     onClick={() => setSaveMode(m)}
-                    className={`flex-1 text-[9px] font-black py-1.5 rounded-md transition-all ${saveMode === m ? "bg-amber-600 text-black" : "bg-slate-800 text-slate-400"}`}
+                    className={`flex-1 text-[9px] font-black py-1.5 rounded-md transition-all ${saveMode === m ? "bg-amber-600 text-black" : "bg-white/[0.05] text-slate-400"}`}
                   >
                     {m === "nameplate" ? "Nameplate" : "Free Text"}
                   </button>
@@ -193,7 +193,7 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
               <div className="space-y-1.5">
                 <p className="text-[8px] font-bold text-slate-600 uppercase">Preset Label</p>
                 <input
-                  className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 focus:outline-none focus:border-amber-500/50"
+                  className="w-full bg-white/[0.05] text-slate-200 text-xs rounded-md px-2 py-1.5 border border-white/[0.08] placeholder-slate-600 focus:outline-none focus:border-indigo-400/70/50"
                   placeholder="Preset name (e.g. Host Nameplate)…"
                   value={saveLabel}
                   onChange={e => setSaveLabel(e.target.value)}
@@ -203,7 +203,7 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
               <div className="space-y-1.5">
                 <p className="text-[8px] font-bold text-slate-600 uppercase">Style Template</p>
                 <select
-                  className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 focus:outline-none focus:border-amber-500/50"
+                  className="w-full bg-white/[0.05] text-slate-200 text-xs rounded-md px-2 py-1.5 border border-white/[0.08] focus:outline-none focus:border-indigo-400/70/50"
                   value={saveTemplateId}
                   onChange={e => setSaveTemplateId(e.target.value)}
                 >
@@ -218,13 +218,13 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
                 {saveMode === "nameplate" ? (
                   <div className="flex flex-col gap-1.5">
                     <input
-                      className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 focus:outline-none focus:border-amber-500/50"
+                      className="w-full bg-white/[0.05] text-slate-200 text-xs rounded-md px-2 py-1.5 border border-white/[0.08] placeholder-slate-600 focus:outline-none focus:border-indigo-400/70/50"
                       placeholder="Name (required)"
                       value={saveNpName}
                       onChange={e => setSaveNpName(e.target.value)}
                     />
                     <input
-                      className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 focus:outline-none focus:border-amber-500/50"
+                      className="w-full bg-white/[0.05] text-slate-200 text-xs rounded-md px-2 py-1.5 border border-white/[0.08] placeholder-slate-600 focus:outline-none focus:border-indigo-400/70/50"
                       placeholder="Title / Role (optional)"
                       value={saveNpTitle}
                       onChange={e => setSaveNpTitle(e.target.value)}
@@ -232,7 +232,7 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
                   </div>
                 ) : (
                   <textarea
-                    className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 resize-none h-16 focus:outline-none focus:border-amber-500/50"
+                    className="w-full bg-white/[0.05] text-slate-200 text-xs rounded-md px-2 py-1.5 border border-white/[0.08] placeholder-slate-600 resize-none h-16 focus:outline-none focus:border-indigo-400/70/50"
                     placeholder="Text to display…"
                     value={saveFtText}
                     onChange={e => setSaveFtText(e.target.value)}
@@ -250,7 +250,7 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
                 </button>
                 <button
                   onClick={() => { setAddOpen(false); setSaveLabel(""); setSaveNpName(""); setSaveNpTitle(""); setSaveFtText(""); }}
-                  className="px-3 text-[10px] font-bold bg-slate-800 text-slate-400 rounded-md"
+                  className="px-3 text-[10px] font-bold bg-white/[0.05] text-slate-400 rounded-md"
                 >
                   Cancel
                 </button>
@@ -388,7 +388,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
           <span className="text-[9px] text-purple-400/60 italic">Edit in Design Hub ↗</span>
         </div>
         <select
-          className="w-full bg-slate-800 text-slate-200 text-xs rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-amber-500"
+          className="w-full bg-white/[0.05] text-slate-200 text-xs rounded-lg px-3 py-2 border border-white/[0.08] focus:outline-none focus:border-indigo-400/70"
           value={ltTemplate.id}
           onChange={(e) => {
             const found = ltSavedTemplates.find((t) => t.id === e.target.value);
@@ -402,10 +402,10 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
       </div>
 
       {/* ── Mode tabs ── */}
-      <div className="flex rounded-lg overflow-hidden border border-slate-700 shrink-0">
+      <div className="flex rounded-lg overflow-hidden border border-white/[0.08] shrink-0">
         {(["nameplate", "lyrics", "freetext"] as const).map((m) => (
           <button key={m} onClick={() => setLtMode(m)}
-            className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest transition-all ${ltMode === m ? "bg-slate-700 text-amber-400" : "text-slate-500 hover:text-slate-300"}`}>
+            className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest transition-all ${ltMode === m ? "bg-white/[0.12] text-amber-400" : "text-slate-500 hover:text-slate-300"}`}>
             {m === "freetext" ? "Free Text" : m === "nameplate" ? "Nameplate" : "Lyrics"}
           </button>
         ))}
@@ -415,13 +415,13 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
       {ltMode === "nameplate" && (
         <div className="flex flex-col gap-2">
           <input
-            className="w-full bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700 placeholder-slate-500"
+            className="w-full bg-white/[0.05] text-slate-200 text-sm rounded-lg px-3 py-2 border border-white/[0.08] placeholder-slate-500"
             placeholder="Name"
             value={ltName}
             onChange={(e) => setLtName(e.target.value)}
           />
           <input
-            className="w-full bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700 placeholder-slate-500"
+            className="w-full bg-white/[0.05] text-slate-200 text-sm rounded-lg px-3 py-2 border border-white/[0.08] placeholder-slate-500"
             placeholder="Title / Role (optional)"
             value={ltTitle}
             onChange={(e) => setLtTitle(e.target.value)}
@@ -430,7 +430,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
             <span className="text-[10px] text-slate-400 uppercase font-bold">Auto-hide after:</span>
             <input
               type="number" min={0} max={60}
-              className="w-12 bg-slate-800 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700 text-center focus:outline-none focus:border-amber-500"
+              className="w-12 bg-white/[0.05] text-slate-200 text-xs rounded px-2 py-1 border border-white/[0.08] text-center focus:outline-none focus:border-indigo-400/70"
               value={ltTemplate.autoHideSeconds || 0}
               onChange={(e) => setLtTemplate(p => ({ ...p, autoHideSeconds: parseInt(e.target.value) || 0 }))}
             />
@@ -444,7 +444,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
       {ltMode === "freetext" && (
         <div className="flex flex-col gap-2">
           <textarea
-            className="w-full bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700 placeholder-slate-500 resize-none h-24"
+            className="w-full bg-white/[0.05] text-slate-200 text-sm rounded-lg px-3 py-2 border border-white/[0.08] placeholder-slate-500 resize-none h-24"
             placeholder="Type your message..."
             value={ltFreeText}
             onChange={(e) => setLtFreeText(e.target.value)}
@@ -467,7 +467,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
                     scrollEnabled: opt.enabled,
                     ...(opt.dir ? { scrollDirection: opt.dir } : {}),
                   }))}
-                  className={`px-2 py-1 text-[10px] font-bold rounded transition-all ${active ? "bg-amber-600 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}
+                  className={`px-2 py-1 text-[10px] font-bold rounded transition-all ${active ? "bg-amber-600 text-white" : "bg-white/[0.12] text-slate-300 hover:bg-white/[0.14]"}`}
                 >
                   {opt.label}
                 </button>
@@ -479,7 +479,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
               <span className="text-[10px] text-slate-400 uppercase font-bold">Repeats:</span>
               <input
                 type="number" min={0} max={50}
-                className="w-12 bg-slate-800 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700 text-center focus:outline-none focus:border-amber-500"
+                className="w-12 bg-white/[0.05] text-slate-200 text-xs rounded px-2 py-1 border border-white/[0.08] text-center focus:outline-none focus:border-indigo-400/70"
                 value={ltTemplate.scrollCount || 0}
                 onChange={(e) => setLtTemplate(p => ({ ...p, scrollCount: parseInt(e.target.value) || 0 }))}
               />
@@ -494,7 +494,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
         <div className="flex flex-col gap-3">
           <div className="flex gap-2 items-center">
             <select
-              className="flex-1 bg-slate-800 text-slate-200 text-xs rounded-lg px-2 py-2 border border-slate-700"
+              className="flex-1 bg-white/[0.05] text-slate-200 text-xs rounded-lg px-2 py-2 border border-white/[0.08]"
               value={ltSongId || ""}
               onChange={(e) => { setLtSongId(e.target.value || null); setLtLineIndex(0); setLtAtEnd(false); }}
             >
@@ -513,7 +513,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
                   setLtLineIndex(0);
                 }
               }}
-              className={`px-3 py-2 rounded-lg border text-[10px] font-bold transition-all ${ltSongId === "quick-lyrics" ? "bg-amber-500 text-black border-amber-400" : "bg-slate-800 text-slate-400 border-slate-700 hover:text-slate-200"}`}
+              className={`px-3 py-2 rounded-lg border text-[10px] font-bold transition-all ${ltSongId === "quick-lyrics" ? "bg-amber-500 text-black border-amber-400" : "bg-white/[0.05] text-slate-400 border-white/[0.08] hover:text-slate-200"}`}
               title="Quick Lyrics Entry"
             >
               QUICK
@@ -521,10 +521,10 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
           </div>
 
           {ltSongId === "quick-lyrics" && (
-            <div className="flex flex-col gap-2 bg-slate-800/50 p-2 rounded-lg border border-slate-700/50">
+            <div className="flex flex-col gap-2 bg-white/[0.04] p-2 rounded-lg border border-white/[0.1]">
               <p className="text-[9px] text-slate-500 uppercase font-black">Quick Paste (Newlines = Lines)</p>
               <textarea
-                className="w-full bg-slate-900 text-slate-200 text-[11px] rounded p-2 border border-slate-700 focus:outline-none focus:border-amber-500/50 resize-none h-20"
+                className="w-full bg-black/40 text-slate-200 text-[11px] rounded p-2 border border-white/[0.08] focus:outline-none focus:border-indigo-400/70/50 resize-none h-20"
                 placeholder="Paste lyrics here..."
                 onChange={(e) => {
                   const lines = e.target.value.split("\n").filter(l => l.trim());
@@ -540,7 +540,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
               <span className="text-[10px] text-slate-400 uppercase font-bold">Lines:</span>
               {([1, 2] as const).map((n) => (
                 <button key={n} onClick={() => setLtLinesPerDisplay(n)}
-                  className={`text-[10px] font-bold w-6 h-6 rounded ${ltLinesPerDisplay === n ? "bg-amber-600 text-white" : "bg-slate-700 text-slate-400"}`}>
+                  className={`text-[10px] font-bold w-6 h-6 rounded ${ltLinesPerDisplay === n ? "bg-amber-600 text-white" : "bg-white/[0.12] text-slate-400"}`}>
                   {n}
                 </button>
               ))}
@@ -549,7 +549,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
               <span className="text-[10px] text-slate-400 uppercase font-bold ml-1">Auto-hide:</span>
               <input
                 type="number" min={0} max={60}
-                className="w-10 bg-slate-800 text-slate-200 text-xs rounded px-1 py-1 border border-slate-700 text-center focus:outline-none focus:border-amber-500"
+                className="w-10 bg-white/[0.05] text-slate-200 text-xs rounded px-1 py-1 border border-white/[0.08] text-center focus:outline-none focus:border-indigo-400/70"
                 value={ltTemplate.autoHideSeconds || 0}
                 onChange={(e) => setLtTemplate(p => ({ ...p, autoHideSeconds: parseInt(e.target.value) || 0 }))}
               />
@@ -557,13 +557,13 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
             </div>
             <div className="flex items-center gap-1">
               <button onClick={() => setLtAutoAdvance(!ltAutoAdvance)}
-                className={`text-[10px] font-bold uppercase px-2 py-1 rounded ${ltAutoAdvance ? "bg-amber-600 text-white" : "bg-slate-700 text-slate-400"}`}>
+                className={`text-[10px] font-bold uppercase px-2 py-1 rounded ${ltAutoAdvance ? "bg-amber-600 text-white" : "bg-white/[0.12] text-slate-400"}`}>
                 Auto {ltAutoAdvance ? "ON" : "OFF"}
               </button>
               {ltAutoAdvance && (
                 <div className="flex items-center gap-1">
                   <input type="number" min={1} max={30}
-                    className="w-12 bg-slate-800 text-slate-200 text-xs rounded px-1 py-1 border border-slate-700 text-center"
+                    className="w-12 bg-white/[0.05] text-slate-200 text-xs rounded px-1 py-1 border border-white/[0.08] text-center"
                     value={ltAutoSeconds}
                     onChange={(e) => setLtAutoSeconds(Number(e.target.value))}
                   />
@@ -574,12 +574,12 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
           </div>
 
           {ltSongId && ltFlatLines.length > 0 && (
-            <div className="flex flex-col gap-2 bg-slate-900 border border-slate-800 rounded-xl p-3">
+            <div className="flex flex-col gap-2 bg-black/40 border border-white/[0.06] rounded-xl p-3">
               <div className="flex items-center justify-between">
                 <p className="text-[9px] text-slate-600 uppercase font-bold tracking-widest">Now Live</p>
                 <p className="text-[9px] text-slate-600 tabular-nums">{ltLineIndex + 1} / {ltFlatLines.length}</p>
               </div>
-              <div className="bg-slate-800 rounded-lg px-3 py-2">
+              <div className="bg-white/[0.05] rounded-lg px-3 py-2">
                 <p className="text-[9px] text-amber-500 font-bold uppercase mb-0.5">{ltFlatLines[ltLineIndex]?.sectionLabel}</p>
                 <p className="text-sm text-slate-200 font-semibold">{ltFlatLines[ltLineIndex]?.text}</p>
                 {ltLinesPerDisplay === 2 && ltFlatLines[ltLineIndex + 1] && (
@@ -606,11 +606,11 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
         {ltMode === "lyrics" && (
           <div className="flex gap-2">
             <button onClick={() => ltAdvance(-1)}
-              className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-lg transition-all">
+              className="flex-1 py-2 bg-white/[0.05] hover:bg-white/[0.1] text-slate-300 text-xs font-bold rounded-lg transition-all">
               ◀ PREV
             </button>
             <button onClick={() => ltAdvance(1)}
-              className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-lg transition-all">
+              className="flex-1 py-2 bg-white/[0.05] hover:bg-white/[0.1] text-slate-300 text-xs font-bold rounded-lg transition-all">
               NEXT ▶
             </button>
           </div>
@@ -645,7 +645,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
         </button>
       </div>
 
-      <div className="border-t border-slate-800 pt-3">
+      <div className="border-t border-white/[0.06] pt-3">
         <p className="text-[9px] font-black text-slate-700 uppercase tracking-widest mb-2">Keyboard (LT tab active)</p>
         <div className="grid grid-cols-2 gap-x-3 gap-y-1">
           {([
@@ -654,7 +654,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
             ["H", "Show / Hide"],
           ] as const).map(([key, desc]) => (
             <div key={key} className="flex items-center gap-1.5">
-              <span className="text-[8px] font-mono bg-slate-800 text-slate-400 px-1 py-0.5 rounded border border-slate-700 whitespace-nowrap">{key}</span>
+              <span className="text-[8px] font-mono bg-white/[0.05] text-slate-400 px-1 py-0.5 rounded border border-white/[0.08] whitespace-nowrap">{key}</span>
               <span className="text-[9px] text-slate-600">{desc}</span>
             </div>
           ))}

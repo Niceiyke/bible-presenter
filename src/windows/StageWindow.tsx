@@ -123,9 +123,10 @@ export function StageWindow() {
         style={{ backgroundColor: useTheme ? "rgba(0,0,0,0.25)" : "#0f172a", borderColor: useTheme ? "rgba(255,255,255,0.08)" : "#1e293b" }}
       >
         <div className="flex items-center gap-3">
-          <span className="text-xs font-bold uppercase tracking-widest" style={{ color: useTheme ? "rgba(255,255,255,0.5)" : "#64748b" }}>{t("stage.label")}</span>
+          <span className="inline-flex w-2.5 h-2.5 rounded-full bg-live-400 dot-flash shadow-[0_0_10px_rgba(34,211,238,0.7)]" style={{ background: "#22d3ee" }} />
+          <span className="text-xs font-bold uppercase tracking-widest" style={{ color: useTheme ? "rgba(255,255,255,0.55)" : "#94a3b8" }}>{t("stage.label")}</span>
           {ltOnAir && (
-            <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest" style={{ backgroundColor: accent + "33", color: accent }}>
+            <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest backdrop-blur-sm" style={{ backgroundColor: accent + "2e", color: accent, boxShadow: `0 0 18px ${accent}44` }}>
               {t("stage.ltOnAir")}
             </span>
           )}
@@ -141,7 +142,10 @@ export function StageWindow() {
       <div className="flex-1 grid grid-cols-2 gap-0 overflow-hidden">
         <div className="flex flex-col p-8 border-r overflow-hidden" style={{ borderColor: useTheme ? "rgba(255,255,255,0.08)" : "#1e293b" }}>
           <div className="flex items-center gap-3 mb-4 shrink-0">
-            <div className="w-3 h-3 rounded-full animate-pulse" style={{ backgroundColor: "#ef4444" }} />
+            <div
+              className="w-3 h-3 rounded-full dot-flash"
+              style={{ backgroundColor: "#ef4444", boxShadow: "0 0 12px rgba(239,68,68,0.8)" }}
+            />
             <span className="text-xs font-black uppercase tracking-widest" style={{ color: "#ef4444" }}>{t("stage.nowLive")}</span>
           </div>
           <p className="text-xl font-bold mb-3 shrink-0 truncate" style={{ color: useTheme ? "rgba(255,255,255,0.8)" : "#cbd5e1" }}>{itemSummary(liveItem)}</p>
@@ -160,9 +164,10 @@ export function StageWindow() {
           </div>
         </div>
 
-        <div className="flex flex-col p-8 border-2 overflow-hidden" style={{ borderColor: accent + "66", backgroundColor: useTheme ? accent + "0d" : "rgba(120,53,15,0.1)" }}>
+        <div className="flex flex-col p-8 border-2 overflow-hidden rounded-xl" style={{ borderColor: accent + "66", backgroundColor: useTheme ? accent + "0d" : "rgba(120,53,15,0.1)", boxShadow: `inset 0 0 0 1px ${accent}12, 0 0 50px -15px ${accent}30` }}>
           <div className="flex items-center gap-3 mb-4 shrink-0">
             <span className="text-xs font-black uppercase tracking-widest" style={{ color: accent }}>{t("stage.upNext")}</span>
+            <span className="w-1.5 h-1.5 rounded-full dot-flash" style={{ backgroundColor: accent }} />
           </div>
           <p className="text-xl font-bold mb-3 shrink-0 truncate" style={{ color: accent }}>{itemSummary(stagedItem)}</p>
           <div className="text-4xl font-serif leading-snug flex-1 overflow-hidden" style={{ color: useTheme ? "rgba(255,255,255,0.9)" : "#fef3c7" }}>

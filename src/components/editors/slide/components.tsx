@@ -18,7 +18,7 @@ export function Btn({ onClick, icon, children, className = "" }: {
   return (
     <button
       onClick={onClick}
-      className={`flex items-center gap-1.5 px-2.5 py-1.5 bg-white/8 hover:bg-white/14 text-slate-300 hover:text-white text-[11px] font-semibold rounded-lg transition-all shrink-0 ${className}`}
+      className={`flex items-center gap-1.5 px-2.5 py-1.5 bg-white/8 hover:bg-white/14 hover:ring-1 hover:ring-indigo-400/40 text-slate-300 hover:text-white text-[11px] font-semibold rounded-lg transition-all active:scale-95 shrink-0 ${className}`}
     >
       {icon}{children}
     </button>
@@ -35,7 +35,7 @@ export function ToggleBtn({ active, onClick, title, children }: {
     <button
       onClick={onClick}
       title={title}
-      className={`w-8 h-8 flex items-center justify-center rounded-lg transition-all shrink-0 ${active ? "bg-indigo-500 text-white" : "bg-white/8 text-slate-400 hover:text-white hover:bg-white/14"}`}
+      className={`w-8 h-8 flex items-center justify-center rounded-lg transition-all active:scale-90 shrink-0 ${active ? "bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-500/30" : "bg-white/8 text-slate-400 hover:text-white hover:bg-white/14"}`}
     >
       {children}
     </button>
@@ -48,7 +48,7 @@ export function Div() {
 
 export function Panel({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="bg-white/4 rounded-xl border border-white/8 p-3 flex flex-col gap-2.5">
+    <div className="bg-white/4 rounded-xl border border-white/[0.06] p-3 flex flex-col gap-2.5">
       <p className="text-[8px] font-black uppercase tracking-widest text-slate-600">{label}</p>
       {children}
     </div>
@@ -64,7 +64,7 @@ export function IconBtn({ onClick, title, children }: {
     <button
       onClick={onClick}
       title={title}
-      className="p-2 bg-white/6 hover:bg-white/12 text-slate-400 hover:text-white rounded-lg flex items-center justify-center transition-all"
+      className="p-2 bg-white/6 hover:bg-white/12 hover:ring-1 hover:ring-indigo-400/40 text-slate-400 hover:text-white rounded-lg flex items-center justify-center transition-all active:scale-90"
     >
       {children}
     </button>
@@ -178,10 +178,10 @@ export function FontPicker({
       {open && createPortal(
         <div
           data-font-popover
-          className="fixed z-[90] w-52 max-h-72 overflow-hidden rounded-lg border border-white/10 bg-[#1a1a2e] shadow-2xl flex flex-col"
+          className="fixed z-[90] w-52 max-h-72 overflow-hidden rounded-lg border border-white/10 bg-slate-900/95 backdrop-blur-xl shadow-2xl flex flex-col"
           style={{ top: pos.top, left: pos.left }}
         >
-          <div className="p-1.5 border-b border-white/8 shrink-0">
+          <div className="p-1.5 border-b border-white/[0.06] shrink-0">
             <input
               autoFocus
               value={query}

@@ -178,10 +178,10 @@ export function SlideCanvas({
         </div>
       </div>
 
-      <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/60 backdrop-blur border border-white/10 rounded-full px-3 py-1.5 z-[70]">
-        <button disabled={slideIndex === 0} onClick={e => { e.stopPropagation(); onNavigate(-1); }} className="text-slate-400 hover:text-white disabled:opacity-20 transition-all"><ChevronLeft size={16} /></button>
+      <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/60 backdrop-blur-md border border-white/10 rounded-full px-3 py-1.5 z-[70] shadow-float">
+        <button disabled={slideIndex === 0} onClick={e => { e.stopPropagation(); onNavigate(-1); }} className="text-slate-400 hover:text-white disabled:opacity-20 transition-all active:scale-90"><ChevronLeft size={16} /></button>
         <span className="text-xs text-slate-300 font-bold tabular-nums min-w-[40px] text-center">{slideIndex + 1} / {slideCount}</span>
-        <button disabled={slideIndex === slideCount - 1} onClick={e => { e.stopPropagation(); onNavigate(1); }} className="text-slate-400 hover:text-white disabled:opacity-20 transition-all"><ChevronRight size={16} /></button>
+        <button disabled={slideIndex === slideCount - 1} onClick={e => { e.stopPropagation(); onNavigate(1); }} className="text-slate-400 hover:text-white disabled:opacity-20 transition-all active:scale-90"><ChevronRight size={16} /></button>
       </div>
     </div>
   );

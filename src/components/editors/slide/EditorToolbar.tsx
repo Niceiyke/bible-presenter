@@ -72,7 +72,7 @@ export function EditorToolbar({
   // P2.5: merge user-installed @font-face families with the built-in list.
   const { availableFonts } = useFonts();
   return (
-    <div className="h-11 border-b border-white/8 flex items-center px-3 gap-1 bg-[#131326] shrink-0 overflow-x-auto">
+    <div className="h-11 border-b border-white/[0.06] flex items-center px-3 gap-1 bg-slate-900/70 backdrop-blur-xl shrink-0 overflow-x-auto">
 
       {/* ── No selection: Insert tools ── */}
       {selectedCount === 0 && <>
@@ -87,7 +87,7 @@ export function EditorToolbar({
           <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white/8 hover:bg-white/14 text-slate-300 hover:text-white text-[11px] font-semibold rounded-lg transition-all shrink-0">
             <Square size={13} /> Shape
           </div>
-          <div className="absolute left-0 top-full mt-1 hidden group-hover:flex flex-col bg-[#1a1a2e] border border-white/10 rounded-lg p-1 z-[80] shadow-2xl min-w-[110px]">
+          <div className="absolute left-0 top-full mt-1 hidden group-hover:flex flex-col bg-slate-900/95 backdrop-blur-xl border border-white/10 rounded-lg p-1 z-[80] shadow-2xl min-w-[110px]">
             {([
               { s: "rect", label: "Rectangle" },
               { s: "rounded", label: "Rounded" },
@@ -196,7 +196,7 @@ export function EditorToolbar({
       </>}
 
       <div className="flex-1" />
-      <div className="flex items-center gap-1 border-l border-white/8 pl-2 shrink-0">
+      <div className="flex items-center gap-1 border-l border-white/[0.06] pl-2 shrink-0">
         {/* P3.2: snap-to-grid. Clicking the icon cycles
             0 (off) → 4 → 8 → 16 → 0; hold the dropdown for an explicit pick. */}
         <div className="relative group shrink-0">
@@ -208,7 +208,7 @@ export function EditorToolbar({
             <Grid3x3 size={13} />
             <span className="text-[10px] font-bold tabular-nums w-5 text-center">{gridSize === 0 ? "—" : gridSize}</span>
           </button>
-          <div className="absolute right-0 top-full mt-1 hidden group-hover:flex flex-col bg-[#1a1a2e] border border-white/10 rounded-lg p-1 z-[80] shadow-2xl min-w-[80px]">
+          <div className="absolute right-0 top-full mt-1 hidden group-hover:flex flex-col bg-slate-900/95 backdrop-blur-xl border border-white/10 rounded-lg p-1 z-[80] shadow-2xl min-w-[80px]">
             {[
               { v: 0, label: "Off" },
               { v: 4, label: "4%" },

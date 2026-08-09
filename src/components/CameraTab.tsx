@@ -100,7 +100,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
       <div className="flex-1 flex flex-col lg:flex-row gap-6">
         {/* Preview Area */}
         <div className="flex-1 flex flex-col gap-4">
-          <div className="aspect-video bg-black rounded-xl overflow-hidden border border-slate-800 relative group">
+          <div className="aspect-video bg-black rounded-xl overflow-hidden border border-white/[0.06] relative group">
             <video 
               ref={videoRef}
               autoPlay
@@ -131,7 +131,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
             <button 
               onClick={handleStage}
               disabled={!selectedCameraId}
-              className="py-3 px-4 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white rounded-xl font-bold transition-all border border-slate-700 flex items-center justify-center gap-2"
+              className="py-3 px-4 bg-white/[0.05] hover:bg-white/[0.1] disabled:opacity-50 text-white rounded-xl font-bold transition-all border border-white/[0.08] flex items-center justify-center gap-2"
             >
               Stage Preview
             </button>
@@ -150,7 +150,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
               onClick={() => {
                 setSettings({ ...settings, background: { type: "None" } });
               }}
-              className="py-3 px-4 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-bold transition-all border border-slate-700 flex items-center justify-center gap-2"
+              className="py-3 px-4 bg-white/[0.05] hover:bg-white/[0.1] text-white rounded-xl font-bold transition-all border border-white/[0.08] flex items-center justify-center gap-2"
             >
               Clear Background
             </button>
@@ -164,7 +164,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
               <h2 className="text-xs font-black text-slate-500 uppercase tracking-widest">Available Devices</h2>
               <button 
                 onClick={() => { refreshCameras(); }}
-                className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-amber-500 transition-colors"
+                className="p-1.5 hover:bg-white/[0.08] rounded-lg text-slate-400 hover:text-amber-500 transition-colors"
                 title="Refresh devices"
               >
                 <RefreshCw size={14} />
@@ -182,11 +182,11 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                     }}
                     className={`w-full p-3 rounded-xl border text-left transition-all flex items-center gap-3 ${
                       selectedCameraId === cam.deviceId
-                        ? "bg-amber-500/10 border-amber-500/50 text-amber-400"
-                        : "bg-slate-900/50 border-slate-800 text-slate-400 hover:border-slate-700 hover:bg-slate-800"
+                        ? "bg-indigo-500/10 border-indigo-400/50 text-indigo-300"
+                        : "bg-black/40 border-white/[0.06] text-slate-400 hover:border-white/[0.15] hover:bg-white/[0.08]"
                     }`}
                   >
-                    <div className={`w-2 h-2 rounded-full ${selectedCameraId === cam.deviceId ? "bg-amber-500 animate-pulse" : "bg-slate-700"}`} />
+                    <div className={`w-2 h-2 rounded-full ${selectedCameraId === cam.deviceId ? "bg-amber-500 animate-pulse" : "bg-white/[0.12]"}`} />
                     <span className="text-sm font-medium truncate">{cam.label}</span>
                   </button>
                 ))
@@ -194,7 +194,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
             </div>
           </section>
 
-          <section className="mt-auto p-4 bg-slate-900/50 border border-slate-800 rounded-xl text-slate-400">
+          <section className="mt-auto p-4 bg-black/40 border border-white/[0.06] rounded-xl text-slate-400">
             <h3 className="text-[10px] font-black text-amber-500/70 uppercase tracking-widest mb-1 flex items-center gap-1.5">
               <Camera size={10} /> Camera Mode
             </h3>

@@ -33,18 +33,18 @@ export function BiblePickerModal({ onSelect, onClose }: BiblePickerModalProps) {
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden">
-        <header className="p-4 border-b border-slate-800 flex items-center justify-between shrink-0">
+      <div className="bg-black/40 border border-white/[0.08] rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden">
+        <header className="p-4 border-b border-white/[0.06] flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <BookOpen className="text-amber-500" size={18} />
             <h2 className="text-sm font-black uppercase tracking-widest text-white">Insert Scripture</h2>
           </div>
-          <button onClick={onClose} className="p-1 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white transition-all">
+          <button onClick={onClose} className="p-1 hover:bg-white/[0.08] rounded-full text-slate-400 hover:text-white transition-all">
             <X size={20} />
           </button>
         </header>
 
-        <div className="p-4 border-b border-slate-800 bg-slate-900/50 flex flex-col gap-4 shrink-0">
+        <div className="p-4 border-b border-white/[0.06] bg-black/40 flex flex-col gap-4 shrink-0">
           <div className="flex items-center gap-1.5 flex-wrap">
             {availableVersions.filter(v => !(settings.disabled_bible_versions || []).includes(v)).map((v) => (
               <button
@@ -53,7 +53,7 @@ export function BiblePickerModal({ onSelect, onClose }: BiblePickerModalProps) {
                 className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition-all ${
                   bibleVersion === v
                     ? "bg-amber-500 text-black"
-                    : "bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-700"
+                    : "bg-white/[0.05] text-slate-400 hover:text-slate-200 border border-white/[0.08]"
                 }`}
               >
                 {v}
@@ -61,11 +61,11 @@ export function BiblePickerModal({ onSelect, onClose }: BiblePickerModalProps) {
             ))}
           </div>
 
-          <div className="flex gap-2 p-1 bg-slate-950 rounded-lg border border-slate-800 w-fit">
+          <div className="flex gap-2 p-1 bg-black rounded-lg border border-white/[0.06] w-fit">
             <button
               onClick={() => setSearchMode("quick")}
               className={`px-4 py-1.5 rounded text-[10px] font-black uppercase transition-all flex items-center gap-1.5 ${
-                searchMode === "quick" ? "bg-slate-800 text-amber-500" : "text-slate-500 hover:text-slate-300"
+                searchMode === "quick" ? "bg-white/[0.05] text-amber-500" : "text-slate-500 hover:text-slate-300"
               }`}
             >
               <Zap size={12} /> Quick Entry
@@ -73,7 +73,7 @@ export function BiblePickerModal({ onSelect, onClose }: BiblePickerModalProps) {
             <button
               onClick={() => setSearchMode("semantic")}
               className={`px-4 py-1.5 rounded text-[10px] font-black uppercase transition-all flex items-center gap-1.5 ${
-                searchMode === "semantic" ? "bg-slate-800 text-amber-500" : "text-slate-500 hover:text-slate-300"
+                searchMode === "semantic" ? "bg-white/[0.05] text-amber-500" : "text-slate-500 hover:text-slate-300"
               }`}
             >
               <Search size={12} /> Semantic Search
@@ -100,7 +100,7 @@ export function BiblePickerModal({ onSelect, onClose }: BiblePickerModalProps) {
                   placeholder="Search by topic or reference..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  className="flex-1 bg-white/[0.05] border border-white/[0.08] rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-indigo-400/70"
                 />
                 <button type="submit" className="bg-amber-500 hover:bg-amber-400 text-black font-bold px-4 py-2 rounded-lg text-xs transition-all">
                   SEARCH
@@ -123,7 +123,7 @@ export function BiblePickerModal({ onSelect, onClose }: BiblePickerModalProps) {
                 <button
                   key={i}
                   onClick={() => onSelect(v)}
-                  className="p-3 text-left rounded-xl bg-slate-800/40 border border-slate-800 hover:border-amber-500/50 hover:bg-slate-800 transition-all group"
+                  className="p-3 text-left rounded-xl bg-white/[0.03] border border-white/[0.06] hover:border-indigo-400/60 hover:bg-white/[0.08] transition-all group"
                 >
                   <p className="text-amber-500 text-[10px] font-black mb-1 uppercase tracking-wider">
                     {v.book} {v.chapter}:{v.verse} <span className="text-slate-600 ml-1 font-bold">{v.version}</span>

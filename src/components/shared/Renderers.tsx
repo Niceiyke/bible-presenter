@@ -958,7 +958,7 @@ export function SmallItemPreview({
   switch (item.type) {
     case "Verse":
       return (
-        <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-slate-900/50">
+        <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-black/40">
           <p className="text-xs font-serif line-clamp-3 mb-1 opacity-80">{item.data.text}</p>
           <p className="text-[8px] font-black text-amber-500 uppercase">{item.data.book} {item.data.chapter}:{item.data.verse}</p>
         </div>
@@ -999,7 +999,7 @@ export function SlideThumbnail({
   
   return (
     <div
-      className="group relative aspect-video rounded overflow-hidden border border-slate-700 hover:border-amber-500/50 transition-all cursor-pointer"
+      className="group relative aspect-video rounded overflow-hidden border border-white/[0.08] hover:border-indigo-400/60 transition-all cursor-pointer"
       onClick={onStage}
     >
       <CustomSlideRenderer slide={slide} scale={0.1} appDataDir={appDataDir} />
@@ -1011,7 +1011,7 @@ export function SlideThumbnail({
           {onStage && (
             <button
               onClick={(e) => { e.stopPropagation(); onStage(); }}
-              className="w-full bg-slate-600 hover:bg-slate-500 text-white text-[9px] font-bold py-1 rounded"
+              className="w-full bg-white/15 hover:bg-white/25 text-white text-[9px] font-bold py-1 rounded backdrop-blur-sm"
             >
               STAGE
             </button>
@@ -1019,7 +1019,7 @@ export function SlideThumbnail({
           {onLive && (
             <button
               onClick={(e) => { e.stopPropagation(); onLive(); }}
-              className="w-full bg-amber-500 hover:bg-amber-400 text-black text-[9px] font-bold py-1 rounded"
+              className="w-full bg-gradient-to-br from-amber-400 to-amber-600 hover:from-amber-300 hover:to-amber-500 text-black text-[9px] font-bold py-1 rounded shadow-lg shadow-amber-500/30"
             >
               DISPLAY
             </button>

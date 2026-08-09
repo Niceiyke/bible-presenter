@@ -114,7 +114,7 @@ export function BackgroundEditor({
                 else onChange({ type: "Audio", value: current.type === "Audio" ? (current as any).value : { ...DEFAULT_AUDIO_BG } });
               }}
               className={`flex-none px-3 py-1 rounded text-[9px] font-bold border transition-all ${
-                current.type === mode ? "border-amber-500 bg-amber-500/10 text-amber-400" : "border-slate-700 bg-slate-800/50 text-slate-500 hover:border-slate-600"
+                current.type === mode ? "border-indigo-400/60 bg-indigo-500/15 text-indigo-300" : "border-white/[0.08] bg-white/[0.03] text-slate-500 hover:border-white/[0.18]"
               }`}
             >
               {mode === "None" ? "Inherit" : mode}
@@ -128,7 +128,7 @@ export function BackgroundEditor({
               type="color"
               value={(current as { type: "Color"; value: string }).value}
               onChange={(e) => onChange({ type: "Color", value: e.target.value })}
-              className="w-8 h-8 rounded cursor-pointer border border-slate-700 bg-transparent"
+              className="w-8 h-8 rounded cursor-pointer border border-white/[0.08] bg-transparent"
             />
             <span className="text-[9px] font-mono text-slate-500">{(current as { type: "Color"; value: string }).value}</span>
           </div>
@@ -139,7 +139,7 @@ export function BackgroundEditor({
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setShowPicker(true)}
-                className="flex-1 py-1 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-slate-300 transition-all"
+                className="flex-1 py-1 rounded border border-white/[0.08] bg-white/[0.05] hover:bg-white/[0.08] text-[9px] font-bold text-slate-300 transition-all"
               >
                 {(current as { type: "Image"; value: ImageBackground }).value?.path ? "Change from Library..." : "Pick from Library..."}
               </button>
@@ -167,8 +167,8 @@ export function BackgroundEditor({
                     onClick={() => updateIbg({ objectFit: fit })}
                     className={`flex-1 py-0.5 rounded text-[8px] font-bold border transition-all capitalize ${
                       ibg?.objectFit === fit
-                        ? "border-amber-500 bg-amber-500/10 text-amber-400"
-                        : "border-slate-700 bg-slate-800/50 text-slate-500"
+                        ? "border-indigo-400/60 bg-indigo-500/15 text-indigo-300"
+                        : "border-white/[0.08] bg-white/[0.03] text-slate-500"
                     }`}
                   >
                     {fit === "contain" ? "Fit" : fit === "cover" ? "Crop" : "Stretch"}
@@ -187,7 +187,7 @@ export function BackgroundEditor({
                 type="range" min="0" max="1" step="0.05"
                 value={ibg?.opacity ?? 1}
                 onChange={(e) => updateIbg({ opacity: parseFloat(e.target.value) })}
-                className="w-full h-1 appearance-none bg-slate-700 rounded accent-amber-500 cursor-pointer"
+                className="w-full h-1 appearance-none bg-white/[0.12] rounded accent-indigo-400 cursor-pointer"
               />
             </div>
           </div>
@@ -199,7 +199,7 @@ export function BackgroundEditor({
             <div className="flex items-center gap-2">
               <button
                 onClick={handlePickVideo}
-                className="flex-1 py-1 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-slate-300 transition-all"
+                className="flex-1 py-1 rounded border border-white/[0.08] bg-white/[0.05] hover:bg-white/[0.08] text-[9px] font-bold text-slate-300 transition-all"
               >
                 {vbg.path ? "Change Video..." : "Pick Video File..."}
               </button>
@@ -222,7 +222,7 @@ export function BackgroundEditor({
               <button
                 onClick={() => updateVbg({ loopVideo: !vbg.loopVideo })}
                 className={`py-1 rounded text-[9px] font-bold border transition-all ${
-                  vbg.loopVideo ? "border-amber-500 bg-amber-500/10 text-amber-400" : "border-slate-700 bg-slate-800/50 text-slate-500"
+                  vbg.loopVideo ? "border-indigo-400/60 bg-indigo-500/15 text-indigo-300" : "border-white/[0.08] bg-white/[0.03] text-slate-500"
                 }`}
               >
                 Loop: {vbg.loopVideo ? "On" : "Off"}
@@ -230,7 +230,7 @@ export function BackgroundEditor({
               <button
                 onClick={() => updateVbg({ muted: !vbg.muted })}
                 className={`py-1 rounded text-[9px] font-bold border transition-all ${
-                  vbg.muted ? "border-amber-500 bg-amber-500/10 text-amber-400" : "border-slate-700 bg-slate-800/50 text-slate-500"
+                  vbg.muted ? "border-indigo-400/60 bg-indigo-500/15 text-indigo-300" : "border-white/[0.08] bg-white/[0.03] text-slate-500"
                 }`}
               >
                 Muted: {vbg.muted ? "On" : "Off"}
@@ -247,8 +247,8 @@ export function BackgroundEditor({
                     onClick={() => updateVbg({ objectFit: fit })}
                     className={`flex-1 py-0.5 rounded text-[8px] font-bold border transition-all capitalize ${
                       vbg.objectFit === fit
-                        ? "border-amber-500 bg-amber-500/10 text-amber-400"
-                        : "border-slate-700 bg-slate-800/50 text-slate-500"
+                        ? "border-indigo-400/60 bg-indigo-500/15 text-indigo-300"
+                        : "border-white/[0.08] bg-white/[0.03] text-slate-500"
                     }`}
                   >
                     {fit}
@@ -267,7 +267,7 @@ export function BackgroundEditor({
                 type="range" min="0.05" max="1" step="0.05"
                 value={vbg.opacity}
                 onChange={(e) => updateVbg({ opacity: parseFloat(e.target.value) })}
-                className="w-full h-1 appearance-none bg-slate-700 rounded accent-amber-500 cursor-pointer"
+                className="w-full h-1 appearance-none bg-white/[0.12] rounded accent-indigo-400 cursor-pointer"
               />
             </div>
 
@@ -281,7 +281,7 @@ export function BackgroundEditor({
                 type="range" min="0.25" max="2" step="0.25"
                 value={vbg.playbackRate}
                 onChange={(e) => updateVbg({ playbackRate: parseFloat(e.target.value) })}
-                className="w-full h-1 appearance-none bg-slate-700 rounded accent-amber-500 cursor-pointer"
+                className="w-full h-1 appearance-none bg-white/[0.12] rounded accent-indigo-400 cursor-pointer"
               />
             </div>
           </div>
@@ -294,7 +294,7 @@ export function BackgroundEditor({
               <select
                 value={cbg.deviceId}
                 onChange={(e) => updateCbg({ deviceId: e.target.value })}
-                className="w-full py-1 px-2 rounded border border-slate-700 bg-slate-800 text-[10px] text-slate-300"
+                className="w-full py-1 px-2 rounded border border-white/[0.08] bg-white/[0.05] text-[10px] text-slate-300"
               >
                 <option value="">Select Camera...</option>
                 {availableCameras.map((cam) => (
@@ -312,7 +312,7 @@ export function BackgroundEditor({
             <button
               onClick={() => updateCbg({ mirrored: !cbg.mirrored })}
               className={`py-1 rounded text-[9px] font-bold border transition-all ${
-                cbg.mirrored ? "border-amber-500 bg-amber-500/10 text-amber-400" : "border-slate-700 bg-slate-800/50 text-slate-500"
+                cbg.mirrored ? "border-indigo-400/60 bg-indigo-500/15 text-indigo-300" : "border-white/[0.08] bg-white/[0.03] text-slate-500"
               }`}
             >
               Mirrored: {cbg.mirrored ? "On" : "Off"}
@@ -328,8 +328,8 @@ export function BackgroundEditor({
                     onClick={() => updateCbg({ objectFit: fit })}
                     className={`flex-1 py-0.5 rounded text-[8px] font-bold border transition-all capitalize ${
                       cbg.objectFit === fit
-                        ? "border-amber-500 bg-amber-500/10 text-amber-400"
-                        : "border-slate-700 bg-slate-800/50 text-slate-500"
+                        ? "border-indigo-400/60 bg-indigo-500/15 text-indigo-300"
+                        : "border-white/[0.08] bg-white/[0.03] text-slate-500"
                     }`}
                   >
                     {fit}
@@ -348,7 +348,7 @@ export function BackgroundEditor({
                 type="range" min="0.05" max="1" step="0.05"
                 value={cbg.opacity}
                 onChange={(e) => updateCbg({ opacity: parseFloat(e.target.value) })}
-                className="w-full h-1 appearance-none bg-slate-700 rounded accent-amber-500 cursor-pointer"
+                className="w-full h-1 appearance-none bg-white/[0.12] rounded accent-indigo-400 cursor-pointer"
               />
             </div>
           </div>
@@ -360,7 +360,7 @@ export function BackgroundEditor({
             <div className="flex items-center gap-2">
               <button
                 onClick={handlePickAudio}
-                className="flex-1 py-1 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-slate-300 transition-all"
+                className="flex-1 py-1 rounded border border-white/[0.08] bg-white/[0.05] hover:bg-white/[0.08] text-[9px] font-bold text-slate-300 transition-all"
               >
                 {abg.path ? "Change Audio..." : "Pick Audio File..."}
               </button>
@@ -382,7 +382,7 @@ export function BackgroundEditor({
             <button
               onClick={() => updateAbg({ loopAudio: !abg.loopAudio })}
               className={`py-1 rounded text-[9px] font-bold border transition-all ${
-                abg.loopAudio ? "border-amber-500 bg-amber-500/10 text-amber-400" : "border-slate-700 bg-slate-800/50 text-slate-500"
+                abg.loopAudio ? "border-indigo-400/60 bg-indigo-500/15 text-indigo-300" : "border-white/[0.08] bg-white/[0.03] text-slate-500"
               }`}
             >
               Loop: {abg.loopAudio ? "On" : "Off"}
@@ -398,7 +398,7 @@ export function BackgroundEditor({
                 type="range" min="0" max="1" step="0.05"
                 value={abg.volume}
                 onChange={(e) => updateAbg({ volume: parseFloat(e.target.value) })}
-                className="w-full h-1 appearance-none bg-slate-700 rounded accent-amber-500 cursor-pointer"
+                className="w-full h-1 appearance-none bg-white/[0.12] rounded accent-indigo-400 cursor-pointer"
               />
             </div>
           </div>

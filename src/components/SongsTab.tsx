@@ -79,7 +79,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
             <>
               <button
                 onClick={() => setShowSongImport(!showSongImport)}
-                className="text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded"
+                className="text-[10px] font-bold uppercase bg-white/[0.05] hover:bg-white/[0.1] text-slate-300 px-2 py-1 rounded"
               >Import</button>
               <button
                 onClick={() => setEditingSong({ id: "", title: "", author: "", sections: [{ label: "Verse 1", lines: [""] }], arrangement: [], style: "LowerThird" })}
@@ -119,7 +119,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
 
       {/* Search */}
       <input
-        className="w-full bg-slate-800 text-slate-200 text-xs rounded-lg px-3 py-2 border border-slate-700 placeholder-slate-500"
+        className="w-full bg-white/[0.05] text-slate-200 text-xs rounded-lg px-3 py-2 border border-white/[0.08] placeholder-slate-500"
         placeholder={activeSubTab === "mine" ? "Search my songs..." : "Search hymn library..."}
         value={songSearch}
         onChange={(e) => setSongSearch(e.target.value)}
@@ -128,7 +128,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
       {/* Song list */}
       <div className="flex flex-col gap-2">
         {filteredSongs.map((song) => (
-          <div key={song.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-col gap-1">
+          <div key={song.id} className="bg-black/40 border border-white/[0.06] rounded-xl p-3 flex flex-col gap-1">
             <div className="flex justify-between items-start">
               <div>
                 <p className="text-sm font-bold text-slate-200">{song.title}</p>
@@ -160,7 +160,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
                       className="text-[9px] font-black uppercase bg-purple-600/40 hover:bg-purple-600 text-purple-300 px-2 py-1 rounded border border-purple-500/20">+ SERVICE</button>
                     <button
                       onClick={() => setEditingSong(JSON.parse(JSON.stringify(song)))}
-                      className="text-[9px] font-black uppercase bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-1 rounded"
+                      className="text-[9px] font-black uppercase bg-white/[0.12] hover:bg-white/[0.14] text-slate-300 px-2 py-1 rounded"
                     >Edit</button>
                     <button
                       onClick={async () => {
@@ -188,7 +188,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
                     >Import</button>
                     <button
                       onClick={() => onStage(getSongDisplayItem(song, 0))}
-                      className="text-[9px] font-black uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded"
+                      className="text-[9px] font-black uppercase bg-white/[0.05] hover:bg-white/[0.1] text-slate-300 px-2 py-1 rounded"
                     >Preview</button>
                   </>
                 )}
@@ -206,27 +206,27 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
       {/* Song Editor Modal */}
       {editingSong && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
-            <div className="flex justify-between items-center p-4 border-b border-slate-800">
+          <div className="bg-black/40 border border-white/[0.08] rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center p-4 border-b border-white/[0.06]">
               <h3 className="text-sm font-bold text-slate-200">{editingSong.id ? "Edit Song" : "New Song"}</h3>
               <button onClick={() => setEditingSong(null)} className="text-slate-500 hover:text-white text-lg font-bold">✕</button>
             </div>
             <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
               <div className="flex gap-2">
                 <input
-                  className="flex-1 bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700"
+                  className="flex-1 bg-white/[0.05] text-slate-200 text-sm rounded-lg px-3 py-2 border border-white/[0.08]"
                   placeholder="Song title"
                   value={editingSong.title}
                   onChange={(e) => setEditingSong({ ...editingSong, title: e.target.value })}
                 />
                 <input
-                  className="flex-1 bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700"
+                  className="flex-1 bg-white/[0.05] text-slate-200 text-sm rounded-lg px-3 py-2 border border-white/[0.08]"
                   placeholder="Author (optional)"
                   value={editingSong.author || ""}
                   onChange={(e) => setEditingSong({ ...editingSong, author: e.target.value })}
                 />
                 <select
-                  className="bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700 focus:outline-none"
+                  className="bg-white/[0.05] text-slate-200 text-sm rounded-lg px-3 py-2 border border-white/[0.08] focus:outline-none"
                   value={editingSong.style || "LowerThird"}
                   onChange={(e) => setEditingSong({ ...editingSong, style: e.target.value as any })}
                 >
@@ -235,10 +235,10 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
                 </select>
               </div>
               {editingSong.sections.map((section, si) => (
-                <div key={si} className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 flex flex-col gap-2">
+                <div key={si} className="bg-white/[0.04] border border-white/[0.08] rounded-xl p-3 flex flex-col gap-2">
                   <div className="flex gap-2 items-center">
                     <input
-                      className="flex-1 bg-slate-800 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600 font-bold"
+                      className="flex-1 bg-white/[0.05] text-slate-200 text-xs rounded px-2 py-1 border border-white/[0.14] font-bold"
                       value={section.label}
                       onChange={(e) => {
                         const s = [...editingSong.sections];
@@ -257,7 +257,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
                   {section.lines.map((line, li) => (
                     <div key={li} className="flex gap-1">
                       <input
-                        className="flex-1 bg-slate-900 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700"
+                        className="flex-1 bg-black/40 text-slate-200 text-xs rounded px-2 py-1 border border-white/[0.08]"
                         value={line}
                         placeholder={`Line ${li + 1}`}
                         onChange={(e) => {
@@ -290,10 +290,10 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
               ))}
               <button
                 onClick={() => setEditingSong({ ...editingSong, sections: [...editingSong.sections, { label: `Section ${editingSong.sections.length + 1}`, lines: [""] }] })}
-                className="text-[10px] font-bold uppercase text-slate-500 hover:text-amber-400 border border-slate-700 hover:border-amber-500 rounded-lg py-2"
+                className="text-[10px] font-bold uppercase text-slate-500 hover:text-amber-400 border border-white/[0.08] hover:border-indigo-400/60 rounded-lg py-2"
               >+ Add Section</button>
 
-              <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-3 flex flex-col gap-3">
+              <div className="bg-white/[0.03] border border-white/[0.08] rounded-xl p-3 flex flex-col gap-3">
                 <div className="flex items-center justify-between">
                   <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Song Styling</p>
                   {(editingSong.font || editingSong.font_size || editingSong.font_weight || editingSong.color) && (
@@ -307,7 +307,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
                   <div className="flex flex-col gap-1">
                     <label className="text-[10px] text-slate-500 uppercase font-bold">Font Family</label>
                     <select
-                      className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700 focus:outline-none"
+                      className="bg-white/[0.05] text-slate-200 text-xs rounded px-2 py-1.5 border border-white/[0.08] focus:outline-none"
                       value={editingSong.font || ""}
                       onChange={(e) => setEditingSong({ ...editingSong, font: e.target.value || undefined })}
                     >
@@ -319,7 +319,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
                     <label className="text-[10px] text-slate-500 uppercase font-bold">Font Size (pt)</label>
                     <input
                       type="number"
-                      className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700 focus:outline-none"
+                      className="bg-white/[0.05] text-slate-200 text-xs rounded px-2 py-1.5 border border-white/[0.08] focus:outline-none"
                       value={editingSong.font_size || ""}
                       placeholder="Default"
                       onChange={(e) => {
@@ -331,7 +331,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
                   <div className="flex flex-col gap-1">
                     <label className="text-[10px] text-slate-500 uppercase font-bold">Font Weight</label>
                     <select
-                      className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700 focus:outline-none"
+                      className="bg-white/[0.05] text-slate-200 text-xs rounded px-2 py-1.5 border border-white/[0.08] focus:outline-none"
                       value={editingSong.font_weight || ""}
                       onChange={(e) => setEditingSong({ ...editingSong, font_weight: e.target.value || undefined })}
                     >
@@ -355,7 +355,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
                         onChange={(e) => setEditingSong({ ...editingSong, color: e.target.value })}
                       />
                       <input
-                        className="flex-1 bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700 focus:outline-none"
+                        className="flex-1 bg-white/[0.05] text-slate-200 text-xs rounded px-2 py-1.5 border border-white/[0.08] focus:outline-none"
                         value={editingSong.color || ""}
                         placeholder="Default"
                         onChange={(e) => setEditingSong({ ...editingSong, color: e.target.value || undefined })}
@@ -365,7 +365,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
                 </div>
               </div>
 
-              <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-3 flex flex-col gap-2">
+              <div className="bg-white/[0.03] border border-white/[0.08] rounded-xl p-3 flex flex-col gap-2">
                 <div className="flex items-center justify-between">
                   <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Arrangement</p>
                   {(editingSong.arrangement ?? []).length > 0 && (
@@ -381,7 +381,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
                     <button
                       key={sec.label}
                       onClick={() => setEditingSong({ ...editingSong, arrangement: [...(editingSong.arrangement ?? []), sec.label] })}
-                      className="px-2 py-0.5 text-[10px] font-bold rounded bg-slate-700 hover:bg-amber-700 text-slate-300 hover:text-white border border-slate-600 hover:border-amber-500 transition-all"
+                      className="px-2 py-0.5 text-[10px] font-bold rounded bg-white/[0.08] hover:bg-amber-500/20 text-slate-300 hover:text-amber-200 border border-white/[0.1] hover:border-indigo-400/50 transition-all"
                     >+ {sec.label}</button>
                   ))}
                 </div>
@@ -410,8 +410,8 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
                 )}
               </div>
             </div>
-            <div className="p-4 border-t border-slate-800 flex justify-end gap-2">
-              <button onClick={() => setEditingSong(null)} className="text-xs font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg">Cancel</button>
+            <div className="p-4 border-t border-white/[0.06] flex justify-end gap-2">
+              <button onClick={() => setEditingSong(null)} className="text-xs font-bold uppercase bg-white/[0.05] hover:bg-white/[0.1] text-slate-300 px-4 py-2 rounded-lg">Cancel</button>
               <button
                 onClick={async () => {
                   const saved = await invoke<Song>("save_song", { song: editingSong });
@@ -449,7 +449,7 @@ function SongImportDialog({ onComplete, onCancel }: { onComplete: (parsed: Parse
   const hasChords = text.includes("[") && /\[[A-G]/.test(text);
 
   return (
-    <div className="bg-slate-900 border border-slate-700 rounded-xl p-3 flex flex-col gap-3">
+    <div className="bg-black/40 border border-white/[0.08] rounded-xl p-3 flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <div>
           <p className="text-[10px] font-bold uppercase text-slate-300">Import Song</p>
@@ -461,7 +461,7 @@ function SongImportDialog({ onComplete, onCancel }: { onComplete: (parsed: Parse
       </div>
 
       <textarea
-        className="w-full h-40 bg-slate-950 text-slate-200 text-xs rounded-lg p-3 border border-slate-700 resize-none font-mono"
+        className="w-full h-40 bg-black text-slate-200 text-xs rounded-lg p-3 border border-white/[0.08] resize-none font-mono"
         placeholder={`Amazing Grace\n\nVerse 1\nAmazing grace how sweet the sound\nThat saved a wretch like me\n\nChorus\nAmazing grace how sweet the sound\n...`}
         value={text}
         onChange={(e) => setText(e.target.value)}
@@ -476,16 +476,16 @@ function SongImportDialog({ onComplete, onCancel }: { onComplete: (parsed: Parse
       </button>
 
       {parsed && parsed.sections.length > 0 && (
-        <div className="bg-slate-950 border border-slate-700 rounded-lg p-3 flex flex-col gap-3">
+        <div className="bg-black border border-white/[0.08] rounded-lg p-3 flex flex-col gap-3">
           <div className="grid grid-cols-2 gap-2">
             <input
-              className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700"
+              className="bg-white/[0.05] text-slate-200 text-xs rounded px-2 py-1.5 border border-white/[0.08]"
               placeholder="Song Title"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
             />
             <input
-              className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700"
+              className="bg-white/[0.05] text-slate-200 text-xs rounded px-2 py-1.5 border border-white/[0.08]"
               placeholder="Author"
               value={author}
               onChange={(e) => setAuthor(e.target.value)}
@@ -506,7 +506,7 @@ function SongImportDialog({ onComplete, onCancel }: { onComplete: (parsed: Parse
             </p>
             <div className="flex flex-col gap-2 max-h-40 overflow-y-auto custom-scrollbar">
               {parsed.sections.map((sec, i) => (
-                <div key={i} className="bg-slate-900 rounded-lg p-2">
+                <div key={i} className="bg-black/40 rounded-lg p-2">
                   <p className="text-[9px] font-black uppercase text-amber-500 mb-1">{sec.label || `Section ${i + 1}`}</p>
                   {sec.lines.slice(0, 4).map((line, j) => (
                     <p key={j} className="text-[10px] text-slate-400 font-mono leading-snug">

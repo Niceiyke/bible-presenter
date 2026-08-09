@@ -28,24 +28,24 @@ export function LogViewer() {
   if (!isLogOpen) return null;
 
   return (
-    <div className="fixed inset-x-0 bottom-0 h-80 bg-slate-950 border-t border-slate-800 z-[100] flex flex-col shadow-2xl">
-      <div className="h-10 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-4 shrink-0">
+    <div className="fixed inset-x-0 bottom-0 h-80 bg-black/80 backdrop-blur-xl border-t border-white/[0.06] z-[100] flex flex-col shadow-float">
+      <div className="h-10 bg-white/[0.02] border-b border-white/[0.06] flex items-center justify-between px-4 shrink-0">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+            <span className="w-2 h-2 rounded-full bg-amber-400 dot-flash shadow-[0_0_8px_rgba(245,158,11,0.7)]" />
             <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400">System Logs</h3>
           </div>
-          <div className="h-4 w-px bg-slate-800" />
-          <div className="flex items-center gap-2 bg-black/40 px-2 py-1 rounded border border-slate-800">
+          <div className="h-4 w-px bg-white/10" />
+          <div className="flex items-center gap-2 bg-black/40 px-2 py-1 rounded border border-white/[0.08]">
             <Search size={12} className="text-slate-500" />
             <input
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               placeholder="Filter logs..."
-              className="bg-transparent border-none outline-none text-[10px] text-slate-300 w-40"
+              className="bg-transparent border-none outline-none text-[10px] text-slate-300 w-40 placeholder:text-slate-600"
             />
           </div>
-          <div className="flex items-center gap-1.5 bg-black/40 px-2 py-1 rounded border border-slate-800">
+          <div className="flex items-center gap-1.5 bg-black/40 px-2 py-1 rounded border border-white/[0.08]">
             <Filter size={12} className="text-slate-500" />
             <select
               value={levelFilter}
@@ -63,7 +63,7 @@ export function LogViewer() {
         <div className="flex items-center gap-2">
           <button
             onClick={handleCopyAll}
-            className="flex items-center gap-1.5 px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition-all text-[9px] font-bold uppercase border border-slate-700"
+            className="flex items-center gap-1.5 px-2 py-1 bg-white/[0.06] hover:bg-white/[0.1] text-slate-300 rounded transition-all text-[9px] font-bold uppercase border border-white/[0.08] active:scale-95"
             title="Copy all visible logs to clipboard"
           >
             {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
@@ -71,13 +71,13 @@ export function LogViewer() {
           </button>
           <button
             onClick={clearLogs}
-            className="flex items-center gap-1.5 px-2 py-1 bg-red-900/20 hover:bg-red-900/40 text-red-400 rounded transition-all text-[9px] font-bold uppercase border border-red-900/30"
+            className="flex items-center gap-1.5 px-2 py-1 bg-red-900/20 hover:bg-red-900/40 text-red-400 rounded transition-all text-[9px] font-bold uppercase border border-red-900/40 active:scale-95"
           >
             <Trash2 size={12} /> Clear
           </button>
           <button
             onClick={() => setIsLogOpen(false)}
-            className="p-1 text-slate-500 hover:text-white transition-all"
+            className="p-1 text-slate-500 hover:text-white transition-all active:scale-90"
           >
             <X size={18} />
           </button>

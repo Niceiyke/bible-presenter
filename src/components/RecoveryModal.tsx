@@ -47,15 +47,15 @@ export function RecoveryModal({ recovery, onRestore, onDiscard }: RecoveryModalP
         >
           <motion.div
             ref={panelRef}
-            className="w-full max-w-lg bg-slate-900 border border-amber-500/30 rounded-xl shadow-2xl overflow-hidden"
+            className="w-full max-w-lg bg-slate-900/95 backdrop-blur-xl border border-amber-500/30 rounded-2xl shadow-float overflow-hidden"
             initial={{ scale: 0.95, y: 12 }}
             animate={{ scale: 1, y: 0 }}
             exit={{ scale: 0.95, y: 12 }}
             transition={{ duration: 0.18 }}
             role="document"
           >
-            <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-800 bg-amber-950/20">
-              <div className="w-9 h-9 rounded-full bg-amber-500/15 flex items-center justify-center shrink-0">
+            <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.06] bg-gradient-to-r from-amber-950/40 to-transparent">
+              <div className="w-9 h-9 rounded-full bg-gradient-to-br from-amber-500/25 to-amber-600/10 flex items-center justify-center shrink-0 ring-1 ring-amber-500/30">
                 <AlertTriangle size={18} className="text-amber-400" />
               </div>
               <div className="flex-1 min-w-0">
@@ -72,7 +72,7 @@ export function RecoveryModal({ recovery, onRestore, onDiscard }: RecoveryModalP
               <p className="text-[10px] uppercase font-black text-slate-500 mb-2">{t("recovery.preview")}</p>
               <ol className="space-y-1">
                 {recovery.scheduleEntries.map((e, i) => (
-                  <li key={e.id} className="flex items-center gap-3 text-sm py-1.5 px-2 rounded bg-slate-950/60 border border-slate-800/60">
+                  <li key={e.id} className="flex items-center gap-3 text-sm py-1.5 px-2 rounded bg-black/40 border border-white/[0.06]">
                     <span className="text-[10px] font-black text-slate-600 w-5 text-right shrink-0">{i + 1}</span>
                     <span className="text-slate-200 font-medium truncate flex-1">{displayItemLabel(e.item)}</span>
                     <span className="text-[9px] uppercase font-black text-slate-600 shrink-0">{e.item.type}</span>
@@ -81,18 +81,18 @@ export function RecoveryModal({ recovery, onRestore, onDiscard }: RecoveryModalP
               </ol>
             </div>
 
-            <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-slate-800 bg-slate-950/40">
+            <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-white/[0.06] bg-black/20">
               <button
                 onClick={() => dismiss(onDiscard)}
                 aria-label={t("recovery.discard")}
-                className="px-3 py-2 text-xs font-black uppercase rounded-md text-slate-400 hover:text-red-300 hover:bg-red-900/20 flex items-center gap-1.5 transition-all"
+                className="px-3 py-2 text-xs font-black uppercase rounded-md text-slate-400 hover:text-red-300 hover:bg-red-900/20 flex items-center gap-1.5 transition-all active:scale-95"
               >
                 <Trash2 size={13} /> {t("recovery.discard")}
               </button>
               <button
                 onClick={() => dismiss(onRestore)}
                 aria-label={t("recovery.restore")}
-                className="px-4 py-2 text-xs font-black uppercase rounded-md bg-amber-500 hover:bg-amber-400 text-black flex items-center gap-1.5 transition-all shadow-lg shadow-amber-500/20"
+                className="px-4 py-2 text-xs font-black uppercase rounded-md bg-gradient-to-br from-amber-400 to-amber-600 hover:from-amber-300 hover:to-amber-500 text-black flex items-center gap-1.5 transition-all shadow-lg shadow-amber-500/25 active:scale-95"
               >
                 <RotateCcw size={13} /> {t("recovery.restore")}
               </button>

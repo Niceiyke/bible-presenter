@@ -11,12 +11,12 @@ const ShortcutGroup = ({ title, shortcuts }: { title: string; shortcuts: { key: 
     <h3 className="text-amber-500 font-bold text-xs uppercase tracking-widest mb-3 px-1">{title}</h3>
     <div className="grid grid-cols-1 gap-2">
       {shortcuts.map((s, i) => (
-        <div key={i} className="flex items-center justify-between py-1.5 px-3 rounded bg-slate-800/50 hover:bg-slate-800 transition-colors">
+        <div key={i} className="flex items-center justify-between py-1.5 px-3 rounded bg-white/[0.04] hover:bg-white/[0.08] transition-colors">
           <span className="text-slate-300 text-sm">{s.desc}</span>
           <div className="flex gap-1">
             {s.key.split(' + ').map((k, ki) => (
               <React.Fragment key={ki}>
-                <kbd className="min-w-[24px] h-6 px-1.5 flex items-center justify-center bg-slate-700 text-slate-100 rounded text-[10px] font-bold border-b-2 border-slate-900 shadow-sm">
+                <kbd className="min-w-[24px] h-6 px-1.5 flex items-center justify-center bg-white/[0.12] text-slate-100 rounded text-[10px] font-bold border-b-2 border-white/20 shadow-sm">
                   {k}
                 </kbd>
                 {ki < s.key.split(' + ').length - 1 && <span className="text-slate-500 text-xs self-center">+</span>}
@@ -102,10 +102,10 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200" onClick={onClose}>
       <div 
-        className="bg-slate-900 border border-slate-700 w-full max-w-2xl max-h-[85vh] rounded-xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200"
+        className="bg-black/40 border border-white/[0.08] w-full max-w-2xl max-h-[85vh] rounded-xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200"
         onClick={e => e.stopPropagation()}
       >
-        <header className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/50">
+        <header className="px-6 py-4 border-b border-white/[0.06] flex items-center justify-between bg-black/40">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 bg-amber-500/10 rounded-lg flex items-center justify-center text-amber-500">
               <Keyboard size={20} />
@@ -117,7 +117,7 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose 
           </div>
           <button 
             onClick={onClose}
-            className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+            className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/[0.08] text-slate-400 hover:text-white transition-colors"
           >
             <X size={20} />
           </button>
@@ -136,11 +136,11 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose 
           </div>
         </div>
 
-        <footer className="px-6 py-4 border-t border-slate-800 bg-slate-950/50 flex justify-between items-center">
-          <p className="text-[10px] text-slate-500 uppercase tracking-widest font-medium">Press <kbd className="bg-slate-800 px-1 rounded text-slate-300">ESC</kbd> to close</p>
+        <footer className="px-6 py-4 border-t border-white/[0.06] bg-black/50 flex justify-between items-center">
+          <p className="text-[10px] text-slate-500 uppercase tracking-widest font-medium">Press <kbd className="bg-white/[0.05] px-1 rounded text-slate-300">ESC</kbd> to close</p>
           <button 
             onClick={onClose}
-            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded text-sm font-medium transition-colors"
+            className="px-4 py-2 bg-white/[0.05] hover:bg-white/[0.1] text-white rounded text-sm font-medium transition-colors"
           >
             Got it
           </button>

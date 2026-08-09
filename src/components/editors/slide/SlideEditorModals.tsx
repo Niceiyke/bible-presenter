@@ -81,8 +81,8 @@ export function SlideEditorModals({
     <>
       {/* ── Template Gallery Modal ── */}
       {showTemplateGallery && (
-        <div className="absolute inset-0 z-[100] bg-black/70 flex items-center justify-center backdrop-blur-sm">
-          <div className="bg-[#131326] border border-white/10 rounded-2xl p-5 w-full max-w-lg mx-4 shadow-2xl max-h-[80vh] flex flex-col">
+        <div className="absolute inset-0 z-[100] bg-black/60 flex items-center justify-center backdrop-blur-md">
+          <div className="bg-slate-900/70 backdrop-blur-xl border border-white/10 rounded-2xl p-5 w-full max-w-lg mx-4 shadow-2xl max-h-[80vh] flex flex-col">
             <div className="flex items-center justify-between mb-4 shrink-0">
               <p className="text-sm font-bold text-white">Slide Templates</p>
               <button onClick={() => setShowTemplateGallery(false)} className="text-slate-400 hover:text-white"><X size={16} /></button>
@@ -94,7 +94,7 @@ export function SlideEditorModals({
               ) : (
                 <div className="grid grid-cols-2 gap-3">
                   {BUILTIN_DECKS.map((deck, di) => (
-                    <div key={`builtin-${di}`} className="group relative rounded-xl border border-white/8 bg-white/4 overflow-hidden">
+                    <div key={`builtin-${di}`} className="group relative rounded-xl border border-white/[0.06] bg-white/4 overflow-hidden">
                       <div className="flex gap-1 p-1 bg-black/30">
                         {deck.slides().slice(0, 3).map(s => (
                           <div key={s.id} className="flex-1 min-w-0">
@@ -118,7 +118,7 @@ export function SlideEditorModals({
                     </div>
                   ))}
                   {templates.map(tpl => (
-                    <div key={tpl.id} className="group relative rounded-xl border border-white/8 bg-white/4 overflow-hidden">
+                    <div key={tpl.id} className="group relative rounded-xl border border-white/[0.06] bg-white/4 overflow-hidden">
                       <SlideThumbnail slide={(tpl.slides ?? [tpl.slide].filter(Boolean))[0] ?? { id: "x", background: { type: "color", value: "#1a1a2e" }, elements: [] }} width={120} height={68} appDataDir={appDataDir} alt={tpl.name} />
                       <div className="p-2 flex items-center justify-between bg-white/4">
                         <div className="min-w-0">
@@ -141,14 +141,14 @@ export function SlideEditorModals({
 
       {/* ── Unsaved changes confirmation ── */}
       {showUnsavedConfirm && (
-        <div className="absolute inset-0 z-[100] bg-black/70 flex items-center justify-center backdrop-blur-sm">
-          <div className="bg-[#131326] border border-white/10 rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl">
+        <div className="absolute inset-0 z-[100] bg-black/60 flex items-center justify-center backdrop-blur-md">
+          <div className="bg-slate-900/70 backdrop-blur-xl border border-white/10 rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl">
             <p className="text-sm font-bold text-white mb-1">Unsaved Changes</p>
             <p className="text-xs text-slate-400 mb-5">You have unsaved changes to "{pres.name}". Save before leaving?</p>
             <div className="flex gap-2">
-              <button onClick={onDiscardChanges} className="flex-1 py-2.5 bg-white/6 hover:bg-red-500/20 text-slate-400 hover:text-red-400 text-[11px] font-bold rounded-lg transition-all">Discard</button>
-              <button onClick={() => setShowUnsavedConfirm(false)} className="flex-1 py-2.5 bg-white/8 hover:bg-white/12 text-slate-300 text-[11px] font-bold rounded-lg transition-all">Cancel</button>
-              <button onClick={onSaveAndClose} className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-400 text-black text-[11px] font-bold rounded-lg transition-all">Save</button>
+              <button onClick={onDiscardChanges} className="flex-1 py-2.5 bg-white/6 hover:bg-red-500/15 text-slate-400 hover:text-red-400 text-[11px] font-bold rounded-lg transition-all active:scale-95">Discard</button>
+              <button onClick={() => setShowUnsavedConfirm(false)} className="flex-1 py-2.5 bg-white/8 hover:bg-white/12 text-slate-300 text-[11px] font-bold rounded-lg transition-all active:scale-95">Cancel</button>
+              <button onClick={onSaveAndClose} className="flex-1 py-2.5 bg-gradient-to-br from-amber-400 to-amber-600 hover:from-amber-300 hover:to-amber-500 text-black text-[11px] font-bold rounded-lg transition-all shadow-lg shadow-amber-500/20 active:scale-95">Save</button>
             </div>
           </div>
         </div>

@@ -36,8 +36,8 @@ export function MediaPickerModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-8" style={{ backgroundColor: "rgba(0,0,0,0.75)" }}>
-      <div className="bg-slate-900 rounded-xl border border-slate-700 flex flex-col w-full max-w-2xl" style={{ maxHeight: "80vh" }}>
-        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 shrink-0">
+      <div className="bg-black/40 rounded-xl border border-white/[0.08] flex flex-col w-full max-w-2xl" style={{ maxHeight: "80vh" }}>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06] shrink-0">
           <span className="text-sm font-bold text-slate-200">Media Library — Pick {label}</span>
           <div className="flex gap-2">
             <button
@@ -61,7 +61,7 @@ export function MediaPickerModal({
                 <button
                   key={img.id}
                   onClick={() => { onSelect(img.path); onClose(); }}
-                  className="aspect-video rounded-lg overflow-hidden border border-slate-700 hover:border-amber-500 transition-all group relative bg-slate-800"
+                  className="aspect-video rounded-lg overflow-hidden border border-white/[0.08] hover:border-indigo-400/60 transition-all group relative bg-white/[0.05]"
                 >
                   {img.media_type === "Video" || img.media_type === "Audio" ? (
                     <div className="w-full h-full relative">

@@ -44,8 +44,8 @@ export function SlideListPanel({
   const slidePanelRef = useRef<HTMLDivElement>(null);
 
   return (
-    <aside className="w-48 border-r border-white/8 bg-[#131326] flex flex-col overflow-hidden shrink-0">
-      <div className="px-3 py-2 border-b border-white/8 flex items-center justify-between shrink-0">
+    <aside className="w-48 border-r border-white/[0.06] bg-slate-900/70 backdrop-blur-xl flex flex-col overflow-hidden shrink-0">
+      <div className="px-3 py-2 border-b border-white/[0.06] flex items-center justify-between shrink-0">
         <span className="text-[8px] font-black uppercase tracking-widest text-slate-600">Slides</span>
         <span className="text-[8px] text-slate-700">{slides.length}</span>
       </div>
@@ -72,7 +72,7 @@ export function SlideListPanel({
                   ? "border-purple-500 border-dashed shadow-lg shadow-purple-500/20"
                   : dragSlideIdx === i
                     ? "border-white/20 opacity-50"
-                    : "border-white/8 hover:border-white/20"
+                    : "border-white/[0.06] hover:border-white/20"
             } ${dragSlideIdx !== null ? "cursor-grabbing" : "cursor-grab"}`}
           >
             <SlideThumbnail slide={s} className="absolute inset-0 w-full h-full" appDataDir={appDataDir} theme={theme} alt={`Slide ${i + 1}`} />
@@ -91,7 +91,7 @@ export function SlideListPanel({
         ))}
       </div>
 
-      <div className="border-t border-white/8 p-2 flex gap-1 shrink-0">
+      <div className="border-t border-white/[0.06] p-2 flex gap-1 shrink-0">
         {(["Title", "Body", "Blank"] as const).map(t => (
           <button key={t}
             onClick={() => onAddSlide(t.toLowerCase() as "title" | "default" | "blank")}

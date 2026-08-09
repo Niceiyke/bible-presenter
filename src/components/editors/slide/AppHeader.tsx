@@ -37,7 +37,7 @@ export function AppHeader({
   onSaveAndClose,
 }: AppHeaderProps) {
   return (
-    <header className="flex items-center gap-3 px-4 py-2 border-b border-white/8 bg-[#131326] shrink-0">
+    <header className="flex items-center gap-3 px-4 py-2 border-b border-white/[0.06] bg-slate-900/70 backdrop-blur-xl shrink-0">
       <button onClick={onClose} className="p-1.5 hover:bg-white/8 rounded-lg text-slate-500 hover:text-white transition-all" title="Close editor">
         <X size={18} />
       </button>
@@ -70,7 +70,7 @@ export function AppHeader({
         <Download size={13} />
       </button>
       <div className="h-5 w-px bg-white/10" />
-      <button onClick={onSaveAndClose} className="flex items-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-black font-black uppercase text-[11px] rounded-lg transition-all shadow-lg tracking-wide">
+      <button onClick={onSaveAndClose} className="flex items-center gap-1.5 px-4 py-2 bg-gradient-to-br from-amber-400 to-amber-600 hover:from-amber-300 hover:to-amber-500 text-black font-black uppercase text-[11px] rounded-lg transition-all shadow-lg shadow-amber-500/25 active:scale-95 tracking-wide">
         <Save size={14} /> Save & Close
       </button>
     </header>
