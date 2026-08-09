@@ -8,6 +8,7 @@ import {
 import {
   CustomSlideRenderer,
   SongSlideRenderer,
+  ItemBackground,
 } from "./shared/Renderers";
 import { useAppStore } from "../store";
 import { useTauriEvent } from "../hooks/useTauriEvent";
@@ -249,12 +250,15 @@ export function PreviewCard({
             transition={{ duration: 0.2 }}
           >
             {item.type === "Verse" ? (
-              <div className="flex flex-col items-center justify-center gap-3">
-                <p className="text-xl font-serif text-slate-100 leading-snug line-clamp-5 drop-shadow-lg">{item.data.text}</p>
-                <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 ring-1 ring-amber-500/30 backdrop-blur-sm">
-                  <p className="text-amber-400 font-mono font-bold uppercase tracking-widest text-sm shrink-0">
-                    {item.data.book} {item.data.chapter}:{item.data.verse}
-                  </p>
+              <div className="relative w-full h-full flex items-center justify-center">
+                <ItemBackground item={item} settings={settings} appDataDir={appDataDir} />
+                <div className="relative z-10 flex flex-col items-center justify-center gap-3 px-4">
+                  <p className="text-xl font-serif text-slate-100 leading-snug line-clamp-5 drop-shadow-lg">{item.data.text}</p>
+                  <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 ring-1 ring-amber-500/30 backdrop-blur-sm">
+                    <p className="text-amber-400 font-mono font-bold uppercase tracking-widest text-sm shrink-0">
+                      {item.data.book} {item.data.chapter}:{item.data.verse}
+                    </p>
+                  </div>
                 </div>
               </div>
             ) : item.type === "CustomSlide" ? (

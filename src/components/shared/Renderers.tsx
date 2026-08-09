@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { resolvePath, getTransitionVariants } from "../../utils";
+import { resolvePath, getTransitionVariants, getEffectiveBackground, getVideoBackground, getImageBackground, getCameraBackground } from "../../utils";
 import { sanitizeSlideHtml } from "../../utils/sanitize";
 import { useAppStore } from "../../store";
 import {
@@ -19,6 +19,7 @@ import {
   SlideBackground,
   SlideTheme,
   TextElement,
+  THEMES,
 } from "../../types";
 import { renderDocToHtml, isJsonContent } from "../editors/slide/slideTextExtensions";
 import { useAutoSizeText, resolveAutoSizeInputs, docToPlainText } from "./useAutoSizeText";
@@ -112,6 +113,104 @@ function BackgroundVideoEl({ value, loop, muted, objectFit, opacity, appDataDir 
       muted={muted !== false}
       playsInline
     />
+  );
+}
+
+/**
+ * Effective settings-driven background for a content item, mirroring the
+ * output window's layer stack (video / camera / image / solid color). Used
+ * in the operator + stage previews so what the operator sees matches what
+ * gets projected. Camera backgrounds open the device stream like the output
+ * window does.
+ */
+export function ItemBackground({
+  item,
+  settings,
+  appDataDir = null,
+  className = "",
+  children,
+}: {
+  item: DisplayItem | null;
+  settings: PresentationSettings;
+  appDataDir?: string | null;
+  className?: string;
+  children?: React.ReactNode;
+}) {
+  const videoBg = getVideoBackground(settings, item);
+  const imageBg = getImageBackground(settings, item);
+  const cameraBg = getCameraBackground(settings, item);
+  const hasMedia = !!(videoBg?.path || imageBg?.path || cameraBg?.deviceId);
+  const { colors } = (settings ? (THEMES[settings.theme] ?? THEMES.dark) : THEMES.dark);
+  const baseStyle = hasMedia
+    ? { backgroundColor: "#000" }
+    : getEffectiveBackground(settings, item, colors, appDataDir);
+
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const cameraRef = useRef<HTMLVideoElement | null>(null);
+  const deviceId = cameraBg?.deviceId;
+
+  useEffect(() => {
+    let activeStream: MediaStream | null = null;
+    if (deviceId && !deviceId.startsWith("native:") && !deviceId.startsWith("ndi:")) {
+      navigator.mediaDevices
+        .getUserMedia({ video: { deviceId: { exact: deviceId } } })
+        .then((stream) => {
+          activeStream = stream;
+          setCameraStream(stream);
+        })
+        .catch(() => {});
+    }
+    return () => {
+      if (activeStream) activeStream.getTracks().forEach((t) => t.stop());
+      setCameraStream(null);
+    };
+  }, [deviceId]);
+
+  useEffect(() => {
+    if (cameraRef.current && cameraStream) cameraRef.current.srcObject = cameraStream;
+  }, [cameraStream, deviceId]);
+
+  return (
+    <div className={`absolute inset-0 overflow-hidden pointer-events-none ${className}`} style={baseStyle}>
+      {imageBg?.path && (
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundImage: `url(${convertFileSrc(resolvePath(imageBg.path, appDataDir))})`,
+            backgroundSize: imageBg.objectFit === "contain" ? "contain" : imageBg.objectFit === "fill" ? "100% 100%" : "cover",
+            backgroundPosition: "center",
+            backgroundRepeat: "no-repeat",
+            opacity: imageBg.opacity ?? 1,
+          }}
+        />
+      )}
+      {videoBg?.path && (
+        <video
+          key={videoBg.path}
+          src={convertFileSrc(resolvePath(videoBg.path, appDataDir))}
+          className="absolute inset-0 w-full h-full"
+          style={{ objectFit: videoBg.objectFit ?? "cover", opacity: videoBg.opacity ?? 1 }}
+          autoPlay
+          loop={videoBg.loopVideo ?? true}
+          muted={videoBg.muted ?? true}
+          playsInline
+        />
+      )}
+      {cameraBg?.deviceId && (
+        <video
+          ref={cameraRef}
+          className="absolute inset-0 w-full h-full"
+          style={{
+            objectFit: cameraBg.objectFit ?? "cover",
+            opacity: cameraBg.opacity ?? 1,
+            transform: cameraBg.mirrored ? "scaleX(-1)" : "none",
+          }}
+          autoPlay
+          playsInline
+        />
+      )}
+      {children}
+    </div>
   );
 }
 

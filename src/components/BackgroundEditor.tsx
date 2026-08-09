@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { MediaPickerModal } from "./MediaPickerModal";
 import { useAppStore } from "../store";
 import { relativizePath } from "../utils";
@@ -38,16 +37,22 @@ export function BackgroundEditor({
   value,
   onChange,
   mediaImages = [],
+  mediaVideos = [],
+  mediaAudio = [],
   onUploadMedia = async () => {},
 }: {
   label: string;
   value: BackgroundSetting | undefined;
   onChange: (bg: BackgroundSetting) => void;
   mediaImages?: MediaItem[];
+  mediaVideos?: MediaItem[];
+  mediaAudio?: MediaItem[];
   onUploadMedia?: () => Promise<void>;
 }) {
   const { appDataDir, availableCameras, refreshCameras } = useAppStore();
   const [showPicker, setShowPicker] = useState(false);
+  const [showVideoPicker, setShowVideoPicker] = useState(false);
+  const [showAudioPicker, setShowAudioPicker] = useState(false);
   const current: BackgroundSetting = value ?? { type: "None" };
 
   const vbg = current.type === "Video" ? (current as { type: "Video"; value: VideoBackground }).value : null;
@@ -73,28 +78,12 @@ export function BackgroundEditor({
     }
   }, [current.type]);
 
-  const handlePickVideo = async () => {
-    try {
-      const selected = await openDialog({
-        multiple: false,
-        filters: [{ name: "Videos", extensions: ["mp4", "webm", "mov", "mkv", "avi", "m4v"] }],
-      });
-      if (typeof selected !== "string") return;
-      const rel = relativizePath(selected, appDataDir);
-      onChange({ type: "Video", value: { ...(vbg ?? DEFAULT_VIDEO_BG), path: rel } });
-    } catch {}
+  const handlePickVideo = () => {
+    setShowVideoPicker(true);
   };
 
-  const handlePickAudio = async () => {
-    try {
-      const selected = await openDialog({
-        multiple: false,
-        filters: [{ name: "Audio", extensions: ["mp3", "wav", "ogg", "flac", "m4a", "aac"] }],
-      });
-      if (typeof selected !== "string") return;
-      const rel = relativizePath(selected, appDataDir);
-      onChange({ type: "Audio", value: { ...(abg ?? DEFAULT_AUDIO_BG), path: rel } });
-    } catch {}
+  const handlePickAudio = () => {
+    setShowAudioPicker(true);
   };
 
   return (
@@ -201,7 +190,7 @@ export function BackgroundEditor({
                 onClick={handlePickVideo}
                 className="flex-1 py-1 rounded border border-white/[0.08] bg-white/[0.05] hover:bg-white/[0.08] text-[9px] font-bold text-slate-300 transition-all"
               >
-                {vbg.path ? "Change Video..." : "Pick Video File..."}
+                {vbg.path ? "Change from Library..." : "Pick from Library..."}
               </button>
               {vbg.path && (
                 <button
@@ -362,7 +351,7 @@ export function BackgroundEditor({
                 onClick={handlePickAudio}
                 className="flex-1 py-1 rounded border border-white/[0.08] bg-white/[0.05] hover:bg-white/[0.08] text-[9px] font-bold text-slate-300 transition-all"
               >
-                {abg.path ? "Change Audio..." : "Pick Audio File..."}
+                {abg.path ? "Change from Library..." : "Pick from Library..."}
               </button>
               {abg.path && (
                 <button
@@ -410,6 +399,24 @@ export function BackgroundEditor({
           images={mediaImages}
           onSelect={(path) => { onChange({ type: "Image", value: { ...(ibg ?? DEFAULT_IMAGE_BG), path: relativizePath(path, appDataDir) } }); }}
           onClose={() => setShowPicker(false)}
+          onUpload={onUploadMedia}
+        />
+      )}
+      {showVideoPicker && (
+        <MediaPickerModal
+          images={mediaVideos}
+          mode="video"
+          onSelect={(path) => { onChange({ type: "Video", value: { ...(vbg ?? DEFAULT_VIDEO_BG), path: relativizePath(path, appDataDir) } }); }}
+          onClose={() => setShowVideoPicker(false)}
+          onUpload={onUploadMedia}
+        />
+      )}
+      {showAudioPicker && (
+        <MediaPickerModal
+          images={mediaAudio}
+          mode="audio"
+          onSelect={(path) => { onChange({ type: "Audio", value: { ...(abg ?? DEFAULT_AUDIO_BG), path: relativizePath(path, appDataDir) } }); }}
+          onClose={() => setShowAudioPicker(false)}
           onUpload={onUploadMedia}
         />
       )}

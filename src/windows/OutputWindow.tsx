@@ -463,7 +463,7 @@ export function OutputWindow() {
       className="fixed inset-0 overflow-hidden cursor-none pointer-events-none select-none"
       style={
         (videoBg || cameraBg || bgImage)
-          ? { color: colors.verseText }
+          ? { backgroundColor: "#000", color: colors.verseText }
           : { ...bgStyle, color: colors.verseText }
       }
     >

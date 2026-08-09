@@ -1,6 +1,6 @@
 {
   "productName": "Wordlyte",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "identifier": "io.wordlyte.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -15,7 +15,8 @@
         "width": 1200,
         "height": 800,
         "label": "main",
-        "create": false
+        "create": false,
+        "additionalBrowserArgs": "--enable-gpu-rasterization --enable-zero-copy --ignore-gpu-blocklist --enable-accelerated-video-decode --enable-features=MediaFoundationVideoCapture"
       },
       {
         "title": "Wordlyte - Output",
@@ -23,11 +24,12 @@
         "width": 1920,
         "height": 1080,
         "decorations": false,
-        "transparent": true,
+        "transparent": false,
         "alwaysOnTop": true,
         "fullscreen": false,
         "visible": false,
-        "create": false
+        "create": false,
+        "additionalBrowserArgs": "--disable-accelerated-video-decode"
       },
       {
         "title": "Wordlyte - Stage",

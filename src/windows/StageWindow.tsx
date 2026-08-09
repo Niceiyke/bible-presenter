@@ -5,7 +5,7 @@ import type { DisplayItem, PresentationSettings, TimerData } from "../types";
 import { THEMES } from "../types";
 import { displayItemLabel } from "../utils";
 import { stageDetail as stageDetailFor } from "../items/registry";
-import { CustomSlideRenderer } from "../components/shared/Renderers";
+import { CustomSlideRenderer, ItemBackground } from "../components/shared/Renderers";
 import { useAppStore } from "../store";
 import { useT } from "../i18n";
 import { signalOperatorWarning } from "../hooks/useAppInitialization";
@@ -140,48 +140,58 @@ export function StageWindow() {
       </div>
 
       <div className="flex-1 grid grid-cols-2 gap-0 overflow-hidden">
-        <div className="flex flex-col p-8 border-r overflow-hidden" style={{ borderColor: useTheme ? "rgba(255,255,255,0.08)" : "#1e293b" }}>
-          <div className="flex items-center gap-3 mb-4 shrink-0">
-            <div
-              className="w-3 h-3 rounded-full dot-flash"
-              style={{ backgroundColor: "#ef4444", boxShadow: "0 0 12px rgba(239,68,68,0.8)" }}
-            />
-            <span className="text-xs font-black uppercase tracking-widest" style={{ color: "#ef4444" }}>{t("stage.nowLive")}</span>
-          </div>
-          <p className="text-xl font-bold mb-3 shrink-0 truncate" style={{ color: useTheme ? "rgba(255,255,255,0.8)" : "#cbd5e1" }}>{itemSummary(liveItem)}</p>
-          <div className="text-4xl font-serif leading-snug flex-1 overflow-hidden" style={{ color: textCol }}>
-            {liveItem?.type === "CustomSlide" ? (
-              <div className="w-full h-full relative border rounded-lg overflow-hidden" style={{ borderColor: useTheme ? "rgba(255,255,255,0.08)" : "#1e293b" }}>
-                <CustomSlideRenderer slide={liveItem.data} scale={0.2} appDataDir={appDataDir} theme={liveItem.data.theme} />
-              </div>
-            ) : liveItem?.type === "Timer" ? (
-              <div className="flex items-center justify-center h-full">
-                <span className="font-mono text-8xl font-black tabular-nums" style={{ color: textCol }}>{liveTimerDisplay}</span>
-              </div>
-            ) : (
-              <p className="line-clamp-[8] whitespace-pre-wrap">{itemDetail(liveItem)}</p>
-            )}
+        <div className="flex flex-col p-8 border-r overflow-hidden relative" style={{ borderColor: useTheme ? "rgba(255,255,255,0.08)" : "#1e293b" }}>
+          {settings && liveItem && liveItem?.type !== "CustomSlide" && (
+            <ItemBackground item={liveItem} settings={settings} appDataDir={appDataDir} />
+          )}
+          <div className="relative z-10 flex flex-col min-h-0">
+            <div className="flex items-center gap-3 mb-4 shrink-0">
+              <div
+                className="w-3 h-3 rounded-full dot-flash"
+                style={{ backgroundColor: "#ef4444", boxShadow: "0 0 12px rgba(239,68,68,0.8)" }}
+              />
+              <span className="text-xs font-black uppercase tracking-widest" style={{ color: "#ef4444" }}>{t("stage.nowLive")}</span>
+            </div>
+            <p className="text-xl font-bold mb-3 shrink-0 truncate" style={{ color: useTheme ? "rgba(255,255,255,0.8)" : "#cbd5e1" }}>{itemSummary(liveItem)}</p>
+            <div className="text-4xl font-serif leading-snug flex-1 overflow-hidden relative" style={{ color: textCol }}>
+              {liveItem?.type === "CustomSlide" ? (
+                <div className="w-full h-full relative border rounded-lg overflow-hidden" style={{ borderColor: useTheme ? "rgba(255,255,255,0.08)" : "#1e293b" }}>
+                  <CustomSlideRenderer slide={liveItem.data} scale={0.2} appDataDir={appDataDir} theme={liveItem.data.theme} />
+                </div>
+              ) : liveItem?.type === "Timer" ? (
+                <div className="flex items-center justify-center h-full">
+                  <span className="font-mono text-8xl font-black tabular-nums" style={{ color: textCol }}>{liveTimerDisplay}</span>
+                </div>
+              ) : (
+                <p className="line-clamp-[8] whitespace-pre-wrap">{itemDetail(liveItem)}</p>
+              )}
+            </div>
           </div>
         </div>
 
-        <div className="flex flex-col p-8 border-2 overflow-hidden rounded-xl" style={{ borderColor: accent + "66", backgroundColor: useTheme ? accent + "0d" : "rgba(120,53,15,0.1)", boxShadow: `inset 0 0 0 1px ${accent}12, 0 0 50px -15px ${accent}30` }}>
-          <div className="flex items-center gap-3 mb-4 shrink-0">
-            <span className="text-xs font-black uppercase tracking-widest" style={{ color: accent }}>{t("stage.upNext")}</span>
-            <span className="w-1.5 h-1.5 rounded-full dot-flash" style={{ backgroundColor: accent }} />
-          </div>
-          <p className="text-xl font-bold mb-3 shrink-0 truncate" style={{ color: accent }}>{itemSummary(stagedItem)}</p>
-          <div className="text-4xl font-serif leading-snug flex-1 overflow-hidden" style={{ color: useTheme ? "rgba(255,255,255,0.9)" : "#fef3c7" }}>
-            {stagedItem?.type === "CustomSlide" ? (
-              <div className="w-full h-full relative border rounded-lg overflow-hidden" style={{ borderColor: useTheme ? "rgba(255,255,255,0.08)" : "#1e293b" }}>
-                <CustomSlideRenderer slide={stagedItem.data} scale={0.2} appDataDir={appDataDir} theme={stagedItem.data.theme} />
-              </div>
-            ) : stagedItem?.type === "Timer" ? (
-              <div className="flex items-center justify-center h-full">
-                <span className="font-mono text-7xl font-black tabular-nums" style={{ color: accent }}>{computeTimerDisplay(stagedItem.data, Date.now())}</span>
-              </div>
-            ) : (
-              <p className="line-clamp-[8] whitespace-pre-wrap">{itemDetail(stagedItem)}</p>
-            )}
+        <div className="flex flex-col p-8 border-2 overflow-hidden rounded-xl relative" style={{ borderColor: accent + "66", backgroundColor: useTheme ? accent + "0d" : "rgba(120,53,15,0.1)", boxShadow: `inset 0 0 0 1px ${accent}12, 0 0 50px -15px ${accent}30` }}>
+          {settings && stagedItem && stagedItem?.type !== "CustomSlide" && (
+            <ItemBackground item={stagedItem} settings={settings} appDataDir={appDataDir} />
+          )}
+          <div className="relative z-10 flex flex-col min-h-0">
+            <div className="flex items-center gap-3 mb-4 shrink-0">
+              <span className="text-xs font-black uppercase tracking-widest" style={{ color: accent }}>{t("stage.upNext")}</span>
+              <span className="w-1.5 h-1.5 rounded-full dot-flash" style={{ backgroundColor: accent }} />
+            </div>
+            <p className="text-xl font-bold mb-3 shrink-0 truncate" style={{ color: accent }}>{itemSummary(stagedItem)}</p>
+            <div className="text-4xl font-serif leading-snug flex-1 overflow-hidden relative" style={{ color: useTheme ? "rgba(255,255,255,0.9)" : "#fef3c7" }}>
+              {stagedItem?.type === "CustomSlide" ? (
+                <div className="w-full h-full relative border rounded-lg overflow-hidden" style={{ borderColor: useTheme ? "rgba(255,255,255,0.08)" : "#1e293b" }}>
+                  <CustomSlideRenderer slide={stagedItem.data} scale={0.2} appDataDir={appDataDir} theme={stagedItem.data.theme} />
+                </div>
+              ) : stagedItem?.type === "Timer" ? (
+                <div className="flex items-center justify-center h-full">
+                  <span className="font-mono text-7xl font-black tabular-nums" style={{ color: accent }}>{computeTimerDisplay(stagedItem.data, Date.now())}</span>
+                </div>
+              ) : (
+                <p className="line-clamp-[8] whitespace-pre-wrap">{itemDetail(stagedItem)}</p>
+              )}
+            </div>
           </div>
         </div>
       </div>

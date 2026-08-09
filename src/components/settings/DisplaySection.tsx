@@ -733,6 +733,8 @@ export function DisplaySection({ onUpdateSettings, onUploadMedia }: DisplaySecti
             value={settings.bible_background}
             onChange={(bg) => onUpdateSettings({ ...settings, bible_background: bg })}
             mediaImages={media.filter((m) => m.media_type === "Image")}
+            mediaVideos={media}
+            mediaAudio={media}
             onUploadMedia={onUploadMedia}
           />
           <div className="border-t border-white/[0.08]" />
@@ -741,6 +743,8 @@ export function DisplaySection({ onUpdateSettings, onUploadMedia }: DisplaySecti
             value={settings.media_background}
             onChange={(bg) => onUpdateSettings({ ...settings, media_background: bg })}
             mediaImages={media.filter((m) => m.media_type === "Image")}
+            mediaVideos={media}
+            mediaAudio={media}
             onUploadMedia={onUploadMedia}
           />
         </div>
