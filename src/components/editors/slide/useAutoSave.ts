@@ -1,64 +1,102 @@
 /**
  * `useAutoSave`
  *
- * Debounced autosave for the active presentation. Commits `pres` to the
- * backend `save_studio_presentation` Tauri command after `delayMs`
- * since the last local change, with a guard so overlapping saves wait
- * for the in-flight one to finish before retrying.
+ * Debounced, revision-safe autosave for the active presentation.
  *
- * Behaviour mirrors the inline autosave the SlideEditor previously
- * owned (`autoSaveTimerRef` + `savePendingRef`), with two differences:
+ * The slide editor owns a monotonically increasing `revisionRef` that is
+ * bumped on every document mutation and an `EditorSaveState` machine:
  *
- *   - It no longer touches `isDirtyRef` directly. The caller owns the
- *     "dirty" signal (a ref, in practice) and passes it in; the hook
- *     will save only when `dirtyRef.current` is true. This decouples
- *     the hook from any specific dirty-tracking representation.
+ *   "saved" | "dirty" | "saving" | "save-failed"
  *
- *   - The hook accepts a `savingRef` so the host can synchronously
- *     inspect "is a save currently in-flight?" for the editor's
- *     close-button confirmation flow without coupling to internal
- *     state.
+ * Rules enforced here (SLIDE_EDITOR_MODERNIZATION_PLAN §7.2):
+ *
+ *   - Save after a debounce period since the last local change.
+ *   - Save the latest presentation snapshot, never an outdated closure.
+ *   - If a mutation occurs while a save is in flight, do not clear dirty
+ *     state until the newer revision is also persisted. This is done by
+ *     capturing `{ revision, snapshot }` when the save starts and, on
+ *     success, clearing dirty only when `revisionRef` still equals the
+ *     captured revision; otherwise the state returns to "dirty" and a new
+ *     debounced save is scheduled.
+ *   - On failure the state becomes "save-failed"; dirty state is retained
+ *     and an explicit retry (or any new edit) schedules a fresh save.
+ *   - No overlapping saves: the `inFlightRef` promise guard prevents a
+ *     second save while one is running, and the effect only schedules
+ *     when the state is exactly "dirty".
+ *   - The host can await `inFlightRef.current` (e.g. from a close/discard
+ *     handler) so a pending save is never silently abandoned.
+ *
+ * The same `save` function is shared with manual save and Save & Close.
  */
 
 import { useEffect, type RefObject } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import type { CustomPresentation } from "../../../types";
 
+export type EditorSaveState = "saved" | "dirty" | "saving" | "save-failed";
+
 interface UseAutoSaveArgs {
+  /** Latest presentation snapshot (current render value). */
   pres: CustomPresentation;
-  dirtyRef: RefObject<boolean>;
-  savingRef: RefObject<boolean>;
-  /** Called after a successful autosave so the host can clear is-dirty UI. */
-  onSaveOK?: () => void;
-  /** Called when autosave fails. Host may surface a toast. */
+  /** Live save-state value; included as an effect dep so transitions re-evaluate. */
+  saveState: EditorSaveState;
+  /** Ref mirror of `saveState` for synchronous reads outside React. */
+  saveStateRef: RefObject<EditorSaveState>;
+  setSaveState: (s: EditorSaveState) => void;
+  /** Monotonically increasing revision, bumped on every document mutation. */
+  revisionRef: RefObject<number>;
+  /** Shared persistence function (also used by manual save and close). */
+  save: (p: CustomPresentation) => Promise<void>;
+  /** Host stores the in-flight promise here so close/discard can await it. */
+  inFlightRef: RefObject<Promise<void> | null>;
   onSaveError?: (err: unknown) => void;
   delayMs?: number;
 }
 
 export function useAutoSave({
   pres,
-  dirtyRef,
-  savingRef,
-  onSaveOK,
+  saveState,
+  saveStateRef,
+  setSaveState,
+  revisionRef,
+  save,
+  inFlightRef,
   onSaveError,
-  delayMs = 3000,
+  delayMs = 2500,
 }: UseAutoSaveArgs): void {
   useEffect(() => {
-    if (!dirtyRef.current) return;
-    const t = setTimeout(async () => {
-      if (savingRef.current) return;
-      savingRef.current = true;
-      try {
-        await invoke("save_studio_presentation", { presentation: pres });
-        dirtyRef.current = false;
-        onSaveOK?.();
-      } catch (err) {
-        console.error("Auto-save failed", err);
-        onSaveError?.(err);
-      } finally {
-        savingRef.current = false;
-      }
+    if (saveState !== "dirty") return;
+
+    const t = setTimeout(() => {
+      if (inFlightRef.current) return;
+
+      const revision = revisionRef.current;
+      const snapshot = pres;
+      saveStateRef.current = "saving";
+      setSaveState("saving");
+
+      inFlightRef.current = (async () => {
+        try {
+          await save(snapshot);
+          if (revisionRef.current === revision) {
+            saveStateRef.current = "saved";
+            setSaveState("saved");
+          } else {
+            // A newer revision landed while we were saving: keep dirty so
+            // the effect reschedules and persists the latest snapshot.
+            saveStateRef.current = "dirty";
+            setSaveState("dirty");
+          }
+        } catch (err) {
+          console.error("Auto-save failed", err);
+          saveStateRef.current = "save-failed";
+          setSaveState("save-failed");
+          onSaveError?.(err);
+        } finally {
+          inFlightRef.current = null;
+        }
+      })();
     }, delayMs);
+
     return () => clearTimeout(t);
-  }, [pres, dirtyRef, savingRef, onSaveOK, onSaveError, delayMs]);
+  }, [pres, saveState, saveStateRef, setSaveState, revisionRef, save, inFlightRef, onSaveError, delayMs]);
 }

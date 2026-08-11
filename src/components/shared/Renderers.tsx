@@ -295,7 +295,7 @@ export function CustomSlideRenderer({
   // memoized further inside `renderDocToHtml`, so a banner that toggles
   // background colour every frame does not reparse its neighbour.
   const renderedElements = useMemo(() => elements.map((el) => {
-    if (hiddenElementIds.includes(el.id)) return null;
+    if (hiddenElementIds.includes(el.id) || el.hidden) return null;
 
     const elStyle: React.CSSProperties = {
       position: "absolute",
@@ -427,11 +427,23 @@ export function CustomSlideRenderer({
   }).map((node) => node), [elements, hiddenElementIds, scale, appDataDir, theme, entranceEnabled]);
 
   // P4.5 — after computing each element's node, apply the entrance
+  // P7: respect prefers-reduced-motion — skip entrance animations when the
+  //  operator has requested reduced motion. The slide still renders; only the
+  //  animated entrance wrapper is bypassed.
+  const [reducedMotion, setReducedMotion] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setReducedMotion(mq.matches);
+    const handler = (e: MediaQueryListEvent) => setReducedMotion(e.matches);
+    mq.addEventListener?.("change", handler);
+    return () => mq.removeEventListener?.("change", handler);
+  }, []);
+
   // animation wrapper when the caller enabled it (projection path only).
-  const animatedElements = entranceEnabled
+  const animatedElements = entranceEnabled && !reducedMotion
     ? elements
         .map((el, i) => {
-          if (hiddenElementIds.includes(el.id)) return null;
+          if (hiddenElementIds.includes(el.id) || el.hidden) return null;
           const ent = el.entrance;
           if (!ent || ent.type === "none") return renderedElements[i] ?? null;
           const v = getTransitionVariants(ent.type, ent.duration / 1000);

@@ -45,6 +45,8 @@ export interface SlideCanvasProps {
   slide: CustomSlide;
   canvasRef: React.RefObject<HTMLDivElement | null>;
   canvasScale: number;
+  /** P3: zoom multiplier on the fit width (1 = fit). */
+  zoom: number;
   appDataDir: string | null;
   activeElementIds: string[];
   editingElementId: string | null;
@@ -71,6 +73,7 @@ export function SlideCanvas({
   slide,
   canvasRef,
   canvasScale,
+  zoom,
   appDataDir,
   activeElementIds,
   editingElementId,
@@ -94,7 +97,7 @@ export function SlideCanvas({
       style={{ background: "radial-gradient(circle, #252540 1px, transparent 1px)", backgroundSize: "22px 22px", backgroundColor: "#0b0b18" }}
       onClick={onCanvasClick}
     >
-      <div ref={canvasRef} className="relative shadow-2xl shadow-black/80 ring-1 ring-white/8" style={{ aspectRatio: "16/9", backgroundColor: backingBackgroundColor(slide.background), width: "min(100%, calc((100vh - 140px) * 16 / 9))" }}>
+      <div ref={canvasRef} className="relative shadow-2xl shadow-black/80 ring-1 ring-console-border" style={{ aspectRatio: "16/9", backgroundColor: backingBackgroundColor(slide.background), width: `min(100%, calc((100vh - 140px) * 16 / 9 * ${zoom}))` }}>
         <CustomSlideRenderer slide={slide} scale={canvasScale} appDataDir={appDataDir} hiddenElementIds={editingElementId ? [editingElementId] : []} />
 
         {/* P3.2: visual grid overlay — shown only when snapping is on.
@@ -136,6 +139,7 @@ export function SlideCanvas({
           {slide.elements.slice().sort((a, b) => a.z_index - b.z_index).map(el => {
             const isActive = activeElementIds.includes(el.id);
             const isEditing = editingElementId === el.id;
+            const isHidden = !!el.hidden;
             const isGroupedSelected = el.groupId && activeElementIds.some(id => {
               const sel = slide.elements.find(e => e.id === id);
               return sel?.groupId === el.groupId;
@@ -143,34 +147,38 @@ export function SlideCanvas({
 
             return (
               <div key={el.id}
-                className={`absolute pointer-events-auto transition-all ${isEditing ? "cursor-text" : isActive ? "cursor-move" : "cursor-pointer"}`}
+                className={`absolute pointer-events-auto transition-all ${isHidden ? "cursor-pointer" : isEditing ? "cursor-text" : isActive ? "cursor-move" : "cursor-pointer"}`}
                 style={{
                   left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`,
                   zIndex: el.z_index + 100,
-                  outline: isEditing ? "2px solid #34d399" : isActive ? "2px solid #818cf8" : isGroupedSelected ? "2px dashed #818cf8" : "2px solid transparent",
+                  opacity: isHidden ? 0.3 : 1,
+                  outline: isHidden ? "2px dashed #a8b5c1" : isEditing ? "2px solid #34d399" : isActive ? "2px solid #818cf8" : isGroupedSelected ? "2px dashed #818cf8" : "2px solid transparent",
                   outlineOffset: "1px",
                 }}
                 onClick={e => onElementClick(el.id, e)}
-                onPointerDown={e => { if (!isEditing) onDrag(el.id, e); }}
-                onDoubleClick={e => onDblClick(el.id, e)}
+                onPointerDown={e => { if (!isEditing && !isHidden && !el.locked) onDrag(el.id, e); }}
+                onDoubleClick={e => { if (!isHidden) onDblClick(el.id, e); }}
               >
+                {isHidden && (
+                  <span className="absolute inset-0 flex items-center justify-center text-[7px] font-bold text-console-text-subtle pointer-events-none">Hidden</span>
+                )}
                 {isEditing && el.kind === "text" && <InlineTextEditor el={el} canvasScale={canvasScale} theme={theme} onCommit={doc => onCommit(el.id, doc)} />}
-                {isActive && !isEditing && Object.entries(HANDLES).map(([h, style]) => (
+                {isActive && !isEditing && !isHidden && Object.entries(HANDLES).map(([h, style]) => (
                   <div key={h} onPointerDown={e => onResize(el.id, e, h as Handle)} className="absolute w-2.5 h-2.5 bg-white border-2 border-indigo-400 rounded-full shadow-md" style={{ position: "absolute", ...style }} />
                 ))}
                 {/* P3.4: rotation grabber — a circular handle mounted
                     above the element's top-center, slightly away from
                     the box so it doesn't interfere with the n-handle. */}
-                {isActive && !isEditing && (
+                {isActive && !isEditing && !isHidden && (
                   <div
                     onPointerDown={e => onRotate(el.id, e)}
                     title="Rotate"
-                    className="absolute left-1/2 -translate-x-1/2 -top-7 w-5 h-5 bg-amber-500 border-2 border-white rounded-full shadow-md cursor-grab hover:bg-amber-400 transition-all"
+                    className="absolute left-1/2 -translate-x-1/2 -top-7 w-5 h-5 bg-state-warning border-2 border-console-text rounded-full shadow-md cursor-grab hover:bg-action-primary-hover transition-all"
                     style={{ position: "absolute" }}
                   />
                 )}
-                {isActive && !isEditing && el.kind === "text" && (
-                  <span className="absolute top-full left-0 mt-1 px-1.5 py-0.5 bg-indigo-500 text-white text-[7px] font-bold rounded whitespace-nowrap pointer-events-none z-[200]">↕ drag · double-click to edit</span>
+                {isActive && !isEditing && !isHidden && el.kind === "text" && (
+                  <span className="absolute top-full left-0 mt-1 px-1.5 py-0.5 bg-tool-design text-console-text text-[7px] font-bold rounded whitespace-nowrap pointer-events-none z-[200]">↕ drag · double-click to edit</span>
                 )}
               </div>
             );
@@ -178,10 +186,10 @@ export function SlideCanvas({
         </div>
       </div>
 
-      <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/60 backdrop-blur border border-white/10 rounded-full px-3 py-1.5 z-[70]">
-        <button disabled={slideIndex === 0} onClick={e => { e.stopPropagation(); onNavigate(-1); }} className="text-slate-400 hover:text-white disabled:opacity-20 transition-all"><ChevronLeft size={16} /></button>
-        <span className="text-xs text-slate-300 font-bold tabular-nums min-w-[40px] text-center">{slideIndex + 1} / {slideCount}</span>
-        <button disabled={slideIndex === slideCount - 1} onClick={e => { e.stopPropagation(); onNavigate(1); }} className="text-slate-400 hover:text-white disabled:opacity-20 transition-all"><ChevronRight size={16} /></button>
+      <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-console-surface/80 backdrop-blur border border-console-border rounded-full px-3 py-1.5 z-[70]">
+        <button disabled={slideIndex === 0} onClick={e => { e.stopPropagation(); onNavigate(-1); }} aria-label="Previous slide" title="Previous slide" className="text-console-text-muted hover:text-console-text disabled:opacity-20 transition-all"><ChevronLeft size={16} /></button>
+        <span className="text-xs text-console-text font-bold tabular-nums min-w-[40px] text-center">{slideIndex + 1} / {slideCount}</span>
+        <button disabled={slideIndex === slideCount - 1} onClick={e => { e.stopPropagation(); onNavigate(1); }} aria-label="Next slide" title="Next slide" className="text-console-text-muted hover:text-console-text disabled:opacity-20 transition-all"><ChevronRight size={16} /></button>
       </div>
     </div>
   );

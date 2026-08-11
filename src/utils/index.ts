@@ -167,6 +167,107 @@ export function newBlankSlide(): CustomSlide {
   };
 }
 
+// ─── Slide-layout factories (SLIDE_EDITOR_MODERNIZATION_PLAN §5.3) ──────────
+// The "+ Add slide" menu offers a small set of opinionated starter layouts in
+// addition to the classic Title / Title-and-content / Blank trio. Each builds
+// a plain `CustomSlide` with the same defaults as the existing factories so
+// the editor, renderer, and templates all treat them identically.
+
+export function newQuoteSlide(): CustomSlide {
+  return {
+    id: stableId(),
+    background: { type: "color", value: "#1a1a2e" },
+    elements: [
+      {
+        id: stableId(),
+        kind: "text",
+        x: 12, y: 20, w: 76, h: 40, z_index: 1,
+        content: textToDoc('"An inspiring quote goes here."'),
+        font_size: 52, font_family: "Georgia", color: "#ffffff", align: "center", v_align: "middle", bold: false, italic: true, shadow: true, shadow_color: "#000000",
+      },
+      {
+        id: stableId(),
+        kind: "text",
+        x: 12, y: 62, w: 76, h: 12, z_index: 2,
+        content: textToDoc("— Attribution"),
+        font_size: 30, font_family: "Arial", color: "#f4b740", align: "center", v_align: "middle", bold: true, italic: false,
+      },
+    ],
+  };
+}
+
+export function newAnnouncementSlide(): CustomSlide {
+  return {
+    id: stableId(),
+    background: { type: "color", value: "#1a1a2e" },
+    elements: [
+      {
+        id: stableId(),
+        kind: "text",
+        x: 10, y: 28, w: 80, h: 24, z_index: 1,
+        content: textToDoc("Announcement Title"),
+        font_size: 56, font_family: "Arial", color: "#ffffff", align: "center", v_align: "middle", bold: true, italic: false,
+      },
+      {
+        id: stableId(),
+        kind: "text",
+        x: 15, y: 56, w: 70, h: 20, z_index: 2,
+        content: textToDoc("Details go here — date, time, place."),
+        font_size: 32, font_family: "Arial", color: "#c9d4de", align: "center", v_align: "middle", bold: false, italic: false,
+      },
+    ],
+  };
+}
+
+export function newImageCaptionSlide(): CustomSlide {
+  return {
+    id: stableId(),
+    background: { type: "color", value: "#1a1a2e" },
+    elements: [
+      {
+        id: stableId(),
+        kind: "text",
+        x: 15, y: 15, w: 70, h: 52, z_index: 1,
+        content: textToDoc("Image goes here"),
+        font_size: 34, font_family: "Arial", color: "#7d8d9d", align: "center", v_align: "middle", bold: false, italic: true,
+      },
+      {
+        id: stableId(),
+        kind: "text",
+        x: 15, y: 70, w: 70, h: 14, z_index: 2,
+        content: textToDoc("Caption"),
+        font_size: 26, font_family: "Arial", color: "#ffffff", align: "center", v_align: "middle", bold: false, italic: false,
+      },
+    ],
+  };
+}
+
+/** P5 (SLIDE_EDITOR_MODERNIZATION_PLAN §5.3): a Scripture starter layout —
+ *  a centered reference line and a body that inherits the theme so the
+ *  operator can drop a verse straight in. */
+export function newScriptureSlide(): CustomSlide {
+  return {
+    id: stableId(),
+    background: { type: "color", value: "#1a1a2e" },
+    elements: [
+      {
+        id: stableId(),
+        kind: "text",
+        x: 10, y: 14, w: 80, h: 14, z_index: 1,
+        content: textToDoc("John 3:16"),
+        font_size: 40, font_family: "Georgia", color: "#f4b740", align: "center", v_align: "middle", bold: true, italic: false,
+      },
+      {
+        id: stableId(),
+        kind: "text",
+        x: 12, y: 32, w: 76, h: 50, z_index: 2,
+        content: textToDoc("For God so loved the world, that he gave his only begotten Son…"),
+        font_size: 36, font_family: "Georgia", color: "#ffffff", align: "center", v_align: "middle", bold: false, italic: true, shadow: true, shadow_color: "#000000",
+      },
+    ],
+  };
+}
+
 export function deepCloneSlide(slide: CustomSlide): CustomSlide {
   return JSON.parse(JSON.stringify(slide));
 }

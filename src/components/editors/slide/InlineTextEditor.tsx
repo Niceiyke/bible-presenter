@@ -263,7 +263,7 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
 
   return (
     <div
-      className="absolute inset-0 outline-none ring-2 ring-emerald-400/60 flex flex-col"
+      className="absolute inset-0 outline-none ring-2 ring-state-success/60 flex flex-col"
       style={{ justifyContent }}
       onPointerDown={(e) => e.stopPropagation()}
       onPointerMove={(e) => e.stopPropagation()}
@@ -273,7 +273,7 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
       {/* Floating toolbar — above the content, never stealing pointer events
           from the editor unless the user is interacting with a control. */}
       <div
-        className="absolute top-1 left-1/2 -translate-x-1/2 z-30 flex items-center gap-0.5 bg-[#1a1a2e]/95 border border-white/15 rounded-lg px-1 py-1 shadow-2xl shadow-black/80 backdrop-blur"
+        className="absolute top-1 left-1/2 -translate-x-1/2 z-30 flex items-center gap-0.5 bg-console-surface border border-console-border rounded-lg px-1 py-1 shadow-2xl shadow-black/80 backdrop-blur"
         // Mousedown handlers call preventDefault() so the editor doesn't
         // collapse its selection when the user mouses down on a toolbar
         // button. Pointer-down is also stopped so drag/resize doesn't
@@ -310,12 +310,12 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
           className="flex items-center gap-1 px-1 cursor-pointer"
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <Type size={11} className="text-slate-400" />
+          <Type size={11} className="text-console-text-muted" />
           <select
             value={editor.getAttributes("textStyle")?.font || el.font_family || "Arial"}
             onChange={(e) => editor.chain().focus().setFontFamily(e.target.value).run()}
             onMouseDown={(e) => e.stopPropagation()}
-            className="bg-white/8 border border-white/10 rounded px-1 py-0.5 text-[10px] text-slate-200 outline-none max-w-[110px]"
+            className="bg-console-surface-raised border border-console-border rounded px-1 py-0.5 text-[10px] text-console-text outline-none max-w-[110px]"
           >
             {availableFonts.map((f) => <option key={f} value={f}>{f}</option>)}
           </select>
@@ -324,7 +324,7 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
         <ToolbarButton title="Smaller (Alt+A⁻)" onClick={() => bumpFontSize(-4)}>
           <AArrowDown size={13} />
         </ToolbarButton>
-        <span className="text-[10px] text-slate-500 tabular-nums w-7 text-center">
+        <span className="text-[10px] text-console-text-muted tabular-nums w-7 text-center">
           {(() => {
             const selSize = (editor.getAttributes("textStyle") as any)?.fontSize;
             if (typeof selSize === "string" && selSize.trim().endsWith("pt")) {
@@ -347,7 +347,7 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
             value={(editor.getAttributes("textStyle") as any)?.color || el.color || "#ffffff"}
             onChange={(e) => editor.chain().focus().setColor(e.target.value).run()}
             onMouseDown={(e) => e.stopPropagation()}
-            className="w-7 h-7 rounded-lg cursor-pointer border border-white/20 bg-transparent"
+            className="w-7 h-7 rounded-lg cursor-pointer border border-console-border bg-transparent"
             title="Text Color"
           />
         </label>
@@ -368,12 +368,12 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
           onMouseDown={(e) => e.stopPropagation()}
           title="Paragraph style"
         >
-          <Pilcrow size={11} className="text-slate-400" />
+          <Pilcrow size={11} className="text-console-text-muted" />
           <select
             value={currentStyleName}
             onChange={(e) => applyParagraphStyle(e.target.value)}
             onMouseDown={(e) => e.stopPropagation()}
-            className="bg-white/8 border border-white/10 rounded px-1 py-0.5 text-[10px] text-slate-200 outline-none max-w-[100px]"
+            className="bg-console-surface-raised border border-console-border rounded px-1 py-0.5 text-[10px] text-console-text outline-none max-w-[100px]"
           >
             <option value="">Plain</option>
             {(theme?.paragraphStyles ? Object.keys(theme.paragraphStyles) : []).map(name => (
@@ -395,7 +395,7 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
               if (m) applyCase(m);
             }}
             onMouseDown={(e) => e.stopPropagation()}
-            className="bg-white/8 border border-white/10 rounded px-1 py-0.5 text-[10px] text-slate-200 outline-none"
+            className="bg-console-surface-raised border border-console-border rounded px-1 py-0.5 text-[10px] text-console-text outline-none"
           >
             <option value="">Aa</option>
             <option value="upper">UPPERCASE</option>
@@ -467,8 +467,8 @@ function ToolbarButton({
       title={title}
       onMouseDown={(e) => e.preventDefault()}
       onClick={(e) => { e.preventDefault(); onClick(); }}
-      className={`w-7 h-7 flex items-center justify-center rounded-lg transition-all text-slate-300 hover:text-white ${
-        active ? "bg-emerald-500/30 text-white" : "bg-white/8 hover:bg-white/16"
+      className={`w-7 h-7 flex items-center justify-center rounded-lg transition-all text-console-text hover:text-console-text ${
+        active ? "bg-state-success/30 text-console-text" : "bg-console-surface-raised hover:bg-console-surface-strong"
       }`}
     >
       {children}
@@ -477,5 +477,5 @@ function ToolbarButton({
 }
 
 function ToolbarDivider() {
-  return <div className="w-px h-5 bg-white/10 mx-0.5 shrink-0" />;
+  return <div className="w-px h-5 bg-console-border mx-0.5 shrink-0" />;
 }

@@ -13,33 +13,67 @@
  * used here; this hook only *wires* them together.
  */
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { useSlideHistory, textCoalesceKey } from "./useSlideHistory";
-import { useAutoSave } from "./useAutoSave";
+import { useAutoSave, type EditorSaveState } from "./useAutoSave";
 import { useCanvasScale } from "./useCanvasScale";
 import { useElementDrag, useElementResize, useElementRotation } from "./useElementDragResize";
 import type { GuideLine } from "./useElementDragResize";
 import { useSlideDragDrop } from "./useSlideDragDrop";
 import { migratePresentation, alignElements, adjustZOrder, collectGroupMembers, synthesizeDefaultTheme, type AlignmentAxis, type ZDirection } from "./helpers";
-import { newDefaultSlide, newTitleSlide, newBlankSlide, stableId, relativizePath, exportPresentation, importPresentation, deepCloneSlide, newTextElement, newImageElement, newVideoElement, newShapeElement } from "../../../utils";
+import { newDefaultSlide, newTitleSlide, newBlankSlide, newQuoteSlide, newAnnouncementSlide, newImageCaptionSlide, newScriptureSlide, stableId, relativizePath, exportPresentation, importPresentation, deepCloneSlide, newTextElement, newImageElement, newVideoElement, newShapeElement, buildCustomSlideItem } from "../../../utils";
 import { useAppStore } from "../../../store";
 import { useKeyboardBinding } from "../../../hooks/keyboardRegistry";
-import type { CustomPresentation, CustomSlide, MediaItem, SlideElement, SlideMaster, SlideTemplate, ProseMirrorJSON, SlideBackground } from "../../../types";
+import type { CustomPresentation, CustomSlide, MediaItem, SlideElement, SlideMaster, SlideTemplate, ProseMirrorJSON, SlideBackground, DisplayItem } from "../../../types";
 
 export interface UseSlideEditorArgs {
   initialPres: CustomPresentation;
   onClose: (saved: boolean) => void;
+  /** P3: stage the active slide into the output queue (never broadcasts). */
+  onStageSlide?: (item: DisplayItem) => Promise<boolean> | boolean;
+  /** P6: add the active slide to the active service plan. */
+  onAddToService?: (item: DisplayItem) => Promise<void> | void;
 }
 
-export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
-  const { appDataDir, stagedItem, setToast, setIsDirty, templates, setTemplates } = useAppStore();
+/** P3: the "+ Add slide" menu layouts offered by the slide rail. */
+export type AddSlideKind = "title" | "default" | "blank" | "quote" | "announcement" | "imageCaption" | "scripture";
+
+export function useSlideEditor({ initialPres, onClose, onStageSlide, onAddToService }: UseSlideEditorArgs) {
+  const { appDataDir, stagedItem, liveItem, setToast, templates, setTemplates } = useAppStore();
 
   const init = () => migratePresentation(JSON.parse(JSON.stringify(initialPres)));
   // P1.4 + P1.6: history + coalescing live in the hook. `setPres` accepts
   // `(next, { save, coalesceKey })`; `undo`/`redo` operate the stack.
-  const { present: pres, setPres, undo, redo, canUndo, canRedo } = useSlideHistory(init());
+  // The history's `setPres` is wrapped below so every document mutation
+  // marks the presentation dirty and bumps the save revision.
+  const { present: pres, setPres: commitPres, undo, redo, canUndo, canRedo } = useSlideHistory(init());
+
+  // ── Save state machine (P1.x) ─────────────────────────────────────────────
+  // `saveState` drives the top-bar status and the close/discard guards.
+  // `revisionRef` is bumped on every document mutation; autosave clears
+  // dirty only when the saved snapshot's revision is still current.
+  const [saveState, setSaveState] = useState<EditorSaveState>("saved");
+  const saveStateRef = useRef<EditorSaveState>("saved");
+  const revisionRef = useRef(0);
+  const presRef = useRef(pres);
+  const inFlightSaveRef = useRef<Promise<void> | null>(null);
+
+  useEffect(() => { presRef.current = pres; }, [pres]);
+
+  // Wrapped mutation entry point. Every call that reaches the history's
+  // `setPres` bumps the save revision and marks the document dirty (unless
+  // a save is already in flight — the revision guard still prevents the
+  // pending save from clearing dirty for the newer revision).
+  const setPres = useCallback<typeof commitPres>((next, opts) => {
+    revisionRef.current += 1;
+    if (saveStateRef.current !== "saving") {
+      saveStateRef.current = "dirty";
+      setSaveState("dirty");
+    }
+    commitPres(next, opts);
+  }, [commitPres]);
 
   const [activeSlideIdx, setActiveSlideIdx] = useState(0);
   const [activeElementIds, setActiveElementIds] = useState<string[]>([]);
@@ -67,8 +101,11 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const canvasScale = useCanvasScale(canvasRef);
 
-  const isDirtyRef = useRef(false);
-  const savePendingRef = useRef(false);
+  // P3: canvas zoom as a multiplier on the fit width (1 = fit). Changing it
+  // resizes the canvas element itself, so `useCanvasScale` re-measures and
+  // element coordinates, inline editing, and drag/resize stay correct.
+  const [zoom, setZoom] = useState(1);
+
   const suppressClickRef = useRef(false);
 
   const activeElementId = activeElementIds.length === 1 ? activeElementIds[0] : null;
@@ -108,29 +145,44 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
     });
   }, [activeSlideIdx, editingMasterId]);
 
-  // ── Auto-save debounce (P1.4) ───────────────────────────────────────────────
+  // ── Auto-save debounce (P1.4 + revision-safe P1.x) ────────────────────────
+  const savePresentation = useCallback(async (p: CustomPresentation) => {
+    await invoke("save_studio_presentation", { presentation: p });
+  }, []);
+
   useAutoSave({
     pres,
-    dirtyRef: isDirtyRef,
-    savingRef: savePendingRef,
-    onSaveOK: () => setIsDirty(false),
+    saveState,
+    saveStateRef,
+    setSaveState,
+    revisionRef,
+    save: savePresentation,
+    inFlightRef: inFlightSaveRef,
+    onSaveError: () => setToast("Auto-save failed"),
   });
 
   // ── Undo / redo wrappers — the history stack itself lives in
-  //    useSlideHistory (P1.6). These just mark the doc dirty. ──────────────────
+  //    useSlideHistory (P1.6). Undoing a saved change makes the doc dirty
+  //    again and bumps the revision so the reverted state is persisted. ──────
   const handleUndo = useCallback(() => {
     if (!canUndo) return;
     undo();
-    isDirtyRef.current = true;
-    setIsDirty(true);
-  }, [canUndo, undo, setIsDirty]);
+    revisionRef.current += 1;
+    if (saveStateRef.current !== "saving") {
+      saveStateRef.current = "dirty";
+      setSaveState("dirty");
+    }
+  }, [canUndo, undo]);
 
   const handleRedo = useCallback(() => {
     if (!canRedo) return;
     redo();
-    isDirtyRef.current = true;
-    setIsDirty(true);
-  }, [canRedo, redo, setIsDirty]);
+    revisionRef.current += 1;
+    if (saveStateRef.current !== "saving") {
+      saveStateRef.current = "dirty";
+      setSaveState("dirty");
+    }
+  }, [canRedo, redo]);
 
   // ── Get IDs to move (element + all group members) ───────────────────────────
   const getGroupIds = useCallback((id: string): string[] => {
@@ -186,8 +238,8 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
 
     if (typing) return;
 
-    // Slide panel keyboard navigation
-    if (focusedSlidePanel && !(e.ctrlKey || e.metaKey)) {
+    // Slide panel keyboard navigation (Alt is reserved for reordering below)
+    if (focusedSlidePanel && !(e.ctrlKey || e.metaKey) && !e.altKey) {
       if (e.key === "ArrowUp") {
         e.preventDefault(); setActiveSlideIdx(i => Math.max(0, i - 1));
       } else if (e.key === "ArrowDown") {
@@ -195,6 +247,15 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
       } else if (e.key === "Delete") {
         e.preventDefault(); handleDeleteSlide();
       }
+    }
+
+    // P3: Alt+ArrowUp/ArrowDown reorders the active slide in the rail
+    // (keyboard reorder actions per §5.3). Ctrl+Arrow stays reserved for
+    // nudging selected elements.
+    if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      e.preventDefault();
+      handleMoveActiveSlide(e.key === "ArrowUp" ? -1 : 1);
+      return;
     }
 
     if ((e.ctrlKey || e.metaKey) && e.key === "z") {
@@ -335,8 +396,13 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
   };
 
   const deleteSelectedElements = () => {
-    commitElements(els => els.filter(e => !allSelectedIds.has(e.id)));
-    setActiveElementIds([]);
+    // P4: locked elements cannot be accidentally deleted — skip them so a
+    // stray Delete only removes unlocked members of the selection.
+    commitElements(els => els.filter(e => !allSelectedIds.has(e.id) || e.locked));
+    setActiveElementIds(prev => prev.filter(id => {
+      const el = slide.elements.find(e => e.id === id);
+      return el?.locked;
+    }));
   };
 
   const duplicateSelectedElements = () => {
@@ -410,11 +476,17 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
     }));
   };
 
-  const handleAddSlide = (type: "default" | "title" | "blank") => {
+  const handleAddSlide = (type: AddSlideKind) => {
     setPres(prev => {
       const ns = [...prev.slides];
       ns.splice(activeSlideIdx + 1, 0,
-        type === "title" ? newTitleSlide() : type === "blank" ? newBlankSlide() : newDefaultSlide());
+        type === "title" ? newTitleSlide()
+          : type === "blank" ? newBlankSlide()
+            : type === "quote" ? newQuoteSlide()
+              : type === "announcement" ? newAnnouncementSlide()
+                : type === "imageCaption" ? newImageCaptionSlide()
+                  : type === "scripture" ? newScriptureSlide()
+                    : newDefaultSlide());
       return { ...prev, slides: ns };
     });
     setActiveSlideIdx(i => i + 1);
@@ -454,27 +526,83 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
     else if (fromIdx > activeSlideIdx && toIdx <= activeSlideIdx) setActiveSlideIdx(i => i + 1);
   };
 
+  /** P3: stage the active slide into the output queue. Uses the in-memory
+   *  presentation (with any unsaved edits) so the operator can preview the
+   *  exact slide they are looking at. */
+  const stageCurrentSlide = useCallback(async () => {
+    const presCurrent = presRef.current;
+    const slideIdx = Math.min(activeSlideIdx, presCurrent.slides.length - 1);
+    const summary = { id: presCurrent.id, name: presCurrent.name, slide_count: presCurrent.slides.length };
+    const item = buildCustomSlideItem(summary, presCurrent.slides, slideIdx, presCurrent.theme);
+    setStaging(true);
+    try {
+      const ok = await onStageSlide?.(item);
+      if (ok !== false) setToast(`Slide ${slideIdx + 1} staged`);
+    } catch (err) {
+      setToast("Failed to stage slide: " + String(err));
+    } finally {
+      setStaging(false);
+    }
+  }, [activeSlideIdx, onStageSlide, setToast]);
+
+  /** P6: add the active slide to the active service plan via the shared
+   *  `addToSchedule` path (same mutation + persistence as Service Plan). */
+  const addToServiceCurrentSlide = useCallback(async () => {
+    const presCurrent = presRef.current;
+    const slideIdx = Math.min(activeSlideIdx, presCurrent.slides.length - 1);
+    const item = buildCustomSlideItem({ id: presCurrent.id, name: presCurrent.name, slide_count: presCurrent.slides.length }, presCurrent.slides, slideIdx, presCurrent.theme);
+    try {
+      await onAddToService?.(item);
+    } catch (err) {
+      setToast("Failed to add to service: " + String(err));
+    }
+  }, [activeSlideIdx, onAddToService, setToast]);
+
+  /** P6: is the active slide the one currently staged or on air? Returns a
+   *  textual status (never color alone) so the header can show an indicator. */
+  const currentSlideStatus: "live" | "staged" | "idle" = (() => {
+    const isMatch = (it: DisplayItem | null): boolean =>
+      it?.type === "CustomSlide" && it.data.presentation_id === pres.id && it.data.slide_index === activeSlideIdx;
+    if (isMatch(liveItem)) return "live";
+    if (isMatch(stagedItem)) return "staged";
+    return "idle";
+  })();
+
+  const [staging, setStaging] = useState(false);
+
+  const canMoveSlideUp = activeSlideIdx > 0;
+  const canMoveSlideDown = activeSlideIdx < pres.slides.length - 1;
+  const handleMoveActiveSlide = (dir: -1 | 1) => {
+    if (dir === -1 ? !canMoveSlideUp : !canMoveSlideDown) return;
+    handleMoveSlide(activeSlideIdx, activeSlideIdx + dir);
+  };
+
   const alignElement = (type: AlignmentAxis) => {
     if (activeElementIds.length === 0) return;
     const els = slide.elements.filter(e => activeElementIds.includes(e.id));
     const updates = alignElements(els, type);
-    // Commit all align deltas in a single history entry.
-    setPres(prev => {
-      const cs = prev.slides[activeSlideIdx];
-      const ns = [...prev.slides];
-      ns[activeSlideIdx] = { ...cs, elements: cs.elements.map(e => updates[e.id] ? ({ ...e, ...updates[e.id] } as SlideElement) : e) };
-      return { ...prev, slides: ns };
-    });
+    // Route through `commitElements` so aligning inside a master edits the
+    // master layout (not the active slide) and produces a single history entry.
+    commitElements(prev => prev.map(e => updates[e.id] ? ({ ...e, ...updates[e.id] } as SlideElement) : e));
   };
 
   const updateZOrder = (dir: ZDirection) => {
     if (activeElementIds.length === 0) return;
     const ids = new Set(activeElementIds);
     // Behaviour parity with the pre-P1.4 code: operate on the selected
-    // element that is lowest in z-order.
+    // element that is lowest in z-order. `commitElements` routes to the
+    // master when editing a master layout.
     const target = [...slide.elements].sort((a, b) => a.z_index - b.z_index).find(e => ids.has(e.id));
     if (!target) return;
-    updateSlide({ ...slide, elements: adjustZOrder(slide.elements, target.id, dir) });
+    commitElements(els => adjustZOrder(els, target.id, dir));
+  };
+
+  /** P4: move a specific element (by id) in the z-order, invoked from the
+   *  Layers panel. `commitElements` routes to the master layout when a
+   *  master is being edited, and produces a single undo entry. */
+  const handleZOrderElement = (id: string, dir: ZDirection) => {
+    if (!slide.elements.some(e => e.id === id)) return;
+    commitElements(els => adjustZOrder(els, id, dir));
   };
 
   // ── Slide reordering via pointer drag (P1.4) ────────────────────────────────
@@ -618,27 +746,59 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
   };
 
   // ── Save / Close ────────────────────────────────────────────────────────────
+  // Manual save, autosave, retry, and Save & Close all share
+  // `savePresentation`. Close never silently abandons an in-flight save.
+  const handleRetrySave = async () => {
+    if (saveStateRef.current === "saving") return;
+    try {
+      await savePresentation(presRef.current);
+      saveStateRef.current = "saved";
+      setSaveState("saved");
+      setToast("Saved");
+    } catch (err) {
+      console.error("Save failed", err);
+      saveStateRef.current = "save-failed";
+      setSaveState("save-failed");
+      setToast("Save failed — try again");
+    }
+  };
+
   const handleSaveAndClose = async () => {
     try {
-      await invoke("save_studio_presentation", { presentation: pres });
-      isDirtyRef.current = false;
-      setIsDirty(false);
+      if (inFlightSaveRef.current) {
+        // Wait for the pending autosave to finish (its failure is ignored;
+        // we always persist a fresh snapshot below before closing).
+        await inFlightSaveRef.current.catch(() => {});
+      }
+      await savePresentation(presRef.current);
+      saveStateRef.current = "saved";
+      setSaveState("saved");
       onClose(true);
     } catch (err) {
       console.error("Save failed", err);
-      setToast("Save failed");
+      saveStateRef.current = "save-failed";
+      setSaveState("save-failed");
+      setToast("Save failed — try again");
     }
   };
 
   const handleCloseRequest = () => {
-    if (isDirtyRef.current) setShowUnsavedConfirm(true);
+    if (saveStateRef.current !== "saved") setShowUnsavedConfirm(true);
     else onClose(false);
   };
 
-  const handleDiscardChanges = () => {
-    isDirtyRef.current = false;
-    setIsDirty(false);
+  const handleDiscardChanges = async () => {
     setShowUnsavedConfirm(false);
+    if (inFlightSaveRef.current) {
+      // Never abandon a pending save silently: wait for it so we know what
+      // actually reached disk before closing.
+      try {
+        await inFlightSaveRef.current;
+      } catch {
+        setToast("A pending save failed; changes may not be on disk");
+      }
+    }
+    saveStateRef.current = "saved";
     onClose(false);
   };
 
@@ -840,15 +1000,21 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
 
   /** P4.2: copy the master layout onto the active slide as editable
    *  placeholders, tagging each with its `role` so later master edits
-   *  cascade into it. The slide keeps its own background/text. */
+   *  cascade into it. The slide keeps its own background/text. One atomic
+   *  history entry: both the element clone and the `masterRef` stamp are
+   *  committed in a single `setPres`. */
   const handleApplyMasterToSlide = (masterId: string) => {
     const master = pres.masters?.find(m => m.id === masterId);
     if (!master) return;
     const clones: SlideElement[] = master.elements.map(e => ({ ...JSON.parse(JSON.stringify(e)) as SlideElement, id: stableId() }));
-    commitElements(els => [...els.filter(el => el.kind !== "text" || !(el as any).role), ...clones]);
     setPres(prev => {
       const slides = [...prev.slides];
-      slides[activeSlideIdx] = { ...slides[activeSlideIdx], masterRef: masterId };
+      const cs = slides[activeSlideIdx];
+      slides[activeSlideIdx] = {
+        ...cs,
+        masterRef: masterId,
+        elements: [...cs.elements.filter(el => el.kind !== "text" || !(el as any).role), ...clones],
+      };
       return { ...prev, slides };
     });
     setToast("Master applied to this slide");
@@ -890,7 +1056,11 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
     gridSize, setGridSize,
     guides,
     // refs / scale
-    canvasRef, canvasScale, isDirtyRef,
+    canvasRef, canvasScale,
+    // P3 — canvas zoom (1 = fit)
+    zoom, setZoom,
+    // save state
+    saveState, handleRetrySave,
     // interactions
     slideDragDrop, handleSlidePointerDown, handleSlidePointerUp, handleSlideClick,
     handleDrag, handleResize, handleRotate,
@@ -898,6 +1068,8 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
     handleCloseRequest, handleSaveAndClose, handleDiscardChanges,
     handleImport, handleExport,
     handleAddSlide, handleDuplicateSlide, handleDeleteSlide,
+    handleMoveSlide, handleMoveActiveSlide, canMoveSlideUp, canMoveSlideDown,
+    stageCurrentSlide, addToServiceCurrentSlide, currentSlideStatus, staging,
     handleSaveAsTemplate, handleInsertTemplate, handleDeleteTemplate,
     handleImageSelect, handleVideoSelect, handleBgVideoSelect, handleBgImageSelect, handleAddVerse,
     handleInsertVerse,
@@ -906,7 +1078,7 @@ export function useSlideEditor({ initialPres, onClose }: UseSlideEditorArgs) {
     groupSelectedElements, ungroupSelectedElements,
     duplicateSelectedElements, duplicateElement,
     deleteElement, deleteSelectedElements,
-    alignElement, updateZOrder,
+    alignElement, updateZOrder, handleZOrderElement,
     setSlideBackground,
     updateTheme,
     // P4.2 — master editing

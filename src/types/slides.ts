@@ -74,6 +74,14 @@ interface BaseElement {
   opacity?: number;
   /** If true, the element is non-interactive on the canvas. */
   locked?: boolean;
+  /** P4 (Phase 4): if true, the element is not rendered on the canvas,
+   *  output, or stage — but remains in the document (the Layers panel can
+   *  un-hide it). A hidden element renders as a faint dashed placeholder
+   *  in the editor so it stays selectable. */
+  hidden?: boolean;
+  /** P4 (Phase 4): optional operator-facing name. The Layers panel shows a
+   *  generated name like "Text 1" / "Image 2" when this is unset. */
+  name?: string;
   /** P3.4: rotation in degrees, clockwise. Default `0`. The renderer
    *  applies `transform: rotate(${rotation}deg)` about the element's
    *  box center. */

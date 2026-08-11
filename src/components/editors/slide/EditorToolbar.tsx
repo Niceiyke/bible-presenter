@@ -2,15 +2,18 @@
  * EditorToolbar — the horizontal command bar above the canvas (P1.4).
  * Shows insert tools, multi-select actions, or per-element formatting
  * controls depending on the current selection.
+ *
+ * Phase 2: uses click/focus `EditorMenu` dropdowns (no hover-only menus),
+ * semantic console tokens, and 40px+ hit targets on every control.
  */
 
 import React from "react";
 import {
   Type, Image as ImageIcon, Copy, Square,
   AlignCenter, AlignLeft, AlignRight, Trash2,
-  BookOpen, Layers, Video, Grid3x3, Play,
+  BookOpen, Layers, Video, Grid3x3,
 } from "lucide-react";
-import { Btn, ToggleBtn, Div, FontPicker } from "./components";
+import { Btn, ToggleBtn, Div, FontPicker, EditorMenu } from "./components";
 import type { SlideElement } from "../../../types";
 import { useFonts } from "../../../hooks/useFonts";
 
@@ -38,10 +41,22 @@ export interface EditorToolbarProps {
   onUpdateElement: (id: string, updates: Partial<SlideElement>) => void;
   onDuplicateSlide: () => void;
   onDeleteSlide: () => void;
-  /** P4.7: in-editor live preview PIP toggle (Space). */
-  previewOpen: boolean;
-  onTogglePreview: () => void;
 }
+
+const SHAPES: { value: "rect" | "rounded" | "circle" | "line" | "triangle"; label: string }[] = [
+  { value: "rect", label: "Rectangle" },
+  { value: "rounded", label: "Rounded" },
+  { value: "circle", label: "Circle" },
+  { value: "line", label: "Line" },
+  { value: "triangle", label: "Triangle" },
+];
+
+const GRID_OPTIONS: { value: number; label: string }[] = [
+  { value: 0, label: "Off" },
+  { value: 4, label: "4%" },
+  { value: 8, label: "8%" },
+  { value: 16, label: "16%" },
+];
 
 export function EditorToolbar({
   activeEl,
@@ -66,51 +81,30 @@ export function EditorToolbar({
   onUpdateElement,
   onDuplicateSlide,
   onDeleteSlide,
-  previewOpen,
-  onTogglePreview,
 }: EditorToolbarProps) {
   // P2.5: merge user-installed @font-face families with the built-in list.
   const { availableFonts } = useFonts();
   return (
-    <div className="h-11 border-b border-white/8 flex items-center px-3 gap-1 bg-[#131326] shrink-0 overflow-x-auto">
+    <div className="h-12 border-b border-console-border flex items-center px-3 gap-1 bg-console-surface shrink-0 overflow-x-auto">
 
       {/* ── No selection: Insert tools ── */}
       {selectedCount === 0 && <>
-        <span className="text-[8px] font-black uppercase tracking-widest text-slate-600 mr-1 shrink-0">Insert</span>
-        <Btn onClick={onAddText} icon={<Type size={13} />}>Text</Btn>
-        <Btn onClick={onOpenImgPicker} icon={<ImageIcon size={13} />}>Image</Btn>
-        <Btn onClick={onOpenVideoPicker} icon={<Video size={13} />}>Video</Btn>
-        {/* P3.5: Insert Shape dropdown — surface rect/rounded/circle/line/triangle.
-            A small hover popover sits next to the Btn so inserting any
-            shape is one click + pick. */}
-        <div className="relative group shrink-0">
-          <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white/8 hover:bg-white/14 text-slate-300 hover:text-white text-[11px] font-semibold rounded-lg transition-all shrink-0">
-            <Square size={13} /> Shape
-          </div>
-          <div className="absolute left-0 top-full mt-1 hidden group-hover:flex flex-col bg-[#1a1a2e] border border-white/10 rounded-lg p-1 z-[80] shadow-2xl min-w-[110px]">
-            {([
-              { s: "rect", label: "Rectangle" },
-              { s: "rounded", label: "Rounded" },
-              { s: "circle", label: "Circle" },
-              { s: "line", label: "Line" },
-              { s: "triangle", label: "Triangle" },
-            ] as const).map(o => (
-              <button
-                key={o.s}
-                onClick={() => onAddShape(o.s)}
-                className="px-2 py-1 text-[10px] font-bold rounded text-left text-slate-400 hover:text-white hover:bg-white/10 transition-all"
-              >
-                {o.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="w-px h-5 bg-white/10 mx-1 shrink-0" />
-        <Btn onClick={onOpenBiblePicker} icon={<BookOpen size={13} />} className="bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/20">
+        <span className="op-control-label text-console-text-subtle mr-1 shrink-0">Insert</span>
+        <Btn onClick={onAddText} icon={<Type size={14} />}>Text</Btn>
+        <Btn onClick={onOpenImgPicker} icon={<ImageIcon size={14} />}>Image</Btn>
+        <Btn onClick={onOpenVideoPicker} icon={<Video size={14} />}>Video</Btn>
+        <EditorMenu
+          label="Insert shape"
+          trigger={<><Square size={14} /> Shape</>}
+          items={SHAPES}
+          onSelect={onAddShape}
+        />
+        <Div />
+        <Btn onClick={onOpenBiblePicker} icon={<BookOpen size={14} />} className="bg-tool-design/15 hover:bg-tool-design/25 text-tool-design border-tool-design/30">
           Bible
         </Btn>
         {insertVerseEnabled && (
-          <Btn onClick={onInsertVerse} icon={<BookOpen size={13} />} className="text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/20">
+          <Btn onClick={onInsertVerse} icon={<BookOpen size={14} />} className="text-tool-design bg-tool-design/10 hover:bg-tool-design/20">
             Insert Verse
           </Btn>
         )}
@@ -118,12 +112,12 @@ export function EditorToolbar({
 
       {/* ── Multi-select actions ── */}
       {multiSelectActive && <>
-        <span className="text-[9px] text-indigo-400 font-bold shrink-0">{selectedCount} selected</span>
-        <Btn onClick={onGroup} icon={<Layers size={13} />}>Group</Btn>
-        {hasGroup && <Btn onClick={onUngroup} icon={<Layers size={13} />}>Ungroup</Btn>}
-        <Btn onClick={onDuplicateSelected} icon={<Copy size={13} />}>Dup All</Btn>
-        <Btn onClick={onDeleteSelected} icon={<Trash2 size={13} />} className="hover:bg-red-500/20 hover:text-red-400">Del All</Btn>
-        <div className="w-px h-5 bg-white/10 mx-1 shrink-0" />
+        <span className="text-[11px] text-tool-design font-bold shrink-0">{selectedCount} selected</span>
+        <Btn onClick={onGroup} icon={<Layers size={14} />}>Group</Btn>
+        {hasGroup && <Btn onClick={onUngroup} icon={<Layers size={14} />}>Ungroup</Btn>}
+        <Btn onClick={onDuplicateSelected} icon={<Copy size={14} />}>Duplicate</Btn>
+        <Btn onClick={onDeleteSelected} icon={<Trash2 size={14} />} className="hover:bg-state-live-soft hover:text-state-live hover:border-state-live/40">Delete</Btn>
+        <Div />
       </>}
 
       {/* ── Text element selected ── */}
@@ -139,104 +133,85 @@ export function EditorToolbar({
         {(() => {
           const baseFs = typeof activeEl.font_size === "number" ? activeEl.font_size : null;
           return (
-            <div className="flex items-center bg-white/8 border border-white/10 rounded-lg shrink-0 overflow-hidden">
+            <div className="flex items-center bg-console-surface-raised border border-console-border rounded-lg shrink-0 overflow-hidden">
               <button
                 onClick={() => onUpdateElement(activeEl.id, { font_size: Math.max(8, (baseFs ?? 32) - 2) })}
                 disabled={baseFs === null}
-                className="px-2 py-1 text-slate-400 hover:text-white hover:bg-white/10 text-sm font-bold disabled:opacity-30">−</button>
+                aria-label="Decrease font size"
+                className="h-10 px-2.5 text-console-text-muted hover:text-console-text hover:bg-console-surface-strong text-sm font-bold disabled:opacity-30">−</button>
               <input
                 type="number"
                 value={baseFs ?? ""}
                 placeholder="—"
                 disabled={baseFs === null}
+                aria-label="Font size"
                 onChange={e => onUpdateElement(activeEl.id, { font_size: Number(e.target.value) })}
                 onKeyDown={e => e.stopPropagation()}
-                className="w-10 bg-transparent py-1 text-xs text-white text-center outline-none tabular-nums disabled:opacity-30 placeholder:text-slate-600" />
+                className="w-11 bg-transparent py-1 text-xs text-console-text text-center outline-none tabular-nums disabled:opacity-30 placeholder:text-console-text-subtle" />
               <button
                 onClick={() => onUpdateElement(activeEl.id, { font_size: (baseFs ?? 32) + 2 })}
                 disabled={baseFs === null}
-                className="px-2 py-1 text-slate-400 hover:text-white hover:bg-white/10 text-sm font-bold disabled:opacity-30">+</button>
+                aria-label="Increase font size"
+                className="h-10 px-2.5 text-console-text-muted hover:text-console-text hover:bg-console-surface-strong text-sm font-bold disabled:opacity-30">+</button>
             </div>
           );
         })()}
         <Div /><ToggleBtn active={!!activeEl.bold} onClick={() => onUpdateElement(activeEl.id, { bold: !activeEl.bold })} title="Bold"><span className="font-black text-sm">B</span></ToggleBtn>
         <ToggleBtn active={!!activeEl.italic} onClick={() => onUpdateElement(activeEl.id, { italic: !activeEl.italic })} title="Italic"><span className="font-serif italic text-sm">I</span></ToggleBtn>
         <Div />
-        <ToggleBtn active={activeEl.align === "left"} onClick={() => onUpdateElement(activeEl.id, { align: "left" })} title="Align left"><AlignLeft size={14} /></ToggleBtn>
-        <ToggleBtn active={activeEl.align === "center" || !activeEl.align} onClick={() => onUpdateElement(activeEl.id, { align: "center" })} title="Center"><AlignCenter size={14} /></ToggleBtn>
-        <ToggleBtn active={activeEl.align === "right"} onClick={() => onUpdateElement(activeEl.id, { align: "right" })} title="Align right"><AlignRight size={14} /></ToggleBtn>
+        <ToggleBtn active={activeEl.align === "left"} onClick={() => onUpdateElement(activeEl.id, { align: "left" })} title="Align left"><AlignLeft size={15} /></ToggleBtn>
+        <ToggleBtn active={activeEl.align === "center" || !activeEl.align} onClick={() => onUpdateElement(activeEl.id, { align: "center" })} title="Center"><AlignCenter size={15} /></ToggleBtn>
+        <ToggleBtn active={activeEl.align === "right"} onClick={() => onUpdateElement(activeEl.id, { align: "right" })} title="Align right"><AlignRight size={15} /></ToggleBtn>
         <Div />
-        <div className="flex items-center gap-1.5 shrink-0"><span className="text-[9px] text-slate-600">Color</span><input type="color" value={activeEl.color} onChange={e => onUpdateElement(activeEl.id, { color: e.target.value })} className="w-7 h-7 rounded-lg cursor-pointer border border-white/20 bg-transparent" /></div>
-        <label className="flex items-center gap-1.5 shrink-0 cursor-pointer ml-1"><input type="checkbox" checked={activeEl.shadow !== false} onChange={e => onUpdateElement(activeEl.id, { shadow: e.target.checked })} className="accent-indigo-500" /><span className="text-[9px] text-slate-500">Shadow</span></label>
+        <div className="flex items-center gap-1.5 shrink-0"><span className="text-[10px] font-bold text-console-text-subtle">Color</span><input type="color" value={activeEl.color} onChange={e => onUpdateElement(activeEl.id, { color: e.target.value })} className="w-8 h-8 rounded-lg cursor-pointer border border-console-border bg-console-surface-raised" aria-label="Text color" /></div>
+        <label className="flex items-center gap-1.5 shrink-0 cursor-pointer ml-1"><input type="checkbox" checked={activeEl.shadow !== false} onChange={e => onUpdateElement(activeEl.id, { shadow: e.target.checked })} className="accent-state-stage" /><span className="text-[10px] font-bold text-console-text-subtle">Shadow</span></label>
       </>}
 
       {/* ── Shape selected ── */}
       {activeEl?.kind === "shape" && selectedCount === 1 && <>
-        <span className="text-[9px] text-slate-500 shrink-0">Fill</span>
-        <input type="color" value={activeEl.fillColor ?? activeEl.color ?? "#6366f1"} onChange={e => onUpdateElement(activeEl.id, { fillColor: e.target.value })} className="w-8 h-8 rounded-lg cursor-pointer border border-white/20 bg-transparent shrink-0" />
-        <Div /><span className="text-[9px] text-slate-500 shrink-0">Stroke</span>
-        <input type="color" value={activeEl.strokeColor ?? "#000000"} onChange={e => onUpdateElement(activeEl.id, { strokeColor: e.target.value })} className="w-8 h-8 rounded-lg cursor-pointer border border-white/20 bg-transparent shrink-0" />
-        <input type="number" min={0} max={50} value={Math.round(activeEl.strokeWidth ?? 0)} onChange={e => onUpdateElement(activeEl.id, { strokeWidth: Number(e.target.value) })} onKeyDown={e => e.stopPropagation()} className="w-12 bg-white/8 border border-white/10 rounded-lg px-2 py-1 text-xs text-white outline-none shrink-0" />
-        <Div /><span className="text-[9px] text-slate-500 shrink-0">Opacity</span>
-        <input type="range" min={0} max={1} step={0.05} value={activeEl.opacity ?? 1} onChange={e => onUpdateElement(activeEl.id, { opacity: Number(e.target.value) })} className="w-20 accent-indigo-500 shrink-0" />
-        <span className="text-[10px] text-slate-400 font-mono shrink-0 w-8">{Math.round((activeEl.opacity ?? 1) * 100)}%</span>
+        <span className="text-[10px] font-bold text-console-text-subtle shrink-0">Fill</span>
+        <input type="color" value={activeEl.fillColor ?? activeEl.color ?? "#6366f1"} onChange={e => onUpdateElement(activeEl.id, { fillColor: e.target.value })} className="w-8 h-8 rounded-lg cursor-pointer border border-console-border bg-console-surface-raised shrink-0" aria-label="Fill color" />
+        <Div /><span className="text-[10px] font-bold text-console-text-subtle shrink-0">Stroke</span>
+        <input type="color" value={activeEl.strokeColor ?? "#000000"} onChange={e => onUpdateElement(activeEl.id, { strokeColor: e.target.value })} className="w-8 h-8 rounded-lg cursor-pointer border border-console-border bg-console-surface-raised shrink-0" aria-label="Stroke color" />
+        <input type="number" min={0} max={50} value={Math.round(activeEl.strokeWidth ?? 0)} onChange={e => onUpdateElement(activeEl.id, { strokeWidth: Number(e.target.value) })} onKeyDown={e => e.stopPropagation()} className="w-14 bg-console-surface-raised border border-console-border rounded-lg px-2 py-1 text-xs text-console-text outline-none shrink-0" aria-label="Stroke width" />
+        <Div /><span className="text-[10px] font-bold text-console-text-subtle shrink-0">Opacity</span>
+        <input type="range" min={0} max={1} step={0.05} value={activeEl.opacity ?? 1} onChange={e => onUpdateElement(activeEl.id, { opacity: Number(e.target.value) })} className="w-20 accent-state-stage shrink-0" aria-label="Opacity" />
+        <span className="text-[11px] text-console-text-muted font-mono shrink-0 w-8">{Math.round((activeEl.opacity ?? 1) * 100)}%</span>
       </>}
 
       {/* ── Image selected ── */}
       {activeEl?.kind === "image" && selectedCount === 1 && <>
-        <Btn onClick={onOpenImgPicker} icon={<ImageIcon size={13} />}>Change Image</Btn>
+        <Btn onClick={onOpenImgPicker} icon={<ImageIcon size={14} />}>Change Image</Btn>
       </>}
 
       {/* ── Video selected ── */}
       {activeEl?.kind === "video" && selectedCount === 1 && <>
-        <Btn onClick={onOpenVideoPicker} icon={<Video size={13} />}>Change Video</Btn>
+        <Btn onClick={onOpenVideoPicker} icon={<Video size={14} />}>Change Video</Btn>
         <Div />
-        <label className="flex items-center gap-1.5 shrink-0 cursor-pointer"><input type="checkbox" checked={activeEl.loop !== false} onChange={e => onUpdateElement(activeEl.id, { loop: e.target.checked })} className="accent-indigo-500" /><span className="text-[9px] text-slate-500">Loop</span></label>
-        <label className="flex items-center gap-1.5 shrink-0 cursor-pointer"><input type="checkbox" checked={activeEl.muted !== false} onChange={e => onUpdateElement(activeEl.id, { muted: e.target.checked })} className="accent-indigo-500" /><span className="text-[9px] text-slate-500">Muted</span></label>
+        <label className="flex items-center gap-1.5 shrink-0 cursor-pointer"><input type="checkbox" checked={activeEl.loop !== false} onChange={e => onUpdateElement(activeEl.id, { loop: e.target.checked })} className="accent-state-stage" /><span className="text-[10px] font-bold text-console-text-subtle">Loop</span></label>
+        <label className="flex items-center gap-1.5 shrink-0 cursor-pointer"><input type="checkbox" checked={activeEl.muted !== false} onChange={e => onUpdateElement(activeEl.id, { muted: e.target.checked })} className="accent-state-stage" /><span className="text-[10px] font-bold text-console-text-subtle">Muted</span></label>
       </>}
 
       <div className="flex-1" />
-      <div className="flex items-center gap-1 border-l border-white/8 pl-2 shrink-0">
-        {/* P3.2: snap-to-grid. Clicking the icon cycles
-            0 (off) → 4 → 8 → 16 → 0; hold the dropdown for an explicit pick. */}
-        <div className="relative group shrink-0">
-          <button
-            onClick={() => onSetGridSize(gridSize === 0 ? 4 : gridSize === 4 ? 8 : gridSize === 8 ? 16 : 0)}
-            title={`Snap to grid: ${gridSize === 0 ? "Off" : gridSize + "%"}`}
-            className={`flex items-center gap-1 px-2 py-1.5 rounded-lg transition-all ${gridSize > 0 ? "bg-indigo-500/30 text-white" : "bg-white/6 hover:bg-white/12 text-slate-400 hover:text-white"}`}
-          >
-            <Grid3x3 size={13} />
-            <span className="text-[10px] font-bold tabular-nums w-5 text-center">{gridSize === 0 ? "—" : gridSize}</span>
-          </button>
-          <div className="absolute right-0 top-full mt-1 hidden group-hover:flex flex-col bg-[#1a1a2e] border border-white/10 rounded-lg p-1 z-[80] shadow-2xl min-w-[80px]">
-            {[
-              { v: 0, label: "Off" },
-              { v: 4, label: "4%" },
-              { v: 8, label: "8%" },
-              { v: 16, label: "16%" },
-            ].map(o => (
-              <button
-                key={o.v}
-                onClick={() => onSetGridSize(o.v)}
-                className={`px-2 py-1 text-[10px] font-bold rounded text-left transition-all ${gridSize === o.v ? "bg-indigo-500 text-white" : "text-slate-400 hover:text-white hover:bg-white/10"}`}
-              >
-                {o.label}
-              </button>
-            ))}
-          </div>
-        </div>
+      <div className="flex items-center gap-1 border-l border-console-border pl-2 shrink-0">
+        <EditorMenu
+          label="Snap to grid"
+          align="right"
+          trigger={<Grid3x3 size={14} />}
+          activeLabel={gridSize === 0 ? "—" : `${gridSize}%`}
+          items={GRID_OPTIONS}
+          value={gridSize}
+          onSelect={onSetGridSize}
+        />
         <Div />
-        <Btn onClick={onDuplicateSlide} icon={<Copy size={13} />}>Dupe</Btn>
-        <button onClick={onDeleteSlide} disabled={!canDeleteSlide} className="p-2 bg-white/6 hover:bg-red-500/20 text-slate-500 hover:text-red-400 rounded-lg transition-all disabled:opacity-20" title="Delete slide"><Trash2 size={13} /></button>
-        <div className="flex-1" />
+        <Btn onClick={onDuplicateSlide} icon={<Copy size={14} />}>Duplicate</Btn>
         <button
-          onClick={onTogglePreview}
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all ${previewOpen ? "bg-emerald-500/30 text-emerald-300" : "bg-white/6 hover:bg-white/12 text-slate-400 hover:text-white"}`}
-          title="Live preview (Space) — plays entrance animation, nothing is broadcast"
-        >
-          <Play size={13} />
-          <span className="text-[10px] font-bold">{previewOpen ? "Previewing" : "Preview"}</span>
-        </button>
+          onClick={onDeleteSlide}
+          disabled={!canDeleteSlide}
+          aria-label="Delete slide"
+          title="Delete slide"
+          className="w-10 h-10 bg-console-surface-raised hover:bg-state-live-soft text-console-text-muted hover:text-state-live rounded-lg border border-console-border flex items-center justify-center transition-all disabled:opacity-20 focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
+        ><Trash2 size={14} /></button>
       </div>
     </div>
   );

@@ -6,8 +6,9 @@
  */
 
 import React from "react";
-import { useLayoutEffect } from "react";
+import { useLayoutEffect, useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import { Check, ChevronDown, ChevronRight } from "lucide-react";
 
 export function Btn({ onClick, icon, children, className = "" }: {
   onClick: () => void;
@@ -18,7 +19,7 @@ export function Btn({ onClick, icon, children, className = "" }: {
   return (
     <button
       onClick={onClick}
-      className={`flex items-center gap-1.5 px-2.5 py-1.5 bg-white/8 hover:bg-white/14 text-slate-300 hover:text-white text-[11px] font-semibold rounded-lg transition-all shrink-0 ${className}`}
+      className={`flex items-center gap-1.5 min-h-[40px] px-3 bg-console-surface-raised hover:bg-console-surface-strong text-console-text-muted hover:text-console-text text-xs font-bold rounded-lg border border-console-border transition-all shrink-0 ${className}`}
     >
       {icon}{children}
     </button>
@@ -35,7 +36,13 @@ export function ToggleBtn({ active, onClick, title, children }: {
     <button
       onClick={onClick}
       title={title}
-      className={`w-8 h-8 flex items-center justify-center rounded-lg transition-all shrink-0 ${active ? "bg-indigo-500 text-white" : "bg-white/8 text-slate-400 hover:text-white hover:bg-white/14"}`}
+      aria-label={title}
+      aria-pressed={active}
+      className={`w-10 h-10 flex items-center justify-center rounded-lg border transition-all shrink-0 focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${
+        active
+          ? "bg-state-stage/20 text-state-stage border-state-stage/50"
+          : "bg-console-surface-raised text-console-text-muted hover:text-console-text hover:bg-console-surface-strong border-console-border"
+      }`}
     >
       {children}
     </button>
@@ -43,13 +50,13 @@ export function ToggleBtn({ active, onClick, title, children }: {
 }
 
 export function Div() {
-  return <div className="w-px h-5 bg-white/10 mx-0.5 shrink-0" />;
+  return <div className="w-px h-6 bg-console-border mx-1 shrink-0" />;
 }
 
 export function Panel({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="bg-white/4 rounded-xl border border-white/8 p-3 flex flex-col gap-2.5">
-      <p className="text-[8px] font-black uppercase tracking-widest text-slate-600">{label}</p>
+    <div className="bg-console-surface-raised/40 rounded-xl border border-console-border p-3 flex flex-col gap-2.5">
+      <p className="text-[11px] font-bold text-console-text-subtle">{label}</p>
       {children}
     </div>
   );
@@ -64,7 +71,8 @@ export function IconBtn({ onClick, title, children }: {
     <button
       onClick={onClick}
       title={title}
-      className="p-2 bg-white/6 hover:bg-white/12 text-slate-400 hover:text-white rounded-lg flex items-center justify-center transition-all"
+      aria-label={title}
+      className="w-10 h-10 bg-console-surface-raised hover:bg-console-surface-strong text-console-text-muted hover:text-console-text rounded-lg border border-console-border flex items-center justify-center transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
     >
       {children}
     </button>
@@ -80,10 +88,184 @@ export function TextBtn({ onClick, title, children }: {
     <button
       onClick={onClick}
       title={title}
-      className="p-2 bg-white/6 hover:bg-white/12 text-slate-500 hover:text-white rounded-lg flex items-center justify-center transition-all text-[9px] font-bold"
+      aria-label={title}
+      className="w-10 h-10 bg-console-surface-raised hover:bg-console-surface-strong text-console-text-muted hover:text-console-text rounded-lg border border-console-border flex items-center justify-center transition-all text-[11px] font-bold focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * EditorMenu — a click/focus dropdown menu for the editor toolbar
+ * (SLIDE_EDITOR_MODERNIZATION_PLAN §5.5 / §6.4). Replaces hover-only
+ * popovers: the menu opens on click (or Enter/Space on the trigger) and
+ * closes on Escape or outside click, so every action is reachable from
+ * the keyboard.
+ */
+export function EditorMenu<T extends string | number>({
+  trigger,
+  label,
+  activeLabel,
+  items,
+  value,
+  onSelect,
+  align = "left",
+  className = "",
+  triggerClassName = "",
+}: {
+  trigger: React.ReactNode;
+  label: string;
+  activeLabel?: string;
+  items: { value: T; label: React.ReactNode }[];
+  value?: T;
+  onSelect: (v: T) => void;
+  align?: "left" | "right";
+  className?: string;
+  /** Extra classes for the trigger button (e.g. `w-full justify-center`). */
+  triggerClassName?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  // P7: focus restoration — when the menu closes (Escape / outside click /
+  // item select), return focus to the trigger so keyboard users aren't
+  // dropped. The effect runs on every open→close transition.
+  useEffect(() => {
+    if (open) return;
+    // Only restore when focus is inside the menu (closing transitions).
+    // We schedule on next tick so the item-select click doesn't fight us.
+    const t = setTimeout(() => {
+      if (rootRef.current && rootRef.current.contains(document.activeElement)) {
+        triggerRef.current?.focus();
+      }
+    }, 0);
+    return () => clearTimeout(t);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocMouse = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
+    };
+    document.addEventListener("mousedown", onDocMouse);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocMouse);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className={`relative shrink-0 ${className}`}>
+      <button
+        ref={triggerRef}
+        onClick={() => setOpen(o => !o)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setOpen(o => !o);
+          }
+        }}
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={label}
+        className={`flex items-center gap-1.5 min-h-[40px] px-3 bg-console-surface-raised hover:bg-console-surface-strong text-console-text-muted hover:text-console-text text-xs font-bold rounded-lg border border-console-border transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${triggerClassName}`}
+      >
+        {trigger}
+        {activeLabel !== undefined && (
+          <span className="text-[10px] font-bold tabular-nums text-console-text-subtle">{activeLabel}</span>
+        )}
+        <ChevronDown size={12} className={`transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute z-[80] mt-1 rounded-lg border border-console-border-strong bg-console-surface shadow-2xl p-1 flex flex-col min-w-[150px]"
+          style={{ left: align === "left" ? 0 : undefined, right: align === "right" ? 0 : undefined }}
+        >
+          {items.map(it => (
+            <button
+              key={it.value}
+              role="menuitem"
+              onClick={() => { setOpen(false); onSelect(it.value); }}
+              className={`flex items-center justify-between gap-3 px-2.5 py-2 text-[11px] font-bold rounded text-left transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${
+                value === it.value
+                  ? "bg-state-stage/15 text-state-stage"
+                  : "text-console-text-muted hover:text-console-text hover:bg-console-surface-strong"
+              }`}
+            >
+              {it.label}
+              {value === it.value && <Check size={12} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * TextInputModal — small reusable text-input modal used instead of
+ * `window.prompt` (SLIDE_EDITOR_MODERNIZATION_PLAN §5.6). Rendered in a
+ * portal so it overlays the whole editor.
+ */
+export function TextInputModal({
+  title,
+  placeholder = "",
+  defaultValue = "",
+  confirmLabel = "Create",
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  placeholder?: string;
+  defaultValue?: string;
+  confirmLabel?: string;
+  onConfirm: (value: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = React.useState(defaultValue);
+
+  return createPortal(
+    <div className="fixed inset-0 z-[110] bg-black/70 flex items-center justify-center backdrop-blur-sm">
+      <div className="bg-console-surface border border-console-border-strong rounded-2xl p-5 w-full max-w-xs mx-4 shadow-2xl">
+        <p className="text-sm font-bold text-console-text mb-3">{title}</p>
+        <input
+          autoFocus
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          onKeyDown={e => {
+            e.stopPropagation();
+            if (e.key === "Enter") onConfirm(value.trim() || defaultValue);
+            else if (e.key === "Escape") onCancel();
+          }}
+          placeholder={placeholder}
+          aria-label={title}
+          className="w-full bg-console-surface-raised border border-console-border rounded-lg px-3 py-2 text-sm text-console-text outline-none focus:border-console-border-strong focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] transition-colors placeholder:text-console-text-subtle"
+        />
+        <div className="flex gap-2 mt-4">
+          <button onClick={onCancel} className="flex-1 py-2 bg-console-surface-raised hover:bg-console-surface-strong text-console-text-muted text-[11px] font-bold rounded-lg transition-all">
+            Cancel
+          </button>
+          <button
+            onClick={() => onConfirm(value.trim() || defaultValue)}
+            className="flex-1 py-2 bg-action-primary hover:bg-action-primary-hover text-black text-[11px] font-bold rounded-lg transition-all"
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -169,7 +351,10 @@ export function FontPicker({
         ref={setAnchorEl}
         onClick={e => { e.stopPropagation(); setOpen(o => !o); }}
         title="Font family"
-        className="bg-white/8 hover:bg-white/14 border border-white/10 rounded-lg px-2 py-1 text-[11px] text-slate-300 outline-none max-w-[150px] shrink-0 truncate text-left transition-all"
+        aria-label="Font family"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className="min-h-[40px] bg-console-surface-raised hover:bg-console-surface-strong border border-console-border rounded-lg px-2 py-1 text-[11px] text-console-text outline-none max-w-[150px] shrink-0 truncate text-left transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
         style={{ fontFamily: value && canInherit ? value : undefined }}
       >
         {value}
@@ -178,36 +363,36 @@ export function FontPicker({
       {open && createPortal(
         <div
           data-font-popover
-          className="fixed z-[90] w-52 max-h-72 overflow-hidden rounded-lg border border-white/10 bg-[#1a1a2e] shadow-2xl flex flex-col"
+          className="fixed z-[90] w-52 max-h-72 overflow-hidden rounded-lg border border-console-border-strong bg-console-surface shadow-2xl flex flex-col"
           style={{ top: pos.top, left: pos.left }}
         >
-          <div className="p-1.5 border-b border-white/8 shrink-0">
+          <div className="p-1.5 border-b border-console-border shrink-0">
             <input
               autoFocus
               value={query}
               onChange={e => setQuery(e.target.value)}
               onKeyDown={e => e.stopPropagation()}
               placeholder="Search fonts…"
-              className="w-full bg-white/6 border border-white/10 rounded-md px-2 py-1 text-[11px] text-white outline-none focus:border-indigo-500/50 transition-colors placeholder:text-slate-600"
+              className="w-full bg-console-surface-raised border border-console-border rounded-md px-2 py-1 text-[11px] text-console-text outline-none focus:border-console-border-strong transition-colors placeholder:text-console-text-subtle"
             />
           </div>
           <div className="overflow-y-auto custom-scrollbar">
             {canInherit && q.length === 0 && (
               <button
                 onClick={() => pick("inherit")}
-                className={`w-full px-2 py-1.5 text-left text-[11px] font-bold rounded transition-all ${value === "inherit" ? "bg-indigo-500 text-white" : "text-slate-400 hover:text-white hover:bg-white/10"}`}
+                className={`w-full px-2 py-1.5 text-left text-[11px] font-bold rounded transition-all ${value === "inherit" ? "bg-state-stage/20 text-state-stage" : "text-console-text-muted hover:text-console-text hover:bg-console-surface-strong"}`}
               >
                 {inheritLabel}
               </button>
             )}
             {filtered.length === 0 && (
-              <p className="px-2 py-3 text-[10px] text-slate-600 text-center">No matches</p>
+              <p className="px-2 py-3 text-[10px] text-console-text-subtle text-center">No matches</p>
             )}
             {filtered.map(f => (
               <button
                 key={f}
                 onClick={() => pick(f)}
-                className={`w-full px-2 py-1.5 text-left text-[11px] rounded transition-all ${value !== "inherit" && value === f ? "bg-white/10 text-white" : "text-slate-300 hover:text-white hover:bg-white/10"}`}
+                className={`w-full px-2 py-1.5 text-left text-[11px] rounded transition-all ${value !== "inherit" && value === f ? "bg-console-surface-strong text-console-text" : "text-console-text-muted hover:text-console-text hover:bg-console-surface-strong"}`}
                 style={{ fontFamily: f }}
               >
                 {f}
@@ -218,5 +403,41 @@ export function FontPicker({
         document.body
       )}
     </>
+  );
+}
+
+/**
+ * InspectorSection — a collapsible inspector section
+ * (SLIDE_EDITOR_MODERNIZATION_PLAN §5.6 / Phase 4). Replaces the
+ * equal-width tab bar with stacked, independently collapsible panels so
+ * advanced controls do not crowd the default view. Each section owns its
+ * open/closed state; the header carries a label and an optional
+ * right-aligned badge.
+ */
+export function InspectorSection({
+  label,
+  badge,
+  defaultOpen = true,
+  children,
+}: {
+  label: string;
+  badge?: React.ReactNode;
+  defaultOpen?: boolean;
+  children?: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="rounded-xl border border-console-border bg-console-surface-raised/40 overflow-hidden">
+      <button
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+        className="w-full flex items-center gap-2 px-3 py-2.5 transition-all hover:bg-console-surface-strong focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
+      >
+        <ChevronRight size={13} className={`text-console-text-subtle transition-transform ${open ? "rotate-90" : ""}`} />
+        <span className="text-[11px] font-bold text-console-text flex-1 text-left">{label}</span>
+        {badge && <span className="text-[9px] text-console-text-subtle font-bold">{badge}</span>}
+      </button>
+      {open && <div className="px-3 pb-3 flex flex-col gap-2.5">{children}</div>}
+    </div>
   );
 }

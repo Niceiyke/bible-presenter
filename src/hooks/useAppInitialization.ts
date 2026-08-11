@@ -152,10 +152,16 @@ export function useAppInitialization() {
       }
     });
     const unlistenSongsSync = listen<Song[]>("songs-sync", (ev) => { setSongs(ev.payload); });
-    const unlistenStudioSync = listen<any[]>("studio-sync", (ev) => { setStudioList(ev.payload); });
-    const unlistenStudioSlidesSync = listen<{ id: string; slides: any[] }>("studio-slides-sync", (ev) => {
+    const unlistenStudioSync = listen<any[] | null>("studio-sync", (ev) => {
+      if (!ev?.payload) return;
+      setStudioList(ev.payload);
+    });
+    const unlistenStudioSlidesSync = listen<{ id: string; slides: any[] } | null>("studio-slides-sync", (ev) => {
+      // P6: null/empty update events must not leave stale state or throw.
+      if (!ev?.payload) return;
       const { id, slides } = ev.payload;
-      setStudioSlides({ ...useAppStore.getState().studioSlides, [id]: slides });
+      if (!id) return;
+      setStudioSlides({ ...useAppStore.getState().studioSlides, [id]: slides ?? [] });
     });
     const unlistenLog = listen<any>("system-log", (ev) => {
       const entry = ev.payload;

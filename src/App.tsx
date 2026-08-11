@@ -301,6 +301,8 @@ export default function App() {
             initialPres={editingPres}
             mediaImages={media.filter(m => m.media_type === "Image")}
             media={media}
+            onStageSlide={stageItem}
+            onAddToService={addToSchedule}
             onClose={(saved) => {
               if (saved) {
                 invoke("list_studio_presentations").then((list: any) => {
