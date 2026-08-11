@@ -480,9 +480,18 @@ export function OutputWindow() {
         </div>
       )}
 
-      {settings.show_background_logo && settings.background_logo_path && (
+      {settings.show_background_logo && (settings.background_logo_path || settings.background_logo_text) && (
         <div className="absolute inset-0 z-50 bg-black">
-          {settings.background_logo_path.toLowerCase().match(/\.(mp4|webm|mov|mkv|avi)$/) ? (
+          {settings.background_logo_text ? (
+            <div className="w-full h-full flex items-center justify-center px-16 text-center">
+              <p
+                className="font-black leading-tight drop-shadow-2xl"
+                style={{ color: settings.background_logo_text_color ?? "#ffffff", fontSize: "4.5rem" }}
+              >
+                {settings.background_logo_text}
+              </p>
+            </div>
+          ) : settings.background_logo_path?.toLowerCase().match(/\.(mp4|webm|mov|mkv|avi)$/) ? (
             <video
               src={convertFileSrc(resolvePath(settings.background_logo_path, appDataDir))}
               className="w-full h-full"
@@ -491,14 +500,14 @@ export function OutputWindow() {
               loop
               muted
             />
-          ) : (
+          ) : settings.background_logo_path ? (
             <img
               src={convertFileSrc(resolvePath(settings.background_logo_path, appDataDir))}
               className="w-full h-full"
               style={{ objectFit: settings.background_logo_fit ?? "cover" }}
               alt="Background Logo"
             />
-          )}
+          ) : null}
         </div>
       )}
 
@@ -556,13 +565,28 @@ export function OutputWindow() {
         />
       )}
 
-      {settings.logo_path && (
+      {settings.logo_text ? (
+        <p
+          className="absolute bottom-8 right-8 z-60 font-black leading-tight opacity-60 text-right"
+          style={{ color: settings.logo_text_color ?? "#ffffff", fontSize: "1.5rem" }}
+        >
+          {settings.logo_text}
+        </p>
+      ) : settings.logo_path?.toLowerCase().match(/\.(mp4|webm|mov|mkv|avi)$/) ? (
+        <video
+          src={convertFileSrc(resolvePath(settings.logo_path, appDataDir))}
+          className="absolute bottom-8 right-8 w-24 h-24 object-contain opacity-50 z-60"
+          autoPlay
+          loop
+          muted
+        />
+      ) : settings.logo_path ? (
         <img
           src={convertFileSrc(resolvePath(settings.logo_path, appDataDir))}
           className="absolute bottom-8 right-8 w-24 h-24 object-contain opacity-50 z-60"
           alt="Logo"
         />
-      )}
+      ) : null}
 
       <AnimatePresence mode="wait">
         {liveItem ? (

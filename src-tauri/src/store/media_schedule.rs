@@ -399,6 +399,14 @@ pub struct PresentationSettings {
     pub background_logo_path: Option<String>,
     #[serde(default)]
     pub show_background_logo: bool,
+    #[serde(default)]
+    pub logo_text: Option<String>,
+    #[serde(default)]
+    pub logo_text_color: Option<String>,
+    #[serde(default)]
+    pub background_logo_text: Option<String>,
+    #[serde(default)]
+    pub background_logo_text_color: Option<String>,
     #[serde(default = "default_fit_mode")]
     pub background_logo_fit: String,
     #[serde(default)]
@@ -477,6 +485,8 @@ impl Default for PresentationSettings {
             background: BackgroundSetting::default(), bible_background: BackgroundSetting::default(),
             media_background: BackgroundSetting::default(), logo_path: None, background_logo_path: None,
             show_background_logo: false, background_logo_fit: default_fit_mode(), is_blanked: false,
+            logo_text: None, logo_text_color: None,
+            background_logo_text: None, background_logo_text_color: None,
             font_size: default_font_size(), slide_transition: default_transition(),
             slide_transition_duration: default_transition_duration(),
             verse_font_family: default_verse_font_family(),

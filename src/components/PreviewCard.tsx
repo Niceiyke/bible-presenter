@@ -11,8 +11,9 @@ import {
 } from "./shared/Renderers";
 import { useAppStore } from "../store";
 import { useTauriEvent } from "../hooks/useTauriEvent";
+import { THEMES } from "../types";
 import type { DisplayItem, MediaItem } from "../types";
-import { getItemUid } from "../utils";
+import { getEffectiveBackground, getItemUid, getVideoBackground, resolvePath } from "../utils";
 
 function formatTime(s: number): string {
   if (!isFinite(s) || s < 0) return "0:00";
@@ -43,6 +44,12 @@ export function PreviewCard({
   const isAudio = item?.type === "Media" && (item.data as MediaItem).media_type === "Audio";
   const isCamera = item?.type === "Camera";
   const showControls = isVideo || isAudio;
+
+  const themeColors = THEMES[settings.theme]?.colors ?? THEMES.dark.colors;
+  const effectiveColors = settings.custom_theme_colors ? { ...themeColors, ...settings.custom_theme_colors } : themeColors;
+  const refColor = settings.reference_color && settings.reference_color !== "" ? settings.reference_color : effectiveColors.referenceText;
+  const bgStyle = item ? getEffectiveBackground(settings, item, effectiveColors, appDataDir) : {};
+  const bgVideo = getVideoBackground(settings, item);
 
   // Measure the 16:9 slide box and scale slide/song fonts against the
   // 1080p reference — the same policy `useCanvasScale` uses, so the
@@ -236,10 +243,22 @@ export function PreviewCard({
         </div>
       )}
       <div
-        className={`flex-1 flex flex-col items-center justify-center bg-black/40 rounded-2xl border border-slate-800 text-center min-h-0 relative group ${
-          item?.type === "Media" ? "p-0 overflow-hidden" : "p-6"
+        className={`flex-1 flex flex-col items-center justify-center bg-black/40 rounded-2xl border border-slate-800 text-center min-h-0 relative group overflow-hidden ${
+          item?.type === "Media" ? "p-0" : "p-6"
         }`}
+        style={bgStyle}
       >
+        {bgVideo?.path && (
+          <video
+            className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+            style={{ opacity: bgVideo.opacity ?? 1 }}
+            src={convertFileSrc(resolvePath(bgVideo.path, appDataDir))}
+            autoPlay
+            muted={bgVideo.muted ?? true}
+            loop={bgVideo.loopVideo ?? true}
+            playsInline
+          />
+        )}
         {item ? (
           <motion.div 
             key={getItemUid(item)}
@@ -249,13 +268,29 @@ export function PreviewCard({
             transition={{ duration: 0.2 }}
           >
             {item.type === "Verse" ? (
-              <div className="flex flex-col items-center justify-center gap-3">
-                <p className="text-xl font-serif text-slate-300 leading-snug line-clamp-5">
+              <div ref={slideBoxRef} className="w-full h-full flex flex-col items-center justify-center gap-3 text-center">
+                {settings.reference_position === "top" && (
+                  <p
+                    className="uppercase tracking-widest font-bold shrink-0"
+                    style={{ color: refColor, fontSize: `${(settings.reference_font_size ?? 36) * slideScale}px`, fontFamily: settings.reference_font_family ?? "Arial, sans-serif" }}
+                  >
+                    {item.data.book} {item.data.chapter}:{item.data.verse}
+                  </p>
+                )}
+                <p
+                  className="leading-snug"
+                  style={{ color: effectiveColors.verseText, fontFamily: settings.verse_font_family ?? "Georgia, serif", fontSize: `${settings.font_size * slideScale}px` }}
+                >
                   {item.data.text}
                 </p>
-                <p className="text-amber-500 font-mono font-bold uppercase tracking-widest text-sm shrink-0">
-                  {item.data.book} {item.data.chapter}:{item.data.verse}
-                </p>
+                {settings.reference_position !== "top" && (
+                  <p
+                    className="uppercase tracking-widest font-bold shrink-0"
+                    style={{ color: refColor, fontSize: `${(settings.reference_font_size ?? 36) * slideScale}px`, fontFamily: settings.reference_font_family ?? "Arial, sans-serif" }}
+                  >
+                    {item.data.book} {item.data.chapter}:{item.data.verse}
+                  </p>
+                )}
               </div>
             ) : item.type === "CustomSlide" ? (
               <div ref={slideBoxRef} className="w-full" style={{ aspectRatio: "16/9" }}>
@@ -302,7 +337,7 @@ export function PreviewCard({
                     alt={(item.data as MediaItem).name}
                   />
                 ) : (item.data as MediaItem).media_type === "Audio" ? (
-                  <div className="w-full h-full flex flex-col items-center justify-center gap-3 bg-slate-900 rounded-xl">
+                  <div className="w-full h-full flex flex-col items-center justify-center gap-3 bg-slate-900/70 rounded-xl backdrop-blur-sm">
                     <div className="w-16 h-16 rounded-full bg-gradient-to-br from-amber-500/30 to-purple-500/30 border border-amber-500/40 flex items-center justify-center">
                       <Music size={26} className="text-amber-300" />
                     </div>

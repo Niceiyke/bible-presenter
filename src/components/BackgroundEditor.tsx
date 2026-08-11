@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { MediaPickerModal } from "./MediaPickerModal";
 import { useAppStore } from "../store";
 import { relativizePath } from "../utils";
@@ -37,17 +36,17 @@ export function BackgroundEditor({
   label,
   value,
   onChange,
-  mediaImages = [],
+  media = [],
   onUploadMedia = async () => {},
 }: {
   label: string;
   value: BackgroundSetting | undefined;
   onChange: (bg: BackgroundSetting) => void;
-  mediaImages?: MediaItem[];
+  media?: MediaItem[];
   onUploadMedia?: () => Promise<void>;
 }) {
   const { appDataDir, availableCameras, refreshCameras } = useAppStore();
-  const [showPicker, setShowPicker] = useState(false);
+  const [pickerMode, setPickerMode] = useState<null | "image" | "video" | "audio">(null);
   const current: BackgroundSetting = value ?? { type: "None" };
 
   const vbg = current.type === "Video" ? (current as { type: "Video"; value: VideoBackground }).value : null;
@@ -72,30 +71,6 @@ export function BackgroundEditor({
       refreshCameras();
     }
   }, [current.type]);
-
-  const handlePickVideo = async () => {
-    try {
-      const selected = await openDialog({
-        multiple: false,
-        filters: [{ name: "Videos", extensions: ["mp4", "webm", "mov", "mkv", "avi", "m4v"] }],
-      });
-      if (typeof selected !== "string") return;
-      const rel = relativizePath(selected, appDataDir);
-      onChange({ type: "Video", value: { ...(vbg ?? DEFAULT_VIDEO_BG), path: rel } });
-    } catch {}
-  };
-
-  const handlePickAudio = async () => {
-    try {
-      const selected = await openDialog({
-        multiple: false,
-        filters: [{ name: "Audio", extensions: ["mp3", "wav", "ogg", "flac", "m4a", "aac"] }],
-      });
-      if (typeof selected !== "string") return;
-      const rel = relativizePath(selected, appDataDir);
-      onChange({ type: "Audio", value: { ...(abg ?? DEFAULT_AUDIO_BG), path: rel } });
-    } catch {}
-  };
 
   return (
     <>
@@ -138,7 +113,7 @@ export function BackgroundEditor({
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setShowPicker(true)}
+                onClick={() => setPickerMode("image")}
                 className="flex-1 py-1 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-slate-300 transition-all"
               >
                 {(current as { type: "Image"; value: ImageBackground }).value?.path ? "Change from Library..." : "Pick from Library..."}
@@ -198,10 +173,10 @@ export function BackgroundEditor({
             {/* File picker */}
             <div className="flex items-center gap-2">
               <button
-                onClick={handlePickVideo}
+                onClick={() => setPickerMode("video")}
                 className="flex-1 py-1 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-slate-300 transition-all"
               >
-                {vbg.path ? "Change Video..." : "Pick Video File..."}
+                {vbg.path ? "Change from Library..." : "Pick from Library..."}
               </button>
               {vbg.path && (
                 <button
@@ -359,10 +334,10 @@ export function BackgroundEditor({
             {/* File picker */}
             <div className="flex items-center gap-2">
               <button
-                onClick={handlePickAudio}
+                onClick={() => setPickerMode("audio")}
                 className="flex-1 py-1 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-slate-300 transition-all"
               >
-                {abg.path ? "Change Audio..." : "Pick Audio File..."}
+                {abg.path ? "Change from Library..." : "Pick from Library..."}
               </button>
               {abg.path && (
                 <button
@@ -405,11 +380,20 @@ export function BackgroundEditor({
         )}
       </div>
 
-      {showPicker && (
+      {pickerMode && (
         <MediaPickerModal
-          images={mediaImages}
-          onSelect={(path) => { onChange({ type: "Image", value: { ...(ibg ?? DEFAULT_IMAGE_BG), path: relativizePath(path, appDataDir) } }); }}
-          onClose={() => setShowPicker(false)}
+          images={media}
+          mode={pickerMode}
+          onSelect={(path) => {
+            if (pickerMode === "image") {
+              onChange({ type: "Image", value: { ...(ibg ?? DEFAULT_IMAGE_BG), path: relativizePath(path, appDataDir) } });
+            } else if (pickerMode === "video") {
+              onChange({ type: "Video", value: { ...(vbg ?? DEFAULT_VIDEO_BG), path: relativizePath(path, appDataDir) } });
+            } else {
+              onChange({ type: "Audio", value: { ...(abg ?? DEFAULT_AUDIO_BG), path: relativizePath(path, appDataDir) } });
+            }
+          }}
+          onClose={() => setPickerMode(null)}
           onUpload={onUploadMedia}
         />
       )}

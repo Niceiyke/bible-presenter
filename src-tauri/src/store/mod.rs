@@ -291,7 +291,7 @@ impl BibleStore {
         self.book_map.get(&clean).cloned().unwrap_or(raw.to_string())
     }
 
-    pub fn detect_verses_by_ref(&self, text: &str) -> Vec<Verse> {
+    pub fn detect_verses_by_ref(&self, text: &str, version: &str) -> Vec<Verse> {
         let text_lower = text.to_lowercase();
 
         // Range ("John 3:16-18") must be checked before the single-verse regex,
@@ -304,11 +304,10 @@ impl BibleStore {
                         caps.get(3).map(|m| m.as_str()).unwrap_or("").parse::<i32>(),
                         caps.get(4).map(|m| m.as_str()).unwrap_or("").parse::<i32>(),
                     ) {
-                        let version = self.get_active_version();
                         if to >= from {
                             let mut out = Vec::new();
                             for v in from..=to {
-                                if let Ok(Some(v)) = self.get_verse(&book, chapter, v, &version) {
+                                if let Ok(Some(v)) = self.get_verse(&book, chapter, v, version) {
                                     out.push(v);
                                 }
                             }
@@ -326,8 +325,7 @@ impl BibleStore {
             if self.books.contains(&book) {
                 if let Ok(chapter) = caps.get(2).map(|m| m.as_str()).unwrap_or("").parse::<i32>() {
                     if let Ok(verse) = caps.get(3).map(|m| m.as_str()).unwrap_or("").parse::<i32>() {
-                        let version = self.get_active_version();
-                        if let Ok(Some(v)) = self.get_verse(&book, chapter, verse, &version) {
+                        if let Ok(Some(v)) = self.get_verse(&book, chapter, verse, version) {
                             return vec![v];
                         }
                     }
@@ -339,8 +337,7 @@ impl BibleStore {
             let book = self.normalize_book(caps.get(1).map(|m| m.as_str()).unwrap_or(""));
             if self.books.contains(&book) {
                 if let Ok(chapter) = caps.get(2).map(|m| m.as_str()).unwrap_or("").parse::<i32>() {
-                    let version = self.get_active_version();
-                    if let Ok(verses) = self.get_chapter_verses(&book, chapter, &version) {
+                    if let Ok(verses) = self.get_chapter_verses(&book, chapter, version) {
                         return verses.into_iter().take(20).collect();
                     }
                 }
@@ -350,8 +347,8 @@ impl BibleStore {
         Vec::new()
     }
 
-    pub fn detect_verse_by_ref(&self, text: &str) -> Option<Verse> {
-        self.detect_verses_by_ref(text).into_iter().next()
+    pub fn detect_verse_by_ref(&self, text: &str, version: &str) -> Option<Verse> {
+        self.detect_verses_by_ref(text, version).into_iter().next()
     }
 
     pub fn get_verse(&self, book: &str, chapter: i32, verse: i32, version: &str) -> anyhow::Result<Option<Verse>> {
@@ -424,13 +421,13 @@ impl BibleStore {
         Ok(None)
     }
 
-    pub fn search_all(&self, query: &str) -> anyhow::Result<SearchResponse> {
+    pub fn search_all(&self, query: &str, version: &str) -> anyhow::Result<SearchResponse> {
         let query = query.trim();
         if query.is_empty() {
             return Ok(SearchResponse { results: Vec::new(), method: String::new() });
         }
 
-        let ref_results = self.detect_verses_by_ref(query);
+        let ref_results = self.detect_verses_by_ref(query, version);
 
         // A clean reference ("John 3:16", "Psalms 23") short-circuits to the reference match.
         // If the query has extra meaningful words beyond the reference ("John 3:16 love"),
@@ -439,7 +436,7 @@ impl BibleStore {
             return Ok(SearchResponse { results: ref_results, method: "reference".to_string() });
         }
 
-        let mut results = self.search_fts_keyword(query);
+        let mut results = self.search_fts_keyword(query, version);
 
         // Still surface the explicit reference at the top of keyword results.
         if let Some(r) = ref_results.first() {
@@ -466,7 +463,7 @@ impl BibleStore {
 
     /// Tiered keyword search: exact phrase -> all terms (AND) -> any term (OR) -> LIKE fallback.
     /// Results carry a normalized bm25 relevance score in `Verse.score` (0..1, higher = better).
-    fn search_fts_keyword(&self, query: &str) -> Vec<Verse> {
+    fn search_fts_keyword(&self, query: &str, version: &str) -> Vec<Verse> {
         let tokens: Vec<String> = query.split_whitespace().filter_map(clean_token).collect();
         if tokens.is_empty() {
             return Vec::new();
@@ -475,17 +472,17 @@ impl BibleStore {
         // Tier 1: exact phrase match, preserving all words (including stop words).
         let escaped = query.replace('"', "\"\"");
         let phrase = format!("\"{}\"", escaped);
-        let phrase_hits = self.run_fts_query(&phrase);
+        let phrase_hits = self.run_fts_query(&phrase, version);
         if !phrase_hits.is_empty() {
             return phrase_hits;
         }
 
         // Tier 2: every token must appear. Stop words are matched exactly (no prefix) to
-        // avoid "the*" hitting "them/they/there"; content words use a prefix for stemming.
+        // avoid "the*" hitting "them/they/theirs"; content words use a prefix for stemming.
         let and_terms: Vec<String> = tokens.iter().map(|t| {
             if STOP_WORDS.contains(&t.as_str()) { t.clone() } else { format!("{}*", t) }
         }).collect();
-        let and_hits = self.run_fts_query(&and_terms.join(" AND "));
+        let and_hits = self.run_fts_query(&and_terms.join(" AND "), version);
         if !and_hits.is_empty() {
             return and_hits;
         }
@@ -496,26 +493,26 @@ impl BibleStore {
             .map(|t| format!("{}*", t))
             .collect();
         if !or_terms.is_empty() {
-            let or_hits = self.run_fts_query(&or_terms.join(" OR "));
+            let or_hits = self.run_fts_query(&or_terms.join(" OR "), version);
             if !or_hits.is_empty() {
                 return or_hits;
             }
         }
 
         // Final fallback: contiguous substring match via LIKE.
-        self.like_contiguous(query).unwrap_or_default()
+        self.like_contiguous(query, version).unwrap_or_default()
     }
 
-    /// Runs an FTS5 query across all versions and returns verses ordered by bm25 relevance
-    /// with scores normalized to 0..1.
-    fn run_fts_query(&self, match_query: &str) -> Vec<Verse> {
+    /// Runs an FTS5 query restricted to `version` and returns verses ordered by bm25
+    /// relevance with scores normalized to 0..1.
+    fn run_fts_query(&self, match_query: &str, version: &str) -> Vec<Verse> {
         let conn = self.conn.lock();
         let Ok(mut stmt) = conn.prepare_cached(
             "SELECT b.title, b.text, b.version, b.chapter, b.verse,
                     bm25(wordlyte_bible_fts) AS relevance
              FROM wordlyte_bible b
              JOIN wordlyte_bible_fts f ON b.rowid = f.rowid
-             WHERE wordlyte_bible_fts MATCH ?1
+             WHERE wordlyte_bible_fts MATCH ?1 AND b.version = ?2
              ORDER BY relevance
              LIMIT 200"
         ) else {
@@ -523,7 +520,7 @@ impl BibleStore {
         };
 
         let mut scored: Vec<(Verse, f32)> = Vec::new();
-        match stmt.query_map(params![match_query], |row| {
+        match stmt.query_map(params![match_query, version], |row| {
             let text: Option<String> = row.get(1)?;
             Ok((
                 Verse {
@@ -566,18 +563,17 @@ impl BibleStore {
             .collect()
     }
 
-    /// Contiguous-substring LIKE fallback, preferring the active version.
-    fn like_contiguous(&self, query: &str) -> anyhow::Result<Vec<Verse>> {
+    /// Contiguous-substring LIKE fallback, restricted to the active version.
+    fn like_contiguous(&self, query: &str, version: &str) -> anyhow::Result<Vec<Verse>> {
         let pattern = format!("%{}%", query.trim().replace(' ', "%"));
-        let active_version = self.get_active_version();
         let conn = self.conn.lock();
         let mut stmt = conn.prepare_cached(
             "SELECT title, text, version, chapter, verse FROM wordlyte_bible \
-             WHERE text LIKE ?1 \
-             ORDER BY (CASE WHEN version = ?2 THEN 0 ELSE 1 END), rowid \
+             WHERE text LIKE ?1 AND version = ?2 \
+             ORDER BY rowid \
              LIMIT 20"
         )?;
-        let rows = stmt.query_map(params![pattern, active_version], |row| {
+        let rows = stmt.query_map(params![pattern, version], |row| {
             let text: Option<String> = row.get(1)?;
             Ok(Verse {
                 book: row.get(0)?,

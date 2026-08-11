@@ -4,7 +4,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "../store";
 import { displayItemLabel, stableId } from "../utils";
 import { itemNextLive, type ItemLookup } from "../items/registry";
-import type { DisplayItem, PresentationSettings, PropItem, MediaItem, ScheduleEntry, Schedule, Scene } from "../types";
+import type { DisplayItem, PresentationSettings, PropItem, MediaItem, ScheduleEntry, Schedule, ServiceMeta, Scene } from "../types";
 
 const getVerseKey = (v: any, threshold: number) => `${v.book}-${v.chapter}-${v.verse}-${v.version}-${threshold}`;
 const MAX_VERSE_SPLITS = 64;
@@ -26,12 +26,15 @@ export function useItemActions() {
     ltVisible, setLtVisible, ltTemplate, ltMode, ltLineIndex, ltLinesPerDisplay,
     currentLowerThird, setCurrentLowerThird,
     scheduleEntries, setScheduleEntries,
-    activeServiceId, services,
+    activeServiceId, setActiveServiceId,
+    setActiveScheduleIdx,
+    services, setServices,
     media, setMedia,
     songs, studioSlides,
     setToast, setPropItems, propItems,
     setBackendError, setBusyAction,
     scenes, setScenes,
+    setPendingScheduleItem, setAddToServiceOpen,
   } = useAppStore();
 
   const verseSplitsRef = useRef<Record<string, any[]>>({});
@@ -299,10 +302,39 @@ export function useItemActions() {
   }, [setLiveItem, setStagedItem, setPropItems, setCurrentLowerThird, setLtVisible, setToast, setBackendError, setBusyAction, stageItem]);
 
   const addToSchedule = useCallback(async (item: DisplayItem) => {
+    const svcs = useAppStore.getState().services;
+    // With multiple services, ask which one to add to instead of silently
+    // appending to the currently active service.
+    if (svcs.length > 1) {
+      setPendingScheduleItem(item);
+      setAddToServiceOpen(true);
+      return;
+    }
     const entry: ScheduleEntry = { id: stableId(), item };
     setScheduleEntries([...scheduleEntries, entry]);
     setToast("Added to schedule");
-  }, [scheduleEntries, setScheduleEntries, setToast]);
+  }, [scheduleEntries, setScheduleEntries, setToast, setPendingScheduleItem, setAddToServiceOpen]);
+
+  const addToService = useCallback(async (item: DisplayItem, serviceId: string) => {
+    try {
+      const loaded: Schedule = await invoke<Schedule>("load_service", { id: serviceId })
+        .catch(() => ({ id: serviceId, name: "Service", items: [] } as Schedule));
+      const entry: ScheduleEntry = { id: stableId(), item };
+      const next: Schedule = { ...loaded, items: [...(loaded.items ?? []), entry] };
+      await invoke("save_service", { schedule: next });
+      setActiveServiceId(serviceId);
+      setScheduleEntries(next.items ?? []);
+      setActiveScheduleIdx(null);
+      localStorage.setItem("activeServiceId", serviceId);
+      const list = (await invoke<ServiceMeta[]>("list_services")) as ServiceMeta[];
+      setServices(list);
+      setToast("Added to service");
+      return true;
+    } catch (err: any) {
+      setBackendError(`Add to service failed: ${err?.message ?? err}`);
+      return false;
+    }
+  }, [setActiveServiceId, setScheduleEntries, setActiveScheduleIdx, setServices, setToast, setBackendError]);
 
   const persistSchedule = useCallback(async () => {
     const s: Schedule = { id: activeServiceId, name: services.find(s => s.id === activeServiceId)?.name || "Service", items: scheduleEntries };
@@ -424,6 +456,7 @@ export function useItemActions() {
     undoClearAll,
     getNextItem,
     addToSchedule,
+    addToService,
     persistSchedule,
     handleFileUpload,
     handleDeleteMedia,

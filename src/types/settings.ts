@@ -49,6 +49,10 @@ export interface PresentationSettings {
   background_logo_path?: string;
   background_logo_fit?: MediaFitMode;
   show_background_logo?: boolean;
+  logo_text?: string;
+  logo_text_color?: string;
+  background_logo_text?: string;
+  background_logo_text_color?: string;
   is_blanked: boolean;
   font_size: number;
   slide_transition?: string;

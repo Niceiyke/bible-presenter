@@ -16,6 +16,7 @@ import { LeftNav } from "./components/layout/LeftNav";
 import { BottomDrawer } from "./components/layout/BottomDrawer";
 import { Cockpit } from "./components/layout/Cockpit";
 import { ContentBrowser } from "./components/layout/ContentBrowser";
+import { AddToServiceModal } from "./components/AddToServiceModal";
 
 import { Toast } from "./components/Toast";
 import { ShortcutsModal } from "./components/ShortcutsModal";
@@ -53,6 +54,9 @@ export default function App() {
     pastScheduleStates, futureScheduleStates,
     isInitialized,
     backendAvailable,
+    services,
+    addToServiceOpen, setAddToServiceOpen,
+    pendingScheduleItem, setPendingScheduleItem,
   } = useAppStore();
 
   const [editingPres, setEditingPres] = useState<CustomPresentation | null>(null);
@@ -66,7 +70,7 @@ export default function App() {
 
   const {
     nextLiveItem, stageItem, goLive, sendLive, clearAll, undoClearAll, getNextItem,
-    addToSchedule, persistSchedule, handleFileUpload, handleDeleteMedia,
+    addToSchedule, addToService, persistSchedule, handleFileUpload, handleDeleteMedia,
     updateSettings, updateProps,
     loadScenes, saveScene, deleteScene, applyScene, captureScene,
   } = useItemActions();
@@ -317,6 +321,23 @@ export default function App() {
 
       <ShortcutsModal isOpen={showShortcuts} onClose={() => useAppStore.getState().setShowShortcuts(false)} />
       <LogViewer />
+
+      <AddToServiceModal
+        open={addToServiceOpen}
+        services={services}
+        activeServiceId={activeServiceId}
+        onClose={() => {
+          setAddToServiceOpen(false);
+          setPendingScheduleItem(null);
+        }}
+        onSelect={async (id) => {
+          const item = pendingScheduleItem;
+          if (!item) return;
+          await addToService(item, id);
+          setAddToServiceOpen(false);
+          setPendingScheduleItem(null);
+        }}
+      />
     </div>
   );
 }

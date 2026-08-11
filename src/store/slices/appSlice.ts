@@ -1,6 +1,7 @@
 import { StateCreator } from "zustand";
 import { AppStore } from "../index";
 import { DEFAULT_SETTINGS, PresentationSettings, CustomPresentation, CustomSlide, PresentationSummary, SlideTemplate, Scene } from "../../types";
+import type { DisplayItem } from "../../types";
 
 export interface LogEntry {
   level: string;
@@ -78,6 +79,10 @@ export interface AppSlice {
   setBusyAction: (key: string, busy: boolean) => void;
   backendAvailable: boolean;
   setBackendAvailable: (v: boolean) => void;
+  addToServiceOpen: boolean;
+  setAddToServiceOpen: (v: boolean) => void;
+  pendingScheduleItem: DisplayItem | null;
+  setPendingScheduleItem: (v: DisplayItem | null) => void;
 }
 
 export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) => ({
@@ -155,4 +160,8 @@ export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) =>
   }),
   backendAvailable: true,
   setBackendAvailable: (v) => set({ backendAvailable: v }),
+  addToServiceOpen: false,
+  setAddToServiceOpen: (v) => set({ addToServiceOpen: v }),
+  pendingScheduleItem: null,
+  setPendingScheduleItem: (v) => set({ pendingScheduleItem: v }),
 });

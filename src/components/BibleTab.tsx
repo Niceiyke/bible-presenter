@@ -148,7 +148,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
     setIsSearching(true);
     setSearchError(null);
     try {
-      const response: any = await invoke("search_semantic_query", { query: searchQuery });
+      const response: any = await invoke("search_semantic_query", { query: searchQuery, version: bibleVersion });
       setSearchResults(response.results);
       setSearchMethod(response.method);
     } catch (err: any) {
@@ -315,8 +315,8 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
           </span>
         </div>
         <p className="text-[10px] text-console-text-subtle leading-tight">
-          Reference search works across all enabled versions. The chosen version is the reference source and the
-          chapter navigation target.
+          Search and reference results are filtered to the active version. Switch versions to search that
+          translation.
         </p>
       </div>
 
@@ -346,7 +346,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
               A plain reference (e.g. <span className="text-console-text">John 3:16</span>,
               <span className="text-console-text"> John 3:16-18</span>,
               <span className="text-console-text"> Psalm 23</span>) returns that verse or chapter directly.
-              Anything else runs a keyword search across all versions.
+              Anything else runs a keyword search within the active version.
             </p>
             {searchError && (
               <p className="text-state-error text-xs mb-2">{searchError}</p>

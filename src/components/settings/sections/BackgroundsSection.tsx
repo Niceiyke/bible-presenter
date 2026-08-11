@@ -157,7 +157,7 @@ export function BackgroundsSection({ onUpdateSettings, onUploadMedia }: Settings
             label={t("settings.bg.bibleVerses")}
             value={settings.bible_background}
             onChange={(bg) => onUpdateSettings({ ...settings, bible_background: bg })}
-            mediaImages={media.filter((m) => m.media_type === "Image")}
+            media={media}
             onUploadMedia={onUploadMedia}
           />
           <div className="border-t border-slate-800" />
@@ -165,7 +165,7 @@ export function BackgroundsSection({ onUpdateSettings, onUploadMedia }: Settings
             label={t("settings.bg.media")}
             value={settings.media_background}
             onChange={(bg) => onUpdateSettings({ ...settings, media_background: bg })}
-            mediaImages={media.filter((m) => m.media_type === "Image")}
+            media={media}
             onUploadMedia={onUploadMedia}
           />
         </div>
