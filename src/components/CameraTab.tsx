@@ -1,12 +1,14 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useAppStore } from "../store";
-import { Camera, RefreshCw, Video, Play, Monitor } from "lucide-react";
+import { Camera, RefreshCw, Video, Play, Monitor, AlertTriangle } from "lucide-react";
 import type { DisplayItem, CameraBackground } from "../types";
 
 interface CameraTabProps {
   onStage?: (item: DisplayItem) => void;
   onLive?: (item: DisplayItem) => void;
 }
+
+type CameraError = "permission" | "device" | "unknown" | null;
 
 export function CameraTab({ onStage, onLive }: CameraTabProps) {
   const { 
@@ -20,6 +22,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const [cameraError, setCameraError] = useState<CameraError>(null);
 
   useEffect(() => {
     refreshCameras();
@@ -68,12 +71,28 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     navigator.mediaDevices.getUserMedia({ 
       video: { deviceId: { exact: selectedCameraId } } 
     }).then(stream => {
+      setCameraError(null);
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
       }
     }).catch(err => {
       console.error("CameraTab: failed to get stream", err);
+      const name = (err as DOMException)?.name ?? "";
+      if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+        setCameraError("permission");
+      } else if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") {
+        setCameraError("device");
+      } else {
+        setCameraError("unknown");
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
     });
 
     return () => {
@@ -118,6 +137,30 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
               BROWSER PREVIEW
             </div>
           </div>
+
+          {cameraError && (
+            <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-red-950/60 border border-red-800/60 text-red-300 text-xs">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5 text-red-400" />
+              <div className="flex-1">
+                <p className="font-bold uppercase tracking-wider">
+                  {cameraError === "permission" ? "Camera permission denied" : cameraError === "device" ? "Camera not found" : "Camera unavailable"}
+                </p>
+                <p className="text-red-400/80 mt-0.5">
+                  {cameraError === "permission"
+                    ? "Allow camera access for this app in Windows Settings, then refresh devices."
+                    : cameraError === "device"
+                      ? "The selected device is disconnected or no longer available. Pick another camera below."
+                      : "An error occurred while opening the camera. Refresh devices and try again."}
+                </p>
+              </div>
+              <button
+                onClick={() => { setCameraError(null); refreshCameras(); }}
+                className="shrink-0 px-2 py-1 text-[10px] font-black uppercase bg-red-900/50 hover:bg-red-800 rounded-md border border-red-800 transition-all"
+              >
+                Retry
+              </button>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-4">
             <button 

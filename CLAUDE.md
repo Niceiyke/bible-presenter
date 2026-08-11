@@ -1,113 +1,227 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file describes the current Wordlyte repository. Keep it updated when the application architecture, commands, windows, or persistence model changes.
 
 ## Commands
 
 ```bash
-# Development (runs Vite dev server + Tauri backend together)
-npm run tauri dev
+# Frontend development
+npm run dev                 # Vite dev server on port 1420
+npm run build               # tsc + vite build -> dist/
+npm run preview             # Preview the production frontend build
+npm run test                # Vitest (jsdom) unit/behavior tests
 
-# Frontend only
-npm run dev           # Vite dev server on port 1420
-npm run build         # tsc + vite build → dist/
+# Tauri development and packaging
+npm run tauri dev           # Runs the Vite frontend and Tauri desktop app
+npm run tauri build         # Production NSIS bundle
 
 # Rust backend
 cd src-tauri
-cargo check           # Fast compile check
-cargo clippy          # Lint
-cargo build           # Debug build
-cargo build --release # Release build
-
-# Full production bundle
-npm run tauri build
+cargo check                 # Fast compile check
+cargo clippy                # Lints
+cargo build                 # Debug build
+cargo build --release       # Release build
 ```
 
-There are no tests in this project currently.
+Vitest (jsdom) covers the transactional `useItemActions` core (stage failure, live transitions, clear propagation, settings/props rollback, service persistence), the schedule undo/redo slice, and the output-window toggle failure path. Rust unit tests exist in selected command modules. Production-safety work should extend these frontend tests to stage/live/clear state and Tauri event synchronization.
 
-## Required Files (Not in Repo)
+The UI/UX roadmap is documented in `docs/UI_UX_MODERNIZATION_PLAN.md`.
 
-The app will start but `start_session` will fail without models. It will **crash at startup** without the database.
+## Stack
 
+- React 19 and TypeScript.
+- Vite 7.
+- Tailwind CSS v4 through `@tailwindcss/vite` in `vite.config.ts`.
+- Zustand 5 for shared frontend state.
+- Framer Motion for transitions and reorder interactions.
+- Lucide React for icons.
+- Tauri 2 and Rust for the desktop shell, persistence, media operations, and display windows.
+- SQLite through `rusqlite` for Bible, media, schedule, song, presentation, lower-third, props, and scene data.
+
+## Frontend entry and shell
+
+`src/main.tsx` mounts `I18nProvider`, the root `ErrorBoundary`, and `App`.
+
+`src/App.tsx` is the operator-shell orchestrator. It mounts:
+
+- `AppHeader` for output, logs, shortcuts, and backend status.
+- `LeftNav` for workspace navigation.
+- `ContentBrowser` for the active workspace.
+- `BottomDrawer` for lower thirds and timers.
+- `Cockpit` for staged/live previews and the service queue.
+- `MusicPlayer`, toast notifications, recovery, slide editing, and logs.
+
+The current content workspaces are:
+
+- `BibleTab`: Bible versions, quick reference entry, chapter browsing, semantic search, recent items.
+- `SongsTab`: user songs, hymn library, song import, editing, arrangements, and lyrics mode.
+- `MediaTab`: image/video/audio library, camera view, metadata, fit modes, playback settings, bulk actions, missing-file relinking.
+- `StudioTab`: custom presentation list, slide thumbnails, stage/live/service actions, and the slide editor entry point.
+- `ScheduleTab`: service selection, service management, reorder, undo/redo, persistent/one-shot behavior.
+- `LowerThirdTab`: nameplates, lyrics, free text, presets, templates, and live controls.
+- `TimersTab`: countdown, count-up, clock, staging, live display, and stop/reset.
+- `PropsTab`: persistent image and clock overlays.
+- `ScenesTab`: capture, apply, and delete bundles of settings, props, and lower-third state.
+- `SettingsTab`: Bible assets, output styling, themes, backgrounds, monitors, stage, and operator behavior.
+
+## Windows
+
+Window definitions are in `src-tauri/tauri.conf.json` and are created after `AppState` is managed in `src-tauri/src/main.rs`.
+
+- `main`: operator window, 1200x800.
+- `output`: transparent, always-on-top audience output, 1920x1080, hidden by default.
+- `stage`: performer confidence monitor, 1280x720, hidden by default.
+- `design`: configured Design Hub window, 1440x900, hidden by default.
+- `studio`: configured Audio Studio window, 1440x900, hidden by default.
+
+`App.tsx` currently renders dedicated React branches for `output` and `stage`. Any work involving `design` or `studio` must first verify whether those windows are intended to load the same operator app or need their own renderer branch.
+
+`src/windows/OutputWindow.tsx` renders projected content, backgrounds, media, cameras, timers, songs, custom slides, props, logos, transitions, lower thirds, and safe projection error fallback.
+
+`src/windows/StageWindow.tsx` renders Now Live and Up Next confidence views, timer/clock information, custom slide previews, settings, lower-third state, and stage theme behavior.
+
+Do not apply operator-console color tokens directly to projected output. Audience themes are persisted separately in `src/types/settings.ts`.
+
+## State management
+
+`src/store/index.ts` composes Zustand slices from `src/store/slices/`:
+
+- `appSlice`: active tab, settings, initialization, logs, output visibility, studio data, scenes, errors, and general UI state.
+- `liveSlice`: live item, staged item, previous item, next verse, recents, history, and blackout state.
+- `bibleSlice`: Bible versions, books, chapters, verses, selection, and search.
+- `mediaSlice`: media library, filters, metadata, playback, and media UI state.
+- `lowerThirdSlice`: lower-third mode, template, visibility, song/lyrics state, presets, and current payload.
+- `serviceSlice`: service entries, service history, active service, service manager, and props.
+- `cameraSlice`: camera devices and selected camera state.
+
+When adding shared state, prefer the relevant slice instead of adding unrelated local state to `App.tsx`. Avoid duplicating authoritative live or service state in multiple components.
+
+## Initialization and events
+
+`src/hooks/useAppInitialization.ts`:
+
+- Resolves the current Tauri window label.
+- Waits for backend startup readiness for the main window.
+- Hydrates Bible versions, media, presentations, schedules, songs, hymns, lower-third templates, settings, props, services, current lower third, scenes, recents, and schedule history.
+- Registers synchronization listeners.
+
+Typed event names and payloads are defined in `src/hooks/useTauriEvent.ts`.
+
+Important events include:
+
+- `live-item-update`: live item or null.
+- `item-staged`: staged item or null.
+- `settings-changed`: presentation settings.
+- `lower-third-update`: lower-third payload or null.
+- `props-update`: persistent props.
+- `media-control` and `media-state`: media transport commands and feedback.
+- `songs-sync`, `studio-sync`, and `studio-slides-sync`: content synchronization.
+- `system-log` and `operator-warning`: backend/operator diagnostics.
+
+Any change to live, staged, clear, settings, lower-third, props, or service behavior must verify all windows and all listeners, including null/clear payloads.
+
+## Live transition flow
+
+The normal operator flow is:
+
+```text
+Content workspace
+  -> stageItem(item)
+  -> Tauri stage_item
+  -> stagedItem / item-staged event
+  -> goLive()
+  -> Tauri commit_staged
+  -> liveItem / live-item-update event
+  -> output and stage windows render the authoritative state
 ```
-src-tauri/models/
-  whisper-base.bin          # ~148 MB GGML Whisper model
-  all-minilm-l6-v2.onnx     # ~90 MB sentence-transformer ONNX
-  tokenizer.json            # HuggingFace tokenizer (already committed)
 
-src-tauri/bible_data/
-  bible.db                  # SQLite with table: verses(id, book, chapter, verse, text)
-  embeddings.npy            # ~48 MB pre-computed 384-dim L2-normalized verse embeddings
+`sendLive(item)` combines staging and committing. It must never commit if staging failed. Keep this behavior transactional when changing `src/hooks/useItemActions.ts`.
+
+`clearAll()` affects live content, staged content, props, and lower thirds. Treat it as a production-destructive action and preserve failure recovery.
+
+## Rust backend
+
+Rust modules are in `src-tauri/src/`:
+
+- `state.rs`: `AppState`, `PresentationState`, live/staged/settings/lower-third/props state.
+- `store/mod.rs`: Bible store and shared data types.
+- `store/data_db.rs`: SQLite data database setup and schema helpers.
+- `store/media_schedule.rs`: media, schedules, services, songs, presentations, settings, props, scenes, and related persistence.
+- `commands/bible.rs`: Bible lookup, versions, search, chapter/verse retrieval, and verse splitting.
+- `commands/media.rs`: media import, metadata, playback, relinking, deletion, bulk operations, and existence checks.
+- `commands/schedule.rs`: service schedules, recovery, and service persistence.
+- `commands/display.rs`: stage, commit, go-live, clear, settings, current item, and timer behavior.
+- `commands/studio_pres.rs`: custom presentations and slide templates.
+- `commands/songs.rs`: songs and hymn-related persistence.
+- `commands/lower_third.rs`: lower-third state, templates, and presets.
+- `commands/props.rs`: persistent props.
+- `commands/scenes.rs`: scene capture, persistence, and application.
+- `commands/windows.rs`: output, stage, studio/design window toggles and monitor handling.
+- `commands/assets.rs`: Bible data download and asset paths.
+
+The startup path searches for `bible_data/wordlyte_bible.db`. If it is unavailable, the app creates an empty placeholder Bible store and Settings can download Bible assets. Bundled hymn data is `bible_data/hymns.json`.
+
+User data is stored under the Tauri app-local data directory. The backend logs to the app data logs directory, and panic logs use the `io.wordlyte.app` local-app path.
+
+## Assets and runtime data
+
+Runtime Bible and media assets may not be committed to the repository. Confirm required files from `src-tauri/src/commands/assets.rs` and the current startup logs rather than relying on old model instructions.
+
+Do not reintroduce the old Whisper, ONNX, CPAL, VAD, or transcription-engine architecture described in previous versions of this file. The current repository has no `TranscriptionEngine`, audio engine, or `ort` dependency in `src-tauri/Cargo.toml`.
+
+## Styling and color rules
+
+Operator UI styling currently lives primarily in Tailwind classes and `src/index.css`. The modernization plan defines semantic operator colors in `docs/UI_UX_MODERNIZATION_PLAN.md`.
+
+Target semantic meanings:
+
+- Amber: primary action and attention.
+- Red: on-air and destructive actions.
+- Cyan: staged/up-next content.
+- Green: saved, connected, or completed.
+- Purple: presentation/design tools.
+- Teal: audio/music tools.
+- Blue/cyan focus ring: keyboard focus.
+
+Do not use color alone to convey live state. Pair color with text, icon, border, and layout position.
+
+## Important frontend constraints
+
+- Tailwind v4 requires `@tailwindcss/vite` and `@import "tailwindcss"` in `src/index.css`.
+- `select { color-scheme: dark; }` exists to keep native WebView2 option lists readable.
+- The app root uses `user-select: none` for operator controls; editable ProseMirror content explicitly restores text selection.
+- Use the existing `useTauriEvent` hook for new typed event listeners where possible.
+- Use `useFonts` when a window must render user-installed fonts.
+- Media paths should be relativized for persistence and resolved consistently before `convertFileSrc`.
+- Keep keyboard shortcuts centralized through `keyboardRegistry.ts` and avoid collisions with text inputs, modals, lyric mode, and the slide editor.
+
+## Verification expectations
+
+For frontend-only work:
+
+```bash
+npm run build
 ```
 
-Startup logs go to `{AppLocalData}/com.biblepresenter.rs/logs/app.log`.
+For Rust or Tauri contract changes:
 
-## Architecture
-
-### Two-Window Model
-
-The same React app (`src/App.tsx`) is loaded in two Tauri windows:
-
-- **`main`** (1200×800) — Operator control panel: device selector, VAD threshold slider, manual book/chapter/verse picker, keyword search, live transcription view
-- **`output`** (1920×1080, transparent, always-on-top, hidden by default) — Audience display, toggled via `toggle_output_window` command which also tries to fullscreen on a secondary monitor
-
-The window's role is determined at runtime: `getCurrentWindow().label` is checked in `useEffect`. Both windows subscribe to the same `transcription-update` Tauri event and maintain their own `activeVerse` state. When `select_verse` is called, `app.emit("transcription-update", ...)` broadcasts to both.
-
-### Live Transcription Pipeline
-
-```
-Microphone → CPAL stream → Rubato resampler (→ 16kHz mono) → VAD gate (energy threshold)
-  → mpsc channel → Tokio async loop (accumulate 32000 samples = 2s)
-  → spawn_blocking:
-      1. Whisper transcription (text)
-      2. ONNX embedding (384-dim L2-normalized vector)
-      3. store.detect_verse_hybrid(text, embedding)
-           ├─ Regex patterns on text (explicit references like "John 3:16")
-           ├─ Cosine similarity against pre-loaded embeddings.npy (threshold 0.45)
-           └─ Fallback: keyword overlap in verse_cache (threshold ≥ 3 matching words)
-  → app.emit("transcription-update", { text, detected_verse })
-  → Slide buffer forward (keep 8000 sample overlap)
+```bash
+npm run build
+cd src-tauri
+cargo check
+cargo clippy
 ```
 
-`BibleStore` preloads all verses into `verse_cache: Vec<Verse>` and all embeddings into `embeddings: Option<Array2<f32>>` at startup for in-memory inference speed.
+Manual production checks should cover:
 
-### Global State
-
-`AppState` in `main.rs` holds:
-- `audio: Arc<Mutex<AudioEngine>>` — CPAL stream, device selection, VAD
-- `engine: Option<Arc<TranscriptionEngine>>` — Whisper context + ONNX session (None if models missing)
-- `store: Arc<BibleStore>` — SQLite connection, verse cache, embeddings
-
-All Tauri commands receive `State<'_, AppState>`.
-
-## Critical Dependency Constraint: ort + ndarray
-
-**`ort 2.0.0-rc.11`** depends on ndarray 0.17; **`ndarray-npy 0.8`** depends on ndarray 0.15. Enabling ort's `ndarray` feature causes both versions to compile simultaneously, creating type conflicts (e.g. `Axis` becomes ambiguous).
-
-**Rules:**
-- Do NOT add `features = ["ndarray"]` to the `ort` dependency
-- Use raw tensor APIs only:
-  ```rust
-  // Input tensors:
-  Tensor::from_array(([1usize, seq_len], data_vec))?
-
-  // Output tensors:
-  let (shape, data) = output.try_extract_tensor::<f32>()?;
-  // shape derefs to &[i64], data is &[f32]
-
-  // Do NOT use try_extract_array() — it returns ndarray 0.17 types
-
-  // ort::inputs! macro returns Vec<...>, NOT Result — do not use ?
-  let inputs = ort::inputs!["name" => Tensor::from_array(...)?];
-  ```
-- `ort::value::Tensor` is the correct import path (not `ort::Tensor`)
-
-## Frontend Stack
-
-- **Tailwind CSS v4** — requires `@tailwindcss/vite` plugin in `vite.config.ts`; `@import "tailwindcss"` in `index.css` is the v4 CSS-first syntax. The `tailwind.config.js` is a legacy v3-format file that v4 ignores.
-- **`framer-motion`** and **`lucide-react`** and **`zustand`** are installed but not yet used in `App.tsx`
-- All UI state is local `useState` in the single monolithic `App.tsx` component
-
-## Windows Platform Notes
-
-`cpal::Stream` on Windows is `!Send + !Sync` (raw WASAPI handles). `AudioEngine` wraps it in `StreamHandle` with `unsafe impl Send + Sync` — safe because `AudioEngine` itself is behind `Arc<Mutex<>>` in `AppState`, serialising all access.
+- Main window at 1280x720.
+- Main window at 1920x1080.
+- Windows scaling at 125% and 150%.
+- Output and stage on one monitor.
+- Output and stage on two monitors.
+- Output/stage window toggle failure.
+- Stage failure before go-live.
+- Clear live and clear all propagation.
+- Service reorder, undo, redo, save, and restart recovery.
+- Missing Bible assets and missing media files.
+- Lower-third, timer, props, scene, camera, and presentation behavior.

@@ -145,4 +145,17 @@ mod tests {
         let result = split_verse(v, Some(200));
         assert_eq!(result.len(), 1);
     }
+
+    #[test]
+    fn range_detection_pattern() {
+        use crate::store::{RE_FULL, RE_RANGE};
+        // A range must be captured by RE_RANGE, and RE_FULL must not fire first.
+        assert!(RE_RANGE.is_match("john 3:16-18"));
+        // Single-verse references still match RE_FULL.
+        assert!(RE_FULL.is_match("John 3:16"));
+        assert!(RE_FULL.is_match("Psalm 23:4"));
+        // Bare chapter references do not match either verse regex.
+        assert!(!RE_RANGE.is_match("Psalm 23"));
+        assert!(!RE_FULL.is_match("Psalm 23"));
+    }
 }

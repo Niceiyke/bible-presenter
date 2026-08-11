@@ -8,21 +8,7 @@ pub async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) ->
         if window.is_visible().unwrap_or(false) {
             window.hide().map_err(|e: tauri::Error| e.to_string())?;
         } else {
-            let preferred = state.presentation.settings.lock().preferred_monitor.clone();
-            let monitors = window.available_monitors().map_err(|e: tauri::Error| e.to_string())?;
-            if monitors.len() > 1 {
-                if let Some(primary) = window.primary_monitor().map_err(|e: tauri::Error| e.to_string())? {
-                    let target = monitors.iter().find(|m| {
-                        preferred.as_deref().map_or(false, |p| m.name().map_or(false, |n| n == p))
-                    }).or_else(|| monitors.iter().find(|m| m.name() != primary.name()));
-                    if let Some(mon) = target {
-                        let pos = mon.position();
-                        window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos.x, y: pos.y }))
-                            .map_err(|e: tauri::Error| e.to_string())?;
-                        window.set_fullscreen(true).map_err(|e: tauri::Error| e.to_string())?;
-                    }
-                }
-            }
+            position_output_on_preferred(app.clone(), &state)?;
             let _ = window.set_ignore_cursor_events(true);
             window.show().map_err(|e: tauri::Error| e.to_string())?;
             window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
@@ -44,6 +30,50 @@ pub async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) ->
             let staged = state.presentation.staged_item.lock().clone();
             emit_checked(&app, "item-staged", &staged);
         }
+    }
+    Ok(())
+}
+
+fn position_output_on_preferred(app: AppHandle, state: &State<'_, AppState>) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("output") {
+        let preferred = state.presentation.settings.lock().preferred_monitor.clone();
+        let monitors = window.available_monitors().map_err(|e: tauri::Error| e.to_string())?;
+        if monitors.len() > 1 {
+            if let Some(primary) = window.primary_monitor().map_err(|e: tauri::Error| e.to_string())? {
+                let target = monitors.iter().find(|m| {
+                    preferred.as_deref().map_or(false, |p| m.name().map_or(false, |n| n == p))
+                }).or_else(|| monitors.iter().find(|m| m.name() != primary.name()));
+                if let Some(mon) = target {
+                    let pos = mon.position();
+                    window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos.x, y: pos.y }))
+                        .map_err(|e: tauri::Error| e.to_string())?;
+                    window.set_fullscreen(true).map_err(|e: tauri::Error| e.to_string())?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Show the output window on the preferred monitor with a test pattern so the
+/// operator can verify cable/signal routing before the service begins.
+#[tauri::command]
+pub async fn show_output_test_pattern(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("output") {
+        position_output_on_preferred(app.clone(), &state)?;
+        let _ = window.set_ignore_cursor_events(true);
+        window.show().map_err(|e: tauri::Error| e.to_string())?;
+        window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
+        emit_checked(&app, "monitor-test", &serde_json::json!({ "active": true }));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn hide_output_test_pattern(app: AppHandle) -> Result<(), String> {
+    emit_checked(&app, "monitor-test", &serde_json::json!({ "active": false }));
+    if let Some(window) = app.get_webview_window("output") {
+        window.hide().map_err(|e: tauri::Error| e.to_string())?;
     }
     Ok(())
 }

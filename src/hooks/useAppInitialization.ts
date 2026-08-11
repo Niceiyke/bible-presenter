@@ -26,6 +26,7 @@ export function useAppInitialization() {
     setStagedItem, setStartupIssues, setIsInitialized,
     setAppDataDir, setRecentItems,
     setBackendError, addLog, setScenes,
+    setBackendAvailable,
   } = useAppStore();
 
   useEffect(() => {
@@ -47,7 +48,12 @@ export function useAppInitialization() {
           await new Promise(r => setTimeout(r, 1000));
         }
       }
-      if (!ready) return;
+      if (!ready) {
+        setBackendAvailable(false);
+        setIsInitialized(true);
+        return;
+      }
+      setBackendAvailable(true);
 
       const [
         versionsRes, mediaRes, studioRes, scheduleRes, songsRes, hymnLibraryRes,
@@ -117,7 +123,9 @@ export function useAppInitialization() {
 
     const unlistenStaged = listen("item-staged", (ev: any) => setStagedItem(ev.payload as DisplayItem));
     const unlistenLive = listen<{ detected_item: DisplayItem | null }>("live-item-update", (ev) => {
-      if (ev.payload.detected_item) setLiveItem(ev.payload.detected_item);
+      // Propagate null clears too — ignoring null leaves stale live state
+      // after a clear operation.
+      setLiveItem(ev.payload.detected_item ?? null);
     });
     const unlistenSettings = listen("settings-changed", (ev: any) => setSettings(ev.payload as PresentationSettings));
     const unlistenLtUpdate = listen("lower-third-update", (ev: any) => {

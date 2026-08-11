@@ -2,6 +2,8 @@ import { StateCreator } from "zustand";
 import { AppStore } from "../index";
 import { ScheduleEntry, ServiceMeta, PropItem } from "../../types";
 
+export type ServiceSaveState = "idle" | "dirty" | "saving" | "saved" | "failed";
+
 export interface ServiceSlice {
   scheduleEntries: ScheduleEntry[];
   setScheduleEntries: (v: ScheduleEntry[]) => void;
@@ -23,6 +25,9 @@ export interface ServiceSlice {
   setNewServiceName: (v: string) => void;
   propItems: PropItem[];
   setPropItems: (v: PropItem[]) => void;
+  /// P7: persisted-save state surfaced next to the service name.
+  saveState: ServiceSaveState;
+  setSaveState: (v: ServiceSaveState) => void;
 }
 
 export const createServiceSlice: StateCreator<AppStore, [], [], ServiceSlice> = (set) => ({
@@ -65,4 +70,6 @@ export const createServiceSlice: StateCreator<AppStore, [], [], ServiceSlice> = 
   setNewServiceName: (v) => set({ newServiceName: v }),
   propItems: [],
   setPropItems: (v) => set({ propItems: v }),
+  saveState: "idle",
+  setSaveState: (v) => set({ saveState: v }),
 });

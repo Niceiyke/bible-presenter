@@ -50,6 +50,15 @@ export function TimersTab({ onStage, onLive }: TimersTabProps) {
 
   return (
     <div className="flex flex-col gap-4">
+      {/* Current-state badge */}
+      <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-800 bg-slate-900/50">
+        <span className={`w-2 h-2 rounded-full ${timerRunning ? "bg-red-500 animate-pulse" : "bg-slate-600"}`} />
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-300">
+          {timerRunning ? "Timer running" : isTimerLive ? "Timer live" : "Timer stopped"}
+        </p>
+        {isTimerLive && <p className="text-[9px] text-slate-500 uppercase font-bold ml-auto">On air</p>}
+      </div>
+
       <div>
         <p className="text-[9px] font-black uppercase text-slate-500 mb-2">Timer Type</p>
         <div className="flex gap-2">

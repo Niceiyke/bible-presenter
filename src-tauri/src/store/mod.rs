@@ -59,8 +59,12 @@ fn clean_token(word: &str) -> Option<String> {
     if sanitized.is_empty() { None } else { Some(sanitized) }
 }
 
-static RE_FULL: Lazy<Regex> = Lazy::new(|| {
+pub(crate) static RE_FULL: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)[:\s]+(\d+)").unwrap()
+});
+
+pub(crate) static RE_RANGE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)[:\s]+(\d+)\s*-\s*(\d+)").unwrap()
 });
 
 static RE_CHAP: Lazy<Regex> = Lazy::new(|| {
@@ -289,6 +293,33 @@ impl BibleStore {
 
     pub fn detect_verses_by_ref(&self, text: &str) -> Vec<Verse> {
         let text_lower = text.to_lowercase();
+
+        // Range ("John 3:16-18") must be checked before the single-verse regex,
+        // since RE_FULL would otherwise capture it and return only verse 16.
+        if let Some(caps) = RE_RANGE.captures(&text_lower) {
+            let book = self.normalize_book(caps.get(1).map(|m| m.as_str()).unwrap_or(""));
+            if self.books.contains(&book) {
+                if let Ok(chapter) = caps.get(2).map(|m| m.as_str()).unwrap_or("").parse::<i32>() {
+                    if let (Ok(from), Ok(to)) = (
+                        caps.get(3).map(|m| m.as_str()).unwrap_or("").parse::<i32>(),
+                        caps.get(4).map(|m| m.as_str()).unwrap_or("").parse::<i32>(),
+                    ) {
+                        let version = self.get_active_version();
+                        if to >= from {
+                            let mut out = Vec::new();
+                            for v in from..=to {
+                                if let Ok(Some(v)) = self.get_verse(&book, chapter, v, &version) {
+                                    out.push(v);
+                                }
+                            }
+                            if !out.is_empty() {
+                                return out;
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         if let Some(caps) = RE_FULL.captures(&text_lower) {
             let book = self.normalize_book(caps.get(1).map(|m| m.as_str()).unwrap_or(""));

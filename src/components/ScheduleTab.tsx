@@ -1,11 +1,12 @@
-import React from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Settings, Edit2, Trash2, Repeat, Zap, GripVertical, Undo2, Redo2 } from "lucide-react";
+import { Settings, Edit2, Trash2, Repeat, Zap, GripVertical, Undo2, Redo2, ListPlus, Play, X } from "lucide-react";
 import { Reorder } from "framer-motion";
 import { useAppStore } from "../store";
 import { stableId } from "../utils";
 import { ScheduleTile } from "../items/registry";
-import type { DisplayItem, Schedule } from "../types";
+import { Button, IconButton, ConfirmModal, SaveStatus, type SaveStatusState } from "./ui";
+import type { DisplayItem, Schedule, ScheduleEntry, ServiceMeta } from "../types";
 
 interface ScheduleTabProps {
   onSendItem: (item: DisplayItem, idx: number) => void;
@@ -24,7 +25,44 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
     serviceManagerOpen, setServiceManagerOpen,
     newServiceName, setNewServiceName,
     isSchedulePersistent, setIsSchedulePersistent,
+    saveState, setSaveState,
+    setToast,
   } = useAppStore();
+
+  const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+  const [createValue, setCreateValue] = useState("");
+  const saveTimerRef = useRef<number | null>(null);
+
+  // Derive a readable save state for the SaveStatus pill.
+  const derivedSave: SaveStatusState = (() => {
+    switch (saveState) {
+      case "dirty": return "unsaved";
+      case "saving": return "saving";
+      case "failed": return "failed";
+      case "saved": return "saved";
+      default: return "idle";
+    }
+  })();
+
+  // Debounced persist so reorder/remove bursts only produce one backend save.
+  const debouncedPersist = useCallback(() => {
+    setSaveState("dirty");
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(async () => {
+      try {
+        setSaveState("saving");
+        await onPersist();
+        setSaveState("saved");
+        window.setTimeout(() => setSaveState("idle"), 1500);
+      } catch {
+        setSaveState("failed");
+      }
+    }, 400);
+  }, [onPersist, setSaveState]);
+
+  useEffect(() => () => { if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current); }, []);
 
   const sendAndMaybeRemove = (item: DisplayItem, idx: number, entryId: string) => {
     onSendItem(item, idx);
@@ -32,7 +70,7 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
       const next = scheduleEntries.filter((e) => e.id !== entryId);
       pushScheduleState(next);
       setActiveScheduleIdx(null);
-      onPersist();
+      debouncedPersist();
     } else {
       setActiveScheduleIdx(idx);
     }
@@ -55,178 +93,191 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
   const removeFromSchedule = async (id: string) => {
     const next = scheduleEntries.filter((e) => e.id !== id);
     pushScheduleState(next);
-    onPersist();
+    if (activeScheduleIdx !== null && next.length <= activeScheduleIdx) setActiveScheduleIdx(null);
+    debouncedPersist();
   };
 
   const handleReorder = (next: typeof scheduleEntries) => {
     setScheduleEntries(next);
-    // Don't push state on every drag step, maybe on drag end? 
-    // For now, simple push works but might be noisy.
   };
 
   const handleReorderEnd = () => {
     pushScheduleState(scheduleEntries);
-    onPersist();
+    debouncedPersist();
   };
+
+  const selectService = async (id: string) => {
+    if (saveState === "dirty" || saveState === "saving") await onPersist();
+    const loaded: Schedule = await invoke("load_service", { id });
+    setScheduleEntries(loaded.items ?? []);
+    setActiveServiceId(id);
+    setActiveScheduleIdx(null);
+    localStorage.setItem("activeServiceId", id);
+  };
+
+  const createService = async (name: string) => {
+    if (!name.trim()) return;
+    const id = stableId();
+    const svc: Schedule = { id, name: name.trim(), items: [] };
+    await invoke("save_service", { schedule: svc });
+    const list = (await invoke("list_services")) as ServiceMeta[];
+    setServices(list);
+    setActiveServiceId(id);
+    setScheduleEntries([]);
+    setActiveScheduleIdx(null);
+    localStorage.setItem("activeServiceId", id);
+    setCreateValue("");
+    setToast("Service created");
+  };
+
+  const renameService = async (id: string, name: string) => {
+    if (!name.trim()) return;
+    const loaded: Schedule = await invoke<Schedule>("load_service", { id: id }).catch(() => ({ id, name, items: [] } as Schedule));
+    await invoke("save_service", { schedule: { ...loaded, name: name.trim() } });
+    const list = (await invoke("list_services")) as ServiceMeta[];
+    setServices(list);
+    setToast("Service renamed");
+  };
+
+  const deleteService = async (id: string) => {
+    await invoke("delete_service", { id });
+    const list = (await invoke("list_services")) as ServiceMeta[];
+    setServices(list);
+    if (activeServiceId === id && list.length > 0) {
+      setActiveServiceId(list[0].id);
+      const loaded: Schedule = await invoke("load_service", { id: list[0].id });
+      setScheduleEntries(loaded.items ?? []);
+    }
+    setToast("Service deleted");
+  };
+
+  const activeServiceName = services.find((s) => s.id === activeServiceId)?.name ?? "Service";
 
   return (
     <div className="flex flex-col gap-3">
+      {/* Service selector + manager */}
       <div className="flex items-center gap-2">
         <select
           value={activeServiceId}
-          onChange={async (e) => {
-            const id = e.target.value;
-            onPersist();
-            const loaded: Schedule = await invoke("load_service", { id });
-            setScheduleEntries(loaded.items ?? []);
-            setActiveServiceId(id);
-            localStorage.setItem("activeServiceId", id);
-          }}
-          className="flex-1 bg-slate-800 text-slate-200 text-xs rounded border border-slate-700 px-2 py-1.5 font-bold"
+          onChange={(e) => selectService(e.target.value)}
+          className="flex-1 bg-console-surface-raised text-console-text text-xs rounded border border-console-border px-2 py-2 font-bold focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
         >
           {services.map((s) => (
             <option key={s.id} value={s.id}>{s.name} ({s.item_count})</option>
           ))}
         </select>
-        <button
-          onClick={() => setServiceManagerOpen(!serviceManagerOpen)}
-          className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 rounded border border-slate-700 transition-all"
-        >
-          <Settings size={12} />
-        </button>
+        <IconButton label="Manage services" onClick={() => setServiceManagerOpen(!serviceManagerOpen)}>
+          <Settings size={13} />
+        </IconButton>
       </div>
 
       {serviceManagerOpen && (
-        <div className="bg-slate-900 border border-slate-700 rounded-lg p-3 flex flex-col gap-2">
-          <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Manage Services</p>
+        <div className="bg-console-surface border border-console-border rounded-lg p-3 flex flex-col gap-2">
+          <p className="text-[10px] font-black text-console-text-muted uppercase tracking-widest">Manage Services</p>
           {services.map((s) => (
             <div key={s.id} className="flex items-center gap-2">
-              <span className={`flex-1 text-xs truncate ${s.id === activeServiceId ? "text-amber-400 font-bold" : "text-slate-300"}`}>{s.name}</span>
-              <button
-                onClick={async () => {
-                  const newName = window.prompt("Rename service:", s.name);
-                  if (!newName || newName === s.name) return;
-                  const loaded: Schedule = await invoke<Schedule>("load_service", { id: s.id }).catch(() => ({ id: s.id, name: s.name, items: [] } as Schedule));
-                  await invoke("save_service", { schedule: { ...loaded, name: newName } });
-                  const list = await invoke("list_services");
-                  setServices(list as any);
-                }}
-                className="text-slate-500 hover:text-slate-200 p-1 rounded"
+              <span className={`flex-1 text-xs truncate ${s.id === activeServiceId ? "text-action-primary font-bold" : "text-console-text"}`}>{s.name}</span>
+              <IconButton
+                label={`Rename ${s.name}`}
+                size={11}
+                className="h-7 w-7"
+                onClick={() => { setRenameTarget({ id: s.id, name: s.name }); setRenameValue(s.name); }}
               >
-                <Edit2 size={10} />
-              </button>
-              <button
+                <Edit2 size={11} />
+              </IconButton>
+              <IconButton
+                label={`Delete ${s.name}`}
+                size={11}
+                className="h-7 w-7"
+                tone="live"
                 disabled={s.id === activeServiceId || services.length <= 1}
-                onClick={async () => {
-                  if (!window.confirm(`Delete service "${s.name}"?`)) return;
-                  await invoke("delete_service", { id: s.id });
-                  const list = await invoke("list_services");
-                  setServices(list as any);
-                }}
-                className="text-red-700 hover:text-red-400 p-1 rounded disabled:opacity-30"
+                onClick={() => setDeleteTarget({ id: s.id, name: s.name })}
               >
-                <Trash2 size={10} />
-              </button>
+                <Trash2 size={11} />
+              </IconButton>
             </div>
           ))}
-          <hr className="border-slate-700" />
+          <hr className="border-console-border" />
           <div className="flex gap-2">
             <input
-              value={newServiceName}
-              onChange={(e) => setNewServiceName(e.target.value)}
+              value={createValue}
+              onChange={(e) => setCreateValue(e.target.value)}
               placeholder="New service name…"
-              className="flex-1 bg-slate-800 text-slate-200 text-xs rounded border border-slate-700 px-2 py-1"
-              onKeyDown={async (e) => {
-                if (e.key !== "Enter" || !newServiceName.trim()) return;
-                const id = stableId();
-                const svc: Schedule = { id, name: newServiceName.trim(), items: [] };
-                await invoke("save_service", { schedule: svc });
-                const list = await invoke("list_services");
-                setServices(list as any);
-                setActiveServiceId(id);
-                setScheduleEntries([]);
-                localStorage.setItem("activeServiceId", id);
-                setNewServiceName("");
-              }}
+              className="flex-1 bg-console-surface-raised text-console-text text-xs rounded border border-console-border px-2 py-1.5 focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
+              onKeyDown={(e) => { if (e.key === "Enter") createService(createValue); }}
             />
-            <button
-              onClick={async () => {
-                if (!newServiceName.trim()) return;
-                const id = stableId();
-                const svc: Schedule = { id, name: newServiceName.trim(), items: [] };
-                await invoke("save_service", { schedule: svc });
-                const list = await invoke("list_services");
-                setServices(list as any);
-                setActiveServiceId(id);
-                setScheduleEntries([]);
-                localStorage.setItem("activeServiceId", id);
-                setNewServiceName("");
-              }}
-              className="px-2 py-1 bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold rounded"
-            >
-              + New
-            </button>
+            <Button variant="primary" size="sm" icon={<ListPlus size={12} />} onClick={() => createService(createValue)}>New</Button>
           </div>
         </div>
       )}
 
-      <div className="flex justify-between items-center">
-        <div className="flex items-center gap-2">
-          <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Items</h2>
+      {/* Header: service status + save state + behavior */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2 min-w-0">
+          <h2 className="text-xs font-bold text-console-text-muted uppercase tracking-widest truncate" title={activeServiceName}>
+            {activeServiceName}
+          </h2>
+          <span className="text-[9px] text-console-text-subtle font-mono">
+            {scheduleEntries.length} item{scheduleEntries.length === 1 ? "" : "s"}
+          </span>
+          <SaveStatus state={derivedSave} />
+        </div>
+
+        <div className="flex items-center gap-1.5">
           <button
             onClick={() => setIsSchedulePersistent(!isSchedulePersistent)}
-            title={isSchedulePersistent ? "Persistent: items stay after play" : "One-shot: items removed after play"}
-            className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold border transition-all ${
+            title={isSchedulePersistent ? "Items stay after playing — keep for repeat services" : "Items are removed after playing"}
+            className={`flex items-center gap-1 px-1.5 py-1 rounded text-[9px] font-bold border transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${
               isSchedulePersistent
-                ? "bg-emerald-900/40 border-emerald-700/50 text-emerald-400 hover:bg-emerald-900/60"
-                : "bg-amber-900/40 border-amber-700/50 text-amber-400 hover:bg-amber-900/60"
+                ? "bg-state-stage-soft border-state-stage/50 text-state-stage hover:bg-state-stage/20"
+                : "bg-action-primary/15 border-action-primary/40 text-action-primary hover:bg-action-primary/25"
             }`}
           >
             {isSchedulePersistent ? <Repeat size={9} /> : <Zap size={9} />}
-            {isSchedulePersistent ? "LOOP" : "ONCE"}
+            {isSchedulePersistent ? "Keep after playing" : "Remove after playing"}
           </button>
-          
-          <div className="h-3 w-px bg-slate-800 mx-1" />
-          
-          <button
-            onClick={undoSchedule}
-            disabled={pastScheduleStates.length === 0}
-            className="p-1 text-slate-500 hover:text-slate-300 disabled:opacity-30"
-            title="Undo"
-          >
+
+          <div className="h-3 w-px bg-console-border mx-1" />
+
+          <IconButton label="Undo" size={11} className="h-7 w-7" disabled={pastScheduleStates.length === 0} onClick={undoSchedule}>
             <Undo2 size={12} />
-          </button>
-          <button
-            onClick={redoSchedule}
-            disabled={futureScheduleStates.length === 0}
-            className="p-1 text-slate-500 hover:text-slate-300 disabled:opacity-30"
-            title="Redo"
-          >
+          </IconButton>
+          <IconButton label="Redo" size={11} className="h-7 w-7" disabled={futureScheduleStates.length === 0} onClick={redoSchedule}>
             <Redo2 size={12} />
-          </button>
+          </IconButton>
         </div>
-        {scheduleEntries.length > 0 && (
-          <div className="flex gap-1">
-            <button
-              onClick={handlePrevItem}
-              disabled={activeScheduleIdx === 0 || scheduleEntries.length === 0}
-              className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded border border-slate-700 disabled:opacity-30 transition-all"
-            >
-              ← Prev
-            </button>
-            <button
-              onClick={handleNextItem}
-              disabled={scheduleEntries.length === 0 || activeScheduleIdx === scheduleEntries.length - 1}
-              className="px-2 py-1 bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold rounded disabled:opacity-30 transition-all"
-            >
-              Next →
-            </button>
-          </div>
-        )}
       </div>
 
+      {/* Play next controls */}
+      {scheduleEntries.length > 0 && (
+        <div className="flex items-center gap-1.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={activeScheduleIdx === 0 || scheduleEntries.length === 0}
+            onClick={handlePrevItem}
+          >
+            ← Prev
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            icon={<Play size={11} />}
+            disabled={scheduleEntries.length === 0 || activeScheduleIdx === scheduleEntries.length - 1}
+            onClick={handleNextItem}
+          >
+            Next
+          </Button>
+          {activeScheduleIdx !== null && (
+            <span className="text-[9px] font-mono text-console-text-subtle ml-1">
+              Playing: {activeScheduleIdx + 1} of {scheduleEntries.length}
+            </span>
+          )}
+        </div>
+      )}
+
       {scheduleEntries.length === 0 ? (
-        <p className="text-slate-700 text-xs italic text-center pt-8">Schedule is empty. Add verses or media with + QUEUE.</p>
+        <p className="text-console-text-subtle text-xs italic text-center pt-8">Schedule is empty. Add verses or media with + QUEUE.</p>
       ) : (
         <Reorder.Group axis="y" values={scheduleEntries} onReorder={handleReorder} className="flex flex-col gap-1.5">
           {scheduleEntries.map((entry, idx) => {
@@ -236,30 +287,79 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
                 key={entry.id}
                 value={entry}
                 onDragEnd={handleReorderEnd}
-                className={`flex items-center gap-2 p-2.5 rounded-lg border transition-all group cursor-default select-none ${
+                className={`flex items-center gap-2 p-2.5 rounded-lg border transition-all group cursor-default select-none focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${
                   isActive
-                    ? "bg-amber-500/10 border-amber-500/40"
-                    : "bg-slate-800/40 border-slate-700/40 hover:bg-slate-800 hover:border-slate-700"
+                    ? "bg-state-stage-soft border-state-stage/50"
+                    : "bg-console-surface-raised/40 border-console-border hover:bg-console-surface-raised hover:border-console-border-strong"
                 }`}
               >
-                <div className="cursor-grab active:cursor-grabbing p-1 -ml-1 text-slate-600 hover:text-slate-400 transition-colors">
+                <div className="cursor-grab active:cursor-grabbing p-1 -ml-1 text-console-text-subtle hover:text-console-text-muted transition-colors" aria-label="Reorder (drag)">
                   <GripVertical size={14} />
                 </div>
-                <div className={`w-5 h-5 flex items-center justify-center rounded text-[9px] font-black shrink-0 ${isActive ? "bg-amber-500 text-black" : "bg-slate-700 text-slate-400"}`}>
+                <div className={`w-5 h-5 flex items-center justify-center rounded text-[9px] font-black shrink-0 ${isActive ? "bg-state-stage text-slate-950" : "bg-console-surface-strong text-console-text-muted"}`}>
                   {idx + 1}
                 </div>
-                <div className="flex-1 min-w-0" onClick={() => stageItem(entry.item)}>
+                <div className="flex-1 min-w-0 cursor-pointer" onClick={() => stageItem(entry.item)}>
                   <ScheduleTile item={entry.item} />
                 </div>
-                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all shrink-0">
-                  <button onClick={() => sendAndMaybeRemove(entry.item, idx, entry.id)} className="p-1 bg-amber-500 hover:bg-amber-400 text-black rounded text-[10px] font-bold">▶</button>
-                  <button onClick={() => removeFromSchedule(entry.id)} className="p-1 bg-red-900/50 text-red-400 rounded hover:bg-red-900 hover:text-white">✕</button>
+                <div className="flex gap-1 shrink-0">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    icon={<Play size={10} />}
+                    onClick={() => sendAndMaybeRemove(entry.item, idx, entry.id)}
+                  >
+                    Play Next
+                  </Button>
+                  <IconButton
+                    label="Remove from schedule"
+                    tone="live"
+                    size={11}
+                    className="h-8 w-8"
+                    onClick={() => removeFromSchedule(entry.id)}
+                  >
+                    <X size={11} />
+                  </IconButton>
                 </div>
               </Reorder.Item>
             );
           })}
         </Reorder.Group>
       )}
+
+      {/* Rename service modal */}
+      <ConfirmModal
+        open={!!renameTarget}
+        title="Rename service"
+        confirmLabel="Rename"
+        confirmVariant="primary"
+        onConfirm={async () => {
+          if (renameTarget) await renameService(renameTarget.id, renameValue);
+        }}
+        onClose={() => setRenameTarget(null)}
+      >
+        <input
+          autoFocus
+          value={renameValue}
+          onChange={(e) => setRenameValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { renameTarget && renameService(renameTarget.id, renameValue); setRenameTarget(null); } }}
+          placeholder="Service name…"
+          className="w-full bg-console-surface-raised text-console-text text-xs rounded border border-console-border px-3 py-2 focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
+        />
+      </ConfirmModal>
+
+      {/* Delete service modal */}
+      <ConfirmModal
+        open={!!deleteTarget}
+        title={`Delete "${deleteTarget?.name ?? ""}"?`}
+        description="The service and its saved items will be removed. This cannot be undone."
+        confirmLabel="Delete Service"
+        confirmVariant="live"
+        onConfirm={async () => {
+          if (deleteTarget) await deleteService(deleteTarget.id);
+        }}
+        onClose={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

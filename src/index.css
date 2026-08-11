@@ -1,5 +1,37 @@
 @import "tailwindcss";
 
+/* ---- Operator console semantic tokens (Phase 2) -----------------------------
+   Mapped from docs/UI_UX_MODERNIZATION_PLAN.md §4. Kept entirely separate from
+   the audience output themes in `src/types/settings.ts` (THEMES). Do not apply
+   these tokens to projected content; projection uses persisted theme colors. */
+@theme {
+  --color-console-canvas: #0b0f14;
+  --color-console-surface: #111820;
+  --color-console-surface-raised: #17212b;
+  --color-console-surface-strong: #1d2a36;
+  --color-console-border: #2a3947;
+  --color-console-border-strong: #3a4d5d;
+  --color-console-text: #f4f7fa;
+  --color-console-text-muted: #a8b5c1;
+  --color-console-text-subtle: #7d8d9d;
+
+  --color-action-primary: #f4b740;
+  --color-action-primary-hover: #ffd166;
+
+  --color-state-live: #f04455;
+  --color-state-live-soft: #3a1820;
+  --color-state-stage: #38bdf8;
+  --color-state-stage-soft: #102c3b;
+  --color-state-success: #35c98b;
+  --color-state-warning: #f4b740;
+  --color-state-error: #ff6b78;
+
+  --color-tool-design: #a78bfa;
+  --color-tool-audio: #67d4c0;
+
+  --color-focus-ring: #7dd3fc;
+}
+
 html, body, #root {
   height: 100%;
   overflow: hidden;
@@ -15,6 +47,38 @@ select {
 }
 select option {
   color-scheme: dark;
+}
+
+/* Shared operator-console base rules (Phase 2).
+   - Keyboard focus is always visible: a cyan ring on segmented controls.
+   - Minimum label/control typography for a live operator console. Remember
+     these apply to operator chrome, never to projected audience output. */
+:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@layer base {
+  button, a, input, select, textarea {
+    font-synthesis: none;
+  }
+  /* Keep operator controls readable on volunteer hardware; projector
+     typography is driven by persisted theme settings, not these rules. */
+  .op-control-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+  .op-hit-target {
+    position: relative;
+  }
+  .op-hit-target::after {
+    content: "";
+    position: absolute;
+    inset: calc((44px - 100%) / 2);
+    pointer-events: none;
+  }
 }
 
 @keyframes lt-scroll-rtl {

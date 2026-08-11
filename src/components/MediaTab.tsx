@@ -1,19 +1,21 @@
 import React from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Upload, Trash2, Tag, BookOpen, X, Camera, Search, RotateCcw, Repeat, Volume2 } from "lucide-react";
+import { Upload, Trash2, Tag, BookOpen, X, Camera, Search, RotateCcw, Repeat, Volume2, Eye } from "lucide-react";
 import { useAppStore } from "../store";
 import type { DisplayItem, MediaFitMode, MediaItem } from "../types";
 import { EditMediaModal } from "./EditMediaModal";
 import { CameraTab } from "./CameraTab";
 import { MediaThumb, MediaTypeIcon, formatDuration } from "./MediaThumb";
+import { DeleteMediaModal } from "./DeleteMediaModal";
+import { ContentCard, Button, ConfirmModal } from "./ui";
 
 interface MediaTabProps {
   onStage: (item: DisplayItem) => void;
   onLive: (item: DisplayItem) => void;
   onAddToSchedule: (item: DisplayItem) => void;
   onLoadMedia: () => void;
-  onDeleteMedia: (id: string) => void;
+  onDeleteMedia: (id: string, removeFile?: boolean) => void;
   onSetAsLogo: (path: string) => void;
   onSetAsBackgroundLogo: (path: string) => void;
 }
@@ -38,6 +40,9 @@ export function MediaTab({
 }: MediaTabProps) {
   const [showEditModal, setShowEditModal] = React.useState(false);
   const [selectedMediaItem, setSelectedMediaItem] = React.useState<MediaItem | null>(null);
+  const [deleteItem, setDeleteItem] = React.useState<MediaItem | null>(null);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = React.useState(false);
+  const [bulkRefsUsed, setBulkRefsUsed] = React.useState(false);
   const [selectedMediaItems, setSelectedMediaItems] = React.useState<string[]>([]);
   const [bulkTagInput, setBulkTagInput] = React.useState("");
   const [bulkCategoryInput, setBulkCategoryInput] = React.useState("");
@@ -92,22 +97,9 @@ export function MediaTab({
   }
 
   async function handleDeleteOne(item: MediaItem) {
-    // Delete-safety: warn when the item is still referenced by a service,
-    // presentation or scene so the operator doesn't orphan a schedule.
-    try {
-      const refs = await invoke<string[]>("get_media_references", { id: item.id });
-      const note = refs.length > 0
-        ? `\n\nStill used in: ${refs.slice(0, 5).join(", ")}${refs.length > 5 ? "…" : ""}`
-        : "";
-      if (window.confirm(`Delete "${item.name}"?${note}\nThe file will be removed from disk.`)) {
-        onDeleteMedia(item.id);
-      }
-    } catch (err) {
-      console.error("Reference check failed", err);
-      if (window.confirm(`Delete "${item.name}"? The file will be removed from disk.`)) {
-        onDeleteMedia(item.id);
-      }
-    }
+    // Delete-safety: the modal shows references and lets the operator decide
+    // between removing from the library only or deleting the file, too.
+    setDeleteItem(item);
   }
 
   function handleToggleSelect(id: string) {
@@ -121,11 +113,8 @@ export function MediaTab({
     const refs = await Promise.all(
       items.map((it) => invoke<string[]>("get_media_references", { id: it.id }).catch(() => [] as string[]))
     );
-    const used = refs.some((r) => r.length > 0);
-    if (window.confirm(`Are you sure you want to delete ${selectedMediaItems.length} selected media items?${used ? "\n\nWARNING: Some are still used in services/presentations." : ""}`)) {
-      await bulkDeleteMedia(selectedMediaItems);
-      setSelectedMediaItems([]);
-    }
+    setBulkRefsUsed(refs.some((r) => r.length > 0));
+    setBulkDeleteOpen(true);
   }
 
   async function handleAddBulkTags() {
@@ -334,77 +323,62 @@ export function MediaTab({
             {search ? "No media matches your search." : "No items here yet. Click + UPLOAD to add."}
           </p>
         ) : (
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
             {sorted.map((item) => {
               const missing = missingIds.has(item.id);
               return (
-                <div
+                <ContentCard
                   key={item.id}
-                  className={`relative flex flex-col bg-slate-800/60 rounded-xl overflow-hidden border transition-all group ${
-                    selectedMediaItems.includes(item.id)
-                      ? "border-amber-500/70 ring-1 ring-amber-500/30"
-                      : "border-slate-700/60 hover:border-slate-500 hover:shadow-lg hover:shadow-black/30"
-                  }`}
+                  selected={selectedMediaItems.includes(item.id)}
+                  missing={missing}
                 >
                   {/* Checkbox overlay */}
                   <input
                     type="checkbox"
-                    className="absolute top-2 left-2 z-20 w-4 h-4 text-amber-500 bg-slate-700 border-slate-600 rounded focus:ring-amber-500 focus:ring-2 cursor-pointer"
+                    className="absolute top-2 left-2 z-20 w-4 h-4 text-action-primary bg-console-surface-raised border-console-border rounded focus:ring-action-primary focus:ring-2 cursor-pointer"
                     checked={selectedMediaItems.includes(item.id)}
                     onChange={() => handleToggleSelect(item.id)}
                   />
                   {/* Type badge */}
                   {!missing && (
-                    <span className="absolute top-2 right-2 z-20 px-1.5 py-0.5 rounded-md bg-black/50 backdrop-blur-sm text-slate-200 text-[8px] font-black uppercase tracking-wide flex items-center gap-1">
+                    <span className="absolute top-2 right-2 z-20 px-1.5 py-0.5 rounded-md bg-black/50 backdrop-blur-sm text-console-text text-[8px] font-black uppercase tracking-wide flex items-center gap-1">
                       <MediaTypeIcon item={item} />
                       {item.media_type}
                     </span>
                   )}
-                  <div className="aspect-video overflow-hidden bg-slate-900 shrink-0 relative">
+                  <div className="aspect-video overflow-hidden bg-console-canvas shrink-0 relative">
                     <MediaThumb item={item} className="w-full h-full transition-transform duration-300 group-hover:scale-105" dimmed={missing} />
-                    {/* Hover quick actions */}
+                    {/* Permanent quick actions */}
                     {!missing && (
-                      <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button
-                          onClick={() => onStage({ type: "Media", data: item })}
-                          className="px-2.5 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-white text-[8px] font-black uppercase tracking-wide backdrop-blur-sm transition-colors"
-                          title="Stage"
-                        >Stage</button>
-                        <button
-                          onClick={() => onLive({ type: "Media", data: item })}
-                          className="px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-black text-[8px] font-black uppercase tracking-wide transition-colors"
-                          title="Display Live"
-                        >Live</button>
-                        <button
-                          onClick={() => onAddToSchedule({ type: "Media", data: item })}
-                          className="px-2.5 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-white text-[8px] font-black uppercase tracking-wide backdrop-blur-sm transition-colors"
-                          title="Add to Service"
-                        >+Svc</button>
+                      <div className="absolute inset-x-0 bottom-0 z-10 flex items-center justify-center gap-1.5 p-2 bg-gradient-to-t from-black/70 to-transparent">
+                        <Button variant="ghost" size="sm" onClick={() => onStage({ type: "Media", data: item })}>Stage</Button>
+                        <Button variant="primary" size="sm" icon={<Eye size={11} />} onClick={() => onLive({ type: "Media", data: item })}>Live</Button>
+                        <Button variant="bare" size="sm" onClick={() => onAddToSchedule({ type: "Media", data: item })}>Service</Button>
                       </div>
                     )}
                     {missing && (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-red-950/20">
-                        <X className="text-red-500" size={24} />
-                        <span className="text-[8px] font-black text-red-500 uppercase tracking-tighter bg-black/60 px-1 rounded">FILE MISSING</span>
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-state-live-soft/30">
+                        <X className="text-state-error" size={24} />
+                        <span className="text-[8px] font-black text-state-error uppercase tracking-tighter bg-black/60 px-1 rounded">FILE MISSING</span>
                       </div>
                     )}
                   </div>
                   <div className="px-2.5 py-2 flex flex-col gap-1.5 flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2">
-                      <p className="text-[10px] font-bold text-slate-200 truncate flex-1" title={item.name}>
+                      <p className="text-[10px] font-bold text-console-text truncate flex-1" title={item.name}>
                         {item.name}
                       </p>
                       {item.duration != null && !missing && (
-                        <span className="text-[8px] text-slate-500 font-mono shrink-0">{formatDuration(item.duration)}</span>
+                        <span className="text-[8px] text-console-text-subtle font-mono shrink-0">{formatDuration(item.duration)}</span>
                       )}
                     </div>
                     {/* Metadata chips */}
                     <div className="flex flex-wrap gap-1 min-h-0">
                       {item.category && (
-                        <span className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 text-[7px] font-bold truncate max-w-full">{item.category}</span>
+                        <span className="px-1.5 py-0.5 rounded bg-tool-design/10 text-tool-design text-[7px] font-bold truncate max-w-full">{item.category}</span>
                       )}
                       {item.tags && item.tags.length > 0 && (
-                        <span className="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 text-[7px] font-bold truncate max-w-full">{item.tags.slice(0, 2).join(', ')}{item.tags.length > 2 ? "+" : ""}</span>
+                        <span className="px-1.5 py-0.5 rounded bg-tool-audio/10 text-tool-audio text-[7px] font-bold truncate max-w-full">{item.tags.slice(0, 2).join(', ')}{item.tags.length > 2 ? "+" : ""}</span>
                       )}
                     </div>
 
@@ -416,10 +390,10 @@ export function MediaTab({
                             key={mode}
                             onClick={() => handleSetFit(item.id, mode)}
                             title={title}
-                            className={`flex-1 text-[7px] font-bold py-1 rounded transition-all ${
+                            className={`flex-1 text-[7px] font-bold py-1 rounded transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${
                               (item.fit_mode ?? "contain") === mode
-                                ? "bg-blue-500 text-white"
-                                : "bg-slate-700/60 text-slate-400 hover:text-slate-200"
+                                ? "bg-tool-design text-white"
+                                : "bg-console-surface-strong text-console-text-muted hover:text-console-text"
                             }`}
                           >{label}</button>
                         ))}
@@ -432,14 +406,14 @@ export function MediaTab({
                         <button
                           onClick={() => setMediaPlayback(item.id, !(item.loop_playback ?? true), item.playback_rate ?? 1, item.volume ?? 1)}
                           title={item.loop_playback ?? true ? "Loop enabled — click to play once" : "Play once — click to loop"}
-                          className={`flex items-center gap-0.5 text-[7px] font-bold px-1.5 py-0.5 rounded transition-all ${item.loop_playback ?? true ? "bg-amber-500/20 text-amber-300" : "bg-slate-700 text-slate-400"}`}
+                          className={`flex items-center gap-0.5 text-[7px] font-bold px-1.5 py-0.5 rounded transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${item.loop_playback ?? true ? "bg-action-primary/20 text-action-primary" : "bg-console-surface-strong text-console-text-muted"}`}
                         >
                           <Repeat size={8} /> {item.loop_playback ?? true ? "LOOP" : "ONCE"}
                         </button>
                         <select
                           value={item.playback_rate ?? 1}
                           onChange={(e) => setMediaPlayback(item.id, item.loop_playback ?? true, parseFloat(e.target.value), item.volume ?? 1)}
-                          className="bg-slate-700/60 text-[8px] text-slate-300 rounded px-1 py-0.5 outline-none"
+                          className="bg-console-surface-strong text-[8px] text-console-text-muted rounded px-1 py-0.5 outline-none"
                           title="Playback speed"
                         >
                           {[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => <option key={r} value={r}>{r}×</option>)}
@@ -447,7 +421,7 @@ export function MediaTab({
                         <button
                           onClick={() => setMediaPlayback(item.id, item.loop_playback ?? true, item.playback_rate ?? 1, (item.volume ?? 1) > 0 ? 0 : 1)}
                           title={item.volume ?? 1 > 0 ? "Mute (persisted)" : "Unmute"}
-                          className="flex items-center gap-0.5 text-[7px] font-bold px-1.5 py-0.5 rounded transition-all bg-slate-700 text-slate-400"
+                          className="flex items-center gap-0.5 text-[7px] font-bold px-1.5 py-0.5 rounded transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] bg-console-surface-strong text-console-text-muted"
                         >
                           <Volume2 size={8} /> {(item.volume ?? 1) > 0 ? "MUTE" : "UNMUTE"}
                         </button>
@@ -456,19 +430,19 @@ export function MediaTab({
 
                     {/* Bottom action row */}
                     {missing ? (
-                      <button onClick={() => handleRelink(item)} className="w-full bg-red-600 hover:bg-red-500 text-white text-[7px] font-black py-1.5 rounded-lg transition-all flex items-center justify-center gap-1">
+                      <button onClick={() => handleRelink(item)} className="w-full bg-state-live hover:bg-state-live/90 text-white text-[7px] font-black py-1.5 rounded-lg transition-all flex items-center justify-center gap-1 focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]">
                         <RotateCcw size={10} /> RELINK MISSING FILE
                       </button>
                     ) : (
-                      <div className="grid grid-cols-4 gap-1 border-t border-slate-700/40 pt-1.5 mt-auto">
-                        <button onClick={() => { setSelectedMediaItem(item); setShowEditModal(true); }} className="bg-blue-900/40 hover:bg-blue-700 text-blue-300 text-[7px] font-bold py-1.5 rounded-lg transition-all" title="Edit Metadata">EDIT</button>
-                        <button onClick={() => onSetAsBackgroundLogo(item.path)} className="bg-purple-900/40 hover:bg-purple-700 text-purple-300 text-[7px] font-bold py-1.5 rounded-lg transition-all" title="Set as Background Logo">BG LOGO</button>
-                        <button onClick={() => onSetAsLogo(item.path)} className="bg-teal-900/40 hover:bg-teal-700 text-teal-300 text-[7px] font-bold py-1.5 rounded-lg transition-all" title="Set as Corner Logo">CORNER</button>
-                        <button onClick={() => handleDeleteOne(item)} className="bg-red-900/40 hover:bg-red-800 text-red-400 text-[7px] font-bold py-1.5 rounded-lg transition-all" title="Delete">DEL</button>
+                      <div className="grid grid-cols-4 gap-1 border-t border-console-border pt-1.5 mt-auto">
+                        <button onClick={() => { setSelectedMediaItem(item); setShowEditModal(true); }} className="bg-tool-design/25 hover:bg-tool-design text-tool-design text-[7px] font-bold py-1.5 rounded-lg transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]" title="Edit Metadata">EDIT</button>
+                        <button onClick={() => onSetAsBackgroundLogo(item.path)} className="bg-tool-design/25 hover:bg-tool-design text-tool-design text-[7px] font-bold py-1.5 rounded-lg transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]" title="Set as Background Logo">BG LOGO</button>
+                        <button onClick={() => onSetAsLogo(item.path)} className="bg-tool-audio/25 hover:bg-tool-audio text-tool-audio text-[7px] font-bold py-1.5 rounded-lg transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]" title="Set as Corner Logo">CORNER</button>
+                        <button onClick={() => handleDeleteOne(item)} className="bg-state-live/25 hover:bg-state-live text-state-live text-[7px] font-bold py-1.5 rounded-lg transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]" title="Delete">DEL</button>
                       </div>
                     )}
                   </div>
-                </div>
+                </ContentCard>
               );
             })}
           </div>
@@ -480,6 +454,29 @@ export function MediaTab({
         isOpen={showEditModal}
         onClose={() => setShowEditModal(false)}
         mediaItem={selectedMediaItem}
+      />
+
+      {/* Delete safety modal */}
+      <DeleteMediaModal
+        item={deleteItem}
+        onDelete={async (id, removeFile) => { await onDeleteMedia(id, removeFile); }}
+        onClose={() => setDeleteItem(null)}
+      />
+
+      {/* Bulk delete confirmation */}
+      <ConfirmModal
+        open={bulkDeleteOpen}
+        title={`Delete ${selectedMediaItems.length} items?`}
+        description={bulkRefsUsed
+          ? "Some selected items are still used in services, presentations, or scenes. Deleting them will orphan those references."
+          : "Remove the selected items from the library. The files on disk will also be deleted."}
+        confirmLabel="Delete Items"
+        confirmVariant="live"
+        onConfirm={async () => {
+          await bulkDeleteMedia(selectedMediaItems);
+          setSelectedMediaItems([]);
+        }}
+        onClose={() => setBulkDeleteOpen(false)}
       />
     </div>
   );

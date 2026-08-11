@@ -21,8 +21,8 @@ export interface AppSlice {
   setSidebarWidth: (v: number | ((prev: number) => number)) => void;
   bottomDeckOpen: boolean;
   setBottomDeckOpen: (v: boolean) => void;
-  bottomDeckMode: "live-lt" | "timer";
-  setBottomDeckMode: (v: "live-lt" | "timer") => void;
+  bottomDeckMode: "live-lt" | "timer" | "props" | "camera" | "scenes";
+  setBottomDeckMode: (v: "live-lt" | "timer" | "props" | "camera" | "scenes") => void;
   topPanelPct: number;
   setTopPanelPct: (v: number | ((prev: number) => number)) => void;
   stagePct: number;
@@ -74,6 +74,10 @@ export interface AppSlice {
   setScenes: (v: Scene[] | ((prev: Scene[]) => Scene[])) => void;
   backendError: string | null;
   setBackendError: (v: string | null) => void;
+  busyActions: string[];
+  setBusyAction: (key: string, busy: boolean) => void;
+  backendAvailable: boolean;
+  setBackendAvailable: (v: boolean) => void;
 }
 
 export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) => ({
@@ -142,4 +146,13 @@ export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) =>
   setScenes: (v) => set((s) => ({ scenes: typeof v === "function" ? v(s.scenes) : v })),
   backendError: null,
   setBackendError: (v) => set({ backendError: v }),
+  busyActions: [],
+  setBusyAction: (key, busy) => set((s) => {
+    const has = s.busyActions.includes(key);
+    if (busy && !has) return { busyActions: [...s.busyActions, key] };
+    if (!busy && has) return { busyActions: s.busyActions.filter((k) => k !== key) };
+    return {};
+  }),
+  backendAvailable: true,
+  setBackendAvailable: (v) => set({ backendAvailable: v }),
 });

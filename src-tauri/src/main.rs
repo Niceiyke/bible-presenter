@@ -236,6 +236,8 @@ fn main() {
             wordlyte_lib::commands::windows::toggle_stage_window,
             wordlyte_lib::commands::windows::toggle_studio_window,
             wordlyte_lib::commands::windows::get_available_monitors,
+            wordlyte_lib::commands::windows::show_output_test_pattern,
+            wordlyte_lib::commands::windows::hide_output_test_pattern,
             wordlyte_lib::commands::props::get_props,
             wordlyte_lib::commands::props::set_props,
             wordlyte_lib::commands::misc::get_app_data_dir,

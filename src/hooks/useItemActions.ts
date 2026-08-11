@@ -9,6 +9,14 @@ import type { DisplayItem, PresentationSettings, PropItem, MediaItem, ScheduleEn
 const getVerseKey = (v: any, threshold: number) => `${v.book}-${v.chapter}-${v.verse}-${v.version}-${threshold}`;
 const MAX_VERSE_SPLITS = 64;
 
+export interface ClearSnapshot {
+  liveItem: DisplayItem | null;
+  stagedItem: DisplayItem | null;
+  propItems: PropItem[];
+  currentLowerThird: { data: any; template: any } | null;
+  ltVisible: boolean;
+}
+
 export function useItemActions() {
   const {
     liveItem, setLiveItem, stagedItem, setStagedItem,
@@ -16,16 +24,22 @@ export function useItemActions() {
     nextVerse, recentItems, setRecentItems,
     settings, setSettings,
     ltVisible, setLtVisible, ltTemplate, ltMode, ltLineIndex, ltLinesPerDisplay,
+    currentLowerThird, setCurrentLowerThird,
     scheduleEntries, setScheduleEntries,
     activeServiceId, services,
     media, setMedia,
     songs, studioSlides,
-    setToast, setPropItems,
-    setBackendError,
+    setToast, setPropItems, propItems,
+    setBackendError, setBusyAction,
     scenes, setScenes,
   } = useAppStore();
 
   const verseSplitsRef = useRef<Record<string, any[]>>({});
+
+  // Monotonic guard so a slow (e.g. verse-splitting) stage request can never
+  // overwrite a newer staging request. Only the newest request may apply its
+  // result to local or backend state.
+  const stageReqRef = useRef(0);
 
   const buildLookup = useCallback((): ItemLookup => ({
     studioSlides,
@@ -62,7 +76,8 @@ export function useItemActions() {
     return itemNextLive(liveItem, buildLookup());
   }, [liveItem, buildLookup]);
 
-  const stageItem = useCallback(async (item: DisplayItem) => {
+  const stageItem = useCallback(async (item: DisplayItem): Promise<boolean> => {
+    const reqId = ++stageReqRef.current;
     let finalItem = item;
     const prevStaged = useAppStore.getState().stagedItem;
 
@@ -83,7 +98,7 @@ export function useItemActions() {
           verseSplitsRef.current[key] = splits;
         } catch (err: any) {
           setBackendError(`Failed to split verse: ${err?.message ?? err}`);
-          return;
+          return false;
         }
       }
       if (splits.length > 1) {
@@ -91,30 +106,44 @@ export function useItemActions() {
       }
     }
 
+    // Abandon this request if a newer stage request began while we awaited
+    // the verse split. Only the newest request may update staged state.
+    if (reqId !== stageReqRef.current) return false;
+
+    setBusyAction("stage", true);
     setStagedItem(finalItem);
     try {
       await invoke("stage_item", { item: finalItem });
     } catch (err: any) {
-      setStagedItem(prevStaged);
-      setBackendError(`Failed to stage item: ${err?.message ?? err}`);
+      if (reqId === stageReqRef.current) {
+        setStagedItem(prevStaged);
+        setBackendError(`Failed to stage item: ${err?.message ?? err}`);
+      }
+      return false;
+    } finally {
+      if (reqId === stageReqRef.current) setBusyAction("stage", false);
     }
-  }, [setStagedItem, settings, setBackendError]);
+    return true;
+  }, [setStagedItem, settings, setBackendError, setBusyAction]);
 
   const getNextItem = useCallback((item: DisplayItem): DisplayItem | null => {
     return itemNextLive(item, buildLookup());
   }, [buildLookup]);
 
-  const goLive = useCallback(async () => {
-    const current = liveItem;
-    const staged = stagedItem;
+  const goLive = useCallback(async (): Promise<boolean> => {
+    const current = useAppStore.getState().liveItem;
+    const staged = useAppStore.getState().stagedItem;
     let committed: DisplayItem | null = null;
+    setBusyAction("goLive", true);
     try {
       committed = (await invoke<DisplayItem | null>("commit_staged")) ?? null;
     } catch (err: any) {
       setBackendError(`Failed to go live: ${err?.message ?? err}`);
-      return;
+      return false;
+    } finally {
+      setBusyAction("goLive", false);
     }
-    setLiveItem(committed);
+    if (committed) setLiveItem(committed);
     if (current) setPreviousItem(current);
 
     if (staged?.type === "Song" && staged.data.style === "LowerThird") {
@@ -141,17 +170,25 @@ export function useItemActions() {
     if (nextLiveItem) {
       stageItem(nextLiveItem);
     }
-  }, [nextLiveItem, stageItem, liveItem, stagedItem, settings, setPreviousItem, setLiveItem, ltTemplate, setLtVisible, updateSettings, setBackendError]);
+    return true;
+  }, [nextLiveItem, stageItem, settings, setPreviousItem, setLiveItem, ltTemplate, setLtVisible, updateSettings, setBackendError, setBusyAction]);
 
-  const sendLive = useCallback(async (item: DisplayItem) => {
-    const current = liveItem;
-    await stageItem(item);
+  const sendLive = useCallback(async (item: DisplayItem): Promise<boolean> => {
+    const current = useAppStore.getState().liveItem;
+    // Stage first; never commit when staging fails — commit would expose an
+    // older or invalid item to the audience.
+    const stagedOk = await stageItem(item);
+    if (!stagedOk) return false;
+
     let committed: DisplayItem | null = null;
+    setBusyAction("goLive", true);
     try {
       committed = (await invoke<DisplayItem | null>("commit_staged")) ?? null;
     } catch (err: any) {
       setBackendError(`Failed to send live: ${err?.message ?? err}`);
-      return;
+      return false;
+    } finally {
+      setBusyAction("goLive", false);
     }
     setLiveItem(committed);
     if (current) setPreviousItem(current);
@@ -195,25 +232,71 @@ export function useItemActions() {
     if (next) {
       stageItem(next);
     }
-  }, [stageItem, setRecentItems, getNextItem, liveItem, setPreviousItem, setLiveItem, settings, ltTemplate, setLtVisible, updateSettings, setBackendError]);
+    return true;
+  }, [stageItem, setRecentItems, getNextItem, setPreviousItem, setLiveItem, settings, ltTemplate, setLtVisible, updateSettings, setBackendError, setBusyAction]);
 
-  const clearAll = useCallback(async () => {
-    const prevLive = useAppStore.getState().liveItem;
-    const prevStaged = useAppStore.getState().stagedItem;
-    const prevProps = useAppStore.getState().propItems;
+  const clearAll = useCallback(async (): Promise<ClearSnapshot | null> => {
+    const snapshot: ClearSnapshot = {
+      liveItem: useAppStore.getState().liveItem,
+      stagedItem: useAppStore.getState().stagedItem,
+      propItems: useAppStore.getState().propItems,
+      currentLowerThird: useAppStore.getState().currentLowerThird,
+      ltVisible: useAppStore.getState().ltVisible,
+    };
+    setBusyAction("clear", true);
+    try {
+      await invoke("clear_all");
+    } catch (err: any) {
+      useAppStore.getState().setLiveItem(snapshot.liveItem);
+      useAppStore.getState().setStagedItem(snapshot.stagedItem);
+      useAppStore.getState().setPropItems(snapshot.propItems);
+      setBackendError(`Clear All failed: ${err?.message ?? err}`);
+      return null;
+    } finally {
+      setBusyAction("clear", false);
+    }
     setLiveItem(null);
     setStagedItem(null);
     setPropItems([]);
     setLtVisible(false);
+    setCurrentLowerThird(null);
+    return snapshot;
+  }, [setLiveItem, setStagedItem, setPropItems, setLtVisible, setCurrentLowerThird, setBackendError, setBusyAction]);
+
+  const undoClearAll = useCallback(async (snapshot: ClearSnapshot): Promise<boolean> => {
+    setBusyAction("clear", true);
     try {
-      await invoke("clear_all");
+      if (snapshot.stagedItem) {
+        const ok = await stageItem(snapshot.stagedItem);
+        if (!ok) throw new Error("restoring staged item failed");
+      }
+      if (snapshot.liveItem) {
+        const current = useAppStore.getState().liveItem;
+        await invoke("go_live_item", { item: snapshot.liveItem });
+        setLiveItem(snapshot.liveItem);
+        if (current) setPreviousItem(current);
+      }
+      if (snapshot.propItems.length > 0) {
+        await invoke("set_props", { props: snapshot.propItems });
+        setPropItems(snapshot.propItems);
+      }
+      if (snapshot.ltVisible && snapshot.currentLowerThird) {
+        await invoke("show_lower_third", {
+          data: snapshot.currentLowerThird.data,
+          template: snapshot.currentLowerThird.template,
+        });
+        setCurrentLowerThird(snapshot.currentLowerThird);
+        setLtVisible(true);
+      }
+      setToast("Clear undone");
+      return true;
     } catch (err: any) {
-      setLiveItem(prevLive);
-      setStagedItem(prevStaged);
-      setPropItems(prevProps);
-      setBackendError(`Clear All failed: ${err?.message ?? err}`);
+      setBackendError(`Undo clear failed: ${err?.message ?? err}`);
+      return false;
+    } finally {
+      setBusyAction("clear", false);
     }
-  }, [setLiveItem, setStagedItem, setPropItems, setLtVisible, setBackendError]);
+  }, [setLiveItem, setStagedItem, setPropItems, setCurrentLowerThird, setLtVisible, setToast, setBackendError, setBusyAction, stageItem]);
 
   const addToSchedule = useCallback(async (item: DisplayItem) => {
     const entry: ScheduleEntry = { id: stableId(), item };
@@ -223,13 +306,16 @@ export function useItemActions() {
 
   const persistSchedule = useCallback(async () => {
     const s: Schedule = { id: activeServiceId, name: services.find(s => s.id === activeServiceId)?.name || "Service", items: scheduleEntries };
+    setBusyAction("save", true);
     try {
       await invoke("save_service", { schedule: s });
       setToast("Service saved");
     } catch (err: any) {
       setBackendError(`Save service failed: ${err?.message ?? err}`);
+    } finally {
+      setBusyAction("save", false);
     }
-  }, [activeServiceId, services, scheduleEntries, setToast, setBackendError]);
+  }, [activeServiceId, services, scheduleEntries, setToast, setBackendError, setBusyAction]);
 
   const handleFileUpload = useCallback(async () => {
     try {
@@ -253,9 +339,9 @@ export function useItemActions() {
     }
   }, [media, setMedia, setToast, setBackendError]);
 
-  const handleDeleteMedia = useCallback(async (id: string) => {
+  const handleDeleteMedia = useCallback(async (id: string, removeFile = true) => {
     try {
-      await invoke("delete_media", { id });
+      await invoke("delete_media", { id, removeFile });
       setMedia(media.filter((m) => m.id !== id));
     } catch (err: any) {
       console.error("Delete failed:", err);
@@ -335,6 +421,7 @@ export function useItemActions() {
     goLive,
     sendLive,
     clearAll,
+    undoClearAll,
     getNextItem,
     addToSchedule,
     persistSchedule,

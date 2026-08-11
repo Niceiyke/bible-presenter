@@ -1,9 +1,10 @@
-import React from "react";
+import React, { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Image, Clock, Eye, EyeOff, X } from "lucide-react";
+import { Image, Clock, Eye, EyeOff, X, AlertTriangle } from "lucide-react";
 import { useAppStore } from "../store";
 import { stableId, relativizePath } from "../utils";
+import { ConfirmModal } from "./ui";
 import type { PropItem } from "../types";
 
 interface PropsTabProps {
@@ -12,12 +13,15 @@ interface PropsTabProps {
 
 export function PropsTab({ onUpdateProps }: PropsTabProps) {
   const { propItems, setPropItems, appDataDir } = useAppStore();
+  const [confirmClear, setConfirmClear] = useState(false);
 
   const updateAndSave = async (next: PropItem[]) => {
     setPropItems(next);
     onUpdateProps(next);
     await invoke("set_props", { props: next });
   };
+
+  const visibleProps = propItems.filter((p) => p.visible);
 
   return (
     <div className="flex flex-col gap-4">
@@ -47,10 +51,7 @@ export function PropsTab({ onUpdateProps }: PropsTabProps) {
           </button>
           {propItems.length > 0 && (
             <button
-              onClick={async () => {
-                if (!window.confirm("Remove all props?")) return;
-                await updateAndSave([]);
-              }}
+              onClick={() => setConfirmClear(true)}
               className="px-2 py-1 bg-red-900/50 hover:bg-red-800 text-red-400 text-xs rounded border border-red-900 transition-all"
             >
               Clear All
@@ -58,6 +59,37 @@ export function PropsTab({ onUpdateProps }: PropsTabProps) {
           )}
         </div>
       </div>
+
+      {/* Miniature output canvas */}
+      {visibleProps.length > 0 && (
+        <div className="bg-slate-950 border border-slate-800 rounded-lg overflow-hidden">
+          <div className="px-3 py-1.5 border-b border-slate-800 flex items-center justify-between">
+            <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Output Preview (16:9)</p>
+            <p className="text-[9px] text-slate-600">{visibleProps.length} visible</p>
+          </div>
+          <div className="aspect-video relative bg-slate-900/60 m-3 rounded overflow-hidden">
+            {visibleProps.map((prop) => (
+              <div
+                key={prop.id}
+                className="absolute flex items-center justify-center overflow-hidden border border-dashed border-slate-500/60"
+                style={{
+                  left: `${prop.x}%`, top: `${prop.y}%`,
+                  width: `${prop.w}%`, height: `${prop.h}%`,
+                  opacity: prop.opacity,
+                  backgroundColor: prop.kind === "image" ? "rgba(245,158,11,0.15)" : "rgba(148,163,184,0.15)",
+                }}
+                title={prop.kind === "clock" ? (prop.text ?? "HH:mm:ss") : prop.path}
+              >
+                {prop.kind === "clock" ? (
+                  <span className="text-[8px] font-mono text-slate-300" style={{ color: prop.color }}>HH:mm:ss</span>
+                ) : (
+                  <Image size={10} className="text-amber-500/70" />
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {propItems.length === 0 ? (
         <p className="text-slate-700 text-xs italic text-center pt-8">No props. Add an image logo or clock overlay above.</p>
@@ -151,6 +183,17 @@ export function PropsTab({ onUpdateProps }: PropsTabProps) {
           ))}
         </div>
       )}
+
+      <ConfirmModal
+        open={confirmClear}
+        title="Remove all props?"
+        description="This removes every persistent prop and clears the live output overlay."
+        confirmLabel="Remove All"
+        confirmVariant="live"
+        icon={<AlertTriangle size={18} className="text-state-live" />}
+        onConfirm={async () => { await updateAndSave([]); }}
+        onClose={() => setConfirmClear(false)}
+      />
     </div>
   );
 }

@@ -17,7 +17,7 @@ export interface MediaSlice {
       tags: string[],
       category: string | undefined
     ) => Promise<void>;
-    bulkDeleteMedia: (ids: string[]) => Promise<void>;
+    bulkDeleteMedia: (ids: string[], removeFile?: boolean) => Promise<void>;
     bulkUpdateMedia: (
       ids: string[],
       tagsToAdd: string[],
@@ -80,9 +80,9 @@ export const createMediaSlice: StateCreator<AppStore, [], [], MediaSlice> = (set
       console.error("Failed to update media metadata:", error);
     }
   },
-  bulkDeleteMedia: async (ids: string[]) => {
+  bulkDeleteMedia: async (ids: string[], removeFile = true) => {
     try {
-      await invoke("bulk_delete_media", { ids });
+      await invoke("bulk_delete_media", { ids, removeFile });
       set((state) => ({
         media: state.media.filter((item) => !ids.includes(item.id)),
       }));

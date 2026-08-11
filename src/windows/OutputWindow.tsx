@@ -56,6 +56,7 @@ export function OutputWindow() {
     verse_split_threshold: 200,
   });
   const [appDataDir, setAppDataDir] = useState<string | null>(null);
+  const [monitorTest, setMonitorTest] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const bgVideoRef = useRef<HTMLVideoElement>(null);
@@ -238,6 +239,10 @@ export function OutputWindow() {
       setPropItems((event.payload as PropItem[]) ?? []);
     });
 
+    const unlistenMonitorTest = listen("monitor-test", (event: any) => {
+      setMonitorTest(!!event.payload?.active);
+    });
+
     Promise.all([
       invoke("get_current_item").then((v: any) => { if (v) setLiveItem(v); }).catch((e: any) => signalOperatorWarning(`Output hydrate (live): ${e?.message ?? e}`)),
       invoke("get_current_lower_third").then((lt: any) => { if (lt) setLowerThird(lt); }).catch((e: any) => signalOperatorWarning(`Output hydrate (LT): ${e?.message ?? e}`)),
@@ -254,6 +259,7 @@ export function OutputWindow() {
       unlistenLt.then((f) => f());
       unlistenMedia.then((f) => f());
       unlistenProps.then((f) => f());
+      unlistenMonitorTest.then((f) => f());
     };
   }, []);
 
@@ -460,6 +466,20 @@ export function OutputWindow() {
           : { ...bgStyle, color: colors.verseText }
       }
     >
+      {monitorTest && (
+        <div className="absolute inset-0 z-[70] bg-black flex flex-col items-center justify-center gap-6">
+          <div className="grid grid-cols-4 w-4/5 h-1/2 rounded overflow-hidden border border-white/20">
+            {["#ffffff", "#ffff00", "#00ffff", "#00ff00", "#ff00ff", "#ff0000", "#0000ff", "#000000"].map((c) => (
+              <div key={c} className="flex items-center justify-center" style={{ backgroundColor: c }}>
+                <span className="text-[10px] font-black uppercase text-black/60 mix-blend-difference">{c}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-white text-2xl font-black uppercase tracking-widest">Monitor Test Pattern</p>
+          <p className="text-white/50 text-sm">{window.innerWidth}×{window.innerHeight}</p>
+        </div>
+      )}
+
       {settings.show_background_logo && settings.background_logo_path && (
         <div className="absolute inset-0 z-50 bg-black">
           {settings.background_logo_path.toLowerCase().match(/\.(mp4|webm|mov|mkv|avi)$/) ? (

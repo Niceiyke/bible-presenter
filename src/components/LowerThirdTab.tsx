@@ -281,6 +281,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
     ltAutoAdvance, setLtAutoAdvance,
     ltAutoSeconds, setLtAutoSeconds,
     ltAtEnd, setLtAtEnd,
+    currentLowerThird,
   } = useAppStore();
 
   const ltAutoRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -596,6 +597,42 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
                   <p className="text-xs text-slate-500 italic">{ltFlatLines[ltLineIndex + ltLinesPerDisplay]?.text}</p>
                 </div>
               ) : null}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Live lower-third preview (nameplate / free text) ── */}
+      {ltMode !== "lyrics" && (
+        <div className="flex flex-col gap-1.5 bg-slate-900 border border-slate-800 rounded-xl p-3">
+          <div className="flex items-center justify-between">
+            <p className="text-[9px] text-slate-600 uppercase font-bold tracking-widest">Live Preview</p>
+            <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded ${ltVisible ? "bg-green-900/40 text-green-400" : "bg-slate-800 text-slate-500"}`}>
+              {ltVisible ? "ON AIR" : "HIDDEN"}
+            </span>
+          </div>
+          <div className="bg-slate-800 rounded-lg px-3 py-2 min-h-[3rem] flex items-center">
+            {ltVisible && currentLowerThird ? (
+              currentLowerThird.data.kind === "Nameplate" ? (
+                <div>
+                  <p className="text-sm font-bold text-slate-100">{currentLowerThird.data.data.name}</p>
+                  {currentLowerThird.data.data.title && (
+                    <p className="text-[11px] text-slate-400">{currentLowerThird.data.data.title}</p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm font-semibold text-slate-200">{currentLowerThird.data.data.text}</p>
+              )
+            ) : (
+              <p className="text-xs italic text-slate-600">Nothing on air</p>
+            )}
+          </div>
+          {!ltVisible && (ltMode === "nameplate" ? ltName : ltFreeText) && (
+            <div className="px-3 py-1.5">
+              <p className="text-[9px] text-slate-600 uppercase font-bold tracking-widest mb-0.5">Ready to show</p>
+              <p className="text-xs text-slate-500 italic truncate">
+                {ltMode === "nameplate" ? `${ltName}${ltTitle ? ` — ${ltTitle}` : ""}` : ltFreeText}
+              </p>
             </div>
           )}
         </div>

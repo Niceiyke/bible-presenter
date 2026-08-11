@@ -1,7 +1,9 @@
 import React, { useState } from "react";
-import { Camera, Check, Plus, Trash2, Zap } from "lucide-react";
+import { Camera, Check, Trash2, Zap, AlertTriangle } from "lucide-react";
 import { useAppStore } from "../store";
 import { useT } from "../i18n";
+import { ConfirmModal } from "./ui";
+import { displayItemLabel } from "../utils";
 import type { Scene } from "../types";
 
 interface ScenesTabProps {
@@ -11,16 +13,58 @@ interface ScenesTabProps {
   captureScene: (name: string) => Promise<void>;
 }
 
+interface SceneChanges {
+  props: number;
+  lowerThird: boolean;
+  settings: string[];
+}
+
+function describeChanges(scene: Scene, current: {
+  propItems: number;
+  ltVisible: boolean;
+  settingsTheme: string;
+}): SceneChanges {
+  const settingsDiffs: string[] = [];
+  if (scene.settings.theme && scene.settings.theme !== current.settingsTheme) {
+    settingsDiffs.push(`Theme: ${scene.settings.theme}`);
+  }
+  if (scene.settings.background?.type && scene.settings.background.type !== "None") {
+    settingsDiffs.push(`Background: ${scene.settings.background.type}`);
+  }
+  return {
+    props: scene.props.length,
+    lowerThird: !!scene.lower_third_data,
+    settings: settingsDiffs,
+  };
+}
+
 export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: ScenesTabProps) {
-  const { scenes, settings } = useAppStore();
+  const { scenes, settings, propItems, ltVisible } = useAppStore();
   const t = useT();
   const [newName, setNewName] = useState("");
+  const [pendingApply, setPendingApply] = useState<Scene | null>(null);
 
   const handleCapture = async () => {
     const name = newName.trim() || `Scene ${scenes.length + 1}`;
     await captureScene(name);
     setNewName("");
   };
+
+  const handleApply = (scene: Scene) => {
+    const changes = describeChanges(scene, {
+      propItems: propItems.length,
+      ltVisible,
+      settingsTheme: settings.theme,
+    });
+    // If the scene touches live-facing layers, require explicit confirmation.
+    if (changes.props > 0 || changes.lowerThird || changes.settings.length > 0 || propItems.length > 0 || ltVisible) {
+      setPendingApply(scene);
+    } else {
+      applyScene(scene.id);
+    }
+  };
+
+  const liveItem = useAppStore.getState().liveItem;
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl">
@@ -55,37 +99,94 @@ export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: 
           </div>
         ) : (
           <div className="space-y-1.5">
-            {scenes.map((s) => (
-              <div key={s.id} className="group flex items-center gap-3 px-3 py-2.5 rounded-lg bg-slate-950/60 border border-slate-800/60 hover:border-slate-700 transition-all">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-bold text-slate-200 truncate">{s.name}</p>
-                  <p className="text-[10px] text-slate-600 uppercase font-black">
-                    {s.props.length} prop{s.props.length !== 1 ? "s" : ""}
-                    {s.lower_third_data ? " · LT" : ""}
-                    {" · theme: "}{settings.theme === s.settings.theme ? "same" : s.settings.theme}
-                  </p>
+            {scenes.map((s) => {
+              const changes = describeChanges(s, {
+                propItems: propItems.length,
+                ltVisible,
+                settingsTheme: settings.theme,
+              });
+              return (
+                <div key={s.id} className="group flex items-center gap-3 px-3 py-2.5 rounded-lg bg-slate-950/60 border border-slate-800/60 hover:border-slate-700 transition-all">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-slate-200 truncate">{s.name}</p>
+                    <p className="text-[10px] text-slate-600 uppercase font-black">
+                      {s.props.length} prop{s.props.length !== 1 ? "s" : ""}
+                      {s.lower_third_data ? " · LT" : ""}
+                      {" · theme: "}{settings.theme === s.settings.theme ? "same" : s.settings.theme}
+                    </p>
+                    {/* What this scene changes */}
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {s.props.length > 0 && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                          {s.props.length} prop{s.props.length !== 1 ? "s" : ""}
+                        </span>
+                      )}
+                      {s.lower_third_data && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-cyan-400 border border-slate-700">
+                          Lower third
+                        </span>
+                      )}
+                      {changes.settings.map((d) => (
+                        <span key={d} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-amber-400 border border-slate-700">
+                          {d}
+                        </span>
+                      ))}
+                      {changes.props === 0 && !s.lower_third_data && changes.settings.length === 0 && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-slate-500 border border-slate-700">
+                          Settings only
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <button
+                      onClick={() => handleApply(s)}
+                      className="px-2.5 py-1.5 rounded-md bg-amber-500 hover:bg-amber-400 text-black text-[10px] font-black uppercase flex items-center gap-1 transition-all"
+                      title={t("scenes.apply")}
+                    >
+                      <Check size={12} /> {t("scenes.apply")}
+                    </button>
+                    <button
+                      onClick={() => deleteScene(s.id)}
+                      className="p-1.5 rounded-md bg-slate-800 hover:bg-red-900/40 text-slate-500 hover:text-red-300 transition-all"
+                      title={t("scenes.delete")}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
                 </div>
-                <div className="flex gap-1 shrink-0">
-                  <button
-                    onClick={() => applyScene(s.id)}
-                    className="px-2.5 py-1.5 rounded-md bg-amber-500 hover:bg-amber-400 text-black text-[10px] font-black uppercase flex items-center gap-1 transition-all"
-                    title={t("scenes.apply")}
-                  >
-                    <Check size={12} /> {t("scenes.apply")}
-                  </button>
-                  <button
-                    onClick={() => deleteScene(s.id)}
-                    className="p-1.5 rounded-md bg-slate-800 hover:bg-red-900/40 text-slate-500 hover:text-red-300 transition-all"
-                    title={t("scenes.delete")}
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
+
+      <ConfirmModal
+        open={!!pendingApply}
+        title="Apply scene?"
+        description={`"${pendingApply?.name}" will change live-facing output.`}
+        confirmLabel="Apply Scene"
+        confirmVariant="live"
+        icon={<AlertTriangle size={18} className="text-state-live" />}
+        onConfirm={async () => {
+          if (pendingApply) await applyScene(pendingApply.id);
+        }}
+        onClose={() => setPendingApply(null)}
+      >
+        <div className="flex flex-col gap-1.5 text-xs">
+          <p className="text-console-text-muted">
+            {liveItem ? <>Currently live: <span className="text-console-text font-bold">{displayItemLabel(liveItem)}</span>.</> : "Nothing is currently live."}
+          </p>
+          {propItems.length > 0 && (
+            <p className="text-console-text-muted">• Replaces <span className="text-console-text font-bold">{propItems.length} active prop{propItems.length !== 1 ? "s" : ""}</span>.</p>
+          )}
+          {ltVisible && <p className="text-console-text-muted">• Hides or replaces the lower third.</p>}
+          {pendingApply?.lower_third_data && <p className="text-console-text-muted">• Shows a scene lower third.</p>}
+          {pendingApply && describeChanges(pendingApply, { propItems: propItems.length, ltVisible, settingsTheme: settings.theme }).settings.length > 0 && (
+            <p className="text-console-text-muted">• Changes theme and/or background.</p>
+          )}
+        </div>
+      </ConfirmModal>
     </div>
   );
 }

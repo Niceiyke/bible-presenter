@@ -1247,23 +1247,16 @@ impl MediaScheduleStore {
     }
 
     pub fn delete_media(&self, id: String) -> Result<()> {
-        if let Some(path) = self.data_db.get_media_path(&id).map_err(|e| anyhow::anyhow!(e))? {
-            // Resolve relative stored paths to the media dir before deleting.
-            let resolved = if PathBuf::from(&path).is_absolute() {
-                PathBuf::from(&path)
-            } else {
-                self.media_dir.join(&path)
-            };
-            let thumb = self.thumbnails_dir.join(format!("{}.jpg", id));
-            let _ = fs::remove_file(&resolved);
-            let _ = fs::remove_file(&thumb);
-        }
-        self.data_db.delete_media(&id).map_err(|e| anyhow::anyhow!(e))
+        self.delete_media_with_file(id, true)
     }
 
-    pub fn bulk_delete_media(&self, ids: Vec<String>) -> Result<()> {
-        for id in &ids {
-            if let Ok(Some(path)) = self.data_db.get_media_path(id) {
+    /// Delete a media record. `remove_file` controls whether the on-disk file
+    /// and thumbnail are also removed ("delete file") or the entry is only
+    /// dropped from the library ("remove from library").
+    pub fn delete_media_with_file(&self, id: String, remove_file: bool) -> Result<()> {
+        if remove_file {
+            if let Some(path) = self.data_db.get_media_path(&id).map_err(|e| anyhow::anyhow!(e))? {
+                // Resolve relative stored paths to the media dir before deleting.
                 let resolved = if PathBuf::from(&path).is_absolute() {
                     PathBuf::from(&path)
                 } else {
@@ -1272,6 +1265,31 @@ impl MediaScheduleStore {
                 let thumb = self.thumbnails_dir.join(format!("{}.jpg", id));
                 let _ = fs::remove_file(&resolved);
                 let _ = fs::remove_file(&thumb);
+            }
+        }
+        self.data_db.delete_media(&id).map_err(|e| anyhow::anyhow!(e))
+    }
+
+    pub fn bulk_delete_media(&self, ids: Vec<String>) -> Result<()> {
+        self.bulk_delete_media_with_file(ids, true)
+    }
+
+    /// Delete many media records. `remove_file` controls whether the on-disk
+    /// files and thumbnails are also removed ("delete file") or the entries
+    /// are only dropped from the library ("remove from library").
+    pub fn bulk_delete_media_with_file(&self, ids: Vec<String>, remove_file: bool) -> Result<()> {
+        if remove_file {
+            for id in &ids {
+                if let Ok(Some(path)) = self.data_db.get_media_path(id) {
+                    let resolved = if PathBuf::from(&path).is_absolute() {
+                        PathBuf::from(&path)
+                    } else {
+                        self.media_dir.join(&path)
+                    };
+                    let thumb = self.thumbnails_dir.join(format!("{}.jpg", id));
+                    let _ = fs::remove_file(&resolved);
+                    let _ = fs::remove_file(&thumb);
+                }
             }
         }
         self.data_db.delete_media_bulk(&ids).map_err(|e| anyhow::anyhow!(e))

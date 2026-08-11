@@ -1,10 +1,11 @@
 import React, { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { Plus, Edit2, Trash2, ChevronDown, ChevronUp, Search, Presentation } from "lucide-react";
+import { Plus, Presentation, Edit2, Trash2, Search } from "lucide-react";
 import { useAppStore } from "../store";
 import { SlideThumbnail } from "./shared/Renderers";
 import { buildCustomSlideItem } from "../utils";
+import { ContentCard, ConfirmModal, StatusBadge, Button } from "./ui";
 import type { CustomPresentation, CustomSlide, DisplayItem, PresentationSummary } from "../types";
 
 interface StudioTabProps {
@@ -24,6 +25,15 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
   } = useAppStore();
 
   const [search, setSearch] = useState("");
+  const [deletePres, setDeletePres] = useState<PresentationSummary | null>(null);
+
+  const handleDelete = async (id: string) => {
+    await invoke("delete_studio_presentation", { id });
+    const next = studioList.filter((p) => p.id !== id);
+    setStudioList(next);
+    emit("studio-sync", next);
+    if (expandedStudioPresId === id) setExpandedStudioPresId(null);
+  };
 
   const handlePresentStudio = async (id: string) => {
     if (expandedStudioPresId === id) {
@@ -40,19 +50,6 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
       }
     }
     setExpandedStudioPresId(id);
-  };
-
-  const handleDelete = async (id: string) => {
-    if (!window.confirm("Delete this presentation?")) return;
-    try {
-      await invoke("delete_studio_presentation", { id });
-      const next = studioList.filter((p) => p.id !== id);
-      setStudioList(next);
-      emit("studio-sync", next);
-      if (expandedStudioPresId === id) setExpandedStudioPresId(null);
-    } catch (err) {
-      setToast("Failed to delete presentation");
-    }
   };
 
   const filtered: PresentationSummary[] = search.trim()
@@ -90,60 +87,45 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
         {filtered.map((pres) => {
           const isExpanded = expandedStudioPresId === pres.id;
           return (
-            <div
+            <ContentCard
               key={pres.id}
-              className={`flex flex-col bg-slate-900 border rounded-xl overflow-hidden transition-all ${
-                isExpanded ? "border-purple-600/40 shadow-lg shadow-purple-900/10" : "border-slate-800 hover:border-slate-700"
-              }`}
+              className={isExpanded ? "border-tool-design/40 shadow-lg shadow-tool-design/10" : undefined}
             >
               <div className="flex items-center gap-3 p-3">
                 <div
                   className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 transition-all ${
-                    isExpanded ? "bg-purple-600 text-white" : "bg-slate-800 text-slate-500"
+                    isExpanded ? "bg-tool-design text-white" : "bg-console-surface-raised text-console-text-muted"
                   }`}
                 >
                   <Presentation size={18} />
                 </div>
 
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-slate-200 truncate leading-tight">{pres.name}</p>
-                  <p className="text-[10px] text-slate-600 mt-0.5">
-                    {pres.slide_count} {pres.slide_count === 1 ? "slide" : "slides"}
-                  </p>
+                  <p className="text-sm font-semibold text-console-text truncate leading-tight">{pres.name}</p>
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    <StatusBadge tone={pres.slide_count > 0 ? "design" : "neutral"} label={`${pres.slide_count} slide${pres.slide_count === 1 ? "" : "s"}`} />
+                    {isExpanded && <StatusBadge tone="stage" label="Open" />}
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => onOpenEditor(pres.id)}
-                    className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-500 hover:text-slate-200 rounded-lg transition-all"
-                    title="Edit presentation"
-                  >
-                    <Edit2 size={13} />
-                  </button>
-                  <button
-                    onClick={() => handleDelete(pres.id)}
-                    className="p-2 bg-slate-800 hover:bg-red-900/60 text-slate-500 hover:text-red-400 rounded-lg transition-all"
-                    title="Delete presentation"
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                  <button
+                <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                  <Button variant="ghost" size="sm" icon={<Edit2 size={12} />} onClick={() => onOpenEditor(pres.id)}>Edit</Button>
+                  <Button variant="bare" size="sm" icon={<Trash2 size={12} />} onClick={() => setDeletePres(pres)}>Delete</Button>
+                  <Button
+                    variant={isExpanded ? "primary" : "ghost"}
+                    size="sm"
                     onClick={() => handlePresentStudio(pres.id)}
-                    className={`p-2 rounded-lg transition-all ${
-                      isExpanded
-                        ? "bg-purple-600 text-white"
-                        : "bg-slate-800 hover:bg-slate-700 text-slate-500 hover:text-slate-200"
-                    }`}
-                    title={isExpanded ? "Collapse" : "Show slides"}
                   >
-                    {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                  </button>
+                    {isExpanded ? "Collapse" : "Show Slides"}
+                  </Button>
                 </div>
               </div>
 
               {isExpanded && studioSlides[pres.id] && (
-                <div className="px-3 pb-3 border-t border-slate-800/50">
-                  <p className="text-[9px] font-black uppercase tracking-widest text-slate-600 pt-2.5 pb-2">Slides</p>
+                <div className="px-3 pb-3 border-t border-console-border/50">
+                  <div className="flex items-center gap-2 mt-2 mb-2">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-console-text-muted">Slides</p>
+                  </div>
                   <div className="grid grid-cols-3 gap-2">
                     {studioSlides[pres.id].map((slide, idx) => {
                       const displayItem = buildCustomSlideItem(pres, studioSlides[pres.id], idx);
@@ -162,7 +144,7 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
                   </div>
                 </div>
               )}
-            </div>
+            </ContentCard>
           );
         })}
 
@@ -172,16 +154,29 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
 
         {studioList.length === 0 && (
           <div className="flex flex-col items-center gap-3 py-12 text-center">
-            <div className="w-12 h-12 bg-slate-900 rounded-xl flex items-center justify-center border border-slate-800">
-              <Presentation size={22} className="text-slate-700" />
+            <div className="w-12 h-12 bg-console-surface-raised rounded-xl flex items-center justify-center border border-console-border">
+              <Presentation size={22} className="text-console-text-subtle" />
             </div>
             <div>
-              <p className="text-slate-500 text-sm font-medium">No presentations yet</p>
-              <p className="text-slate-700 text-xs mt-1">Click New to create your first presentation</p>
+              <p className="text-console-text-muted text-sm font-medium">No presentations yet</p>
+              <p className="text-console-text-subtle text-xs mt-1">Click New to create your first presentation</p>
             </div>
           </div>
         )}
       </div>
+
+      {/* Delete confirmation */}
+      <ConfirmModal
+        open={!!deletePres}
+        title={`Delete "${deletePres?.name ?? ""}"?`}
+        description="The presentation and all its slides will be removed. This cannot be undone."
+        confirmLabel="Delete Presentation"
+        confirmVariant="live"
+        onConfirm={async () => {
+          if (deletePres) await handleDelete(deletePres.id);
+        }}
+        onClose={() => setDeletePres(null)}
+      />
     </div>
   );
 }

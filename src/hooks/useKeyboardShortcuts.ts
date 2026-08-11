@@ -8,10 +8,10 @@ import { useKeyboardBinding } from "./keyboardRegistry";
 import type { DisplayItem } from "../types";
 
 interface Props {
-  stageItem: (item: DisplayItem) => Promise<void>;
-  goLive: () => Promise<void>;
-  sendLive: (item: DisplayItem) => Promise<void>;
-  clearAll: () => Promise<void>;
+  stageItem: (item: DisplayItem) => Promise<boolean>;
+  goLive: () => Promise<boolean>;
+  sendLive: (item: DisplayItem) => Promise<boolean>;
+  clearAll: () => Promise<unknown>;
   ltFlatLines: { text: string; sectionLabel: string }[];
 }
 
@@ -47,7 +47,7 @@ export function useKeyboardShortcuts(props: Props): void {
           invoke("clear_live").catch((err: any) => setBackendError(`Clear failed: ${err?.message ?? err}`));
           break;
         case "Enter": if (stagedItem) goLive(); break;
-        case "o": if (e.ctrlKey) { invoke("toggle_output_window"); setOutputVisible((v: boolean) => !v); } break;
+        case "o": if (e.ctrlKey) { e.preventDefault(); invoke("toggle_output_window").then(() => setOutputVisible((v: boolean) => !v)).catch((err: any) => setBackendError(`Output window: ${err?.message ?? err}`)); } break;
         case "b": if (e.ctrlKey) { e.preventDefault(); const nb = !settings.is_blanked; setSettings({ ...settings, is_blanked: nb }); setIsBlackout(nb); invoke("save_settings", { settings: { ...settings, is_blanked: nb } }); } break;
         case "t": if (e.ctrlKey) { e.preventDefault(); setBottomDeckOpen(!bottomDeckOpen); } break;
         case "F1": setActiveTab("bible"); break;

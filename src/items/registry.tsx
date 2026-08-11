@@ -1,6 +1,6 @@
 import React from "react";
 import type { DisplayItem, Song, CustomSlide, Verse, PresentationSettings } from "../types";
-import { buildCustomSlideItem } from "../utils";
+import { buildCustomSlideItem, displayItemLabel } from "../utils";
 
 /**
  * Item-kind registry.
@@ -301,4 +301,117 @@ export function ScheduleTile({ item }: { item: DisplayItem }) {
 
 export function stageDetail(item: DisplayItem): string {
   return kindOf(item).stageDetail(item as any);
+}
+
+// ─── Cockpit metadata helpers (Phase 4) ──────────────────────────────────────
+
+export interface ItemMeta {
+  /** Operator-facing kind label, e.g. "Bible Verse", "Song", "Slide". */
+  kindLabel: string;
+  /** Primary reference / title (e.g. "John 3:16" or song title). */
+  title: string;
+  /** Secondary detail (e.g. "NIV" version or section label). */
+  detail: string | null;
+  /** Fractional progress (0..1) when the item has an intrinsic span. */
+  progress: number | null;
+  /** Progress text when available, e.g. "Slide 3/10". */
+  progressLabel: string | null;
+  /** Runtime hint, e.g. media duration. */
+  durationLabel: string | null;
+}
+
+const TYPE_LABELS: Record<DisplayItem["type"], string> = {
+  Verse: "Bible Verse",
+  Media: "Media",
+  Camera: "Camera",
+  CustomSlide: "Slide",
+  Timer: "Timer",
+  Song: "Song",
+};
+
+export function itemMeta(item: DisplayItem): ItemMeta {
+  return itemMetaAt(item, Date.now());
+}
+
+export function itemMetaAt(item: DisplayItem, now: number): ItemMeta {
+  const base: ItemMeta = {
+    kindLabel: TYPE_LABELS[item.type] ?? "Content",
+    title: displayItemLabel(item),
+    detail: null,
+    progress: null,
+    progressLabel: null,
+    durationLabel: null,
+  };
+
+  switch (item.type) {
+    case "Verse": {
+      const { book, chapter, verse, version, split_index, total_splits } = item.data;
+      base.title = `${book} ${chapter}:${verse}`;
+      base.detail = version;
+      if (total_splits && total_splits > 1) {
+        const idx = (split_index ?? 0) + 1;
+        base.progress = idx / total_splits;
+        base.progressLabel = `Verse ${idx}/${total_splits}`;
+      }
+      return base;
+    }
+    case "CustomSlide": {
+      const { presentation_name, slide_index, slide_count } = item.data;
+      base.title = presentation_name;
+      base.detail = null;
+      if (slide_count > 0) {
+        const idx = slide_index + 1;
+        base.progress = idx / slide_count;
+        base.progressLabel = `Slide ${idx}/${slide_count}`;
+      }
+      return base;
+    }
+    case "Song": {
+      const { title, section_label, slide_index, total_slides } = item.data;
+      base.title = title;
+      base.detail = section_label;
+      if (total_slides > 0) {
+        const idx = slide_index + 1;
+        base.progress = idx / total_slides;
+        base.progressLabel = `Section ${idx}/${total_slides}`;
+      }
+      return base;
+    }
+    case "Media": {
+      base.title = item.data.name;
+      base.detail = item.data.media_type;
+      if (item.data.duration) {
+        const m = Math.floor(item.data.duration / 60);
+        const s = Math.floor(item.data.duration % 60);
+        base.durationLabel = `${m}:${s.toString().padStart(2, "0")}`;
+      }
+      return base;
+    }
+    case "Timer": {
+      base.title = item.data.label || (item.data.timer_type === "clock" ? "Clock" : `Timer: ${item.data.timer_type}`);
+      base.detail = item.data.timer_type;
+      if (item.data.timer_type === "countdown" && item.data.duration_secs && item.data.started_at) {
+        const remaining = Math.max(0, item.data.started_at + item.data.duration_secs * 1000 - now);
+        const frac = remaining === 0 ? 0 : Math.max(0, Math.min(1, (item.data.duration_secs * 1000 - remaining) / (item.data.duration_secs * 1000)));
+        const mins = Math.floor(remaining / 60000);
+        const secs = Math.floor((remaining % 60000) / 1000);
+        base.progress = frac;
+        base.progressLabel = `${mins}:${secs.toString().padStart(2, "0")} left`;
+        base.durationLabel = `${mins}:${secs.toString().padStart(2, "0")}`;
+      } else if (item.data.timer_type === "countdown" && item.data.duration_secs) {
+        const m = Math.floor(item.data.duration_secs / 60);
+        const s = Math.floor(item.data.duration_secs % 60);
+        base.durationLabel = `${m}:${s.toString().padStart(2, "0")}`;
+      }
+      return base;
+    }
+    case "Camera":
+      base.title = "Live Camera";
+      base.detail = item.data.deviceId.startsWith("native:") || item.data.deviceId.startsWith("ndi:")
+        ? item.data.deviceId.split(":")[1] ?? item.data.deviceId.slice(0, 12)
+        : null;
+      return base;
+    default:
+      return base;
+  }
 }

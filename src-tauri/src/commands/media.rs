@@ -47,9 +47,12 @@ pub async fn relink_media(app: AppHandle, state: State<'_, AppState>, id: String
     })
 }
 
+/// Delete a media item. `remove_file` (default true) determines whether the
+/// on-disk file is also removed; passing false only removes the library entry.
 #[tauri::command]
-pub async fn delete_media(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    state.media_schedule.delete_media(id).map_err(|e| e.to_string())
+pub async fn delete_media(state: State<'_, AppState>, id: String, remove_file: Option<bool>) -> Result<(), String> {
+    let remove = remove_file.unwrap_or(true);
+    state.media_schedule.delete_media_with_file(id, remove).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -106,9 +109,12 @@ pub async fn get_media_references(state: State<'_, AppState>, id: String) -> Res
     Ok(state.media_schedule.find_media_references(&item.path))
 }
 
+/// Delete media items. `remove_file` (default true) determines whether the
+/// on-disk files are also removed; passing false only removes library entries.
 #[tauri::command]
-pub async fn bulk_delete_media(state: State<'_, AppState>, ids: Vec<String>) -> Result<(), String> {
-    state.media_schedule.bulk_delete_media(ids).map_err(|e| e.to_string())
+pub async fn bulk_delete_media(state: State<'_, AppState>, ids: Vec<String>, remove_file: Option<bool>) -> Result<(), String> {
+    let remove = remove_file.unwrap_or(true);
+    state.media_schedule.bulk_delete_media_with_file(ids, remove).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

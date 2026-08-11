@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, lazy, Suspense } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { AnimatePresence } from "framer-motion";
+import { AlertTriangle } from "lucide-react";
 
 import { useAppStore } from "./store";
 import { useAppInitialization } from "./hooks/useAppInitialization";
@@ -18,7 +19,6 @@ import { ContentBrowser } from "./components/layout/ContentBrowser";
 
 import { Toast } from "./components/Toast";
 import { ShortcutsModal } from "./components/ShortcutsModal";
-import { SlideEditor } from "./components/editors/SlideEditor";
 import { LogViewer } from "./components/LogViewer";
 import { RecoveryModal } from "./components/RecoveryModal";
 import { MusicPlayer } from "./components/MusicPlayer";
@@ -27,6 +27,12 @@ import { OutputWindow, StageWindow } from "./windows";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
 import type { CustomPresentation, ScheduleEntry } from "./types";
+
+// P10: the Tiptap-based slide editor is the heaviest module in the app and only
+// needed while a presentation is open. Load it on demand.
+const SlideEditor = lazy(() =>
+  import("./components/editors/SlideEditor").then((m) => ({ default: m.SlideEditor }))
+);
 
 export default function App() {
   const {
@@ -46,6 +52,7 @@ export default function App() {
     recentItems, setRecentItems,
     pastScheduleStates, futureScheduleStates,
     isInitialized,
+    backendAvailable,
   } = useAppStore();
 
   const [editingPres, setEditingPres] = useState<CustomPresentation | null>(null);
@@ -58,7 +65,7 @@ export default function App() {
   useFonts(); // P2.5: inject @font-face for user-installed fonts.
 
   const {
-    nextLiveItem, stageItem, goLive, sendLive, clearAll, getNextItem,
+    nextLiveItem, stageItem, goLive, sendLive, clearAll, undoClearAll, getNextItem,
     addToSchedule, persistSchedule, handleFileUpload, handleDeleteMedia,
     updateSettings, updateProps,
     loadScenes, saveScene, deleteScene, applyScene, captureScene,
@@ -147,6 +154,57 @@ export default function App() {
   if (label === "output") return <ErrorBoundary windowLabel="output"><OutputWindow /></ErrorBoundary>;
   if (label === "stage") return <ErrorBoundary windowLabel="stage"><StageWindow /></ErrorBoundary>;
 
+  // Neutral startup surface until the window role is known AND while the
+  // backend is booting — never render operator controls into a window whose
+  // role is unresolved.
+  if (!label) {
+    return (
+      <div className="h-screen bg-slate-950 flex items-center justify-center flex-col gap-4 select-none">
+        <div className="w-8 h-8 bg-amber-500 rounded-md flex items-center justify-center text-black font-black text-xs">WL</div>
+        <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-500">Preparing Wordlyte…</p>
+      </div>
+    );
+  }
+
+  // Configured but not-yet-implemented auxiliary windows get an explicit
+  // neutral role surface instead of silently rendering the operator console.
+  if (label === "design" || label === "studio") {
+    return (
+      <div className="h-screen bg-slate-950 flex items-center justify-center flex-col gap-4 select-none">
+        <div className="w-8 h-8 bg-purple-500/80 rounded-md flex items-center justify-center text-black font-black text-xs">
+          {label === "design" ? "D" : "A"}
+        </div>
+        <p className="text-xs font-black uppercase tracking-widest text-slate-400">
+          {label === "design" ? "Design Hub" : "Audio Studio"}
+        </p>
+        <p className="text-[11px] text-slate-600">This window is not implemented yet.</p>
+      </div>
+    );
+  }
+
+  // Main window: if the backend never became available, offer retry and
+  // remediation instead of an empty, non-functional console.
+  if (label === "main" && !backendAvailable) {
+    return (
+      <div className="h-screen bg-slate-950 flex items-center justify-center flex-col gap-4 select-none px-8">
+        <div className="w-12 h-12 rounded-full bg-red-500/15 flex items-center justify-center">
+          <AlertTriangle size={22} className="text-red-400" />
+        </div>
+        <h1 className="text-base font-black text-slate-200">Backend unavailable</h1>
+        <p className="text-xs text-slate-500 max-w-md text-center leading-relaxed">
+          Wordlyte could not reach its local service to load your Bibles, media, and service plans.
+          Check that the app is not blocked by security software and try again.
+        </p>
+        <button
+          onClick={() => window.location.reload()}
+          className="mt-1 px-4 py-2 text-xs font-black uppercase bg-amber-500 hover:bg-amber-400 text-black rounded-md transition-all"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden select-none">
 
@@ -188,6 +246,11 @@ export default function App() {
             sendLive={sendLive}
             handleFileUpload={handleFileUpload}
             updateSettings={updateSettings}
+            updateProps={updateProps}
+            saveScene={saveScene}
+            deleteScene={deleteScene}
+            applyScene={applyScene}
+            captureScene={captureScene}
           />
         </div>
 
@@ -197,6 +260,7 @@ export default function App() {
           goLive={goLive}
           sendLive={sendLive}
           clearAll={clearAll}
+          undoClearAll={undoClearAll}
           persistSchedule={persistSchedule}
           updateSettings={updateSettings}
           cockpitWidth={cockpitWidth}
@@ -228,25 +292,27 @@ export default function App() {
       )}
 
       {editingPres && (
-        <SlideEditor
-          initialPres={editingPres}
-          mediaImages={media.filter(m => m.media_type === "Image")}
-          media={media}
-          onClose={(saved) => {
-            if (saved) {
-              invoke("list_studio_presentations").then((list: any) => {
-                useAppStore.getState().setStudioList(list);
-                emit("studio-sync", list);
-              });
-              invoke("load_studio_presentation", { id: editingPres.id }).then((data: any) => {
-                const slides = data.slides;
-                useAppStore.getState().setStudioSlides({ ...studioSlides, [editingPres.id]: slides });
-                emit("studio-slides-sync", { id: editingPres.id, slides });
-              });
-            }
-            setEditingPres(null);
-          }}
-        />
+        <Suspense fallback={null}>
+          <SlideEditor
+            initialPres={editingPres}
+            mediaImages={media.filter(m => m.media_type === "Image")}
+            media={media}
+            onClose={(saved) => {
+              if (saved) {
+                invoke("list_studio_presentations").then((list: any) => {
+                  useAppStore.getState().setStudioList(list);
+                  emit("studio-sync", list);
+                });
+                invoke("load_studio_presentation", { id: editingPres.id }).then((data: any) => {
+                  const slides = data.slides;
+                  useAppStore.getState().setStudioSlides({ ...studioSlides, [editingPres.id]: slides });
+                  emit("studio-slides-sync", { id: editingPres.id, slides });
+                });
+              }
+              setEditingPres(null);
+            }}
+          />
+        </Suspense>
       )}
 
       <ShortcutsModal isOpen={showShortcuts} onClose={() => useAppStore.getState().setShowShortcuts(false)} />

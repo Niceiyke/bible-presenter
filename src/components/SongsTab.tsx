@@ -5,6 +5,7 @@ import { useAppStore } from "../store";
 import { FONTS } from "../types";
 import type { Song, LyricSection, DisplayItem } from "../types";
 import { detectAndParse, type ParsedSong } from "../utils/songImporter";
+import { ContentCard, ContentCardActions, ConfirmModal, StatusBadge, Button } from "./ui";
 
 interface SongsTabProps {
   onOpenLyricsMode: (songId: string) => void;
@@ -24,6 +25,26 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
   } = useAppStore();
 
   const [activeSubTab, setActiveSubTab] = React.useState<"mine" | "library">("mine");
+  const [deleteSong, setDeleteSong] = React.useState<Song | null>(null);
+  const [previewSong, setPreviewSong] = React.useState<Song | null>(null);
+
+  // Readable song-style metadata: full-slide lyric vs lower-third.
+  const styleMeta = (song: Song): { badge: "audio" | "design" | "neutral"; label: string; info: string } => {
+    const slideCount = song.arrangement && song.arrangement.length > 0 ? song.arrangement.length : song.sections.length;
+    const lineCount = song.sections.reduce((a, s) => a + s.lines.length, 0);
+    if (song.style === "FullSlide") {
+      return {
+        badge: "design",
+        label: "Full Slide",
+        info: `${slideCount} slide${slideCount === 1 ? "" : "s"} · ${lineCount} lines`,
+      };
+    }
+    return {
+      badge: "audio",
+      label: "Lower Third",
+      info: `${slideCount} line${slideCount === 1 ? "" : "s"} · ${lineCount} lyric lines`,
+    };
+  };
 
   const getSongDisplayItem = (song: Song, flatIndex = 0): DisplayItem => {
     const flat: { label: string; lines: string[] }[] = [];
@@ -127,53 +148,32 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
 
       {/* Song list */}
       <div className="flex flex-col gap-2">
-        {filteredSongs.map((song) => (
-          <div key={song.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-col gap-1">
-            <div className="flex justify-between items-start">
-              <div>
-                <p className="text-sm font-bold text-slate-200">{song.title}</p>
-                {song.author && <p className="text-[10px] text-slate-500">{song.author}</p>}
-                <p className="text-[10px] text-slate-600 mt-0.5">{song.sections.length} section{song.sections.length !== 1 ? "s" : ""} · {song.sections.reduce((a, s) => a + s.lines.length, 0)} lines</p>
-              </div>
-              <div className="flex gap-1">
+        {filteredSongs.map((song) => {
+          const style = styleMeta(song);
+          const slideItem = getSongDisplayItem(song, 0);
+          return (
+            <ContentCard key={song.id} className="p-3 gap-1">
+              <div className="flex justify-between items-start gap-2">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-console-text truncate">{song.title}</p>
+                  {song.author && <p className="text-[10px] text-console-text-muted truncate">{song.author}</p>}
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    <StatusBadge tone={style.badge} label={style.label} />
+                    <span className="text-[10px] text-console-text-subtle">{style.info}</span>
+                  </div>
+                </div>
                 {activeSubTab === "mine" ? (
-                  <>
-                    {song.style === "FullSlide" ? (
-                      <>
-                        <button
-                          onClick={() => onStage(getSongDisplayItem(song, 0))}
-                          className="text-[9px] font-black uppercase bg-amber-600 hover:bg-amber-500 text-white px-2 py-1 rounded"
-                        >Stage</button>
-                        <button
-                          onClick={() => onLive(getSongDisplayItem(song, 0))}
-                          className="text-[9px] font-black uppercase bg-red-700 hover:bg-red-600 text-white px-2 py-1 rounded"
-                        >Live</button>
-                      </>
-                    ) : (
-                      <button
-                        onClick={() => onOpenLyricsMode(song.id)}
-                        className="text-[9px] font-black uppercase bg-green-700 hover:bg-green-600 text-white px-2 py-1 rounded"
-                      >Use</button>
-                    )}
-                    <button
-                      onClick={() => onAddToSchedule(getSongDisplayItem(song, 0))}
-                      className="text-[9px] font-black uppercase bg-purple-600/40 hover:bg-purple-600 text-purple-300 px-2 py-1 rounded border border-purple-500/20">+ SERVICE</button>
-                    <button
-                      onClick={() => setEditingSong(JSON.parse(JSON.stringify(song)))}
-                      className="text-[9px] font-black uppercase bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-1 rounded"
-                    >Edit</button>
-                    <button
-                      onClick={async () => {
-                        await invoke("delete_song", { id: song.id });
-                        const next = songs.filter((s) => s.id !== song.id);
-                        setSongs(next);
-                        emit("songs-sync", next);
-                      }}
-                      className="text-[9px] font-black uppercase bg-red-900/50 hover:bg-red-800 text-red-400 px-2 py-1 rounded"
-                    >Del</button>
-                  </>
+                  <ContentCardActions
+                    dense
+                    onPreview={song.style === "FullSlide" ? undefined : () => setPreviewSong(song)}
+                    onStage={song.style === "FullSlide" ? () => onStage(slideItem) : undefined}
+                    onLive={song.style === "FullSlide" ? () => onLive(slideItem) : undefined}
+                    onAddToSchedule={() => onAddToSchedule(slideItem)}
+                    onEdit={() => setEditingSong(JSON.parse(JSON.stringify(song)))}
+                    onDelete={() => setDeleteSong(song)}
+                  />
                 ) : (
-                  <>
+                  <div className="flex gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                     <button
                       onClick={async () => {
                         // Import from library
@@ -184,24 +184,75 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
                         emit("songs-sync", next);
                         setActiveSubTab("mine");
                       }}
-                      className="text-[9px] font-black uppercase bg-amber-600 hover:bg-amber-500 text-white px-2 py-1 rounded"
+                      className="text-[9px] font-black uppercase bg-action-primary hover:bg-action-primary-hover text-black px-3 py-1.5 rounded"
                     >Import</button>
                     <button
-                      onClick={() => onStage(getSongDisplayItem(song, 0))}
-                      className="text-[9px] font-black uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded"
+                      onClick={() => setPreviewSong(song)}
+                      className="text-[9px] font-black uppercase bg-console-surface-raised hover:bg-console-surface-strong text-console-text-muted px-3 py-1.5 rounded"
                     >Preview</button>
-                  </>
+                  </div>
                 )}
               </div>
-            </div>
-          </div>
-        ))}
+              {/* Lower-third songs open lyrics mode from the card too */}
+              {activeSubTab === "mine" && song.style !== "FullSlide" && (
+                <div className="flex items-center gap-1.5 mt-1">
+                  <Button variant="success" size="sm" onClick={() => onOpenLyricsMode(song.id)}>Use (lyrics mode)</Button>
+                </div>
+              )}
+            </ContentCard>
+          );
+        })}
         {filteredSongs.length === 0 && (
-          <p className="text-slate-600 text-xs italic text-center py-4">
+          <p className="text-console-text-subtle text-xs italic text-center py-4">
             {activeSubTab === "mine" ? "No songs yet. Create one or import lyrics." : "No hymns found in library."}
           </p>
         )}
       </div>
+
+      {/* Song lyric preview modal */}
+      {previewSong && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+          <div className="bg-console-surface border border-console-border-strong rounded-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
+            <div className="flex justify-between items-center p-4 border-b border-console-border">
+              <h3 className="text-sm font-black text-console-text">{previewSong.title}</h3>
+              <button onClick={() => setPreviewSong(null)} className="text-console-text-muted hover:text-console-text text-lg font-bold">✕</button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 custom-scrollbar">
+              {(previewSong.arrangement && previewSong.arrangement.length > 0
+                ? previewSong.arrangement.map((label) => previewSong.sections.find((s) => s.label === label)).filter(Boolean) as LyricSection[]
+                : previewSong.sections
+              ).map((sec, i) => (
+                <div key={i} className="bg-console-surface-raised rounded-lg p-3">
+                  <p className="text-[9px] font-black uppercase text-action-primary mb-1.5">{sec.label}</p>
+                  {sec.lines.map((line, j) => (
+                    <p key={j} className="text-[11px] text-console-text leading-snug">{line}</p>
+                  ))}
+                </div>
+              ))}
+            </div>
+            <div className="p-4 border-t border-console-border flex justify-end gap-2">
+              <Button variant="bare" onClick={() => setPreviewSong(null)}>Close</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Song delete confirmation */}
+      <ConfirmModal
+        open={!!deleteSong}
+        title={`Delete "${deleteSong?.title ?? ""}"?`}
+        description="The song will be removed from your library. This cannot be undone."
+        confirmLabel="Delete Song"
+        confirmVariant="live"
+        onConfirm={async () => {
+          if (!deleteSong) return;
+          await invoke("delete_song", { id: deleteSong.id });
+          const next = songs.filter((s) => s.id !== deleteSong.id);
+          setSongs(next);
+          emit("songs-sync", next);
+        }}
+        onClose={() => setDeleteSong(null)}
+      />
 
       {/* Song Editor Modal */}
       {editingSong && (
