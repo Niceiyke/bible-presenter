@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Music2 } from "lucide-react";
 import { FONTS } from "../../types";
 import type { Song, SongSlideData, SongStyle } from "../../types";
-import { normalizeSong, getSongSequence, songValidate } from "../../utils/song";
+import { normalizeSong, getSongSequence, syncArrangementForSections, songValidate } from "../../utils/song";
 import { useAppStore } from "../../store";
 import { useT } from "../../i18n";
 import { Button, Modal, SaveStatus, type SaveStatusState } from "../ui";
@@ -68,7 +68,15 @@ export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps)
     : "No sections";
 
   const patch = (next: Partial<Song>) => setDraft((d) => ({ ...d, ...next }));
-  const setSections = (next: Song["sections"]) => setDraft((d) => ({ ...d, sections: next }));
+  // Sections carry stable ids. When a section is added or removed (a
+  // structural change), keep the arrangement in sync so the sequence always
+  // includes every verse. Pure lyric/label edits never reorder a deliberate
+  // custom arrangement.
+  const setSections = (next: Song["sections"]) => setDraft((d) => ({
+    ...d,
+    sections: next,
+    arrangement_steps: syncArrangementForSections(d.arrangement_steps, d.sections, next),
+  }));
   const setArrangement = (steps: Song["arrangement_steps"]) =>
     setDraft((d) => ({ ...d, arrangement_steps: steps }));
 

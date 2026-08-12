@@ -70,14 +70,34 @@ function naturalSort(a, b) {
 }
 
 function splitStanzas(text) {
-  // Normalize line endings, collapse whitespace-only blank lines to empty, then split on
+  // Normalize line endings and collapse whitespace-only blank lines to empty, then split on
   // one-or-more blank lines. Using /\n\s*\n/ would eat the leading whitespace of the next
   // stanza (e.g. an indented Chorus first line) and corrupt chorus detection.
   // NOTE: String.prototype.trim() ignores its argument and trims ALL whitespace, so
   // we trim only "\n" via regex to preserve leading indentation inside each stanza.
-  return text
+  const normalized = text
     .replace(/\r\n?/g, "\n")
-    .replace(/\n[ \t]+\n/g, "\n\n")
+    .replace(/\n[ \t]+\n/g, "\n\n");
+
+  // Many source files indent EVERY line (verses included) by a uniform amount
+  // (commonly a single leading space). "Indented line starts" alone would then
+  // mark every stanza as a Chorus and collapse the whole hymn into one section.
+  // Strip the common leading indentation first so only genuinely deeper
+  // (chorus) stanzas keep leading whitespace.
+  const lines = normalized.split("\n");
+  let commonIndent = Infinity;
+  for (const l of lines) {
+    if (l.trim().length === 0) continue;
+    const leading = /^[ \t]*/.exec(l);
+    const width = leading ? leading[0].length : 0;
+    if (width < commonIndent) commonIndent = width;
+  }
+  const strip = Number.isFinite(commonIndent) ? commonIndent : 0;
+  const dedented = lines
+    .map((l) => (l.trim().length === 0 ? l : l.slice(strip)))
+    .join("\n");
+
+  return dedented
     .split(/\n{2,}/)
     .map((s) => s.replace(/^\n+/, "").replace(/\n+$/, ""))
     .filter((s) => s.trim().length > 0);

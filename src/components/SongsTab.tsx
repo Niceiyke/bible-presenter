@@ -79,7 +79,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
         invoke<Song[]>("get_hymn_library"),
       ]);
       setSongs(s);
-      setHymnLibrary(h);
+      setHymnLibrary(h.map(normalizeSong));
     } catch (err: any) {
       setBackendError(`Songs failed to load: ${err?.message ?? err}`);
     } finally {

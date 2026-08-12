@@ -236,6 +236,33 @@ export function buildArrangementStepsFromSections(sections: LyricSection[]): Son
   return out;
 }
 
+/**
+ * Keep an arrangement in sync with structural section edits.
+ *
+ * Returns the arrangement with steps for deleted sections removed and newly
+ * added sections appended at the end, so a song always plays every verse.
+ * Pure lyric/label edits (same id set) return the arrangement unchanged,
+ * meaning the operator's deliberate custom order is never clobbered by typing
+ * in a textarea.
+ */
+export function syncArrangementForSections(
+  current: SongArrangementStep[] | undefined,
+  oldSections: LyricSection[],
+  newSections: LyricSection[],
+): SongArrangementStep[] {
+  const oldIds = new Set(oldSections.filter((s) => s.id).map((s) => s.id!));
+  const newIds = new Set(newSections.filter((s) => s.id).map((s) => s.id!));
+  const structuralChange =
+    oldIds.size !== newIds.size || [...oldIds].some((id) => !newIds.has(id));
+  if (!structuralChange) return current ?? [];
+  const kept = (current ?? []).filter((s) => newIds.has(s.section_id));
+  const inSteps = new Set(kept.map((s) => s.section_id));
+  const added = newSections
+    .filter((s) => s.id && !inSteps.has(s.id))
+    .map((s) => ({ section_id: s.id! }));
+  return [...kept, ...added];
+}
+
 /** Validation result for the song editor (`SongEditorModal`). */
 export interface SongValidation {
   ok: boolean;

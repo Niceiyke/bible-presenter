@@ -12,10 +12,11 @@ import {
   songNeedsMetadata,
   splitLyricLines,
   buildArrangementStepsFromSections,
+  syncArrangementForSections,
   songValidate,
   SONG_SCHEMA_VERSION,
 } from "../song";
-import type { Song, DisplayItem } from "../../types";
+import type { Song, LyricSection, DisplayItem } from "../../types";
 
 const mkSong = (over: Partial<Song> = {}): Song => ({
   id: "s1",
@@ -121,6 +122,48 @@ describe("getSongSequence", () => {
     const seq = getSongSequence(song);
     expect(seq[0].id).toBe(seq[2].id);
     expect(seq[0].label).toBe("Chorus");
+  });
+});
+
+describe("hymn-style songs (no ids, legacy arrangement)", () => {
+  // Hymns from the bundled library ship without section ids or
+  // arrangement_steps; they rely on the legacy label `arrangement`. Once
+  // normalized, the full play order (including repeated choruses) must be
+  // recognized instead of only the natural section order.
+  const hymn: Song = {
+    id: "hymn-all-your-anxiety",
+    title: "All Your Anxiety",
+    sections: [
+      { label: "Verse 1", lines: ["Is there a heart o'er-bound by sorrow?"] },
+      { label: "Chorus", lines: ["All your anxiety, all your care"] },
+      { label: "Verse 2", lines: ["No other friend so keen to help you"] },
+      { label: "Verse 3", lines: ["Come then at once--delay no longer!"] },
+    ],
+    arrangement: ["Verse 1", "Chorus", "Verse 2", "Chorus", "Verse 3", "Chorus"],
+    style: "FullSlide",
+  };
+
+  it("normalizes sections and preserves the full arrangement order", () => {
+    const n = normalizeSong(hymn);
+    expect(n.arrangement_steps).toHaveLength(6);
+    const seq = getSongSequence(n);
+    expect(seq.map(s => s.label)).toEqual(["Verse 1", "Chorus", "Verse 2", "Chorus", "Verse 3", "Chorus"]);
+  });
+
+  it("resolves every arrangement step before normalizing or fallback", () => {
+    // Regression: an un-normalized hymn must not silently clamp to the first
+    // section once normalized — every arranged verse appears in sequence.
+    const n = normalizeSong(hymn);
+    expect(getSongSequence(n).length).toBe(6);
+    expect(getSongSequence(n)[2].label).toBe("Verse 2");
+    expect(getSongSequence(n)[4].label).toBe("Verse 3");
+  });
+
+  it("builds display items for later steps of the arrangement", () => {
+    const n = normalizeSong(hymn);
+    const item = buildSongDisplayItem(n, 4) as Extract<DisplayItem, { type: "Song" }>;
+    expect(item.data.section_label).toBe("Verse 3");
+    expect(item.data.total_slides).toBe(6);
   });
 });
 
@@ -301,6 +344,52 @@ describe("buildArrangementStepsFromSections", () => {
   it("skips sections without an id", () => {
     const steps = buildArrangementStepsFromSections([{ label: "X", lines: ["y"] }]);
     expect(steps).toEqual([]);
+  });
+});
+
+describe("syncArrangementForSections", () => {
+  const v1 = { id: "v1", label: "Verse 1", lines: ["a"] };
+  const v2 = { id: "v2", label: "Verse 2", lines: ["b"] };
+  const c = { id: "c", label: "Chorus", lines: ["d"] };
+
+  it("appends newly added sections so every verse plays", () => {
+    // Regression: adding Verse 2 + Chorus to a new song must include them in
+    // the arrangement, not leave the sequence stuck on the first section.
+    const current = [{ section_id: "v1" }];
+    const next = syncArrangementForSections(current, [v1], [v1, v2, c]);
+    expect(next.map((s) => s.section_id)).toEqual(["v1", "v2", "c"]);
+  });
+
+  it("leaves the arrangement alone on a pure lyric/label edit", () => {
+    const current = [
+      { section_id: "v1" },
+      { section_id: "c" },
+      { section_id: "v1" },
+    ];
+    const edited: LyricSection[] = [
+      { ...v1, lines: ["NEW LINE"] },
+      { ...v2 },
+      { ...c },
+    ];
+    expect(syncArrangementForSections(current, [v1, c, v2], edited)).toEqual(current);
+  });
+
+  it("drops steps pointing at deleted sections", () => {
+    const current = [
+      { section_id: "v1" },
+      { section_id: "c" },
+      { section_id: "v2" },
+      { section_id: "c" },
+    ];
+    const next = syncArrangementForSections(current, [v1, c, v2], [v1, c]);
+    expect(next.map((s) => s.section_id)).toEqual(["v1", "c", "c"]);
+  });
+
+  it("returns an empty arrangement when starting from undefined", () => {
+    expect(syncArrangementForSections(undefined, [v1], [v1, v2])).toEqual([
+      { section_id: "v1" },
+      { section_id: "v2" },
+    ]);
   });
 });
 

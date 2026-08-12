@@ -74,7 +74,7 @@ describe("SongSectionEditorList", () => {
     expect((onChange.mock.calls[0][0] as LyricSection[])[0].lines).toEqual(["keep"]);
   });
 
-  it("duplicates a section as a new section without copying the id", () => {
+  it("duplicates a section as a new section with a fresh id", () => {
     const onChange = vi.fn();
     render(
       <SongSectionEditorList
@@ -86,8 +86,39 @@ describe("SongSectionEditorList", () => {
     const next = onChange.mock.calls[0][0] as LyricSection[];
     expect(next).toHaveLength(2);
     expect(next[0].id).toBe("orig");
-    expect(next[1].id).toBeUndefined();
+    expect(next[1].id).toBeTruthy();
+    expect(next[1].id).not.toBe("orig");
     expect(next[1].lines).toEqual(["line"]);
+  });
+
+  it("every added section gets a stable id so it can join the arrangement", () => {
+    const onChange = vi.fn();
+    render(
+      <SongSectionEditorList
+        sections={[section("a", "Verse", ["1"])]}
+        onChange={onChange}
+      />,
+    );
+    fireEvent.click(screen.getByText("Add section"));
+    const next = onChange.mock.calls[0][0] as LyricSection[];
+    expect(next).toHaveLength(2);
+    expect(next[0].id).toBe("a");
+    expect(next[1].id).toBeTruthy();
+    expect(next[1].label).toBe("Verse");
+    expect(next[1].lines).toEqual([""]);
+  });
+
+  it("adding a section does not change the ids of existing sections", () => {
+    const onChange = vi.fn();
+    render(
+      <SongSectionEditorList
+        sections={[section("a", "Verse", ["1"]), section("b", "Chorus", ["2"])]}
+        onChange={onChange}
+      />,
+    );
+    fireEvent.click(screen.getByText("Add section"));
+    const next = onChange.mock.calls[0][0] as LyricSection[];
+    expect(next.map((s) => s.id)).toEqual(["a", "b", expect.anything()]);
   });
 
   it("reorders source sections without touching arrangement steps (editor-only)", () => {

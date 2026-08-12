@@ -24,6 +24,9 @@ import { getSongSequence } from "../utils/song";
 export interface ItemLookup {
   studioSlides: Record<string, CustomSlide[]>;
   songs: Song[];
+  /** Hymn-library songs — navigation must resolve live hymns even though
+   *  they are not part of the operator's saved `songs` collection. */
+  hymns: Song[];
   nextVerse: Verse | null;
   verseSplits: Record<string, Verse[]>;
   verseSplitThreshold: number;
@@ -60,6 +63,14 @@ const verseKey = (v: Verse, threshold: number) =>
 
 function songFlatSections(song: Song): { label: string; lines: string[] }[] {
   return getSongSequence(song);
+}
+
+/** Find a song by id across both the user collection and the hymn library. */
+function lookupSong(lookup: ItemLookup, id: string): Song | undefined {
+  return (
+    lookup.songs.find((s) => s.id === id) ??
+    (lookup.hymns ?? []).find((s) => s.id === id)
+  );
 }
 
 // ─── Verse ────────────────────────────────────────────────────────────────
@@ -184,7 +195,7 @@ const songKind: ItemKind<Extract<DisplayItem, { type: "Song" }>> = {
     </p>
   ),
   nextLive: (i, lookup) => {
-    const song = lookup.songs.find((s) => s.id === i.data.song_id);
+    const song = lookupSong(lookup, i.data.song_id);
     if (!song) return null;
     const flat = songFlatSections(song);
     const idx = i.data.slide_index + 1;
@@ -194,7 +205,7 @@ const songKind: ItemKind<Extract<DisplayItem, { type: "Song" }>> = {
     return null;
   },
   nav: (i, lookup) => {
-    const song = lookup.songs.find((s) => s.id === i.data.song_id);
+    const song = lookupSong(lookup, i.data.song_id);
     if (!song) return { prev: null, next: null, first: null, last: null };
     const flat = songFlatSections(song);
     if (flat.length === 0) return { prev: null, next: null, first: null, last: null };

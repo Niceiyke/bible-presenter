@@ -26,7 +26,7 @@ export function useKeyboardShortcuts(props: Props): void {
     setActiveTab, setBottomDeckOpen, bottomDeckOpen,
     showShortcuts, setShowShortcuts,
     outputVisible, setOutputVisible,
-    songs, scheduleEntries, activeScheduleIdx, setActiveScheduleIdx,
+    songs, hymnLibrary, scheduleEntries, activeScheduleIdx, setActiveScheduleIdx,
     setBackendError,
   } = useAppStore();
 
@@ -61,13 +61,13 @@ export function useKeyboardShortcuts(props: Props): void {
         case "F9": setActiveTab("settings"); break;
         case "n": if (nextVerse) { const it: DisplayItem = { type: "Verse", data: nextVerse }; if (e.ctrlKey) sendLive(it); else stageItem(it); } break;
         case "ArrowRight": {
-          const lookup: ItemLookup = { studioSlides, songs, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold };
+          const lookup: ItemLookup = { studioSlides, songs, hymns: hymnLibrary, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold };
           const nav = liveItem ? itemNav(liveItem, lookup) : null;
           if (nav?.next) sendLive(nav.next);
           break;
         }
         case "ArrowLeft": {
-          const lookup: ItemLookup = { studioSlides, songs, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold };
+          const lookup: ItemLookup = { studioSlides, songs, hymns: hymnLibrary, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold };
           const nav = liveItem ? itemNav(liveItem, lookup) : null;
           if (nav?.prev) sendLive(nav.prev);
           break;
@@ -128,13 +128,13 @@ export function useKeyboardShortcuts(props: Props): void {
           break;
         }
         case "Home": {
-          const lookup: ItemLookup = { studioSlides, songs, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold };
+          const lookup: ItemLookup = { studioSlides, songs, hymns: hymnLibrary, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold };
           const nav = liveItem ? itemNav(liveItem, lookup) : null;
           if (nav?.first) { e.preventDefault(); sendLive(nav.first); }
           break;
         }
         case "End": {
-          const lookup: ItemLookup = { studioSlides, songs, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold };
+          const lookup: ItemLookup = { studioSlides, songs, hymns: hymnLibrary, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold };
           const nav = liveItem ? itemNav(liveItem, lookup) : null;
           if (nav?.last) { e.preventDefault(); sendLive(nav.last); }
           break;

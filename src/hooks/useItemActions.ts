@@ -30,7 +30,7 @@ export function useItemActions() {
     setActiveScheduleIdx,
     services, setServices,
     media, setMedia,
-    songs, studioSlides,
+    songs, hymnLibrary, studioSlides,
     setToast, setPropItems, propItems,
     setBackendError, setBusyAction,
     scenes, setScenes,
@@ -47,10 +47,11 @@ export function useItemActions() {
   const buildLookup = useCallback((): ItemLookup => ({
     studioSlides,
     songs,
+    hymns: hymnLibrary,
     nextVerse,
     verseSplits: verseSplitsRef.current as any,
     verseSplitThreshold: settings.verse_split_threshold,
-  }), [studioSlides, songs, nextVerse, settings.verse_split_threshold]);
+  }), [studioSlides, songs, hymnLibrary, nextVerse, settings.verse_split_threshold]);
 
   const updateSettings = useCallback(async (next: PresentationSettings) => {
     const prev = useAppStore.getState().settings;

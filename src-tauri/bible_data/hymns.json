@@ -1186,16 +1186,72 @@
     "title": "Will Your Anchor Hold",
     "sections": [
       {
-        "label": "Chorus",
+        "label": "Verse 1",
         "lines": [
           "Will your anchor hold in the storms of life?",
           "When the clouds unfold their wings of strife;",
           "When the strong tides lift and the cables strain,",
           "Will your anchor drift, or firm remain?"
         ]
+      },
+      {
+        "label": "Chorus",
+        "lines": [
+          "We have an anchor that keeps the soul",
+          "Steadfast and sure while the billows roll:",
+          "Fasten'd to the Rock which cannot move,",
+          "Grounded firm and deep in the Saviour's love!"
+        ]
+      },
+      {
+        "label": "Verse 2",
+        "lines": [
+          "It is safely moored 'twill the storms withstand,",
+          "For 'tis well secured by the Saviour's hand;",
+          "And the cables passed from His heart to mine,",
+          "Can defy the blast through strength divine."
+        ]
+      },
+      {
+        "label": "Verse 3",
+        "lines": [
+          "It will firmly hold in the straits of fear,",
+          "When the breakers have told the reef is near,",
+          "Though the tempest rave and the wild winds blow,",
+          "Not an angry wave shall our bark o'erflow."
+        ]
+      },
+      {
+        "label": "Verse 4",
+        "lines": [
+          "It will surely hold in the floods of death,",
+          "When the waters cold, chill our latest breath,",
+          "On the rising tide it can never fail,",
+          "While our hopes abide within the veil!"
+        ]
+      },
+      {
+        "label": "Verse 5",
+        "lines": [
+          "When our eyes behold, through the gathering night",
+          "The city of gold, our harbour bright,",
+          "We shall anchor fast by the heavenly shore,",
+          "With the storms all past for evermore."
+        ]
       }
     ],
-    "arrangement": [],
+    "arrangement": [
+      "Verse 1",
+      "Chorus",
+      "Verse 2",
+      "Chorus",
+      "Verse 3",
+      "Chorus",
+      "Verse 4",
+      "Chorus",
+      "Verse 5",
+      "Chorus"
+    ],
     "style": "FullSlide"
   },
   {

@@ -4,6 +4,7 @@ import { listen, emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppStore } from "../store";
 import { stableId } from "../utils";
+import { normalizeSong } from "../utils/song";
 import {
   MediaItem, Song, LowerThirdTemplate,
   PresentationSettings, PropItem, ServiceMeta,
@@ -80,7 +81,10 @@ export function useAppInitialization() {
       const scheduleItems = Array.isArray(scheduleRes?.items) ? scheduleRes.items : [];
       setScheduleEntries(scheduleItems.map((e: any) => ({ id: e.id || stableId(), item: e.item ?? e })));
       setSongs(songsRes);
-      setHymnLibrary(hymnLibraryRes);
+      // Hymns ship without section ids / arrangement_steps. Normalize so
+      // every consumer (sequence, live nav, lower third) sees the full
+      // arrangement order instead of falling back to natural section order.
+      setHymnLibrary(hymnLibraryRes.map(normalizeSong));
 
       const savedTpls = ltRes.length ? ltRes : [useAppStore.getState().ltTemplate];
       setLtSavedTemplates(savedTpls);

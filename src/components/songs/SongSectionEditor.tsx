@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { ChevronDown, ChevronRight, Copy, Trash2, ArrowUp, ArrowDown, Plus } from "lucide-react";
 import type { LyricSection } from "../../types";
 import { splitLyricLines } from "../../utils/song";
+import { stableId } from "../../utils";
 
 interface SongSectionEditorListProps {
   sections: LyricSection[];
@@ -42,7 +43,7 @@ export function SongSectionEditorList({ sections, onChange }: SongSectionEditorL
     })());
   const duplicate = (i: number) =>
     onChange((() => {
-      const copy = { ...sections[i], id: undefined, label: `${sections[i].label} (copy)` };
+      const copy = { ...sections[i], id: stableId(), label: `${sections[i].label} (copy)` };
       const next = [...sections];
       next.splice(i + 1, 0, copy);
       return next;
@@ -51,7 +52,9 @@ export function SongSectionEditorList({ sections, onChange }: SongSectionEditorL
   const addSection = () =>
     onChange([
       ...sections,
-      { label: "Verse", lines: [""] },
+      // New sections need a stable id immediately so the arrangement editor
+      // can reference them and the sequence can include them.
+      { id: stableId(), label: "Verse", lines: [""] },
     ]);
 
   const iconBtn = (label: string, icon: React.ReactNode, onClick: () => void, disabled?: boolean) => (
