@@ -1,7 +1,15 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { ChevronDown, ChevronRight, Music2 } from "lucide-react";
 import { FONTS } from "../../types";
-import type { Song } from "../../types";
-import { Button, Modal } from "../ui";
+import type { Song, SongSlideData, SongStyle } from "../../types";
+import { normalizeSong, getSongSequence, songValidate } from "../../utils/song";
+import { useAppStore } from "../../store";
+import { useT } from "../../i18n";
+import { Button, Modal, SaveStatus, type SaveStatusState } from "../ui";
+import { SongMetadataForm } from "./SongMetadataForm";
+import { SongSectionEditorList } from "./SongSectionEditor";
+import { SongArrangementEditor } from "./SongArrangementEditor";
+import { SongSlideRenderer, LowerThirdOverlay } from "../shared/Renderers";
 
 interface SongEditorModalProps {
   /** The song being edited (or a new-song stub). Resets the internal draft. */
@@ -16,245 +24,285 @@ const newSong = (): Song => ({
   id: "",
   title: "",
   author: "",
-  sections: [{ label: "Verse 1", lines: [""] }],
+  sections: [{ label: "Verse", lines: [""] }],
   arrangement: [],
   style: "LowerThird",
 });
 
-/** Song metadata + sections + styling + arrangement editor. Keeps its own
- *  local draft separate from the persisted library so Cancel never mutates
- *  saved songs and Save failure keeps the draft. */
+/** Phase 5: the song editor — metadata form, multiline section editor,
+ *  separate arrangement-step editor, display defaults, a live 16:9 preview
+ *  (full-screen and overlay), explicit Save/Cancel with unsaved-change
+ *  confirmation, and validation that prevents saving an empty song. */
 export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps) {
-  const [draft, setDraft] = useState<Song>(() => (song ? JSON.parse(JSON.stringify(song)) : newSong()));
-  const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState<Song>(() => normalizeSong(song ? JSON.parse(JSON.stringify(song)) : newSong()));
+  const [original] = useState<Song>(() => normalizeSong(song ? JSON.parse(JSON.stringify(song)) : newSong()));
+  const [saveState, setSaveState] = useState<SaveStatusState>("idle");
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [previewMode, setPreviewMode] = useState<"full" | "overlay">("full");
+  const [previewIndex, setPreviewIndex] = useState(0);
+  const [showDefaults, setShowDefaults] = useState(false);
+  const ltTemplate = useAppStore((s) => s.ltTemplate);
+  const t = useT();
 
   useEffect(() => {
-    if (song) setDraft(JSON.parse(JSON.stringify(song)));
-    else setDraft(newSong());
+    if (song) setDraft(normalizeSong(JSON.parse(JSON.stringify(song))));
+    else setDraft(normalizeSong(newSong()));
   }, [song]);
 
-  const patch = (next: Song) => setDraft(next);
+  const dirty = useMemo(
+    () => JSON.stringify(draft) !== JSON.stringify(original),
+    [draft, original],
+  );
+
+  useEffect(() => {
+    if (dirty && saveState !== "saving" && saveState !== "failed") setSaveState("unsaved");
+    else if (!dirty && saveState !== "saving" && saveState !== "failed") setSaveState("idle");
+  }, [dirty, saveState]);
+
+  const sequence = useMemo(() => getSongSequence(draft), [draft]);
+  const validation = useMemo(() => songValidate(draft), [draft]);
+  const previewClamped = Math.max(0, Math.min(previewIndex, sequence.length - 1));
+  const previewSection = sequence[previewClamped];
+  const previewLabel = previewSection
+    ? `${previewSection.label} (${previewClamped + 1} of ${sequence.length || 1})`
+    : "No sections";
+
+  const patch = (next: Partial<Song>) => setDraft((d) => ({ ...d, ...next }));
+  const setSections = (next: Song["sections"]) => setDraft((d) => ({ ...d, sections: next }));
+  const setArrangement = (steps: Song["arrangement_steps"]) =>
+    setDraft((d) => ({ ...d, arrangement_steps: steps }));
 
   const handleSave = async () => {
-    setSaving(true);
+    setSaveState("saving");
     try {
       await onSave(draft);
+      setSaveState("saved");
     } catch {
-      // Save failure is surfaced by the caller via onSave; keep the modal
-      // open with the draft intact so the operator can retry.
-    } finally {
-      setSaving(false);
+      setSaveState("failed");
     }
   };
 
-  const updateSection = (si: number, next: Song["sections"][number]) => {
-    const s = [...draft.sections];
-    s[si] = next;
-    patch({ ...draft, sections: s });
+  const requestClose = () => {
+    if (dirty && saveState !== "saving") setConfirmDiscard(true);
+    else onClose();
   };
 
-  const footer = (
+  const previewData: SongSlideData = useMemo(() => ({
+    song_id: draft.id,
+    title: draft.title || "Untitled song",
+    author: draft.author,
+    section_label: previewSection?.label ?? "",
+    lines: previewSection?.lines ?? [],
+    slide_index: previewClamped,
+    total_slides: sequence.length,
+    style: draft.style,
+    font: draft.font,
+    font_size: draft.font_size,
+    font_weight: draft.font_weight,
+    color: draft.color,
+  }), [draft, previewSection, previewClamped, sequence.length]);
+
+  const overlayData = previewSection
+    ? {
+        kind: "Lyrics" as const,
+        data: {
+          line1: previewSection.lines[0] ?? "",
+          line2: previewSection.lines[1],
+          section_label: previewSection.label,
+        },
+      }
+    : { kind: "Nameplate" as const, data: { name: draft.title || "Untitled song", title: draft.author } };
+
+  const footer = confirmDiscard ? (
     <>
-      <Button variant="bare" onClick={onClose} disabled={saving}>Cancel</Button>
-      <Button variant="primary" onClick={handleSave} loading={saving}>Save Song</Button>
+      <span className="text-[11px] text-state-warning font-bold mr-auto">{t("songs.editor.discardConfirm")}</span>
+      <Button variant="bare" size="md" onClick={() => setConfirmDiscard(false)}>{t("songs.editor.keepEditing")}</Button>
+      <Button variant="live" size="md" onClick={onClose}>{t("songs.editor.discard")}</Button>
+    </>
+  ) : (
+    <>
+      <SaveStatus state={saveState} />
+      <Button variant="bare" size="md" onClick={requestClose} disabled={saveState === "saving"}>{t("songs.editor.cancel")}</Button>
+      <Button
+        variant="primary"
+        size="md"
+        onClick={handleSave}
+        loading={saveState === "saving"}
+        disabled={!validation.ok || saveState === "saving"}
+      >
+        {t("songs.editor.save")}
+      </Button>
     </>
   );
+
+  const sequenceLength = sequence.length;
 
   return (
     <Modal
       open={!!song}
-      onClose={onClose}
-      title={draft.id ? "Edit Song" : "New Song"}
+      onClose={requestClose}
+      title={draft.id ? t("songs.editor.editTitle") : t("songs.editor.newTitle")}
+      headerRight={confirmDiscard ? undefined : <SaveStatus state={saveState} />}
       footer={footer}
-      maxWidth="max-w-2xl"
-      maxHeightClass="max-h-[90vh]"
+      maxWidth="max-w-4xl"
+      maxHeightClass="max-h-[92vh]"
     >
-      <div className="flex flex-col gap-4 p-4">
-        <div className="flex gap-2">
-          <input
-            className="flex-1 bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700"
-            placeholder="Song title"
-            value={draft.title}
-            onChange={(e) => patch({ ...draft, title: e.target.value })}
-          />
-          <input
-            className="flex-1 bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700"
-            placeholder="Author (optional)"
-            value={draft.author || ""}
-            onChange={(e) => patch({ ...draft, author: e.target.value })}
-          />
-          <select
-            className="bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700 focus:outline-none"
-            value={draft.style || "LowerThird"}
-            onChange={(e) => patch({ ...draft, style: e.target.value as any })}
-          >
-            <option value="LowerThird">Lower Third</option>
-            <option value="FullSlide">Full Slide (Hymn Style)</option>
-          </select>
-        </div>
+      <div className="grid md:grid-cols-[1fr_minmax(260px,360px)] gap-4 p-4">
+        {/* ── Left: editor ────────────────────────────────────────────── */}
+        <div className="flex flex-col gap-4 min-w-0">
+          <SongMetadataForm draft={draft} onChange={patch} />
 
-        {draft.sections.map((section, si) => (
-          <div key={si} className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 flex flex-col gap-2">
-            <div className="flex gap-2 items-center">
-              <input
-                className="flex-1 bg-slate-800 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600 font-bold"
-                value={section.label}
-                onChange={(e) => updateSection(si, { ...section, label: e.target.value })}
-              />
-              <button
-                onClick={() => patch({ ...draft, sections: draft.sections.filter((_, i) => i !== si) })}
-                className="text-red-500 hover:text-red-300 text-xs font-bold px-1"
-              >✕</button>
-            </div>
-            {section.lines.map((line, li) => (
-              <div key={li} className="flex gap-1">
-                <input
-                  className="flex-1 bg-slate-900 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700"
-                  value={line}
-                  placeholder={`Line ${li + 1}`}
-                  onChange={(e) => {
-                    const lines = [...section.lines];
-                    lines[li] = e.target.value;
-                    updateSection(si, { ...section, lines });
-                  }}
-                />
-                <button
-                  onClick={() => updateSection(si, {
-                    ...section,
-                    lines: section.lines.filter((_, i) => i !== li),
-                  })}
-                  className="text-slate-600 hover:text-red-400 text-xs px-1"
-                >✕</button>
-              </div>
-            ))}
+          <div className="flex flex-col gap-1.5">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-console-text-subtle">{t("songs.editor.sections")}</p>
+            <SongSectionEditorList sections={draft.sections} onChange={setSections} />
+          </div>
+
+          <SongArrangementEditor draft={draft} onChange={setArrangement} />
+
+          <div className="border border-console-border rounded-lg">
             <button
-              onClick={() => updateSection(si, { ...section, lines: [...section.lines, ""] })}
-              className="text-[10px] text-slate-500 hover:text-amber-400 font-bold uppercase self-start"
-            >+ Add Line</button>
-          </div>
-        ))}
-        <button
-          onClick={() => patch({ ...draft, sections: [...draft.sections, { label: `Section ${draft.sections.length + 1}`, lines: [""] }] })}
-          className="text-[10px] font-bold uppercase text-slate-500 hover:text-amber-400 border border-slate-700 hover:border-amber-500 rounded-lg py-2"
-        >+ Add Section</button>
-
-        <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-3 flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Song Styling</p>
-            {(draft.font || draft.font_size || draft.font_weight || draft.color) && (
-              <button
-                onClick={() => patch({ ...draft, font: undefined, font_size: undefined, font_weight: undefined, color: undefined })}
-                className="text-[9px] font-bold uppercase text-slate-500 hover:text-red-400"
-              >Reset Style</button>
-            )}
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] text-slate-500 uppercase font-bold">Font Family</label>
-              <select
-                className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700 focus:outline-none"
-                value={draft.font || ""}
-                onChange={(e) => patch({ ...draft, font: e.target.value || undefined })}
-              >
-                <option value="">Default (Theme)</option>
-                {FONTS.map(f => <option key={f} value={f}>{f}</option>)}
-              </select>
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] text-slate-500 uppercase font-bold">Font Size (pt)</label>
-              <input
-                type="number"
-                className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700 focus:outline-none"
-                value={draft.font_size || ""}
-                placeholder="Default"
-                onChange={(e) => {
-                  const val = parseInt(e.target.value);
-                  patch({ ...draft, font_size: isNaN(val) ? undefined : val });
-                }}
-              />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] text-slate-500 uppercase font-bold">Font Weight</label>
-              <select
-                className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700 focus:outline-none"
-                value={draft.font_weight || ""}
-                onChange={(e) => patch({ ...draft, font_weight: e.target.value || undefined })}
-              >
-                <option value="">Default</option>
-                <option value="normal">Normal</option>
-                <option value="bold">Bold</option>
-                <option value="100">Thin (100)</option>
-                <option value="300">Light (300)</option>
-                <option value="500">Medium (500)</option>
-                <option value="700">Bold (700)</option>
-                <option value="900">Black (900)</option>
-              </select>
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] text-slate-500 uppercase font-bold">Text Color</label>
-              <div className="flex gap-2">
-                <input
-                  type="color"
-                  className="w-8 h-8 bg-transparent border-none cursor-pointer rounded-lg overflow-hidden"
-                  value={draft.color || "#ffffff"}
-                  onChange={(e) => patch({ ...draft, color: e.target.value })}
-                />
-                <input
-                  className="flex-1 bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700 focus:outline-none"
-                  value={draft.color || ""}
-                  placeholder="Default"
-                  onChange={(e) => patch({ ...draft, color: e.target.value || undefined })}
-                />
+              type="button"
+              onClick={() => setShowDefaults((v) => !v)}
+              className="w-full flex items-center gap-2 px-3 h-9 text-left hover:bg-console-surface-raised rounded-lg transition-all focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-[var(--color-focus-ring)]"
+              aria-expanded={showDefaults}
+            >
+              {showDefaults ? <ChevronDown size={14} className="text-console-text-subtle" /> : <ChevronRight size={14} className="text-console-text-subtle" />}
+              <span className="text-[10px] font-bold uppercase tracking-wider text-console-text-subtle">{t("songs.editor.displayDefaults")}</span>
+            </button>
+            {showDefaults && (
+              <div className="grid grid-cols-2 gap-3 p-3 border-t border-console-border">
+                <div className="flex flex-col gap-1 col-span-2">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-console-text-subtle">Default output mode</label>
+                  <div className="flex bg-console-surface-raised border border-console-border rounded-lg p-0.5 w-fit">
+                    {(["LowerThird", "FullSlide"] as SongStyle[]).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => patch({ style: m })}
+                        className={`h-8 px-3 text-[10px] font-bold rounded-md transition-all focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)] ${
+                          (draft.style ?? "LowerThird") === m
+                            ? "bg-console-surface-strong text-action-primary"
+                            : "text-console-text-subtle hover:text-console-text"
+                        }`}
+                        aria-pressed={(draft.style ?? "LowerThird") === m}
+                      >
+                        {m === "FullSlide" ? t("songs.use.fullScreen") : t("songs.use.lyricsOverlay")}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-console-text-subtle">Font</label>
+                  <select
+                    className="h-9 rounded-md bg-console-surface-raised border border-console-border text-console-text text-xs px-2 focus:border-console-border-strong"
+                    value={draft.font || ""}
+                    onChange={(e) => patch({ font: e.target.value || undefined })}
+                  >
+                    <option value="">Theme default</option>
+                    {FONTS.map((f) => <option key={f} value={f}>{f}</option>)}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-console-text-subtle">Font size (pt)</label>
+                  <input
+                    type="number"
+                    className="h-9 rounded-md bg-console-surface-raised border border-console-border text-console-text text-xs px-2"
+                    value={draft.font_size ?? ""}
+                    placeholder="Default"
+                    onChange={(e) => patch({ font_size: e.target.value === "" ? undefined : Number(e.target.value) })}
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-console-text-subtle">Font weight</label>
+                  <select
+                    className="h-9 rounded-md bg-console-surface-raised border border-console-border text-console-text text-xs px-2"
+                    value={draft.font_weight || ""}
+                    onChange={(e) => patch({ font_weight: e.target.value || undefined })}
+                  >
+                    <option value="">Default</option>
+                    <option value="normal">Normal</option>
+                    <option value="bold">Bold</option>
+                    <option value="500">Medium</option>
+                    <option value="700">Bold (700)</option>
+                    <option value="900">Black</option>
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-console-text-subtle">Text colour</label>
+                  <input
+                    type="color"
+                    className="h-9 w-full rounded-md bg-transparent border border-console-border cursor-pointer"
+                    value={draft.color || "#ffffff"}
+                    onChange={(e) => patch({ color: e.target.value })}
+                  />
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
 
-        <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-3 flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Arrangement</p>
-            {(draft.arrangement ?? []).length > 0 && (
+        {/* ── Right: live preview ──────────────────────────────────────── */}
+        <div className="flex flex-col gap-2 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1 bg-console-surface-raised border border-console-border rounded-lg p-0.5">
               <button
-                onClick={() => patch({ ...draft, arrangement: [] })}
-                className="text-[9px] font-bold uppercase text-slate-500 hover:text-red-400"
-              >Clear</button>
+                type="button"
+                onClick={() => setPreviewMode("full")}
+                className={`h-7 px-2 text-[10px] font-bold rounded-md transition-all focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)] ${
+                  previewMode === "full" ? "bg-console-surface-strong text-action-primary" : "text-console-text-subtle hover:text-console-text"
+                }`}
+                aria-pressed={previewMode === "full"}
+              >
+                Full-screen
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewMode("overlay")}
+                className={`h-7 px-2 text-[10px] font-bold rounded-md transition-all focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)] ${
+                  previewMode === "overlay" ? "bg-console-surface-strong text-action-primary" : "text-console-text-subtle hover:text-console-text"
+                }`}
+                aria-pressed={previewMode === "overlay"}
+              >
+                Overlay
+              </button>
+            </div>
+            <p className="text-[10px] text-console-text-subtle tabular-nums truncate">{previewLabel}</p>
+          </div>
+
+          <div className="relative w-full aspect-video rounded-lg overflow-hidden bg-slate-950 border border-console-border">
+            {previewMode === "full" ? (
+              <div className="absolute inset-0" aria-hidden>
+                <SongSlideRenderer data={previewData} scale={0.28} />
+              </div>
+            ) : (
+              <div className="absolute inset-0" aria-hidden>
+                <LowerThirdOverlay data={overlayData as any} template={ltTemplate} />
+              </div>
+            )}
+            {sequenceLength === 0 && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <p className="text-[10px] text-console-text-subtle italic">{t("songs.editor.noSections")}</p>
+              </div>
             )}
           </div>
-          <p className="text-[10px] text-slate-600">Order sections for playback (repeat chorus, etc.)</p>
-          <div className="flex flex-wrap gap-1.5">
-            {draft.sections.map((sec) => (
-              <button
-                key={sec.label}
-                onClick={() => patch({ ...draft, arrangement: [...(draft.arrangement ?? []), sec.label] })}
-                className="px-2 py-0.5 text-[10px] font-bold rounded bg-slate-700 hover:bg-amber-700 text-slate-300 hover:text-white border border-slate-600 hover:border-amber-500 transition-all"
-              >+ {sec.label}</button>
-            ))}
+
+          <div className="flex gap-1.5">
+            <Button variant="ghost" size="md" onClick={() => setPreviewIndex((i) => Math.max(0, i - 1))} disabled={previewClamped <= 0}>{t("songs.editor.prev")}</Button>
+            <Button variant="ghost" size="md" onClick={() => setPreviewIndex((i) => Math.min(sequence.length - 1, i + 1))} disabled={previewClamped >= sequence.length - 1}>{t("songs.editor.next")}</Button>
           </div>
-          {(draft.arrangement ?? []).length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mt-1">
-              {(draft.arrangement ?? []).map((label, i) => (
-                <span
-                  key={`${label}-${i}`}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded bg-amber-900/50 text-amber-300 border border-amber-700"
-                >
-                  {i + 1}. {label}
-                  <button
-                    onClick={() => {
-                      const arr = [...(draft.arrangement ?? [])];
-                      arr.splice(i, 1);
-                      patch({ ...draft, arrangement: arr });
-                    }}
-                    className="text-amber-500 hover:text-red-400 ml-0.5"
-                  >×</button>
-                </span>
-              ))}
-            </div>
-          )}
-          {(draft.arrangement ?? []).length === 0 && (
-            <p className="text-[10px] text-slate-600 italic">Using natural section order</p>
-          )}
+          <p className="flex items-center gap-1.5 text-[10px] text-console-text-subtle">
+            <Music2 size={11} /> {t("songs.editor.previewLocal")}
+          </p>
         </div>
       </div>
+
+      {!validation.ok && (
+        <div className="px-4 pb-3 -mt-1">
+          {validation.errors.map((e) => (
+            <p key={e} className="text-[10px] text-state-error font-bold">{e}</p>
+          ))}
+        </div>
+      )}
     </Modal>
   );
 }

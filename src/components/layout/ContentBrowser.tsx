@@ -59,7 +59,9 @@ export function ContentBrowser({
   } = useAppStore();
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+    <div className={activeTab === "lt-designer"
+      ? "flex-1 min-h-0 overflow-hidden"
+      : "flex-1 min-h-0 overflow-y-auto p-4 custom-scrollbar"}>
       <Suspense fallback={null}>
         {activeTab === "bible" && <BibleTab onStage={stageItem} onLive={sendLive} onAddToSchedule={addToSchedule} />}
         {activeTab === "media" && (

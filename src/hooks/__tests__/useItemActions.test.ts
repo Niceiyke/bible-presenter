@@ -223,6 +223,68 @@ describe("useItemActions", () => {
     });
   });
 
+describe("song overlay go-live failures (Phase 6)", () => {
+    const overlayItem = (): DisplayItem => ({
+      type: "Song",
+      data: {
+        song_id: "s1",
+        title: "Song",
+        section_label: "Chorus",
+        lines: ["line one", "line two"],
+        slide_index: 0,
+        total_slides: 2,
+        style: "LowerThird",
+      } as any,
+    });
+
+    it("sendLive does not claim the overlay is visible when show_lower_third fails", async () => {
+      useAppStore.setState({ ltVisible: false });
+      const item = overlayItem();
+      mockInvoke.mockResolvedValueOnce(undefined); // stage_item
+      mockInvoke.mockResolvedValueOnce(item);        // commit_staged
+      mockInvoke.mockRejectedValueOnce(new Error("lt boom")); // show_lower_third
+      const { result } = renderHook(() => useItemActions());
+
+      let ok = false;
+      await act(async () => { ok = await result.current.sendLive(item); });
+
+      expect(ok).toBe(true);
+      // The live item is the committed song, but the overlay flag must NOT
+      // have been flipped on a failed show command.
+      expect(useAppStore.getState().ltVisible).toBe(false);
+      expect(useAppStore.getState().backendError).toContain("Lower-third failed");
+    });
+
+    it("sendLive flips the overlay visible only when show_lower_third succeeds", async () => {
+      useAppStore.setState({ ltVisible: false });
+      const item = overlayItem();
+      mockInvoke.mockResolvedValueOnce(undefined); // stage_item
+      mockInvoke.mockResolvedValueOnce(item);        // commit_staged
+      mockInvoke.mockResolvedValueOnce(undefined);   // show_lower_third
+      const { result } = renderHook(() => useItemActions());
+
+      await act(async () => { await result.current.sendLive(item); });
+
+      expect(useAppStore.getState().ltVisible).toBe(true);
+      expect(useAppStore.getState().ltSongId).toBe("s1");
+      expect(useAppStore.getState().ltMode).toBe("lyrics");
+    });
+
+    it("goLive does not flip the overlay visible when show_lower_third fails", async () => {
+      useAppStore.setState({ ltVisible: false, stagedItem: overlayItem(), liveItem: null });
+      mockInvoke.mockResolvedValueOnce(overlayItem()); // commit_staged
+      mockInvoke.mockRejectedValueOnce(new Error("lt boom")); // show_lower_third
+      const { result } = renderHook(() => useItemActions());
+
+      let ok = true;
+      await act(async () => { ok = await result.current.goLive(); });
+
+      expect(ok).toBe(true);
+      expect(useAppStore.getState().ltVisible).toBe(false);
+      expect(useAppStore.getState().backendError).toContain("Lower-third failed");
+    });
+  });
+
   describe("service persistence", () => {
     it("saves the active service with its schedule entries", async () => {
       const item = makeVerse();

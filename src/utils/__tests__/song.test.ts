@@ -7,6 +7,12 @@ import {
   getNextSongIndex,
   getPreviousSongIndex,
   getSongCounts,
+  songSearchText,
+  searchSongs,
+  songNeedsMetadata,
+  splitLyricLines,
+  buildArrangementStepsFromSections,
+  songValidate,
   SONG_SCHEMA_VERSION,
 } from "../song";
 import type { Song, DisplayItem } from "../../types";
@@ -193,5 +199,125 @@ describe("getSongCounts", () => {
     expect(c.sections).toBe(3);
     expect(c.sequence).toBe(2);
     expect(c.lines).toBe(4);
+  });
+});
+
+describe("songSearchText", () => {
+  it("includes title, author, key, CCLI, labels, and lyrics", () => {
+    const song = mkSong({
+      author: "John Newton",
+      key: "G",
+      ccli: "12345",
+      sections: [
+        { label: "Verse 1", lines: ["Amazing grace"] },
+        { label: "Chorus", lines: ["How sweet the sound"] },
+      ],
+    });
+    const text = songSearchText(song);
+    expect(text).toContain("amazing grace");
+    expect(text).toContain("john newton");
+    expect(text).toContain("g");
+    expect(text).toContain("12345");
+    expect(text).toContain("verse 1");
+    expect(text).toContain("how sweet the sound");
+  });
+});
+
+describe("searchSongs", () => {
+  const songs = [
+    mkSong({ id: "a", title: "Amazing Grace", author: "John Newton", key: "F#", ccli: "111" }),
+    mkSong({
+      id: "b",
+      title: "How Great Thou Art",
+      sections: [{ label: "Verse 1", lines: ["O Lord my God"] }],
+    }),
+  ];
+
+  it("returns the collection unchanged for an empty query", () => {
+    expect(searchSongs(songs, "")).toBe(songs);
+    expect(searchSongs(songs, "   ")).toBe(songs);
+  });
+
+  it("finds by title", () => {
+    expect(searchSongs(songs, "amazing")).toHaveLength(1);
+  });
+
+  it("finds by lyric text", () => {
+    expect(searchSongs(songs, "O Lord my God").map(s => s.id)).toEqual(["b"]);
+  });
+
+  it("finds by author and key", () => {
+    expect(searchSongs(songs, "newton").map(s => s.id)).toEqual(["a"]);
+    expect(searchSongs(songs, "f#").map(s => s.id)).toEqual(["a"]);
+  });
+
+  it("finds by CCLI number", () => {
+    expect(searchSongs(songs, "111").map(s => s.id)).toEqual(["a"]);
+  });
+
+  it("is case-insensitive", () => {
+    expect(searchSongs(songs, "AMAZING GRACE").map(s => s.id)).toEqual(["a"]);
+  });
+});
+
+describe("songNeedsMetadata", () => {
+  it("flags missing author, copyright, or CCLI", () => {
+    expect(songNeedsMetadata(mkSong())).toBe(true);
+    expect(songNeedsMetadata(mkSong({ author: "A", copyright: "C", ccli: "1" }))).toBe(false);
+    expect(songNeedsMetadata(mkSong({ author: "A", copyright: "C" }))).toBe(true);
+  });
+
+  it("ignores a missing key", () => {
+    expect(songNeedsMetadata(mkSong({ author: "A", copyright: "C", ccli: "1", key: undefined }))).toBe(false);
+  });
+});
+
+describe("splitLyricLines", () => {
+  it("preserves line order", () => {
+    expect(splitLyricLines("first\nsecond\nthird")).toEqual(["first", "second", "third"]);
+  });
+
+  it("preserves intentional internal blank lines", () => {
+    expect(splitLyricLines("a\n\nb")).toEqual(["a", "", "b"]);
+  });
+
+  it("trims trailing blank lines", () => {
+    expect(splitLyricLines("a\nb\n  \n\n")).toEqual(["a", "b"]);
+  });
+
+  it("normalizes CRLF and empty input", () => {
+    expect(splitLyricLines("a\r\nb")).toEqual(["a", "b"]);
+    expect(splitLyricLines("")).toEqual([]);
+  });
+});
+
+describe("buildArrangementStepsFromSections", () => {
+  it("references sections by id in natural order", () => {
+    const a = normalizeSong(mkSong());
+    const steps = buildArrangementStepsFromSections(a.sections);
+    expect(steps.map((s) => s.section_id)).toEqual(a.sections.map((s) => s.id));
+  });
+
+  it("skips sections without an id", () => {
+    const steps = buildArrangementStepsFromSections([{ label: "X", lines: ["y"] }]);
+    expect(steps).toEqual([]);
+  });
+});
+
+describe("songValidate", () => {
+  it("flags a missing title", () => {
+    expect(songValidate(mkSong({ title: "  " })).ok).toBe(false);
+  });
+
+  it("flags an empty sections array", () => {
+    expect(songValidate({ ...mkSong(), sections: [] }).ok).toBe(false);
+  });
+
+  it("flags sections with only blank lines", () => {
+    expect(songValidate(mkSong({ sections: [{ label: "V", lines: ["  ", ""] }] })).ok).toBe(false);
+  });
+
+  it("accepts a song with a title and at least one lyric line", () => {
+    expect(songValidate(mkSong()).ok).toBe(true);
   });
 });

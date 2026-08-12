@@ -1,14 +1,15 @@
 {
   "name": "wordlyte",
   "private": true,
-  "version": "1.9.2",
+  "version": "1.9.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "convert-hymns": "node scripts/convert-gospel-hymns.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

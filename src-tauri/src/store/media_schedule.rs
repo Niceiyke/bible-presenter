@@ -246,6 +246,12 @@ pub struct SongSlideData {
     pub lines: Vec<String>,
     pub slide_index: u32,
     pub total_slides: u32,
+    /// Phase 6 (SONG_SYSTEM_MODERNIZATION_PLAN §10/§4.7): the display mode a
+    /// committed song should render in. Survives `stage_item`/`commit_staged`
+    /// so a round-trip never silently drops the full-screen vs overlay
+    /// distinction. Frontend `SongSlideData.style` mirrors this.
+    #[serde(default)]
+    pub style: Option<String>,
     #[serde(default)]
     pub font: Option<String>,
     #[serde(default)]
@@ -510,8 +516,19 @@ impl Default for PresentationSettings {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LyricSection {
+    /// P1: stable section identity referenced by `arrangement_steps`. Optional
+    /// so legacy JSON without ids still deserializes; `normalizeSong`
+    /// backfills one before the next save.
+    #[serde(default)]
+    pub id: Option<String>,
     pub label: String,
     pub lines: Vec<String>,
+}
+
+/// P1: one step in the canonical (id-based) song arrangement.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SongArrangementStep {
+    pub section_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -524,9 +541,20 @@ pub struct Song {
     pub copyright: Option<String>,
     #[serde(default)]
     pub ccli: Option<String>,
+    /// P1: musical key (e.g. "G"). Optional; survives import + save.
+    #[serde(default)]
+    pub key: Option<String>,
     pub sections: Vec<LyricSection>,
+    /// Legacy field. Read during migration and written during the
+    /// compatibility window so old consumers remain loadable.
     #[serde(default)]
     pub arrangement: Vec<String>,
+    /// P1: canonical arrangement as ordered section-id references.
+    #[serde(default)]
+    pub arrangement_steps: Option<Vec<SongArrangementStep>>,
+    /// Optional schema marker for future migrations.
+    #[serde(default)]
+    pub schema_version: Option<u32>,
     #[serde(default)]
     pub style: Option<String>,
     #[serde(default)]
@@ -537,6 +565,139 @@ pub struct Song {
     pub font_weight: Option<String>,
     #[serde(default)]
     pub color: Option<String>,
+}
+
+#[cfg(test)]
+mod song_tests {
+    use super::*;
+
+    const LEGACY_SONG: &str = r#"{
+        "id": "s1",
+        "title": "Amazing Grace",
+        "author": "John Newton",
+        "sections": [
+            { "label": "Verse 1", "lines": ["Amazing grace", "How sweet the sound"] },
+            { "label": "Chorus", "lines": ["Was blind but now I see"] }
+        ],
+        "arrangement": ["Chorus", "Verse 1"]
+    }"#;
+
+    const NEW_SONG: &str = r#"{
+        "id": "s2",
+        "title": "How Great",
+        "author": "Carl Boberg",
+        "key": "G",
+        "sections": [
+            { "id": "sec-a", "label": "Verse 1", "lines": ["O Lord my God"] },
+            { "id": "sec-b", "label": "Chorus", "lines": ["Then sings my soul"] }
+        ],
+        "arrangement": ["Chorus", "Verse 1"],
+        "arrangement_steps": [{ "section_id": "sec-b" }, { "section_id": "sec-a" }],
+        "schema_version": 2
+    }"#;
+
+    #[test]
+    fn legacy_song_json_deserializes_with_optional_fields_defaulted() {
+        let song: Song = serde_json::from_str(LEGACY_SONG).expect("legacy song must load");
+        assert_eq!(song.title, "Amazing Grace");
+        assert_eq!(song.sections.len(), 2);
+        assert!(song.sections[0].id.is_none(), "legacy sections have no id");
+        assert!(song.key.is_none());
+        assert!(song.arrangement_steps.is_none());
+        assert!(song.schema_version.is_none());
+    }
+
+    #[test]
+    fn new_song_json_round_trips_id_and_arrangement_steps() {
+        let song: Song = serde_json::from_str(NEW_SONG).expect("new song must load");
+        assert_eq!(song.sections[0].id.as_deref(), Some("sec-a"));
+        assert_eq!(song.key.as_deref(), Some("G"));
+        let steps = song.arrangement_steps.as_ref().expect("steps present");
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].section_id, "sec-b");
+        assert_eq!(song.schema_version, Some(2));
+
+        let json = serde_json::to_string(&song).expect("serialize");
+        let again: Song = serde_json::from_str(&json).expect("round trip");
+        assert_eq!(again.sections[0].id.as_deref(), Some("sec-a"));
+        assert_eq!(again.arrangement_steps.as_ref().unwrap()[1].section_id, "sec-a");
+    }
+
+    #[test]
+    fn save_round_trip_preserves_legacy_arrangement_field() {
+        let song: Song = serde_json::from_str(LEGACY_SONG).unwrap();
+        let json = serde_json::to_string(&song).unwrap();
+        let again: Song = serde_json::from_str(&json).unwrap();
+        assert_eq!(again.arrangement, vec!["Chorus", "Verse 1"]);
+    }
+
+    #[test]
+    fn song_slide_data_round_trips_full_slide_style() {
+        let data = SongSlideData {
+            song_id: "s1".into(),
+            title: "Amazing Grace".into(),
+            author: Some("Newton".into()),
+            section_label: "Verse 1".into(),
+            lines: vec!["Amazing grace".into()],
+            slide_index: 0,
+            total_slides: 3,
+            style: Some("FullSlide".into()),
+            font: None,
+            font_size: None,
+            font_weight: None,
+            color: None,
+        };
+        let json = serde_json::to_string(&data).unwrap();
+        let again: SongSlideData = serde_json::from_str(&json).unwrap();
+        assert_eq!(again.style.as_deref(), Some("FullSlide"));
+    }
+
+    #[test]
+    fn song_slide_data_round_trips_lower_third_style() {
+        let data = SongSlideData {
+            song_id: "s1".into(),
+            title: "Amazing Grace".into(),
+            author: None,
+            section_label: "Chorus".into(),
+            lines: vec!["line".into()],
+            slide_index: 1,
+            total_slides: 4,
+            style: Some("LowerThird".into()),
+            font: Some("Georgia".into()),
+            font_size: Some(40.0),
+            font_weight: Some("bold".into()),
+            color: Some("#ffffff".into()),
+        };
+        let json = serde_json::to_string(&data).unwrap();
+        let again: SongSlideData = serde_json::from_str(&json).unwrap();
+        assert_eq!(again.style.as_deref(), Some("LowerThird"));
+        assert_eq!(again.font.as_deref(), Some("Georgia"));
+        assert_eq!(again.font_size, Some(40.0));
+    }
+
+    #[test]
+    fn display_item_song_round_trips_style_through_enum() {
+        let item = DisplayItem::Song(SongSlideData {
+            song_id: "s1".into(),
+            title: "T".into(),
+            author: None,
+            section_label: "Verse".into(),
+            lines: vec!["x".into()],
+            slide_index: 0,
+            total_slides: 1,
+            style: Some("LowerThird".into()),
+            font: None,
+            font_size: None,
+            font_weight: None,
+            color: None,
+        });
+        let json = serde_json::to_string(&item).unwrap();
+        let again: DisplayItem = serde_json::from_str(&json).unwrap();
+        match again {
+            DisplayItem::Song(s) => assert_eq!(s.style.as_deref(), Some("LowerThird")),
+            _ => panic!("expected Song variant"),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

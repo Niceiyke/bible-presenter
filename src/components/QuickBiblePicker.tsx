@@ -24,8 +24,19 @@ export function QuickBiblePicker({
 
   useEffect(() => {
     if (!bookQuery.trim()) { setSuggestions([]); return; }
-    const q = bookQuery.toLowerCase();
-    setSuggestions(books.filter((b) => b.toLowerCase().includes(q)).slice(0, 7));
+    const q = bookQuery.toLowerCase().replace(/\s+/g, "");
+    setSuggestions(
+      books
+        .map((b) => ({ b, norm: b.toLowerCase().replace(/\s+/g, "") }))
+        .filter(({ norm }) => norm.includes(q))
+        .sort((a, z) => {
+          const aPrefix = a.norm.startsWith(q) ? 0 : 1;
+          const zPrefix = z.norm.startsWith(q) ? 0 : 1;
+          return aPrefix - zPrefix;
+        })
+        .map(({ b }) => b)
+        .slice(0, 7),
+    );
     setActiveSuggIdx(0);
   }, [bookQuery, books]);
 

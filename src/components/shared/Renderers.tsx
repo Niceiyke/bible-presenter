@@ -667,12 +667,15 @@ export function LowerThirdOverlay({
 
   const variants = getVariants();
   
-  // Robust positioning logic
+  // Keep layout positioning separate from Framer Motion's transform-based
+  // animation. The transform template appends the alignment transform after
+  // Motion has generated its entry/exit transform.
   const isFullWidth = t.widthPct >= 100;
   const positionStyle: React.CSSProperties = {
     position: "absolute",
     zIndex: 40,
-    width: isFullWidth ? "100%" : `${t.widthPct}%`,
+    width: isFullWidth ? "100%" : `${Math.max(10, Math.min(100, t.widthPct))}%`,
+    boxSizing: "border-box",
     pointerEvents: "none",
   };
 
@@ -683,8 +686,7 @@ export function LowerThirdOverlay({
   } else if (t.hAlign === "right") {
     positionStyle.right = t.offsetX;
   } else {
-    positionStyle.left = "50%";
-    positionStyle.transform = "translateX(-50%)";
+    positionStyle.left = `calc(50% + ${t.offsetX}px)`;
   }
 
   if (t.vAlign === "top") {
@@ -692,14 +694,18 @@ export function LowerThirdOverlay({
   } else if (t.vAlign === "bottom") {
     positionStyle.bottom = t.offsetY;
   } else {
-    positionStyle.top = "50%";
-    const currentTransform = positionStyle.transform || "";
-    positionStyle.transform = `${currentTransform} translateY(-50%)`.trim();
+    positionStyle.top = `calc(50% + ${t.offsetY}px)`;
   }
+
+  const alignmentTransform = [
+    !isFullWidth && t.hAlign === "center" ? "translateX(-50%)" : "",
+    t.vAlign === "middle" ? "translateY(-50%)" : "",
+  ].filter(Boolean).join(" ");
 
   return (
     <motion.div
       style={positionStyle}
+      transformTemplate={(transform) => `${transform} ${alignmentTransform}`.trim()}
       initial={variants.initial}
       animate={variants.animate}
       exit={{ ...variants.exit, transition: { duration: t.exitDuration ?? 0.2 } }}
@@ -710,11 +716,11 @@ export function LowerThirdOverlay({
         filter: { duration: (t.animationDuration || 0.5) * 1.5 }
       }}
     >
-      <div style={containerStyle}>
+      <div style={{ ...containerStyle, textAlign: t.hAlign, boxSizing: "border-box", minWidth: 0 }}>
         {data.kind === "Nameplate" && (
           <div className="w-full">
             {t.variant === "modern" ? (
-              <div className="flex flex-col items-center text-center">
+              <div className={`flex flex-col ${t.hAlign === "center" ? "items-center" : t.hAlign === "right" ? "items-end" : "items-start"}`}>
                 <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
                   {substituteTokens(data.data.name)}
                 </p>

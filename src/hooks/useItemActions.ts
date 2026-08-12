@@ -158,12 +158,17 @@ export function useItemActions() {
           section_label: staged.data.section_label
         }
       };
-      invoke("show_lower_third", { data: payload, template: ltTemplate }).catch((e: any) =>
-        setBackendError(`Lower-third failed: ${e?.message ?? e}`));
-      setLtVisible(true);
-      useAppStore.getState().setLtSongId(staged.data.song_id);
-      useAppStore.getState().setLtLineIndex(staged.data.slide_index);
-      useAppStore.getState().setLtMode("lyrics");
+      // Phase 6: only claim the overlay is visible when the backend accepts
+      // the show command — a silent fire-and-forget would let the operator
+      // believe an overlay is on air when it is not.
+      invoke("show_lower_third", { data: payload, template: ltTemplate })
+        .then(() => {
+          setLtVisible(true);
+          useAppStore.getState().setLtSongId(staged.data.song_id);
+          useAppStore.getState().setLtLineIndex(staged.data.slide_index);
+          useAppStore.getState().setLtMode("lyrics");
+        })
+        .catch((e: any) => setBackendError(`Lower-third failed: ${e?.message ?? e}`));
     }
 
     if (settings.auto_clear_background_logo && settings.show_background_logo) {
@@ -205,12 +210,15 @@ export function useItemActions() {
           section_label: item.data.section_label
         }
       };
-      invoke("show_lower_third", { data: payload, template: ltTemplate }).catch((e: any) =>
-        setBackendError(`Lower-third failed: ${e?.message ?? e}`));
-      setLtVisible(true);
-      useAppStore.getState().setLtSongId(item.data.song_id);
-      useAppStore.getState().setLtLineIndex(item.data.slide_index);
-      useAppStore.getState().setLtMode("lyrics");
+      // Phase 6: see goLive — only flip the visible state on a successful show.
+      invoke("show_lower_third", { data: payload, template: ltTemplate })
+        .then(() => {
+          setLtVisible(true);
+          useAppStore.getState().setLtSongId(item.data.song_id);
+          useAppStore.getState().setLtLineIndex(item.data.slide_index);
+          useAppStore.getState().setLtMode("lyrics");
+        })
+        .catch((e: any) => setBackendError(`Lower-third failed: ${e?.message ?? e}`));
     }
 
     if (settings.auto_clear_background_logo && settings.show_background_logo) {

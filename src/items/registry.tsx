@@ -179,7 +179,9 @@ const songKind: ItemKind<Extract<DisplayItem, { type: "Song" }>> = {
   accent: "pink",
   stageDetail: (i) => i.data.lines.join("\n"),
   ScheduleTile: ({ item }) => (
-    <p className="text-pink-400 text-[10px] font-bold uppercase truncate">SONG: {item.data.title} ({item.data.section_label})</p>
+    <p className="text-pink-400 text-[10px] font-bold uppercase truncate">
+      {item.data.style === "FullSlide" ? "FULL" : "OVR"} · {item.data.title} ({item.data.section_label})
+    </p>
   ),
   nextLive: (i, lookup) => {
     const song = lookup.songs.find((s) => s.id === i.data.song_id);

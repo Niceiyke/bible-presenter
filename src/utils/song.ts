@@ -181,6 +181,81 @@ export function getPreviousSongIndex(song: Song, index: number): number | null {
   return index - 1;
 }
 
+/** Lower-cased searchable text for one song: title, author, copyright, CCLI,
+ *  key, every section label, and every lyric line. Used by the shared library
+ *  search so a volunteer can find a song by any field (Phase 4). */
+export function songSearchText(song: Song): string {
+  const parts: string[] = [song.title];
+  if (song.author) parts.push(song.author);
+  if (song.copyright) parts.push(song.copyright);
+  if (song.ccli) parts.push(song.ccli);
+  if (song.key) parts.push(song.key);
+  for (const sec of song.sections) {
+    parts.push(sec.label);
+    for (const line of sec.lines) parts.push(line);
+  }
+  return parts.join(" ").toLowerCase();
+}
+
+/** Case-insensitive free-text filter across title, author, lyrics, key, CCLI,
+ *  and section labels. An empty/whitespace query returns the collection
+ *  unchanged so the "no query" path never allocates a new list. */
+export function searchSongs(songs: Song[], query: string): Song[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return songs;
+  return songs.filter((s) => songSearchText(s).includes(q));
+}
+
+/** Readiness: a song "needs metadata" when one of the documented fields
+ *  (author, copyright, CCLI) is missing. Key is deliberately excluded so a
+ *  song without a known key is not treated as incomplete. */
+export function songNeedsMetadata(song: Song): boolean {
+  return !song.author || !song.copyright || !song.ccli;
+}
+
+/** Phase 5: convert a multiline textarea value into the canonical lyric-lines
+ *  array. One line per row, preserving internal blank lines (intentional verse
+ *  spacing); only trailing blank rows are trimmed. This keeps line order
+ *  predictable while a stray Enter at the end does not silently create an
+ *  extra empty lyric. */
+export function splitLyricLines(value: string): string[] {
+  const lines = String(value ?? "").split(/\r?\n/);
+  while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop();
+  return lines;
+}
+
+/** Phase 5: build an id-based arrangement that plays the given sections in
+ *  natural order. New sections are referenced by their existing id; sections
+ *  lacking an id are skipped (a section without an id cannot be referenced
+ *  safely and is normalized on save). */
+export function buildArrangementStepsFromSections(sections: LyricSection[]): SongArrangementStep[] {
+  const out: SongArrangementStep[] = [];
+  for (const s of sections) {
+    if (s.id) out.push({ section_id: s.id });
+  }
+  return out;
+}
+
+/** Validation result for the song editor (`SongEditorModal`). */
+export interface SongValidation {
+  ok: boolean;
+  errors: string[];
+}
+
+/** Phase 5: validate a song draft before saving. A song needs a non-empty
+ *  title and at least one non-empty lyric line, otherwise `Save` stays
+ *  disabled and the editor surfaces the failure inline. */
+export function songValidate(song: Song): SongValidation {
+  const errors: string[] = [];
+  if (!song.title.trim()) errors.push("A song needs a title.");
+  if (song.sections.length === 0) {
+    errors.push("Add at least one section.");
+  } else if (!song.sections.some((s) => s.lines.some((l) => l.trim()))) {
+    errors.push("Add at least one lyric line.");
+  }
+  return { ok: errors.length === 0, errors };
+}
+
 /** Counts for card display / card metadata. */
 export function getSongCounts(song: Song): { sections: number; sequence: number; lines: number } {
   const sections = song.sections.length;

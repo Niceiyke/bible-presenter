@@ -19,7 +19,7 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
   setLtTemplate: (t: LowerThirdTemplate) => void;
   onSetToast: (msg: string) => void;
 }) {
-  const { currentLowerThird, ltVisible, setLtVisible } = useAppStore();
+  const { currentLowerThird, ltVisible, setLtVisible, setBackendError } = useAppStore();
   const [presets, setPresets] = useState<LtPreset[]>([]);
   const [saveLabel, setSaveLabel] = useState("");
   const [saveMode, setSaveMode] = useState<"nameplate" | "freetext">("nameplate");
@@ -55,8 +55,8 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
       
       await invoke("show_lt_preset", { id: preset.id, template: targetTemplate });
       onSetToast(`Showing: ${preset.label}`);
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      setBackendError(`Preset failed: ${err?.message ?? err}`);
     }
   }
 
@@ -64,8 +64,8 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
     try {
       await invoke("hide_lower_third");
       setLtVisible(false);
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      setBackendError(`Hide overlay failed: ${err?.message ?? err}`);
     }
   }
 
@@ -74,8 +74,8 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
       const updated = await invoke<LtPreset[]>("delete_lt_preset", { id });
       setPresets(updated);
       onSetToast("Preset deleted");
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      setBackendError(`Delete preset failed: ${err?.message ?? err}`);
     }
   }
 
@@ -101,8 +101,8 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
       setSaveLabel(""); setSaveNpName(""); setSaveNpTitle(""); setSaveFtText("");
       setAddOpen(false);
       onSetToast("Preset saved");
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      setBackendError(`Save preset failed: ${err?.message ?? err}`);
     }
   }
 
@@ -269,6 +269,7 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
 export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
   const {
     activeTab,
+    setActiveTab,
     songs, setSongs,
     ltMode, setLtMode,
     ltVisible, setLtVisible,
@@ -302,6 +303,19 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
     return flattenSongForLowerThird(ltSelectedSong);
   }, [ltSelectedSong, ltSongId, quickLyricsText]);
 
+  // Phase 7: if the selected song is deleted from the library, reset the
+  // selection so the panel never renders against a missing song. A live
+  // overlay that was already sent is not force-hidden — the operator can
+  // still hide it manually; only the *selection* is cleared.
+  useEffect(() => {
+    if (!ltSongId || ltSongId === "quick-lyrics") return;
+    if (ltSongId && !songs.some((s) => s.id === ltSongId)) {
+      setLtSongId(null);
+      setLtLineIndex(0);
+      setLtAtEnd(false);
+    }
+  }, [songs, ltSongId, setLtSongId, setLtLineIndex, setLtAtEnd]);
+
   const ltSendCurrent = useCallback(async (index: number) => {
     if (ltFlatLines.length === 0) return;
     const clampedIndex = Math.max(0, Math.min(index, ltFlatLines.length - 1));
@@ -329,14 +343,16 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
     else if (e.key === "ArrowLeft") { e.preventDefault(); ltAdvance(-1); }
     else if (e.key === "h" || e.key === "H") {
       if (ltVisible) {
-        invoke("hide_lower_third").then(() => setLtVisible(false)).catch(console.error);
+        invoke("hide_lower_third")
+          .then(() => setLtVisible(false))
+          .catch((err: any) => setBackendError(`Hide overlay failed: ${err?.message ?? err}`));
       } else {
         if (!ltSongId || ltFlatLines.length === 0) return;
         const payload = ltBuildLyricsPayload(ltFlatLines, ltLineIndex, ltLinesPerDisplay);
         if (!payload) return;
         invoke("show_lower_third", { data: payload, template: ltTemplate })
           .then(() => setLtVisible(true))
-          .catch(console.error);
+          .catch((err: any) => setBackendError(`Show overlay failed: ${err?.message ?? err}`));
       }
     }
   });
@@ -353,7 +369,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
             return prev;
           }
           const next = Math.min(prev + ltLinesPerDisplay, maxIdx);
-          Promise.resolve().then(() => ltSendCurrent(next)).catch(console.error);
+          Promise.resolve().then(() => ltSendCurrent(next)).catch((err: any) => setBackendError(`Overlay update failed: ${err?.message ?? err}`));
           if (next >= maxIdx) setLtAtEnd(true);
           return next;
         });
@@ -362,8 +378,25 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
     return () => { if (ltAutoRef.current) clearInterval(ltAutoRef.current); };
   }, [ltAutoAdvance, ltVisible, ltMode, ltAutoSeconds, ltLinesPerDisplay, ltFlatLines, ltSendCurrent]);
 
+  const canShow = ltMode === "nameplate"
+    ? ltName.trim().length > 0
+    : ltMode === "freetext"
+    ? ltFreeText.trim().length > 0
+    : Boolean(ltSongId && ltFlatLines.length > 0);
+
   return (
-    <div className="flex flex-col gap-3 p-3">
+    <div className="flex flex-col gap-3">
+
+      <div className="flex items-center justify-between gap-3 rounded-xl border border-console-border bg-console-surface-raised/70 px-4 py-3">
+        <div className="min-w-0">
+          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-console-text-muted">Live Lower Third</p>
+          <p className="mt-0.5 text-xs text-console-text-subtle">Prepare a name, lyric, or message for output.</p>
+        </div>
+        <span className={`shrink-0 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-wide ${ltVisible ? "border-state-live/50 bg-state-live-soft text-state-live" : "border-console-border bg-console-surface text-console-text-subtle"}`}>
+          <span className={`h-1.5 w-1.5 rounded-full ${ltVisible ? "bg-state-live" : "bg-console-text-subtle"}`} />
+          {ltVisible ? "On air" : "Hidden"}
+        </span>
+      </div>
 
       {/* ── Saved presets (at top for quick access) ── */}
       <PresetsPanel 
@@ -374,10 +407,16 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
       />
 
       {/* ── Template selector ── */}
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-1.5 rounded-xl border border-console-border bg-console-surface/70 p-3">
         <div className="flex items-center justify-between">
-          <span className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Style Template</span>
-          <span className="text-[9px] text-purple-400/60 italic">Edit in Design Hub ↗</span>
+          <span className="text-[10px] text-console-text-muted uppercase font-bold tracking-widest">Style template</span>
+          <button
+            type="button"
+            onClick={() => setActiveTab("lt-designer")}
+            className="text-[10px] font-bold text-tool-design hover:text-purple-300 transition-colors"
+          >
+            Open designer
+          </button>
         </div>
         <select
           className="w-full bg-slate-800 text-slate-200 text-xs rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-amber-500"
@@ -396,8 +435,8 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
       {/* ── Mode tabs ── */}
       <div className="flex rounded-lg overflow-hidden border border-slate-700 shrink-0">
         {(["nameplate", "lyrics", "freetext"] as const).map((m) => (
-          <button key={m} onClick={() => setLtMode(m)}
-            className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest transition-all ${ltMode === m ? "bg-slate-700 text-amber-400" : "text-slate-500 hover:text-slate-300"}`}>
+          <button key={m} onClick={() => setLtMode(m)} aria-pressed={ltMode === m}
+            className={`min-h-10 flex-1 py-2 text-[10px] font-bold uppercase tracking-widest transition-all ${ltMode === m ? "bg-console-surface-strong text-action-primary" : "text-console-text-subtle hover:text-console-text"}`}>
             {m === "freetext" ? "Free Text" : m === "nameplate" ? "Nameplate" : "Lyrics"}
           </button>
         ))}
@@ -665,10 +704,11 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
           </div>
         )}
         <button
+          disabled={!ltVisible && !canShow}
           onClick={async () => {
             if (ltVisible) {
               try { await invoke("hide_lower_third"); setLtVisible(false); }
-              catch (err) { console.error("hide_lower_third failed:", err); }
+              catch (err: any) { setBackendError(`Hide overlay failed: ${err?.message ?? err}`); }
             } else {
               let payload: LowerThirdData | null = null;
               if (ltMode === "nameplate") {
@@ -681,16 +721,16 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
               }
               if (!payload) return;
               try { await invoke("show_lower_third", { data: payload, template: ltTemplate }); setLtVisible(true); }
-              catch (err) { console.error("show_lower_third failed:", err); }
+              catch (err: any) { setBackendError(`Show overlay failed: ${err?.message ?? err}`); }
             }
           }}
-          className={`w-full py-3 text-sm font-black uppercase rounded-xl transition-all ${
+          className={`w-full min-h-12 text-sm font-black uppercase rounded-xl transition-all ${
             ltVisible
-              ? "bg-red-700 hover:bg-red-600 text-white shadow-[0_0_16px_rgba(185,28,28,0.4)]"
-              : "bg-green-700 hover:bg-green-600 text-white"
+              ? "bg-console-surface-strong hover:bg-state-live-soft text-state-live border border-state-live/60"
+              : "bg-state-live hover:bg-red-400 text-white shadow-[0_0_16px_rgba(240,68,85,0.24)] disabled:cursor-not-allowed disabled:opacity-40"
           }`}
         >
-          {ltVisible ? "■ HIDE Lower Third" : "▶ SHOW Lower Third"}
+          {ltVisible ? "Hide lower third" : "Show lower third"}
         </button>
       </div>
 

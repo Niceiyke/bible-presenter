@@ -33,11 +33,12 @@ function AccordionSection({
     <div className="border-b border-slate-800/60 last:border-b-0">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-slate-800/30 transition-colors group"
+        aria-expanded={open}
+        className="w-full min-h-11 flex items-center justify-between px-4 py-3 hover:bg-slate-800/30 transition-colors group"
       >
         <div className="flex items-center gap-2">
           <Icon size={12} className="text-slate-500 group-hover:text-slate-400 transition-colors" />
-          <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 group-hover:text-slate-400 transition-colors">
+          <span className="text-[11px] font-black uppercase tracking-widest text-console-text-muted group-hover:text-console-text transition-colors">
             {title}
           </span>
         </div>
@@ -52,8 +53,8 @@ function AccordionSection({
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-3 min-h-[22px]">
-      <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wide shrink-0">{label}</span>
+    <div className="flex items-center justify-between gap-3 min-h-8">
+      <span className="text-[10px] text-console-text-muted uppercase font-bold tracking-wide shrink-0">{label}</span>
       <div className="flex items-center gap-1.5">{children}</div>
     </div>
   );
@@ -66,13 +67,14 @@ function SliderRow({ label, min, max, step = 1, value, onChange, unit = "" }: {
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between">
-        <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wide">{label}</span>
-        <span className="text-[10px] text-amber-400 font-mono">{value}{unit}</span>
+        <span className="text-[10px] text-console-text-muted uppercase font-bold tracking-wide">{label}</span>
+        <span className="text-[11px] text-action-primary font-mono tabular-nums">{value}{unit}</span>
       </div>
       <input
         type="range" min={min} max={max} step={step} value={value}
         onChange={e => onChange(step < 1 ? parseFloat(e.target.value) : parseInt(e.target.value))}
-        className="w-full h-1 accent-amber-500 cursor-pointer"
+        aria-label={label}
+        className="w-full h-1.5 accent-amber-500 cursor-pointer"
       />
     </div>
   );
@@ -95,12 +97,14 @@ function ColorSwatch({ value, onChange, label }: { value: string; onChange: (v: 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <button
+      type="button"
+      aria-label="Toggle setting"
       onClick={() => onChange(!checked)}
-      className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${checked ? "bg-amber-500" : "bg-slate-700 hover:bg-slate-600"}`}
+      className={`relative w-10 h-6 rounded-full transition-colors shrink-0 ${checked ? "bg-action-primary" : "bg-slate-700 hover:bg-slate-600"}`}
     >
       <div
-        className="absolute top-[3px] w-3.5 h-3.5 rounded-full bg-white shadow transition-all duration-150"
-        style={{ left: checked ? "18px" : "3px" }}
+        className="absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-all duration-150"
+        style={{ left: checked ? "20px" : "4px" }}
       />
     </button>
   );
@@ -179,9 +183,10 @@ function AlignmentGrid({
           })}
         </div>
       </div>
-      <p className="text-[9px] text-slate-600">
+      <p className="text-[10px] leading-relaxed text-console-text-subtle">
         Active: <span className="text-amber-400 font-bold">{vAlign} {hAlign}</span>
       </p>
+      <p className="text-[10px] leading-relaxed text-console-text-subtle">Offsets use the nearest canvas edge, or the canvas center for middle/center.</p>
     </div>
   );
 }
@@ -238,8 +243,10 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
     if (!el) return;
     const obs = new ResizeObserver(() => {
       const { width, height } = el.getBoundingClientRect();
-      if (width > 0 && height > 0) {
-        setScale(Math.min(width / 1920, height / 1080) * 0.92);
+      const availableWidth = Math.max(0, width - 64);
+      const availableHeight = Math.max(0, height - 64);
+      if (availableWidth > 0 && availableHeight > 0) {
+        setScale(Math.min(availableWidth / 1920, availableHeight / 1080));
       }
     });
     obs.observe(el);
@@ -331,13 +338,13 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
       : "bg-slate-900";
 
   return (
-    <div className="h-full flex overflow-hidden">
+    <div className="h-full min-h-0 flex overflow-hidden bg-console-canvas">
       {/* ── LEFT PANEL ───────────────────────────────────────────────────── */}
-      <div className="w-64 shrink-0 border-r border-slate-800 flex flex-col overflow-hidden bg-slate-900/20">
+      <div className="w-[18rem] max-w-[34vw] shrink-0 border-r border-console-border flex flex-col overflow-hidden bg-console-surface">
 
         {/* Template Manager */}
-        <div className="px-3 py-3 border-b border-slate-800 space-y-2 bg-slate-900/50 shrink-0">
-          <p className="text-[8px] font-black uppercase tracking-widest text-slate-600">Template</p>
+        <div className="px-4 py-3 border-b border-console-border space-y-2 bg-console-surface-raised/40 shrink-0">
+          <p className="text-[10px] font-black uppercase tracking-widest text-console-text-muted">Template</p>
           <div className="flex items-center gap-1.5">
             <select
               className="flex-1 min-w-0 bg-slate-950 text-slate-200 text-[11px] rounded-lg px-2 py-1.5 border border-slate-800 outline-none focus:border-amber-500/50 transition-colors"
@@ -349,10 +356,10 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
             >
               {ltSavedTemplates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
-            <button onClick={handleDuplicate} className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition-all" title="Duplicate">
+            <button onClick={handleDuplicate} className="min-w-9 min-h-9 p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition-all" title="Duplicate">
               <Copy size={12} />
             </button>
-            <button onClick={handleSave} className="p-1.5 bg-amber-600 hover:bg-amber-500 rounded-lg text-white transition-all" title="Save">
+            <button onClick={handleSave} className="min-w-9 min-h-9 p-1.5 bg-action-primary hover:bg-action-primary-hover rounded-lg text-black transition-all" title="Save">
               <Save size={12} />
             </button>
           </div>
@@ -363,17 +370,17 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
               placeholder="Template name"
               className="flex-1 min-w-0 bg-slate-950 text-slate-300 text-[10px] px-2 py-1 rounded-lg border border-slate-800 outline-none focus:border-amber-500/40"
             />
-            <button onClick={exportTemplate} title="Export" className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-500 hover:text-slate-300 transition-all">
+            <button onClick={exportTemplate} title="Export" className="min-w-9 min-h-9 p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-500 hover:text-slate-300 transition-all">
               <Download size={12} />
             </button>
-            <button onClick={importTemplate} title="Import" className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-500 hover:text-slate-300 transition-all">
+            <button onClick={importTemplate} title="Import" className="min-w-9 min-h-9 p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-500 hover:text-slate-300 transition-all">
               <Upload size={12} />
             </button>
           </div>
         </div>
 
         {/* Settings Sections */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar">
+        <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
 
           {/* Position & Layout */}
           <AccordionSection title="Position & Layout" icon={Move}>
@@ -657,15 +664,18 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
       </div>
 
       {/* ── RIGHT: PREVIEW ───────────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col overflow-hidden bg-slate-950">
+      <div className="min-w-0 flex-1 flex flex-col overflow-hidden bg-console-canvas">
 
         {/* Preview toolbar */}
-        <div className="h-10 border-b border-slate-800 flex items-center justify-between px-4 shrink-0 bg-slate-900/30">
+        <div className="min-h-12 border-b border-console-border flex flex-wrap items-center justify-between gap-3 px-4 py-2 shrink-0 bg-console-surface/70">
           <div className="flex items-center gap-2">
             <Monitor size={13} className="text-slate-600" />
-            <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Preview — 1920×1080</span>
+            <div>
+              <span className="text-[11px] font-black uppercase tracking-widest text-console-text">Output Preview</span>
+              <span className="block text-[10px] text-console-text-subtle">1920 × 1080 safe canvas</span>
+            </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             {/* Preview mode */}
             <div className="flex items-center gap-1 bg-slate-900 rounded-lg border border-slate-800 p-0.5">
               {([
@@ -707,7 +717,7 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
         </div>
 
         {/* Canvas — dynamically scaled */}
-        <div ref={previewRef} className="flex-1 flex items-center justify-center overflow-hidden p-8">
+        <div ref={previewRef} className="relative min-h-0 flex-1 flex items-center justify-center overflow-hidden p-8">
           <div
             className={`relative rounded-xl overflow-hidden shadow-[0_0_60px_rgba(0,0,0,0.6)] ring-1 ring-white/8 ${bgClass}`}
             style={{ width: Math.round(1920 * scale), height: Math.round(1080 * scale) }}
