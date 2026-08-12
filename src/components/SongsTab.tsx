@@ -2,10 +2,19 @@ import React from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { useAppStore } from "../store";
-import { FONTS } from "../types";
-import type { Song, LyricSection, DisplayItem } from "../types";
-import { detectAndParse, type ParsedSong } from "../utils/songImporter";
-import { ContentCard, ContentCardActions, ConfirmModal, StatusBadge, Button } from "./ui";
+import type { Song, DisplayItem } from "../types";
+import type { ParsedSong } from "../utils/songImporter";
+import { buildSongDisplayItem } from "../utils/song";
+import { ConfirmModal } from "./ui";
+import {
+  SongCard,
+  SongEditorModal,
+  SongFilters,
+  SongImportWizard,
+  SongLibraryToolbar,
+  SongPreviewModal,
+  type SongSource,
+} from "./songs/index";
 
 interface SongsTabProps {
   onOpenLyricsMode: (songId: string) => void;
@@ -14,230 +23,149 @@ interface SongsTabProps {
   onAddToSchedule: (item: DisplayItem) => void;
 }
 
+/** Songs workspace orchestrator. Owns library source/search selection and the
+ *  selected-song/preview/use state; delegates forms to `components/songs/` and
+ *  only mutates the persistent list after a backend command succeeds. */
 export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }: SongsTabProps) {
   const {
     songs, setSongs,
     hymnLibrary,
-    songSearch, setSongSearch,
-    editingSong, setEditingSong,
-    songImportText, setSongImportText,
-    showSongImport, setShowSongImport,
+    setBackendError,
   } = useAppStore();
 
-  const [activeSubTab, setActiveSubTab] = React.useState<"mine" | "library">("mine");
+  const [source, setSource] = React.useState<SongSource>("mine");
+  const [search, setSearch] = React.useState("");
+  const [showSongImport, setShowSongImport] = React.useState(false);
+  const [editingSong, setEditingSong] = React.useState<Song | null>(null);
   const [deleteSong, setDeleteSong] = React.useState<Song | null>(null);
   const [previewSong, setPreviewSong] = React.useState<Song | null>(null);
 
-  // Readable song-style metadata: full-slide lyric vs lower-third.
-  const styleMeta = (song: Song): { badge: "audio" | "design" | "neutral"; label: string; info: string } => {
-    const slideCount = song.arrangement && song.arrangement.length > 0 ? song.arrangement.length : song.sections.length;
-    const lineCount = song.sections.reduce((a, s) => a + s.lines.length, 0);
-    if (song.style === "FullSlide") {
-      return {
-        badge: "design",
-        label: "Full Slide",
-        info: `${slideCount} slide${slideCount === 1 ? "" : "s"} · ${lineCount} lines`,
-      };
-    }
-    return {
-      badge: "audio",
-      label: "Lower Third",
-      info: `${slideCount} line${slideCount === 1 ? "" : "s"} · ${lineCount} lyric lines`,
+  const getSongDisplayItem = (song: Song, flatIndex = 0): DisplayItem =>
+    buildSongDisplayItem(song, flatIndex);
+
+  const collection = source === "mine" ? songs : hymnLibrary;
+  const filteredSongs = collection.filter((s) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      s.title.toLowerCase().includes(q) ||
+      (s.author && s.author.toLowerCase().includes(q))
+    );
+  });
+
+  const handleImport = async (parsed: ParsedSong) => {
+    const song: Song = {
+      id: "",
+      title: parsed.title || "Untitled",
+      author: parsed.author,
+      copyright: parsed.copyright,
+      ccli: parsed.ccli,
+      key: parsed.key,
+      sections: parsed.sections.length > 0 ? parsed.sections : [{ label: "Verse 1", lines: [""] }],
+      arrangement: [],
+      style: "LowerThird",
     };
+    const saved = await invoke<Song>("save_song", { song });
+    const next = [...songs, saved].sort((a, b) => a.title.localeCompare(b.title));
+    setSongs(next);
+    emit("songs-sync", next);
+    setShowSongImport(false);
   };
 
-  const getSongDisplayItem = (song: Song, flatIndex = 0): DisplayItem => {
-    const flat: { label: string; lines: string[] }[] = [];
-    if (song.arrangement && song.arrangement.length > 0) {
-      for (const label of song.arrangement) {
-        const sec = song.sections.find((s) => s.label === label);
-        if (sec) flat.push(sec);
-      }
-    } else {
-      flat.push(...song.sections);
-    }
-    const item = flat[flatIndex] || flat[0];
-    return {
-      type: "Song",
-      data: {
-        song_id: song.id,
-        title: song.title,
-        author: song.author,
-        section_label: item.label,
-        lines: item.lines,
-        slide_index: flatIndex,
-        total_slides: flat.length,
-        style: song.style,
-        font: song.font,
-        font_size: song.font_size,
-        font_weight: song.font_weight,
-        color: song.color,
-      },
-    };
+  const handleSaveSong = async (draft: Song) => {
+    const saved = await invoke<Song>("save_song", { song: draft });
+    const idx = songs.findIndex((s) => s.id === saved.id);
+    let next;
+    if (idx >= 0) { next = [...songs]; next[idx] = saved; }
+    else { next = [...songs, saved].sort((a, b) => a.title.localeCompare(b.title)); }
+    setSongs(next);
+    emit("songs-sync", next);
+    setEditingSong(null);
   };
 
-  const filteredSongs = (activeSubTab === "mine" ? songs : hymnLibrary).filter((s) => 
-    s.title.toLowerCase().includes(songSearch.toLowerCase()) ||
-    (s.author && s.author.toLowerCase().includes(songSearch.toLowerCase()))
-  );
+  const handleDelete = async () => {
+    if (!deleteSong) return;
+    const saved = deleteSong;
+    setDeleteSong(null);
+    await invoke("delete_song", { id: saved.id });
+    const next = songs.filter((s) => s.id !== saved.id);
+    setSongs(next);
+    emit("songs-sync", next);
+  };
+
+  const handleCopyHymn = async (song: Song) => {
+    const saved = await invoke<Song>("save_song", { song: { ...song, id: "" } });
+    const next = [...songs, saved].sort((a, b) => a.title.localeCompare(b.title));
+    setSongs(next);
+    emit("songs-sync", next);
+    setSource("mine");
+  };
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Header */}
-      <div className="flex justify-between items-center">
-        <div className="flex gap-4 items-center">
-          <button
-            onClick={() => setActiveSubTab("mine")}
-            className={`text-xs font-bold uppercase tracking-widest ${activeSubTab === "mine" ? "text-amber-500 border-b-2 border-amber-500" : "text-slate-500 hover:text-slate-300"}`}
-          >My Songs</button>
-          <button
-            onClick={() => setActiveSubTab("library")}
-            className={`text-xs font-bold uppercase tracking-widest ${activeSubTab === "library" ? "text-amber-500 border-b-2 border-amber-500" : "text-slate-500 hover:text-slate-300"}`}
-          >Hymn Library</button>
-        </div>
-        <div className="flex gap-2">
-          {activeSubTab === "mine" && (
-            <>
-              <button
-                onClick={() => setShowSongImport(!showSongImport)}
-                className="text-[10px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded"
-              >Import</button>
-              <button
-                onClick={() => setEditingSong({ id: "", title: "", author: "", sections: [{ label: "Verse 1", lines: [""] }], arrangement: [], style: "LowerThird" })}
-                className="text-[10px] font-bold uppercase bg-amber-600 hover:bg-amber-500 text-white px-2 py-1 rounded"
-              >+ New</button>
-            </>
-          )}
-        </div>
-      </div>
+      <SongLibraryToolbar
+        source={source}
+        onChangeSource={setSource}
+        onOpenImport={() => setShowSongImport((v) => !v)}
+        onNewSong={() => setEditingSong({
+          id: "",
+          title: "",
+          author: "",
+          sections: [{ label: "Verse 1", lines: [""] }],
+          arrangement: [],
+          style: "LowerThird",
+        })}
+      />
 
-      {/* Import text area */}
-      {showSongImport && activeSubTab === "mine" && (
-        <SongImportDialog
-          onComplete={async (parsed) => {
-            const song: Song = {
-              id: "",
-              title: parsed.title || "Untitled",
-              author: parsed.author,
-              copyright: parsed.copyright,
-              ccli: parsed.ccli,
-              sections: parsed.sections.length > 0
-                ? parsed.sections
-                : [{ label: "Verse 1", lines: [""] }],
-              arrangement: [],
-              style: "LowerThird",
-            };
-            const saved = await invoke<Song>("save_song", { song });
-            const next = [...songs, saved].sort((a, b) => a.title.localeCompare(b.title));
-            setSongs(next);
-            emit("songs-sync", next);
-            setSongImportText("");
-            setShowSongImport(false);
+      {showSongImport && source === "mine" && (
+        <SongImportWizard
+          onImport={async (parsed) => {
+            try {
+              await handleImport(parsed);
+            } catch (err: any) {
+              setBackendError(`Import failed: ${err?.message ?? err}`);
+              throw err;
+            }
           }}
-          onCancel={() => { setShowSongImport(false); setSongImportText(""); }}
+          onCancel={() => setShowSongImport(false)}
         />
       )}
 
-      {/* Search */}
-      <input
-        className="w-full bg-slate-800 text-slate-200 text-xs rounded-lg px-3 py-2 border border-slate-700 placeholder-slate-500"
-        placeholder={activeSubTab === "mine" ? "Search my songs..." : "Search hymn library..."}
-        value={songSearch}
-        onChange={(e) => setSongSearch(e.target.value)}
-      />
+      <SongFilters source={source} search={search} onSearch={setSearch} />
 
-      {/* Song list */}
       <div className="flex flex-col gap-2">
         {filteredSongs.map((song) => {
-          const style = styleMeta(song);
           const slideItem = getSongDisplayItem(song, 0);
+          const isMine = source === "mine";
           return (
-            <ContentCard key={song.id} className="p-3 gap-1">
-              <div className="flex justify-between items-start gap-2">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-bold text-console-text truncate">{song.title}</p>
-                  {song.author && <p className="text-[10px] text-console-text-muted truncate">{song.author}</p>}
-                  <div className="flex items-center gap-2 mt-1 flex-wrap">
-                    <StatusBadge tone={style.badge} label={style.label} />
-                    <span className="text-[10px] text-console-text-subtle">{style.info}</span>
-                  </div>
-                </div>
-                {activeSubTab === "mine" ? (
-                  <ContentCardActions
-                    dense
-                    onPreview={song.style === "FullSlide" ? undefined : () => setPreviewSong(song)}
-                    onStage={song.style === "FullSlide" ? () => onStage(slideItem) : undefined}
-                    onLive={song.style === "FullSlide" ? () => onLive(slideItem) : undefined}
-                    onAddToSchedule={() => onAddToSchedule(slideItem)}
-                    onEdit={() => setEditingSong(JSON.parse(JSON.stringify(song)))}
-                    onDelete={() => setDeleteSong(song)}
-                  />
-                ) : (
-                  <div className="flex gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      onClick={async () => {
-                        // Import from library
-                        const toImport = { ...song, id: "" }; // Clear ID to generate new one
-                        const saved = await invoke<Song>("save_song", { song: toImport });
-                        const next = [...songs, saved].sort((a, b) => a.title.localeCompare(b.title));
-                        setSongs(next);
-                        emit("songs-sync", next);
-                        setActiveSubTab("mine");
-                      }}
-                      className="text-[9px] font-black uppercase bg-action-primary hover:bg-action-primary-hover text-black px-3 py-1.5 rounded"
-                    >Import</button>
-                    <button
-                      onClick={() => setPreviewSong(song)}
-                      className="text-[9px] font-black uppercase bg-console-surface-raised hover:bg-console-surface-strong text-console-text-muted px-3 py-1.5 rounded"
-                    >Preview</button>
-                  </div>
-                )}
-              </div>
-              {/* Lower-third songs open lyrics mode from the card too */}
-              {activeSubTab === "mine" && song.style !== "FullSlide" && (
-                <div className="flex items-center gap-1.5 mt-1">
-                  <Button variant="success" size="sm" onClick={() => onOpenLyricsMode(song.id)}>Use (lyrics mode)</Button>
-                </div>
-              )}
-            </ContentCard>
+            <SongCard
+              key={song.id}
+              song={song}
+              source={source}
+              onPreview={() => setPreviewSong(song)}
+              onStage={isMine && song.style === "FullSlide" ? () => onStage(slideItem) : undefined}
+              onLive={isMine && song.style === "FullSlide" ? () => onLive(slideItem) : undefined}
+              onAddToSchedule={isMine ? () => onAddToSchedule(slideItem) : undefined}
+              onUseLyrics={isMine ? () => onOpenLyricsMode(song.id) : undefined}
+              onEdit={isMine ? () => setEditingSong(JSON.parse(JSON.stringify(song))) : undefined}
+              onDelete={isMine ? () => setDeleteSong(song) : undefined}
+              onImport={!isMine ? () => handleCopyHymn(song) : undefined}
+            />
           );
         })}
         {filteredSongs.length === 0 && (
           <p className="text-console-text-subtle text-xs italic text-center py-4">
-            {activeSubTab === "mine" ? "No songs yet. Create one or import lyrics." : "No hymns found in library."}
+            {source === "mine"
+              ? search
+                ? "No songs match your search."
+                : "No songs yet. Create one or import lyrics."
+              : "No hymns found in library."}
           </p>
         )}
       </div>
 
-      {/* Song lyric preview modal */}
-      {previewSong && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
-          <div className="bg-console-surface border border-console-border-strong rounded-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
-            <div className="flex justify-between items-center p-4 border-b border-console-border">
-              <h3 className="text-sm font-black text-console-text">{previewSong.title}</h3>
-              <button onClick={() => setPreviewSong(null)} className="text-console-text-muted hover:text-console-text text-lg font-bold">✕</button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 custom-scrollbar">
-              {(previewSong.arrangement && previewSong.arrangement.length > 0
-                ? previewSong.arrangement.map((label) => previewSong.sections.find((s) => s.label === label)).filter(Boolean) as LyricSection[]
-                : previewSong.sections
-              ).map((sec, i) => (
-                <div key={i} className="bg-console-surface-raised rounded-lg p-3">
-                  <p className="text-[9px] font-black uppercase text-action-primary mb-1.5">{sec.label}</p>
-                  {sec.lines.map((line, j) => (
-                    <p key={j} className="text-[11px] text-console-text leading-snug">{line}</p>
-                  ))}
-                </div>
-              ))}
-            </div>
-            <div className="p-4 border-t border-console-border flex justify-end gap-2">
-              <Button variant="bare" onClick={() => setPreviewSong(null)}>Close</Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <SongPreviewModal song={previewSong} onClose={() => setPreviewSong(null)} />
 
-      {/* Song delete confirmation */}
       <ConfirmModal
         open={!!deleteSong}
         title={`Delete "${deleteSong?.title ?? ""}"?`}
@@ -245,340 +173,27 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
         confirmLabel="Delete Song"
         confirmVariant="live"
         onConfirm={async () => {
-          if (!deleteSong) return;
-          await invoke("delete_song", { id: deleteSong.id });
-          const next = songs.filter((s) => s.id !== deleteSong.id);
-          setSongs(next);
-          emit("songs-sync", next);
+          try {
+            await handleDelete();
+          } catch (err: any) {
+            setBackendError(`Delete failed: ${err?.message ?? err}`);
+          }
         }}
         onClose={() => setDeleteSong(null)}
       />
 
-      {/* Song Editor Modal */}
-      {editingSong && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
-            <div className="flex justify-between items-center p-4 border-b border-slate-800">
-              <h3 className="text-sm font-bold text-slate-200">{editingSong.id ? "Edit Song" : "New Song"}</h3>
-              <button onClick={() => setEditingSong(null)} className="text-slate-500 hover:text-white text-lg font-bold">✕</button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
-              <div className="flex gap-2">
-                <input
-                  className="flex-1 bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700"
-                  placeholder="Song title"
-                  value={editingSong.title}
-                  onChange={(e) => setEditingSong({ ...editingSong, title: e.target.value })}
-                />
-                <input
-                  className="flex-1 bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700"
-                  placeholder="Author (optional)"
-                  value={editingSong.author || ""}
-                  onChange={(e) => setEditingSong({ ...editingSong, author: e.target.value })}
-                />
-                <select
-                  className="bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 border border-slate-700 focus:outline-none"
-                  value={editingSong.style || "LowerThird"}
-                  onChange={(e) => setEditingSong({ ...editingSong, style: e.target.value as any })}
-                >
-                  <option value="LowerThird">Lower Third</option>
-                  <option value="FullSlide">Full Slide (Hymn Style)</option>
-                </select>
-              </div>
-              {editingSong.sections.map((section, si) => (
-                <div key={si} className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 flex flex-col gap-2">
-                  <div className="flex gap-2 items-center">
-                    <input
-                      className="flex-1 bg-slate-800 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600 font-bold"
-                      value={section.label}
-                      onChange={(e) => {
-                        const s = [...editingSong.sections];
-                        s[si] = { ...s[si], label: e.target.value };
-                        setEditingSong({ ...editingSong, sections: s });
-                      }}
-                    />
-                    <button
-                      onClick={() => {
-                        const s = editingSong.sections.filter((_, i) => i !== si);
-                        setEditingSong({ ...editingSong, sections: s });
-                      }}
-                      className="text-red-500 hover:text-red-300 text-xs font-bold px-1"
-                    >✕</button>
-                  </div>
-                  {section.lines.map((line, li) => (
-                    <div key={li} className="flex gap-1">
-                      <input
-                        className="flex-1 bg-slate-900 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700"
-                        value={line}
-                        placeholder={`Line ${li + 1}`}
-                        onChange={(e) => {
-                          const s = [...editingSong.sections];
-                          const lines = [...s[si].lines];
-                          lines[li] = e.target.value;
-                          s[si] = { ...s[si], lines };
-                          setEditingSong({ ...editingSong, sections: s });
-                        }}
-                      />
-                      <button
-                        onClick={() => {
-                          const s = [...editingSong.sections];
-                          s[si] = { ...s[si], lines: s[si].lines.filter((_, i) => i !== li) };
-                          setEditingSong({ ...editingSong, sections: s });
-                        }}
-                        className="text-slate-600 hover:text-red-400 text-xs px-1"
-                      >✕</button>
-                    </div>
-                  ))}
-                  <button
-                    onClick={() => {
-                      const s = [...editingSong.sections];
-                      s[si] = { ...s[si], lines: [...s[si].lines, ""] };
-                      setEditingSong({ ...editingSong, sections: s });
-                    }}
-                    className="text-[10px] text-slate-500 hover:text-amber-400 font-bold uppercase self-start"
-                  >+ Add Line</button>
-                </div>
-              ))}
-              <button
-                onClick={() => setEditingSong({ ...editingSong, sections: [...editingSong.sections, { label: `Section ${editingSong.sections.length + 1}`, lines: [""] }] })}
-                className="text-[10px] font-bold uppercase text-slate-500 hover:text-amber-400 border border-slate-700 hover:border-amber-500 rounded-lg py-2"
-              >+ Add Section</button>
-
-              <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-3 flex flex-col gap-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Song Styling</p>
-                  {(editingSong.font || editingSong.font_size || editingSong.font_weight || editingSong.color) && (
-                    <button
-                      onClick={() => setEditingSong({ ...editingSong, font: undefined, font_size: undefined, font_weight: undefined, color: undefined })}
-                      className="text-[9px] font-bold uppercase text-slate-500 hover:text-red-400"
-                    >Reset Style</button>
-                  )}
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[10px] text-slate-500 uppercase font-bold">Font Family</label>
-                    <select
-                      className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700 focus:outline-none"
-                      value={editingSong.font || ""}
-                      onChange={(e) => setEditingSong({ ...editingSong, font: e.target.value || undefined })}
-                    >
-                      <option value="">Default (Theme)</option>
-                      {FONTS.map(f => <option key={f} value={f}>{f}</option>)}
-                    </select>
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[10px] text-slate-500 uppercase font-bold">Font Size (pt)</label>
-                    <input
-                      type="number"
-                      className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700 focus:outline-none"
-                      value={editingSong.font_size || ""}
-                      placeholder="Default"
-                      onChange={(e) => {
-                        const val = parseInt(e.target.value);
-                        setEditingSong({ ...editingSong, font_size: isNaN(val) ? undefined : val });
-                      }}
-                    />
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[10px] text-slate-500 uppercase font-bold">Font Weight</label>
-                    <select
-                      className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700 focus:outline-none"
-                      value={editingSong.font_weight || ""}
-                      onChange={(e) => setEditingSong({ ...editingSong, font_weight: e.target.value || undefined })}
-                    >
-                      <option value="">Default</option>
-                      <option value="normal">Normal</option>
-                      <option value="bold">Bold</option>
-                      <option value="100">Thin (100)</option>
-                      <option value="300">Light (300)</option>
-                      <option value="500">Medium (500)</option>
-                      <option value="700">Bold (700)</option>
-                      <option value="900">Black (900)</option>
-                    </select>
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[10px] text-slate-500 uppercase font-bold">Text Color</label>
-                    <div className="flex gap-2">
-                      <input
-                        type="color"
-                        className="w-8 h-8 bg-transparent border-none cursor-pointer rounded-lg overflow-hidden"
-                        value={editingSong.color || "#ffffff"}
-                        onChange={(e) => setEditingSong({ ...editingSong, color: e.target.value })}
-                      />
-                      <input
-                        className="flex-1 bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700 focus:outline-none"
-                        value={editingSong.color || ""}
-                        placeholder="Default"
-                        onChange={(e) => setEditingSong({ ...editingSong, color: e.target.value || undefined })}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-3 flex flex-col gap-2">
-                <div className="flex items-center justify-between">
-                  <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Arrangement</p>
-                  {(editingSong.arrangement ?? []).length > 0 && (
-                    <button
-                      onClick={() => setEditingSong({ ...editingSong, arrangement: [] })}
-                      className="text-[9px] font-bold uppercase text-slate-500 hover:text-red-400"
-                    >Clear</button>
-                  )}
-                </div>
-                <p className="text-[10px] text-slate-600">Order sections for playback (repeat chorus, etc.)</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {editingSong.sections.map((sec) => (
-                    <button
-                      key={sec.label}
-                      onClick={() => setEditingSong({ ...editingSong, arrangement: [...(editingSong.arrangement ?? []), sec.label] })}
-                      className="px-2 py-0.5 text-[10px] font-bold rounded bg-slate-700 hover:bg-amber-700 text-slate-300 hover:text-white border border-slate-600 hover:border-amber-500 transition-all"
-                    >+ {sec.label}</button>
-                  ))}
-                </div>
-                {(editingSong.arrangement ?? []).length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mt-1">
-                    {(editingSong.arrangement ?? []).map((label, i) => (
-                      <span
-                        key={`${label}-${i}`}
-                        className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded bg-amber-900/50 text-amber-300 border border-amber-700"
-                      >
-                        {i + 1}. {label}
-                        <button
-                          onClick={() => {
-                            const arr = [...(editingSong.arrangement ?? [])];
-                            arr.splice(i, 1);
-                            setEditingSong({ ...editingSong, arrangement: arr });
-                          }}
-                          className="text-amber-500 hover:text-red-400 ml-0.5"
-                        >×</button>
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {(editingSong.arrangement ?? []).length === 0 && (
-                  <p className="text-[10px] text-slate-600 italic">Using natural section order</p>
-                )}
-              </div>
-            </div>
-            <div className="p-4 border-t border-slate-800 flex justify-end gap-2">
-              <button onClick={() => setEditingSong(null)} className="text-xs font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg">Cancel</button>
-              <button
-                onClick={async () => {
-                  const saved = await invoke<Song>("save_song", { song: editingSong });
-                  const idx = songs.findIndex((s) => s.id === saved.id);
-                  let next;
-                  if (idx >= 0) { next = [...songs]; next[idx] = saved; }
-                  else { next = [...songs, saved].sort((a, b) => a.title.localeCompare(b.title)); }
-                  setSongs(next);
-                  emit("songs-sync", next);
-                  setEditingSong(null);
-                }}
-                className="text-xs font-bold uppercase bg-amber-600 hover:bg-amber-500 text-white px-4 py-2 rounded-lg"
-              >Save Song</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SongImportDialog({ onComplete, onCancel }: { onComplete: (parsed: ParsedSong) => void; onCancel: () => void; }) {
-  const [text, setText] = React.useState("");
-  const [parsed, setParsed] = React.useState<ParsedSong | null>(null);
-  const [title, setTitle] = React.useState("");
-  const [author, setAuthor] = React.useState("");
-
-  const handleParse = () => {
-    const { detected, result } = detectAndParse(text);
-    setParsed(result);
-    setTitle(result.title || "");
-    setAuthor(result.author || "");
-  };
-
-  const hasChords = text.includes("[") && /\[[A-G]/.test(text);
-
-  return (
-    <div className="bg-slate-900 border border-slate-700 rounded-xl p-3 flex flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-[10px] font-bold uppercase text-slate-300">Import Song</p>
-          <p className="text-[9px] text-slate-600">
-            Paste from EasyWorship, OpenLP, ChordPro, or plain text with section labels
-          </p>
-        </div>
-        <button onClick={onCancel} className="text-slate-500 hover:text-red-400 text-lg leading-none">×</button>
-      </div>
-
-      <textarea
-        className="w-full h-40 bg-slate-950 text-slate-200 text-xs rounded-lg p-3 border border-slate-700 resize-none font-mono"
-        placeholder={`Amazing Grace\n\nVerse 1\nAmazing grace how sweet the sound\nThat saved a wretch like me\n\nChorus\nAmazing grace how sweet the sound\n...`}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
+      <SongEditorModal
+        song={editingSong}
+        onClose={() => setEditingSong(null)}
+        onSave={async (draft) => {
+          try {
+            await handleSaveSong(draft);
+          } catch (err: any) {
+            setBackendError(`Save failed: ${err?.message ?? err}`);
+            throw err;
+          }
+        }}
       />
-
-      <button
-        onClick={handleParse}
-        disabled={!text.trim()}
-        className="text-[10px] font-bold uppercase bg-purple-600/40 hover:bg-purple-600 text-purple-300 px-3 py-2 rounded-lg transition-all disabled:opacity-30"
-      >
-        Preview Parse
-      </button>
-
-      {parsed && parsed.sections.length > 0 && (
-        <div className="bg-slate-950 border border-slate-700 rounded-lg p-3 flex flex-col gap-3">
-          <div className="grid grid-cols-2 gap-2">
-            <input
-              className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700"
-              placeholder="Song Title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-            />
-            <input
-              className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-700"
-              placeholder="Author"
-              value={author}
-              onChange={(e) => setAuthor(e.target.value)}
-            />
-          </div>
-          {parsed.copyright && (
-            <div className="flex items-center gap-2 text-[9px]">
-              <span className="text-slate-600 font-bold">©</span>
-              <span className="text-slate-400">{parsed.copyright}</span>
-              {parsed.ccli && <span className="text-slate-600 ml-auto">CCLI #{parsed.ccli}</span>}
-            </div>
-          )}
-          <div>
-            <p className="text-[9px] font-bold uppercase text-slate-600 mb-2">
-              {parsed.sections.length} section{parsed.sections.length !== 1 ? "s" : ""} detected
-              {hasChords && <span className="text-amber-500 ml-2">· Chords detected</span>}
-              <span className="text-slate-600 ml-2">({parsed.format})</span>
-            </p>
-            <div className="flex flex-col gap-2 max-h-40 overflow-y-auto custom-scrollbar">
-              {parsed.sections.map((sec, i) => (
-                <div key={i} className="bg-slate-900 rounded-lg p-2">
-                  <p className="text-[9px] font-black uppercase text-amber-500 mb-1">{sec.label || `Section ${i + 1}`}</p>
-                  {sec.lines.slice(0, 4).map((line, j) => (
-                    <p key={j} className="text-[10px] text-slate-400 font-mono leading-snug">
-                      {hasChords ? <span className="text-purple-400/70">{line.replace(/\[(.*?)\]/g, (_, c) => `[${c}]`)}</span> : line}
-                    </p>
-                  ))}
-                  {sec.lines.length > 4 && (
-                    <p className="text-[8px] text-slate-700 mt-1">+ {sec.lines.length - 4} more lines</p>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-          <button
-            onClick={() => onComplete({ ...parsed, title, author })}
-            className="text-[10px] font-bold uppercase bg-amber-600 hover:bg-amber-500 text-white px-4 py-2 rounded-lg"
-          >
-            Import Song
-          </button>
-        </div>
-      )}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import React from "react";
 import type { DisplayItem, Song, CustomSlide, Verse, PresentationSettings } from "../types";
 import { buildCustomSlideItem, displayItemLabel } from "../utils";
+import { getSongSequence } from "../utils/song";
 
 /**
  * Item-kind registry.
@@ -58,15 +59,7 @@ const verseKey = (v: Verse, threshold: number) =>
   `${v.book}-${v.chapter}-${v.verse}-${v.version}-${threshold}`;
 
 function songFlatSections(song: Song): { label: string; lines: string[] }[] {
-  if (song.arrangement && song.arrangement.length > 0) {
-    const out: { label: string; lines: string[] }[] = [];
-    for (const lbl of song.arrangement) {
-      const sec = song.sections.find((s) => s.label === lbl);
-      if (sec) out.push(sec);
-    }
-    return out;
-  }
-  return song.sections;
+  return getSongSequence(song);
 }
 
 // ─── Verse ────────────────────────────────────────────────────────────────

@@ -8,6 +8,8 @@ export interface ParsedSong {
   key?: string;
   sections: { label: string; lines: string[] }[];
   format: DetectedFormat;
+  warnings: string[];
+  chordsDetected: boolean;
 }
 
 function stripChords(line: string): string {
@@ -20,6 +22,9 @@ function tryParseChordPro(text: string): ParsedSong | null {
   const sections: { label: string; lines: string[] }[] = [];
   let currentSection: string[] = [];
   let currentLabel = "Verse 1";
+  const warnings: string[] = [];
+  let chordsDetected = false;
+  let chordProMetaFound = false;
 
   const metaRe = /^\{(title|key|author|copyright|ccli|ccli_no|ccli_number|comments)\s*:\s*(.+)\}$/i;
   for (const rawLine of lines) {
@@ -29,6 +34,7 @@ function tryParseChordPro(text: string): ParsedSong | null {
     const metaMatch = line.match(metaRe);
     if (metaMatch) {
       const key = metaMatch[1].toLowerCase();
+      chordProMetaFound = true;
       if (key === "ccli_no" || key === "ccli_number") meta.ccli = metaMatch[2].trim();
       else if (key === "comments") continue;
       else meta[key] = metaMatch[2].trim();
@@ -37,6 +43,7 @@ function tryParseChordPro(text: string): ParsedSong | null {
 
     if (line.startsWith("{") && line.endsWith("}")) {
       const tag = line.slice(1, -1).trim();
+      chordProMetaFound = true;
       if (tag.startsWith("soc") || tag.startsWith("start_of_chorus")) {
         if (currentSection.length > 0) {
           sections.push({ label: currentLabel, lines: [...currentSection] });
@@ -75,16 +82,10 @@ function tryParseChordPro(text: string): ParsedSong | null {
       continue;
     }
 
-    if (/^\[[A-G][#b]?m?(maj|min|dim|aug|sus\d*)?\]/i.test(line)) {
-      const clean = stripChords(line);
-      if (clean) currentSection.push(line);
-      continue;
-    }
-    if (/\[[A-G]/.test(line)) {
-      currentSection.push(line);
-      continue;
-    }
-    currentSection.push(line);
+    if (/\[[A-G]/.test(line)) chordsDetected = true;
+
+    const clean = stripChords(line);
+    if (clean) currentSection.push(clean);
   }
 
   if (currentSection.length > 0) {
@@ -92,6 +93,10 @@ function tryParseChordPro(text: string): ParsedSong | null {
   }
 
   if (sections.length === 0) return null;
+
+  if (chordsDetected) {
+    warnings.push("Chord markers were detected and removed from the lyric lines.");
+  }
 
   return {
     title: meta["title"] || "",
@@ -101,6 +106,8 @@ function tryParseChordPro(text: string): ParsedSong | null {
     key: meta["key"],
     sections,
     format: "chordpro",
+    warnings,
+    chordsDetected,
   };
 }
 
@@ -152,6 +159,8 @@ function tryParseOpenLyrics(text: string): ParsedSong | null {
     key: key || undefined,
     sections,
     format: "openlyrics",
+    warnings: [],
+    chordsDetected: false,
   };
 }
 
@@ -161,12 +170,17 @@ function tryParseSections(text: string): ParsedSong | null {
   let author = "";
   let copyright = "";
   let ccli = "";
+  let key = "";
   const sections: { label: string; lines: string[] }[] = [];
   let currentSection: string[] = [];
   let currentLabel = "";
 
   const sectionRe = /^(Verse\s*\d*|Chorus|Bridge|Pre[- ]?Chorus|Outro|Intro|Tag|Ending|Coda)\s*:?\s*$/i;
   const titleRe = /^Title\s*:\s*(.+)$/i;
+  const authorRe = /^Author\s*:\s*(.+)$/i;
+  const copyrightRe = /^Copyright\s*:\s*(.+)$/i;
+  const ccliRe = /^CCLI\s*:?\s*(.+)$/i;
+  const keyRe = /^Key\s*:\s*(.+)$/i;
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
@@ -174,6 +188,26 @@ function tryParseSections(text: string): ParsedSong | null {
     if (titleRe.test(line)) {
       const m = line.match(titleRe);
       if (m) title = m[1].trim();
+      continue;
+    }
+    if (authorRe.test(line)) {
+      const m = line.match(authorRe);
+      if (m) author = m[1].trim();
+      continue;
+    }
+    if (copyrightRe.test(line)) {
+      const m = line.match(copyrightRe);
+      if (m) copyright = m[1].trim();
+      continue;
+    }
+    if (ccliRe.test(line)) {
+      const m = line.match(ccliRe);
+      if (m) ccli = m[1].trim();
+      continue;
+    }
+    if (keyRe.test(line)) {
+      const m = line.match(keyRe);
+      if (m) key = m[1].trim();
       continue;
     }
 
@@ -192,9 +226,7 @@ function tryParseSections(text: string): ParsedSong | null {
       continue;
     }
 
-    if (!line) {
-      continue;
-    }
+    if (!line) continue;
 
     if (currentLabel || sections.length === 0) {
       if (!currentLabel) {
@@ -219,8 +251,11 @@ function tryParseSections(text: string): ParsedSong | null {
     author: author || undefined,
     copyright: copyright || undefined,
     ccli: ccli || undefined,
+    key: key || undefined,
     sections,
     format: "sections",
+    warnings: [],
+    chordsDetected: false,
   };
 }
 
@@ -231,12 +266,14 @@ function tryParsePlain(text: string): ParsedSong | null {
     title: lines[0],
     sections: [{ label: "", lines }],
     format: "plain",
+    warnings: [],
+    chordsDetected: false,
   };
 }
 
 export function detectAndParse(text: string): { detected: DetectedFormat; result: ParsedSong } {
   const trimmed = text.trim();
-  if (!trimmed) return { detected: "plain", result: { title: "", sections: [], format: "plain" } };
+  if (!trimmed) return { detected: "plain", result: { title: "", sections: [], format: "plain", warnings: ["Empty input — no content to import."], chordsDetected: false } };
 
   if (/^\s*</.test(trimmed)) {
     const result = tryParseOpenLyrics(trimmed);
@@ -244,7 +281,12 @@ export function detectAndParse(text: string): { detected: DetectedFormat; result
   }
 
   const chordProResult = tryParseChordPro(trimmed);
-  if (chordProResult && chordProResult.sections.some(s => /\[[A-G]/.test(s.lines.join(" ")))) {
+  // Detect as ChordPro when the parser found sections AND either chords were
+  // stripped or the input carries ChordPro-style `{directive}` markers (meta
+  // or section tags). Checking `s.lines` for chords is no longer reliable
+  // because the parser already stripped them.
+  const hasChordProDirectives = /\{[^}]+\}/.test(trimmed);
+  if (chordProResult && chordProResult.sections.length > 0 && (chordProResult.chordsDetected || hasChordProDirectives)) {
     return { detected: "chordpro", result: chordProResult };
   }
 
@@ -256,5 +298,5 @@ export function detectAndParse(text: string): { detected: DetectedFormat; result
   const plainResult = tryParsePlain(trimmed);
   if (plainResult) return { detected: "plain", result: plainResult };
 
-  return { detected: "plain", result: { title: "", sections: [], format: "plain" } };
+  return { detected: "plain", result: { title: "", sections: [], format: "plain", warnings: [], chordsDetected: false } };
 }

@@ -41,14 +41,9 @@ export interface LowerThirdSlice {
   setSongs: (v: Song[]) => void;
   hymnLibrary: Song[];
   setHymnLibrary: (v: Song[]) => void;
-  songSearch: string;
-  setSongSearch: (v: string) => void;
-  editingSong: Song | null;
-  setEditingSong: (v: Song | null) => void;
-  songImportText: string;
-  setSongImportText: (v: string) => void;
-  showSongImport: boolean;
-  setShowSongImport: (v: boolean) => void;
+  /** P2: transient Quick Lyrics draft — never persisted, never in `songs`. */
+  quickLyricsText: string;
+  setQuickLyricsText: (v: string) => void;
 }
 
 export const createLowerThirdSlice: StateCreator<AppStore, [], [], LowerThirdSlice> = (set) => ({
@@ -90,12 +85,6 @@ export const createLowerThirdSlice: StateCreator<AppStore, [], [], LowerThirdSli
   setSongs: (v) => set({ songs: v }),
   hymnLibrary: [],
   setHymnLibrary: (v) => set({ hymnLibrary: v }),
-  songSearch: "",
-  setSongSearch: (v) => set({ songSearch: v }),
-  editingSong: null,
-  setEditingSong: (v) => set({ editingSong: v }),
-  songImportText: "",
-  setSongImportText: (v) => set({ songImportText: v }),
-  showSongImport: false,
-  setShowSongImport: (v) => set({ showSongImport: v }),
+  quickLyricsText: "",
+  setQuickLyricsText: (v) => set({ quickLyricsText: v }),
 });

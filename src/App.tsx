@@ -10,6 +10,7 @@ import { useFonts } from "./hooks/useFonts";
 import { useBibleCascade } from "./hooks/useBibleCascade";
 import { useItemActions } from "./hooks/useItemActions";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { flattenSongForLowerThird } from "./utils/song";
 
 import { AppHeader } from "./components/layout/AppHeader";
 import { LeftNav } from "./components/layout/LeftNav";
@@ -77,19 +78,7 @@ export default function App() {
 
   const ltFlatLines = useMemo((): { text: string; sectionLabel: string }[] => {
     const song = songs.find(s => s.id === ltSongId);
-    if (!song) return [];
-    const flat: { text: string; sectionLabel: string }[] = [];
-    const arr = song.arrangement;
-    const sections = song.sections;
-    if (arr && arr.length > 0) {
-      for (const lbl of arr) {
-        const sec = sections.find((s) => s.label === lbl);
-        if (sec) for (const line of sec.lines) flat.push({ text: line, sectionLabel: sec.label });
-      }
-    } else {
-      for (const section of sections) for (const line of section.lines) flat.push({ text: line, sectionLabel: section.label });
-    }
-    return flat;
+    return flattenSongForLowerThird(song);
   }, [songs, ltSongId]);
 
   useKeyboardShortcuts({ stageItem, goLive, sendLive, clearAll, ltFlatLines });

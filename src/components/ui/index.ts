@@ -10,6 +10,8 @@ export { SearchField } from "./SearchField";
 export { EmptyState } from "./EmptyState";
 export { ConfirmModal } from "./ConfirmModal";
 export type { ConfirmModalProps } from "./ConfirmModal";
+export { Modal } from "./Modal";
+export type { ModalProps } from "./Modal";
 export { ActionBar } from "./ActionBar";
 export { PreviewSurface } from "./PreviewSurface";
 export { SaveStatus } from "./SaveStatus";

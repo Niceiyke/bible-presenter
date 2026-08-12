@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useMemo, useCallback, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { useAppStore } from "../store";
 import { ltBuildLyricsPayload } from "../utils";
+import { flattenSongForLowerThird } from "../utils/song";
 import { useKeyboardBinding } from "../hooks/keyboardRegistry";
-import type { LowerThirdData, LtPreset, LowerThirdTemplate } from "../types";
+import type { LowerThirdData, LtPreset, LowerThirdTemplate, Song } from "../types";
 
 interface LowerThirdTabProps {
   onLoadMedia: () => Promise<void>;
@@ -282,6 +284,8 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
     ltAutoSeconds, setLtAutoSeconds,
     ltAtEnd, setLtAtEnd,
     currentLowerThird,
+    quickLyricsText, setQuickLyricsText,
+    setBackendError, setToast,
   } = useAppStore();
 
   const ltAutoRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -292,24 +296,11 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
   );
 
   const ltFlatLines = useMemo((): { text: string; sectionLabel: string }[] => {
-    if (!ltSelectedSong) return [];
-    const flat: { text: string; sectionLabel: string }[] = [];
-    const arr = ltSelectedSong.arrangement;
-    const sections = ltSelectedSong.sections;
-    if (arr && arr.length > 0) {
-      for (const label of arr) {
-        const sec = sections.find((s) => s.label === label);
-        if (sec) {
-          for (const line of sec.lines) flat.push({ text: line, sectionLabel: sec.label });
-        }
-      }
-    } else {
-      for (const section of sections) {
-        for (const line of section.lines) flat.push({ text: line, sectionLabel: section.label });
-      }
+    if (ltSongId === "quick-lyrics") {
+      return quickLyricsText.split("\n").filter(l => l.trim()).map(l => ({ text: l.trim(), sectionLabel: "QUICK" }));
     }
-    return flat;
-  }, [ltSelectedSong]);
+    return flattenSongForLowerThird(ltSelectedSong);
+  }, [ltSelectedSong, ltSongId, quickLyricsText]);
 
   const ltSendCurrent = useCallback(async (index: number) => {
     if (ltFlatLines.length === 0) return;
@@ -508,9 +499,6 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
                   setLtSongId(null);
                 } else {
                   setLtSongId("quick-lyrics");
-                  if (!songs.find(s => s.id === "quick-lyrics")) {
-                    setSongs([...songs, { id: "quick-lyrics", title: "Quick Lyrics", sections: [{ label: "QUICK", lines: [] }], arrangement: ["QUICK"] } as any]);
-                  }
                   setLtLineIndex(0);
                 }
               }}
@@ -527,12 +515,36 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
               <textarea
                 className="w-full bg-slate-900 text-slate-200 text-[11px] rounded p-2 border border-slate-700 focus:outline-none focus:border-amber-500/50 resize-none h-20"
                 placeholder="Paste lyrics here..."
-                onChange={(e) => {
-                  const lines = e.target.value.split("\n").filter(l => l.trim());
-                  const quickSong = { id: "quick-lyrics", title: "Quick Lyrics", sections: [{ label: "QUICK", lines }], arrangement: ["QUICK"] };
-                  setSongs([...songs.filter(s => s.id !== "quick-lyrics"), quickSong as any]);
-                }}
+                value={quickLyricsText}
+                onChange={(e) => { setQuickLyricsText(e.target.value); setLtLineIndex(0); }}
               />
+              <button
+                onClick={async () => {
+                  const lines = quickLyricsText.split("\n").filter(l => l.trim());
+                  if (lines.length === 0) return;
+                  const song: Song = {
+                    id: "",
+                    title: "Quick Lyrics " + new Date().toLocaleDateString(),
+                    sections: [{ label: "QUICK", lines }],
+                    arrangement: ["QUICK"],
+                    style: "LowerThird",
+                  };
+                  try {
+                    const saved = await invoke<Song>("save_song", { song });
+                    const next = [...songs, saved].sort((a, b) => a.title.localeCompare(b.title));
+                    setSongs(next);
+                    emit("songs-sync", next);
+                    setLtSongId(saved.id);
+                    setQuickLyricsText("");
+                    setToast("Saved as song");
+                  } catch (err: any) {
+                    setBackendError(`Save failed: ${err?.message ?? err}`);
+                  }
+                }}
+                className="text-[10px] font-bold uppercase bg-amber-600 hover:bg-amber-500 text-white px-2 py-1 rounded transition-all"
+              >
+                Save as Song
+              </button>
             </div>
           )}
 

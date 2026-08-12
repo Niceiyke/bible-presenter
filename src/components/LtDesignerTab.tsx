@@ -6,6 +6,7 @@ import { writeFile, readTextFile } from "@tauri-apps/plugin-fs";
 import { useAppStore } from "../store";
 import { LowerThirdOverlay } from "./shared/Renderers";
 import { stableId } from "../utils";
+import { flattenSongForLowerThird } from "../utils/song";
 import { FONTS } from "../types";
 import {
   Monitor, Plus, Type, Palette, Move, Zap, Square,
@@ -225,19 +226,7 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
 
   const ltFlatLines = React.useMemo(() => {
     const song = songs.find(s => s.id === ltSongId);
-    if (!song) return [];
-    const flat: { text: string; sectionLabel: string }[] = [];
-    const arr = song.arrangement;
-    if (arr && arr.length > 0) {
-      for (const lbl of arr) {
-        const sec = song.sections.find(s => s.label === lbl);
-        if (sec) for (const line of sec.lines) flat.push({ text: line, sectionLabel: sec.label });
-      }
-    } else {
-      for (const section of song.sections)
-        for (const line of section.lines) flat.push({ text: line, sectionLabel: section.label });
-    }
-    return flat;
+    return flattenSongForLowerThird(song);
   }, [songs, ltSongId]);
 
   // Dynamic preview scaling
