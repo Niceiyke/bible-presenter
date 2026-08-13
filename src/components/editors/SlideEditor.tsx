@@ -9,6 +9,7 @@ import { SlideCanvas } from "./slide/SlideCanvas";
 import { PropertiesPanel } from "./slide/PropertiesPanel";
 import { ZoomControls } from "./slide/ZoomControls";
 import { SlideEditorModals } from "./slide/SlideEditorModals";
+import { useReferenceHeight } from "../../hooks/useReferenceHeight";
 import type { CustomPresentation, CustomSlide, MediaItem, SlideTheme, DisplayItem } from "../../types";
 
 // ─── Main SlideEditor ────────────────────────────────────────────────────────
@@ -331,17 +332,18 @@ function LivePreviewPip({
   onNavigate: (delta: number) => void;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
+  const referenceHeight = useReferenceHeight();
   const [pipScale, setPipScale] = useState(0.2);
 
   useLayoutEffect(() => {
     const el = boxRef.current;
     if (!el) return;
-    const update = () => setPipScale(el.clientHeight / 1080);
+    const update = () => setPipScale(el.clientHeight / referenceHeight);
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [referenceHeight]);
 
   return (
     <div

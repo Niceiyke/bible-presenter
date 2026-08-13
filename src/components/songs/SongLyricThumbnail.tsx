@@ -3,6 +3,7 @@ import type { Song, SongSlideData } from "../../types";
 import { getSongSequence } from "../../utils/song";
 import { useAppStore } from "../../store";
 import { useBoxScale } from "../../hooks/useBoxScale";
+import { useReferenceHeight } from "../../hooks/useReferenceHeight";
 import { SongSlideRenderer } from "../shared/Renderers";
 
 interface SongLyricThumbnailProps {
@@ -18,7 +19,8 @@ interface SongLyricThumbnailProps {
 export function SongLyricThumbnail({ song }: SongLyricThumbnailProps) {
   const showSectionLabel = useAppStore((s) => !!s.settings.show_song_section_labels);
   const boxRef = useRef<HTMLDivElement>(null);
-  const scale = useBoxScale(boxRef);
+  const referenceHeight = useReferenceHeight();
+  const scale = useBoxScale(boxRef, referenceHeight);
 
   const sequence = getSongSequence(song);
   const sec = sequence[0];

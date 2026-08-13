@@ -16,6 +16,7 @@
 import React, { useLayoutEffect, useRef, useState } from "react";
 import { CustomSlideRenderer } from "../../shared/Renderers";
 import type { CustomSlide, SlideTheme } from "../../../types";
+import { useReferenceHeight } from "../../../hooks/useReferenceHeight";
 
 interface SlideThumbnailProps {
   slide: CustomSlide;
@@ -39,7 +40,8 @@ export function SlideThumbnail({
   height,
 }: SlideThumbnailProps) {
   const boxRef = useRef<HTMLDivElement>(null);
-  const [boxH, setBoxH] = useState(0);
+  const [boxH, setBoxH] = useState<number>(0);
+  const referenceHeight = useReferenceHeight();
 
   // Measure the rendered slot height (ResizeObserver, so it stays correct
   // if the slot resizes) and scale against the 1080p reference — the same
@@ -55,7 +57,10 @@ export function SlideThumbnail({
     return () => ro.disconnect();
   }, []);
 
-  const scale = (boxH > 0 ? boxH : (height ?? 1080)) / 1080;
+  // Fall back to the explicit `height` prop when measurement hasn't run
+  // yet; a `0` measured height must never resolve to scale 1.0 (that would
+  // render the thumbnail at full output size until the observer fires).
+  const scale = (boxH > 0 ? boxH : (height && height > 0 ? height : referenceHeight)) / referenceHeight;
 
   return (
     <div

@@ -11,6 +11,7 @@ import {
 } from "./shared/Renderers";
 import { useAppStore } from "../store";
 import { useTauriEvent } from "../hooks/useTauriEvent";
+import { useReferenceHeight } from "../hooks/useReferenceHeight";
 import { THEMES } from "../types";
 import type { DisplayItem, MediaItem } from "../types";
 import { getEffectiveBackground, getItemUid, getVideoBackground, resolvePath } from "../utils";
@@ -52,21 +53,22 @@ export function PreviewCard({
   const bgVideo = getVideoBackground(settings, item);
 
   // Measure the 16:9 slide box and scale slide/song fonts against the
-  // 1080p reference — the same policy `useCanvasScale` uses, so the
-  // preview always matches the output proportions regardless of the
-  // cockpit's resizable width.
+  // configured reference (1080p by default) — the same policy
+  // `useCanvasScale` uses, so the preview always matches the output
+  // proportions regardless of the cockpit's resizable width.
   const slideBoxRef = useRef<HTMLDivElement | null>(null);
+  const referenceHeight = useReferenceHeight();
   const [slideScale, setSlideScale] = useState(0.25);
 
   useLayoutEffect(() => {
     const el = slideBoxRef.current;
     if (!el) return;
-    const update = () => setSlideScale(el.clientHeight / 1080);
+    const update = () => setSlideScale(el.clientHeight / referenceHeight);
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [item]);
+  }, [item, referenceHeight]);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cameraPreviewRef = useRef<HTMLVideoElement | null>(null);

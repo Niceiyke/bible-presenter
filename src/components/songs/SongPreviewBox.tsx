@@ -1,6 +1,7 @@
 import React, { useRef } from "react";
 import type { SongSlideData } from "../../types";
 import { useBoxScale } from "../../hooks/useBoxScale";
+import { useReferenceHeight } from "../../hooks/useReferenceHeight";
 import { SongSlideRenderer } from "../shared/Renderers";
 import { cn } from "../ui/cn";
 
@@ -26,7 +27,8 @@ export function SongPreviewBox({
   className?: string;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
-  const scale = useBoxScale(boxRef);
+  const referenceHeight = useReferenceHeight();
+  const scale = useBoxScale(boxRef, referenceHeight);
 
   return (
     <div

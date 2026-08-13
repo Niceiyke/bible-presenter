@@ -13,9 +13,9 @@
 
 import type { RefObject } from "react";
 import { useBoxScale } from "../../../hooks/useBoxScale";
-
-const REFERENCE_HEIGHT = 1080;
+import { useReferenceHeight } from "../../../hooks/useReferenceHeight";
 
 export function useCanvasScale(canvasRef: RefObject<HTMLDivElement | null>): number {
-  return useBoxScale(canvasRef, REFERENCE_HEIGHT);
+  const referenceHeight = useReferenceHeight();
+  return useBoxScale(canvasRef, referenceHeight);
 }

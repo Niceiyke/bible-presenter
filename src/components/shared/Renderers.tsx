@@ -4,6 +4,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { resolvePath, getTransitionVariants } from "../../utils";
 import { sanitizeSlideHtml } from "../../utils/sanitize";
 import { useAppStore } from "../../store";
+import { useReferenceHeight } from "../../hooks/useReferenceHeight";
 import {
   CustomSlide,
   CustomSlideDisplayData,
@@ -1024,23 +1025,24 @@ export function SmallItemPreview({
   settings?: PresentationSettings;
 }) {
   // Slot that re-measures and re-scales slide/song renderers against the
-  // 1080p reference — same policy as `useCanvasScale` so previews always
+  // configured reference — same policy as `useCanvasScale` so previews always
   // match the editor canvas irrespective of the host box size. The previous
   // hardcoded `scale={0.1}` (CustomSlide) / `scale={0.2}` (Song) only ever
   // matched one fixed box height, so wider/narrower hosts overflowed or
   // shrank content.
   const boxRef = useRef<HTMLDivElement>(null);
+  const referenceHeight = useReferenceHeight();
   const [scale, setScale] = useState(0.1);
 
   useLayoutEffect(() => {
     const el = boxRef.current;
     if (!el) return;
-    const update = () => setScale(el.clientHeight > 0 ? el.clientHeight / 1080 : 0.1);
+    const update = () => setScale(el.clientHeight > 0 ? el.clientHeight / referenceHeight : 0.1);
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [item]);
+  }, [item, referenceHeight]);
 
   switch (item.type) {
     case "Verse":
@@ -1092,7 +1094,7 @@ export function SlideThumbnail({
 }) {
   const showOverlay = onStage || onLive || onAddToSchedule;
 
-  // Measure the slot height and scale slide fonts against the 1080p
+  // Measure the slot height and scale slide fonts against the configured
   // reference — the same policy `useCanvasScale` (editor canvas) and
   // `editors/slide/SlideThumbnail` (slide-rail thumbnails) use. The
   // previous hardcoded `scale={0.1}` only matched a 108px-tall slot,
@@ -1101,17 +1103,18 @@ export function SlideThumbnail({
   // making text overflow (small slot) or sit too small (large slot)
   // relative to the slide's % boxes which always fill the container.
   const boxRef = useRef<HTMLDivElement>(null);
+  const referenceHeight = useReferenceHeight();
   const [scale, setScale] = useState(0.1);
 
   useLayoutEffect(() => {
     const el = boxRef.current;
     if (!el) return;
-    const update = () => setScale(el.clientHeight > 0 ? el.clientHeight / 1080 : 0.1);
+    const update = () => setScale(el.clientHeight > 0 ? el.clientHeight / referenceHeight : 0.1);
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [referenceHeight]);
 
   return (
     <div
