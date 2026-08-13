@@ -253,7 +253,13 @@ impl TokenStore {
             std::fs::create_dir_all(dir)?;
         }
         let json = serde_json::to_string(&devices).unwrap_or_else(|_| "[]".into());
-        std::fs::write(path, json)
+        // Write to a temp file and rename so a crash mid-write can never leave
+        // a truncated `remote_devices.json` behind. A corrupt file would
+        // otherwise silently clear every paired device token on the next load.
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, path)?;
+        Ok(())
     }
 
     pub fn load(&self, path: &Path) {
@@ -350,6 +356,19 @@ mod tests {
         let devices = loaded.list_devices();
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].name, "Phone");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn persist_leaves_no_temp_file_behind() {
+        let store = TokenStore::new();
+        store.register_device("tok-atomic", "iPad".into(), RemoteRole::Operator);
+        let base = std::env::temp_dir().join(format!("remote_devices_atomic_test_{}", uuid::Uuid::new_v4()));
+        let path = base.with_extension("json");
+        let tmp = base.with_extension("json.tmp");
+        store.persist(&path).unwrap();
+        assert!(path.exists());
+        assert!(!tmp.exists(), "atomic persist left a temp file behind");
         let _ = std::fs::remove_file(&path);
     }
 

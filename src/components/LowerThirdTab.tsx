@@ -5,6 +5,7 @@ import { useAppStore } from "../store";
 import { ltBuildLyricsPayload } from "../utils";
 import { useKeyboardBinding } from "../hooks/keyboardRegistry";
 import { useLtFlatLines } from "../hooks/useLtFlatLines";
+import { resolveSongLtTemplate } from "../utils/song";
 import { LowerThirdPreview } from "./LowerThirdPreview";
 import type { LowerThirdData, LtPreset, LowerThirdTemplate, Song } from "../types";
 
@@ -346,6 +347,10 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
 
   const ltFlatLines = useLtFlatLines();
 
+  // A song with its own saved template wins over the operator's active one
+  // for the lyrics-overlay send path.
+  const resolvedLtTemplate = resolveSongLtTemplate(ltSongId, songs, ltSavedTemplates, ltTemplate);
+
   // Draft nameplate / free text, used for the styled preview and for
   // live-updating the overlay while it is on air.
   const ltDraftPayload = useMemo((): LowerThirdData | null => {
@@ -386,8 +391,8 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
     const clampedIndex = Math.max(0, Math.min(index, ltFlatLines.length - 1));
     const payload = ltBuildLyricsPayload(ltFlatLines, clampedIndex, ltLinesPerDisplay);
     if (!payload) return;
-    await invoke("show_lower_third", { data: payload, template: ltTemplate });
-  }, [ltFlatLines, ltLinesPerDisplay, ltTemplate]);
+    await invoke("show_lower_third", { data: payload, template: resolvedLtTemplate });
+  }, [ltFlatLines, ltLinesPerDisplay, resolvedLtTemplate]);
 
   const ltAdvance = useCallback(async (dir: 1 | -1) => {
     if (ltFlatLines.length === 0) return;
@@ -415,7 +420,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
         if (!ltSongId || ltFlatLines.length === 0) return;
         const payload = ltBuildLyricsPayload(ltFlatLines, ltLineIndex, ltLinesPerDisplay);
         if (!payload) return;
-        invoke("show_lower_third", { data: payload, template: ltTemplate })
+        invoke("show_lower_third", { data: payload, template: resolvedLtTemplate })
           .then(() => setLtVisible(true))
           .catch((err: any) => setBackendError(`Show overlay failed: ${err?.message ?? err}`));
       }
@@ -778,7 +783,8 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
                 payload = ltBuildLyricsPayload(ltFlatLines, ltLineIndex, ltLinesPerDisplay);
               }
               if (!payload) return;
-              try { await invoke("show_lower_third", { data: payload, template: ltTemplate }); setLtVisible(true); }
+              const sendTemplate = ltMode === "lyrics" ? resolvedLtTemplate : ltTemplate;
+              try { await invoke("show_lower_third", { data: payload, template: sendTemplate }); setLtVisible(true); }
               catch (err: any) { setBackendError(`Show overlay failed: ${err?.message ?? err}`); }
             }
           }}

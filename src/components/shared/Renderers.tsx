@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useMemo } from "react";
+import React, { useRef, useEffect, useState, useMemo, useLayoutEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { resolvePath, getTransitionVariants } from "../../utils";
@@ -1023,6 +1023,25 @@ export function SmallItemPreview({
   appDataDir?: string | null;
   settings?: PresentationSettings;
 }) {
+  // Slot that re-measures and re-scales slide/song renderers against the
+  // 1080p reference — same policy as `useCanvasScale` so previews always
+  // match the editor canvas irrespective of the host box size. The previous
+  // hardcoded `scale={0.1}` (CustomSlide) / `scale={0.2}` (Song) only ever
+  // matched one fixed box height, so wider/narrower hosts overflowed or
+  // shrank content.
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(0.1);
+
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const update = () => setScale(el.clientHeight > 0 ? el.clientHeight / 1080 : 0.1);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [item]);
+
   switch (item.type) {
     case "Verse":
       return (
@@ -1038,11 +1057,19 @@ export function SmallItemPreview({
         <video src={convertFileSrc(item.data.path)} className="w-full h-full object-cover" muted />
       );
     case "CustomSlide":
-      return <CustomSlideRenderer slide={item.data} scale={0.1} appDataDir={appDataDir} />;
+      return (
+        <div ref={boxRef} className="w-full h-full">
+          <CustomSlideRenderer slide={item.data} scale={scale} appDataDir={appDataDir} />
+        </div>
+      );
     case "Timer":
       return <TimerRenderer data={item.data} />;
     case "Song":
-      return <SongSlideRenderer data={item.data} scale={0.2} />;
+      return (
+        <div ref={boxRef} className="w-full h-full" style={{ aspectRatio: "16/9" }}>
+          <SongSlideRenderer data={item.data} scale={scale} fontSize={settings?.font_size} />
+        </div>
+      );
     default:
       return null;
   }
@@ -1064,13 +1091,35 @@ export function SlideThumbnail({
   appDataDir?: string | null;
 }) {
   const showOverlay = onStage || onLive || onAddToSchedule;
-  
+
+  // Measure the slot height and scale slide fonts against the 1080p
+  // reference — the same policy `useCanvasScale` (editor canvas) and
+  // `editors/slide/SlideThumbnail` (slide-rail thumbnails) use. The
+  // previous hardcoded `scale={0.1}` only matched a 108px-tall slot,
+  // so on wider/narrower operator windows the StudioTab grid handed
+  // `CustomSlideRenderer` a scale that diverged from the editor's,
+  // making text overflow (small slot) or sit too small (large slot)
+  // relative to the slide's % boxes which always fill the container.
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(0.1);
+
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const update = () => setScale(el.clientHeight > 0 ? el.clientHeight / 1080 : 0.1);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   return (
     <div
+      ref={boxRef}
       className="group relative aspect-video rounded overflow-hidden border border-slate-700 hover:border-amber-500/50 transition-all cursor-pointer"
       onClick={onStage}
     >
-      <CustomSlideRenderer slide={slide} scale={0.1} appDataDir={appDataDir} />
+      <CustomSlideRenderer slide={slide} scale={scale} appDataDir={appDataDir} />
       <div className="absolute bottom-0 left-0 px-1 py-0.5 bg-black/50">
         <span className="text-[7px] text-white/70">{index + 1}</span>
       </div>

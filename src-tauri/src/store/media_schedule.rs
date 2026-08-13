@@ -267,6 +267,11 @@ pub struct SongSlideData {
     /// song JSON continues to deserialize.
     #[serde(default)]
     pub background: Option<BackgroundSetting>,
+    /// Per-song lower-third template override (see `Song::lt_template_id`).
+    /// Copied onto the on-wire payload so overlay sends use the song's
+    /// chosen template instead of the operator's current selection.
+    #[serde(default)]
+    pub lt_template_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -579,6 +584,11 @@ pub struct Song {
     /// Per-song background override. See `SongSlideData::background`.
     #[serde(default)]
     pub background: Option<BackgroundSetting>,
+    /// Per-song lower-third template override. When present and resolvable,
+    /// the song's lyrics overlay uses this template instead of the operator's
+    /// currently selected one. Optional so legacy songs still deserialize.
+    #[serde(default)]
+    pub lt_template_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -661,6 +671,7 @@ mod song_tests {
             font_weight: None,
             color: None,
             background: None,
+            lt_template_id: None,
         };
         let json = serde_json::to_string(&data).unwrap();
         let again: SongSlideData = serde_json::from_str(&json).unwrap();
@@ -683,6 +694,7 @@ mod song_tests {
             font_weight: Some("bold".into()),
             color: Some("#ffffff".into()),
             background: None,
+            lt_template_id: None,
         };
         let json = serde_json::to_string(&data).unwrap();
         let again: SongSlideData = serde_json::from_str(&json).unwrap();
@@ -707,6 +719,7 @@ mod song_tests {
             font_weight: None,
             color: None,
             background: None,
+            lt_template_id: None,
         });
         let json = serde_json::to_string(&item).unwrap();
         let again: DisplayItem = serde_json::from_str(&json).unwrap();

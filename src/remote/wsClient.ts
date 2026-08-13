@@ -126,6 +126,10 @@ export function useRemote(): UseRemote {
   const revisionRef = useRef<number | null>(null);
   const connectedRef = useRef(false);
   const pairRef = useRef<{ resolve: () => void; reject: (e: Error) => void } | null>(null);
+  // `connect` is defined below, but the message handler must be able to reopen
+  // the socket when authentication fails. Keep a ref instead of closing over
+  // `connect` to avoid a stale/recursive callback.
+  const connectRef = useRef<() => void>(() => {});
 
   const closeAllPending = useCallback((e: Error) => {
     for (const [, p] of pendingRef.current) {
@@ -162,13 +166,16 @@ export function useRemote(): UseRemote {
         return;
       }
       if (result.command_id === "handshake") {
-        // Authentication/pairing failure — reject any in-flight pair and
-        // drop the stored token so the device re-pairs.
+        // Authentication/pairing failure — reject any in-flight pair, drop the
+        // stored token so the device re-pairs, and reopen a fresh socket. The
+        // server closes the connection right after a rejected handshake, so
+        // without this the socket's `onclose` would flip the UI to "error"
+        // instead of landing on the pairing screen.
         const pair = pairRef.current;
         pairRef.current = null;
         if (pair) pair.reject(new Error(result.error?.message ?? "Authentication failed"));
         localStorage.removeItem(LS_DEVICE_TOKEN);
-        setConn("pairing");
+        connectRef.current();
         return;
       }
       const pending = pendingRef.current.get(result.command_id);
@@ -224,6 +231,8 @@ export function useRemote(): UseRemote {
       }
     };
   }, [handleMessage, closeAllPending]);
+
+  connectRef.current = connect;
 
   useEffect(() => {
     connect();

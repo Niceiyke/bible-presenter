@@ -145,6 +145,7 @@ describe("useRemote handshake", () => {
       lastWs().recv({ command_id: "handshake", ok: false, revision: 0, error: { code: "invalid_pairing", message: "Invalid pairing code" } });
     });
     await expect(pairing).rejects.toThrow("Invalid pairing code");
+    act(() => lastWs().open());
     expect(result.current.conn).toBe("pairing");
   });
 
@@ -166,6 +167,10 @@ describe("useRemote handshake", () => {
       lastWs().recv({ command_id: "handshake", ok: false, revision: 0, error: { code: "unknown_token", message: "Unknown token" } });
     });
     expect(localStorage.getItem("wordlyte.remote.token")).toBeNull();
+    // A fresh socket is opened so the device can re-pair (the old one is
+    // closed by the server after the rejected handshake).
+    expect(FakeWebSocket.instances.length).toBe(2);
+    act(() => lastWs().open());
     expect(result.current.conn).toBe("pairing");
   });
 });

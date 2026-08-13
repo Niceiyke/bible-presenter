@@ -9,7 +9,27 @@
 
 import { stableId } from "./index";
 import type { DisplayItem } from "../types";
-import type { Song, LyricSection, SongLine, SongStyle, SongArrangementStep } from "../types";
+import type { Song, LyricSection, SongLine, SongStyle, SongArrangementStep, LowerThirdTemplate } from "../types";
+
+/** Resolve the lower-third template a song should be projected with. A song
+ *  with a saved `lt_template_id` wins over the operator's currently selected
+ *  template; an unknown/deleted template id or a song without one falls back
+ *  to the operator's active template. */
+export function resolveSongLtTemplate(
+  songId: string | null | undefined,
+  songs: Song[],
+  savedTemplates: LowerThirdTemplate[],
+  fallback: LowerThirdTemplate,
+): LowerThirdTemplate {
+  if (!songId) return fallback;
+  const song = songs.find((s) => s.id === songId);
+  const templateId = song?.lt_template_id;
+  if (templateId) {
+    const found = savedTemplates.find((t) => t.id === templateId);
+    if (found) return found;
+  }
+  return fallback;
+}
 
 /** Current frontend song schema version. `normalizeSong` stamps it. */
 export const SONG_SCHEMA_VERSION = 2;
@@ -163,6 +183,7 @@ export function buildSongDisplayItem(
       font_weight: song.font_weight,
       color: song.color,
       background: song.background,
+      lt_template_id: song.lt_template_id,
     },
   };
 }

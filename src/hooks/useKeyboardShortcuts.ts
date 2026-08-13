@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { useAppStore } from "../store";
 import { ltBuildLyricsPayload } from "../utils";
+import { resolveSongLtTemplate } from "../utils/song";
 import { itemNav, type ItemLookup } from "../items/registry";
 import { useKeyboardBinding } from "./keyboardRegistry";
 import type { DisplayItem } from "../types";
@@ -21,7 +22,7 @@ export function useKeyboardShortcuts(props: Props): void {
   const {
     label, stagedItem, liveItem, studioSlides, nextVerse,
     ltVisible, setLtVisible, ltLineIndex, setLtLineIndex,
-    ltLinesPerDisplay, ltMode, ltTemplate,
+    ltLinesPerDisplay, ltMode, ltTemplate, ltSavedTemplates, ltSongId,
     settings, setSettings, setIsBlackout,
     setActiveTab, setBottomDeckOpen, bottomDeckOpen,
     showShortcuts, setShowShortcuts,
@@ -29,6 +30,10 @@ export function useKeyboardShortcuts(props: Props): void {
     songs, hymnLibrary, scheduleEntries, activeScheduleIdx, setActiveScheduleIdx,
     setBackendError,
   } = useAppStore();
+
+  // A song with its own saved template wins over the operator's active one
+  // for the lyrics-overlay keyboard path (Ctrl+Space, PageUp/PageDown).
+  const resolvedLtTemplate = resolveSongLtTemplate(ltSongId, songs, ltSavedTemplates, ltTemplate);
 
   useKeyboardBinding(
     "operator-default",
@@ -78,7 +83,7 @@ export function useKeyboardShortcuts(props: Props): void {
             if (ltVisible) { invoke("hide_lower_third"); setLtVisible(false); }
             else {
               let p = ltBuildLyricsPayload(ltFlatLines, ltLineIndex, ltLinesPerDisplay);
-              if (p) { invoke("show_lower_third", { data: p, template: ltTemplate }); setLtVisible(true); }
+              if (p) { invoke("show_lower_third", { data: p, template: resolvedLtTemplate }); setLtVisible(true); }
             }
           }
           break;
@@ -88,7 +93,7 @@ export function useKeyboardShortcuts(props: Props): void {
             setLtLineIndex(next);
             if (ltVisible) {
               const p = ltBuildLyricsPayload(ltFlatLines, next, ltLinesPerDisplay);
-              if (p) invoke("show_lower_third", { data: p, template: ltTemplate });
+              if (p) invoke("show_lower_third", { data: p, template: resolvedLtTemplate });
             }
           }
           break;
@@ -98,7 +103,7 @@ export function useKeyboardShortcuts(props: Props): void {
             setLtLineIndex(nextIdx);
             if (ltVisible) {
               const p = ltBuildLyricsPayload(ltFlatLines, nextIdx, ltLinesPerDisplay);
-              if (p) invoke("show_lower_third", { data: p, template: ltTemplate });
+              if (p) invoke("show_lower_third", { data: p, template: resolvedLtTemplate });
             }
           }
           break;

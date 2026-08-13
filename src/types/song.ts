@@ -61,6 +61,11 @@ export interface Song {
    *  `BackgroundSetting` union (None/Color/Image/Video/Camera/Audio),
    *  the same shape `BackgroundEditor` edits. */
   background?: BackgroundSetting;
+  /** Optional per-song lower-third template override. When present and found
+   *  in the saved templates, the song uses it for its lyrics overlay instead
+   *  of the operator's currently selected `ltTemplate`. Absent = inherit the
+   *  operator's active template. */
+  lt_template_id?: string;
 }
 
 export interface SongSlideData {
@@ -80,4 +85,9 @@ export interface SongSlideData {
    *  on-wire slide payload by `buildSongDisplayItem` so the output and stage
    *  windows resolve the same background as the editor preview. */
   background?: BackgroundSetting;
+  /** Per-song lower-third template override (see `Song.lt_template_id`).
+   *  Copied into the on-wire slide payload by `buildSongDisplayItem` so the
+   *  overlay sends with the song's chosen template rather than the operator's
+   *  current selection. */
+  lt_template_id?: string;
 }

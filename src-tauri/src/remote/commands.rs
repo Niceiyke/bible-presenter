@@ -197,6 +197,7 @@ pub fn build_song_slide(song: &Song, index: usize, style: Option<String>) -> Res
         font_weight: song.font_weight.clone(),
         color: song.color.clone(),
         background: song.background.clone(),
+        lt_template_id: song.lt_template_id.clone(),
     }))
 }
 

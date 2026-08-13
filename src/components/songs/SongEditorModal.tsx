@@ -47,6 +47,7 @@ export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps)
   const [showDefaults, setShowDefaults] = useState(false);
   const [showBackground, setShowBackground] = useState(false);
   const ltTemplate = useAppStore((s) => s.ltTemplate);
+  const ltSavedTemplates = useAppStore((s) => s.ltSavedTemplates);
   const media = useAppStore((s) => s.media);
   const setMedia = useAppStore((s) => s.setMedia);
   const settings = useAppStore((s) => s.settings);
@@ -152,6 +153,11 @@ export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps)
         },
       }
     : { kind: "Nameplate" as const, data: { name: draft.title || "Untitled song", title: draft.author } };
+
+  // Preview the overlay with the song's chosen template when it has one.
+  const overlayTemplate = draft.lt_template_id
+    ? ltSavedTemplates.find((t) => t.id === draft.lt_template_id) ?? ltTemplate
+    : ltTemplate;
 
   const footer = confirmDiscard ? (
     <>
@@ -278,6 +284,22 @@ export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps)
                     onChange={(e) => patch({ color: e.target.value })}
                   />
                 </div>
+                <div className="flex flex-col gap-1 col-span-2">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-console-text-subtle">Lower-third template</label>
+                  <select
+                    className="h-9 rounded-md bg-console-surface-raised border border-console-border text-console-text text-xs px-2 focus:border-console-border-strong"
+                    value={draft.lt_template_id ?? ""}
+                    onChange={(e) => patch({ lt_template_id: e.target.value || undefined })}
+                  >
+                    <option value="">Inherit current template</option>
+                    {ltSavedTemplates.map((tmpl) => (
+                      <option key={tmpl.id} value={tmpl.id}>{tmpl.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-console-text-subtle leading-snug">
+                    Used for this song&apos;s lyrics overlay. Inherit uses the template selected in the Lower-Third tab.
+                  </p>
+                </div>
               </div>
             )}
           </div>
@@ -346,7 +368,7 @@ export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps)
               />
             ) : (
               <div className="absolute inset-0" aria-hidden>
-                <LowerThirdOverlay data={overlayData as any} template={ltTemplate} />
+                <LowerThirdOverlay data={overlayData as any} template={overlayTemplate} />
               </div>
             )}
             {sequenceLength === 0 && (

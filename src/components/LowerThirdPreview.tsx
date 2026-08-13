@@ -62,7 +62,7 @@ export function LowerThirdPreview({
           left: "50%",
           top: "50%",
           transform: scale > 0 ? `translate(-50%, -50%) scale(${scale})` : undefined,
-          transformOrigin: "top left",
+          transformOrigin: "center center",
         }}
       >
         <LowerThirdOverlay data={data} template={template} />

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "../store";
 import { displayItemLabel, stableId } from "../utils";
+import { resolveSongLtTemplate } from "../utils/song";
 import { itemNextLive, type ItemLookup } from "../items/registry";
 import type { DisplayItem, PresentationSettings, PropItem, MediaItem, ScheduleEntry, Schedule, ServiceMeta, Scene } from "../types";
 import type { LtLivePayload } from "../store/slices/lowerThirdSlice";
@@ -24,7 +25,7 @@ export function useItemActions() {
     previousItem, setPreviousItem,
     nextVerse, recentItems, setRecentItems,
     settings, setSettings,
-    ltVisible, setLtVisible, ltTemplate, ltMode, ltLineIndex, ltLinesPerDisplay,
+    ltVisible, setLtVisible, ltTemplate, ltSavedTemplates, ltMode, ltLineIndex, ltLinesPerDisplay,
     currentLowerThird, setCurrentLowerThird,
     scheduleEntries, setScheduleEntries,
     activeServiceId, setActiveServiceId,
@@ -157,13 +158,13 @@ export function useItemActions() {
         data: {
           line1: staged.data.lines[0] ?? "",
           line2: staged.data.lines[1],
-          section_label: staged.data.section_label
+          section_label: settings.show_song_section_labels ? staged.data.section_label : undefined
         }
       };
       // Phase 6: only claim the overlay is visible when the backend accepts
       // the show command — a silent fire-and-forget would let the operator
       // believe an overlay is on air when it is not.
-      invoke("show_lower_third", { data: payload, template: ltTemplate })
+      invoke("show_lower_third", { data: payload, template: resolveSongLtTemplate(staged.data.song_id, songs, ltSavedTemplates, ltTemplate) })
         .then(() => {
           setLtVisible(true);
           useAppStore.getState().setLtSongId(staged.data.song_id);
@@ -181,7 +182,7 @@ export function useItemActions() {
       stageItem(nextLiveItem);
     }
     return true;
-  }, [nextLiveItem, stageItem, settings, setPreviousItem, setLiveItem, ltTemplate, setLtVisible, updateSettings, setBackendError, setBusyAction]);
+  }, [nextLiveItem, stageItem, settings, setPreviousItem, setLiveItem, ltTemplate, ltSavedTemplates, songs, setLtVisible, updateSettings, setBackendError, setBusyAction]);
 
   const sendLive = useCallback(async (item: DisplayItem): Promise<boolean> => {
     const current = useAppStore.getState().liveItem;
@@ -209,11 +210,11 @@ export function useItemActions() {
         data: {
           line1: item.data.lines[0] ?? "",
           line2: item.data.lines[1],
-          section_label: item.data.section_label
+          section_label: settings.show_song_section_labels ? item.data.section_label : undefined
         }
       };
       // Phase 6: see goLive — only flip the visible state on a successful show.
-      invoke("show_lower_third", { data: payload, template: ltTemplate })
+      invoke("show_lower_third", { data: payload, template: resolveSongLtTemplate(item.data.song_id, songs, ltSavedTemplates, ltTemplate) })
         .then(() => {
           setLtVisible(true);
           useAppStore.getState().setLtSongId(item.data.song_id);
@@ -246,7 +247,7 @@ export function useItemActions() {
       stageItem(next);
     }
     return true;
-  }, [stageItem, setRecentItems, getNextItem, setPreviousItem, setLiveItem, settings, ltTemplate, setLtVisible, updateSettings, setBackendError, setBusyAction]);
+  }, [stageItem, setRecentItems, getNextItem, setPreviousItem, setLiveItem, settings, ltTemplate, ltSavedTemplates, songs, setLtVisible, updateSettings, setBackendError, setBusyAction]);
 
   const clearAll = useCallback(async (): Promise<ClearSnapshot | null> => {
     const snapshot: ClearSnapshot = {

@@ -8,6 +8,7 @@ import {
   flattenSongForLowerThird,
 } from "../../utils/song";
 import { ltBuildLyricsPayload } from "../../utils";
+import { resolveSongLtTemplate } from "../../utils/song";
 import { useAppStore } from "../../store";
 import { useT } from "../../i18n";
 import { Button, Modal } from "../ui";
@@ -34,7 +35,7 @@ interface SongUsePanelProps {
  *  the LowerThirdTab mirrors the selection (Phase 7). */
 export function SongUsePanel({ song, source, onClose, onStage, onLive, onAddToSchedule }: SongUsePanelProps) {
   const {
-    ltTemplate, setLtSongId, setLtMode, setLtLineIndex,
+    ltTemplate, ltSavedTemplates, songs, setLtSongId, setLtMode, setLtLineIndex,
     ltVisible, setLtVisible, busyActions, setBackendError,
     settings,
   } = useAppStore();
@@ -103,6 +104,9 @@ export function SongUsePanel({ song, source, onClose, onStage, onLive, onAddToSc
       section_label: current?.label ?? "",
     },
   };
+
+  // Preview with the song's chosen template when it has one.
+  const previewLtTemplate = resolveSongLtTemplate(song?.id, songs, ltSavedTemplates, ltTemplate);
 
   const position = `${current?.label ?? "—"} · ${clamped + 1} of ${sequence.length || 1}`;
 
@@ -196,7 +200,7 @@ export function SongUsePanel({ song, source, onClose, onStage, onLive, onAddToSc
                   />
                 ) : (
                   <div className="absolute inset-0" aria-hidden>
-                    <LowerThirdOverlay data={overlayData as any} template={ltTemplate} />
+                    <LowerThirdOverlay data={overlayData as any} template={previewLtTemplate} />
                   </div>
                 )
               )}
@@ -234,7 +238,7 @@ export function SongUsePanel({ song, source, onClose, onStage, onLive, onAddToSc
                           section_label: next.label,
                         },
                       } as any}
-                      template={ltTemplate}
+                      template={previewLtTemplate}
                     />
                   </div>
                 )
