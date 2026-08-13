@@ -166,7 +166,7 @@ mod tests {
     #[test]
     fn state_is_held_or_viewing() {
         let lease = ControllerLease::new();
-        assert_eq!(lease.state(), RemoteControllerState::Viewing);
+        assert!(matches!(lease.state(), RemoteControllerState::Viewing));
         lease.request("dev-1", "iPad");
         match lease.state() {
             RemoteControllerState::Held { device_id, device_name, .. } => {

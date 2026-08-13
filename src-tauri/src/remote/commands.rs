@@ -2,11 +2,12 @@ use crate::events::{emit_checked, LiveItemUpdate};
 use crate::remote::auth::StoredDevice;
 use crate::remote::protocol::{
     RemoteCommand, RemoteCommandResult, RemoteCommandType, RemoteEventKind,
+    RemoteLowerThirdPayload, RemoteSongControl, RemoteSongSearch, RemoteSongSummary,
     RemoteVerseRef, RemoteRole,
 };
 use crate::remote::{RemoteControl, DESKTOP_CONTROLLER_ID};
 use crate::state::AppState;
-use crate::store::{DisplayItem, SearchResponse};
+use crate::store::{DisplayItem, LowerThirdData, LyricSection, Schedule, ScheduleEntry, SearchResponse, Song, SongSlideData};
 use serde_json::json;
 use tauri::AppHandle;
 
@@ -143,6 +144,171 @@ pub fn search_bible(state: &AppState, query: &str, version: &str) -> Result<Sear
 }
 
 // ---------------------------------------------------------------------------
+// Song resolution
+// ---------------------------------------------------------------------------
+
+/// Canonical song section sequence: `arrangement_steps` (id-based) → legacy
+/// `arrangement` (labels) → section order. Mirrors the frontend
+/// `getSongSequence` in `src/utils/song.ts`.
+pub fn song_sequence(song: &Song) -> Vec<&LyricSection> {
+    if let Some(steps) = &song.arrangement_steps {
+        let out: Vec<&LyricSection> = steps
+            .iter()
+            .filter_map(|step| song.sections.iter().find(|s| s.id.as_deref() == Some(step.section_id.as_str())))
+            .collect();
+        if !out.is_empty() {
+            return out;
+        }
+    }
+    if !song.arrangement.is_empty() {
+        let out: Vec<&LyricSection> = song
+            .arrangement
+            .iter()
+            .filter_map(|label| song.sections.iter().find(|s| s.label == *label))
+            .collect();
+        if !out.is_empty() {
+            return out;
+        }
+    }
+    song.sections.iter().collect()
+}
+
+/// Builds a full-screen `Song` display item for a sequence index (clamped to a
+/// valid slide), carrying the display mode and per-song styling so stage and
+/// commit never drop the full-screen vs overlay distinction.
+pub fn build_song_slide(song: &Song, index: usize, style: Option<String>) -> Result<DisplayItem, String> {
+    let sequence = song_sequence(song);
+    if sequence.is_empty() {
+        return Err("Song has no sections".into());
+    }
+    let idx = if index < sequence.len() { index } else { 0 };
+    let section = sequence[idx];
+    Ok(DisplayItem::Song(SongSlideData {
+        song_id: song.id.clone(),
+        title: song.title.clone(),
+        author: song.author.clone(),
+        section_label: section.label.clone(),
+        lines: section.lines.clone(),
+        slide_index: idx as u32,
+        total_slides: sequence.len() as u32,
+        style: style.or_else(|| song.style.clone()),
+        font: song.font.clone(),
+        font_size: song.font_size,
+        font_weight: song.font_weight.clone(),
+        color: song.color.clone(),
+        background: song.background.clone(),
+    }))
+}
+
+/// Finds a song by id in the user library, falling back to the bundled hymn
+/// library.
+pub async fn resolve_song(app: &AppHandle, state: &AppState, id: &str) -> Option<Song> {
+    if let Some(song) = state.media_schedule.list_songs().ok()?.into_iter().find(|s| s.id == id) {
+        return Some(song);
+    }
+    if let Ok(hymns) = crate::commands::misc::get_hymn_library(app.clone()).await {
+        return hymns.into_iter().find(|s| s.id == id);
+    }
+    None
+}
+
+pub fn song_summary(song: &Song) -> RemoteSongSummary {
+    RemoteSongSummary {
+        id: song.id.clone(),
+        title: song.title.clone(),
+        style: song.style.clone(),
+        section_labels: crate::remote::snapshot::song_section_labels(song),
+    }
+}
+
+/// Searchable lowercase text for a song (title, author, key) plus every lyric
+/// line so a volunteer can find songs by content.
+fn song_searchable(song: &Song) -> String {
+    let mut parts = vec![song.title.clone()];
+    if let Some(a) = &song.author {
+        parts.push(a.clone());
+    }
+    if let Some(k) = &song.key {
+        parts.push(k.clone());
+    }
+    for section in &song.sections {
+        parts.push(section.label.clone());
+        parts.extend(section.lines.iter().cloned());
+    }
+    parts.join(" ").to_lowercase()
+}
+
+// ---------------------------------------------------------------------------
+// Service queue helpers
+// ---------------------------------------------------------------------------
+
+/// Appends `item` to the active service through the shared schedule persistence
+/// path and broadcasts the new queue to all remotes.
+pub fn op_add_to_service(state: &AppState, item: DisplayItem, source: Option<String>) -> Result<(), String> {
+    let services = state.media_schedule.list_services().map_err(|e| e.to_string())?;
+    let id = crate::remote::snapshot::persisted_active_service_id(state)
+        .or_else(|| services.first().map(|s| s.id.clone()))
+        .ok_or_else(|| "No service available".to_string())?;
+
+    let mut schedule = match state.media_schedule.load_service(&id) {
+        Ok(s) => s,
+        Err(_) => Schedule {
+            id: id.clone(),
+            name: services.iter().find(|s| s.id == id).map(|s| s.name.clone()).unwrap_or_else(|| "Service".into()),
+            items: Vec::new(),
+        },
+    };
+    schedule.items.push(ScheduleEntry { id: uuid::Uuid::new_v4().to_string(), item });
+    state.media_schedule.save_service(&schedule).map_err(|e| e.to_string())?;
+
+    let (meta, entries) = crate::remote::snapshot::active_service_snapshot(state);
+    state.remote.hub.publish(
+        RemoteEventKind::ScheduleChanged,
+        json!({ "active_service": meta, "entries": entries }),
+        source,
+    );
+    Ok(())
+}
+
+/// Stages the next/previous entry of the active service queue relative to the
+/// current live item (falling back to the first/last entry).
+pub fn op_stage_queue_neighbor(app: &AppHandle, state: &AppState, dir: i32, source: Option<String>) -> Result<(), String> {
+    let (_meta, entries) = crate::remote::snapshot::active_service_snapshot(state);
+    if entries.is_empty() {
+        return Err("No service entries".into());
+    }
+    let live = state.presentation.live_item.lock().clone();
+    let live_json = live.as_ref().and_then(|i| serde_json::to_value(i).ok());
+    let current_idx = live_json.as_ref().and_then(|lv| entries.iter().position(|e| serde_json::to_value(&e.item).ok().as_ref() == Some(lv)));
+    let idx = match current_idx {
+        Some(i) => (i as i32 + dir).clamp(0, entries.len() as i32 - 1) as usize,
+        None if dir > 0 => 0,
+        None => entries.len() - 1,
+    };
+    op_stage(app, state, entries[idx].item.clone(), source, 0);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Lower third helpers
+// ---------------------------------------------------------------------------
+
+/// Shows a lower-third overlay through the authoritative presentation state.
+pub fn op_show_lower_third(app: &AppHandle, state: &AppState, data: LowerThirdData, template: Option<serde_json::Value>, source: Option<String>) {
+    let payload = json!({ "data": data, "template": template.unwrap_or_else(|| json!({})) });
+    *state.presentation.lower_third.lock() = Some(payload.clone());
+    emit_checked(app, "lower-third-update", &Some(payload.clone()));
+    state.remote.hub.publish(RemoteEventKind::LowerThirdChanged, json!({ "lower_third": payload }), source);
+}
+
+/// Hides any lower-third overlay and propagates the null change.
+pub fn op_hide_lower_third(app: &AppHandle, state: &AppState, source: Option<String>) {
+    *state.presentation.lower_third.lock() = None;
+    emit_checked(app, "lower-third-update", &Option::<serde_json::Value>::None);
+    state.remote.hub.publish(RemoteEventKind::LowerThirdChanged, json!({ "lower_third": null }), source);
+}
+
+// ---------------------------------------------------------------------------
 // Authorization helpers
 // ---------------------------------------------------------------------------
 
@@ -194,7 +360,7 @@ pub async fn dispatch(
 ) -> RemoteCommandResult {
     // Mutating commands must pass the lease + revision gates before touching
     // authoritative state. Read-only commands skip the lease check.
-    let mutating = is_mutating(&command.r#type);
+    let mutating = is_mutating(command.r#type.clone());
     if mutating {
         if let Err(e) = check_revision(control, command.expected_revision) {
             return err_result(&command.command_id, control.hub.current_revision(), "stale_revision", &e);
@@ -387,11 +553,105 @@ pub async fn dispatch(
             }
             RemoteCommandResult::ok_with(&command.command_id, control.hub.current_revision(), json!({ "renewed": renewed }))
         }
+        RemoteCommandType::ServiceList => {
+            let (meta, entries) = crate::remote::snapshot::active_service_snapshot(state);
+            RemoteCommandResult::ok_with(
+                &command.command_id,
+                control.hub.current_revision(),
+                json!({ "active_service": meta, "entries": entries }),
+            )
+        }
+        RemoteCommandType::BibleAddToService => {
+            let r = command_payload::<RemoteVerseRef>(command).ok();
+            let resp = match r {
+                Some(r) => resolve_verse(state, &r).and_then(|item| op_add_to_service(state, item, source.clone())),
+                None => Err("Missing verse reference".into()),
+            };
+            match resp {
+                Ok(()) => RemoteCommandResult::ok(&command.command_id, control.hub.current_revision()),
+                Err(e) => err_result(&command.command_id, control.hub.current_revision(), "add_to_service_failed", &e),
+            }
+        }
+        RemoteCommandType::SongsSearch => {
+            let req = command_payload::<RemoteSongSearch>(command).ok();
+            if let Some(req) = req {
+                let mut all: Vec<Song> = state.media_schedule.list_songs().unwrap_or_default();
+                if req.include_hymns {
+                    if let Ok(hymns) = crate::commands::misc::get_hymn_library(app.clone()).await {
+                        all.extend(hymns);
+                    }
+                }
+                let query = req.query.to_lowercase();
+                let matched: Vec<RemoteSongSummary> = if query.trim().is_empty() {
+                    all.iter().take(50).map(song_summary).collect()
+                } else {
+                    all.into_iter()
+                        .filter(|s| song_searchable(s).contains(&query))
+                        .take(50)
+                        .map(|s| song_summary(&s))
+                        .collect()
+                };
+                RemoteCommandResult::ok_with(&command.command_id, control.hub.current_revision(), json!(matched))
+            } else {
+                err_result(&command.command_id, control.hub.current_revision(), "missing_payload", "Missing song search query")
+            }
+        }
+        RemoteCommandType::SongStage | RemoteCommandType::SongGoLive => {
+            let req = command_payload::<RemoteSongControl>(command).ok();
+            let resp = match req {
+                Some(req) => match resolve_song(app, state, &req.song_id).await {
+                    Some(song) => match build_song_slide(&song, req.section_index.unwrap_or(0), req.style.clone()) {
+                        Ok(item) => {
+                            if command.r#type == RemoteCommandType::SongGoLive {
+                                op_send_live(app, state, item, source.clone()).map(|_| ())
+                            } else {
+                                op_stage(app, state, item, source.clone(), control.hub.current_revision());
+                                Ok(())
+                            }
+                        }
+                        Err(e) => Err(e),
+                    },
+                    None => Err("Song not found".into()),
+                },
+                None => Err("Missing song payload".into()),
+            };
+            match resp {
+                Ok(()) => RemoteCommandResult::ok(&command.command_id, control.hub.current_revision()),
+                Err(e) => err_result(&command.command_id, control.hub.current_revision(), "song_failed", &e),
+            }
+        }
+        RemoteCommandType::LowerThirdShow => {
+            let req = command_payload::<RemoteLowerThirdPayload>(command).ok();
+            match req {
+                Some(req) => {
+                    let data_json = json!({ "kind": req.kind, "data": req.data });
+                    match serde_json::from_value::<LowerThirdData>(data_json) {
+                        Ok(data) => {
+                            op_show_lower_third(app, state, data, req.template, source.clone());
+                            RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
+                        }
+                        Err(e) => err_result(&command.command_id, control.hub.current_revision(), "invalid_lower_third", &e.to_string()),
+                    }
+                }
+                None => err_result(&command.command_id, control.hub.current_revision(), "missing_payload", "Missing lower-third payload"),
+            }
+        }
+        RemoteCommandType::LowerThirdHide => {
+            op_hide_lower_third(app, state, source.clone());
+            RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
+        }
+        RemoteCommandType::DisplayStageNext | RemoteCommandType::DisplayStagePrevious => {
+            let dir = if command.r#type == RemoteCommandType::DisplayStageNext { 1 } else { -1 };
+            match op_stage_queue_neighbor(app, state, dir, source.clone()) {
+                Ok(()) => RemoteCommandResult::ok(&command.command_id, control.hub.current_revision()),
+                Err(e) => err_result(&command.command_id, control.hub.current_revision(), "queue_stage_failed", &e),
+            }
+        }
         _ => err_result(&command.command_id, control.hub.current_revision(), NOT_IMPLEMENTED, "Command not implemented in this build"),
     }
 }
 
-fn is_mutating(t: &RemoteCommandType) -> bool {
+fn is_mutating(t: RemoteCommandType) -> bool {
     matches!(
         t,
         RemoteCommandType::RemoteRequestControl

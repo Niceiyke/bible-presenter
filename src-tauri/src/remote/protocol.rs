@@ -20,7 +20,7 @@ impl Default for RemoteRole {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind")]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RemoteControllerState {
     Viewing,
     Requested { device_id: String, device_name: String },
@@ -291,8 +291,12 @@ mod tests {
         };
         let json = serde_json::to_string(&s).unwrap();
         let back: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(back["protocol_version"], REMOTE_PROTOCOL_VERSION);
-        assert_eq!(back["connected"], true);
-        assert_eq!(back["controller_state"]["kind"], "held");
+        assert_eq!(back.get("protocol_version").and_then(|v| v.as_u64()), Some(REMOTE_PROTOCOL_VERSION as u64));
+        assert_eq!(back.get("connected").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            back.get("controller_state").and_then(|v| v.get("kind")).and_then(|v| v.as_str()),
+            Some("held")
+        );
     }
 }
+

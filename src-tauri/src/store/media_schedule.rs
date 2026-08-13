@@ -663,6 +663,7 @@ mod song_tests {
             font_size: None,
             font_weight: None,
             color: None,
+            background: None,
         };
         let json = serde_json::to_string(&data).unwrap();
         let again: SongSlideData = serde_json::from_str(&json).unwrap();
@@ -684,6 +685,7 @@ mod song_tests {
             font_size: Some(40.0),
             font_weight: Some("bold".into()),
             color: Some("#ffffff".into()),
+            background: None,
         };
         let json = serde_json::to_string(&data).unwrap();
         let again: SongSlideData = serde_json::from_str(&json).unwrap();
@@ -707,6 +709,7 @@ mod song_tests {
             font_size: None,
             font_weight: None,
             color: None,
+            background: None,
         });
         let json = serde_json::to_string(&item).unwrap();
         let again: DisplayItem = serde_json::from_str(&json).unwrap();

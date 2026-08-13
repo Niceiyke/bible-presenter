@@ -104,13 +104,13 @@ pub fn build_snapshot(
     }
 }
 
-fn active_service_snapshot(state: &AppState) -> (Option<crate::store::ServiceMeta>, Vec<crate::store::ScheduleEntry>) {
+pub(crate) fn active_service_snapshot(state: &AppState) -> (Option<crate::store::ServiceMeta>, Vec<crate::store::ScheduleEntry>) {
     let services = state.media_schedule.list_services().unwrap_or_default();
-    let active_id = state.media_schedule.get_active_service_id();
+    let active_id = persisted_active_service_id(state);
 
     let active_meta = services
         .iter()
-        .find(|s| Some(&s.id) == active_id.as_ref())
+        .find(|s| active_id.as_deref().map_or(false, |id| s.id == id))
         .or_else(|| services.first())
         .cloned();
 
@@ -123,6 +123,20 @@ fn active_service_snapshot(state: &AppState) -> (Option<crate::store::ServiceMet
         None => Vec::new(),
     };
     (active_meta, entries)
+}
+
+/// The desktop operator console persists its active service id to
+/// `recovery.json` (via `save_recovery`) on every service change. There is no
+/// separate backend "active service" column, so the remote resolves the id from
+/// that authoritative file and falls back to the first service.
+pub(crate) fn persisted_active_service_id(state: &AppState) -> Option<String> {
+    let path = state.app_data_dir.join("recovery.json");
+    let raw = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    value
+        .get("activeServiceId")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 #[cfg(test)]

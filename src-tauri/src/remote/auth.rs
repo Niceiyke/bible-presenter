@@ -326,7 +326,7 @@ mod tests {
         assert_eq!(store.authenticate_device("device-token-1").unwrap().id, device.id);
 
         assert!(store.revoke_device(&device.id));
-        assert_eq!(store.authenticate_device("device-token-1"), Err(AuthError::Revoked));
+        assert!(matches!(store.authenticate_device("device-token-1"), Err(AuthError::Revoked)));
     }
 
     #[test]

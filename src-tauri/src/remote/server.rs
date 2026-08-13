@@ -52,18 +52,23 @@ async fn ws_handler(
 
 /// Binds the remote server on a random local port and returns the bound
 /// address. `files_dir` must already contain the compiled `remote.html`.
+/// Records the bound address and task handle on `control` so `remote_disable`
+/// can shut the server down and `remote_status` can report port/URLs.
 pub async fn start(ctx: RemoteCtx) -> Result<SocketAddr, String> {
-    ctx.control.enabled.store(true, std::sync::atomic::Ordering::SeqCst);
+    let control = ctx.control.clone();
+    control.enabled.store(true, std::sync::atomic::Ordering::SeqCst);
     let app = router(ctx);
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.map_err(|e| e.to_string())?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         let _ = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
         )
         .await;
     });
+    *control.task.lock() = Some(handle);
+    *control.bound_addr.lock() = Some(addr);
     Ok(addr)
 }
 
