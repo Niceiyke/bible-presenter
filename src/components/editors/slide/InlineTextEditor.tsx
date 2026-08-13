@@ -92,6 +92,10 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
   onCommitRef.current = onCommit;
 
   const editor = useEditor({
+    // Tiptap 3.x: `useEditor` doesn't re-render React on transactions by
+    // default, which left the toolbar's font-size/color/alignment readouts
+    // stale after a change. This keeps React in sync with ProseMirror state.
+    shouldRerenderOnTransaction: true,
     extensions: [
       StarterKit.configure({
         // We enable in-editor undo history here (Tiptap 3.x renamed
