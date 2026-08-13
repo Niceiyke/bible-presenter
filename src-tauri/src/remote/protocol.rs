@@ -5,18 +5,13 @@ use serde::{Deserialize, Serialize};
 /// in `src/types/remote.ts`. Bump on any incompatible wire change.
 pub const REMOTE_PROTOCOL_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteRole {
+    #[default]
     Viewer,
     Operator,
     Admin,
-}
-
-impl Default for RemoteRole {
-    fn default() -> Self {
-        RemoteRole::Viewer
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -154,14 +154,19 @@ export function useRemote(): UseRemote {
           if (r.device_token) localStorage.setItem(LS_DEVICE_TOKEN, r.device_token);
           if (r.device_id) setSelfId(r.device_id);
           if (pair) pair.resolve();
-        } else if (pair) {
-          pair.reject(new Error(result.error?.message ?? "Pairing failed"));
+          setConn("connected");
+        } else {
+          if (pair) pair.reject(new Error(result.error?.message ?? "Pairing failed"));
+          setConn("pairing");
         }
-        setConn("connected");
         return;
       }
       if (result.command_id === "handshake") {
-        // Authentication failure — drop the stored token and re-pair.
+        // Authentication/pairing failure — reject any in-flight pair and
+        // drop the stored token so the device re-pairs.
+        const pair = pairRef.current;
+        pairRef.current = null;
+        if (pair) pair.reject(new Error(result.error?.message ?? "Authentication failed"));
         localStorage.removeItem(LS_DEVICE_TOKEN);
         setConn("pairing");
         return;

@@ -223,7 +223,7 @@ impl ConnectedDevices {
 
     pub fn list(&self) -> Vec<ConnectedDevice> {
         let mut list: Vec<ConnectedDevice> = self.inner.lock().values().cloned().collect();
-        list.sort_by(|a, b| b.connected_at.cmp(&a.connected_at));
+        list.sort_by_key(|b| std::cmp::Reverse(b.connected_at));
         list
     }
 }

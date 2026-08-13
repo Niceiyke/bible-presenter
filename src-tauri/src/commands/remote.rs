@@ -93,7 +93,7 @@ pub async fn remote_enable(app: AppHandle, state: State<'_, AppState>) -> Result
         control,
     };
     let addr = crate::remote::server::start(ctx).await?;
-    let _ = state.remote.persist_devices();
+    state.remote.persist_devices();
     crate::store::log_msg(&app, &format!("Remote Control enabled on {}", addr));
 
     Ok(status_info(&state.remote, Some(pairing)))

@@ -110,7 +110,7 @@ pub(crate) fn active_service_snapshot(state: &AppState) -> (Option<crate::store:
 
     let active_meta = services
         .iter()
-        .find(|s| active_id.as_deref().map_or(false, |id| s.id == id))
+        .find(|s| active_id.as_deref().is_some_and(|id| s.id == id))
         .or_else(|| services.first())
         .cloned();
 

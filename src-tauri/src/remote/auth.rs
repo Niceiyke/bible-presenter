@@ -239,7 +239,7 @@ impl TokenStore {
 
     pub fn list_devices(&self) -> Vec<StoredDevice> {
         let mut list: Vec<StoredDevice> = self.devices.lock().values().cloned().collect();
-        list.sort_by(|a, b| b.paired_at.cmp(&a.paired_at));
+        list.sort_by_key(|b| std::cmp::Reverse(b.paired_at));
         list
     }
 

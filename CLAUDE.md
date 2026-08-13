@@ -163,6 +163,18 @@ The startup path searches for `bible_data/wordlyte_bible.db`. If it is unavailab
 
 User data is stored under the Tauri app-local data directory. The backend logs to the app data logs directory, and panic logs use the `io.wordlyte.app` local-app path.
 
+## Remote control subsystem
+
+The Remote Control feature lets a phone/tablet on the same LAN aid the operator. The Tauri backend runs an axum server (a WebSocket endpoint plus static files) and the browser bundle is a separate Vite multi-page entry.
+
+- Rust: `src-tauri/src/remote/` (`mod.rs`, `server.rs`, `auth.rs`, `sessions.rs`, `hub.rs`, `protocol.rs`, `commands.rs`, `snapshot.rs`, `assets.rs`). The server binds a random local port, keeps authoritative state in `state.remote` (`RemoteControl` in `mod.rs`), and never duplicates live/staged/settings state.
+- Wire protocol: `src-tauri/src/remote/protocol.rs` defines `RemoteCommand`/`RemoteEvent`/`RemoteSnapshot`; the frontend mirrors these in `src/types/remote.ts` (`REMOTE_PROTOCOL_VERSION` must match `protocol.rs`). Command/event names are typed literally (e.g. `bible.stage`, `lower_third.show`) and route through the `dispatch` in `remote/commands.rs`.
+- Control model: a single exclusive controller lease (`ControllerLease` in `sessions.rs`). Mutating commands are gated on an operator role, an up-to-date `expected_revision`, and the lease. `RemoteRequestControl` is exempt from the lease gate because it acquires the lease. Pairing uses a short-lived code whose SHA-256 hash is stored; device tokens are persisted under the app data dir (`remote_devices.json`).
+- Tauri commands: `remote_enable`, `remote_disable`, `remote_status`, `remote_regenerate_pairing`, `remote_revoke_device`, `remote_revoke_all`, `remote_claim_control` (registered in `src-tauri/src/main.rs`; implementations in `commands/remote.rs`).
+- Operator UI: Settings → Remote Control (`src/components/settings/sections/RemoteSection.tsx`) enables/disables the server, shows the pairing code and LAN URLs, and manages paired devices and the lease.
+- Browser bundle: `src/remote/` is a standalone React app built to `dist/remote.html` (`remote.html` root entry added to `rollupOptions.input` in `vite.config.ts`). It must not depend on Tauri APIs — it talks only to the WebSocket server. Client logic lives in `src/remote/wsClient.ts` (pair/authenticate handshake, revision-aware sends, snapshot/event hydration). The dev build is served from the project `dist/`.
+- Production shipping: `tauri.conf.json` maps `"../dist": "dist"` in `bundle.resources` so the compiled `remote.html` plus assets land at `resource_dir/dist`, which `resolve_remote_assets_dir` (`remote/assets.rs`) searches. Rebuild with `npm run build` before packaging — `remote_enable` errors if `remote.html` is missing.
+
 ## Assets and runtime data
 
 Runtime Bible and media assets may not be committed to the repository. Confirm required files from `src-tauri/src/commands/assets.rs` and the current startup logs rather than relying on old model instructions.

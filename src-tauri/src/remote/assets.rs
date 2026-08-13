@@ -1,13 +1,14 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Resolves the directory that contains the compiled remote web bundle
 /// (`remote.html` + `assets/`). Search order:
 ///   1. the resource dir (production bundle), joined with `dist`
 ///   2. the directory of the running executable
 ///   3. the current working directory (dev: project root)
+///
 /// Returns an empty path if no `remote.html` can be found; `remote_enable`
 /// then errors with a clear message telling the operator to run `npm run build`.
-pub fn resolve_remote_assets_dir(resource_dir: &PathBuf) -> PathBuf {
+pub fn resolve_remote_assets_dir(resource_dir: &Path) -> PathBuf {
     let mut candidates: Vec<PathBuf> = Vec::new();
     candidates.push(resource_dir.join("dist"));
     if let Ok(exe) = std::env::current_exe() {

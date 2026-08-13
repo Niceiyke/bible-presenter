@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 use protocol::RemoteEventKind;
 use serde_json::json;
 use sessions::{ConnectedDevices, ControllerLease};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 /// Runtime state for the Remote Control server. Lives inside `AppState`
@@ -45,7 +45,7 @@ pub struct RemoteControl {
 }
 
 impl RemoteControl {
-    pub fn new(files_dir: PathBuf, app_data_dir: &PathBuf) -> Self {
+    pub fn new(files_dir: PathBuf, app_data_dir: &Path) -> Self {
         let devices_file = app_data_dir.join("remote_devices.json");
         if let Some(dir) = devices_file.parent() {
             let _ = std::fs::create_dir_all(dir);

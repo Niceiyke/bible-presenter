@@ -1,6 +1,6 @@
 {
   "productName": "Wordlyte",
-  "version": "1.9.5",
+  "version": "1.10.0",
   "identifier": "io.wordlyte.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -84,9 +84,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "bible_data/hymns.json"
-    ],
+    "resources": {
+      "bible_data/hymns.json": "bible_data/hymns.json",
+      "../dist": "dist"
+    },
     "windows": {
       "nsis": {
         "languages": [
