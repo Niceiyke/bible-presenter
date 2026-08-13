@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use wordlyte_lib::{store, state};
+use wordlyte_lib::{remote, store, state};
 use store::log_msg;
 use parking_lot::Mutex;
 use std::fs;
@@ -116,9 +116,21 @@ fn main() {
                 }
             };
 
+            let remote_files_dir = remote::assets::resolve_remote_assets_dir(&resource_path);
+            log_msg(
+                app,
+                &format!(
+                    "Remote assets dir: {} (remote.html {}))",
+                    remote_files_dir.display(),
+                    if remote_files_dir.join("remote.html").exists() { "found" } else { "missing — run `npm run build`" }
+                ),
+            );
+
             let initial_settings = media_schedule
                 .load_settings()
                 .unwrap_or_else(|_| store::PresentationSettings::default());
+
+            let remote_control = Arc::new(remote::RemoteControl::new(remote_files_dir, &app_data_dir));
 
             let state = AppState {
                 presentation: PresentationState {
@@ -132,6 +144,7 @@ fn main() {
                 media_schedule,
                 app_data_dir,
                 download_in_progress: Arc::new(AtomicBool::new(false)),
+                remote: remote_control,
             };
 
             app.manage(state);
@@ -254,6 +267,13 @@ fn main() {
             wordlyte_lib::commands::scenes::capture_scene,
             wordlyte_lib::commands::assets::get_startup_status,
             wordlyte_lib::commands::assets::download_bible_db_cmd,
+            wordlyte_lib::commands::remote::remote_enable,
+            wordlyte_lib::commands::remote::remote_disable,
+            wordlyte_lib::commands::remote::remote_status,
+            wordlyte_lib::commands::remote::remote_regenerate_pairing,
+            wordlyte_lib::commands::remote::remote_revoke_device,
+            wordlyte_lib::commands::remote::remote_revoke_all,
+            wordlyte_lib::commands::remote::remote_claim_control,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

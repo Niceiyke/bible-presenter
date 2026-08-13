@@ -1,12 +1,14 @@
+use crate::remote::commands::{op_clear_all as remote_clear_all, op_clear_live as remote_clear_live, op_commit_staged as remote_commit_staged, op_go_live_item, op_stage as remote_stage};
+use crate::remote::protocol::RemoteEventKind;
 use crate::state::AppState;
 use crate::events::{emit_checked, LiveItemUpdate};
 use crate::store;
+use serde_json::json;
 use tauri::{AppHandle, State};
 
 #[tauri::command]
 pub async fn stage_item(app: AppHandle, state: State<'_, AppState>, item: store::DisplayItem) -> Result<(), String> {
-    *state.presentation.staged_item.lock() = Some(item.clone());
-    emit_checked(&app, "item-staged", &item);
+    remote_stage(&app, &state, item, None, 0);
     Ok(())
 }
 
@@ -16,16 +18,7 @@ pub async fn stage_item(app: AppHandle, state: State<'_, AppState>, item: store:
 /// live item so callers can confirm the commit succeeded.
 #[tauri::command]
 pub async fn commit_staged(app: AppHandle, state: State<'_, AppState>) -> Result<Option<store::DisplayItem>, String> {
-    // Acquire both locks in a single short critical section. Order: live then
-    // staged — stable across all commands to avoid deadlock.
-    let mut live = state.presentation.live_item.lock();
-    let staged = state.presentation.staged_item.lock().clone();
-    *live = staged.clone();
-    drop(live);
-
-    let update = LiveItemUpdate { detected_item: staged.clone() };
-    emit_checked(&app, "live-item-update", &update);
-    Ok(staged)
+    Ok(remote_commit_staged(&app, &state, None))
 }
 
 /// Legacy `go_live` — kept for backwards compatibility but now delegates to
@@ -33,15 +26,13 @@ pub async fn commit_staged(app: AppHandle, state: State<'_, AppState>) -> Result
 /// (matching historical behaviour).
 #[tauri::command]
 pub async fn go_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    commit_staged(app, state).await?;
+    remote_commit_staged(&app, &state, None);
     Ok(())
 }
 
 #[tauri::command]
 pub async fn go_live_item(app: AppHandle, state: State<'_, AppState>, item: store::DisplayItem) -> Result<(), String> {
-    *state.presentation.live_item.lock() = Some(item.clone());
-    let update = LiveItemUpdate { detected_item: Some(item) };
-    emit_checked(&app, "live-item-update", &update);
+    op_go_live_item(&app, &state, item, None);
     Ok(())
 }
 
@@ -50,13 +41,7 @@ pub async fn go_live_item(app: AppHandle, state: State<'_, AppState>, item: stor
 /// (with the unchanged staged value) so windows stay consistent.
 #[tauri::command]
 pub async fn clear_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    *state.presentation.live_item.lock() = None;
-    let update = LiveItemUpdate { detected_item: None };
-    emit_checked(&app, "live-item-update", &update);
-    // Re-broadcast staged so listeners can reconcile (the previous impl
-    // emitted a dead `stage-update` event instead of `item-staged`).
-    let staged = state.presentation.staged_item.lock().clone();
-    emit_checked(&app, "item-staged", &staged);
+    remote_clear_live(&app, &state, None);
     Ok(())
 }
 
@@ -66,15 +51,7 @@ pub async fn clear_live(app: AppHandle, state: State<'_, AppState>) -> Result<()
 /// are intentionally preserved.
 #[tauri::command]
 pub async fn clear_all(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    *state.presentation.live_item.lock() = None;
-    *state.presentation.staged_item.lock() = None;
-    *state.presentation.lower_third.lock() = None;
-    state.presentation.props_layer.lock().clear();
-
-    emit_checked(&app, "live-item-update", &LiveItemUpdate { detected_item: None });
-    emit_checked(&app, "item-staged", &Option::<store::DisplayItem>::None);
-    emit_checked(&app, "lower-third-update", &Option::<serde_json::Value>::None);
-    emit_checked(&app, "props-update", &Vec::<store::PropItem>::new());
+    remote_clear_all(&app, &state, None);
     Ok(())
 }
 
@@ -85,8 +62,12 @@ pub async fn update_timer(app: AppHandle, state: State<'_, AppState>, started_at
         t.started_at = started_at;
         let item = live.clone();
         drop(live);
-        let update = LiveItemUpdate { detected_item: item };
-        emit_checked(&app, "live-item-update", &update);
+        emit_checked(&app, "live-item-update", &LiveItemUpdate { detected_item: item.clone() });
+        state.remote.hub.publish(
+            RemoteEventKind::LiveChanged,
+            json!({ "live_item": item }),
+            None,
+        );
     }
     Ok(())
 }
@@ -109,7 +90,26 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<store::Presentat
 #[tauri::command]
 pub async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: store::PresentationSettings) -> Result<(), String> {
     state.media_schedule.save_settings(&settings).map_err(|e| e.to_string())?;
+    let prev_blanked = {
+        let guard = state.presentation.settings.lock();
+        let prev = guard.is_blanked;
+        drop(guard);
+        prev
+    };
     *state.presentation.settings.lock() = settings.clone();
     emit_checked(&app, "settings-changed", &settings);
+    if prev_blanked != settings.is_blanked {
+        state.remote.hub.publish(
+            RemoteEventKind::BlackoutChanged,
+            json!({ "blackout": settings.is_blanked }),
+            None,
+        );
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    // The display mutations are covered by the transactional frontend tests
+    // (npm run test) plus the remote `commands` unit tests.
 }
