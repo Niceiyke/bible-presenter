@@ -5,6 +5,7 @@ import { useAppStore } from "../store";
 import { displayItemLabel, stableId } from "../utils";
 import { itemNextLive, type ItemLookup } from "../items/registry";
 import type { DisplayItem, PresentationSettings, PropItem, MediaItem, ScheduleEntry, Schedule, ServiceMeta, Scene } from "../types";
+import type { LtLivePayload } from "../store/slices/lowerThirdSlice";
 
 const getVerseKey = (v: any, threshold: number) => `${v.book}-${v.chapter}-${v.verse}-${v.version}-${threshold}`;
 const MAX_VERSE_SPLITS = 64;
@@ -13,7 +14,7 @@ export interface ClearSnapshot {
   liveItem: DisplayItem | null;
   stagedItem: DisplayItem | null;
   propItems: PropItem[];
-  currentLowerThird: { data: any; template: any } | null;
+  currentLowerThird: LtLivePayload | null;
   ltVisible: boolean;
 }
 

@@ -55,6 +55,61 @@ export function OutputSection({ onUpdateSettings }: SettingsSectionProps) {
       </div>
 
       <div>
+        <p className="text-xs text-slate-400 font-bold uppercase mb-3">{t("settings.out.songLabels")}</p>
+        <div className="flex items-center justify-between gap-4">
+          <p className="text-[10px] text-slate-600">{t("settings.out.songLabelsDesc")}</p>
+          <button
+            role="switch"
+            aria-checked={!!settings.show_song_section_labels}
+            onClick={() => onUpdateSettings({ ...settings, show_song_section_labels: !settings.show_song_section_labels })}
+            className={`shrink-0 w-10 h-5 rounded-full transition-all border ${
+              settings.show_song_section_labels
+                ? "bg-amber-500 border-amber-500"
+                : "bg-slate-800 border-slate-700"
+            }`}
+          >
+            <span
+              className={`block w-4 h-4 rounded-full bg-white transition-transform ${
+                settings.show_song_section_labels ? "translate-x-5" : "translate-x-0.5"
+              }`}
+            />
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <p className="text-xs text-slate-400 font-bold uppercase mb-3">{t("settings.out.refHeight")}</p>
+        <div className="flex flex-wrap gap-2 mb-2">
+          {([720, 900, 1080, 1440] as const).map((h) => (
+            <button
+              key={h}
+              onClick={() => onUpdateSettings({ ...settings, reference_output_height: h })}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                (settings.reference_output_height ?? 1080) === h
+                  ? "bg-amber-500 border-amber-500 text-black"
+                  : "bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500"
+              }`}
+            >
+              {h}px
+            </button>
+          ))}
+        </div>
+        <p className="text-[10px] text-slate-600 mb-2">{t("settings.out.refHeightDesc")}</p>
+        <input
+          type="number"
+          min={540}
+          max={2160}
+          step={60}
+          value={settings.reference_output_height ?? 1080}
+          onChange={(e) => {
+            const v = parseInt(e.target.value, 10);
+            if (!Number.isNaN(v)) onUpdateSettings({ ...settings, reference_output_height: v });
+          }}
+          className="w-28 h-9 bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 focus:outline-none focus:border-amber-500"
+        />
+      </div>
+
+      <div>
         <p className="text-xs text-slate-400 font-bold uppercase mb-3">{t("settings.out.slideTransition")}</p>
         <div className="flex flex-wrap gap-2 mb-3">
           {(["fade", "slide-up", "slide-left", "zoom", "none"] as const).map((tr) => (

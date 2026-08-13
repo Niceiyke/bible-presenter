@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, lazy, Suspense } from "react";
+import React, { useState, useEffect, lazy, Suspense } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { AnimatePresence } from "framer-motion";
@@ -10,7 +10,7 @@ import { useFonts } from "./hooks/useFonts";
 import { useBibleCascade } from "./hooks/useBibleCascade";
 import { useItemActions } from "./hooks/useItemActions";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
-import { flattenSongForLowerThird } from "./utils/song";
+import { useLtFlatLines } from "./hooks/useLtFlatLines";
 
 import { AppHeader } from "./components/layout/AppHeader";
 import { LeftNav } from "./components/layout/LeftNav";
@@ -76,10 +76,7 @@ export default function App() {
     loadScenes, saveScene, deleteScene, applyScene, captureScene,
   } = useItemActions();
 
-  const ltFlatLines = useMemo((): { text: string; sectionLabel: string }[] => {
-    const song = songs.find(s => s.id === ltSongId);
-    return flattenSongForLowerThird(song);
-  }, [songs, ltSongId]);
+  const ltFlatLines = useLtFlatLines();
 
   useKeyboardShortcuts({ stageItem, goLive, sendLive, clearAll, ltFlatLines });
 

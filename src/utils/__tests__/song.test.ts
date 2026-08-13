@@ -16,7 +16,8 @@ import {
   songValidate,
   SONG_SCHEMA_VERSION,
 } from "../song";
-import type { Song, LyricSection, DisplayItem } from "../../types";
+import { getEffectiveBackground } from "../index";
+import type { Song, LyricSection, DisplayItem, PresentationSettings } from "../../types";
 
 const mkSong = (over: Partial<Song> = {}): Song => ({
   id: "s1",
@@ -213,6 +214,23 @@ describe("buildSongDisplayItem", () => {
     expect(item.data.font).toBe("Georgia");
     expect(item.data.font_size).toBe(40);
   });
+
+  it("threads a per-song background override into the display item", () => {
+    // Option B: a saved song background travels on `SongSlideData.background`
+    // so the output/stage windows resolve the same background as the editor.
+    const bg = { type: "Color", value: "#1a2b3c" } as const;
+    const song = normalizeSong(mkSong({ background: bg }));
+    const item = buildSongDisplayItem(song, 0) as Extract<DisplayItem, { type: "Song" }>;
+    expect(item.data.background).toEqual(bg);
+  });
+
+  it("leaves background undefined when not set", () => {
+    // Songs without an explicit background must not carry a stray field so
+    // the Option A content-class override stays authoritative.
+    const song = normalizeSong(mkSong());
+    const item = buildSongDisplayItem(song, 0) as Extract<DisplayItem, { type: "Song" }>;
+    expect(item.data.background).toBeUndefined();
+  });
 });
 
 describe("next/previous navigation", () => {
@@ -408,5 +426,62 @@ describe("songValidate", () => {
 
   it("accepts a song with a title and at least one lyric line", () => {
     expect(songValidate(mkSong()).ok).toBe(true);
+  });
+});
+
+/** Option B precedence checks: a per-song background carried on
+ *  `SongSlideData.background` must win over the Settings → Backgrounds
+ *  "Songs" content override, which in turn wins over the global output
+ *  background. Output, stage, and preview cards all go through
+ *  `getEffectiveBackground`, so this is the one assertion that guards the
+ *  whole resolution chain. */
+describe("getEffectiveBackground — Song precedence", () => {
+  const themeColors = { background: "#000000", verseText: "#fff", referenceText: "#f59e0b", waitingText: "#3f3f46" };
+  const baseSettings: PresentationSettings = {
+    theme: "dark",
+    reference_position: "bottom",
+    background: { type: "None" },
+    disabled_bible_versions: [],
+    auto_split_verses: true,
+    verse_split_threshold: 200,
+    font_size: 72,
+    is_blanked: false,
+  };
+
+  const mkSongItem = (over: Partial<Song["background"] & {}>): DisplayItem => {
+    const song = normalizeSong(mkSong({ background: over as any }));
+    return buildSongDisplayItem(song, 0);
+  };
+
+  it("prefers the per-song background over the song_background override", () => {
+    const settings: PresentationSettings = {
+      ...baseSettings,
+      background: { type: "Color", value: "#000000" },
+      song_background: { type: "Color", value: "#songoverride" } as any,
+    };
+    const item = mkSongItem({ type: "Color", value: "#per-song" } as any);
+    const style = getEffectiveBackground(settings, item, themeColors, null);
+    expect((style as { backgroundColor?: string }).backgroundColor).toBe("#per-song");
+  });
+
+  it("falls back to the song_background override when per-song is None", () => {
+    const settings: PresentationSettings = {
+      ...baseSettings,
+      background: { type: "Color", value: "#000000" },
+      song_background: { type: "Color", value: "#songoverride" } as any,
+    };
+    const item = mkSongItem({ type: "None" } as any);
+    const style = getEffectiveBackground(settings, item, themeColors, null);
+    expect((style as { backgroundColor?: string }).backgroundColor).toBe("#songoverride");
+  });
+
+  it("falls back to the global output background when neither per-song nor override is set", () => {
+    const settings: PresentationSettings = {
+      ...baseSettings,
+      background: { type: "Color", value: "#global" },
+    };
+    const item = mkSongItem(undefined as any);
+    const style = getEffectiveBackground(settings, item, themeColors, null);
+    expect((style as { backgroundColor?: string }).backgroundColor).toBe("#global");
   });
 });

@@ -26,14 +26,22 @@ export interface LowerThirdTemplate {
   secondaryFont: string; secondarySize: number; secondaryColor: string;
   secondaryBold: boolean; secondaryItalic: boolean; secondaryUppercase: boolean;
   labelVisible: boolean; labelColor: string; labelSize: number; labelUppercase: boolean;
+  /** Content → style-slot mapping. Headline = name / line 1 / free text,
+   *  subline = title / line 2, label = lyrics section label. Each can be
+   *  rendered with the primary, secondary, or label style set, or hidden.
+   *  This is what lets an operator design templates for songs instead of
+   *  songs being forced onto a hardcoded layout. */
+  nameStyle: "primary" | "secondary" | "label" | "none";
+  titleStyle: "primary" | "secondary" | "label" | "none";
+  labelStyle: "label" | "primary" | "secondary" | "none";
   textShadow: boolean; textShadowColor: string; textShadowBlur: number;
   textOutline: boolean; textOutlineColor: string; textOutlineWidth: number;
   boxShadow: boolean; boxShadowColor: string; boxShadowBlur: number;
   animation: "fade" | "slide-up" | "slide-left" | "none";
-  entryAnimation?: "fade" | "slide-up" | "slide-left" | "slide-right" | "blur-in" | "typewriter" | "none";
+  entryAnimation?: "fade" | "slide-up" | "slide-left" | "slide-right" | "blur-in" | "none";
   exitAnimation?: "fade" | "slide-up" | "slide-left" | "slide-right" | "blur-out" | "none";
   animationDuration: number; exitDuration: number;
-  variant: "classic" | "modern" | "banner";
+  variant: "classic" | "modern" | "banner" | "plaque";
   bannerBadgeText: string;
   scrollEnabled: boolean; scrollDirection: "ltr" | "rtl";
   scrollSpeed: number; scrollSeparator: string; scrollGap: number;
@@ -54,6 +62,7 @@ export const DEFAULT_LT_TEMPLATE: LowerThirdTemplate = {
   secondaryFont: "Arial", secondarySize: 22, secondaryColor: "#f59e0b",
   secondaryBold: false, secondaryItalic: false, secondaryUppercase: false,
   labelVisible: true, labelColor: "#f59e0b", labelSize: 13, labelUppercase: true,
+  nameStyle: "primary", titleStyle: "secondary", labelStyle: "label",
   textShadow: true, textShadowColor: "rgba(0,0,0,0.8)", textShadowBlur: 4,
   textOutline: false, textOutlineColor: "#000000", textOutlineWidth: 1,
   boxShadow: false, boxShadowColor: "rgba(0,0,0,0.5)", boxShadowBlur: 20,

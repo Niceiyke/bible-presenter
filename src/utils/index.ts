@@ -17,6 +17,7 @@ import type {
   SlideBackground,
   ProseMirrorJSON,
   SlideTheme,
+  SongSlideData,
 } from "../types";
 import { THEMES } from "../types";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -429,6 +430,26 @@ export function computePreviewBackground(settings: PresentationSettings, themeCo
   return { backgroundColor: color };
 }
 
+/**
+ * For a Song item, prefer the per-song background override carried on
+ * `SongSlideData.background` (Option B); otherwise fall back to the
+ * Settings → Backgrounds "Songs" content override (Option A). `None`
+ * on the per-item field means "inherit the content override / global"
+ * — same convention the Bible/Media content overrides use.
+ *
+ * Callers still run the union through their `(bg && bg.type !== "None")
+ * ? bg : settings.background` fallback, so returning `undefined` here
+ * yields the global output background in that last step.
+ */
+function songPerItemOrOverride(
+  data: SongSlideData,
+  settings: PresentationSettings,
+): BackgroundSetting | undefined {
+  const per = data.background;
+  if (per && per.type !== "None") return per;
+  return settings.song_background;
+}
+
 export function getVideoBackground(
   settings: PresentationSettings,
   item: DisplayItem | null
@@ -436,6 +457,7 @@ export function getVideoBackground(
   let bg: BackgroundSetting | undefined;
   if (item?.type === "Verse") bg = settings.bible_background;
   else if (item?.type === "Media") bg = settings.media_background;
+  else if (item?.type === "Song") bg = songPerItemOrOverride(item.data, settings);
   else if (item?.type === "CustomSlide")
     bg = settings.background;
   const effective = (bg && bg.type !== "None") ? bg : settings.background;
@@ -450,6 +472,7 @@ export function getCameraBackground(
   let bg: BackgroundSetting | undefined;
   if (item?.type === "Verse") bg = settings.bible_background;
   else if (item?.type === "Media") bg = settings.media_background;
+  else if (item?.type === "Song") bg = songPerItemOrOverride(item.data, settings);
   else if (item?.type === "CustomSlide")
     bg = settings.background;
   const effective = (bg && bg.type !== "None") ? bg : settings.background;
@@ -464,6 +487,7 @@ export function getAudioBackground(
   let bg: BackgroundSetting | undefined;
   if (item?.type === "Verse") bg = settings.bible_background;
   else if (item?.type === "Media") bg = settings.media_background;
+  else if (item?.type === "Song") bg = songPerItemOrOverride(item.data, settings);
   else if (item?.type === "CustomSlide")
     bg = settings.background;
   const effective = (bg && bg.type !== "None") ? bg : settings.background;
@@ -478,6 +502,7 @@ export function getImageBackground(
   let bg: BackgroundSetting | undefined;
   if (item?.type === "Verse") bg = settings.bible_background;
   else if (item?.type === "Media") bg = settings.media_background;
+  else if (item?.type === "Song") bg = songPerItemOrOverride(item.data, settings);
   else if (item?.type === "CustomSlide")
     bg = settings.background;
   const effective = (bg && bg.type !== "None") ? bg : settings.background;
@@ -501,6 +526,15 @@ export function getEffectiveBackground(
   }
   if (item?.type === "Media") {
     const s = pick(settings.media_background);
+    if (s) return s;
+  }
+  if (item?.type === "Song") {
+    // Per-song override wins over the Settings → Backgrounds "Songs" override,
+    // which in turn wins over the global output background (the caller's
+    // final fallback at the bottom of this function).
+    const perItem = pick(item.data.background);
+    if (perItem) return perItem;
+    const s = pick(settings.song_background);
     if (s) return s;
   }
   return computeOutputBackground(settings, colors, appDataDir);

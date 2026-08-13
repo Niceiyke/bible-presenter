@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use crate::store;
+use crate::store::{self, log_msg};
 use serde::Serialize;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, State};
@@ -114,15 +114,29 @@ pub async fn get_hymn_library(app: AppHandle) -> Result<Vec<store::Song>, String
     if let Ok(exe) = std::env::current_exe() { if let Some(dir) = exe.parent() { candidates.push(dir.to_path_buf()); } }
     if let Ok(cwd) = std::env::current_dir() { candidates.push(cwd); }
 
-    let chosen = candidates.iter().find(|p| p.join("bible_data/hymns.json").exists())
-        .or_else(|| candidates.first()).cloned();
-
-    if let Some(p) = chosen {
+    // Resolve the FIRST readable, non-empty file. If a candidate exists but is
+    // empty or malformed (e.g. a stale copy or a manual edit elsewhere), log it
+    // and fall through to the next candidate instead of silently shipping a
+    // truncated library — a "only 2 hymns" symptom usually means the app read
+    // the wrong file on disk.
+    for p in candidates {
         let path = p.join("bible_data/hymns.json");
-        if path.exists() {
-            let json = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-            let hymns: Vec<store::Song> = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-            return Ok(hymns);
+        if !path.exists() {
+            continue;
+        }
+        let json = std::fs::read_to_string(&path)
+            .map_err(|e| format!("hymns.json unreadable at {}: {e}", path.display()))?;
+        match serde_json::from_str::<Vec<store::Song>>(&json) {
+            Ok(hymns) if !hymns.is_empty() => {
+                log_msg(&app, &format!("Hymn library: loaded {} hymns from {}", hymns.len(), path.display()));
+                return Ok(hymns);
+            }
+            Ok(_) => {
+                log_msg(&app, &format!("Hymn library: empty at {}, checking next source", path.display()));
+            }
+            Err(e) => {
+                log_msg(&app, &format!("Hymn library: unparseable at {} ({e}), checking next source", path.display()));
+            }
         }
     }
     Ok(Vec::new())

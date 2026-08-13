@@ -168,6 +168,14 @@ export function BackgroundsSection({ onUpdateSettings, onUploadMedia }: Settings
             media={media}
             onUploadMedia={onUploadMedia}
           />
+          <div className="border-t border-slate-800" />
+          <BackgroundEditor
+            label={t("settings.bg.songs")}
+            value={settings.song_background}
+            onChange={(bg) => onUpdateSettings({ ...settings, song_background: bg })}
+            media={media}
+            onUploadMedia={onUploadMedia}
+          />
         </div>
       </div>
 

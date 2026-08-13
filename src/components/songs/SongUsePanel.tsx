@@ -12,7 +12,8 @@ import { useAppStore } from "../../store";
 import { useT } from "../../i18n";
 import { Button, Modal } from "../ui";
 import type { SongSource } from "./SongLibraryToolbar";
-import { SongSlideRenderer, LowerThirdOverlay } from "../shared/Renderers";
+import { LowerThirdOverlay } from "../shared/Renderers";
+import { SongPreviewBox } from "./SongPreviewBox";
 
 interface SongUsePanelProps {
   song: Song | null;
@@ -35,6 +36,7 @@ export function SongUsePanel({ song, source, onClose, onStage, onLive, onAddToSc
   const {
     ltTemplate, setLtSongId, setLtMode, setLtLineIndex,
     ltVisible, setLtVisible, busyActions, setBackendError,
+    settings,
   } = useAppStore();
   const t = useT();
 
@@ -186,13 +188,17 @@ export function SongUsePanel({ song, source, onClose, onStage, onLive, onAddToSc
             </div>
             <div className="relative w-full aspect-video rounded-lg overflow-hidden bg-slate-950 border border-console-border">
               {previewData && (
-                <div className="absolute inset-0" aria-hidden>
-                  {mode === "FullSlide" ? (
-                    <SongSlideRenderer data={previewData} scale={0.26} />
-                  ) : (
+                mode === "FullSlide" ? (
+                  <SongPreviewBox
+                    data={previewData}
+                    showSectionLabel={!!settings.show_song_section_labels}
+                    fill
+                  />
+                ) : (
+                  <div className="absolute inset-0" aria-hidden>
                     <LowerThirdOverlay data={overlayData as any} template={ltTemplate} />
-                  )}
-                </div>
+                  </div>
+                )
               )}
             </div>
           </div>
@@ -202,22 +208,23 @@ export function SongUsePanel({ song, source, onClose, onStage, onLive, onAddToSc
             <p className="text-[10px] font-bold uppercase tracking-wider text-console-text-subtle">{t("songs.use.upNext")}</p>
             <div className="relative w-full aspect-video rounded-lg overflow-hidden bg-slate-950 border border-console-border">
               {next ? (
-                <div className="absolute inset-0" aria-hidden>
-                  {mode === "FullSlide" ? (
-                    <SongSlideRenderer
-                      data={{
-                        song_id: song?.id ?? "",
-                        title: song?.title ?? "",
-                        author: song?.author,
-                        section_label: next.label,
-                        lines: next.lines,
-                        slide_index: clamped + 1,
-                        total_slides: sequence.length,
-                        style: mode,
-                      }}
-                      scale={0.26}
-                    />
-                  ) : (
+                mode === "FullSlide" ? (
+                  <SongPreviewBox
+                    data={{
+                      song_id: song?.id ?? "",
+                      title: song?.title ?? "",
+                      author: song?.author,
+                      section_label: next.label,
+                      lines: next.lines,
+                      slide_index: clamped + 1,
+                      total_slides: sequence.length,
+                      style: mode,
+                    }}
+                    showSectionLabel={!!settings.show_song_section_labels}
+                    fill
+                  />
+                ) : (
+                  <div className="absolute inset-0" aria-hidden>
                     <LowerThirdOverlay
                       data={{
                         kind: "Lyrics",
@@ -229,8 +236,8 @@ export function SongUsePanel({ song, source, onClose, onStage, onLive, onAddToSc
                       } as any}
                       template={ltTemplate}
                     />
-                  )}
-                </div>
+                  </div>
+                )
               ) : (
                 <div className="absolute inset-0 flex items-center justify-center">
                   <p className="text-[10px] text-console-text-subtle italic">{t("songs.editor.endOfArrangement")}</p>

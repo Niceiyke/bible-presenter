@@ -479,12 +479,16 @@ export function SongSlideRenderer({
   fontSize = 72,
   fontFamily = "Georgia, serif",
   color = "#ffffff",
+  showSectionLabel = false,
 }: {
   data: SongSlideData;
   scale?: number;
   fontSize?: number;
   fontFamily?: string;
   color?: string;
+  /** Whether the section label ("Verse 1", "Chorus") is projected. Controlled by
+   *  the `show_song_section_labels` output setting; off by default. */
+  showSectionLabel?: boolean;
 }) {
   const finalFontSize = data.font_size || fontSize;
   const finalFontFamily = data.font || fontFamily;
@@ -494,7 +498,7 @@ export function SongSlideRenderer({
   return (
     <div className="w-full h-full relative overflow-hidden flex flex-col items-center justify-center p-[8%] text-center">
       <div className="flex flex-col items-center justify-center max-w-[95%]">
-        {data.section_label && (
+        {showSectionLabel && data.section_label && (
           <p className="uppercase tracking-[0.25em] font-black text-amber-500/50 mb-6" style={{ fontSize: `${18 * scale}pt` }}>
             {data.section_label}
           </p>
@@ -590,41 +594,48 @@ const substituteTokens = (text: string) => {
 export function LowerThirdOverlay({
   data,
   template: rawTemplate,
-  onCycleComplete
+  onCycleComplete,
+  scale = 1,
 }: {
   data: LowerThirdData;
   template: LowerThirdTemplate;
   onCycleComplete?: () => void;
+  /** Multiplier for all authored pixel metrics (offsets, sizes, spacing).
+   *  The template is authored for the reference output canvas; pass
+   *  windowScale (windowHeight / referenceHeight) so the overlay stays
+   *  proportionally correct when the output window isn't at the reference. */
+  scale?: number;
 }) {
   const t = { ...DEFAULT_LT_TEMPLATE, ...(rawTemplate || {}) };
+  const s = scale;
   // Guards against onCycleComplete firing multiple times per scroll cycle
   const cycleCompleteFiredRef = useRef(false);
   const containerStyle = {
-    paddingLeft: t.paddingX, paddingRight: t.paddingX,
-    paddingTop: t.paddingY, paddingBottom: t.paddingY,
-    borderRadius: t.borderRadius, overflow: "hidden",
+    paddingLeft: t.paddingX * s, paddingRight: t.paddingX * s,
+    paddingTop: t.paddingY * s, paddingBottom: t.paddingY * s,
+    borderRadius: t.borderRadius * s, overflow: "hidden",
     backdropFilter: t.bgBlur ? `blur(${t.bgBlurAmount ?? 8}px)` : undefined,
     ...(t.bgType === "solid" ? { background: hexToRgba(t.bgColor, t.bgOpacity) } : 
        t.bgType === "gradient" ? { background: `linear-gradient(135deg, ${hexToRgba(t.bgColor, t.bgOpacity)} 0%, ${hexToRgba(t.bgGradientEnd, t.bgOpacity)} 100%)` } :
        t.bgType === "image" && t.bgImagePath ? { backgroundImage: `url("${convertFileSrc(t.bgImagePath)}")`, backgroundSize: "cover", backgroundPosition: "center", backgroundRepeat: "no-repeat" } :
        { background: "transparent" }),
     ...(t.accentEnabled ? {
-      [`border${t.accentSide.charAt(0).toUpperCase() + t.accentSide.slice(1)}`]: `${t.accentWidth}px solid ${t.accentColor}`
+      [`border${t.accentSide.charAt(0).toUpperCase() + t.accentSide.slice(1)}`]: `${t.accentWidth * s}px solid ${t.accentColor}`
     } : {}),
-    ...(t.borderEnabled ? { border: `${t.borderWidth}px solid ${t.borderColor}` } : {}),
-    ...(t.boxShadow ? { boxShadow: `0 10px 30px ${t.boxShadowColor || "rgba(0,0,0,0.5)"}` } : {})
+    ...(t.borderEnabled ? { border: `${t.borderWidth * s}px solid ${t.borderColor}` } : {}),
+    ...(t.boxShadow ? { boxShadow: `0 ${10 * s}px ${30 * s}px ${t.boxShadowColor || "rgba(0,0,0,0.5)"}` } : {})
   } as React.CSSProperties;
 
   const buildLtTextStyle = (
     font: string, size: number, color: string,
     bold: boolean, italic: boolean, uppercase: boolean
   ): React.CSSProperties => ({
-    fontFamily: font, fontSize: size, color,
+    fontFamily: font, fontSize: size * s, color,
     fontWeight: bold ? "bold" : "normal",
     fontStyle: italic ? "italic" : "normal",
     textTransform: uppercase ? "uppercase" : undefined,
-    textShadow: t.textShadow ? `0 2px ${t.textShadowBlur}px ${t.textShadowColor}` : "none",
-    WebkitTextStroke: t.textOutline ? `${t.textOutlineWidth}px ${t.textOutlineColor}` : undefined,
+    textShadow: t.textShadow ? `0 ${2 * s}px ${t.textShadowBlur * s}px ${t.textShadowColor}` : "none",
+    WebkitTextStroke: t.textOutline ? `${t.textOutlineWidth * s}px ${t.textOutlineColor}` : undefined,
     lineHeight: 1.25, margin: 0,
     ...(t.maxLines > 0 ? {
       display: "-webkit-box",
@@ -645,19 +656,19 @@ export function LowerThirdOverlay({
         exit: { opacity: 1, x: 0, y: 0, filter: "blur(0px)" }
       };
   
-      // Entry
+// Entry
       if (entry === "fade") variants.initial = { opacity: 0 };
-      else if (entry === "slide-up") variants.initial = { opacity: 0, y: 40 };
-      else if (entry === "slide-left") variants.initial = { opacity: 0, x: 60 };
-      else if (entry === "slide-right") variants.initial = { opacity: 0, x: -60 };
+      else if (entry === "slide-up") variants.initial = { opacity: 0, y: 40 * s };
+      else if (entry === "slide-left") variants.initial = { opacity: 0, x: 60 * s };
+      else if (entry === "slide-right") variants.initial = { opacity: 0, x: -60 * s };
       else if (entry === "blur-in") variants.initial = { opacity: 0, filter: "blur(20px)", scale: 0.95 };
       else if (entry === "none") variants.initial = { opacity: 1 };
-  
+
       // Exit
       if (exit === "fade") variants.exit = { opacity: 0 };
-      else if (exit === "slide-up") variants.exit = { opacity: 0, y: 40 };
-      else if (exit === "slide-left") variants.exit = { opacity: 0, x: 60 };
-      else if (exit === "slide-right") variants.exit = { opacity: 0, x: -60 };
+      else if (exit === "slide-up") variants.exit = { opacity: 0, y: 40 * s };
+      else if (exit === "slide-left") variants.exit = { opacity: 0, x: 60 * s };
+      else if (exit === "slide-right") variants.exit = { opacity: 0, x: -60 * s };
       else if (exit === "blur-out") variants.exit = { opacity: 0, filter: "blur(20px)", scale: 0.95 };
       else if (exit === "none") variants.exit = { opacity: 1 };
   
@@ -679,22 +690,22 @@ export function LowerThirdOverlay({
     pointerEvents: "none",
   };
 
-  if (isFullWidth) {
+if (isFullWidth) {
     positionStyle.left = 0;
   } else if (t.hAlign === "left") {
-    positionStyle.left = t.offsetX;
+    positionStyle.left = t.offsetX * s;
   } else if (t.hAlign === "right") {
-    positionStyle.right = t.offsetX;
+    positionStyle.right = t.offsetX * s;
   } else {
-    positionStyle.left = `calc(50% + ${t.offsetX}px)`;
+    positionStyle.left = `calc(50% + ${t.offsetX * s}px)`;
   }
 
   if (t.vAlign === "top") {
-    positionStyle.top = t.offsetY;
+    positionStyle.top = t.offsetY * s;
   } else if (t.vAlign === "bottom") {
-    positionStyle.bottom = t.offsetY;
+    positionStyle.bottom = t.offsetY * s;
   } else {
-    positionStyle.top = `calc(50% + ${t.offsetY}px)`;
+    positionStyle.top = `calc(50% + ${t.offsetY * s}px)`;
   }
 
   const alignmentTransform = [
@@ -702,10 +713,103 @@ export function LowerThirdOverlay({
     t.vAlign === "middle" ? "translateY(-50%)" : "",
   ].filter(Boolean).join(" ");
 
+const alignFlex = t.hAlign === "center"
+    ? "items-center text-center"
+    : t.hAlign === "right"
+    ? "items-end"
+    : "items-start";
+
+  // ── Content → style-slot resolution ──────────────────────────────────────
+  const tickerMode = data.kind === "FreeText" && t.scrollEnabled;
+  let headline = "";
+  let subline = "";
+  let kicker = "";
+  if (data.kind === "Nameplate") {
+    headline = data.data.name;
+    subline = data.data.title || "";
+  } else if (data.kind === "Lyrics") {
+    headline = data.data.line1;
+    subline = data.data.line2 || "";
+    if (data.data.section_label && t.labelVisible) kicker = data.data.section_label;
+  } else if (!tickerMode) {
+    headline = data.data.text;
+  }
+
+  const showHeadline = headline.length > 0 && t.nameStyle !== "none";
+  const showSubline = subline.length > 0 && t.titleStyle !== "none";
+  const showKicker = kicker.length > 0 && t.labelStyle !== "none";
+
+  const slotStyle = (slot: "primary" | "secondary" | "label"): React.CSSProperties => {
+    if (slot === "label") {
+      return buildLtTextStyle(t.secondaryFont, t.labelSize, t.labelColor, true, false, t.labelUppercase);
+    }
+    if (slot === "secondary") {
+      return buildLtTextStyle(t.secondaryFont, t.secondarySize, t.secondaryColor, t.secondaryBold, t.secondaryItalic, t.secondaryUppercase);
+    }
+    return buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase);
+  };
+
+  const headlineStyle = slotStyle(t.nameStyle === "none" ? "primary" : t.nameStyle);
+  const sublineStyle = slotStyle(t.titleStyle === "none" ? "primary" : t.titleStyle);
+  const kickerStyle = slotStyle(t.labelStyle === "none" ? "label" : t.labelStyle);
+
+  const badgeText =
+    data.kind === "Lyrics" ? (showKicker ? kicker : t.bannerBadgeText || "LIVE") : t.bannerBadgeText || "LIVE";
+
+  const body = tickerMode ? null : (
+    <div className="w-full">
+      {t.variant === "modern" && (
+        <div className={`flex flex-col ${alignFlex}`}>
+          {showKicker && <p style={{ ...kickerStyle, letterSpacing: "0.1em", marginBottom: 4 }}>{kicker}</p>}
+          {showHeadline && <p style={headlineStyle}>{headline}</p>}
+          {showSubline && (
+            <>
+              <div className="w-1/4 h-px my-2 opacity-30" style={{ backgroundColor: t.accentColor || t.secondaryColor }} />
+              <p style={sublineStyle}>{subline}</p>
+            </>
+          )}
+        </div>
+      )}
+      {t.variant === "banner" && (
+        <div className="flex items-center gap-4">
+          <div className="shrink-0 py-1 px-4 rounded" style={{ background: t.accentColor, color: t.bgColor }}>
+            <p className="font-black text-xl uppercase tracking-tighter">{badgeText}</p>
+          </div>
+          <div className="flex-1 min-w-0">
+            {showHeadline && <p style={headlineStyle}>{headline}</p>}
+            {showSubline && <p style={{ ...sublineStyle, marginTop: 2 }}>{subline}</p>}
+          </div>
+        </div>
+      )}
+      {t.variant === "plaque" && (
+        <div className="flex flex-col">
+          {showKicker && <p style={{ ...kickerStyle, letterSpacing: "0.35em", marginBottom: 6, opacity: 0.9 }}>{kicker}</p>}
+          {showHeadline && <p style={headlineStyle}>{headline}</p>}
+          {showSubline && (
+            <>
+              <div className="w-1/3 h-px my-2 opacity-25" style={{ backgroundColor: t.accentColor || t.secondaryColor }} />
+              <p style={{ ...sublineStyle, opacity: 0.92 }}>{subline}</p>
+            </>
+          )}
+        </div>
+      )}
+      {t.variant === "classic" && (
+        <div className="w-full">
+          {showKicker && <p style={{ ...kickerStyle, letterSpacing: "0.1em", marginBottom: 4 }}>{kicker}</p>}
+          {showHeadline && <p style={headlineStyle}>{headline}</p>}
+          {showSubline && <p style={{ ...sublineStyle, marginTop: 4 }}>{subline}</p>}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <motion.div
       style={positionStyle}
-      transformTemplate={(transform) => `${transform} ${alignmentTransform}`.trim()}
+      transformTemplate={(_transform, generatedTransform) => {
+        const motion = generatedTransform && generatedTransform !== "none" ? generatedTransform : "";
+        return `${motion} ${alignmentTransform}`.trim() || "none";
+      }}
       initial={variants.initial}
       animate={variants.animate}
       exit={{ ...variants.exit, transition: { duration: t.exitDuration ?? 0.2 } }}
@@ -717,108 +821,54 @@ export function LowerThirdOverlay({
       }}
     >
       <div style={{ ...containerStyle, textAlign: t.hAlign, boxSizing: "border-box", minWidth: 0 }}>
-        {data.kind === "Nameplate" && (
-          <div className="w-full">
-            {t.variant === "modern" ? (
-              <div className={`flex flex-col ${t.hAlign === "center" ? "items-center" : t.hAlign === "right" ? "items-end" : "items-start"}`}>
-                <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
-                  {substituteTokens(data.data.name)}
-                </p>
-                {data.data.title && (
-                  <>
-                    <div className="w-1/4 h-px my-2 opacity-30" style={{ backgroundColor: t.secondaryColor }} />
-                    <p style={buildLtTextStyle(t.secondaryFont, t.secondarySize, t.secondaryColor, t.secondaryBold, t.secondaryItalic, t.secondaryUppercase)}>
-                      {substituteTokens(data.data.title)}
-                    </p>
-                  </>
-                )}
-              </div>
-            ) : t.variant === "banner" ? (
-              <div className="flex items-center gap-4">
-                <div className="shrink-0 py-1 px-4 rounded" style={{ background: t.accentColor, color: t.bgColor }}>
-                   <p className="font-black text-xl uppercase tracking-tighter">{t.bannerBadgeText || "LIVE"}</p>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
-                    {substituteTokens(data.data.name)}
-                  </p>
-                  {data.data.title && (
-                    <p style={buildLtTextStyle(t.secondaryFont, t.secondarySize, t.secondaryColor, t.secondaryBold, t.secondaryItalic, t.secondaryUppercase)}>
-                      {substituteTokens(data.data.title)}
-                    </p>
+        {tickerMode && data.kind === "FreeText" ? (
+          <div style={{ overflow: "hidden", position: "relative" }}>
+            <motion.div
+              className="whitespace-nowrap inline-block"
+              style={{ minWidth: '100%' }}
+              initial={{ x: t.scrollDirection === "rtl" ? "100%" : "-100%" }}
+              animate={{ x: t.scrollDirection === "rtl" ? "-100%" : "100%" }}
+              transition={{
+                duration: (11 - t.scrollSpeed) * 5,
+                ease: "linear",
+                repeat: Infinity,
+                repeatType: "loop",
+              }}
+              onUpdate={(latest: any) => {
+                const xValue = parseFloat(latest.x);
+                const nearEnd = t.scrollDirection === "rtl" ? xValue < -98 : xValue > 98;
+                if (nearEnd && !cycleCompleteFiredRef.current) {
+                  cycleCompleteFiredRef.current = true;
+                  onCycleComplete?.();
+                } else if (!nearEnd) {
+                  cycleCompleteFiredRef.current = false;
+                }
+              }}
+            >
+              {Array.from({ length: 3 }).map((_, i) => (
+                <span key={i} style={{ display: "inline-block", marginRight: i < 2 ? t.scrollGap : 0 }}>
+                  {i > 0 && (
+                    <span style={{
+                      margin: `0 ${t.scrollGap}px`,
+                      ...buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase),
+                      opacity: 0.7,
+                    }}>
+                      {t.scrollSeparator}
+                    </span>
                   )}
-                </div>
-              </div>
-            ) : (
-              <>
-                <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
-                  {substituteTokens(data.data.name)}
-                </p>
-                {data.data.title && (
-                  <p style={{ ...buildLtTextStyle(t.secondaryFont, t.secondarySize, t.secondaryColor, t.secondaryBold, t.secondaryItalic, t.secondaryUppercase), marginTop: 4 }}>
-                    {substituteTokens(data.data.title)}
-                  </p>
-                )}
-              </>
-            )}
-          </div>
-        )}
-        {data.kind === "Lyrics" && (
-          <>
-            {data.data.section_label && t.labelVisible && (
-              <p style={{ ...buildLtTextStyle(t.secondaryFont, t.labelSize, t.labelColor, true, false, t.labelUppercase), letterSpacing: "0.1em", marginBottom: 4 }}>
-                {data.data.section_label}
-              </p>
-            )}
-            <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
-              {data.data.line1}
-            </p>
-            {data.data.line2 && (
-              <p style={{ ...buildLtTextStyle(t.secondaryFont, t.secondarySize, t.secondaryColor, t.secondaryBold, t.secondaryItalic, t.secondaryUppercase), marginTop: 4 }}>
-                {data.data.line2}
-              </p>
-            )}
-          </>
-        )}
-        {data.kind === "FreeText" && (
-          t.scrollEnabled ? (
-            <div style={{ overflow: "hidden", position: "relative" }}>
-              <motion.div
-                className="whitespace-nowrap inline-block"
-                style={{ minWidth: '100%' }}
-                initial={{ x: t.scrollDirection === "rtl" ? "100%" : "-100%" }}
-                animate={{ x: t.scrollDirection === "rtl" ? "-100%" : "100%" }}
-                transition={{
-                  duration: (11 - t.scrollSpeed) * 5,
-                  ease: "linear",
-                  repeat: Infinity,
-                  repeatType: "loop",
-                }}
-                onUpdate={(latest: any) => {
-                  const xValue = parseFloat(latest.x);
-                  const nearEnd = t.scrollDirection === "rtl" ? xValue < -98 : xValue > 98;
-                  if (nearEnd && !cycleCompleteFiredRef.current) {
-                    cycleCompleteFiredRef.current = true;
-                    onCycleComplete?.();
-                  } else if (!nearEnd) {
-                    cycleCompleteFiredRef.current = false;
-                  }
-                }}
-              >
-                <span style={{
-                  ...buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase),
-                  display: "inline-block",
-                  flexShrink: 0,
-                }}>
-                  {substituteTokens(data.data.text)}
+                  <span style={{
+                    ...buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase),
+                    display: "inline-block",
+                    flexShrink: 0,
+                  }}>
+                    {substituteTokens(data.data.text)}
+                  </span>
                 </span>
-              </motion.div>
-            </div>
-          ) : (
-            <p style={buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase)}>
-              {substituteTokens(data.data.text)}
-            </p>
-          )
+              ))}
+            </motion.div>
+          </div>
+        ) : (
+          body
         )}
       </div>
     </motion.div>

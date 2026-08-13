@@ -260,6 +260,13 @@ pub struct SongSlideData {
     pub font_weight: Option<String>,
     #[serde(default)]
     pub color: Option<String>,
+    /// Per-song background override (settings-side `BackgroundSetting` union).
+    /// When present and not `None`, wins over Settings → Backgrounds "Songs"
+    /// content override and the global output background. Mirrors how a
+    /// `CustomSlide` carries its own background field. Optional so legacy
+    /// song JSON continues to deserialize.
+    #[serde(default)]
+    pub background: Option<BackgroundSetting>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -401,6 +408,12 @@ pub struct PresentationSettings {
     pub bible_background: BackgroundSetting,
     #[serde(default)]
     pub media_background: BackgroundSetting,
+    #[serde(default)]
+    pub song_background: BackgroundSetting,
+    #[serde(default)]
+    pub show_song_section_labels: bool,
+    #[serde(default = "default_reference_output_height")]
+    pub reference_output_height: f64,
     pub logo_path: Option<String>,
     pub background_logo_path: Option<String>,
     #[serde(default)]
@@ -478,6 +491,7 @@ fn default_auto_clear_background_logo() -> bool { true }
 fn default_version_font() -> String { "Arial, sans-serif".to_string() }
 fn default_version_size() -> f64 { 24.0 }
 fn default_font_size() -> f64 { 72.0 }
+fn default_reference_output_height() -> f64 { 1080.0 }
 fn default_transition() -> String { "fade".to_string() }
 fn default_transition_duration() -> f32 { 0.4 }
 fn default_verse_font_family() -> String { "Georgia, serif".to_string() }
@@ -489,7 +503,7 @@ impl Default for PresentationSettings {
         Self {
             theme: "dark".to_string(), reference_position: "bottom".to_string(),
             background: BackgroundSetting::default(), bible_background: BackgroundSetting::default(),
-            media_background: BackgroundSetting::default(), logo_path: None, background_logo_path: None,
+            media_background: BackgroundSetting::default(), song_background: BackgroundSetting::default(), show_song_section_labels: false, reference_output_height: default_reference_output_height(), logo_path: None, background_logo_path: None,
             show_background_logo: false, background_logo_fit: default_fit_mode(), is_blanked: false,
             logo_text: None, logo_text_color: None,
             background_logo_text: None, background_logo_text_color: None,
@@ -565,6 +579,9 @@ pub struct Song {
     pub font_weight: Option<String>,
     #[serde(default)]
     pub color: Option<String>,
+    /// Per-song background override. See `SongSlideData::background`.
+    #[serde(default)]
+    pub background: Option<BackgroundSetting>,
 }
 
 #[cfg(test)]

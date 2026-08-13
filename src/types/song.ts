@@ -1,3 +1,5 @@
+import type { BackgroundSetting } from "./settings";
+
 export interface LyricSection {
   /** P1: stable section identity for arrangement references. Optional so
    *  legacy JSON without ids still deserializes; `normalizeSong` backfills
@@ -52,6 +54,13 @@ export interface Song {
   font_size?: number;
   font_weight?: string;
   color?: string;
+  /** Optional per-song background override. When present (and not `None`)
+   *  wins over the Settings → Backgrounds "Songs" override, which in turn
+   *  wins over the global output background. Mirrors how `CustomSlide`
+   *  carries its own `background` field. Uses the settings-side
+   *  `BackgroundSetting` union (None/Color/Image/Video/Camera/Audio),
+   *  the same shape `BackgroundEditor` edits. */
+  background?: BackgroundSetting;
 }
 
 export interface SongSlideData {
@@ -67,4 +76,8 @@ export interface SongSlideData {
   font_size?: number;
   font_weight?: string;
   color?: string;
+  /** Per-song background override (see `Song.background`). Copied into the
+   *  on-wire slide payload by `buildSongDisplayItem` so the output and stage
+   *  windows resolve the same background as the editor preview. */
+  background?: BackgroundSetting;
 }

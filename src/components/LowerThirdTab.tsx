@@ -3,8 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { useAppStore } from "../store";
 import { ltBuildLyricsPayload } from "../utils";
-import { flattenSongForLowerThird } from "../utils/song";
 import { useKeyboardBinding } from "../hooks/keyboardRegistry";
+import { useLtFlatLines } from "../hooks/useLtFlatLines";
+import { LowerThirdPreview } from "./LowerThirdPreview";
 import type { LowerThirdData, LtPreset, LowerThirdTemplate, Song } from "../types";
 
 interface LowerThirdTabProps {
@@ -22,9 +23,12 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
   const { currentLowerThird, ltVisible, setLtVisible, setBackendError } = useAppStore();
   const [presets, setPresets] = useState<LtPreset[]>([]);
   const [saveLabel, setSaveLabel] = useState("");
-  const [saveMode, setSaveMode] = useState<"nameplate" | "freetext">("nameplate");
+  const [saveMode, setSaveMode] = useState<"nameplate" | "lyrics" | "freetext">("nameplate");
   const [saveNpName, setSaveNpName] = useState("");
   const [saveNpTitle, setSaveNpTitle] = useState("");
+  const [saveLyLine1, setSaveLyLine1] = useState("");
+  const [saveLyLine2, setSaveLyLine2] = useState("");
+  const [saveLyLabel, setSaveLyLabel] = useState("");
   const [saveFtText, setSaveFtText] = useState("");
   const [saveTemplateId, setSaveTemplateId] = useState(ltTemplate.id);
   const [addOpen, setAddOpen] = useState(false);
@@ -85,6 +89,16 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
     if (saveMode === "nameplate") {
       if (!saveNpName.trim()) return;
       data = { kind: "Nameplate", data: { name: saveNpName.trim(), title: saveNpTitle.trim() || undefined } };
+    } else if (saveMode === "lyrics") {
+      if (!saveLyLine1.trim()) return;
+      data = {
+        kind: "Lyrics",
+        data: {
+          line1: saveLyLine1.trim(),
+          ...(saveLyLine2.trim() ? { line2: saveLyLine2.trim() } : {}),
+          ...(saveLyLabel.trim() ? { section_label: saveLyLabel.trim() } : {}),
+        },
+      };
     } else {
       if (!saveFtText.trim()) return;
       data = { kind: "FreeText", data: { text: saveFtText.trim() } };
@@ -98,7 +112,9 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
     try {
       const updated = await invoke<LtPreset[]>("save_lt_preset", { preset });
       setPresets(updated);
-      setSaveLabel(""); setSaveNpName(""); setSaveNpTitle(""); setSaveFtText("");
+      setSaveLabel(""); setSaveNpName(""); setSaveNpTitle("");
+      setSaveLyLine1(""); setSaveLyLine2(""); setSaveLyLabel("");
+      setSaveFtText("");
       setAddOpen(false);
       onSetToast("Preset saved");
     } catch (err: any) {
@@ -127,9 +143,25 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
 
           {presets.map(p => {
             const isNp = p.data.kind === "Nameplate";
-            const summary = isNp
-              ? `${(p.data as { kind: "Nameplate"; data: { name: string } }).data.name}`
-              : (p.data as { kind: "FreeText"; data: { text: string } }).data.text.slice(0, 35) + "…";
+            const kindMeta = (() => {
+              if (p.data.kind === "Nameplate") {
+                return {
+                  badge: "NP", cls: "bg-blue-900/40 text-blue-400",
+                  summary: (p.data as { kind: "Nameplate"; data: { name: string; title?: string } }).data.name,
+                };
+              }
+              if (p.data.kind === "Lyrics") {
+                const d = (p.data as { kind: "Lyrics"; data: { line1: string; line2?: string; section_label?: string } }).data;
+                return {
+                  badge: "LY", cls: "bg-teal-900/40 text-teal-400",
+                  summary: d.section_label ? `${d.section_label}: ${d.line1}` : d.line1,
+                };
+              }
+              return {
+                badge: "FT", cls: "bg-purple-900/40 text-purple-400",
+                summary: (p.data as { kind: "FreeText"; data: { text: string } }).data.text,
+              };
+            })();
             
             // Check if this preset is currently active/live
             const isActive = ltVisible && currentLowerThird && 
@@ -140,12 +172,12 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
                 key={p.id}
                 className={`flex items-center gap-2 bg-slate-900 border rounded-lg px-2 py-1.5 transition-colors ${isActive ? "border-amber-500/50 bg-amber-500/5" : "border-slate-800"}`}
               >
-                <span className={`shrink-0 text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${isNp ? "bg-blue-900/40 text-blue-400" : "bg-purple-900/40 text-purple-400"}`}>
-                  {isNp ? "NP" : "FT"}
+                <span className={`shrink-0 text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${kindMeta.cls}`}>
+                  {kindMeta.badge}
                 </span>
                 <div className="flex-1 min-w-0">
                   <p className="text-[11px] font-bold text-slate-200 truncate">{p.label}</p>
-                  <p className="text-[9px] text-slate-500 truncate">{summary}</p>
+                  <p className="text-[9px] text-slate-500 truncate">{kindMeta.summary.length > 35 ? kindMeta.summary.slice(0, 35) + "…" : kindMeta.summary}</p>
                 </div>
                 <button
                   onClick={() => isActive ? hidePreset() : activatePreset(p)}
@@ -181,13 +213,13 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
               <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">New Preset</p>
 
               <div className="flex gap-1">
-                {(["nameplate", "freetext"] as const).map(m => (
+                {(["nameplate", "lyrics", "freetext"] as const).map(m => (
                   <button
                     key={m}
                     onClick={() => setSaveMode(m)}
                     className={`flex-1 text-[9px] font-black py-1.5 rounded-md transition-all ${saveMode === m ? "bg-amber-600 text-black" : "bg-slate-800 text-slate-400"}`}
                   >
-                    {m === "nameplate" ? "Nameplate" : "Free Text"}
+                    {m === "nameplate" ? "Nameplate" : m === "lyrics" ? "Lyrics" : "Free Text"}
                   </button>
                 ))}
               </div>
@@ -232,6 +264,27 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
                       onChange={e => setSaveNpTitle(e.target.value)}
                     />
                   </div>
+                ) : saveMode === "lyrics" ? (
+                  <div className="flex flex-col gap-1.5">
+                    <input
+                      className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 focus:outline-none focus:border-amber-500/50"
+                      placeholder="Lyric line 1 (required)"
+                      value={saveLyLine1}
+                      onChange={e => setSaveLyLine1(e.target.value)}
+                    />
+                    <input
+                      className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 focus:outline-none focus:border-amber-500/50"
+                      placeholder="Lyric line 2 (optional)"
+                      value={saveLyLine2}
+                      onChange={e => setSaveLyLine2(e.target.value)}
+                    />
+                    <input
+                      className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 focus:outline-none focus:border-amber-500/50"
+                      placeholder="Section label e.g. Chorus (optional)"
+                      value={saveLyLabel}
+                      onChange={e => setSaveLyLabel(e.target.value)}
+                    />
+                  </div>
                 ) : (
                   <textarea
                     className="w-full bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-700 placeholder-slate-600 resize-none h-16 focus:outline-none focus:border-amber-500/50"
@@ -245,13 +298,13 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
               <div className="flex gap-1.5">
                 <button
                   onClick={savePreset}
-                  disabled={!saveLabel.trim() || (saveMode === "nameplate" ? !saveNpName.trim() : !saveFtText.trim())}
+                  disabled={!saveLabel.trim() || (saveMode === "nameplate" ? !saveNpName.trim() : saveMode === "lyrics" ? !saveLyLine1.trim() : !saveFtText.trim())}
                   className="flex-1 py-1.5 text-[10px] font-black bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-black rounded-md transition-all"
                 >
                   Save
                 </button>
                 <button
-                  onClick={() => { setAddOpen(false); setSaveLabel(""); setSaveNpName(""); setSaveNpTitle(""); setSaveFtText(""); }}
+                  onClick={() => { setAddOpen(false); setSaveLabel(""); setSaveNpName(""); setSaveNpTitle(""); setSaveLyLine1(""); setSaveLyLine2(""); setSaveLyLabel(""); setSaveFtText(""); }}
                   className="px-3 text-[10px] font-bold bg-slate-800 text-slate-400 rounded-md"
                 >
                   Cancel
@@ -284,24 +337,36 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
     ltAutoAdvance, setLtAutoAdvance,
     ltAutoSeconds, setLtAutoSeconds,
     ltAtEnd, setLtAtEnd,
-    currentLowerThird,
     quickLyricsText, setQuickLyricsText,
+    settings,
     setBackendError, setToast,
   } = useAppStore();
 
   const ltAutoRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const ltSelectedSong = useMemo(
-    () => songs.find((s) => s.id === ltSongId) ?? null,
-    [songs, ltSongId],
-  );
+  const ltFlatLines = useLtFlatLines();
 
-  const ltFlatLines = useMemo((): { text: string; sectionLabel: string }[] => {
-    if (ltSongId === "quick-lyrics") {
-      return quickLyricsText.split("\n").filter(l => l.trim()).map(l => ({ text: l.trim(), sectionLabel: "QUICK" }));
+  // Draft nameplate / free text, used for the styled preview and for
+  // live-updating the overlay while it is on air.
+  const ltDraftPayload = useMemo((): LowerThirdData | null => {
+    if (ltMode === "nameplate") {
+      return ltName.trim() ? { kind: "Nameplate", data: { name: ltName, title: ltTitle.trim() || undefined } } : null;
     }
-    return flattenSongForLowerThird(ltSelectedSong);
-  }, [ltSelectedSong, ltSongId, quickLyricsText]);
+    if (ltMode === "freetext") {
+      return ltFreeText.trim() ? { kind: "FreeText", data: { text: ltFreeText } } : null;
+    }
+    return null;
+  }, [ltMode, ltName, ltTitle, ltFreeText]);
+
+  // Live-update nameplate/free text on air without requiring hide → show.
+  useEffect(() => {
+    if (!ltVisible || ltMode === "lyrics" || !ltDraftPayload) return;
+    const timer = setTimeout(() => {
+      invoke("show_lower_third", { data: ltDraftPayload, template: ltTemplate })
+        .catch((err: any) => setBackendError(`Overlay update failed: ${err?.message ?? err}`));
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [ltDraftPayload, ltVisible, ltMode, ltTemplate, setBackendError]);
 
   // Phase 7: if the selected song is deleted from the library, reset the
   // selection so the panel never renders against a missing song. A live
@@ -662,27 +727,20 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
               {ltVisible ? "ON AIR" : "HIDDEN"}
             </span>
           </div>
-          <div className="bg-slate-800 rounded-lg px-3 py-2 min-h-[3rem] flex items-center">
-            {ltVisible && currentLowerThird ? (
-              currentLowerThird.data.kind === "Nameplate" ? (
-                <div>
-                  <p className="text-sm font-bold text-slate-100">{currentLowerThird.data.data.name}</p>
-                  {currentLowerThird.data.data.title && (
-                    <p className="text-[11px] text-slate-400">{currentLowerThird.data.data.title}</p>
-                  )}
-                </div>
-              ) : (
-                <p className="text-sm font-semibold text-slate-200">{currentLowerThird.data.data.text}</p>
-              )
-            ) : (
-              <p className="text-xs italic text-slate-600">Nothing on air</p>
-            )}
-          </div>
-          {!ltVisible && (ltMode === "nameplate" ? ltName : ltFreeText) && (
-            <div className="px-3 py-1.5">
+          <LowerThirdPreview
+            data={ltDraftPayload ?? (ltMode === "nameplate"
+              ? { kind: "Nameplate", data: { name: ltName || "Name", title: ltTitle || undefined } }
+              : { kind: "FreeText", data: { text: ltFreeText || "Your message appears here" } })}
+            template={ltTemplate}
+            refHeight={settings.reference_output_height ?? 1080}
+            background="dark"
+            className="w-full h-44"
+          />
+          {!ltVisible && ltDraftPayload && (
+            <div className="px-1 py-0.5">
               <p className="text-[9px] text-slate-600 uppercase font-bold tracking-widest mb-0.5">Ready to show</p>
               <p className="text-xs text-slate-500 italic truncate">
-                {ltMode === "nameplate" ? `${ltName}${ltTitle ? ` — ${ltTitle}` : ""}` : ltFreeText}
+                {ltMode === "nameplate" ? `${ltName}${ltTitle.trim() ? ` — ${ltTitle}` : ""}` : ltFreeText}
               </p>
             </div>
           )}

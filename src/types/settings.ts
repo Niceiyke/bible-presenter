@@ -45,6 +45,15 @@ export interface PresentationSettings {
   background: BackgroundSetting;
   bible_background?: BackgroundSetting;
   media_background?: BackgroundSetting;
+  song_background?: BackgroundSetting;
+  /** Show section labels (Verse 1, Chorus, Bridge…) on projected song lyrics.
+   *  Off by default — many churches prefer clean lyrics without labels. */
+  show_song_section_labels?: boolean;
+  /** Design/reference output height in px that slide & song typography is
+   *  authored against (1080p by default). Previews derive their render scale
+   *  from this: `boxHeight / reference_output_height`, so switching a church
+   *  to a 1440p projector amounts to changing one number. */
+  reference_output_height?: number;
   logo_path?: string;
   background_logo_path?: string;
   background_logo_fit?: MediaFitMode;
@@ -96,6 +105,8 @@ export const DEFAULT_SETTINGS: PresentationSettings = {
   chapter_verse_font_size: undefined, chapter_verse_font_family: undefined, chapter_verse_color: undefined,
   disabled_bible_versions: [], auto_split_verses: true, verse_split_threshold: 200,
   auto_clear_background_logo: true, stage_uses_theme: false,
+  show_song_section_labels: false,
+  reference_output_height: 1080,
 };
 
 export const THEMES: Record<string, { label: string; colors: ThemeColors }> = {

@@ -1,6 +1,12 @@
 import { StateCreator } from "zustand";
 import { AppStore } from "../index";
-import { LowerThirdTemplate, Song, DEFAULT_LT_TEMPLATE } from "../../types";
+import { Song, DEFAULT_LT_TEMPLATE } from "../../types";
+import type { LowerThirdData, LowerThirdTemplate } from "../../types";
+
+export interface LtLivePayload {
+  data: LowerThirdData;
+  template: LowerThirdTemplate;
+}
 
 export interface LowerThirdSlice {
   ltMode: "nameplate" | "lyrics" | "freetext";
@@ -21,8 +27,8 @@ export interface LowerThirdSlice {
   setLtTitle: (v: string) => void;
   ltFreeText: string;
   setLtFreeText: (v: string) => void;
-  currentLowerThird: { data: any; template: any } | null;
-  setCurrentLowerThird: (v: { data: any; template: any } | null) => void;
+  currentLowerThird: LtLivePayload | null;
+  setCurrentLowerThird: (v: LtLivePayload | null) => void;
   ltSongId: string | null;
   setLtSongId: (v: string | null) => void;
   ltLineIndex: number;

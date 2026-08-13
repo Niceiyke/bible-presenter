@@ -4,7 +4,7 @@
  * hosts the Tiptap `InlineTextEditor` while an element is being edited.
  */
 
-import React from "react";
+import React, { useLayoutEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { CustomSlideRenderer } from "../../shared/Renderers";
 import { InlineTextEditor } from "./InlineTextEditor";
@@ -91,13 +91,48 @@ export function SlideCanvas({
   onCommit,
   onNavigate,
 }: SlideCanvasProps) {
+  // Measure the actual canvas viewport (the flex-1 area between the left
+  // rail, top bar, and right inspector) so the canvas fits the operator
+  // window's real content box instead of assuming a 1080p-full-screen
+  // `100vh`. On a 1280×720 or DPI-scaled window this keeps the canvas from
+  // overflowing or sitting at the wrong size, and `zoom` multiplies the
+  // *measured* fit so preview proportions stay consistent everywhere.
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [viewport, setViewport] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+
+  useLayoutEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const update = () => setViewport({ w: el.clientWidth, h: el.clientHeight });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    window.addEventListener("resize", update);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, []);
+
+  // p-10 padding = 40px each side. Fit the 16:9 canvas inside the usable
+  // space; `zoom` (1 = fit) scales from the measured fit.
+  const PAD = 80;
+  const usableW = Math.max(0, viewport.w - PAD);
+  const usableH = Math.max(0, viewport.h - PAD);
+  const fitW = Math.min(usableW, usableH * (16 / 9));
+  const canvasWidth =
+    viewport.w > 0 && viewport.h > 0
+      ? `${Math.max(0, Math.min(usableW, fitW * zoom))}px`
+      : "100%";
+
   return (
     <div
+      ref={viewportRef}
       className={`flex-1 flex items-center justify-center p-10 overflow-hidden relative ${editingElementId ? '' : 'select-none'}`}
       style={{ background: "radial-gradient(circle, #252540 1px, transparent 1px)", backgroundSize: "22px 22px", backgroundColor: "#0b0b18" }}
       onClick={onCanvasClick}
     >
-      <div ref={canvasRef} className="relative shadow-2xl shadow-black/80 ring-1 ring-console-border" style={{ aspectRatio: "16/9", backgroundColor: backingBackgroundColor(slide.background), width: `min(100%, calc((100vh - 140px) * 16 / 9 * ${zoom}))` }}>
+      <div ref={canvasRef} className="relative shadow-2xl shadow-black/80 ring-1 ring-console-border" style={{ aspectRatio: "16/9", backgroundColor: backingBackgroundColor(slide.background), width: canvasWidth }}>
         <CustomSlideRenderer slide={slide} scale={canvasScale} appDataDir={appDataDir} hiddenElementIds={editingElementId ? [editingElementId] : []} />
 
         {/* P3.2: visual grid overlay — shown only when snapping is on.

@@ -1,15 +1,15 @@
-import React, { useRef, useEffect, useState } from "react";
+import React, { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { writeFile, readTextFile } from "@tauri-apps/plugin-fs";
 import { useAppStore } from "../store";
-import { LowerThirdOverlay } from "./shared/Renderers";
+import { LowerThirdPreview } from "./LowerThirdPreview";
 import { stableId } from "../utils";
-import { flattenSongForLowerThird } from "../utils/song";
+import { useLtFlatLines } from "../hooks/useLtFlatLines";
 import { FONTS } from "../types";
 import {
-  Monitor, Plus, Type, Palette, Move, Zap, Square,
+  Monitor, Type, Palette, Move, Zap, Square, Trash2,
   Image as ImageIcon, Download, Upload, Save, Copy,
   ChevronDown, ChevronRight, User, Music, MessageSquare,
 } from "lucide-react";
@@ -217,6 +217,22 @@ function PillGroup<T extends string>({
   );
 }
 
+type SlotChoice = "primary" | "secondary" | "label" | "none";
+
+function SlotPill({ value, onChange, allowNone = true }: {
+  value: SlotChoice;
+  onChange: (v: SlotChoice) => void;
+  allowNone?: boolean;
+}) {
+  const options: { value: SlotChoice; label: string }[] = [
+    { value: "primary", label: "Pri" },
+    { value: "secondary", label: "Sec" },
+    { value: "label", label: "Lbl" },
+    ...(allowNone ? [{ value: "none" as const, label: "None" }] : []),
+  ];
+  return <PillGroup options={options} value={value} onChange={onChange} />;
+}
+
 // ── Main Component ─────────────────────────────────────────────────────────────
 
 export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
@@ -225,36 +241,17 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
     ltSavedTemplates, setLtSavedTemplates,
     ltMode, ltName, ltTitle, ltFreeText, ltLineIndex, ltLinesPerDisplay,
     showLtImgPicker, setShowLtImgPicker,
-    media, songs, ltSongId,
+    media,
     ltPreviewBg, setLtPreviewBg,
+    settings,
   } = useAppStore();
 
-  const ltFlatLines = React.useMemo(() => {
-    const song = songs.find(s => s.id === ltSongId);
-    return flattenSongForLowerThird(song);
-  }, [songs, ltSongId]);
+  const ltFlatLines = useLtFlatLines();
 
-  // Dynamic preview scaling
-  const previewRef = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(0.5);
-
-  useEffect(() => {
-    const el = previewRef.current;
-    if (!el) return;
-    const obs = new ResizeObserver(() => {
-      const { width, height } = el.getBoundingClientRect();
-      const availableWidth = Math.max(0, width - 64);
-      const availableHeight = Math.max(0, height - 64);
-      if (availableWidth > 0 && availableHeight > 0) {
-        setScale(Math.min(availableWidth / 1920, availableHeight / 1080));
-      }
-    });
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, []);
-
-  // Preview mode (what content to show in preview)
+// Preview mode (what content to show in preview)
   const [previewMode, setPreviewMode] = useState<"nameplate" | "lyrics" | "freetext">("nameplate");
+  // Unsaved changes indicator for the active template.
+  const [dirty, setDirty] = useState(false);
 
   const saveTemplates = async (ts: LowerThirdTemplate[], msg = "Template saved") => {
     try {
@@ -270,6 +267,7 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
   const updateTpl = (patch: Partial<LowerThirdTemplate>) => {
     const next = { ...ltTemplate, ...patch };
     setLtTemplate(next);
+    setDirty(true);
     emit("lower-third-template-sync", [next]);
   };
 
@@ -279,6 +277,7 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
       ? ltSavedTemplates.map(t => t.id === ltTemplate.id ? ltTemplate : t)
       : [...ltSavedTemplates, ltTemplate];
     saveTemplates(newList);
+    setDirty(false);
     localStorage.setItem("activeLtTemplateId", ltTemplate.id);
   };
 
@@ -286,6 +285,7 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
     const n: LowerThirdTemplate = { ...ltTemplate, id: stableId(), name: `${ltTemplate.name} Copy` };
     saveTemplates([...ltSavedTemplates, n], "Template duplicated");
     setLtTemplate(n);
+    setDirty(false);
     localStorage.setItem("activeLtTemplateId", n.id);
   };
 
@@ -308,11 +308,28 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
       if (path && typeof path === "string") {
         const imported = JSON.parse(await readTextFile(path)) as LowerThirdTemplate;
         imported.id = stableId();
+        const list = [...ltSavedTemplates, imported];
+        await saveTemplates(list, "Template imported");
         setLtTemplate(imported);
-        setLtSavedTemplates([...ltSavedTemplates, imported]);
-        onSetToast("Imported");
+        setDirty(false);
+        localStorage.setItem("activeLtTemplateId", imported.id);
       }
     } catch { onSetToast("Invalid template file"); }
+  };
+
+  const handleDelete = async () => {
+    if (ltSavedTemplates.length <= 1) {
+      onSetToast("Keep at least one template");
+      return;
+    }
+    const name = ltTemplate.name;
+    if (!window.confirm(`Delete template "${name}"? This cannot be undone.`)) return;
+    const remaining = ltSavedTemplates.filter(t => t.id !== ltTemplate.id);
+    await saveTemplates(remaining, "Template deleted");
+    setDirty(false);
+    const next = remaining[0];
+    setLtTemplate(next);
+    localStorage.setItem("activeLtTemplateId", next.id);
   };
 
   // Preview data
@@ -330,53 +347,64 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
           },
         };
 
-  const bgClass =
-    ltPreviewBg === "green"
-      ? "bg-[#00b140]"
-      : ltPreviewBg === "checkered"
-      ? "bg-[length:20px_20px] [background-image:linear-gradient(45deg,#333_25%,transparent_25%),linear-gradient(-45deg,#333_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#333_75%),linear-gradient(-45deg,transparent_75%,#333_75%)] [background-position:0_0,0_10px,10px_-10px,-10px_0px] bg-[#1e1e1e]"
-      : "bg-slate-900";
-
   return (
     <div className="h-full min-h-0 flex overflow-hidden bg-console-canvas">
       {/* ── LEFT PANEL ───────────────────────────────────────────────────── */}
       <div className="w-[18rem] max-w-[34vw] shrink-0 border-r border-console-border flex flex-col overflow-hidden bg-console-surface">
 
         {/* Template Manager */}
-        <div className="px-4 py-3 border-b border-console-border space-y-2 bg-console-surface-raised/40 shrink-0">
-          <p className="text-[10px] font-black uppercase tracking-widest text-console-text-muted">Template</p>
+<div className="px-4 py-3 border-b border-console-border space-y-2 bg-console-surface-raised/40 shrink-0">
+          <div className="flex items-center gap-2">
+            <p className="text-[10px] font-black uppercase tracking-widest text-console-text-muted">Template</p>
+            {dirty && (
+              <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/40">
+                Unsaved
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-1.5">
             <select
               className="flex-1 min-w-0 bg-slate-950 text-slate-200 text-[11px] rounded-lg px-2 py-1.5 border border-slate-800 outline-none focus:border-amber-500/50 transition-colors"
               value={ltTemplate.id}
               onChange={e => {
                 const t = ltSavedTemplates.find(t => t.id === e.target.value);
-                if (t) { setLtTemplate(t); localStorage.setItem("activeLtTemplateId", t.id); }
+                if (t) { setLtTemplate(t); setDirty(false); localStorage.setItem("activeLtTemplateId", t.id); }
               }}
             >
               {ltSavedTemplates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
-            <button onClick={handleDuplicate} className="min-w-9 min-h-9 p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition-all" title="Duplicate">
+<button onClick={handleDuplicate} className="min-w-9 min-h-9 p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition-all" title="Duplicate as new template">
               <Copy size={12} />
             </button>
-            <button onClick={handleSave} className="min-w-9 min-h-9 p-1.5 bg-action-primary hover:bg-action-primary-hover rounded-lg text-black transition-all" title="Save">
+            <button
+              onClick={handleSave}
+              title={dirty ? "Save changes to this template" : "Save template"}
+              className={`flex items-center gap-1 min-h-9 px-2 p-1.5 bg-action-primary hover:bg-action-primary-hover rounded-lg text-black transition-all ${dirty ? "ring-1 ring-amber-500/70" : ""}`}
+            >
               <Save size={12} />
+              <span className="text-[9px] font-black uppercase leading-none">{dirty ? "Save changes" : "Save"}</span>
+            </button>
+            <button onClick={() => handleDelete()} title="Delete template" className="min-w-9 min-h-9 p-1.5 bg-slate-800 hover:bg-red-900/40 rounded-lg text-slate-500 hover:text-red-400 transition-all">
+              <Trash2 size={12} />
             </button>
           </div>
           <div className="flex items-center gap-1.5">
             <input
               value={ltTemplate.name}
-              onChange={e => updateTpl({ name: e.target.value })}
+              onChange={e => { updateTpl({ name: e.target.value }); }}
               placeholder="Template name"
               className="flex-1 min-w-0 bg-slate-950 text-slate-300 text-[10px] px-2 py-1 rounded-lg border border-slate-800 outline-none focus:border-amber-500/40"
             />
-            <button onClick={exportTemplate} title="Export" className="min-w-9 min-h-9 p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-500 hover:text-slate-300 transition-all">
+            <button onClick={exportTemplate} title="Export template file" className="min-w-9 min-h-9 p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-500 hover:text-slate-300 transition-all">
               <Download size={12} />
             </button>
-            <button onClick={importTemplate} title="Import" className="min-w-9 min-h-9 p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-500 hover:text-slate-300 transition-all">
+            <button onClick={importTemplate} title="Import template file" className="min-w-9 min-h-9 p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-500 hover:text-slate-300 transition-all">
               <Upload size={12} />
             </button>
           </div>
+          {dirty && (
+            <p className="text-[9px] text-amber-400/80">Changes are saved when you press <span className="font-bold">Save</span>.</p>
+          )}
         </div>
 
         {/* Settings Sections */}
@@ -578,26 +606,66 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
                 />
               </Row>
             </div>
+
+            {/* Song section label (lyrics mode) */}
+            <div className="pt-3 border-t border-slate-800/40 space-y-2">
+              <p className="text-[9px] font-black uppercase tracking-widest text-amber-500/70">Song Label — Section / Verse</p>
+              <Row label="Show Label"><Toggle checked={ltTemplate.labelVisible} onChange={v => updateTpl({ labelVisible: v })} /></Row>
+              {ltTemplate.labelVisible && (
+                <div className="space-y-2 pl-2 border-l-2 border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1">
+                      <SliderRow label="Size" min={8} max={60} value={ltTemplate.labelSize} onChange={v => updateTpl({ labelSize: v })} unit="px" />
+                    </div>
+                    <ColorSwatch value={ltTemplate.labelColor} onChange={v => updateTpl({ labelColor: v })} label="label-col" />
+                  </div>
+                  <Row label="Uppercase"><Toggle checked={ltTemplate.labelUppercase} onChange={v => updateTpl({ labelUppercase: v })} /></Row>
+                </div>
+              )}
+            </div>
+
+            {/* Content → style mapping */}
+            <div className="pt-3 border-t border-slate-800/40 space-y-2">
+              <p className="text-[9px] font-black uppercase tracking-widest text-amber-500/70">Content Styles</p>
+              <p className="text-[9px] leading-relaxed text-console-text-subtle">
+                Map each content piece to a style set. Headline = name / line 1 / free text; Subline = title / line 2; Label = song section label.
+              </p>
+              <div className="space-y-2">
+                <Row label="Headline">
+                  <SlotPill value={ltTemplate.nameStyle} onChange={v => updateTpl({ nameStyle: v })} allowNone={false} />
+                </Row>
+                <Row label="Subline">
+                  <SlotPill value={ltTemplate.titleStyle} onChange={v => updateTpl({ titleStyle: v })} />
+                </Row>
+                <Row label="Label">
+                  <SlotPill value={ltTemplate.labelStyle} onChange={v => updateTpl({ labelStyle: v })} />
+                </Row>
+              </div>
+            </div>
           </AccordionSection>
 
           {/* Motion */}
           <AccordionSection title="Motion & Variants" icon={Zap} defaultOpen={false}>
             <div className="space-y-3">
               <div className="space-y-1">
-                <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wide">Variant</span>
+                <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wide">Layout</span>
                 <PillGroup
                   options={[
                     { value: "classic", label: "Classic" },
                     { value: "modern", label: "Modern" },
                     { value: "banner", label: "Banner" },
+                    { value: "plaque", label: "Plaque" },
                   ]}
                   value={ltTemplate.variant as any}
                   onChange={v => updateTpl({ variant: v })}
                 />
+                <p className="text-[9px] leading-relaxed text-console-text-subtle">
+                  Applies to nameplates, song lyrics, and free text.
+                </p>
               </div>
 
               <div className="space-y-1">
-                <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wide">Animation</span>
+                <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wide">Fallback Anim (legacy)</span>
                 <PillGroup
                   options={[
                     { value: "slide-up", label: "Up" },
@@ -607,6 +675,38 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
                   ]}
                   value={ltTemplate.animation as any}
                   onChange={v => updateTpl({ animation: v })}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wide">Entry</span>
+                <PillGroup
+                  options={[
+                    { value: "slide-up", label: "Up" },
+                    { value: "slide-left", label: "Left" },
+                    { value: "slide-right", label: "Right" },
+                    { value: "fade", label: "Fade" },
+                    { value: "blur-in", label: "Blur" },
+                    { value: "none", label: "None" },
+                  ]}
+                  value={(ltTemplate.entryAnimation || "none") as any}
+                  onChange={v => updateTpl({ entryAnimation: v })}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wide">Exit</span>
+                <PillGroup
+                  options={[
+                    { value: "slide-up", label: "Up" },
+                    { value: "slide-left", label: "Left" },
+                    { value: "slide-right", label: "Right" },
+                    { value: "fade", label: "Fade" },
+                    { value: "blur-out", label: "Out" },
+                    { value: "none", label: "None" },
+                  ]}
+                  value={(ltTemplate.exitAnimation || "none") as any}
+                  onChange={v => updateTpl({ exitAnimation: v })}
                 />
               </div>
 
@@ -672,7 +772,9 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
             <Monitor size={13} className="text-slate-600" />
             <div>
               <span className="text-[11px] font-black uppercase tracking-widest text-console-text">Output Preview</span>
-              <span className="block text-[10px] text-console-text-subtle">1920 × 1080 safe canvas</span>
+              <span className="block text-[10px] text-console-text-subtle">
+                {Math.round((settings.reference_output_height ?? 1080) * 16 / 9)} × {Math.round(settings.reference_output_height ?? 1080)} safe canvas
+              </span>
             </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
@@ -716,39 +818,15 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
           </div>
         </div>
 
-        {/* Canvas — dynamically scaled */}
-        <div ref={previewRef} className="relative min-h-0 flex-1 flex items-center justify-center overflow-hidden p-8">
-          <div
-            className={`relative rounded-xl overflow-hidden shadow-[0_0_60px_rgba(0,0,0,0.6)] ring-1 ring-white/8 ${bgClass}`}
-            style={{ width: Math.round(1920 * scale), height: Math.round(1080 * scale) }}
-          >
-            {/* Subtle screen label */}
-            {ltPreviewBg === "dark" && (
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.03]">
-                <Monitor size={200} />
-              </div>
-            )}
-
-            {/* The actual 1920×1080 canvas, scaled to fit */}
-            <div
-              style={{
-                width: 1920,
-                height: 1080,
-                transform: `scale(${scale})`,
-                transformOrigin: "top left",
-                position: "absolute",
-                top: 0,
-                left: 0,
-              }}
-            >
-              <LowerThirdOverlay template={ltTemplate} data={previewData} />
-            </div>
-          </div>
-
-          {/* Scale indicator */}
-          <div className="absolute bottom-3 right-4 text-[9px] text-slate-700 font-mono">
-            {Math.round(scale * 100)}% scale
-          </div>
+{/* Canvas — dynamically scaled */}
+        <div className="relative min-h-0 flex-1 overflow-hidden p-8">
+          <LowerThirdPreview
+            data={previewData}
+            template={ltTemplate}
+            refHeight={settings.reference_output_height ?? 1080}
+            background={ltPreviewBg}
+            className="w-full h-full shadow-[0_0_60px_rgba(0,0,0,0.6)] ring-1 ring-white/8"
+          />
         </div>
       </div>
 

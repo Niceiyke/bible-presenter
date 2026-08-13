@@ -3,6 +3,7 @@ import { renderHook, act } from "@testing-library/react";
 import { useItemActions } from "../useItemActions";
 import { useAppStore } from "../../store";
 import type { DisplayItem, PropItem } from "../../types";
+import { DEFAULT_LT_TEMPLATE } from "../../types";
 
 // Mock the Tauri bridge before anything imports the real modules.
 vi.mock("@tauri-apps/api/core", () => ({
@@ -157,7 +158,7 @@ describe("useItemActions", () => {
         stagedItem: makeVerse(),
         propItems: [propItem()],
         ltVisible: true,
-        currentLowerThird: { data: { kind: "Nameplate", data: { name: "Test" } }, template: {} },
+        currentLowerThird: { data: { kind: "Nameplate", data: { name: "Test" } }, template: { ...DEFAULT_LT_TEMPLATE } },
       });
       mockInvoke.mockResolvedValueOnce(undefined); // clear_all
       const { result } = renderHook(() => useItemActions());

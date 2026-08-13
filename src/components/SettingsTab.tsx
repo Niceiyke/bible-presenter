@@ -16,7 +16,7 @@ import { StageSection } from "./settings/sections/StageSection";
 import { OperatorSection } from "./settings/sections/OperatorSection";
 
 const CATEGORIES: SettingsCategory[] = [
-  { id: "output", labelKey: "settings.category.output", keywords: ["font", "size", "transition", "blank", "fade", "slide", "verse font", "timing"] },
+  { id: "output", labelKey: "settings.category.output", keywords: ["font", "size", "transition", "blank", "fade", "slide", "verse font", "timing", "song label", "section label", "verse 1", "chorus"] },
   { id: "scripture", labelKey: "settings.category.scripture", keywords: ["reference", "position", "chapter", "verse", "split", "divine", "highlight", "auto split"] },
   { id: "theme", labelKey: "settings.category.theme", keywords: ["color", "dark", "light", "navy", "maroon", "forest", "overrides", "background color"] },
   { id: "branding", labelKey: "settings.category.branding", keywords: ["logo", "splash", "corner", "watermark", "background logo", "brand"] },

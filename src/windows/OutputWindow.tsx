@@ -73,15 +73,19 @@ export function OutputWindow() {
   const verseContainerRef = useRef<HTMLDivElement>(null);
   const [fittedFontPt, setFittedFontPt] = useState<number | null>(null);
 
-  // Calculate font scale based on current window height relative to 1080p reference
+  // Calculate font scale based on current window height relative to the
+  // configured output reference height (1080p by default), so slides/songs
+  // authored for the reference resolution project proportionally even when
+  // the projector window is 720p, 1440p, or DPI-scaled.
   useEffect(() => {
+    const refHeight = settings.reference_output_height ?? 1080;
     const updateScale = () => {
-      setWindowScale(window.innerHeight / 1080);
+      setWindowScale(window.innerHeight / refHeight);
     };
     updateScale();
     window.addEventListener("resize", updateScale);
     return () => window.removeEventListener("resize", updateScale);
-  }, []);
+  }, [settings.reference_output_height]);
 
   // Auto-fit: binary-search the largest font size that fits without overflow
   // Only active when verse splitting is disabled
@@ -725,6 +729,7 @@ export function OutputWindow() {
                   fontSize={settings.font_size}
                   fontFamily={settings.verse_font_family}
                   color={colors.verseText}
+                  showSectionLabel={!!settings.show_song_section_labels}
                 />
               ) : null
             ) : null}
@@ -750,11 +755,12 @@ export function OutputWindow() {
 
       <AnimatePresence>
         {lowerThird && (
-          <LowerThirdOverlay 
-            key="lower-third" 
-            data={lowerThird.data} 
-            template={lowerThird.template} 
+          <LowerThirdOverlay
+            key={lowerThird.data.kind === "Lyrics" ? `lt-${JSON.stringify(lowerThird.data)}` : "lt-static"}
+            data={lowerThird.data}
+            template={lowerThird.template}
             onCycleComplete={handleLtCycleComplete}
+            scale={windowScale}
           />
         )}
       </AnimatePresence>

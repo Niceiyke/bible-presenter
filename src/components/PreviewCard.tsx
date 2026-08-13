@@ -312,7 +312,7 @@ export function PreviewCard({
               </div>
             ) : item.type === "Song" ? (
               <div ref={slideBoxRef} className="w-full" style={{ aspectRatio: "16/9" }}>
-                <SongSlideRenderer data={item.data} scale={slideScale} fontSize={settings.font_size} />
+                <SongSlideRenderer data={item.data} scale={slideScale} fontSize={settings.font_size} showSectionLabel={!!settings.show_song_section_labels} />
               </div>
             ) : item.type === "Camera" ? (
               <div className="w-full h-full relative border border-slate-800 rounded-lg overflow-hidden bg-black">

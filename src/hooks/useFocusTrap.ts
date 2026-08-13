@@ -17,7 +17,13 @@ export function useFocusTrap(
   active: boolean,
   onEscape?: () => void,
 ) {
-  const onKeyDownRef = useRef<((e: KeyboardEvent) => void) | null>(null);
+  // `onEscape` is usually an inline closure from the caller, so it gets a new
+  // identity on every render. Holding it in a ref keeps the effect (and its
+  // auto-focus on activation) from re-running on each keystroke — previously a
+  // modal re-render stole focus back to the first focusable element and made
+  // typing in inputs lose focus after a few characters.
+  const onEscapeRef = useRef(onEscape);
+  onEscapeRef.current = onEscape;
 
   useEffect(() => {
     if (!active) return;
@@ -31,7 +37,7 @@ export function useFocusTrap(
     first?.focus();
 
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && onEscape) { e.preventDefault(); onEscape(); return; }
+      if (e.key === "Escape" && onEscapeRef.current) { e.preventDefault(); onEscapeRef.current(); return; }
       if (e.key !== "Tab") return;
       const items = focusables();
       if (items.length === 0) { e.preventDefault(); return; }
@@ -45,11 +51,9 @@ export function useFocusTrap(
         items[(idx + 1) % items.length].focus();
       }
     };
-    onKeyDownRef.current = handler;
     el.addEventListener("keydown", handler);
     return () => {
       el.removeEventListener("keydown", handler);
-      onKeyDownRef.current = null;
     };
-  }, [active, ref, onEscape]);
+  }, [active, ref]);
 }

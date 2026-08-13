@@ -162,6 +162,7 @@ export function buildSongDisplayItem(
       font_size: song.font_size,
       font_weight: song.font_weight,
       color: song.color,
+      background: song.background,
     },
   };
 }

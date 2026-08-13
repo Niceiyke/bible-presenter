@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Music2 } from "lucide-react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import { FONTS } from "../../types";
-import type { Song, SongSlideData, SongStyle } from "../../types";
+import type { Song, SongSlideData, SongStyle, MediaItem } from "../../types";
 import { normalizeSong, getSongSequence, syncArrangementForSections, songValidate } from "../../utils/song";
 import { useAppStore } from "../../store";
 import { useT } from "../../i18n";
@@ -9,7 +11,9 @@ import { Button, Modal, SaveStatus, type SaveStatusState } from "../ui";
 import { SongMetadataForm } from "./SongMetadataForm";
 import { SongSectionEditorList } from "./SongSectionEditor";
 import { SongArrangementEditor } from "./SongArrangementEditor";
-import { SongSlideRenderer, LowerThirdOverlay } from "../shared/Renderers";
+import { SongPreviewBox } from "./SongPreviewBox";
+import { LowerThirdOverlay } from "../shared/Renderers";
+import { BackgroundEditor } from "../BackgroundEditor";
 
 interface SongEditorModalProps {
   /** The song being edited (or a new-song stub). Resets the internal draft. */
@@ -41,8 +45,35 @@ export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps)
   const [previewMode, setPreviewMode] = useState<"full" | "overlay">("full");
   const [previewIndex, setPreviewIndex] = useState(0);
   const [showDefaults, setShowDefaults] = useState(false);
+  const [showBackground, setShowBackground] = useState(false);
   const ltTemplate = useAppStore((s) => s.ltTemplate);
+  const media = useAppStore((s) => s.media);
+  const setMedia = useAppStore((s) => s.setMedia);
+  const settings = useAppStore((s) => s.settings);
   const t = useT();
+
+  // Inline upload handler so the `BackgroundEditor` picker can import a new
+  // asset straight from the song editor without wiring `useItemActions`
+  // through. Mirrors `useItemActions.handleFileUpload` exactly so behaviour
+  // stays consistent across the app.
+  const handleUploadMedia = async () => {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        filters: [
+          { name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"] },
+          { name: "Videos", extensions: ["mp4", "webm", "mov", "mkv", "avi"] },
+          { name: "Audio", extensions: ["mp3", "wav", "ogg", "m4a", "aac", "flac"] },
+        ],
+      });
+      if (!selected || typeof selected !== "string") return;
+      await invoke("add_media_streaming", { path: selected });
+      const result: MediaItem[] = await invoke("list_media");
+      setMedia(result);
+    } catch (err: any) {
+      console.error("Upload failed:", err);
+    }
+  };
 
   useEffect(() => {
     if (song) setDraft(normalizeSong(JSON.parse(JSON.stringify(song))));
@@ -108,6 +139,7 @@ export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps)
     font_size: draft.font_size,
     font_weight: draft.font_weight,
     color: draft.color,
+    background: draft.background,
   }), [draft, previewSection, previewClamped, sequence.length]);
 
   const overlayData = previewSection
@@ -214,8 +246,10 @@ export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps)
                   <label className="text-[10px] font-bold uppercase tracking-wider text-console-text-subtle">Font size (pt)</label>
                   <input
                     type="number"
-                    className="h-9 rounded-md bg-console-surface-raised border border-console-border text-console-text text-xs px-2"
-                    value={draft.font_size ?? ""}
+                    min={1}
+                    step={1}
+                    className="h-9 rounded-md bg-console-surface-raised border border-console-border text-console-text text-xs px-2 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)]"
+                    value={draft.font_size ?? settings.font_size}
                     placeholder="Default"
                     onChange={(e) => patch({ font_size: e.target.value === "" ? undefined : Number(e.target.value) })}
                   />
@@ -244,6 +278,32 @@ export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps)
                     onChange={(e) => patch({ color: e.target.value })}
                   />
                 </div>
+              </div>
+            )}
+          </div>
+
+          <div className="border border-console-border rounded-lg">
+            <button
+              type="button"
+              onClick={() => setShowBackground((v) => !v)}
+              className="w-full flex items-center gap-2 px-3 h-9 text-left hover:bg-console-surface-raised rounded-lg transition-all focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-[var(--color-focus-ring)]"
+              aria-expanded={showBackground}
+            >
+              {showBackground ? <ChevronDown size={14} className="text-console-text-subtle" /> : <ChevronRight size={14} className="text-console-text-subtle" />}
+              <span className="text-[10px] font-bold uppercase tracking-wider text-console-text-subtle">{t("songs.editor.background")}</span>
+            </button>
+            {showBackground && (
+              <div className="p-3 border-t border-console-border">
+                <p className="text-[10px] text-console-text-subtle mb-2 leading-snug">
+                  Override the global output background for this song only. Leave on <span className="font-bold">Inherit</span> (None) to use the Settings → Backgrounds "Songs" override, then the global output background.
+                </p>
+                <BackgroundEditor
+                  label={t("songs.editor.background")}
+                  value={draft.background ?? { type: "None" }}
+                  onChange={(bg) => patch({ background: bg })}
+                  media={media}
+                  onUploadMedia={handleUploadMedia}
+                />
               </div>
             )}
           </div>
@@ -279,9 +339,11 @@ export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps)
 
           <div className="relative w-full aspect-video rounded-lg overflow-hidden bg-slate-950 border border-console-border">
             {previewMode === "full" ? (
-              <div className="absolute inset-0" aria-hidden>
-                <SongSlideRenderer data={previewData} scale={0.28} />
-              </div>
+              <SongPreviewBox
+                data={previewData}
+                showSectionLabel={!!settings.show_song_section_labels}
+                fill
+              />
             ) : (
               <div className="absolute inset-0" aria-hidden>
                 <LowerThirdOverlay data={overlayData as any} template={ltTemplate} />
