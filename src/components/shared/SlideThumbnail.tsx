@@ -8,6 +8,12 @@
  * `scale` prop (which scales font sizing relative to the thumbnail box), so
  * the rail shows real slide content — backgrounds, shapes, text, images.
  *
+ * The 16:9 slide design is letterboxed inside the (possibly non-16:9) slot
+ * via `useSlideFit`: the largest 16:9 sub-rectangle that fits inside the
+ * card is what the renderer fills, and its height derives the font scale.
+ * Slots that happen to be 16:9 behave exactly as before; odd-shaped slots
+ * no longer stretch or overflow text.
+ *
  * This intentionally does NOT use `html-to-image` / `toPng`: in the Tauri
  * webview those fail to serialize `asset://localhost` media and custom
  * `@font-face` sources (CORS/canvas taint), yielding black snapshots.
@@ -15,10 +21,10 @@
  * slide rail — each thumbnail is a few percent-sized nodes.
  */
 
-import React, { useLayoutEffect, useRef, useState } from "react";
+import React, { useRef } from "react";
 import { CustomSlideRenderer } from "./Renderers";
 import type { CustomSlide, SlideTheme } from "../../types";
-import { useReferenceHeight } from "../../hooks/useReferenceHeight";
+import { useSlideFit } from "../../hooks/useSlideFit";
 
 interface SlideThumbnailProps {
   slide: CustomSlide;
@@ -42,36 +48,31 @@ export function SlideThumbnail({
   height,
 }: SlideThumbnailProps) {
   const boxRef = useRef<HTMLDivElement>(null);
-  const [boxH, setBoxH] = useState<number>(0);
-  const referenceHeight = useReferenceHeight();
+  const { width: fitW, height: fitH, scale } = useSlideFit(boxRef);
 
-  // Measure the rendered slot height (ResizeObserver, so it stays correct
-  // if the slot resizes) and scale against the 1080p reference — the same
-  // policy `useCanvasScale` uses for the editor canvas, so thumbnails and
-  // the main editor always agree on text proportions.
-  useLayoutEffect(() => {
-    const el = boxRef.current;
-    if (!el) return;
-    const update = () => setBoxH(el.clientHeight);
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  // Fall back to the explicit `height` prop when measurement hasn't run
-  // yet; a `0` measured height must never resolve to scale 1.0 (that would
-  // render the thumbnail at full output size until the observer fires).
-  const scale = (boxH > 0 ? boxH : (height && height > 0 ? height : referenceHeight)) / referenceHeight;
+  const ready = fitW > 0 && fitH > 0;
 
   return (
     <div
       ref={boxRef}
       className={className}
-      style={{ width, height, background: "#0f0f1f", overflow: "hidden", pointerEvents: "none" }}
+      style={{
+        width,
+        height,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "#0f0f1f",
+        overflow: "hidden",
+        pointerEvents: "none",
+      }}
       aria-hidden
     >
-      <CustomSlideRenderer slide={slide} scale={scale} appDataDir={appDataDir} theme={theme} />
+      {ready && (
+        <div style={{ width: fitW, height: fitH }}>
+          <CustomSlideRenderer slide={slide} scale={scale} appDataDir={appDataDir} theme={theme} />
+        </div>
+      )}
     </div>
   );
 }

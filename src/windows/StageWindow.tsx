@@ -1,6 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from "react";
-import { useBoxScale } from "../hooks/useBoxScale";
-import { useReferenceHeight } from "../hooks/useReferenceHeight";
+import { useSlideFit } from "../hooks/useSlideFit";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { DisplayItem, PresentationSettings, TimerData } from "../types";
@@ -55,14 +54,14 @@ export function StageWindow() {
 
   // The custom-slide confidence previews below are rendered by
   // `CustomSlideRenderer`, whose authored pt sizes assume a 1080p reference.
-  // Scale each box by its measured height (same policy the editor canvas,
-  // thumbnails, Cockpit previews, and PiP use) so the stage preview matches
-  // the on-air proportions instead of a fixed 0.2.
+  // Letterbox each box's 16:9 design inside its (non-16:9) half-column via
+  // `useSlideFit` — the largest 16:9 sub-rectangle that fits in the measured
+  // height drives the scale, so the stage preview matches the on-air
+  // proportions without overflowing the narrower confidence panels.
   const liveSlideBoxRef = useRef<HTMLDivElement | null>(null);
   const stagedSlideBoxRef = useRef<HTMLDivElement | null>(null);
-  const referenceHeight = useReferenceHeight();
-  const liveSlideScale = useBoxScale(liveSlideBoxRef, referenceHeight);
-  const stagedSlideScale = useBoxScale(stagedSlideBoxRef, referenceHeight);
+  const liveSlideFit = useSlideFit(liveSlideBoxRef);
+  const stagedSlideFit = useSlideFit(stagedSlideBoxRef);
 
   useEffect(() => {
     invoke<DisplayItem>("get_current_item").then(setLiveItem).catch((e: any) => signalOperatorWarning(`Stage hydrate (live): ${e?.message ?? e}`));
@@ -160,8 +159,12 @@ export function StageWindow() {
           <p className="text-xl font-bold mb-3 shrink-0 truncate" style={{ color: useTheme ? "rgba(255,255,255,0.8)" : "#cbd5e1" }}>{itemSummary(liveItem)}</p>
           <div className="text-4xl font-serif leading-snug flex-1 overflow-hidden" style={{ color: textCol }}>
             {liveItem?.type === "CustomSlide" ? (
-              <div ref={liveSlideBoxRef} className="w-full h-full relative border rounded-lg overflow-hidden" style={{ borderColor: useTheme ? "rgba(255,255,255,0.08)" : "#1e293b" }}>
-                <CustomSlideRenderer slide={liveItem.data} scale={liveSlideScale} appDataDir={appDataDir} theme={liveItem.data.theme} />
+              <div ref={liveSlideBoxRef} className="w-full h-full relative border rounded-lg overflow-hidden flex items-center justify-center" style={{ borderColor: useTheme ? "rgba(255,255,255,0.08)" : "#1e293b" }}>
+                {liveSlideFit.width > 0 && liveSlideFit.height > 0 && (
+                  <div style={{ width: liveSlideFit.width, height: liveSlideFit.height }}>
+                    <CustomSlideRenderer slide={liveItem.data} scale={liveSlideFit.scale} appDataDir={appDataDir} theme={liveItem.data.theme} />
+                  </div>
+                )}
               </div>
             ) : liveItem?.type === "Timer" ? (
               <div className="flex items-center justify-center h-full">
@@ -180,8 +183,12 @@ export function StageWindow() {
           <p className="text-xl font-bold mb-3 shrink-0 truncate" style={{ color: accent }}>{itemSummary(stagedItem)}</p>
           <div className="text-4xl font-serif leading-snug flex-1 overflow-hidden" style={{ color: useTheme ? "rgba(255,255,255,0.9)" : "#fef3c7" }}>
             {stagedItem?.type === "CustomSlide" ? (
-              <div ref={stagedSlideBoxRef} className="w-full h-full relative border rounded-lg overflow-hidden" style={{ borderColor: useTheme ? "rgba(255,255,255,0.08)" : "#1e293b" }}>
-                <CustomSlideRenderer slide={stagedItem.data} scale={stagedSlideScale} appDataDir={appDataDir} theme={stagedItem.data.theme} />
+              <div ref={stagedSlideBoxRef} className="w-full h-full relative border rounded-lg overflow-hidden flex items-center justify-center" style={{ borderColor: useTheme ? "rgba(255,255,255,0.08)" : "#1e293b" }}>
+                {stagedSlideFit.width > 0 && stagedSlideFit.height > 0 && (
+                  <div style={{ width: stagedSlideFit.width, height: stagedSlideFit.height }}>
+                    <CustomSlideRenderer slide={stagedItem.data} scale={stagedSlideFit.scale} appDataDir={appDataDir} theme={stagedItem.data.theme} />
+                  </div>
+                )}
               </div>
             ) : stagedItem?.type === "Timer" ? (
               <div className="flex items-center justify-center h-full">

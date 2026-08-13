@@ -12,6 +12,30 @@ import { isRemoteCommandResult, isRemoteEvent } from "../types/remote";
 const LS_DEVICE_TOKEN = "wordlyte.remote.token";
 const LS_DEVICE_NAME = "wordlyte.remote.name";
 
+// The remote app is served over plain HTTP on the LAN, which is not a secure
+// context, so `crypto.randomUUID` is unavailable there. Generate a v4 UUID
+// from `crypto.getRandomValues` (also unavailable in very old engines) with a
+// last-resort Math.random fallback.
+function makeUuid(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  const fallback = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx";
+  return fallback.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 const MUTATING = new Set<RemoteCommandType>([
   "remote.request_control",
   "remote.release_control",
@@ -266,7 +290,7 @@ export function useRemote(): UseRemote {
         reject(new Error("Not connected"));
         return;
       }
-      const command_id = crypto.randomUUID();
+      const command_id = makeUuid();
       const mutating = MUTATING.has(type);
       const cmd: Record<string, unknown> = { command_id, type };
       if (payload !== undefined) cmd.payload = payload;

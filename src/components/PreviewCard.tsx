@@ -12,6 +12,7 @@ import {
 import { useAppStore } from "../store";
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { useReferenceHeight } from "../hooks/useReferenceHeight";
+import { useSlideFit } from "../hooks/useSlideFit";
 import { THEMES } from "../types";
 import type { DisplayItem, MediaItem } from "../types";
 import { getEffectiveBackground, getItemUid, getVideoBackground, resolvePath } from "../utils";
@@ -69,6 +70,12 @@ export function PreviewCard({
     ro.observe(el);
     return () => ro.disconnect();
   }, [item, referenceHeight]);
+
+  // Letterbox the 16:9 slide/song design inside the (possibly non-16:9)
+  // preview card so text never overflows: the renderer fills the largest
+  // 16:9 sub-rectangle that fits, and its height derives the font scale.
+  const slideFitRef = useRef<HTMLDivElement | null>(null);
+  const slideFit = useSlideFit(slideFitRef);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cameraPreviewRef = useRef<HTMLVideoElement | null>(null);
@@ -295,8 +302,12 @@ export function PreviewCard({
                 )}
               </div>
             ) : item.type === "CustomSlide" ? (
-              <div ref={slideBoxRef} className="w-full" style={{ aspectRatio: "16/9" }}>
-                <CustomSlideRenderer slide={item.data} scale={slideScale} appDataDir={appDataDir} />
+              <div ref={slideFitRef} className="w-full h-full flex items-center justify-center">
+                {slideFit.width > 0 && slideFit.height > 0 && (
+                  <div style={{ width: slideFit.width, height: slideFit.height }}>
+                    <CustomSlideRenderer slide={item.data} scale={slideFit.scale} appDataDir={appDataDir} />
+                  </div>
+                )}
               </div>
             ) : item.type === "Timer" ? (
               <div className="flex flex-col items-center justify-center gap-2">
@@ -313,8 +324,12 @@ export function PreviewCard({
                 )}
               </div>
             ) : item.type === "Song" ? (
-              <div ref={slideBoxRef} className="w-full" style={{ aspectRatio: "16/9" }}>
-                <SongSlideRenderer data={item.data} scale={slideScale} fontSize={settings.font_size} showSectionLabel={!!settings.show_song_section_labels} />
+              <div ref={slideFitRef} className="w-full h-full flex items-center justify-center">
+                {slideFit.width > 0 && slideFit.height > 0 && (
+                  <div style={{ width: slideFit.width, height: slideFit.height }}>
+                    <SongSlideRenderer data={item.data} scale={slideFit.scale} fontSize={settings.font_size} showSectionLabel={!!settings.show_song_section_labels} />
+                  </div>
+                )}
               </div>
             ) : item.type === "Camera" ? (
               <div className="w-full h-full relative border border-slate-800 rounded-lg overflow-hidden bg-black">

@@ -33,9 +33,10 @@ export function App() {
   const [pairErr, setPairErr] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
-  const pushToast = useCallback((msg: string, kind: "error" | "info" = "error") => {
+  const pushToast = useCallback((msg: unknown, kind: "error" | "info" = "error") => {
+    const text = msg instanceof Error ? msg.message : String(msg ?? "");
     const id = Date.now() + Math.random();
-    setToasts((cur) => [...cur, { id, msg, kind }]);
+    setToasts((cur) => [...cur, { id, msg: text, kind }]);
     window.setTimeout(() => setToasts((cur) => cur.filter((t) => t.id !== id)), 4200);
   }, []);
 

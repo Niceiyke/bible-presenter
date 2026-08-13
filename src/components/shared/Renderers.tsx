@@ -24,6 +24,7 @@ import {
 import { renderDocToHtml, isJsonContent } from "../editors/slide/slideTextExtensions";
 import { resolveElementTextStyle } from "../editors/slide/textStyleSystem";
 import { useAutoSizeText, resolveAutoSizeInputs, docToPlainText } from "./useAutoSizeText";
+import { useSlideFit } from "../../hooks/useSlideFit";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1005,25 +1006,14 @@ export function SmallItemPreview({
   appDataDir?: string | null;
   settings?: PresentationSettings;
 }) {
-  // Slot that re-measures and re-scales slide/song renderers against the
-  // configured reference — same policy as `useCanvasScale` so previews always
-  // match the editor canvas irrespective of the host box size. The previous
-  // hardcoded `scale={0.1}` (CustomSlide) / `scale={0.2}` (Song) only ever
-  // matched one fixed box height, so wider/narrower hosts overflowed or
-  // shrank content.
+  // Letterbox the 16:9 slide/song design inside the (possibly non-16:9)
+  // preview box via `useSlideFit` — the renderer fills the largest 16:9
+  // sub-rectangle that fits and scales fonts from its height, so wider or
+  // narrower hosts never overflow text. The previous hardcoded scales
+  // (0.1 / 0.2) only matched one fixed box height.
   const boxRef = useRef<HTMLDivElement>(null);
-  const referenceHeight = useReferenceHeight();
-  const [scale, setScale] = useState(0.1);
-
-  useLayoutEffect(() => {
-    const el = boxRef.current;
-    if (!el) return;
-    const update = () => setScale(el.clientHeight > 0 ? el.clientHeight / referenceHeight : 0.1);
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [item, referenceHeight]);
+  const fit = useSlideFit(boxRef);
+  const fitReady = fit.width > 0 && fit.height > 0;
 
   switch (item.type) {
     case "Verse":
@@ -1041,16 +1031,24 @@ export function SmallItemPreview({
       );
     case "CustomSlide":
       return (
-        <div ref={boxRef} className="w-full h-full">
-          <CustomSlideRenderer slide={item.data} scale={scale} appDataDir={appDataDir} />
+        <div ref={boxRef} className="w-full h-full flex items-center justify-center">
+          {fitReady && (
+            <div style={{ width: fit.width, height: fit.height }}>
+              <CustomSlideRenderer slide={item.data} scale={fit.scale} appDataDir={appDataDir} />
+            </div>
+          )}
         </div>
       );
     case "Timer":
       return <TimerRenderer data={item.data} />;
     case "Song":
       return (
-        <div ref={boxRef} className="w-full h-full" style={{ aspectRatio: "16/9" }}>
-          <SongSlideRenderer data={item.data} scale={scale} fontSize={settings?.font_size} />
+        <div ref={boxRef} className="w-full h-full flex items-center justify-center">
+          {fitReady && (
+            <div style={{ width: fit.width, height: fit.height }}>
+              <SongSlideRenderer data={item.data} scale={fit.scale} fontSize={settings?.font_size} />
+            </div>
+          )}
         </div>
       );
     default:
