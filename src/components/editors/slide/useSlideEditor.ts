@@ -23,6 +23,7 @@ import { useElementDrag, useElementResize, useElementRotation } from "./useEleme
 import type { GuideLine } from "./useElementDragResize";
 import { useSlideDragDrop } from "./useSlideDragDrop";
 import { migratePresentation, alignElements, adjustZOrder, collectGroupMembers, synthesizeDefaultTheme, type AlignmentAxis, type ZDirection } from "./helpers";
+import { elementFontSize, stepFontSize } from "./textStyleSystem";
 import { newDefaultSlide, newTitleSlide, newBlankSlide, newQuoteSlide, newAnnouncementSlide, newImageCaptionSlide, newScriptureSlide, stableId, relativizePath, exportPresentation, importPresentation, deepCloneSlide, newTextElement, newImageElement, newVideoElement, newShapeElement, buildCustomSlideItem } from "../../../utils";
 import { useAppStore } from "../../../store";
 import { useKeyboardBinding } from "../../../hooks/keyboardRegistry";
@@ -201,12 +202,14 @@ export function useSlideEditor({ initialPres, onClose, onStageSlide, onAddToServ
 
   // ── P4.4 ───────────────────────────────────────────────────────────────────
   // Bump font-size of every selected *text* element by `delta` points,
-  // clamped to a sane floor so text never collapses to an unreadable size.
+  // clamped through the shared typography policy. `elementFontSize`
+  // resolves the `"inherit"` cascade so elements inheriting the theme
+  // size step from the actual painted size, not a hard-coded 32.
   const bumpSelectedFontSize = (delta: number) => {
     for (const el of getSelectedElements()) {
       if (el.kind !== "text" || el.locked) continue;
-      const base = typeof el.font_size === "number" ? el.font_size : 32;
-      updateElement(el.id, { font_size: Math.max(8, base + delta) }, true, "font-size");
+      const base = elementFontSize(el, pres.theme);
+      updateElement(el.id, { font_size: stepFontSize(base, delta) }, true, "font-size");
     }
   };
 

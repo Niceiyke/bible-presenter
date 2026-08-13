@@ -37,7 +37,7 @@ import {
   Type, AArrowUp, AArrowDown, Pilcrow,
 } from "lucide-react";
 
-import type { TextElement, ProseMirrorJSON, SlideTheme, TextStyle as TextStyleType } from "../../../types";
+import type { TextElement, ProseMirrorJSON, SlideTheme } from "../../../types";
 import { useFonts } from "../../../hooks/useFonts";
 import {
   FontSizeInline,
@@ -45,6 +45,14 @@ import {
   LineHeightInline,
   ParagraphStyleInline,
 } from "./slideTextExtensions";
+import {
+  FONT_SIZE_STEP,
+  findParagraphStyle,
+  paragraphStyleCss,
+  resolveElementTextStyle,
+  resolveFontSize,
+  stepFontSize,
+} from "./textStyleSystem";
 
 interface InlineTextEditorProps {
   el: TextElement;
@@ -66,26 +74,6 @@ const ALIGN_BTNS: { cmd: string; title: string; icon: React.ReactNode }[] = [
   { cmd: "center", title: "Align center", icon: <AlignCenter size={13} /> },
   { cmd: "right", title: "Align right", icon: <AlignRight size={13} /> },
 ];
-
-/** P4.3 — resolve a theme-defined paragraph style recipe to an inline CSS
- *  string the paragraph node stores (font, size, color, italic, indent). */
-export function paragraphStyleCss(
-  name: string,
-  recipe: Partial<TextStyleType> & { indent?: string },
-  theme?: SlideTheme,
-): string {
-  const parts: string[] = [];
-  const fam = recipe.font_family ?? theme?.defaultFontFamily ?? "Arial";
-  const size = recipe.font_size ?? theme?.defaultFontSize ?? 32;
-  parts.push(`font-family: ${fam}`);
-  parts.push(`font-size: ${size}pt`);
-  if (recipe.color) parts.push(`color: ${recipe.color}`);
-  if (recipe.bold) parts.push("font-weight: bold");
-  if (recipe.italic) parts.push("font-style: italic");
-  if (recipe.align) parts.push(`text-align: ${recipe.align}`);
-  if (recipe.indent) parts.push(`text-indent: ${recipe.indent}`);
-  return parts.join("; ");
-}
 
 export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTextEditorProps) {
   // P2.5: user-installed @font-face families merged with built-ins.
@@ -194,6 +182,11 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
     el.v_align === "middle" ? "center" :
     el.v_align === "bottom" ? "flex-end" : "flex-start";
 
+  // Element-level cascade defaults for the editor body, matching exactly
+  // what the output renderer paints (theme → inherit) so WYSIWYG holds
+  // even when the element inherits its font from the presentation theme.
+  const baseStyle = resolveElementTextStyle(el, theme);
+
   const commitNow = () => {
     if (committedRef.current) return;
     committedRef.current = true;
@@ -203,32 +196,28 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
   // Apply per-selection font-size delta: `delta` in points.
   const bumpFontSize = (delta: number) => {
     // Start from the *current* font size of the selection — an already-
-    // styled word keeps its size, and plain text falls back to the
-    // element's default. Previously we always based the step on
-    // `el.font_size`, so selecting a word and pressing A+/A- was "stuck"
-    // at the element default (re-applying the same absolute size every
-    // press) instead of stepping the selected text.
-    const selSize = (editor.getAttributes("textStyle") as any)?.fontSize;
-    let base = typeof el.font_size === "number" ? el.font_size : 32;
-    if (typeof selSize === "string" && selSize.trim().endsWith("pt")) {
-      const parsed = parseFloat(selSize);
-      if (!Number.isNaN(parsed)) base = parsed;
-    }
-    const next = Math.max(8, Math.round(base + delta));
+    // styled word keeps its size, plain text falls back to the element's
+    // default, and a paragraph carrying a P4.3 recipe (e.g. Header=48pt)
+    // steps from the recipe size instead of the element default. The
+    // cascade is resolved by `resolveFontSize` so the A+/A− controls
+    // agree with the readout and the renderer.
+    const base = resolveFontSize({
+      markSize: (editor.getAttributes("textStyle") as any)?.fontSize,
+      paragraphCss: (editor.getAttributes("paragraph") as any)?.dataStyle,
+      elementSize: el.font_size,
+      theme,
+    });
+    const next = stepFontSize(base, delta);
     editor.chain().focus().setFontSize(`${next}pt`).run();
   };
 
-  // P4.3 — current paragraph style, resolved by comparing the paragraph
+  // P4.3 — current paragraph style, resolved by matching the paragraph
   // node's stored `data-style` CSS against each theme recipe. The recipe
   // wins when the CSS strings match, so selecting the same style again
   // leaves the node untouched.
   const currentStyleName = useMemo(() => {
     const css = (editor.getAttributes("paragraph") as any)?.dataStyle ?? null;
-    if (!css) return "";
-    for (const [name, recipe] of Object.entries(theme?.paragraphStyles ?? {})) {
-      if (paragraphStyleCss(name, recipe, theme) === css) return name;
-    }
-    return "";
+    return findParagraphStyle(css, theme)?.name ?? "";
   }, [editor, theme]);
 
   const applyParagraphStyle = (name: string) => {
@@ -321,20 +310,18 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
           </select>
         </label>
         <ToolbarDivider />
-        <ToolbarButton title="Smaller (Alt+A⁻)" onClick={() => bumpFontSize(-4)}>
+        <ToolbarButton title={`Smaller text (−${FONT_SIZE_STEP}pt)`} onClick={() => bumpFontSize(-FONT_SIZE_STEP)}>
           <AArrowDown size={13} />
         </ToolbarButton>
         <span className="text-[10px] text-console-text-muted tabular-nums w-7 text-center">
-          {(() => {
-            const selSize = (editor.getAttributes("textStyle") as any)?.fontSize;
-            if (typeof selSize === "string" && selSize.trim().endsWith("pt")) {
-              const parsed = parseFloat(selSize);
-              if (!Number.isNaN(parsed)) return Math.round(parsed);
-            }
-            return String(el.font_size ?? 32);
-          })()}
+          {Math.round(resolveFontSize({
+            markSize: (editor.getAttributes("textStyle") as any)?.fontSize,
+            paragraphCss: (editor.getAttributes("paragraph") as any)?.dataStyle,
+            elementSize: el.font_size,
+            theme,
+          }))}
         </span>
-        <ToolbarButton title="Larger (Alt+A⁺)" onClick={() => bumpFontSize(4)}>
+        <ToolbarButton title={`Larger text (+${FONT_SIZE_STEP}pt)`} onClick={() => bumpFontSize(FONT_SIZE_STEP)}>
           <AArrowUp size={13} />
         </ToolbarButton>
         <ToolbarDivider />
@@ -413,9 +400,9 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
         <EditorContent
           editor={editor}
           style={{
-            fontFamily: typeof el.font_family === "string" ? el.font_family : "Arial",
-            fontSize: `${(typeof el.font_size === "number" ? el.font_size : 32) * canvasScale}pt`,
-            color: typeof el.color === "string" ? el.color : "#ffffff",
+            fontFamily: baseStyle.fontFamily,
+            fontSize: `${baseStyle.fontSize * canvasScale}pt`,
+            color: baseStyle.color,
             // NOTE: bold/italic are no longer forced here — they are
             // represented as Tiptap marks (see the seeding effect above) so
             // per-word toggleBold/toggleItalic can add AND remove them.

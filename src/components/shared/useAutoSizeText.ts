@@ -24,6 +24,7 @@
 
 import { useLayoutEffect, useRef, useState } from "react";
 import type { TextElement, SlideTheme } from "../../types";
+import { resolveElementTextStyle } from "../editors/slide/textStyleSystem";
 
 export interface AutoSizeOpts {
   /** Effective font-size in points *before* auto-fit is applied
@@ -128,16 +129,12 @@ export function resolveAutoSizeInputs(
   containerHeight: number,
   containerWidth: number,
 ): AutoSizeOpts {
-  const fontFamily =
-    el.font_family === "inherit" || el.font_family === undefined
-      ? theme?.defaultFontFamily ?? "Arial"
-      : el.font_family;
-  const baseFontSize =
-    el.font_size === "inherit" || el.font_size === undefined
-      ? theme?.defaultFontSize ?? 32
-      : el.font_size;
+  // The same inherit-aware cascade the renderer paints with
+  // (`textStyleSystem.resolveElementTextStyle`), so the probe and the
+  // on-screen text never disagree about the declared size/family.
+  const { fontFamily, fontSize } = resolveElementTextStyle(el, theme);
   return {
-    maxPt: baseFontSize * scale,
+    maxPt: fontSize * scale,
     fontFamily,
     weight: el.bold ? "bold" : "normal",
     style: el.italic ? "italic" : "normal",

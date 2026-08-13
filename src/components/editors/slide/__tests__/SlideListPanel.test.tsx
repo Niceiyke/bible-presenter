@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { SlideListPanel } from "../SlideListPanel";
 import type { CustomSlide } from "../../../../types";
 
-vi.mock("../SlideThumbnail", () => ({
+vi.mock("../../../shared/SlideThumbnail", () => ({
   SlideThumbnail: ({ alt }: { alt?: string }) => <div aria-label={alt} />,
 }));
 

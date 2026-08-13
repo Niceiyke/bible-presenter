@@ -16,6 +16,7 @@ import {
 import { Btn, ToggleBtn, Div, FontPicker, EditorMenu } from "./components";
 import type { SlideElement } from "../../../types";
 import { useFonts } from "../../../hooks/useFonts";
+import { FONT_SIZE_MAX, FONT_SIZE_MIN, FONT_SIZE_STEP, stepFontSize } from "./textStyleSystem";
 
 export interface EditorToolbarProps {
   activeEl: SlideElement | null;
@@ -135,12 +136,14 @@ export function EditorToolbar({
           return (
             <div className="flex items-center bg-console-surface-raised border border-console-border rounded-lg shrink-0 overflow-hidden">
               <button
-                onClick={() => onUpdateElement(activeEl.id, { font_size: Math.max(8, (baseFs ?? 32) - 2) })}
+                onClick={() => onUpdateElement(activeEl.id, { font_size: stepFontSize(baseFs ?? 32, -FONT_SIZE_STEP) })}
                 disabled={baseFs === null}
                 aria-label="Decrease font size"
                 className="h-10 px-2.5 text-console-text-muted hover:text-console-text hover:bg-console-surface-strong text-sm font-bold disabled:opacity-30">−</button>
               <input
                 type="number"
+                min={FONT_SIZE_MIN}
+                max={FONT_SIZE_MAX}
                 value={baseFs ?? ""}
                 placeholder="—"
                 disabled={baseFs === null}
@@ -149,7 +152,7 @@ export function EditorToolbar({
                 onKeyDown={e => e.stopPropagation()}
                 className="w-11 bg-transparent py-1 text-xs text-console-text text-center outline-none tabular-nums disabled:opacity-30 placeholder:text-console-text-subtle" />
               <button
-                onClick={() => onUpdateElement(activeEl.id, { font_size: (baseFs ?? 32) + 2 })}
+                onClick={() => onUpdateElement(activeEl.id, { font_size: stepFontSize(baseFs ?? 32, FONT_SIZE_STEP) })}
                 disabled={baseFs === null}
                 aria-label="Increase font size"
                 className="h-10 px-2.5 text-console-text-muted hover:text-console-text hover:bg-console-surface-strong text-sm font-bold disabled:opacity-30">+</button>

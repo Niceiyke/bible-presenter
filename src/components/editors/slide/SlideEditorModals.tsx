@@ -8,7 +8,7 @@ import React, { useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Trash2, X, Plus, Layers } from "lucide-react";
-import { SlideThumbnail } from "./SlideThumbnail";
+import { SlideThumbnail } from "../../shared/SlideThumbnail";
 import { MediaPickerModal } from "../../MediaPickerModal";
 import { BiblePickerModal } from "../../BiblePickerModal";
 import { BUILTIN_DECKS, stableId } from "../../../utils";

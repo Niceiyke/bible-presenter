@@ -1,10 +1,12 @@
 /**
- * SlideThumbnail — P4.6 slide-rail thumbnails.
+ * SlideThumbnail — canonical thumbnail for a single `CustomSlide`.
  *
- * Renders the actual `CustomSlideRenderer` at the slot's dimensions using
- * the renderer's own `scale` prop (which scales font sizing relative to the
- * thumbnail box), so the rail shows real slide content — backgrounds,
- * shapes, text, images.
+ * The single source of truth used by the slide rail (`SlideListPanel`),
+ * the slide-editor template/preview modals (`SlideEditorModals`), and the
+ * Studio grid card (`StudioSlideCard`). Renders the actual
+ * `CustomSlideRenderer` at the slot's dimensions using the renderer's own
+ * `scale` prop (which scales font sizing relative to the thumbnail box), so
+ * the rail shows real slide content — backgrounds, shapes, text, images.
  *
  * This intentionally does NOT use `html-to-image` / `toPng`: in the Tauri
  * webview those fail to serialize `asset://localhost` media and custom
@@ -14,9 +16,9 @@
  */
 
 import React, { useLayoutEffect, useRef, useState } from "react";
-import { CustomSlideRenderer } from "../../shared/Renderers";
-import type { CustomSlide, SlideTheme } from "../../../types";
-import { useReferenceHeight } from "../../../hooks/useReferenceHeight";
+import { CustomSlideRenderer } from "./Renderers";
+import type { CustomSlide, SlideTheme } from "../../types";
+import { useReferenceHeight } from "../../hooks/useReferenceHeight";
 
 interface SlideThumbnailProps {
   slide: CustomSlide;

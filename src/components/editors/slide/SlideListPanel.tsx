@@ -11,7 +11,7 @@ import {
   Plus, Library, Type, Heading1, Quote, Image as ImageIcon, Megaphone, Square, BookOpen,
   ChevronUp, ChevronDown, Copy, Trash2, GripVertical,
 } from "lucide-react";
-import { SlideThumbnail } from "./SlideThumbnail";
+import { SlideThumbnail } from "../../shared/SlideThumbnail";
 import { EditorMenu } from "./components";
 import type { AddSlideKind } from "./useSlideEditor";
 import type { CustomSlide, SlideTheme } from "../../../types";

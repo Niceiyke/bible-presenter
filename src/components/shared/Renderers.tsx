@@ -22,6 +22,7 @@ import {
   TextElement,
 } from "../../types";
 import { renderDocToHtml, isJsonContent } from "../editors/slide/slideTextExtensions";
+import { resolveElementTextStyle } from "../editors/slide/textStyleSystem";
 import { useAutoSizeText, resolveAutoSizeInputs, docToPlainText } from "./useAutoSizeText";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -117,28 +118,6 @@ function BackgroundVideoEl({ value, loop, muted, objectFit, opacity, appDataDir 
 }
 
 /**
- * Resolve a `TextElement` style prop with the theme cascade (P2.4):
- * "inherit" pulls from the supplied `SlideTheme` rather than the
- * element's own override. Concrete values win; absent defaults fall
- * back to the historical "Arial/32pt/white" so the renderer never
- * produces invisible text on an un-themed slide.
- */
-function resolveTextFont(el: TextElement, theme: SlideTheme | undefined) {
-  const fontFamily =
-    el.font_family === "inherit" || el.font_family === undefined
-      ? theme?.defaultFontFamily ?? "Arial"
-      : el.font_family;
-  const fontSize =
-    el.font_size === "inherit" || el.font_size === undefined
-      ? theme?.defaultFontSize ?? 32
-      : el.font_size;
-  const color = el.color === "inherit" || el.color === undefined
-    ? theme?.textColor ?? "#ffffff"
-    : el.color;
-  return { fontFamily, fontSize, color };
-}
-
-/**
  * Single text-element renderer used by `CustomSlideRenderer` so the
  * auto-size algorithm (P3.3) can own its own DOM ref and probe element
  * without the parent's per-slide memo re-running on every binary-search
@@ -154,7 +133,9 @@ function SlideTextElement({
   elStyle: React.CSSProperties;
   vAlign: "flex-start" | "center" | "flex-end";
 }) {
-  const { fontFamily, fontSize, color } = resolveTextFont(el, theme);
+  // Element-level cascade defaults ("inherit" → theme) shared with the
+  // editor CSS, thumbnails, and the auto-size probe (textStyleSystem.ts).
+  const { fontFamily, fontSize, color } = resolveElementTextStyle(el, theme);
   const html = isJsonContent(el.content)
     ? renderDocToHtml(el.content)
     : sanitizeSlideHtml(String(el.content ?? ""));
@@ -1075,85 +1056,4 @@ export function SmallItemPreview({
     default:
       return null;
   }
-}
-
-export function SlideThumbnail({
-  slide,
-  index,
-  onStage,
-  onLive,
-  onAddToSchedule,
-  appDataDir = null,
-}: {
-  slide: CustomSlide;
-  index: number;
-  onStage?: () => void;
-  onLive?: () => void;
-  onAddToSchedule?: () => void;
-  appDataDir?: string | null;
-}) {
-  const showOverlay = onStage || onLive || onAddToSchedule;
-
-  // Measure the slot height and scale slide fonts against the configured
-  // reference — the same policy `useCanvasScale` (editor canvas) and
-  // `editors/slide/SlideThumbnail` (slide-rail thumbnails) use. The
-  // previous hardcoded `scale={0.1}` only matched a 108px-tall slot,
-  // so on wider/narrower operator windows the StudioTab grid handed
-  // `CustomSlideRenderer` a scale that diverged from the editor's,
-  // making text overflow (small slot) or sit too small (large slot)
-  // relative to the slide's % boxes which always fill the container.
-  const boxRef = useRef<HTMLDivElement>(null);
-  const referenceHeight = useReferenceHeight();
-  const [scale, setScale] = useState(0.1);
-
-  useLayoutEffect(() => {
-    const el = boxRef.current;
-    if (!el) return;
-    const update = () => setScale(el.clientHeight > 0 ? el.clientHeight / referenceHeight : 0.1);
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [referenceHeight]);
-
-  return (
-    <div
-      ref={boxRef}
-      className="group relative aspect-video rounded overflow-hidden border border-slate-700 hover:border-amber-500/50 transition-all cursor-pointer"
-      onClick={onStage}
-    >
-      <CustomSlideRenderer slide={slide} scale={scale} appDataDir={appDataDir} />
-      <div className="absolute bottom-0 left-0 px-1 py-0.5 bg-black/50">
-        <span className="text-[7px] text-white/70">{index + 1}</span>
-      </div>
-      {showOverlay && (
-        <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-all flex flex-col items-center justify-center gap-1 p-1">
-          {onStage && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onStage(); }}
-              className="w-full bg-slate-600 hover:bg-slate-500 text-white text-[9px] font-bold py-1 rounded"
-            >
-              STAGE
-            </button>
-          )}
-          {onLive && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onLive(); }}
-              className="w-full bg-amber-500 hover:bg-amber-400 text-black text-[9px] font-bold py-1 rounded"
-            >
-              DISPLAY
-            </button>
-          )}
-          {onAddToSchedule && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onAddToSchedule(); }}
-              className="w-full bg-purple-600/40 hover:bg-purple-600 text-purple-300 text-[9px] font-bold py-1 rounded"
-            >
-              + SERVICE
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
 }

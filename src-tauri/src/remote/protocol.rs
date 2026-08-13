@@ -29,38 +29,68 @@ impl RemoteControllerState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
 pub enum RemoteCommandType {
+    #[serde(rename = "remote.pair")]
     RemotePair,
+    #[serde(rename = "remote.authenticate")]
     RemoteAuthenticate,
+    #[serde(rename = "remote.request_control")]
     RemoteRequestControl,
+    #[serde(rename = "remote.release_control")]
     RemoteReleaseControl,
+    #[serde(rename = "remote.renew_lease")]
     RemoteRenewLease,
+    #[serde(rename = "snapshot.get")]
     SnapshotGet,
+    #[serde(rename = "bible.versions")]
     BibleVersions,
+    #[serde(rename = "bible.books")]
     BibleBooks,
+    #[serde(rename = "bible.chapters")]
     BibleChapters,
+    #[serde(rename = "bible.verse_numbers")]
     BibleVerseNumbers,
+    #[serde(rename = "bible.chapter")]
     BibleChapter,
+    #[serde(rename = "bible.search")]
     BibleSearch,
+    #[serde(rename = "bible.stage")]
     BibleStage,
+    #[serde(rename = "bible.go_live")]
     BibleGoLive,
+    #[serde(rename = "bible.stage_next")]
     BibleStageNext,
+    #[serde(rename = "bible.go_live_next")]
     BibleGoLiveNext,
+    #[serde(rename = "bible.stage_previous")]
     BibleStagePrevious,
+    #[serde(rename = "bible.go_live_previous")]
     BibleGoLivePrevious,
+    #[serde(rename = "bible.add_to_service")]
     BibleAddToService,
+    #[serde(rename = "display.go_live")]
     DisplayGoLive,
+    #[serde(rename = "display.stage_next")]
     DisplayStageNext,
+    #[serde(rename = "display.stage_previous")]
     DisplayStagePrevious,
+    #[serde(rename = "display.clear_live")]
     DisplayClearLive,
+    #[serde(rename = "display.clear_all")]
     DisplayClearAll,
+    #[serde(rename = "display.blackout")]
     DisplayBlackout,
+    #[serde(rename = "service.list")]
     ServiceList,
+    #[serde(rename = "songs.search")]
     SongsSearch,
+    #[serde(rename = "song.stage")]
     SongStage,
+    #[serde(rename = "song.go_live")]
     SongGoLive,
+    #[serde(rename = "lower_third.show")]
     LowerThirdShow,
+    #[serde(rename = "lower_third.hide")]
     LowerThirdHide,
 }
 
@@ -113,16 +143,24 @@ impl RemoteCommandResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum RemoteEventKind {
+    #[serde(rename = "snapshot")]
     Snapshot,
+    #[serde(rename = "live.changed")]
     LiveChanged,
+    #[serde(rename = "staged.changed")]
     StagedChanged,
+    #[serde(rename = "schedule.changed")]
     ScheduleChanged,
+    #[serde(rename = "lower_third.changed")]
     LowerThirdChanged,
+    #[serde(rename = "output.changed")]
     OutputChanged,
+    #[serde(rename = "blackout.changed")]
     BlackoutChanged,
+    #[serde(rename = "controller.changed")]
     ControllerChanged,
+    #[serde(rename = "operator.notice")]
     OperatorNotice,
 }
 

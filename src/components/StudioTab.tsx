@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { Plus, Presentation, Edit2, Trash2, Search } from "lucide-react";
 import { useAppStore } from "../store";
-import { SlideThumbnail } from "./shared/Renderers";
+import { StudioSlideCard } from "./StudioSlideCard";
 import { buildCustomSlideItem } from "../utils";
 import { ContentCard, ConfirmModal, StatusBadge, Button } from "./ui";
 import type { CustomPresentation, CustomSlide, DisplayItem, PresentationSummary } from "../types";
@@ -130,7 +130,7 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
                     {studioSlides[pres.id].map((slide, idx) => {
                       const displayItem = buildCustomSlideItem(pres, studioSlides[pres.id], idx);
                       return (
-                        <SlideThumbnail
+                        <StudioSlideCard
                           key={slide.id}
                           slide={slide}
                           index={idx}
