@@ -89,12 +89,13 @@ export interface RemoteControllerState {
   expires_at?: number;
 }
 
-export interface RemoteDestroyedDevice {
+export interface RemoteDeviceInfo {
   id: string;
   name: string;
   role: RemoteRole;
   paired_at: number;
   last_seen_at?: number;
+  connected: boolean;
 }
 
 export interface RemoteSongSummary {
@@ -129,8 +130,7 @@ export interface RemoteStatus {
   urls: string[];
   pairing_code?: string;
   pairing_expires_at?: number;
-  role: RemoteRole;
-  devices: RemoteDestroyedDevice[];
+  devices: RemoteDeviceInfo[];
   controller_state: RemoteControllerState;
   revision: number;
 }

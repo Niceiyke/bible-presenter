@@ -14,6 +14,7 @@ import { BibleVersionsSection } from "./settings/sections/BibleVersionsSection";
 import { MonitorsSection } from "./settings/sections/MonitorsSection";
 import { StageSection } from "./settings/sections/StageSection";
 import { OperatorSection } from "./settings/sections/OperatorSection";
+import { RemoteSection } from "./settings/sections/RemoteSection";
 
 const CATEGORIES: SettingsCategory[] = [
   { id: "output", labelKey: "settings.category.output", keywords: ["font", "size", "transition", "blank", "fade", "slide", "verse font", "timing", "song label", "section label", "verse 1", "chorus"] },
@@ -25,6 +26,7 @@ const CATEGORIES: SettingsCategory[] = [
   { id: "monitors", labelKey: "settings.category.monitors", keywords: ["monitor", "screen", "display", "output monitor", "test", "projector"] },
   { id: "stage", labelKey: "settings.category.stage", keywords: ["stage", "second monitor", "performer", "confidence", "themed"] },
   { id: "operator", labelKey: "settings.category.operator", keywords: ["behaviour", "behavior", "auto hide", "logo clear", "locale", "language", "i18n"] },
+  { id: "remote", labelKey: "settings.category.remote", keywords: ["remote", "phone", "tablet", "pair", "pairing", "lan", "wifi", "control", "device", "lease"] },
 ];
 
 const LOCALES: { id: Locale; label: string }[] = [
@@ -92,7 +94,8 @@ export function SettingsTab({ onUpdateSettings, onUploadMedia }: SettingsTabProp
     if (category === "versions") return <BibleVersionsSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
     if (category === "monitors") return <MonitorsSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
     if (category === "stage") return <StageSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
-    return <OperatorSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
+    if (category === "operator") return <OperatorSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
+    return <RemoteSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
   };
 
   return (

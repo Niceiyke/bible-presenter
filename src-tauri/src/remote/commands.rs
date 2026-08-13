@@ -368,8 +368,12 @@ pub async fn dispatch(
         if let Err(e) = require_operator(device) {
             return err_result(&command.command_id, control.hub.current_revision(), "forbidden", &e);
         }
-        if let Err(e) = require_lease(control, device) {
-            return err_result(&command.command_id, control.hub.current_revision(), "lease_required", &e);
+        // `RemoteRequestControl` is what *acquires* the lease, so it must
+        // bypass the gate; every other mutating command needs one.
+        if command.r#type != RemoteCommandType::RemoteRequestControl {
+            if let Err(e) = require_lease(control, device) {
+                return err_result(&command.command_id, control.hub.current_revision(), "lease_required", &e);
+            }
         }
     }
 
