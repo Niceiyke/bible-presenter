@@ -22,8 +22,9 @@ import {
   TextElement,
 } from "../../types";
 import { renderDocToHtml, isJsonContent } from "../editors/slide/slideTextExtensions";
+import { ptToScaleHtml } from "../editors/slide/textStyleSystem";
 import { resolveElementTextStyle } from "../editors/slide/textStyleSystem";
-import { useAutoSizeText, resolveAutoSizeInputs, docToPlainText } from "./useAutoSizeText";
+import { useAutoSizeText, resolveAutoSizeInputs } from "./useAutoSizeText";
 import { useSlideFit } from "../../hooks/useSlideFit";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -139,8 +140,7 @@ function SlideTextElement({
   const { fontFamily, fontSize, color } = resolveElementTextStyle(el, theme);
   const html = isJsonContent(el.content)
     ? renderDocToHtml(el.content)
-    : sanitizeSlideHtml(String(el.content ?? ""));
-  const textPlain = docToPlainText(el.content);
+    : ptToScaleHtml(sanitizeSlideHtml(String(el.content ?? "")));
   const autosize = el.autoSize ?? "fixed";
 
   // ── shrink: binary-search the largest pt that fits inside the box. ─────
@@ -155,7 +155,7 @@ function SlideTextElement({
   }, [el.w, el.h, autosize, html, scale]);
   const shrinkPt = useAutoSizeText(
     autosize === "shrink" && boxPx !== null,
-    boxPx ? resolveAutoSizeInputs(el, theme, scale, textPlain, boxPx.h, boxPx.w) : null,
+    boxPx ? resolveAutoSizeInputs(el, theme, scale, html, boxPx.h, boxPx.w) : null,
   );
   const effectivePt = shrinkPt ?? fontSize * scale;
 
@@ -205,6 +205,11 @@ function SlideTextElement({
         style={{
           fontFamily,
           fontSize: `${effectivePt}pt`,
+          // Single multiply point: every per-word mark and P4.3 recipe in
+          // the HTML is `calc(Npt * var(--slide-scale))`, so scaling the
+          // slide (output/stage/thumbnail/editor canvas) must set this var
+          // here. The auto-size probe mirrors it as `mid / baseFontSize`.
+          ["--slide-scale" as any]: effectivePt / (fontSize || 1),
           color,
           fontWeight: el.bold ? "bold" : "normal",
           fontStyle: el.italic ? "italic" : "normal",

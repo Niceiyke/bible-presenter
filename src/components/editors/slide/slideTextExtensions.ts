@@ -35,6 +35,7 @@ import TextAlign from "@tiptap/extension-text-align";
 
 import type { ProseMirrorJSON } from "../../../types";
 import { sanitizeSlideHtml } from "../../../utils/sanitize";
+import { ptSizeToCalc, ptStylesToScale } from "./textStyleSystem";
 
 type StoredStyle = { font?: string; fontSize?: string; lineHeight?: string };
 
@@ -84,6 +85,10 @@ export const FontFamilyInline = Extension.create({
 /**
  * Apply `style="font-size: <size>pt"` to the current text selection.
  * Sizes are entered in points because the slide model uses pt throughout.
+ * The rendered size is wrapped in `calc(<n>pt * var(--slide-scale))` so
+ * per-word marks inherit the element container's scale factor
+ * (`--slide-scale` is set by the renderer and the inline editor), instead
+ * of escaping it and overflowing the box at any `scale !== 1`.
  */
 export const FontSizeInline = Extension.create({
   name: "fontSizeInline",
@@ -99,9 +104,17 @@ export const FontSizeInline = Extension.create({
         attributes: {
           fontSize: {
             default: null,
-            parseHTML: (el) => (el as HTMLElement).style.fontSize || null,
+            // Round-trip safe: emitted marks are `calc(Npt * var(--slide-scale))`,
+            // so when HTML is re-parsed (copy/paste, legacy escape hatch) we
+            // recover the authored pt value instead of storing the calc string.
+            parseHTML: (el) => {
+              const raw = (el as HTMLElement).style.fontSize;
+              if (!raw) return null;
+              const m = raw.match(/^calc\(\s*([0-9]+(?:\.[0-9]+)?)pt\s*\*/);
+              return m ? `${m[1]}pt` : raw;
+            },
             renderHTML: (attrs: StoredStyle) =>
-              attrs.fontSize ? { style: `font-size: ${attrs.fontSize}` } : {},
+              attrs.fontSize ? { style: `font-size: ${ptSizeToCalc(attrs.fontSize)}` } : {},
           },
         },
       },
@@ -175,6 +188,12 @@ export const LineHeightInline = Extension.create({
  * recipe by writing the CSS string into the paragraph's node attrs; the
  * output renderer (via `generateHTML` + `sanitizeSlideHtml`) emits those
  * attrs back as `style` on the `<p>` — no render-time lookup needed.
+ *
+ * The stored `data-style` blob stays byte-identical to the recipe's
+ * authored CSS (absolute pt) so `findParagraphStyle` can match it; only
+ * the *emitted* `style` has its `font-size: Npt` wrapped in the
+ * `--slide-scale` calc so recipe paragraphs scale with the element like
+ * per-word marks do.
  */
 export const ParagraphStyleInline = Extension.create({
   name: "paragraphStyleInline",
@@ -188,7 +207,9 @@ export const ParagraphStyleInline = Extension.create({
             default: null,
             parseHTML: (el) => (el as HTMLElement).getAttribute("data-style") || null,
             renderHTML: (attrs: any) =>
-              attrs.dataStyle ? { "data-style": attrs.dataStyle, style: attrs.dataStyle } : {},
+              attrs.dataStyle
+                ? { "data-style": attrs.dataStyle, style: ptStylesToScale(attrs.dataStyle) }
+                : {},
           },
         },
       },

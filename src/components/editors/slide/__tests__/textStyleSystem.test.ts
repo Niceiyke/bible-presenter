@@ -11,6 +11,9 @@ import {
   resolveFontSize,
   stepFontSize,
   elementFontSize,
+  ptStylesToScale,
+  ptSizeToCalc,
+  ptToScaleHtml,
 } from "../textStyleSystem";
 import { synthesizeDefaultTheme } from "../helpers";
 
@@ -120,5 +123,30 @@ describe("textStyleSystem — element-level inherit cascade", () => {
     expect(elementFontSize({ font_size: 40 }, theme)).toBe(40);
     expect(elementFontSize({ font_size: "inherit" }, theme)).toBe(theme.defaultFontSize);
     expect(elementFontSize({}, undefined)).toBe(32);
+  });
+});
+
+describe("textStyleSystem — render-space scale reconciliation", () => {
+  it("wraps pt sizes in the --slide-scale calc", () => {
+    expect(ptStylesToScale("font-size: 48pt; font-weight: bold")).toBe(
+      "font-size: calc(48pt * var(--slide-scale)); font-weight: bold",
+    );
+    // Non-pt values pass through.
+    expect(ptStylesToScale("font-size: 1.4em")).toBe("font-size: 1.4em");
+    expect(ptStylesToScale("letter-spacing: 2px")).toBe("letter-spacing: 2px");
+  });
+
+  it("wraps a single mark size", () => {
+    expect(ptSizeToCalc("48pt")).toBe("calc(48pt * var(--slide-scale))");
+    expect(ptSizeToCalc("32.5pt")).toBe("calc(32.5pt * var(--slide-scale))");
+    expect(ptSizeToCalc("1.2em")).toBe("1.2em");
+  });
+
+  it("rewrites font-size only inside style attribute bodies", () => {
+    const html = `<p style="font-size: 48pt">Big</p><span class="pt">48pt</span>`;
+    const out = ptToScaleHtml(html);
+    expect(out).toBe(
+      `<p style="font-size: calc(48pt * var(--slide-scale))">Big</p><span class="pt">48pt</span>`,
+    );
   });
 });

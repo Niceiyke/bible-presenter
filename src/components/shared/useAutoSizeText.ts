@@ -46,9 +46,16 @@ export interface AutoSizeOpts {
   availableHeight: number;
   /** Width of the probe element, in CSS px. */
   availableWidth: number;
-  /** Concrete text content for the probe. Caller must serialize the
-   *  JSON doc to plain text before invoking the hook. */
-  plainText: string;
+  /** The sanitized slide-text HTML to probe (per-word marks and P4.3
+   *  recipes included). Serialized as `font-size: calc(Npt * var(--slide-scale))`
+   *  so the probe must set `--slide-scale = mid / baseFontSize` for each
+   *  candidate `mid` — otherwise an oversized inline word is invisible to
+   *  the search and sails past the box (the original overflow bug). */
+  html: string;
+  /** Unscaled element base font-size (pt). Used to compute each probe
+   *  iteration's `--slide-scale` so marks shrink in lock-step with the
+   *  base just as they do on the rendered element. */
+  baseFontSize: number;
   /** Declared line-height; defaults to the value used by
    *  `CustomSlideRenderer`'s text style (`1.3`) so the probe
    *  matches the on-screen text. */
@@ -62,7 +69,7 @@ export function useAutoSizeText(
   opts: AutoSizeOpts | null,
 ): number | null {
   const [fitted, setFitted] = useState<number | null>(null);
-  const probeRef = useRef<HTMLParagraphElement | null>(null);
+  const probeRef = useRef<HTMLDivElement | null>(null);
 
   useLayoutEffect(() => {
     if (!enabled || !opts) {
@@ -74,7 +81,7 @@ export function useAutoSizeText(
       return;
     }
 
-    const probe = document.createElement("p");
+    const probe = document.createElement("div");
     probe.style.cssText = [
       "position:absolute",
       "visibility:hidden",
@@ -88,6 +95,11 @@ export function useAutoSizeText(
       "word-break:break-word",
       `line-height:${opts.lineHeight ?? 1.3}`,
     ].join(";");
+    // Probe the *actual* rendered content (marks + recipes) so oversized
+    // inline words are measured. Without the font-size css-var the calc()
+    // marks would resolve against the probe's own font-size, so the var is
+    // set per iteration below.
+    probe.innerHTML = opts.html;
     // Attach to the document body so the probe inherits webview font
     // settings; the renderer's element box doesn't need to exist yet.
     document.body.appendChild(probe);
@@ -99,7 +111,7 @@ export function useAutoSizeText(
     for (let i = 0; i < 16; i++) {
       const mid = (lo + hi) / 2;
       probe.style.fontSize = `${mid}pt`;
-      probe.textContent = opts.plainText;
+      probe.style.setProperty("--slide-scale", `${mid / opts.baseFontSize}`);
       if (probe.scrollHeight <= opts.availableHeight) {
         best = mid;
         lo = mid + 0.25;
@@ -125,7 +137,7 @@ export function resolveAutoSizeInputs(
   el: TextElement,
   theme: SlideTheme | undefined,
   scale: number,
-  plainText: string,
+  html: string,
   containerHeight: number,
   containerWidth: number,
 ): AutoSizeOpts {
@@ -141,7 +153,8 @@ export function resolveAutoSizeInputs(
     align: el.align ?? "left",
     availableHeight: containerHeight,
     availableWidth: containerWidth,
-    plainText,
+    html,
+    baseFontSize: fontSize,
   };
 }
 

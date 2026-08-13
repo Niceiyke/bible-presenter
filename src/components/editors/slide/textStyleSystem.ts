@@ -63,6 +63,54 @@ export function parsePt(value: unknown): number | null {
   return null;
 }
 
+// ─── Render-space scale reconciliation ──────────────────────────────────────
+
+/**
+ * The slide renderer authors every font size against a reference space
+ * (element `font_size` and per-word marks are both absolute points). The
+ * windows scale the *element base* by `scale` (`fontSize * scale` on the
+ * container) so text fills the current viewport — but per-word marks and
+ * P4.3 recipe blobs were emitted as absolute `pt` inline styles, so they
+ * escaped the scale entirely and overflowed the element box at any
+ * `scale !== 1`.
+ *
+ * Fix: emit those sizes as `calc(<n>pt * var(--slide-scale))`. The
+ * container defines `--slide-scale` = the renderer's current scale (the
+ * editor sets it to `canvasScale`, the output/stage/thumbnail to their
+ * fit scale). The base text is painted at `fontSize * scale` and every
+ * mark/recipe then scales in lock-step (`48pt * scale`), so there is a
+ * single multiply point and no absolute-pt drift. `calc()` with a `var()`
+ * is used instead of `em` because `em` inside a recipe paragraph that is
+ * itself scaled would compound against the altered parent font-size.
+ */
+
+/** Wrap every `font-size: <n>pt` declaration in a style string with the
+ * `--slide-scale` calc so per-element/recipe sizes inherit the container's
+ * scale factor. Non-`pt` values (px, em, unitless) pass through. */
+export function ptStylesToScale(style: string): string {
+  if (!style) return style;
+  return style.replace(/font-size\s*:\s*([0-9]+(?:\.[0-9]+)?)pt/gi, (_m, n) => {
+    return `font-size: calc(${n}pt * var(--slide-scale))`;
+  });
+}
+
+/** Wrap a single `"<n>pt"` size (as stored on a `textStyle` mark) in the
+ *  `--slide-scale` calc so the per-word size inherits the container's
+ *  scale. Non-`pt` values pass through unchanged. */
+export function ptSizeToCalc(size: string): string {
+  return ptStylesToScale(`font-size: ${size}`).replace(/^font-size:\s*/, "");
+}
+
+/** Same rewrite scoped to `style="…"` attribute bodies in an HTML string
+ *  (span marks, `<p>` recipe styles, legacy HTML content). */
+export function ptToScaleHtml(html: string): string {
+  if (!html) return html;
+  return html.replace(/style="([^"]*)"/g, (_m, style) => {
+    const next = ptStylesToScale(style);
+    return next === style ? _m : `style="${next}"`;
+  });
+}
+
 // ─── P4.3 paragraph-style recipes ────────────────────────────────────────────
 
 export type ParagraphStyleRecipe = Partial<TextStyleType> & { indent?: string };

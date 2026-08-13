@@ -402,6 +402,12 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
           style={{
             fontFamily: baseStyle.fontFamily,
             fontSize: `${baseStyle.fontSize * canvasScale}pt`,
+            // Single multiply point shared with the renderer: per-selection
+            // marks are `calc(Npt * var(--slide-scale))`, so this var must
+            // scale them exactly like the audience output does. Without it
+            // a bumped word renders at raw pt (escaping canvasScale) and
+            // overflows the box once committed.
+            ["--slide-scale" as any]: canvasScale,
             color: baseStyle.color,
             // NOTE: bold/italic are no longer forced here — they are
             // represented as Tiptap marks (see the seeding effect above) so
