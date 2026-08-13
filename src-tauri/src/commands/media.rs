@@ -41,9 +41,8 @@ pub async fn relink_media(app: AppHandle, state: State<'_, AppState>, id: String
     let store = state.media_schedule.clone();
     tokio::task::spawn_blocking(move || {
         store.relink_media(&id, std::path::Path::new(&path)).map_err(|e| e.to_string())
-    }).await.map_err(|e| format!("relink task failed: {}", e))?.map_err(|e| e.to_string()).and_then(|item| {
-        let _ = app.emit("media-updated", &item);
-        Ok(item)
+    }).await.map_err(|e| format!("relink task failed: {}", e))?.map_err(|e| e.to_string()).inspect(|item| {
+        let _ = app.emit("media-updated", item);
     })
 }
 

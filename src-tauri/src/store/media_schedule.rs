@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::fs;
 use anyhow::Result;
 use uuid::Uuid;
@@ -383,19 +383,16 @@ impl<'de> serde::Deserialize<'de> for ImageBackground {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", content = "value")]
 pub enum BackgroundSetting {
+    #[default]
     None,
     Color(String),
     Image(ImageBackground),
     Video(VideoBackground),
     Camera(CameraBackground),
     Audio(AudioBackground),
-}
-
-impl Default for BackgroundSetting {
-    fn default() -> Self { BackgroundSetting::None }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -993,7 +990,7 @@ impl MediaScheduleStore {
             if let Ok(entries) = fs::read_dir(&songs_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.extension().map_or(false, |e| e == "json") {
+                    if path.extension().is_some_and(|e| e == "json") {
                         if let Ok(json) = fs::read_to_string(&path) {
                             if let Ok(song) = serde_json::from_str::<Song>(&json) {
                                 let _ = self.data_db.hash_set("songs", &song.id, &json);
@@ -1010,7 +1007,7 @@ impl MediaScheduleStore {
             if let Ok(entries) = fs::read_dir(&studio_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.extension().map_or(false, |e| e == "json") {
+                    if path.extension().is_some_and(|e| e == "json") {
                         if let Ok(json) = fs::read_to_string(&path) {
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json) {
                                 let id = val.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -1030,7 +1027,7 @@ impl MediaScheduleStore {
             if let Ok(entries) = fs::read_dir(&services_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.extension().map_or(false, |e| e == "json") {
+                    if path.extension().is_some_and(|e| e == "json") {
                         if let Ok(json) = fs::read_to_string(&path) {
                             if let Ok(sched) = serde_json::from_str::<Schedule>(&json) {
                                 let _ = self.data_db.hash_set("services", &sched.id, &json);
@@ -1123,7 +1120,7 @@ impl MediaScheduleStore {
         Ok(items)
     }
 
-    fn get_or_create_thumbnail_static(thumb_dir: &PathBuf, media_path: &str, id: &str) -> Option<String> {
+    fn get_or_create_thumbnail_static(thumb_dir: &Path, media_path: &str, id: &str) -> Option<String> {
         let thumb_path = thumb_dir.join(format!("{}.jpg", id));
         if thumb_path.exists() { return Some(thumb_path.to_string_lossy().to_string()); }
         if let Ok(img) = image::open(media_path) {
@@ -1141,7 +1138,7 @@ impl MediaScheduleStore {
     /// (thumbnail_path, duration_secs, width, height) where None values mean
     /// "could not determine". ffmpeg is not bundled; if it isn't on PATH the
     /// whole probe degrades to (None, None, None, None) instead of erroring.
-    fn probe_video(thumb_dir: &PathBuf, media_path: &str, id: &str) -> (Option<String>, Option<f64>, Option<i64>, Option<i64>) {
+    fn probe_video(thumb_dir: &Path, media_path: &str, id: &str) -> (Option<String>, Option<f64>, Option<i64>, Option<i64>) {
         use std::process::Command;
         let thumb_path = thumb_dir.join(format!("{}.jpg", id));
 
@@ -1371,7 +1368,7 @@ impl MediaScheduleStore {
         let ext_str = source_path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
         let media_type = classify_extension(&ext_str).ok_or_else(|| anyhow::anyhow!("Unsupported media type: .{}", ext_str))?;
 
-        let mut dest_path = self.media_dir.join(&source_path.file_name().unwrap_or_default().to_string_lossy().to_string());
+        let mut dest_path = self.media_dir.join(source_path.file_name().unwrap_or_default().to_string_lossy().to_string());
         let mut dest_name = source_path.file_name().unwrap_or_default().to_string_lossy().to_string();
         let stem = source_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
         let dot_ext = source_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
@@ -1543,7 +1540,7 @@ impl MediaScheduleStore {
                 out.push(ServiceMeta { id, name, item_count, updated_at });
             }
         }
-        out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        out.sort_by_key(|a| a.name.to_lowercase());
         Ok(out)
     }
 
@@ -1598,7 +1595,7 @@ impl MediaScheduleStore {
                 items.push(PresentationSummary { id, name: name.to_string(), slide_count, version, updated_at });
             }
         }
-        items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        items.sort_by_key(|a| a.name.to_lowercase());
         Ok(items)
     }
 
@@ -1645,7 +1642,7 @@ impl MediaScheduleStore {
     pub fn list_templates(&self) -> Result<Vec<SlideTemplate>> {
         let rows = self.data_db.hash_list("slide_templates").map_err(|e| anyhow::anyhow!(e))?;
         let mut templates: Vec<SlideTemplate> = rows.iter().filter_map(|(_, data)| serde_json::from_str(data).ok()).collect();
-        templates.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        templates.sort_by_key(|a| a.name.to_lowercase());
         Ok(templates)
     }
 
@@ -1665,7 +1662,7 @@ impl MediaScheduleStore {
     pub fn list_songs(&self) -> Result<Vec<Song>> {
         let rows = self.data_db.hash_list("songs").map_err(|e| anyhow::anyhow!(e))?;
         let mut songs: Vec<Song> = rows.iter().filter_map(|(_, data)| serde_json::from_str(data).ok()).collect();
-        songs.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+        songs.sort_by_key(|a| a.title.to_lowercase());
         Ok(songs)
     }
 
@@ -1742,7 +1739,7 @@ impl MediaScheduleStore {
     pub fn list_scenes(&self) -> Result<Vec<Scene>> {
         let rows = self.data_db.hash_list("scenes").map_err(|e| anyhow::anyhow!(e))?;
         let mut scenes: Vec<Scene> = rows.iter().filter_map(|(_, data)| serde_json::from_str(data).ok()).collect();
-        scenes.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        scenes.sort_by_key(|a| a.name.to_lowercase());
         Ok(scenes)
     }
 

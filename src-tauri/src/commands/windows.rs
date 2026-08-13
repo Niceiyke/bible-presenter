@@ -41,7 +41,7 @@ fn position_output_on_preferred(app: AppHandle, state: &State<'_, AppState>) -> 
         if monitors.len() > 1 {
             if let Some(primary) = window.primary_monitor().map_err(|e: tauri::Error| e.to_string())? {
                 let target = monitors.iter().find(|m| {
-                    preferred.as_deref().map_or(false, |p| m.name().map_or(false, |n| n == p))
+                    preferred.as_deref().is_some_and(|p| m.name().is_some_and(|n| n == p))
                 }).or_else(|| monitors.iter().find(|m| m.name() != primary.name()));
                 if let Some(mon) = target {
                     let pos = mon.position();

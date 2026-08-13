@@ -105,7 +105,7 @@ impl BibleStore {
     pub fn new_empty(app: &tauri::AppHandle) -> Self {
         log_msg(app, "BibleStore: Initializing in empty mode (waiting for database download).");
         let conn = Connection::open_in_memory().expect("Failed to create in-memory DB");
-        let patterns = RegexSet::new(&[
+        let patterns = RegexSet::new([
             r"(?i)\b([1-3]?\s*[a-z]+)\s+(\d+):(\d+)\b",
             r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)",
         ]).unwrap();
@@ -258,7 +258,7 @@ impl BibleStore {
             book_map.insert(alias.to_string(), full.to_string());
         }
 
-        let patterns = RegexSet::new(&[
+        let patterns = RegexSet::new([
             r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)[:\s]+(\d+)",
             r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)",
         ])?;
@@ -537,10 +537,8 @@ impl BibleStore {
             ))
         }) {
             Ok(rows) => {
-                for r in rows {
-                    if let Ok(x) = r {
-                        scored.push(x);
-                    }
+                for x in rows.flatten() {
+                    scored.push(x);
                 }
             }
             Err(_) => return Vec::new(),
@@ -587,10 +585,8 @@ impl BibleStore {
             })
         })?;
         let mut results = Vec::new();
-        for row in rows {
-            if let Ok(v) = row {
-                results.push(v);
-            }
+        for v in rows.flatten() {
+            results.push(v);
         }
         Ok(results)
     }

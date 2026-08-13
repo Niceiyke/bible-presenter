@@ -66,7 +66,7 @@ pub async fn show_lt_preset(
 
     let mut tpl = template.unwrap_or(serde_json::json!({}));
 
-    if tpl.as_object().map_or(true, |o| o.is_empty()) {
+    if tpl.as_object().is_none_or(|o| o.is_empty()) {
         if let Some(tpl_id) = &preset.template_id {
             if let Ok(all_tpls) = state.media_schedule.load_lt_templates() {
                 if let Some(arr) = all_tpls.as_array() {
