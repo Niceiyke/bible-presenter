@@ -27,7 +27,15 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
   const pcsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
 
   useEffect(() => {
-    if (label !== "main") return;
+    // The provider only ever mounts inside the main operator console (see
+    // App.tsx), so this effect must NOT gate on the store `label` — a stale or
+    // unexpected value would silently skip listener registration. Each
+    // lifecycle step is mirrored to the backend log via `phone_camera_host_log`
+    // so we can diagnose the packaged app without DevTools.
+    const hostLog = (msg: string) =>
+      invoke("phone_camera_host_log", { message: `[provider] ${msg}` }).catch(() => {});
+
+    hostLog(`mounted (label=${label})`);
 
     const teardown = (deviceId: string) => {
       const pc = pcsRef.current.get(deviceId);
@@ -47,6 +55,7 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
 
     const handleOffer = async (deviceId: string, sdp: string) => {
       console.log("[phone-camera] offer received for", deviceId);
+      hostLog(`offer received for ${deviceId}`);
       teardown(deviceId);
       try {
         const pc = new RTCPeerConnection({
@@ -85,8 +94,10 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
         await pc.setLocalDescription(answer);
         await invoke("phone_camera_answer", { device_id: deviceId, sdp: answer.sdp ?? "", target: "operator" });
         console.log("[phone-camera] answer sent for", deviceId);
+        hostLog(`answer sent for ${deviceId}`);
       } catch (err) {
         console.error("[phone-camera] answer setup failed:", err);
+        hostLog(`answer setup failed for ${deviceId}: ${String(err)}`);
         teardown(deviceId);
       }
     };
@@ -118,9 +129,11 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
         teardown(deviceId);
       });
       console.log("[phone-camera] main-window phone camera listeners registered (label=" + label + ")");
+      hostLog(`listeners registered (label=${label})`);
     })();
 
     return () => {
+      hostLog("unmounted");
       unlistenOffer?.();
       unlistenIce?.();
       unlistenStop?.();
