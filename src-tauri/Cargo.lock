@@ -7165,7 +7165,7 @@ dependencies = [
 
 [[package]]
 name = "wordlyte"
-version = "1.10.13"
+version = "1.10.14"
 dependencies = [
  "anyhow",
  "axum",

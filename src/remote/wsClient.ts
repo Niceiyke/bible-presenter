@@ -290,6 +290,7 @@ export function useRemote(): UseRemote {
       // phone's peer-connection panels via window postMessage, which the
       // CameraPanel/usePhoneCamera components subscribe to.
       if (event.kind === "camera.answer" || event.kind === "camera.ice") {
+        console.log("[phone-camera] received relay event", event.kind, "for", (event.payload as { device_id?: string })?.device_id, "target", (event.payload as { target?: string })?.target);
         window.postMessage(JSON.stringify({ kind: event.kind, payload: event.payload }), "*");
         return;
       }

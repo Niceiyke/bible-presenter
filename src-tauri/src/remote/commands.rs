@@ -700,6 +700,7 @@ pub async fn dispatch(
                     // steal the staged slot from another phone or from the
                     // operator's staged content.
                     control.register_phone_camera(&device_id, &req.device_id, &req.device_name, &device.id).await;
+                    crate::store::log_msg(app, &format!("Remote camera: registered {} (\"{}\") owned by {}", device_id, req.device_name, device.id));
                     emit_phone_cameras(app, control).await;
                     RemoteCommandResult::ok_with(&command.command_id, control.hub.current_revision(), json!({ "device_id": device_id }))
                 }
@@ -728,6 +729,7 @@ pub async fn dispatch(
                     // operator-side window ("operator" main window or "output"
                     // projection window), which hosts the answering peer.
                     let prefixed = format!("phone-camera-{}", req.device_id);
+                    crate::store::log_msg(app, &format!("Remote camera: relaying offer for {} target {}", prefixed, req.target));
                     emit_checked(app, "phone-camera-offer", &json!({ "device_id": prefixed, "device_name": req.device_id, "sdp": req.sdp, "target": req.target }));
                     RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
                 }
@@ -746,6 +748,7 @@ pub async fn dispatch(
                     // Phone's local ICE candidate -> relay to the matching
                     // operator-side window's peer.
                     let prefixed = format!("phone-camera-{}", req.device_id);
+                    crate::store::log_msg(app, &format!("Remote camera: relaying ICE for {} target {}", prefixed, req.target));
                     emit_checked(app, "phone-camera-ice", &json!({
                         "device_id": prefixed,
                         "candidate": req.candidate,

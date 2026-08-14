@@ -130,6 +130,17 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
       await makeOffer(operatorPc, "operator");
       await makeOffer(outputPc, "output");
 
+      // The operator main window answers the "operator" offer. Its listeners
+      // are registered at app startup, but a fast phone could still race it —
+      // or a re-connect may have dropped the answer. Re-send the offer a few
+      // times until the operator peer actually connects so a transient miss on
+      // the operator side can never leave the preview stuck on "connecting".
+      for (let attempt = 1; attempt <= 3 && operatorPc.connectionState === "connecting"; attempt++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        console.log("[phone-camera] operator peer still connecting — re-sending offer (attempt " + attempt + ")");
+        await makeOffer(operatorPc, "operator");
+      }
+
       pushToast("Camera streaming started", "info");
     } catch (err) {
       console.error("Camera start failed:", err);

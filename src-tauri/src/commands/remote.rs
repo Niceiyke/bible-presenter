@@ -250,28 +250,34 @@ pub async fn remote_set_permissions(app: AppHandle, state: State<'_, AppState>, 
 /// `target` is the peer this answer belongs to ("operator" or "output") so the
 /// phone can apply it to the right connection.
 #[tauri::command]
-pub async fn phone_camera_answer(state: State<'_, AppState>, device_id: String, sdp: String, target: String) -> Result<(), String> {
+pub async fn phone_camera_answer(app: AppHandle, state: State<'_, AppState>, device_id: String, sdp: String, target: String) -> Result<(), String> {
     let control = state.remote.clone();
-    let (raw_id, owner) = control
-        .phone_camera_route(&device_id)
-        .await
-        .ok_or_else(|| format!("No active phone camera {}", device_id))?;
-    // Route the answer to the phone over the hub; the per-connection loop
-    // delivers it only to the addressed device. The payload carries the id the
-    // phone itself used so it can match its own device.
-    control.hub.publish_to(
-        crate::remote::protocol::RemoteEventKind::CameraAnswer,
-        serde_json::json!({ "device_id": raw_id, "sdp": sdp, "target": target }),
-        None,
-        Some(owner),
-    );
-    Ok(())
+    match control.phone_camera_route(&device_id).await {
+        Some((raw_id, owner)) => {
+            crate::store::log_msg(&app, &format!("Remote camera: routing {} answer (target {}) to phone {}", device_id, target, raw_id));
+            // Route the answer to the phone over the hub; the per-connection loop
+            // delivers it only to the addressed device. The payload carries the id
+            // the phone itself used so it can match its own device.
+            control.hub.publish_to(
+                crate::remote::protocol::RemoteEventKind::CameraAnswer,
+                serde_json::json!({ "device_id": raw_id, "sdp": sdp, "target": target }),
+                None,
+                Some(owner),
+            );
+            Ok(())
+        }
+        None => {
+            crate::store::log_msg(&app, &format!("Remote camera: NO REGISTERED CAMERA for {} — answer NOT sent", device_id));
+            Err(format!("No active phone camera {}", device_id))
+        }
+    }
 }
 
 /// The operator window relays one of its local ICE candidates to the phone
 /// that owns the given phone camera.
 #[tauri::command]
 pub async fn phone_camera_ice(
+    app: AppHandle,
     state: State<'_, AppState>,
     device_id: String,
     candidate: String,
@@ -280,21 +286,25 @@ pub async fn phone_camera_ice(
     target: String,
 ) -> Result<(), String> {
     let control = state.remote.clone();
-    let (raw_id, owner) = control
-        .phone_camera_route(&device_id)
-        .await
-        .ok_or_else(|| format!("No active phone camera {}", device_id))?;
-    control.hub.publish_to(
-        crate::remote::protocol::RemoteEventKind::CameraIce,
-        serde_json::json!({
-            "device_id": raw_id,
-            "candidate": candidate,
-            "sdp_mid": sdp_mid,
-            "sdp_m_line_index": sdp_m_line_index,
-            "target": target,
-        }),
-        None,
-        Some(owner),
-    );
-    Ok(())
+    match control.phone_camera_route(&device_id).await {
+        Some((raw_id, owner)) => {
+            control.hub.publish_to(
+                crate::remote::protocol::RemoteEventKind::CameraIce,
+                serde_json::json!({
+                    "device_id": raw_id,
+                    "candidate": candidate,
+                    "sdp_mid": sdp_mid,
+                    "sdp_m_line_index": sdp_m_line_index,
+                    "target": target,
+                }),
+                None,
+                Some(owner),
+            );
+            Ok(())
+        }
+        None => {
+            crate::store::log_msg(&app, &format!("Remote camera: NO REGISTERED CAMERA for {} — operator ICE NOT sent", device_id));
+            Err(format!("No active phone camera {}", device_id))
+        }
+    }
 }

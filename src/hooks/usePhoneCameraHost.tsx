@@ -46,6 +46,7 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
     };
 
     const handleOffer = async (deviceId: string, sdp: string) => {
+      console.log("[phone-camera] offer received for", deviceId);
       teardown(deviceId);
       try {
         const pc = new RTCPeerConnection({
@@ -61,11 +62,18 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
               sdp_mid: ev.candidate.sdpMid ?? "",
               sdp_m_line_index: ev.candidate.sdpMLineIndex ?? 0,
               target: "operator",
-            }).catch((e) => console.error("phone_camera_ice failed:", e));
+            })
+              .then(() => console.log("[phone-camera] operator ICE relayed"))
+              .catch((e) => console.error("phone_camera_ice failed:", e));
           }
         };
 
+        pc.onconnectionstatechange = () => {
+          console.log("[phone-camera] operator peer state:", pc.connectionState);
+        };
+
         pc.ontrack = (ev) => {
+          console.log("[phone-camera] ontrack for", deviceId);
           const stream = new MediaStream();
           ev.streams[0]?.getTracks().forEach((t) => stream.addTrack(t));
           ev.track && stream.addTrack(ev.track);
@@ -76,8 +84,9 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         await invoke("phone_camera_answer", { device_id: deviceId, sdp: answer.sdp ?? "", target: "operator" });
+        console.log("[phone-camera] answer sent for", deviceId);
       } catch (err) {
-        console.error("Phone camera answer setup failed:", err);
+        console.error("[phone-camera] answer setup failed:", err);
         teardown(deviceId);
       }
     };
@@ -97,6 +106,7 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
         if (p.target === "output") return;
         const pc = pcsRef.current.get(p.device_id);
         if (pc && p.candidate) {
+          console.log("[phone-camera] operator ICE candidate from phone for", p.device_id);
           pc.addIceCandidate({ candidate: p.candidate, sdpMid: p.sdp_mid, sdpMLineIndex: p.sdp_m_line_index }).catch(
             (err) => console.error("phone ICE failed:", err)
           );
@@ -104,8 +114,10 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
       });
       unlistenStop = await listen("phone-camera-stop", (e) => {
         const deviceId = (e.payload as { device_id: string }).device_id;
+        console.log("[phone-camera] stop for", deviceId);
         teardown(deviceId);
       });
+      console.log("[phone-camera] main-window phone camera listeners registered (label=" + label + ")");
     })();
 
     return () => {
