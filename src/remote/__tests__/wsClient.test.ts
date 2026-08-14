@@ -9,6 +9,7 @@ function makeSnapshot(overrides: Partial<RemoteSnapshot> = {}): RemoteSnapshot {
     revision: 1,
     connected: true,
     role: "operator",
+    permissions: { scripture: true, song: true, camera: true, lower_third: true, presentation: true },
     controller_state: { kind: "viewing" },
     live_item: null,
     staged_item: null,

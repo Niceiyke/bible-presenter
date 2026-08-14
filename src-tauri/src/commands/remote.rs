@@ -1,4 +1,4 @@
-use crate::remote::protocol::{RemoteControllerState, RemoteRole};
+use crate::remote::protocol::{RemoteControllerState, RemotePermissions, RemoteRole};
 use crate::remote::{public_urls, RemoteControl};
 use crate::state::AppState;
 use serde::Serialize;
@@ -11,6 +11,7 @@ pub struct RemoteDeviceInfo {
     pub id: String,
     pub name: String,
     pub role: RemoteRole,
+    pub permissions: RemotePermissions,
     pub paired_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_seen_at: Option<u64>,
@@ -49,6 +50,7 @@ fn status_info(control: &RemoteControl, pairing_code: Option<String>) -> RemoteS
             id: d.id.clone(),
             name: d.name.clone(),
             role: d.role.clone(),
+            permissions: d.permissions,
             paired_at: d.paired_at,
             last_seen_at: d.last_seen_at,
             connected: connected_ids.contains(&d.id),
@@ -218,6 +220,20 @@ pub async fn remote_set_role(app: AppHandle, state: State<'_, AppState>, device_
     }
 
     crate::store::log_msg(&app, &format!("Remote device role updated: {} -> {:?}", device_id, role));
+    Ok(status_info(&control, control.is_enabled().then(|| control.token_for_display())))
+}
+
+/// Overrides the content permissions of a paired device without changing its
+/// role. Takes effect immediately for the connected device (the dispatch gate
+/// reads live permissions from the token store on every command).
+#[tauri::command]
+pub async fn remote_set_permissions(app: AppHandle, state: State<'_, AppState>, device_id: String, permissions: RemotePermissions) -> Result<RemoteStatusInfo, String> {
+    let control = state.remote.clone();
+    if !control.tokens.set_permissions(&device_id, permissions) {
+        return Err(format!("No paired device with id {}", device_id));
+    }
+    control.persist_devices();
+    crate::store::log_msg(&app, &format!("Remote device permissions updated: {}", device_id));
     Ok(status_info(&control, control.is_enabled().then(|| control.token_for_display())))
 }
 

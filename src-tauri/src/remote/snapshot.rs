@@ -1,5 +1,5 @@
 use crate::remote::protocol::{
-    RemoteControllerState, RemoteRole, RemoteSnapshot, RemoteSongSummary,
+    RemoteControllerState, RemotePermissions, RemoteRole, RemoteSnapshot, RemoteSongSummary,
 };
 use crate::state::AppState;
 use crate::store::Song;
@@ -42,6 +42,7 @@ pub fn build_snapshot(
     app: &AppHandle,
     state: &AppState,
     role: RemoteRole,
+    permissions: RemotePermissions,
     device_id: Option<String>,
     controller_state: RemoteControllerState,
 ) -> RemoteSnapshot {
@@ -89,6 +90,7 @@ pub fn build_snapshot(
         revision: state.remote.hub.current_revision(),
         connected: true,
         role,
+        permissions,
         controller_device_id: device_id.clone(),
         controller_state,
         live_item,

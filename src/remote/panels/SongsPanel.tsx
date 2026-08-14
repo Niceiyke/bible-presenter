@@ -5,7 +5,8 @@ import { Btn, Card, Label, TextInput, cx, Spinner } from "../ui";
 import type { PanelProps } from "../panelTypes";
 
 export function SongsPanel({ client, pushToast }: PanelProps) {
-  const { command, isHeldBySelf } = client;
+  const { command, isHeldBySelf, snapshot } = client;
+  const canSong = snapshot?.permissions?.song ?? false;
   const [query, setQuery] = useState("");
   const [includeHymns, setIncludeHymns] = useState(true);
   const [songs, setSongs] = useState<RemoteSongSummary[]>([]);
@@ -68,14 +69,16 @@ export function SongsPanel({ client, pushToast }: PanelProps) {
                 <p className="text-[13px] text-slate-100 font-semibold truncate">{song.title}</p>
                 <p className="text-[10px] text-slate-500 truncate">{song.section_labels.join(" · ") || "No sections"}</p>
               </div>
-              <span className="shrink-0 flex gap-1">
-                <Btn variant="stage" onClick={(e) => { e.stopPropagation(); serve(song.id, 0, false); }} className="px-2 py-1 text-[11px]">
-                  <Send size={11} />
-                </Btn>
-                <Btn variant="live" onClick={(e) => { e.stopPropagation(); serve(song.id, 0, true); }} className="px-2 py-1 text-[11px]">
-                  <Radio size={11} />
-                </Btn>
-              </span>
+                            {canSong && (
+                <span className="shrink-0 flex gap-1">
+                  <Btn variant="stage" onClick={(e) => { e.stopPropagation(); serve(song.id, 0, false); }} className="px-2 py-1 text-[11px]">
+                    <Send size={11} />
+                  </Btn>
+                  <Btn variant="live" onClick={(e) => { e.stopPropagation(); serve(song.id, 0, true); }} className="px-2 py-1 text-[11px]">
+                    <Radio size={11} />
+                  </Btn>
+                </span>
+              )}
             </button>
             {openId === song.id && (
               <div className="border-t border-slate-800 px-3 py-2 flex flex-col gap-1 max-h-56 overflow-y-auto">
@@ -84,10 +87,12 @@ export function SongsPanel({ client, pushToast }: PanelProps) {
                     <span className={cx("text-[12px]", i === 0 ? "text-cyan-300 font-semibold" : "text-slate-400")}>
                       {i + 1}. {label}
                     </span>
-                    <span className="flex gap-1">
-                      <Btn variant="ghost" onClick={() => serve(song.id, i, false)} className="px-2 py-0.5 text-[10px]">Stage</Btn>
-                      <Btn variant="ghost" onClick={() => serve(song.id, i, true)} className="px-2 py-0.5 text-[10px] text-red-300">Live</Btn>
-                    </span>
+                                        {canSong && (
+                      <span className="flex gap-1">
+                        <Btn variant="ghost" onClick={() => serve(song.id, i, false)} className="px-2 py-0.5 text-[10px]">Stage</Btn>
+                        <Btn variant="ghost" onClick={() => serve(song.id, i, true)} className="px-2 py-0.5 text-[10px] text-red-300">Live</Btn>
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>

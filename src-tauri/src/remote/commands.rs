@@ -3,8 +3,8 @@ use crate::remote::auth::StoredDevice;
 use crate::remote::protocol::{
     RemoteCameraIcePayload, RemoteCameraOfferPayload, RemoteCameraStartPayload,
     RemoteCommand, RemoteCommandResult, RemoteCommandType, RemoteEventKind,
-    RemoteLowerThirdPayload, RemoteSongControl, RemoteSongSearch, RemoteSongSummary,
-    RemoteVerseRef, RemoteRole,
+    RemoteLowerThirdPayload, RemotePermission, RemoteSongControl, RemoteSongSearch,
+    RemoteSongSummary, RemoteVerseRef,
 };
 use crate::remote::{RemoteControl, DESKTOP_CONTROLLER_ID};
 use crate::state::AppState;
@@ -314,19 +314,45 @@ pub fn op_hide_lower_third(app: &AppHandle, state: &AppState, source: Option<Str
 // Authorization helpers
 // ---------------------------------------------------------------------------
 
-fn require_operator(control: &RemoteControl, device: &StoredDevice) -> Result<(), String> {
-    // Read the *live* role from the token store rather than the cached socket
-    // copy so an operator-demoted device is restricted immediately.
-    let role = control
+fn require_permission(control: &RemoteControl, device: &StoredDevice, perm: RemotePermission) -> Result<(), String> {
+    // Read the *live* permissions from the token store rather than the cached
+    // socket copy so a device demoted/revoked by the operator is restricted
+    // immediately.
+    let permissions = control
         .tokens
         .device(&device.id)
-        .map(|d| d.role)
-        .unwrap_or_else(|| device.role.clone());
-    if role == RemoteRole::Viewer {
-        Err("Viewer role cannot mutate state".into())
-    } else {
+        .map(|d| d.permissions)
+        .unwrap_or_else(|| device.permissions);
+    if permissions.has(perm) {
         Ok(())
+    } else {
+        Err("This device is not granted that permission — ask the operator to allow it".into())
     }
+}
+
+/// The content permission a mutating command requires, or `None` for
+/// lease/control lifecycle commands (which are gated separately).
+fn required_permission(t: RemoteCommandType) -> Option<RemotePermission> {
+    use RemoteCommandType::*;
+    Some(match t {
+        BibleStage
+        | BibleGoLive
+        | BibleStageNext
+        | BibleGoLiveNext
+        | BibleStagePrevious
+        | BibleGoLivePrevious
+        | BibleAddToService => RemotePermission::Scripture,
+        SongStage | SongGoLive => RemotePermission::Song,
+        LowerThirdShow | LowerThirdHide => RemotePermission::LowerThird,
+        CameraStart | CameraStop => RemotePermission::Camera,
+        DisplayGoLive
+        | DisplayStageNext
+        | DisplayStagePrevious
+        | DisplayClearLive
+        | DisplayClearAll
+        | DisplayBlackout => RemotePermission::Presentation,
+        _ => return None,
+    })
 }
 
 fn require_lease(control: &RemoteControl, device: &StoredDevice) -> Result<(), String> {
@@ -357,9 +383,9 @@ fn check_revision(control: &RemoteControl, expected: Option<u64>) -> Result<(), 
 // ---------------------------------------------------------------------------
 
 /// Handles one authenticated command from a connected remote. All reads run
-/// without a lease; mutating commands require the operator role and the
-/// controller lease. The returned result carries the backend revision after
-/// any mutation.
+/// without a lease; mutating commands require the device's content permission
+/// and the controller lease. The returned result carries the backend revision
+/// after any mutation.
 pub async fn dispatch(
     app: &AppHandle,
     state: &AppState,
@@ -367,18 +393,37 @@ pub async fn dispatch(
     device: &StoredDevice,
     command: &RemoteCommand,
 ) -> RemoteCommandResult {
-    // Mutating commands must pass the lease + revision gates before touching
-    // authoritative state. Read-only commands skip the lease check.
+    // Mutating commands must pass the revision + permission gates before
+    // touching authoritative state. Read-only commands skip the lease check.
     if is_mutating(command.r#type.clone()) {
         if let Err(e) = check_revision(control, command.expected_revision) {
             return err_result(&command.command_id, control.hub.current_revision(), "stale_revision", &e);
         }
-        if let Err(e) = require_operator(control, device) {
-            return err_result(&command.command_id, control.hub.current_revision(), "forbidden", &e);
-        }
-        // `RemoteRequestControl` is what *acquires* the lease, so it must
-        // bypass the gate; every other mutating command needs one.
-        if command.r#type != RemoteCommandType::RemoteRequestControl {
+        // `RemoteRequestControl` is what *acquires* the lease, so it bypasses
+        // the lease gate but still needs at least one content permission to be
+        // meaningful (a read-only viewer cannot take control).
+        if command.r#type == RemoteCommandType::RemoteRequestControl {
+            let permissions = control
+                .tokens
+                .device(&device.id)
+                .map(|d| d.permissions)
+                .unwrap_or_else(|| device.permissions);
+            if !permissions.any() {
+                return err_result(
+                    &command.command_id,
+                    control.hub.current_revision(),
+                    "forbidden",
+                    "This device has no control permissions — the operator must grant one first",
+                );
+            }
+        } else {
+            // Content commands need their specific permission; lease lifecycle
+            // commands (release/renew) skip the permission check.
+            if let Some(perm) = required_permission(command.r#type.clone()) {
+                if let Err(e) = require_permission(control, device, perm) {
+                    return err_result(&command.command_id, control.hub.current_revision(), "forbidden", &e);
+                }
+            }
             if let Err(e) = require_lease(control, device) {
                 return err_result(&command.command_id, control.hub.current_revision(), "lease_required", &e);
             }
@@ -389,10 +434,16 @@ pub async fn dispatch(
 
     match command.r#type {
         RemoteCommandType::SnapshotGet => {
+            let permissions = control
+                .tokens
+                .device(&device.id)
+                .map(|d| d.permissions)
+                .unwrap_or_else(|| device.permissions);
             let snapshot = crate::remote::snapshot::build_snapshot(
                 app,
                 state,
                 device.role.clone(),
+                permissions,
                 Some(device.id.clone()),
                 control.lease.state(),
             );
@@ -706,9 +757,10 @@ pub async fn dispatch(
     }
 }
 
-/// Commands that change authoritative state. These are gated on the operator
-/// role, the controller lease, and a fresh revision, and are rate-limited per
-/// device. Read-only commands and *signaling relays* are not mutating.
+/// Commands that change authoritative state. These are gated on the device's
+/// content permissions (see `required_permission`), the controller lease, and
+/// a fresh revision, and are rate-limited per device. Read-only commands and
+/// *signaling relays* are not mutating.
 ///
 /// Notably `camera.offer` / `camera.answer` / `camera.ice` are deliberately
 /// NOT mutating: they only forward WebRTC signaling to the operator window and
@@ -800,5 +852,23 @@ mod tests {
         assert!(!is_mutating(RemoteCommandType::BibleSearch));
         assert!(!is_mutating(RemoteCommandType::SnapshotGet));
         assert!(!is_mutating(RemoteCommandType::BibleChapter));
+    }
+
+    #[test]
+    fn content_commands_map_to_the_right_permission() {
+        use RemoteCommandType::*;
+        assert_eq!(required_permission(BibleStage), Some(RemotePermission::Scripture));
+        assert_eq!(required_permission(BibleGoLive), Some(RemotePermission::Scripture));
+        assert_eq!(required_permission(BibleAddToService), Some(RemotePermission::Scripture));
+        assert_eq!(required_permission(SongGoLive), Some(RemotePermission::Song));
+        assert_eq!(required_permission(LowerThirdShow), Some(RemotePermission::LowerThird));
+        assert_eq!(required_permission(CameraStart), Some(RemotePermission::Camera));
+        assert_eq!(required_permission(DisplayGoLive), Some(RemotePermission::Presentation));
+        assert_eq!(required_permission(DisplayClearAll), Some(RemotePermission::Presentation));
+        assert_eq!(required_permission(DisplayBlackout), Some(RemotePermission::Presentation));
+        // Lease lifecycle commands are not content-gated.
+        assert_eq!(required_permission(RemoteRequestControl), None);
+        assert_eq!(required_permission(RemoteRenewLease), None);
+        assert_eq!(required_permission(BibleSearch), None);
     }
 }

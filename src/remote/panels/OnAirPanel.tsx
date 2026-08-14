@@ -34,6 +34,7 @@ export function OnAirPanel({ client, pushToast }: PanelProps) {
   const live = snapshot?.live_item ?? null;
   const staged = snapshot?.staged_item ?? null;
   const blackout = snapshot?.blackout ?? false;
+  const canPresent = snapshot?.permissions?.presentation ?? false;
 
   const act = (type: Parameters<typeof command>[0], payload?: unknown, msg?: string) => {
     if (!isHeldBySelf) {
@@ -55,12 +56,13 @@ export function OnAirPanel({ client, pushToast }: PanelProps) {
         <ItemCard item={staged} tone="staged" />
       </Card>
 
-      <Card>
-        <Label>Controls</Label>
-        <div className="grid grid-cols-2 gap-2">
-          <Btn variant="live" onClick={() => act("display.go_live")} disabled={!staged} className="col-span-2">
-            <Radio size={14} /> Go live
-          </Btn>
+      {canPresent ? (
+        <Card>
+          <Label>Controls</Label>
+          <div className="grid grid-cols-2 gap-2">
+            <Btn variant="live" onClick={() => act("display.go_live")} disabled={!staged} className="col-span-2">
+              <Radio size={14} /> Go live
+            </Btn>
           <Btn variant="stage" onClick={() => act("display.stage_previous")} title="Stage previous service item">
             ◀ Prev
           </Btn>
@@ -82,10 +84,17 @@ export function OnAirPanel({ client, pushToast }: PanelProps) {
           </Btn>
         </div>
         <p className="mt-2 text-[10px] text-slate-600">
-          <Send size={10} className="inline mr-1" />
-          Volunteers stage songs and verses from the other tabs; this is where they go on air.
-        </p>
-      </Card>
+            <Send size={10} className="inline mr-1" />
+            Volunteers stage songs and verses from the other tabs; this is where they go on air.
+          </p>
+        </Card>
+      ) : (
+        <Card>
+          <p className="text-[11px] text-slate-500">
+            You can watch, but you don't have presentation control. Ask the operator to grant it in Settings → Remote Control.
+          </p>
+        </Card>
+      )}
     </div>
   );
 }

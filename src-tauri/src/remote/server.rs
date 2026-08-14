@@ -164,7 +164,7 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
         let result = RemoteCommandResult::ok_with(
             "pair",
             ctx.control.hub.current_revision(),
-            json!({ "device_id": device_id.clone(), "device_token": token, "role": "operator" }),
+            json!({ "device_id": device_id.clone(), "device_token": token, "role": device.role.clone(), "permissions": device.permissions }),
         );
         if sender.send(Message::Text(Utf8Bytes::from(serde_json::to_string(&result).unwrap_or_default()))).await.is_err() {
             return;
@@ -177,6 +177,7 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
         &ctx.app,
         &ctx.state,
         device.role.clone(),
+        device.permissions,
         Some(device_id.clone()),
         ctx.control.lease.state(),
     );
@@ -299,6 +300,7 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
                             &ctx.app,
                             &ctx.state,
                             device_ctx.device.role.clone(),
+                            device_ctx.device.permissions,
                             Some(device_ctx.device.id.clone()),
                             ctx.control.lease.state(),
                         );
@@ -398,7 +400,9 @@ ctx.control
             let device = ctx.control.tokens.register_device(
                 &device_token,
                 payload.device_name,
-                RemoteRole::Operator,
+                // Newly paired devices are read-only until the operator grants
+                // content permissions from Settings → Remote Control.
+                RemoteRole::Viewer,
             );
             ctx.control.tokens.consume_pairing(&payload.pairing_token);
             ctx.control.persist_devices();

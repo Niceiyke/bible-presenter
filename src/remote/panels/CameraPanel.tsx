@@ -16,6 +16,7 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
 
   const deviceId = client.selfId ?? `phone-${Date.now()}`;
   const deviceName = client.selfName || "Phone Camera";
+  const canCamera = client.snapshot?.permissions?.camera ?? false;
 
   const cleanup = useCallback(() => {
     if (pcRef.current) {
@@ -250,6 +251,13 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
       </div>
 
       {/* Controls */}
+      {!canCamera && !isStreaming ? (
+        <Card>
+          <p className="text-[11px] text-slate-500">
+            You don't have camera control. Ask the operator to grant it in Settings → Remote Control.
+          </p>
+        </Card>
+      ) : (
       <div className="grid grid-cols-2 gap-3">
         {isStreaming ? (
           <>
@@ -291,6 +299,7 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
           </>
         )}
       </div>
+      )}
 
       {/* Status info */}
       <div className="flex items-center justify-between text-[10px] text-slate-500 pt-2 border-t border-slate-800">

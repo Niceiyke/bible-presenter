@@ -80,6 +80,11 @@ export function App() {
 
   const holderName = client.controllerState?.kind === "held" ? client.controllerState.device_name ?? "another device" : null;
 
+  // Content permissions granted to this device. A read-only device cannot take
+  // control, so the lease button is hidden and the panels show read-only views.
+  const perms = client.snapshot?.permissions;
+  const canTakeControl = Boolean(perms && (perms.scripture || perms.song || perms.camera || perms.lower_third || perms.presentation));
+
   return (
     <div className="h-full flex flex-col">
       {/* Top bar */}
@@ -126,14 +131,16 @@ export function App() {
                 : "No one is controlling yet"}
           </span>
           <span className="flex-1" />
-          <button onClick={takeOrRelease} className={cx(
-            "shrink-0 px-2.5 py-1 rounded-md text-[10px] font-bold uppercase border transition-colors",
-            client.isHeldBySelf
-              ? "border-amber-500/50 text-amber-300 hover:bg-amber-500/10"
-              : "border-cyan-700/60 text-cyan-300 hover:bg-cyan-900/30"
-          )}>
-            {client.isHeldBySelf ? "Release" : holderName ? "Request" : "Take control"}
-          </button>
+          {(client.isHeldBySelf || canTakeControl) && (
+            <button onClick={takeOrRelease} className={cx(
+              "shrink-0 px-2.5 py-1 rounded-md text-[10px] font-bold uppercase border transition-colors",
+              client.isHeldBySelf
+                ? "border-amber-500/50 text-amber-300 hover:bg-amber-500/10"
+                : "border-cyan-700/60 text-cyan-300 hover:bg-cyan-900/30"
+            )}>
+              {client.isHeldBySelf ? "Release" : holderName ? "Request" : "Take control"}
+            </button>
+          )}
         </div>
       )}
 

@@ -14,6 +14,65 @@ pub enum RemoteRole {
     Admin,
 }
 
+impl RemoteRole {
+    /// Permissions granted by each role before per-device overrides. `viewer`
+    /// is read-only; `operator`/`admin` can do everything the remote exposes.
+    /// Applied on pairing and whenever the role changes — the operator can then
+    /// refine a device's permissions individually from Settings → Remote
+    /// Control.
+    pub fn preset_permissions(&self) -> RemotePermissions {
+        match self {
+            RemoteRole::Viewer => RemotePermissions::default(),
+            RemoteRole::Operator | RemoteRole::Admin => RemotePermissions {
+                scripture: true,
+                song: true,
+                camera: true,
+                lower_third: true,
+                presentation: true,
+            },
+        }
+    }
+}
+
+/// Granular content-domain permissions a paired device may be granted. Roles
+/// provide presets; the operator refines per device from the operator UI.
+/// Enforced server-side per command and mirrored in the snapshot so the remote
+/// UI hides controls the device cannot use.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemotePermissions {
+    pub scripture: bool,
+    pub song: bool,
+    pub camera: bool,
+    pub lower_third: bool,
+    pub presentation: bool,
+}
+
+impl RemotePermissions {
+    pub fn any(&self) -> bool {
+        self.scripture || self.song || self.camera || self.lower_third || self.presentation
+    }
+
+    pub fn has(&self, perm: RemotePermission) -> bool {
+        match perm {
+            RemotePermission::Scripture => self.scripture,
+            RemotePermission::Song => self.song,
+            RemotePermission::Camera => self.camera,
+            RemotePermission::LowerThird => self.lower_third,
+            RemotePermission::Presentation => self.presentation,
+        }
+    }
+}
+
+/// The permission required for a single remote command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemotePermission {
+    Scripture,
+    Song,
+    Camera,
+    LowerThird,
+    Presentation,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RemoteControllerState {
@@ -225,6 +284,7 @@ pub struct RemotePairResult {
     pub device_id: String,
     pub device_token: String,
     pub role: RemoteRole,
+    pub permissions: RemotePermissions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -236,6 +296,7 @@ pub struct RemoteAuthPayload {
 pub struct RemoteAuthResult {
     pub device_id: String,
     pub role: RemoteRole,
+    pub permissions: RemotePermissions,
     pub controller_state: RemoteControllerState,
 }
 
@@ -311,6 +372,7 @@ pub struct RemoteSnapshot {
     pub revision: u64,
     pub connected: bool,
     pub role: RemoteRole,
+    pub permissions: RemotePermissions,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub controller_device_id: Option<String>,
     pub controller_state: RemoteControllerState,
@@ -352,6 +414,7 @@ mod tests {
             revision: 1,
             connected: true,
             role: RemoteRole::Operator,
+            permissions: RemoteRole::Operator.preset_permissions(),
             controller_device_id: Some("dev-1".into()),
             controller_state: RemoteControllerState::Held {
                 device_id: "dev-1".into(),

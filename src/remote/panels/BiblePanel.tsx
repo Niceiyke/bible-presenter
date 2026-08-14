@@ -11,6 +11,7 @@ function refPayload(v: Verse): RemoteBibleRef {
 
 export function BiblePanel({ client, pushToast }: PanelProps) {
   const { snapshot, command, isHeldBySelf } = client;
+  const canScripture = snapshot?.permissions?.scripture ?? false;
   const [version, setVersion] = useState(snapshot?.active_bible_version ?? "");
   const [books, setBooks] = useState<string[]>([]);
   const [book, setBook] = useState("");
@@ -158,17 +159,25 @@ export function BiblePanel({ client, pushToast }: PanelProps) {
               <Btn variant="stage" onClick={() => setVerseNum((selectedVerse.verse - 1 + verses.length) || 1)} className="px-2 py-1 text-[11px]">◀ Prev</Btn>
               <Btn variant="stage" onClick={() => setVerseNum(((selectedVerse.verse) % verses.length) + 1)} className="px-2 py-1 text-[11px]">Next ▶</Btn>
               <span className="flex-1" />
-              <Btn variant="stage" onClick={() => stageSelected(selectedVerse)} className="px-2 py-1 text-[11px]"><Send size={12} /> Stage</Btn>
-              <Btn variant="live" onClick={() => goLiveSelected(selectedVerse)} className="px-2 py-1 text-[11px]"><Radio size={12} /> Go live</Btn>
-              <Btn variant="default" onClick={() => addToService(selectedVerse)} className="px-2 py-1 text-[11px]" title="Add to active service">
-                <Plus size={12} /> Service
-              </Btn>
+              {canScripture ? (
+                <>
+                  <Btn variant="stage" onClick={() => stageSelected(selectedVerse)} className="px-2 py-1 text-[11px]"><Send size={12} /> Stage</Btn>
+                  <Btn variant="live" onClick={() => goLiveSelected(selectedVerse)} className="px-2 py-1 text-[11px]"><Radio size={12} /> Go live</Btn>
+                  <Btn variant="default" onClick={() => addToService(selectedVerse)} className="px-2 py-1 text-[11px]" title="Add to active service">
+                    <Plus size={12} /> Service
+                  </Btn>
+                </>
+              ) : (
+                <p className="text-[10px] text-slate-600">You can read, but you don't have scripture control.</p>
+              )}
             </div>
+            {canScripture && (
             <div className="mt-2 flex gap-1.5">
               <Btn variant="ghost" onClick={() => move(-1, false, selectedVerse)} className="px-2 py-1 text-[11px]">Stage previous</Btn>
               <Btn variant="ghost" onClick={() => move(1, false, selectedVerse)} className="px-2 py-1 text-[11px]">Stage next</Btn>
               <Btn variant="ghost" onClick={() => move(1, true, selectedVerse)} className="px-2 py-1 text-[11px]">Go live next</Btn>
             </div>
+            )}
           </div>
         )}
         {loadingChapter && (

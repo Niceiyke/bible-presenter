@@ -1,4 +1,4 @@
-use crate::remote::protocol::RemoteRole;
+use crate::remote::protocol::{RemotePermissions, RemoteRole};
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -67,6 +67,11 @@ pub struct StoredDevice {
     pub name: String,
     pub token_hash: String,
     pub role: RemoteRole,
+    /// Content permissions; `serde(default)` keeps older device files loadable.
+    /// Devices saved before this field existed are migrated in `load` to their
+    /// role's preset so existing operators keep access until re-scoped.
+    #[serde(default)]
+    pub permissions: RemotePermissions,
     pub paired_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen_at: Option<u64>,
@@ -190,20 +195,24 @@ impl TokenStore {
     ) -> StoredDevice {
         let mut devices = self.devices.lock();
         let token_hash = hash_token(device_token);
-        // Re-pairing the same physical device (same token) updates its name.
+        // Re-pairing the same physical device (same token) updates its name but
+        // preserves its role and permissions — a re-pair must never silently
+        // grant or revoke access, and the pairing code grants a read-only
+        // device until the operator promotes it.
         if let Some(existing) = devices.values_mut().find(|d| d.token_hash == token_hash) {
             existing.name = name;
-            existing.role = role.clone();
             let device = existing.clone();
             // Prevent the old token from every being treated as revoked.
             self.revoked.lock().retain(|h| h != &token_hash);
             return device;
         }
+        let permissions = role.preset_permissions();
         let device = StoredDevice {
             id: new_token(),
             name,
             token_hash,
             role,
+            permissions,
             paired_at: now_unix(),
             last_seen_at: None,
         };
@@ -263,11 +272,30 @@ impl TokenStore {
     /// Changes the role of a paired device. Returns false if the device is
     /// unknown. The new role is enforced immediately for the current socket by
     /// checking the token store (not a cached role) on every dispatch.
+    ///
+    /// Changing the role resets the device's permissions to that role's preset
+    /// (a demotion to Viewer strips every permission; a promotion to Operator
+    /// grants the full set). The operator can then override individual
+    /// permissions with `set_permissions`.
     pub fn set_role(&self, device_id: &str, role: RemoteRole) -> bool {
         let mut devices = self.devices.lock();
         match devices.get_mut(device_id) {
             Some(d) => {
-                d.role = role;
+                d.role = role.clone();
+                d.permissions = role.preset_permissions();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Overrides the per-device permission flags without changing its role.
+    /// Returns false if the device is unknown.
+    pub fn set_permissions(&self, device_id: &str, permissions: RemotePermissions) -> bool {
+        let mut devices = self.devices.lock();
+        match devices.get_mut(device_id) {
+            Some(d) => {
+                d.permissions = permissions;
                 true
             }
             None => false,
@@ -291,11 +319,29 @@ impl TokenStore {
 
     pub fn load(&self, path: &Path) {
         if let Ok(json) = std::fs::read_to_string(path) {
-            if let Ok(devices) = serde_json::from_str::<Vec<StoredDevice>>(&json) {
-                let mut map = self.devices.lock();
-                map.clear();
-                for d in devices {
-                    map.insert(d.id.clone(), d);
+            // Deserialize into a raw value first so devices persisted before
+            // `permissions` existed can be migrated: a device without the field
+            // inherits its role's preset (existing operators keep access until
+            // re-scoped) rather than silently dropping to read-only.
+            if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&json) {
+                if let Some(arr) = value.as_array_mut() {
+                    for item in arr.iter_mut() {
+                        if item.get("permissions").is_none() {
+                            let preset = item
+                                .get("role")
+                                .and_then(|r| serde_json::from_value::<RemoteRole>(r.clone()).ok())
+                                .unwrap_or_default()
+                                .preset_permissions();
+                            item["permissions"] = serde_json::to_value(preset).unwrap_or_default();
+                        }
+                    }
+                }
+                if let Ok(devices) = serde_json::from_value::<Vec<StoredDevice>>(value) {
+                    let mut map = self.devices.lock();
+                    map.clear();
+                    for d in devices {
+                        map.insert(d.id.clone(), d);
+                    }
                 }
             }
         }
@@ -403,5 +449,68 @@ mod tests {
         let code = generate_pairing_code(8);
         assert_eq!(code.len(), 8);
         assert!(!code.contains('0') && !code.contains('O') && !code.contains('1') && !code.contains('I'));
+    }
+
+    #[test]
+    fn new_device_gets_role_preset_permissions() {
+        let store = TokenStore::new();
+        let viewer = store.register_device("v", "Viewer".into(), RemoteRole::Viewer);
+        assert!(!viewer.permissions.any());
+        let operator = store.register_device("o", "Operator".into(), RemoteRole::Operator);
+        assert!(operator.permissions.any());
+        assert!(operator.permissions.scripture && operator.permissions.presentation);
+    }
+
+    #[test]
+    fn re_pairing_preserves_role_and_permissions() {
+        let store = TokenStore::new();
+        store.register_device("tok", "iPad".into(), RemoteRole::Operator);
+        let d = store.list_devices().into_iter().next().unwrap();
+        // Demote to a partial operator: scripture only.
+        let mut partial = d.permissions;
+        partial.presentation = false;
+        store.set_permissions(&d.id, partial);
+        // Re-pair with the same token — name updates, role/permissions survive.
+        let re = store.register_device("tok", "iPad 2".into(), RemoteRole::Viewer);
+        assert_eq!(re.name, "iPad 2");
+        assert_eq!(re.role, RemoteRole::Operator);
+        assert!(!re.permissions.presentation);
+        assert!(re.permissions.scripture);
+    }
+
+    #[test]
+    fn set_role_resets_permissions_to_preset() {
+        let store = TokenStore::new();
+        store.register_device("tok", "iPad".into(), RemoteRole::Operator);
+        let d = store.list_devices().into_iter().next().unwrap();
+        store.set_permissions(&d.id, RemotePermissions {
+            scripture: false, song: false, camera: false, lower_third: false, presentation: false,
+        });
+        assert!(!store.device(&d.id).unwrap().permissions.any());
+        store.set_role(&d.id, RemoteRole::Operator);
+        assert!(store.device(&d.id).unwrap().permissions.any());
+        store.set_role(&d.id, RemoteRole::Viewer);
+        assert!(!store.device(&d.id).unwrap().permissions.any());
+    }
+
+    #[test]
+    fn load_migrates_legacy_devices_to_role_preset() {
+        // A file persisted before `permissions` existed: an operator device
+        // without the field must inherit full access, a viewer none.
+        let json = serde_json::json!([
+            { "id": "a", "name": "iPad", "token_hash": "h1", "role": "operator", "paired_at": 1 },
+            { "id": "b", "name": "Tablet", "token_hash": "h2", "role": "viewer", "paired_at": 2 }
+        ]);
+        let path = std::env::temp_dir().join(format!("remote_devices_migrate_test_{}.json", uuid::Uuid::new_v4()));
+        std::fs::write(&path, json.to_string()).unwrap();
+        let store = TokenStore::new();
+        store.load(&path);
+        let mut by_id = std::collections::HashMap::new();
+        for d in store.list_devices() {
+            by_id.insert(d.id.clone(), d);
+        }
+        assert!(by_id["a"].permissions.any());
+        assert!(!by_id["b"].permissions.any());
+        let _ = std::fs::remove_file(&path);
     }
 }

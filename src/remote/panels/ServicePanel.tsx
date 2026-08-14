@@ -8,6 +8,7 @@ export function ServicePanel({ client, pushToast }: PanelProps) {
   const { snapshot, command, isHeldBySelf } = client;
   const entries = snapshot?.schedule_entries ?? [];
   const activeService = snapshot?.active_service;
+  const canPresent = snapshot?.permissions?.presentation ?? false;
 
   const move = (dir: 1 | -1) => {
     if (!isHeldBySelf) {
@@ -27,14 +28,16 @@ export function ServicePanel({ client, pushToast }: PanelProps) {
             <p className="text-sm text-slate-100 font-semibold truncate">{activeService?.name ?? "No active service"}</p>
             <p className="text-[10px] text-slate-500">{entries.length} items</p>
           </div>
-          <div className="flex gap-1.5 shrink-0">
-            <Btn variant="stage" onClick={() => move(-1)} title="Stage previous queue item">
-              <ChevronLeft size={14} />
-            </Btn>
-            <Btn variant="stage" onClick={() => move(1)} title="Stage next queue item">
-              <ChevronRight size={14} />
-            </Btn>
-          </div>
+                    {canPresent && (
+            <div className="flex gap-1.5 shrink-0">
+              <Btn variant="stage" onClick={() => move(-1)} title="Stage previous queue item">
+                <ChevronLeft size={14} />
+              </Btn>
+              <Btn variant="stage" onClick={() => move(1)} title="Stage next queue item">
+                <ChevronRight size={14} />
+              </Btn>
+            </div>
+          )}
         </div>
       </Card>
 

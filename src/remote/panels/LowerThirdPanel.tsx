@@ -16,6 +16,7 @@ export function LowerThirdPanel({ client, pushToast }: PanelProps) {
   const [text, setText] = useState("");
 
   const active = kindBadge(snapshot?.lower_third);
+  const canLower = snapshot?.permissions?.lower_third ?? false;
 
   const guard = () => {
     if (isHeldBySelf) return true;
@@ -54,6 +55,7 @@ export function LowerThirdPanel({ client, pushToast }: PanelProps) {
 
   return (
     <div className="flex flex-col gap-3">
+      {canLower ? (
       <Card>
         <div className="flex gap-1.5 mb-3">
           {(["Nameplate", "FreeText"] as const).map((m) => (
@@ -95,6 +97,13 @@ export function LowerThirdPanel({ client, pushToast }: PanelProps) {
           {isActive ? `Lower third on air (${active}) — Hide to remove it.` : "Nothing shown on the lower third right now."}
         </p>
       </Card>
+      ) : (
+        <Card>
+          <p className="text-[11px] text-slate-500">
+            You can watch, but you don't have lower-third control. Ask the operator to grant it in Settings → Remote Control.
+          </p>
+        </Card>
+      )}
 
       <Card>
         <Label>Preview (last shown)</Label>

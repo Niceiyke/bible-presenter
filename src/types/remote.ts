@@ -11,6 +11,17 @@ export const REMOTE_PROTOCOL_VERSION = 1;
 
 export type RemoteRole = "viewer" | "operator" | "admin";
 
+/** Granular content-domain permissions a paired device may be granted. Mirrors
+ * `RemotePermissions` in `src-tauri/src/remote/protocol.rs`. Roles provide
+ * presets; the operator refines per device from Settings → Remote Control. */
+export interface RemotePermissions {
+  scripture: boolean;
+  song: boolean;
+  camera: boolean;
+  lower_third: boolean;
+  presentation: boolean;
+}
+
 export type RemoteCommandType =
   | "remote.pair"
   | "remote.authenticate"
@@ -100,6 +111,7 @@ export interface RemoteDeviceInfo {
   id: string;
   name: string;
   role: RemoteRole;
+  permissions: RemotePermissions;
   paired_at: number;
   last_seen_at?: number;
   connected: boolean;
@@ -117,6 +129,7 @@ export interface RemoteSnapshot {
   revision: number;
   connected: boolean;
   role: RemoteRole;
+  permissions: RemotePermissions;
   controller_device_id?: string;
   controller_state: RemoteControllerState;
   live_item: DisplayItem | null;
@@ -151,6 +164,7 @@ export interface RemotePairResult {
   device_id: string;
   device_token: string;
   role: RemoteRole;
+  permissions: RemotePermissions;
 }
 
 export interface RemoteAuthPayload {
@@ -160,6 +174,7 @@ export interface RemoteAuthPayload {
 export interface RemoteAuthResult {
   device_id: string;
   role: RemoteRole;
+  permissions: RemotePermissions;
   controller_state: RemoteControllerState;
 }
 

@@ -14,8 +14,22 @@ import {
   Wifi,
 } from "lucide-react";
 import { useT } from "../../../i18n";
-import type { RemoteStatus } from "../../../types/remote";
+import type { RemotePermissions, RemoteRole, RemoteStatus } from "../../../types/remote";
 import type { SettingsSectionProps } from "../shared";
+
+const ROLE_OPTIONS: { value: RemoteRole; label: string }[] = [
+  { value: "viewer", label: "Viewer" },
+  { value: "operator", label: "Operator" },
+  { value: "admin", label: "Admin" },
+];
+
+const PERMISSIONS: { key: keyof RemotePermissions; label: string }[] = [
+  { key: "scripture", label: "Scripture" },
+  { key: "song", label: "Songs" },
+  { key: "camera", label: "Camera" },
+  { key: "lower_third", label: "Lower ⅓" },
+  { key: "presentation", label: "Presentation" },
+];
 
 function formatClock(ts?: number): string {
   if (!ts) return "";
@@ -240,31 +254,75 @@ export function RemoteSection(_props: SettingsSectionProps) {
             {status.devices.length === 0 && (
               <p className="text-[10px] text-slate-600 italic">{t("settings.remote.noDevices")}</p>
             )}
-            <div className="flex flex-col gap-1.5">
+            <p className="text-[10px] text-slate-600 mb-2">{t("settings.remote.roleHint")}</p>
+            <div className="flex flex-col gap-2">
               {status.devices.map((d) => (
-                <div key={d.id} className="flex items-center justify-between gap-2 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className={`w-2 h-2 rounded-full shrink-0 ${d.connected ? "bg-green-400" : "bg-slate-600"}`} />
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[11px] text-slate-200 font-semibold truncate">{d.name}</span>
-                        <span className="text-[9px] uppercase font-black px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
-                          {d.role}
-                        </span>
+                <div key={d.id} className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${d.connected ? "bg-green-400" : "bg-slate-600"}`} />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] text-slate-200 font-semibold truncate">{d.name}</span>
+                          <span className="text-[9px] uppercase font-black px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
+                            {d.role}
+                          </span>
+                        </div>
+                        <p className="text-[9px] text-slate-600">
+                          {d.connected ? t("settings.remote.connected") : t("settings.remote.disconnected")}
+                        </p>
                       </div>
-                      <p className="text-[9px] text-slate-600">
-                        {d.connected ? t("settings.remote.connected") : t("settings.remote.disconnected")}
-                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <select
+                        value={d.role}
+                        disabled={busy}
+                        onChange={(e) => run(() => invoke("remote_set_role", { deviceId: d.id, role: e.target.value }))}
+                        className="bg-slate-800 border border-slate-700 rounded-md text-[10px] text-slate-200 px-1.5 py-1 disabled:opacity-50"
+                      >
+                        {ROLE_OPTIONS.map((o) => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => run(() => invoke("remote_revoke_device", { deviceId: d.id }))}
+                        disabled={busy}
+                        className="text-slate-500 hover:text-red-300 transition-colors p-1"
+                        aria-label={t("settings.remote.revoke")}
+                      >
+                        <UserX size={13} />
+                      </button>
                     </div>
                   </div>
-                  <button
-                    onClick={() => run(() => invoke("remote_revoke_device", { deviceId: d.id }))}
-                    disabled={busy}
-                    className="shrink-0 text-slate-500 hover:text-red-300 transition-colors p-1"
-                    aria-label={t("settings.remote.revoke")}
-                  >
-                    <UserX size={13} />
-                  </button>
+
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {PERMISSIONS.map((p) => {
+                      const on = Boolean(d.permissions?.[p.key]);
+                      return (
+                        <button
+                          key={p.key}
+                          disabled={busy}
+                          onClick={() =>
+                            run(() =>
+                              invoke("remote_set_permissions", {
+                                deviceId: d.id,
+                                permissions: { ...(d.permissions ?? {}), [p.key]: !on },
+                              })
+                            )
+                          }
+                          title={t("settings.remote.permissionHint", { name: d.name, perm: p.label })}
+                          className={`flex items-center gap-1 px-2 py-1 rounded-md text-[9px] font-bold uppercase border transition-all disabled:opacity-50 ${
+                            on
+                              ? "bg-cyan-500/15 border-cyan-500/60 text-cyan-300"
+                              : "bg-slate-800/60 border-slate-700 text-slate-500 hover:text-slate-300"
+                          }`}
+                        >
+                          <span className={`w-1.5 h-1.5 rounded-full ${on ? "bg-cyan-400" : "bg-slate-600"}`} />
+                          {p.label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               ))}
             </div>
