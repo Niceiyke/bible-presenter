@@ -438,10 +438,10 @@ export function OutputWindow() {
         pc.onicecandidate = (ev) => {
           if (ev.candidate) {
             invoke("phone_camera_ice", {
-              device_id: pcKey,
+              deviceId: pcKey,
               candidate: ev.candidate.candidate,
-              sdp_mid: ev.candidate.sdpMid ?? "",
-              sdp_m_line_index: ev.candidate.sdpMLineIndex ?? 0,
+              sdpMid: ev.candidate.sdpMid ?? "",
+              sdpMLineIndex: ev.candidate.sdpMLineIndex ?? 0,
               target: "output",
             }).catch((e) => console.error("phone_camera_ice failed:", e));
           }
@@ -457,7 +457,7 @@ export function OutputWindow() {
         await pc.setRemoteDescription({ type: "offer", sdp });
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        await invoke("phone_camera_answer", { device_id: pcKey, sdp: answer.sdp ?? "", target: "output" });
+        await invoke("phone_camera_answer", { deviceId: pcKey, sdp: answer.sdp ?? "", target: "output" });
       } catch (err) {
         console.error("Phone camera answer setup failed:", err);
         teardown(deviceId);

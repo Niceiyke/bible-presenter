@@ -66,10 +66,10 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
         pc.onicecandidate = (ev) => {
           if (ev.candidate) {
             invoke("phone_camera_ice", {
-              device_id: deviceId,
+              deviceId,
               candidate: ev.candidate.candidate,
-              sdp_mid: ev.candidate.sdpMid ?? "",
-              sdp_m_line_index: ev.candidate.sdpMLineIndex ?? 0,
+              sdpMid: ev.candidate.sdpMid ?? "",
+              sdpMLineIndex: ev.candidate.sdpMLineIndex ?? 0,
               target: "operator",
             })
               .then(() => console.log("[phone-camera] operator ICE relayed"))
@@ -92,7 +92,7 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
         await pc.setRemoteDescription({ type: "offer", sdp });
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        await invoke("phone_camera_answer", { device_id: deviceId, sdp: answer.sdp ?? "", target: "operator" });
+        await invoke("phone_camera_answer", { deviceId, sdp: answer.sdp ?? "", target: "operator" });
         console.log("[phone-camera] answer sent for", deviceId);
         hostLog(`answer sent for ${deviceId}`);
       } catch (err) {
