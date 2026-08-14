@@ -6,6 +6,7 @@ pub mod protocol;
 pub mod server;
 pub mod sessions;
 pub mod snapshot;
+pub mod tls;
 
 use auth::TokenStore;
 use hub::RemoteHub;
@@ -47,6 +48,10 @@ pub struct RemoteControl {
     /// File holding the last-bound remote port so restarts reuse it instead of
     /// jumping to a new random port (which would orphan phones' saved URLs).
     pub port_file: PathBuf,
+    /// File holding the persisted self-signed TLS certificate + key. Serving
+    /// the remote bundle over HTTPS makes the phone's page a secure context so
+    /// `getUserMedia` (phone camera) works over the LAN.
+    pub tls_file: PathBuf,
     /// Server task handle (kept to abort on disable).
     pub task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Plaintext pairing code kept in memory so the operator can display/scan
@@ -94,6 +99,7 @@ impl RemoteControl {
             mutation_history: Mutex::new(HashMap::new()),
             devices_file: devices_file.clone(),
             port_file: app_data_dir.join("remote_port.txt"),
+            tls_file: app_data_dir.join("remote_tls.json"),
             task: Mutex::new(None),
             pairing_code_plain: Mutex::new(None),
             phone_cameras: Arc::new(RwLock::new(HashMap::new())),
@@ -241,8 +247,8 @@ pub fn public_urls(files_dir: &PathBuf, addr: &std::net::SocketAddr) -> Vec<Stri
     let _ = files_dir;
     let port = addr.port();
     match primary_local_ip() {
-        Some(ip) => vec![format!("http://{}:{}/remote", ip, port)],
-        None => vec![format!("http://127.0.0.1:{}/remote", port)],
+        Some(ip) => vec![format!("https://{}:{}/remote", ip, port)],
+        None => vec![format!("https://127.0.0.1:{}/remote", port)],
     }
 }
 

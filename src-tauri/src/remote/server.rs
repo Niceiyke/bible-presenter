@@ -81,11 +81,16 @@ fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
-/// Binds the remote server on the previously-used local port (falling back to
-/// a random port) and returns the bound address. `files_dir` must already
-/// contain the compiled `remote.html`. Records the bound address and task
-/// handle on `control` so `remote_disable` can shut the server down and
+/// Binds the remote server (HTTPS) on the previously-used local port (falling
+/// back to a random port) and returns the bound address. `files_dir` must
+/// already contain the compiled `remote.html`. Records the bound address and
+/// task handle on `control` so `remote_disable` can shut the server down and
 /// `remote_status` can report port/URLs.
+///
+/// The server is HTTPS with a self-signed cert for the operator's LAN IP:
+/// `navigator.mediaDevices.getUserMedia()` on the phone only works in a secure
+/// context, so the remote bundle must be served over TLS for the phone camera
+/// to stream. The WebSocket upgrades to `wss` automatically.
 ///
 /// Reusing the last bound port keeps phones' bookmarked URLs valid across app
 /// restarts. If that port is taken, we fall back to a random port and persist
@@ -98,24 +103,28 @@ pub async fn start(ctx: RemoteCtx) -> Result<SocketAddr, String> {
     let app = router(ctx);
     let preferred = control.stored_port();
     let listener = match preferred {
-        Some(port) => match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
+        Some(port) => match std::net::TcpListener::bind(("0.0.0.0", port)) {
             Ok(l) => l,
             Err(_) => {
                 // Preferred port unavailable (e.g. another app took it) — use
                 // a random one; persist the new port below.
-                tokio::net::TcpListener::bind("0.0.0.0:0").await.map_err(|e| e.to_string())?
+                std::net::TcpListener::bind("0.0.0.0:0").map_err(|e| e.to_string())?
             }
         },
-        None => tokio::net::TcpListener::bind("0.0.0.0:0").await.map_err(|e| e.to_string())?,
+        None => std::net::TcpListener::bind("0.0.0.0:0").map_err(|e| e.to_string())?,
     };
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
+
+    // Self-signed TLS for the current LAN IP (reused/persisted when possible)
+    // so the phone's page is a secure context and its camera is capturable.
+    let ip = crate::remote::primary_local_ip().unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+    let tls_config = crate::remote::tls::load_or_create(&control.tls_file, ip)?;
+
     let task_control = control.clone();
     let handle = tokio::spawn(async move {
-        let _ = axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await;
+        let _ = axum_server::from_tcp_rustls(listener, tls_config)
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+            .await;
         // The server shut down on its own (not via disable) — clear the
         // runtime flags so status is accurate.
         task_control.enabled.store(false, std::sync::atomic::Ordering::SeqCst);
