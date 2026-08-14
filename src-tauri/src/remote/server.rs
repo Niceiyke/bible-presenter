@@ -69,6 +69,18 @@ const CLIENT_TIMEOUT_MS: u64 = 90_000;
 /// forever. The client treats this as a transient error and reconnects.
 const HANDSHAKE_TIMEOUT_MS: u64 = 15_000;
 
+/// Current wall-clock time in epoch milliseconds. Connection liveness stamps
+/// must all use the same full-millisecond clock: mixing `now_unix() * 1000`
+/// (whole seconds) with `as_millis()` (includes sub-second) makes a subtraction
+/// like `idle_for` underflow the instant a frame arrives inside a second,
+/// which would tear the socket down after every command.
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Binds the remote server on the previously-used local port (falling back to
 /// a random port) and returns the bound address. `files_dir` must already
 /// contain the compiled `remote.html`. Records the bound address and task
@@ -190,7 +202,7 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
     // Last time any frame arrived from this device (epoch millis). Updated on
     // every inbound frame, including pongs the browser auto-sends in response
     // to our heartbeat pings. The watchdog below drops devices that go silent.
-    let last_activity_ms = Arc::new(std::sync::atomic::AtomicU64::new(now_unix() * 1000));
+    let last_activity_ms = Arc::new(std::sync::atomic::AtomicU64::new(now_millis()));
 
     {
         let incoming_tx = incoming_tx.clone();
@@ -200,7 +212,7 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
             while let Some(msg) = receiver.next().await {
                 match msg {
                     Ok(Message::Text(t)) => {
-                        last_activity_ms.store(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+                        last_activity_ms.store(now_millis(), std::sync::atomic::Ordering::Relaxed);
                         if incoming_tx.send(Message::Text(t)).is_err() {
                             break;
                         }
@@ -208,7 +220,7 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
                     Ok(Message::Pong(_)) | Ok(Message::Ping(_)) | Ok(Message::Binary(_)) => {
                         // Any inbound frame is proof of life; the payload of a
                         // pong is not meaningful, so we only refresh the stamp.
-                        last_activity_ms.store(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+                        last_activity_ms.store(now_millis(), std::sync::atomic::Ordering::Relaxed);
                     }
                     Ok(Message::Close(_)) | Err(_) => break,
                 }
@@ -221,8 +233,13 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
     let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(15));
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    loop {
-        let idle_for = now_unix() * 1000 - last_activity_ms.load(std::sync::atomic::Ordering::Relaxed);
+    // Why the connection loop exited, for the operator log. Every `break`
+    // carries a reason so a dropped socket is never a silent mystery.
+    let drop_reason = 'conn: loop {
+        // Both operands are full-millisecond wall clock; `saturating_sub` also
+        // guards any clock skew so a silent device can never underflow and be
+        // dropped after the very frame that proves it is alive.
+        let idle_for = now_millis().saturating_sub(last_activity_ms.load(std::sync::atomic::Ordering::Relaxed));
         let watchdog = if idle_for >= CLIENT_TIMEOUT_MS {
             // Already silent for too long — let the select fire immediately.
             tokio::time::sleep(std::time::Duration::ZERO)
@@ -233,17 +250,21 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
 
         tokio::select! {
             msg = incoming_rx.recv() => {
-                let Some(raw) = msg else { break };
+                let Some(raw) = msg else {
+                    break 'conn "receive task ended (peer closed or network error)";
+                };
                 match raw {
                     Message::Text(text) => handle_client_text(text.as_str(), &device_ctx, &outgoing_tx).await,
-                    Message::Close(_) => break,
+                    Message::Close(_) => break 'conn "client sent a close frame",
                     _ => {}
                 }
             }
             out = outgoing_rx.recv() => {
-                let Some(msg) = out else { break };
+                let Some(msg) = out else {
+                    break 'conn "outgoing channel closed";
+                };
                 if sender.send(msg).await.is_err() {
-                    break;
+                    break 'conn "send failed (peer went away)";
                 }
             }
             ev = hub_rx.recv() => {
@@ -260,7 +281,7 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
                         }
                         let json = serde_json::to_string(&event).unwrap_or_default();
                         if outgoing_tx.send(Message::Text(Utf8Bytes::from(json))).is_err() {
-                            break;
+                            break 'conn "outgoing channel closed";
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
@@ -282,24 +303,29 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
                         };
                         let json = serde_json::to_string(&event).unwrap_or_default();
                         if outgoing_tx.send(Message::Text(Utf8Bytes::from(json))).is_err() {
-                            break;
+                            break 'conn "outgoing channel closed";
                         }
                     }
-                    Err(_) => break,
+                    Err(_) => break 'conn "event bus closed",
                 }
             }
             _ = heartbeat.tick() => {
                 if outgoing_tx.send(Message::Ping(Bytes::new())).is_err() {
-                    break;
+                    break 'conn "outgoing channel closed";
                 }
             }
             _ = &mut watchdog => {
                 // No inbound frames for the timeout — the device is unreachable.
                 // Break so the cleanup below releases its controller lease now.
-                break;
+                break 'conn "watchdog: no traffic for 90s";
             }
         }
-    }
+    };
+
+    crate::store::log_msg(
+        &ctx.app,
+        &format!("Remote device '{}' disconnected ({})", device_ctx.device.name, drop_reason),
+    );
 
     // Cleanup: unregister session and release the controller lease so another
     // device can take over. Disconnecting never alters displayed content.
