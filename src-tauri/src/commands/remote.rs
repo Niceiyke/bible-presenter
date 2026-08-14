@@ -62,7 +62,7 @@ fn status_info(control: &RemoteControl, pairing_code: Option<String>) -> RemoteS
             .map(|a| public_urls(&control.files_dir, &a))
             .unwrap_or_default(),
         pairing_code,
-        pairing_expires_at: control.tokens.pairing_expires_at(),
+        pairing_expires_at: control.pairing_expires_at(),
         devices,
         controller_state: control.lease.state(),
         revision: control.hub.current_revision(),

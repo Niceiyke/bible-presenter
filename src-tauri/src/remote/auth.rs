@@ -5,8 +5,16 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const PAIRING_TTL_SECS: u64 = 5 * 60;
-pub const PAIRING_RATE_LIMIT: usize = 6;
+/// Pairing codes stay valid for 30 minutes — long enough for a volunteer to
+/// walk across the room and type the code without it silently churning. Codes
+/// are regenerated on demand and on expiry (see `ensure_pairing`), never
+/// persisted, and remain single-use.
+pub const PAIRING_TTL_SECS: u64 = 30 * 60;
+/// Generous per-IP budget so a handful of mistyped codes doesn't lock a
+/// volunteer out for a minute. Brute-forcing the 8-char un-confusable code
+/// (≈52^8) over a full TCP+WS handshake per guess is not practical, so 30
+/// tries/minute is still plenty restrictive while staying humane.
+pub const PAIRING_RATE_LIMIT: usize = 30;
 pub const PAIRING_RATE_WINDOW_SECS: u64 = 60;
 pub const DEFAULT_LEASE_TTL_SECS: u64 = 10 * 60;
 pub const COMMAND_RATE_LIMIT: usize = 30;
@@ -72,6 +80,7 @@ pub enum AuthError {
     RateLimited,
     UnknownToken,
     Revoked,
+    HandshakeTimeout,
 }
 
 impl AuthError {
@@ -83,6 +92,7 @@ impl AuthError {
             AuthError::RateLimited => "rate_limited",
             AuthError::UnknownToken => "unknown_token",
             AuthError::Revoked => "revoked",
+            AuthError::HandshakeTimeout => "handshake_timeout",
         }
     }
 
@@ -94,6 +104,7 @@ impl AuthError {
             AuthError::RateLimited => "Too many pairing attempts, try again later".into(),
             AuthError::UnknownToken => "Unknown device token".into(),
             AuthError::Revoked => "Device has been revoked".into(),
+            AuthError::HandshakeTimeout => "Handshake timed out — please reconnect".into(),
         }
     }
 }

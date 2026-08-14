@@ -59,9 +59,11 @@ const MUTATING = new Set<RemoteCommandType>([
   "lower_third.hide",
   "camera.start",
   "camera.stop",
-  "camera.offer",
-  "camera.answer",
-  "camera.ice",
+  // `camera.offer`, `camera.answer`, and `camera.ice` are WebRTC signaling
+  // relays — they never touch authoritative state, so they are deliberately
+  // NOT mutating. Attaching a stale `expected_revision` to them would make a
+  // session fail mid-handshake whenever the local snapshot went stale, and
+  // they must not be throttled like content mutations either.
 ]);
 
 export type RemoteConnState = "connecting" | "pairing" | "connected" | "error";
@@ -159,6 +161,31 @@ export function useRemote(): UseRemote {
   // the socket when authentication fails. Keep a ref instead of closing over
   // `connect` to avoid a stale/recursive callback.
   const connectRef = useRef<() => void>(() => {});
+  // Handle for the pending auto-reconnect timer (exponential backoff).
+  const reconnectTimerRef = useRef<number | null>(null);
+  // Consecutive failed reconnect attempts; drives the backoff schedule.
+  const retryRef = useRef(0);
+
+  const clearReconnectTimer = useCallback(() => {
+    if (reconnectTimerRef.current != null) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  }, []);
+
+  // Schedules a single reconnect attempt with exponential backoff (1s, 2s, 4s,
+  // … capped at 30s). At most one timer is pending at a time. The attempt
+  // counter is reset whenever a snapshot arrives (see handleMessage), so
+  // steady connections never grow the backoff.
+  const scheduleReconnect = useCallback(() => {
+    if (reconnectTimerRef.current != null) return;
+    const attempt = retryRef.current++;
+    const delay = Math.min(1000 * 2 ** attempt, 30000);
+    reconnectTimerRef.current = window.setTimeout(() => {
+      reconnectTimerRef.current = null;
+      connectRef.current();
+    }, delay);
+  }, []);
 
   const closeAllPending = useCallback((e: Error) => {
     for (const [, p] of pendingRef.current) {
@@ -195,16 +222,39 @@ export function useRemote(): UseRemote {
         return;
       }
       if (result.command_id === "handshake") {
-        // Authentication/pairing failure — reject any in-flight pair, drop the
-        // stored token so the device re-pairs, and reopen a fresh socket. The
-        // server closes the connection right after a rejected handshake, so
-        // without this the socket's `onclose` would flip the UI to "error"
-        // instead of landing on the pairing screen.
+        // Authentication/pairing failure. The server closes the connection
+        // right after this, so handle the transition here rather than letting
+        // `onclose` flip to a generic error.
+        //
+        // Only an explicit "this token is dead" response may clear the stored
+        // token. Pairing-code rejections, throttling, and handshake timeouts
+        // must never wipe a still-valid device token, or a transient hiccup
+        // would force the user to re-pair.
         const pair = pairRef.current;
         pairRef.current = null;
-        if (pair) pair.reject(new Error(result.error?.message ?? "Authentication failed"));
-        localStorage.removeItem(LS_DEVICE_TOKEN);
-        connectRef.current();
+        const message = result.error?.message ?? "Authentication failed";
+        if (pair) pair.reject(new Error(message));
+        const code = result.error?.code ?? "";
+        if (code === "unknown_token" || code === "revoked") {
+          localStorage.removeItem(LS_DEVICE_TOKEN);
+          setSelfId(null);
+          setConn("pairing");
+          // Reopen so the pairing screen has a live socket. With no stored
+          // token the fresh socket cannot re-trigger a rejected handshake,
+          // so this is a single transition, not a reconnect loop.
+          connectRef.current();
+        } else if (!pair && storedToken()) {
+          // Transient auth failure (e.g. handshake_timeout/rate_limited) that
+          // leaves a still-valid token intact — keep it, surface the error,
+          // and let the backoff reconnect retry authentication automatically.
+          setErr(message);
+          setConn("error");
+        } else {
+          // Pairing-code rejection while pairing — no token is involved.
+          // Keep the pairing screen and reopen so the user can retry.
+          setConn("pairing");
+          connectRef.current();
+        }
         return;
       }
       const pending = pendingRef.current.get(result.command_id);
@@ -223,6 +273,7 @@ export function useRemote(): UseRemote {
       if (event.kind === "snapshot") {
         const snap = event.payload as unknown;
         if (isSnapshot(snap)) {
+          retryRef.current = 0;
           setConn("connected");
           setSnapshot(snap);
         }
@@ -240,6 +291,7 @@ export function useRemote(): UseRemote {
   }, []);
 
   const connect = useCallback(() => {
+    clearReconnectTimer();
     connectedRef.current = false;
     setConn("connecting");
     setErr(null);
@@ -264,18 +316,24 @@ export function useRemote(): UseRemote {
         connectedRef.current = false;
         closeAllPending(new Error("Connection closed"));
         setConn("error");
+        // Auto-reconnect with backoff after an unexpected drop (the server's
+        // watchdog, flaky Wi-Fi, an app restart). Only when a token is stored
+        // — on the pairing screen there's nothing to authenticate, so wait for
+        // the user to retry instead of churning connections.
+        if (storedToken()) scheduleReconnect();
       }
     };
-  }, [handleMessage, closeAllPending]);
+  }, [handleMessage, closeAllPending, clearReconnectTimer, scheduleReconnect]);
 
   connectRef.current = connect;
 
   useEffect(() => {
     connect();
     return () => {
+      clearReconnectTimer();
       if (wsRef.current) wsRef.current.close();
     };
-  }, [connect]);
+  }, [connect, clearReconnectTimer]);
 
   const pair = useCallback(
     (code: string, name: string) =>

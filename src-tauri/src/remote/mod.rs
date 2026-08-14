@@ -44,6 +44,9 @@ pub struct RemoteControl {
     pub mutation_history: Mutex<HashMap<String, Vec<u64>>>,
     /// Device-token persistence file.
     pub devices_file: PathBuf,
+    /// File holding the last-bound remote port so restarts reuse it instead of
+    /// jumping to a new random port (which would orphan phones' saved URLs).
+    pub port_file: PathBuf,
     /// Server task handle (kept to abort on disable).
     pub task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Plaintext pairing code kept in memory so the operator can display/scan
@@ -90,6 +93,7 @@ impl RemoteControl {
             sessions: ConnectedDevices::new(),
             mutation_history: Mutex::new(HashMap::new()),
             devices_file: devices_file.clone(),
+            port_file: app_data_dir.join("remote_port.txt"),
             task: Mutex::new(None),
             pairing_code_plain: Mutex::new(None),
             phone_cameras: Arc::new(RwLock::new(HashMap::new())),
@@ -108,6 +112,26 @@ impl RemoteControl {
 
     pub fn persist_devices(&self) {
         let _ = self.tokens.persist(&self.devices_file);
+    }
+
+    /// Returns the port bound on the last run, if any. Used so `start` can
+    /// re-bind the same port and keep phones' saved URLs working across app
+    /// restarts.
+    pub fn stored_port(&self) -> Option<u16> {
+        std::fs::read_to_string(&self.port_file)
+            .ok()
+            .and_then(|s| s.trim().parse::<u16>().ok())
+            .filter(|p| *p > 0)
+    }
+
+    /// Records the port that was successfully bound so the next app start can
+    /// reuse it. Written to a temp file and renamed to stay atomic.
+    pub fn persist_port(&self, port: u16) {
+        let _ = std::fs::create_dir_all(self.port_file.parent().unwrap_or(std::path::Path::new(".")));
+        let tmp = self.port_file.with_extension("txt.tmp");
+        if std::fs::write(&tmp, port.to_string()).is_ok() {
+            let _ = std::fs::rename(&tmp, &self.port_file);
+        }
     }
 
     /// Returns a fresh pairing code, reusing the current one while it is
@@ -130,6 +154,17 @@ impl RemoteControl {
 
     pub fn token_for_display(&self) -> String {
         self.ensure_pairing()
+    }
+
+    /// Expiry of the pairing code currently shown in the operator UI. Derived
+    /// from the in-memory plaintext record so it always matches the displayed
+    /// code (the token store's map can hold stale entries from regenerations).
+    pub fn pairing_expires_at(&self) -> Option<u64> {
+        self.pairing_code_plain
+            .lock()
+            .as_ref()
+            .filter(|(code, _, _)| !code.is_empty())
+            .map(|(_, _, expires_at)| *expires_at)
     }
 
     /// Invalidates the current pairing code and issues a new one.

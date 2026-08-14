@@ -57,21 +57,45 @@ async fn ws_handler(
 
 /// Milliseconds of silence before a connected device is treated as dead and
 /// dropped (its controller lease, if held, is then freed immediately instead
-/// of waiting for the 10-minute TTL). The server pings every 15s, so ~2.5x
-/// that interval tolerates a couple of lost pongs on flaky Wi-Fi.
-const CLIENT_TIMEOUT_MS: u64 = 40_000;
+/// of waiting for the 10-minute TTL). The server pings every 15s, so 6x that
+/// interval tolerates a run of lost pongs on flaky Wi-Fi and mobile browsers
+/// that throttle network activity while backgrounded. The client reconnects
+/// automatically with backoff, so a drop here is recoverable either way.
+const CLIENT_TIMEOUT_MS: u64 = 90_000;
 
-/// Binds the remote server on a random local port and returns the bound
-/// address. `files_dir` must already contain the compiled `remote.html`.
-/// Records the bound address and task handle on `control` so `remote_disable`
-/// can shut the server down and `remote_status` can report port/URLs.
+/// Milliseconds a freshly-connected socket may take before sending its first
+/// (pair/authenticate) message. Guards against sockets that open and never
+/// speak (backgrounded tabs, abandoned pages) holding a handshake task open
+/// forever. The client treats this as a transient error and reconnects.
+const HANDSHAKE_TIMEOUT_MS: u64 = 15_000;
+
+/// Binds the remote server on the previously-used local port (falling back to
+/// a random port) and returns the bound address. `files_dir` must already
+/// contain the compiled `remote.html`. Records the bound address and task
+/// handle on `control` so `remote_disable` can shut the server down and
+/// `remote_status` can report port/URLs.
+///
+/// Reusing the last bound port keeps phones' bookmarked URLs valid across app
+/// restarts. If that port is taken, we fall back to a random port and persist
+/// the new one.
 ///
 /// `enabled` is set only after the bind succeeds, so a failed bind never
 /// leaves the server half-started (reported enabled with no port/task).
 pub async fn start(ctx: RemoteCtx) -> Result<SocketAddr, String> {
     let control = ctx.control.clone();
     let app = router(ctx);
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.map_err(|e| e.to_string())?;
+    let preferred = control.stored_port();
+    let listener = match preferred {
+        Some(port) => match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
+            Ok(l) => l,
+            Err(_) => {
+                // Preferred port unavailable (e.g. another app took it) — use
+                // a random one; persist the new port below.
+                tokio::net::TcpListener::bind("0.0.0.0:0").await.map_err(|e| e.to_string())?
+            }
+        },
+        None => tokio::net::TcpListener::bind("0.0.0.0:0").await.map_err(|e| e.to_string())?,
+    };
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
     let task_control = control.clone();
     let handle = tokio::spawn(async move {
@@ -85,6 +109,7 @@ pub async fn start(ctx: RemoteCtx) -> Result<SocketAddr, String> {
         task_control.enabled.store(false, std::sync::atomic::Ordering::SeqCst);
         *task_control.bound_addr.lock() = None;
     });
+    control.persist_port(addr.port());
     control.enabled.store(true, std::sync::atomic::Ordering::SeqCst);
     *control.task.lock() = Some(handle);
     *control.bound_addr.lock() = Some(addr);
@@ -299,12 +324,20 @@ struct DeviceCtx {
 
 /// Reads the first WS message and pairs or authenticates the device. Returns
 /// the authenticated device and the newly-issued token (if this was a pair).
+/// Sockets that never send a first message within `HANDSHAKE_TIMEOUT_MS` are
+/// dropped so they cannot leak handshake tasks.
 async fn authenticate_handshake(
     receiver: &mut futures_util::stream::SplitStream<WebSocket>,
     ctx: &RemoteCtx,
     addr: SocketAddr,
 ) -> Result<(StoredDevice, Option<String>), AuthError> {
-    let Some(msg) = receiver.next().await else {
+    let first = tokio::select! {
+        msg = receiver.next() => msg,
+        _ = tokio::time::sleep(std::time::Duration::from_millis(HANDSHAKE_TIMEOUT_MS)) => {
+            return Err(AuthError::HandshakeTimeout);
+        }
+    };
+    let Some(msg) = first else {
         return Err(AuthError::UnknownToken);
     };
     let text = match msg {

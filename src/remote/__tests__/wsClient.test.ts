@@ -158,7 +158,7 @@ describe("useRemote handshake", () => {
     expect(lastWs().last().payload).toEqual({ device_token: "tok-1" });
   });
 
-  it("drops the stored token and re-pairs when the handshake fails", async () => {
+  it("drops the stored token and lands on pairing when the token is rejected", async () => {
     localStorage.setItem("wordlyte.remote.token", "stale");
     vi.stubGlobal("WebSocket", FakeWebSocket);
     const { result } = renderHook(() => useRemote());
@@ -167,11 +167,88 @@ describe("useRemote handshake", () => {
       lastWs().recv({ command_id: "handshake", ok: false, revision: 0, error: { code: "unknown_token", message: "Unknown token" } });
     });
     expect(localStorage.getItem("wordlyte.remote.token")).toBeNull();
-    // A fresh socket is opened so the device can re-pair (the old one is
-    // closed by the server after the rejected handshake).
+    // A single fresh socket is opened so the pairing screen can submit a new
+    // code — not a reconnect loop.
     expect(FakeWebSocket.instances.length).toBe(2);
     act(() => lastWs().open());
     expect(result.current.conn).toBe("pairing");
+    // No authentication is re-sent — there's no token left to authenticate.
+    expect(lastWs().sent).toHaveLength(0);
+  });
+
+  it("wipes the token and lands on pairing when the device is revoked", async () => {
+    localStorage.setItem("wordlyte.remote.token", "revoked");
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const { result } = renderHook(() => useRemote());
+    act(() => lastWs().open());
+    act(() => {
+      lastWs().recv({ command_id: "handshake", ok: false, revision: 0, error: { code: "revoked", message: "Device revoked" } });
+    });
+    expect(localStorage.getItem("wordlyte.remote.token")).toBeNull();
+    expect(FakeWebSocket.instances.length).toBe(2);
+    act(() => lastWs().open());
+    expect(result.current.conn).toBe("pairing");
+  });
+
+  it("does not wipe a valid token on a transient handshake failure, and reconnects with backoff", async () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.setItem("wordlyte.remote.token", "tok-ok");
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+      const { result } = renderHook(() => useRemote());
+      act(() => lastWs().open());
+      expect(result.current.conn).toBe("connecting");
+
+      act(() => {
+        lastWs().recv({ command_id: "handshake", ok: false, revision: 0, error: { code: "rate_limited", message: "try again later" } });
+      });
+      // The token is kept — only a definitive auth error may clear it — and no
+      // new socket is opened synchronously; the backoff reconnect takes over.
+      expect(localStorage.getItem("wordlyte.remote.token")).toBe("tok-ok");
+      expect(FakeWebSocket.instances.length).toBe(1);
+      expect(result.current.conn).toBe("error");
+
+      // The server closes the socket; the client schedules a reconnect.
+      act(() => lastWs().onclose?.());
+      expect(FakeWebSocket.instances.length).toBe(1);
+      act(() => vi.advanceTimersByTime(1001));
+      expect(FakeWebSocket.instances.length).toBe(2);
+
+      act(() => lastWs().open());
+      expect(lastWs().last().type).toBe("remote.authenticate");
+      expect(lastWs().last().payload).toEqual({ device_token: "tok-ok" });
+      act(() => recvSnapshot(lastWs(), 3));
+      expect(result.current.conn).toBe("connected");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reconnects automatically after an unexpected drop and resumes connecting", async () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.setItem("wordlyte.remote.token", "tok-1");
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+      const { result } = renderHook(() => useRemote());
+      act(() => lastWs().open());
+      act(() => recvSnapshot(lastWs(), 2));
+      expect(result.current.conn).toBe("connected");
+
+      // Watchdog/server restart drops the socket.
+      act(() => lastWs().onclose?.());
+      expect(result.current.conn).toBe("error");
+      expect(FakeWebSocket.instances.length).toBe(1);
+
+      act(() => vi.advanceTimersByTime(1001));
+      expect(result.current.conn).toBe("connecting");
+      expect(FakeWebSocket.instances.length).toBe(2);
+      act(() => lastWs().open());
+      act(() => recvSnapshot(lastWs(), 3));
+      expect(result.current.conn).toBe("connected");
+      expect(result.current.snapshot?.revision).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -194,6 +271,15 @@ describe("useRemote commands", () => {
     });
     sent = lastWs().last();
     expect(sent.type).toBe("bible.search");
+    expect(sent.expected_revision).toBeUndefined();
+
+    // WebRTC signaling relays are non-mutating and must not carry a stale
+    // revision or trip the mutation rate limiter.
+    act(() => {
+      void result.current.command("camera.ice", { candidate: "c0", sdp_mid: "0", sdp_m_line_index: 0, device_id: "phone-camera-x" });
+    });
+    sent = lastWs().last();
+    expect(sent.type).toBe("camera.ice");
     expect(sent.expected_revision).toBeUndefined();
   });
 

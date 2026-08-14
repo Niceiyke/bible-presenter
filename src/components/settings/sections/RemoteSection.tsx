@@ -24,6 +24,16 @@ function formatClock(ts?: number): string {
   return `${d.getHours()}:${mm}`;
 }
 
+function formatRemaining(expires_at?: number, now = Date.now()): string | null {
+  if (!expires_at) return null;
+  const ms = expires_at * 1000 - now;
+  if (ms <= 0) return "expires any second…";
+  const total = Math.ceil(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+
 export function RemoteSection(_props: SettingsSectionProps) {
   const t = useT();
   const [status, setStatus] = useState<RemoteStatus | null>(null);
@@ -31,6 +41,9 @@ export function RemoteSection(_props: SettingsSectionProps) {
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
+  // Seconds ticker so the pairing-code countdown stays live without re-fetching
+  // status every second.
+  const [, setTick] = useState(0);
 
   const refresh = useCallback(async () => {
     try {
@@ -53,6 +66,13 @@ export function RemoteSection(_props: SettingsSectionProps) {
       pollRef.current = window.setInterval(refresh, 4000);
     }
   }, [status?.enabled, refresh]);
+
+  // One-second tick to drive the pairing-code countdown.
+  useEffect(() => {
+    if (!status?.enabled) return;
+    const id = window.setInterval(() => setTick((t) => t + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [status?.enabled]);
 
   const run = useCallback(async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -123,6 +143,9 @@ export function RemoteSection(_props: SettingsSectionProps) {
                 {status.pairing_expires_at && (
                   <span className="text-[10px] text-slate-500 shrink-0">
                     {t("settings.remote.expiresAt")} {formatClock(status.pairing_expires_at)}
+                    {formatRemaining(status.pairing_expires_at) && (
+                      <span className="text-slate-400"> · {formatRemaining(status.pairing_expires_at)}</span>
+                    )}
                   </span>
                 )}
               </div>

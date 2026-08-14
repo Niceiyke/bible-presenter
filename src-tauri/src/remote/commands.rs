@@ -706,7 +706,18 @@ pub async fn dispatch(
     }
 }
 
-pub(crate)     fn is_mutating(t: RemoteCommandType) -> bool {
+/// Commands that change authoritative state. These are gated on the operator
+/// role, the controller lease, and a fresh revision, and are rate-limited per
+/// device. Read-only commands and *signaling relays* are not mutating.
+///
+/// Notably `camera.offer` / `camera.answer` / `camera.ice` are deliberately
+/// NOT mutating: they only forward WebRTC signaling to the operator window and
+/// never touch presentation state. Gating them on the lease/revision would
+/// make a session fail mid-handshake whenever the phone's revision went stale
+/// or ICE candidate bursts tripped the command rate limiter. `camera.start` /
+/// `camera.stop` remain mutating because they alter staged state and camera
+/// registration.
+pub(crate) fn is_mutating(t: RemoteCommandType) -> bool {
     matches!(
         t,
         RemoteCommandType::RemoteRequestControl
@@ -731,9 +742,6 @@ pub(crate)     fn is_mutating(t: RemoteCommandType) -> bool {
             | RemoteCommandType::LowerThirdHide
             | RemoteCommandType::CameraStart
             | RemoteCommandType::CameraStop
-            | RemoteCommandType::CameraOffer
-            | RemoteCommandType::CameraAnswer
-            | RemoteCommandType::CameraIce
     )
 }
 
