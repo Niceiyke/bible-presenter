@@ -194,10 +194,16 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
     return () => window.removeEventListener("message", handleMessage);
   }, [deviceId]);
 
-  // Cleanup on unmount
+  // Cleanup on unmount. Keying this effect on `cleanup` itself would tear down
+  // the live peer connections every time `stream` changes — `setStream` inside
+  // startStreaming re-creates `cleanup`, so the previous effect's cleanup would
+  // close the PCs mid-startup and createOffer would throw "signalingState is
+  // closed". Keep the latest cleanup in a ref and run it only on unmount.
+  const cleanupRef = useRef<() => void>(() => {});
+  cleanupRef.current = cleanup;
   useEffect(() => {
-    return () => cleanup();
-  }, [cleanup]);
+    return () => cleanupRef.current();
+  }, []);
 
   if (client.conn !== "connected") {
     return (
