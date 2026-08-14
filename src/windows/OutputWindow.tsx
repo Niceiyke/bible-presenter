@@ -25,6 +25,7 @@ import { Music } from "lucide-react";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { signalOperatorWarning } from "../hooks/useAppInitialization";
 import { useFonts } from "../hooks/useFonts";
+import PhoneCameraVideo, { usePhoneCameraOrientation } from "../components/shared/PhoneCameraVideo";
 
 function ProjectionErrorFallback() {
   return (
@@ -65,6 +66,10 @@ export function OutputWindow() {
   const mainCameraRef = useRef<HTMLVideoElement>(null);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [mainCameraStream, setMainCameraStream] = useState<MediaStream | null>(null);
+  const liveCameraDeviceId = liveItem?.type === "Camera" ? (liveItem.data.deviceId ?? null) : null;
+  const livePhoneOrientation = usePhoneCameraOrientation(
+    liveCameraDeviceId?.startsWith("phone-camera-") ? liveCameraDeviceId : null
+  );
   // Locally-opened background camera stream (owned by this effect, unlike the
   // relayed phone streams which belong to the phone's peer connections).
   const localBgCameraRef = useRef<MediaStream | null>(null);
@@ -765,19 +770,13 @@ export function OutputWindow() {
               </div>
             ) : liveItem.type === "Camera" ? (
               <div className="absolute inset-0">
-                <video
-                  ref={(el) => {
-                    if (el && mainCameraStream) el.srcObject = mainCameraStream;
-                    mainCameraRef.current = el;
-                  }}
-                  autoPlay
-                  playsInline
-                  className="w-full h-full"
-                  style={{
-                    objectFit: (liveItem.data.objectFit as any) ?? "cover",
-                    opacity: liveItem.data.opacity ?? 1,
-                    transform: liveItem.data.mirrored ? "scaleX(-1)" : "none",
-                  }}
+                <PhoneCameraVideo
+                  stream={mainCameraStream}
+                  orientation={livePhoneOrientation}
+                  mirrored={liveItem.data.mirrored}
+                  objectFit={(liveItem.data.objectFit as any) ?? "cover"}
+                  style={{ opacity: liveItem.data.opacity ?? 1 }}
+                  videoRef={(el) => { mainCameraRef.current = el; }}
                 />
               </div>
             ) : liveItem.type === "CustomSlide" ? (

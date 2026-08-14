@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store";
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { usePhoneCameraStreams } from "../hooks/usePhoneCameraHost";
+import PhoneCameraVideo from "./shared/PhoneCameraVideo";
 import { Camera, RefreshCw, Video, Play, Monitor, AlertTriangle, Smartphone } from "lucide-react";
 import type { DisplayItem, CameraBackground } from "../types";
 
@@ -26,6 +27,8 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     refreshCameras,
     settings,
     setSettings,
+    cameraOrientations,
+    setCameraOrientation,
   } = useAppStore();
   const phoneStreams = usePhoneCameraStreams();
   const [phoneCameras, setPhoneCameras] = useState<PhoneCameraInfo[]>([]);
@@ -93,16 +96,9 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
 
     // Phone cameras arrive over a WebRTC relay hosted by the main window
     // (see PhoneCameraProvider); their ids are synthetic and can never be
-    // opened with getUserMedia. Bind the relayed feed once it arrives.
+    // opened with getUserMedia. PhoneCameraVideo binds the relayed feed, so
+    // there is nothing to do here.
     if (selectedCameraId.startsWith("phone-camera-")) {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      }
-      const stream = phoneStreams[selectedCameraId] ?? null;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
       setCameraError(null);
       return;
     }
@@ -165,12 +161,21 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
         {/* Preview Area */}
         <div className="flex-1 flex flex-col gap-4">
           <div className="aspect-video bg-black rounded-xl overflow-hidden border border-slate-800 relative group">
-            <video 
-              ref={videoRef}
-              autoPlay
-              playsInline
-              className="w-full h-full object-contain"
-            />
+            {isPhoneSelected ? (
+              <PhoneCameraVideo
+                stream={phoneStreams[selectedCameraId!] ?? null}
+                orientation={cameraOrientations[selectedCameraId!] ?? "portrait"}
+                objectFit="contain"
+                videoRef={(el) => { videoRef.current = el; }}
+              />
+            ) : (
+              <video 
+                ref={videoRef}
+                autoPlay
+                playsInline
+                className="w-full h-full object-contain"
+              />
+            )}
             
             {!selectedCameraId && (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 gap-2">
@@ -189,6 +194,29 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
               {isPhoneSelected ? "PHONE PREVIEW" : "BROWSER PREVIEW"}
             </div>
           </div>
+
+          {isPhoneSelected && (
+            <div className="flex items-center justify-between px-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                <Smartphone size={12} className="inline mr-1 -mt-0.5" />Display orientation
+              </span>
+              <div className="flex rounded-lg overflow-hidden border border-slate-700">
+                {(["portrait", "landscape"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => setCameraOrientation(selectedCameraId!, mode)}
+                    className={`px-3 py-1 text-[10px] font-black uppercase transition-all ${
+                      (cameraOrientations[selectedCameraId!] ?? "portrait") === mode
+                        ? "bg-cyan-600 text-white"
+                        : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+                    }`}
+                  >
+                    {mode === "portrait" ? "Portrait" : "Landscape"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {cameraError && (
             <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-red-950/60 border border-red-800/60 text-red-300 text-xs">

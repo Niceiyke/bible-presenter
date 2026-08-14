@@ -226,6 +226,12 @@ export interface RemoteLowerThirdPayload {
 /** WebRTC peer target for a phone camera: which operator-side window answers. */
 export type RemoteCameraTarget = "operator" | "output";
 
+/** How a phone camera feed is oriented when displayed (operator preview and
+ *  projected output). Stored per phone camera device id in the operator store
+ *  and persisted to localStorage so a fixed landscape-mounted phone keeps its
+ *  orientation across sessions and windows. */
+export type PhoneCameraOrientation = "portrait" | "landscape";
+
 export interface RemoteCameraStartPayload {
   device_id: string;
   device_name: string;

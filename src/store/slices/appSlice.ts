@@ -2,6 +2,7 @@ import { StateCreator } from "zustand";
 import { AppStore } from "../index";
 import { DEFAULT_SETTINGS, PresentationSettings, CustomPresentation, CustomSlide, PresentationSummary, SlideTemplate, Scene } from "../../types";
 import type { DisplayItem } from "../../types";
+import type { PhoneCameraOrientation } from "../../types/remote";
 
 export interface LogEntry {
   level: string;
@@ -83,6 +84,8 @@ export interface AppSlice {
   setAddToServiceOpen: (v: boolean) => void;
   pendingScheduleItem: DisplayItem | null;
   setPendingScheduleItem: (v: DisplayItem | null) => void;
+  cameraOrientations: Record<string, PhoneCameraOrientation>;
+  setCameraOrientation: (deviceId: string, orientation: PhoneCameraOrientation) => void;
 }
 
 export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) => ({
@@ -164,4 +167,21 @@ export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) =>
   setAddToServiceOpen: (v) => set({ addToServiceOpen: v }),
   pendingScheduleItem: null,
   setPendingScheduleItem: (v) => set({ pendingScheduleItem: v }),
+  cameraOrientations: (() => {
+    try {
+      const raw = localStorage.getItem("cameraOrientations");
+      return raw ? (JSON.parse(raw) as Record<string, PhoneCameraOrientation>) : {};
+    } catch {
+      return {};
+    }
+  })(),
+  setCameraOrientation: (deviceId, orientation) => set((s) => {
+    const cameraOrientations = { ...s.cameraOrientations, [deviceId]: orientation };
+    try {
+      localStorage.setItem("cameraOrientations", JSON.stringify(cameraOrientations));
+    } catch {
+      /* localStorage unavailable — keep in-memory only */
+    }
+    return { cameraOrientations };
+  }),
 });

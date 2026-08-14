@@ -11,6 +11,7 @@ import {
 } from "./shared/Renderers";
 import { useAppStore } from "../store";
 import { usePhoneCameraStreams } from "../hooks/usePhoneCameraHost";
+import PhoneCameraVideo from "./shared/PhoneCameraVideo";
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { useReferenceHeight } from "../hooks/useReferenceHeight";
 import { useSlideFit } from "../hooks/useSlideFit";
@@ -42,7 +43,7 @@ export function PreviewCard({
   isLocalPreview?: boolean;
   hideHeader?: boolean;
 }) {
-  const { appDataDir, settings } = useAppStore();
+  const { appDataDir, settings, cameraOrientations } = useAppStore();
   const phoneStreams = usePhoneCameraStreams();
   const isVideo = item?.type === "Media" && (item.data as MediaItem).media_type === "Video";
   const isAudio = item?.type === "Media" && (item.data as MediaItem).media_type === "Audio";
@@ -346,12 +347,12 @@ export function PreviewCard({
               </div>
             ) : item.type === "Camera" ? (
               <div className="w-full h-full relative border border-slate-800 rounded-lg overflow-hidden bg-black">
-                <video
-                  ref={cameraPreviewRef}
-                  autoPlay
-                  playsInline
-                  className="w-full h-full object-contain"
-                  style={{ transform: item.data.mirrored ? "scaleX(-1)" : "none" }}
+                <PhoneCameraVideo
+                  stream={item.data.deviceId.startsWith("phone-camera-") ? phoneStreams[item.data.deviceId] ?? null : undefined}
+                  orientation={item.data.deviceId.startsWith("phone-camera-") ? cameraOrientations[item.data.deviceId] ?? "portrait" : "portrait"}
+                  mirrored={item.data.mirrored}
+                  objectFit="contain"
+                  videoRef={(el) => { cameraPreviewRef.current = el; }}
                 />
                 <div className="absolute top-2 left-2 px-1.5 py-0.5 bg-red-500/80 rounded text-[8px] font-black text-white flex items-center gap-1 animate-pulse">
                   <div className="w-1.5 h-1.5 rounded-full bg-white" />
