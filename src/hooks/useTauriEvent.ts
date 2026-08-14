@@ -21,9 +21,10 @@ export interface EventMap {
   "system-log": { level: string; message: string; timestamp: number };
   "operator-warning": { message: string; level?: string };
   "download-progress": { progress: number };
-  "phone-camera-offer": { device_id: string; device_name: string; sdp: string };
-  "phone-camera-ice": { device_id: string; candidate: string; sdp_mid: string; sdp_m_line_index: number };
+  "phone-camera-offer": { device_id: string; device_name: string; sdp: string; target?: "operator" | "output" };
+  "phone-camera-ice": { device_id: string; candidate: string; sdp_mid: string; sdp_m_line_index: number; target?: "operator" | "output" };
   "phone-camera-stop": { device_id: string };
+  "phone-cameras-changed": { cameras: { device_id: string; device_name: string }[] };
 }
 
 export type TauriEventName = keyof EventMap;

@@ -12,6 +12,7 @@ use auth::TokenStore;
 use hub::RemoteHub;
 use parking_lot::Mutex;
 use protocol::RemoteEventKind;
+use serde::Serialize;
 use serde_json::json;
 use sessions::{ConnectedDevices, ControllerLease};
 use std::collections::HashMap;
@@ -79,6 +80,15 @@ pub struct PhoneCamera {
     /// The remote Control device.id that owns this camera (used to target
     /// operator->phone signaling back to the right phone).
     pub owner_device_id: String,
+}
+
+/// Operator-facing summary of a connected phone camera (the Camera tab lists
+/// these so the operator can pick which feed to stage/live).
+#[derive(Debug, Clone, Serialize)]
+pub struct PhoneCameraInfo {
+    /// Prefixed id, also used as the DisplayItem device id ("phone-camera-...").
+    pub device_id: String,
+    pub device_name: String,
 }
 
 impl RemoteControl {
@@ -219,6 +229,38 @@ impl RemoteControl {
     /// `camera.stop` command or disconnects.
     pub async fn unregister_phone_camera(&self, device_id: &str) {
         self.phone_cameras.write().await.remove(device_id);
+    }
+
+    /// Operator-facing list of connected phone cameras (for the Camera tab).
+    pub async fn list_phone_cameras(&self) -> Vec<PhoneCameraInfo> {
+        let mut list: Vec<PhoneCameraInfo> = self
+            .phone_cameras
+            .read()
+            .await
+            .values()
+            .map(|c| PhoneCameraInfo {
+                device_id: c.device_id.clone(),
+                device_name: c.device_name.clone(),
+            })
+            .collect();
+        list.sort_by(|a, b| a.device_name.cmp(&b.device_name));
+        list
+    }
+
+    /// Removes every camera owned by a remote device (used when that device
+    /// disconnects so stale entries don't linger in the Camera tab). Returns
+    /// the removed prefixed ids.
+    pub async fn unregister_phone_cameras_for_owner(&self, owner_device_id: &str) -> Vec<String> {
+        let mut map = self.phone_cameras.write().await;
+        let removed: Vec<String> = map
+            .iter()
+            .filter(|(_, c)| c.owner_device_id == owner_device_id)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &removed {
+            map.remove(id);
+        }
+        removed
     }
 
     /// Looks up the owner (remote Control session id) for a registered phone

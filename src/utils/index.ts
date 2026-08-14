@@ -79,7 +79,7 @@ export function displayItemLabel(item: DisplayItem): string {
     return `${item.data.book} ${item.data.chapter}:${item.data.verse}`;
   }
   if (item.type === "Camera") {
-    return `Camera Feed: ${item.data.deviceId.slice(0, 8)}...`;
+    return item.data.deviceId.startsWith("phone-camera-") ? "Phone Camera" : `Camera Feed: ${item.data.deviceId.slice(0, 8)}...`;
   }
   if (item.type === "CustomSlide") {
     return `${item.data.presentation_name} – Slide ${item.data.slide_index + 1}`;

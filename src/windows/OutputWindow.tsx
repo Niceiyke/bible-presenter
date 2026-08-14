@@ -65,6 +65,9 @@ export function OutputWindow() {
   const mainCameraRef = useRef<HTMLVideoElement>(null);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [mainCameraStream, setMainCameraStream] = useState<MediaStream | null>(null);
+  // Locally-opened background camera stream (owned by this effect, unlike the
+  // relayed phone streams which belong to the phone's peer connections).
+  const localBgCameraRef = useRef<MediaStream | null>(null);
 
   // Phone WebRTC relay. The operator window hosts the *answering* peer for each
   // phone camera; the backend relays offer/ICE from the phone here and carries
@@ -324,37 +327,46 @@ export function OutputWindow() {
   const audioBg = getAudioBackground(settings, liveItem);
   const bgImage = getImageBackground(settings, liveItem);
 
-  // Browser-only camera stream lifecycle
+  // Browser-only camera stream lifecycle. Phone cameras stream over the WebRTC
+  // relay hosted by this window's "output" peer (their ids are synthetic and
+  // can never be opened with getUserMedia here).
   useEffect(() => {
-    let activeStream: MediaStream | null = null;
-    
-    const startBrowserCamera = async (deviceId: string) => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-          video: { deviceId: { exact: deviceId } } 
-        });
-        activeStream = stream;
-        setCameraStream(stream);
-      } catch (err) {
-        console.error("Failed to get camera stream:", err);
+    const deviceId = cameraBg?.deviceId;
+
+    const stopLocal = () => {
+      if (localBgCameraRef.current) {
+        localBgCameraRef.current.getTracks().forEach(track => track.stop());
+        localBgCameraRef.current = null;
       }
     };
 
-    if (cameraBg?.deviceId && !cameraBg.deviceId.startsWith("native:") && !cameraBg.deviceId.startsWith("ndi:")) {
-      startBrowserCamera(cameraBg.deviceId);
-    } else {
-      if (cameraStream) {
-        cameraStream.getTracks().forEach(track => track.stop());
-        setCameraStream(null);
-      }
+    if (deviceId?.startsWith("phone-camera-")) {
+      stopLocal();
+      setCameraStream(phoneStreams[deviceId] ?? null);
+      return;
     }
 
-    return () => {
-      if (activeStream) {
-        activeStream.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, [cameraBg?.deviceId]);
+    if (deviceId && !deviceId.startsWith("native:") && !deviceId.startsWith("ndi:")) {
+      stopLocal();
+      navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } })
+        .then(stream => {
+          localBgCameraRef.current = stream;
+          setCameraStream(stream);
+        })
+        .catch(err => console.error("Failed to get camera stream:", err));
+      return;
+    }
+
+    stopLocal();
+    setCameraStream(null);
+  }, [cameraBg?.deviceId, phoneStreams]);
+
+  useEffect(() => () => {
+    if (localBgCameraRef.current) {
+      localBgCameraRef.current.getTracks().forEach(track => track.stop());
+      localBgCameraRef.current = null;
+    }
+  }, []);
 
   // Main camera stream
   useEffect(() => {
@@ -430,6 +442,7 @@ export function OutputWindow() {
               candidate: ev.candidate.candidate,
               sdp_mid: ev.candidate.sdpMid ?? "",
               sdp_m_line_index: ev.candidate.sdpMLineIndex ?? 0,
+              target: "output",
             }).catch((e) => console.error("phone_camera_ice failed:", e));
           }
         };
@@ -444,7 +457,7 @@ export function OutputWindow() {
         await pc.setRemoteDescription({ type: "offer", sdp });
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        await invoke("phone_camera_answer", { device_id: pcKey, sdp: answer.sdp ?? "" });
+        await invoke("phone_camera_answer", { device_id: pcKey, sdp: answer.sdp ?? "", target: "output" });
       } catch (err) {
         console.error("Phone camera answer setup failed:", err);
         teardown(deviceId);
@@ -453,11 +466,15 @@ export function OutputWindow() {
 
     (async () => {
       unlistenOffer = await listen("phone-camera-offer", (e) => {
-        const p = e.payload as { device_id: string; device_name: string; sdp: string };
+        const p = e.payload as { device_id: string; device_name: string; sdp: string; target?: string };
+        // The main operator window hosts the "operator" peer (preview). This
+        // projection window only answers the "output" peer.
+        if (p.target === "operator") return;
         handleOffer(p.device_id, p.sdp, p.device_id);
       });
       unlistenIce = await listen("phone-camera-ice", (e) => {
-        const p = e.payload as { device_id: string; candidate: string; sdp_mid: string; sdp_m_line_index: number };
+        const p = e.payload as { device_id: string; candidate: string; sdp_mid: string; sdp_m_line_index: number; target?: string };
+        if (p.target === "operator") return;
         const pc = phonePCsRef.current.get(p.device_id);
         if (pc && p.candidate) {
           pc.addIceCandidate({ candidate: p.candidate, sdpMid: p.sdp_mid, sdpMLineIndex: p.sdp_m_line_index }).catch(

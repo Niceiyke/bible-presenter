@@ -1,10 +1,18 @@
 use crate::remote::protocol::{RemoteControllerState, RemotePermissions, RemoteRole};
-use crate::remote::{public_urls, RemoteControl};
+use crate::remote::{public_urls, PhoneCameraInfo, RemoteControl};
 use crate::state::AppState;
 use serde::Serialize;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, State};
+
+/// Operator-facing list of connected phone cameras (Camera tab). Each entry's
+/// `device_id` is the prefixed id ("phone-camera-...") used as the DisplayItem
+/// device id.
+#[tauri::command]
+pub async fn list_phone_cameras(state: State<'_, AppState>) -> Result<Vec<PhoneCameraInfo>, String> {
+    Ok(state.remote.clone().list_phone_cameras().await)
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RemoteDeviceInfo {
@@ -238,9 +246,11 @@ pub async fn remote_set_permissions(app: AppHandle, state: State<'_, AppState>, 
 }
 
 /// The operator window relays its WebRTC answer back to the phone that owns the
-/// given phone camera. `device_id` is the prefixed id ("phone-camera-...").
+/// given phone camera. `device_id` is the prefixed id ("phone-camera-...") and
+/// `target` is the peer this answer belongs to ("operator" or "output") so the
+/// phone can apply it to the right connection.
 #[tauri::command]
-pub async fn phone_camera_answer(state: State<'_, AppState>, device_id: String, sdp: String) -> Result<(), String> {
+pub async fn phone_camera_answer(state: State<'_, AppState>, device_id: String, sdp: String, target: String) -> Result<(), String> {
     let control = state.remote.clone();
     let (raw_id, owner) = control
         .phone_camera_route(&device_id)
@@ -251,7 +261,7 @@ pub async fn phone_camera_answer(state: State<'_, AppState>, device_id: String, 
     // phone itself used so it can match its own device.
     control.hub.publish_to(
         crate::remote::protocol::RemoteEventKind::CameraAnswer,
-        serde_json::json!({ "device_id": raw_id, "sdp": sdp }),
+        serde_json::json!({ "device_id": raw_id, "sdp": sdp, "target": target }),
         None,
         Some(owner),
     );
@@ -267,6 +277,7 @@ pub async fn phone_camera_ice(
     candidate: String,
     sdp_mid: String,
     sdp_m_line_index: u32,
+    target: String,
 ) -> Result<(), String> {
     let control = state.remote.clone();
     let (raw_id, owner) = control
@@ -280,6 +291,7 @@ pub async fn phone_camera_ice(
             "candidate": candidate,
             "sdp_mid": sdp_mid,
             "sdp_m_line_index": sdp_m_line_index,
+            "target": target,
         }),
         None,
         Some(owner),

@@ -347,6 +347,10 @@ pub struct RemoteCameraStartPayload {
 pub struct RemoteCameraOfferPayload {
     pub sdp: String,
     pub device_id: String,
+    /// Which operator-side window should host the answering peer: "operator"
+    /// (main window, for the operator preview) or "output" (projection window).
+    #[serde(default = "default_camera_target")]
+    pub target: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -361,6 +365,14 @@ pub struct RemoteCameraIcePayload {
     pub sdp_mid: String,
     pub sdp_m_line_index: u32,
     pub device_id: String,
+    /// Mirrors the `target` of the peer this candidate belongs to so the phone
+    /// can route it back to the correct connection.
+    #[serde(default = "default_camera_target")]
+    pub target: String,
+}
+
+fn default_camera_target() -> String {
+    "operator".into()
 }
 
 /// Authoritative, read-only snapshot pushed to a connected remote. Mirrors the

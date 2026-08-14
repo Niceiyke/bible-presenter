@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store";
-import { Camera, RefreshCw, Video, Play, Monitor, AlertTriangle } from "lucide-react";
+import { useTauriEvent } from "../hooks/useTauriEvent";
+import { usePhoneCameraStreams } from "../hooks/usePhoneCameraHost";
+import { Camera, RefreshCw, Video, Play, Monitor, AlertTriangle, Smartphone } from "lucide-react";
 import type { DisplayItem, CameraBackground } from "../types";
 
 interface CameraTabProps {
@@ -9,6 +12,11 @@ interface CameraTabProps {
 }
 
 type CameraError = "permission" | "device" | "unknown" | null;
+
+interface PhoneCameraInfo {
+  device_id: string;
+  device_name: string;
+}
 
 export function CameraTab({ onStage, onLive }: CameraTabProps) {
   const { 
@@ -19,10 +27,31 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     settings,
     setSettings,
   } = useAppStore();
-  
+  const phoneStreams = usePhoneCameraStreams();
+  const [phoneCameras, setPhoneCameras] = useState<PhoneCameraInfo[]>([]);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [cameraError, setCameraError] = useState<CameraError>(null);
+
+  const isPhoneSelected = selectedCameraId?.startsWith("phone-camera-") ?? false;
+
+  // Keep the phone-camera list in sync with the backend registry.
+  useEffect(() => {
+    invoke<PhoneCameraInfo[]>("list_phone_cameras").then(setPhoneCameras).catch(console.error);
+  }, []);
+
+  useTauriEvent("phone-cameras-changed", (e) => {
+    setPhoneCameras(e.cameras ?? []);
+  });
+
+  // If the selected phone camera goes away (phone disconnected / stopped),
+  // drop the selection so the preview doesn't linger on a dead feed.
+  useEffect(() => {
+    if (isPhoneSelected && !phoneCameras.some((c) => c.device_id === selectedCameraId)) {
+      setSelectedCameraId(null);
+    }
+  }, [phoneCameras, isPhoneSelected, selectedCameraId, setSelectedCameraId]);
 
   useEffect(() => {
     refreshCameras();
@@ -59,6 +88,22 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
       if (videoRef.current) {
         videoRef.current.srcObject = null;
       }
+      return;
+    }
+
+    // Phone cameras arrive over a WebRTC relay hosted by the main window
+    // (see PhoneCameraProvider); their ids are synthetic and can never be
+    // opened with getUserMedia. Bind the relayed feed once it arrives.
+    if (selectedCameraId.startsWith("phone-camera-")) {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
+      const stream = phoneStreams[selectedCameraId] ?? null;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+      setCameraError(null);
       return;
     }
 
@@ -100,7 +145,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
     };
-  }, [selectedCameraId]);
+  }, [selectedCameraId, phoneStreams]);
 
   const setAsGlobalBg = () => {
     const data = getCameraData();
@@ -133,8 +178,15 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                 <p>No camera selected</p>
               </div>
             )}
+            {isPhoneSelected && !phoneStreams[selectedCameraId!] && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <p className="px-2 py-1 bg-black/60 rounded text-[9px] font-bold uppercase tracking-widest text-slate-300">
+                  Connecting phone camera…
+                </p>
+              </div>
+            )}
             <div className="absolute bottom-4 left-4 px-3 py-1 bg-black/60 backdrop-blur-md rounded-full text-[10px] font-bold text-amber-500 border border-amber-500/30 opacity-0 group-hover:opacity-100 transition-opacity uppercase">
-              BROWSER PREVIEW
+              {isPhoneSelected ? "PHONE PREVIEW" : "BROWSER PREVIEW"}
             </div>
           </div>
 
@@ -235,6 +287,36 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                 ))
               )}
             </div>
+          </section>
+
+          <section>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-xs font-black text-slate-500 uppercase tracking-widest">Phone Cameras</h2>
+            </div>
+            {phoneCameras.length === 0 ? (
+              <p className="text-sm text-slate-600 italic px-2">No phones streaming yet</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {phoneCameras.map(cam => (
+                  <button
+                    key={cam.device_id}
+                    onClick={() => {
+                      setSelectedCameraId(cam.device_id);
+                    }}
+                    className={`w-full p-3 rounded-xl border text-left transition-all flex items-center gap-3 ${
+                      selectedCameraId === cam.device_id
+                        ? "bg-amber-500/10 border-amber-500/50 text-amber-400"
+                        : "bg-slate-900/50 border-slate-800 text-slate-400 hover:border-slate-700 hover:bg-slate-800"
+                    }`}
+                  >
+                    <Smartphone size={14} className={selectedCameraId === cam.device_id ? "text-amber-400" : "text-slate-600"} />
+                    <div className={`w-2 h-2 rounded-full ${selectedCameraId === cam.device_id ? "bg-amber-500 animate-pulse" : "bg-red-500 animate-pulse"}`} />
+                    <span className="text-sm font-medium truncate flex-1">{cam.device_name}</span>
+                    <span className="text-[8px] font-black uppercase tracking-widest text-red-500/80 shrink-0">LIVE</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </section>
 
           <section className="mt-auto p-4 bg-slate-900/50 border border-slate-800 rounded-xl text-slate-400">

@@ -223,6 +223,9 @@ export interface RemoteLowerThirdPayload {
   template?: unknown;
 }
 
+/** WebRTC peer target for a phone camera: which operator-side window answers. */
+export type RemoteCameraTarget = "operator" | "output";
+
 export interface RemoteCameraStartPayload {
   device_id: string;
   device_name: string;
@@ -232,11 +235,13 @@ export interface RemoteCameraStartPayload {
 export interface RemoteCameraOfferPayload {
   sdp: string;
   device_id: string;
+  target?: RemoteCameraTarget;
 }
 
 export interface RemoteCameraAnswerPayload {
   sdp: string;
   device_id: string;
+  target?: RemoteCameraTarget;
 }
 
 export interface RemoteCameraIcePayload {
@@ -244,6 +249,7 @@ export interface RemoteCameraIcePayload {
   sdp_mid: string;
   sdp_m_line_index: number;
   device_id: string;
+  target?: RemoteCameraTarget;
 }
 
 export function isRemoteCommand(value: unknown): value is RemoteCommand {

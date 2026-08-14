@@ -10,6 +10,7 @@ import {
   SongSlideRenderer,
 } from "./shared/Renderers";
 import { useAppStore } from "../store";
+import { usePhoneCameraStreams } from "../hooks/usePhoneCameraHost";
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { useReferenceHeight } from "../hooks/useReferenceHeight";
 import { useSlideFit } from "../hooks/useSlideFit";
@@ -42,6 +43,7 @@ export function PreviewCard({
   hideHeader?: boolean;
 }) {
   const { appDataDir, settings } = useAppStore();
+  const phoneStreams = usePhoneCameraStreams();
   const isVideo = item?.type === "Media" && (item.data as MediaItem).media_type === "Video";
   const isAudio = item?.type === "Media" && (item.data as MediaItem).media_type === "Audio";
   const isCamera = item?.type === "Camera";
@@ -129,8 +131,20 @@ export function PreviewCard({
       }
     };
 
-    if (isCamera && item?.data.deviceId && !item.data.deviceId.startsWith("native:") && !item.data.deviceId.startsWith("ndi:")) {
-      startBrowser(item.data.deviceId);
+    const deviceId = item?.type === "Camera" ? item.data.deviceId : null;
+    if (isCamera && deviceId) {
+      if (deviceId.startsWith("phone-camera-")) {
+        // Phone cameras stream over a WebRTC relay hosted by the main window
+        // (see PhoneCameraProvider); "phone-camera-*" ids are synthetic and
+        // can never be opened with getUserMedia. Bind the relayed feed once it
+        // arrives.
+        const stream = phoneStreams[deviceId];
+        if (cameraPreviewRef.current) {
+          cameraPreviewRef.current.srcObject = stream ?? null;
+        }
+      } else if (!deviceId.startsWith("native:") && !deviceId.startsWith("ndi:")) {
+        startBrowser(deviceId);
+      }
     }
 
     return () => {
@@ -138,7 +152,7 @@ export function PreviewCard({
         activeStream.getTracks().forEach(t => t.stop());
       }
     };
-  }, [isCamera, item?.type === "Camera" ? item.data.deviceId : null]);
+  }, [isCamera, item?.type === "Camera" ? item.data.deviceId : null, phoneStreams]);
 
   const setVideoRefCallback = useCallback(
     (el: HTMLVideoElement | null) => {
@@ -343,6 +357,13 @@ export function PreviewCard({
                   <div className="w-1.5 h-1.5 rounded-full bg-white" />
                   LIVE CAMERA
                 </div>
+                {item.data.deviceId.startsWith("phone-camera-") && !phoneStreams[item.data.deviceId] && (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <p className="px-2 py-1 bg-black/60 rounded text-[9px] font-bold uppercase tracking-widest text-slate-300">
+                      Connecting…
+                    </p>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="w-full h-full overflow-hidden relative">

@@ -238,12 +238,12 @@ const mediaKind: ItemKind<Extract<DisplayItem, { type: "Media" }>> = {
 
 const cameraKind: ItemKind<Extract<DisplayItem, { type: "Camera" }>> = {
   uid: (i) => `camera-${i.data.deviceId}`,
-  label: (i) => `Camera Feed: ${i.data.deviceId.slice(0, 8)}...`,
+  label: (i) => (i.data.deviceId.startsWith("phone-camera-") ? "Phone Camera" : `Camera Feed: ${i.data.deviceId.slice(0, 8)}...`),
   describe: () => "Live Camera",
   accent: "slate",
   stageDetail: () => "Live Camera Feed",
   ScheduleTile: ({ item }) => (
-    <p className="text-slate-400 text-[10px] font-bold uppercase truncate">CAMERA: {item.data.deviceId.slice(0, 12)}</p>
+    <p className="text-slate-400 text-[10px] font-bold uppercase truncate">CAMERA: {item.data.deviceId.startsWith("phone-camera-") ? "PHONE" : item.data.deviceId.slice(0, 12)}</p>
   ),
 };
 

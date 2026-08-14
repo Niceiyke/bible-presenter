@@ -12,17 +12,16 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const pcsRef = useRef<{ operator: RTCPeerConnection | null; output: RTCPeerConnection | null }>({ operator: null, output: null });
 
   const deviceId = client.selfId ?? `phone-${Date.now()}`;
   const deviceName = client.selfName || "Phone Camera";
   const canCamera = client.snapshot?.permissions?.camera ?? false;
 
   const cleanup = useCallback(() => {
-    if (pcRef.current) {
-      pcRef.current.close();
-      pcRef.current = null;
-    }
+    const pcs = [pcsRef.current.operator, pcsRef.current.output];
+    pcs.forEach((pc) => pc?.close());
+    pcsRef.current = { operator: null, output: null };
     if (stream) {
       stream.getTracks().forEach(track => track.stop());
       setStream(null);
@@ -56,59 +55,80 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
         videoRef.current.srcObject = mediaStream;
       }
 
-      // Create peer connection
-      const pc = new RTCPeerConnection({
+      // Create two peer connections: one for the operator main window
+      // (preview) and one for the output projection window. Both send the same
+      // local video; each window answers its own peer.
+      const operatorPc = new RTCPeerConnection({
         iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
       });
-      pcRef.current = pc;
+      const outputPc = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      });
+      pcsRef.current = { operator: operatorPc, output: outputPc };
 
-      // Add video track
+      // Add video track to both peers
       mediaStream.getVideoTracks().forEach(track => {
-        pc.addTrack(track, mediaStream);
+        operatorPc.addTrack(track, mediaStream);
+        outputPc.addTrack(track, mediaStream);
       });
 
-      // Handle ICE candidates
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          client.command("camera.ice", {
-            candidate: event.candidate.candidate,
-            sdp_mid: event.candidate.sdpMid,
-            sdp_m_line_index: event.candidate.sdpMLineIndex,
-            device_id: deviceId,
-          }).catch(console.error);
-        }
+      const setupPeer = (pc: RTCPeerConnection, target: "operator" | "output") => {
+        // Handle ICE candidates, tagged with the peer target so the backend
+        // relays them to the correct operator-side window.
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            client.command("camera.ice", {
+              candidate: event.candidate.candidate,
+              sdp_mid: event.candidate.sdpMid,
+              sdp_m_line_index: event.candidate.sdpMLineIndex,
+              device_id: deviceId,
+              target,
+            }).catch(console.error);
+          }
+        };
       };
 
-      // Handle connection state
-      pc.onconnectionstatechange = () => {
-        if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+      setupPeer(operatorPc, "operator");
+      setupPeer(outputPc, "output");
+
+      // Only the operator peer is authoritative: if it drops, the camera is
+      // dead and the operator can no longer see it. The output/projector peer
+      // is best-effort — the output window may be closed, so its failure must
+      // not tear down the whole camera.
+      operatorPc.onconnectionstatechange = () => {
+        if (operatorPc.connectionState === "failed" || operatorPc.connectionState === "disconnected") {
           pushToast("Camera connection lost", "error");
           cleanup();
-        } else if (pc.connectionState === "connected") {
+        } else if (operatorPc.connectionState === "connected") {
           pushToast("Camera streaming to operator", "info");
         }
       };
-
-      // Handle track events (for receiving answers)
-      pc.ontrack = (event) => {
-        // Not needed for sender, but keep for completeness
+      outputPc.onconnectionstatechange = () => {
+        if (outputPc.connectionState === "connected") {
+          pushToast("Camera ready on projector", "info");
+        }
       };
 
-      // Create offer
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
+      const makeOffer = async (pc: RTCPeerConnection, target: "operator" | "output") => {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await client.command("camera.offer", {
+          sdp: offer.sdp!,
+          device_id: deviceId,
+          target,
+        });
+      };
 
-      // Send start command and offer
+      // Send start command and offers (operator first so the preview connects
+      // even if the projection window never answers).
       await client.command("camera.start", {
         device_id: deviceId,
         device_name: deviceName,
         facing_mode: facingMode,
       });
 
-      await client.command("camera.offer", {
-        sdp: offer.sdp!,
-        device_id: deviceId,
-      });
+      await makeOffer(operatorPc, "operator");
+      await makeOffer(outputPc, "output");
 
       pushToast("Camera streaming started", "info");
     } catch (err) {
@@ -141,21 +161,24 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
     }
   }, [facingMode, isStreaming, cleanup, startStreaming]);
 
-  // Handle incoming answer and ICE from main app
+  // Handle incoming answer and ICE from the main app, routing each to the
+  // matching peer connection by its `target`.
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       try {
         const msg = JSON.parse(event.data);
         if (msg.kind === "camera.answer" && msg.payload?.device_id === deviceId) {
-          if (pcRef.current) {
-            pcRef.current.setRemoteDescription({
+          const pc = pcsRef.current[msg.payload.target === "output" ? "output" : "operator"];
+          if (pc) {
+            pc.setRemoteDescription({
               type: "answer",
               sdp: msg.payload.sdp,
             }).catch(console.error);
           }
         } else if (msg.kind === "camera.ice" && msg.payload?.device_id === deviceId) {
-          if (pcRef.current) {
-            pcRef.current.addIceCandidate({
+          const pc = pcsRef.current[msg.payload.target === "output" ? "output" : "operator"];
+          if (pc) {
+            pc.addIceCandidate({
               candidate: msg.payload.candidate,
               sdpMid: msg.payload.sdp_mid,
               sdpMLineIndex: msg.payload.sdp_m_line_index,

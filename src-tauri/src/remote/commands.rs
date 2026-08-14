@@ -18,6 +18,13 @@ fn err_result(command_id: &str, revision: u64, code: &str, message: &str) -> Rem
     RemoteCommandResult::err(command_id, revision, code, message)
 }
 
+/// Broadcast the current phone-camera list so every window's Camera tab stays
+/// in sync when a phone starts/stops a camera or disconnects.
+async fn emit_phone_cameras(app: &AppHandle, control: &RemoteControl) {
+    let cameras = control.list_phone_cameras().await;
+    emit_checked(app, "phone-cameras-changed", &json!({ "cameras": cameras }));
+}
+
 // ---------------------------------------------------------------------------
 // Shared display operations (used by both Tauri commands and remote dispatch)
 // ---------------------------------------------------------------------------
@@ -688,18 +695,12 @@ pub async fn dispatch(
             match req {
                 Some(req) => {
                     let device_id = format!("phone-camera-{}", req.device_id);
-                    *state.presentation.staged_item.lock() = Some(DisplayItem::Camera(crate::store::CameraBackground {
-                        device_id: device_id.clone(),
-                        opacity: 1.0,
-                        object_fit: "cover".into(),
-                        mirrored: false,
-                    }));
-                    emit_checked(app, "item-staged", state.presentation.staged_item.lock().as_ref().unwrap());
-                    state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": *state.presentation.staged_item.lock() }), source);
-                    // Register the phone camera and remember the phone (remote
-                    // session id) that owns it so operator signaling can be
-                    // routed back to exactly this phone.
+                    // Register-only: the operator picks which feed to stage in
+                    // the Camera tab, so a phone starting a camera must not
+                    // steal the staged slot from another phone or from the
+                    // operator's staged content.
                     control.register_phone_camera(&device_id, &req.device_id, &req.device_name, &device.id).await;
+                    emit_phone_cameras(app, control).await;
                     RemoteCommandResult::ok_with(&command.command_id, control.hub.current_revision(), json!({ "device_id": device_id }))
                 }
                 None => err_result(&command.command_id, control.hub.current_revision(), "missing_payload", "Missing camera start payload"),
@@ -713,7 +714,8 @@ pub async fn dispatch(
             if !device_id.is_empty() {
                 let prefixed = format!("phone-camera-{}", device_id);
                 control.unregister_phone_camera(&prefixed).await;
-                // Tell the operator window to tear down the answering peer.
+                emit_phone_cameras(app, control).await;
+                // Tell the operator windows to tear down the answering peers.
                 emit_checked(app, "phone-camera-stop", &json!({ "device_id": prefixed }));
             }
             RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
@@ -722,10 +724,11 @@ pub async fn dispatch(
             let req = command_payload::<RemoteCameraOfferPayload>(command).ok();
             match req {
                 Some(req) => {
-                    // Phone (offerer) -> relay its SDP offer to the operator
-                    // window, which hosts the answering peer connection.
+                    // Phone (offerer) -> relay its SDP offer to the matching
+                    // operator-side window ("operator" main window or "output"
+                    // projection window), which hosts the answering peer.
                     let prefixed = format!("phone-camera-{}", req.device_id);
-                    emit_checked(app, "phone-camera-offer", &json!({ "device_id": prefixed, "device_name": req.device_id, "sdp": req.sdp }));
+                    emit_checked(app, "phone-camera-offer", &json!({ "device_id": prefixed, "device_name": req.device_id, "sdp": req.sdp, "target": req.target }));
                     RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
                 }
                 None => err_result(&command.command_id, control.hub.current_revision(), "missing_payload", "Missing camera offer payload"),
@@ -740,13 +743,15 @@ pub async fn dispatch(
             let req = command_payload::<RemoteCameraIcePayload>(command).ok();
             match req {
                 Some(req) => {
-                    // Phone's local ICE candidate -> relay to the operator window's peer.
+                    // Phone's local ICE candidate -> relay to the matching
+                    // operator-side window's peer.
                     let prefixed = format!("phone-camera-{}", req.device_id);
                     emit_checked(app, "phone-camera-ice", &json!({
                         "device_id": prefixed,
                         "candidate": req.candidate,
                         "sdp_mid": req.sdp_mid,
                         "sdp_m_line_index": req.sdp_m_line_index,
+                        "target": req.target,
                     }));
                     RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
                 }

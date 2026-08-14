@@ -11,6 +11,7 @@ import { useBibleCascade } from "./hooks/useBibleCascade";
 import { useItemActions } from "./hooks/useItemActions";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useLtFlatLines } from "./hooks/useLtFlatLines";
+import { PhoneCameraProvider } from "./hooks/usePhoneCameraHost";
 
 import { AppHeader } from "./components/layout/AppHeader";
 import { LeftNav } from "./components/layout/LeftNav";
@@ -196,7 +197,8 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden select-none">
+    <PhoneCameraProvider>
+      <div className="h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden select-none">
 
       <AppHeader />
 
@@ -326,6 +328,7 @@ export default function App() {
           setPendingScheduleItem(null);
         }}
       />
-    </div>
+      </div>
+    </PhoneCameraProvider>
   );
 }

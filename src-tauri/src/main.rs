@@ -278,6 +278,7 @@ fn main() {
             wordlyte_lib::commands::remote::remote_set_permissions,
             wordlyte_lib::commands::remote::phone_camera_answer,
             wordlyte_lib::commands::remote::phone_camera_ice,
+            wordlyte_lib::commands::remote::list_phone_cameras,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,3 +1,4 @@
+use crate::events::emit_checked;
 use crate::remote::auth::{now_unix, AuthError, StoredDevice};
 use crate::remote::commands;
 use crate::remote::protocol::{
@@ -352,6 +353,17 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
             json!({ "controller_state": ctx.control.lease.state() }),
             None,
         );
+    }
+
+    // A disconnected phone can no longer stream: drop its cameras from the
+    // Camera tab and tell every window to tear down the answering peers.
+    let removed = ctx.control.unregister_phone_cameras_for_owner(&device_id).await;
+    if !removed.is_empty() {
+        let cameras = ctx.control.list_phone_cameras().await;
+        emit_checked(&ctx.app, "phone-cameras-changed", &json!({ "cameras": cameras }));
+        for id in &removed {
+            emit_checked(&ctx.app, "phone-camera-stop", &json!({ "device_id": id }));
+        }
     }
 }
 
