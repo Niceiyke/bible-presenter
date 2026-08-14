@@ -6,19 +6,42 @@ export interface CameraDeviceInfo {
   label: string;
 }
 
+export interface PhoneCameraInfo {
+  deviceId: string;
+  label: string;
+  peerConnection?: RTCPeerConnection;
+  stream?: MediaStream;
+}
+
 export interface CameraSlice {
   availableCameras: CameraDeviceInfo[];
   selectedCameraId: string | null;
+  phoneCameras: PhoneCameraInfo[];
   setAvailableCameras: (cameras: CameraDeviceInfo[]) => void;
   setSelectedCameraId: (id: string | null) => void;
+  addPhoneCamera: (camera: PhoneCameraInfo) => void;
+  removePhoneCamera: (deviceId: string) => void;
+  updatePhoneCameraStream: (deviceId: string, stream: MediaStream) => void;
   refreshCameras: () => Promise<void>;
 }
 
-export const createCameraSlice: StateCreator<AppStore, [], [], CameraSlice> = (set) => ({
+export const createCameraSlice: StateCreator<AppStore, [], [], CameraSlice> = (set, get) => ({
   availableCameras: [],
   selectedCameraId: null,
+  phoneCameras: [],
   setAvailableCameras: (cameras) => set({ availableCameras: cameras }),
   setSelectedCameraId: (id) => set({ selectedCameraId: id }),
+  addPhoneCamera: (camera) => set((state) => ({
+    phoneCameras: [...state.phoneCameras.filter(c => c.deviceId !== camera.deviceId), camera]
+  })),
+  removePhoneCamera: (deviceId) => set((state) => ({
+    phoneCameras: state.phoneCameras.filter(c => c.deviceId !== deviceId)
+  })),
+  updatePhoneCameraStream: (deviceId, stream) => set((state) => ({
+    phoneCameras: state.phoneCameras.map(c => 
+      c.deviceId === deviceId ? { ...c, stream } : c
+    )
+  })),
   refreshCameras: async () => {
     try {
       // First request permission to get labels

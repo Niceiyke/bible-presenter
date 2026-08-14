@@ -9,6 +9,8 @@ pub const PAIRING_TTL_SECS: u64 = 5 * 60;
 pub const PAIRING_RATE_LIMIT: usize = 6;
 pub const PAIRING_RATE_WINDOW_SECS: u64 = 60;
 pub const DEFAULT_LEASE_TTL_SECS: u64 = 10 * 60;
+pub const COMMAND_RATE_LIMIT: usize = 30;
+pub const COMMAND_RATE_WINDOW_SECS: u64 = 60;
 
 pub fn now_unix() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
@@ -247,6 +249,20 @@ impl TokenStore {
         self.devices.lock().get(device_id).cloned()
     }
 
+    /// Changes the role of a paired device. Returns false if the device is
+    /// unknown. The new role is enforced immediately for the current socket by
+    /// checking the token store (not a cached role) on every dispatch.
+    pub fn set_role(&self, device_id: &str, role: RemoteRole) -> bool {
+        let mut devices = self.devices.lock();
+        match devices.get_mut(device_id) {
+            Some(d) => {
+                d.role = role;
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn persist(&self, path: &Path) -> std::io::Result<()> {
         let devices: Vec<StoredDevice> = self.list_devices();
         if let Some(dir) = path.parent() {
@@ -311,8 +327,7 @@ mod tests {
     #[test]
     fn pairing_is_rate_limited_per_ip() {
         let store = TokenStore::new();
-        let (token, _) = store.generate_pairing_code();
-        store.regenerate_pairing_code(); // drop old code? no — regenerate clears.
+        store.regenerate_pairing_code();
         let (token, _) = store.generate_pairing_code();
 
         // Force expiry checks out of the picture by consuming rate limit first.

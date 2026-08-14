@@ -1,6 +1,22 @@
 use crate::state::AppState;
 use crate::events::{emit_checked, MonitorInfo, LiveItemUpdate};
+use crate::remote::protocol::RemoteEventKind;
+use serde_json::json;
 use tauri::{AppHandle, Manager, State};
+
+/// Broadcasts the current output-window visibility state to every connected
+/// remote so `output.changed` mirrors the actual window state.
+fn publish_output_visible(app: &AppHandle, state: &State<'_, AppState>) {
+    let visible = app
+        .get_webview_window("output")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false);
+    state.remote.hub.publish(
+        RemoteEventKind::OutputChanged,
+        json!({ "output_visible": visible }),
+        None,
+    );
+}
 
 #[tauri::command]
 pub async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
@@ -30,6 +46,7 @@ pub async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) ->
             let staged = state.presentation.staged_item.lock().clone();
             emit_checked(&app, "item-staged", &staged);
         }
+        publish_output_visible(&app, &state);
     }
     Ok(())
 }
@@ -66,15 +83,17 @@ pub async fn show_output_test_pattern(app: AppHandle, state: State<'_, AppState>
         window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
         emit_checked(&app, "monitor-test", &serde_json::json!({ "active": true }));
     }
+    publish_output_visible(&app, &state);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn hide_output_test_pattern(app: AppHandle) -> Result<(), String> {
+pub async fn hide_output_test_pattern(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     emit_checked(&app, "monitor-test", &serde_json::json!({ "active": false }));
     if let Some(window) = app.get_webview_window("output") {
         window.hide().map_err(|e: tauri::Error| e.to_string())?;
     }
+    publish_output_visible(&app, &state);
     Ok(())
 }
 

@@ -13,8 +13,11 @@ use parking_lot::Mutex;
 use protocol::RemoteEventKind;
 use serde_json::json;
 use sessions::{ConnectedDevices, ControllerLease};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Runtime state for the Remote Control server. Lives inside `AppState`
 /// (behind an `Arc` so Tauri state, the axum task, and display commands all
@@ -23,6 +26,8 @@ use std::sync::atomic::AtomicBool;
 pub struct RemoteControl {
     /// Remote Control enablement (default off).
     pub enabled: AtomicBool,
+    /// Serializes `remote_enable` so two rapid toggles can't double-bind.
+    pub start_lock: tokio::sync::Mutex<()>,
     /// Bound address after a successful `start` (port 0 = random).
     pub bound_addr: Mutex<Option<std::net::SocketAddr>>,
     /// Directory that contains the compiled remote web bundle (and dist).
@@ -35,6 +40,8 @@ pub struct RemoteControl {
     pub lease: ControllerLease,
     /// Devices connected right now (for the "connected devices" UI).
     pub sessions: ConnectedDevices,
+    /// Sliding-window mutating-command history per device (rate limiting).
+    pub mutation_history: Mutex<HashMap<String, Vec<u64>>>,
     /// Device-token persistence file.
     pub devices_file: PathBuf,
     /// Server task handle (kept to abort on disable).
@@ -42,6 +49,28 @@ pub struct RemoteControl {
     /// Plaintext pairing code kept in memory so the operator can display/scan
     /// it. Only its SHA-256 hash is ever persisted/validated.
     pub pairing_code_plain: Mutex<Option<(String, String, u64)>>,
+    /// Active phone cameras with their WebRTC peer connections.
+    pub phone_cameras: Arc<RwLock<HashMap<String, PhoneCamera>>>,
+}
+
+/// Represents a phone camera connected via WebRTC. The backend does not
+/// terminate the peer connection — it only acts as a signaling relay: the
+/// *operator window* hosts the answering `RTCPeerConnection` (WebView2 speaks
+/// WebRTC natively) while the phone is the offerer, and media flows directly
+/// phone <-> operator window over the LAN. The backend tracks ownership so
+/// operator answers/ICE can be routed back to the correct phone.
+#[derive(Clone)]
+pub struct PhoneCamera {
+    /// Prefixed id, e.g. "phone-camera-<raw>", also used as the DisplayItem
+    /// device id so the operator window can correlate a stream with an item.
+    pub device_id: String,
+    /// The id the phone itself used, e.g. "<raw>". Events relayed back to the
+    /// phone carry this so the phone can match its own device.
+    pub raw_device_id: String,
+    pub device_name: String,
+    /// The remote Control device.id that owns this camera (used to target
+    /// operator->phone signaling back to the right phone).
+    pub owner_device_id: String,
 }
 
 impl RemoteControl {
@@ -52,15 +81,18 @@ impl RemoteControl {
         }
         let control = Self {
             enabled: AtomicBool::new(false),
+            start_lock: tokio::sync::Mutex::new(()),
             bound_addr: Mutex::new(None),
             files_dir,
             tokens: TokenStore::new(),
             hub: RemoteHub::new(),
             lease: ControllerLease::new(),
             sessions: ConnectedDevices::new(),
+            mutation_history: Mutex::new(HashMap::new()),
             devices_file: devices_file.clone(),
             task: Mutex::new(None),
             pairing_code_plain: Mutex::new(None),
+            phone_cameras: Arc::new(RwLock::new(HashMap::new())),
         };
         control.tokens.load(&devices_file);
         control
@@ -110,6 +142,59 @@ impl RemoteControl {
     pub fn hub_publish_controller_changed(&self) {
         self.hub
             .publish(RemoteEventKind::ControllerChanged, json!({ "controller_state": self.lease.state() }), None);
+    }
+
+    /// Sliding-window budget for mutating commands per connected device. A
+    /// device cannot exceed `COMMAND_RATE_LIMIT` mutations within
+    /// `COMMAND_RATE_WINDOW_SECS`; extra attempts are rejected (not queued).
+    /// Read-only commands are unaffected.
+    pub fn allow_mutating(&self, device_id: &str) -> bool {
+        use crate::remote::auth::{now_unix, COMMAND_RATE_LIMIT, COMMAND_RATE_WINDOW_SECS};
+        let now = now_unix();
+        let mut map = self.mutation_history.lock();
+        let list = map.entry(device_id.to_string()).or_default();
+        list.retain(|t| *t >= now.saturating_sub(COMMAND_RATE_WINDOW_SECS));
+        if list.len() >= COMMAND_RATE_LIMIT {
+            return false;
+        }
+        list.push(now);
+        true
+    }
+
+    /// Register a phone camera device. Called when a remote client sends
+    /// `camera.start` command. `owner_device_id` is the remote Control
+    /// session id of the phone so operator->phone signaling can be targeted.
+    pub async fn register_phone_camera(&self, device_id: &str, raw_device_id: &str, device_name: &str, owner_device_id: &str) {
+        let camera = PhoneCamera {
+            device_id: device_id.to_string(),
+            raw_device_id: raw_device_id.to_string(),
+            device_name: device_name.to_string(),
+            owner_device_id: owner_device_id.to_string(),
+        };
+        self.phone_cameras.write().await.insert(device_id.to_string(), camera);
+    }
+
+    /// Unregister a phone camera device. Called when a remote client sends
+    /// `camera.stop` command or disconnects.
+    pub async fn unregister_phone_camera(&self, device_id: &str) {
+        self.phone_cameras.write().await.remove(device_id);
+    }
+
+    /// Looks up the owner (remote Control session id) for a registered phone
+    /// camera, if any. Used to route operator answers/ICE to the right phone.
+    pub async fn phone_camera_owner(&self, device_id: &str) -> Option<String> {
+        self.phone_cameras.read().await.get(device_id).map(|c| c.owner_device_id.clone())
+    }
+
+    /// Returns both the raw id the phone itself uses (for matching events on
+    /// the phone) and the owner session id (for routing), given the prefixed
+    /// DisplayItem device id.
+    pub async fn phone_camera_route(&self, device_id: &str) -> Option<(String, String)> {
+        self.phone_cameras
+            .read()
+            .await
+            .get(device_id)
+            .map(|c| (c.raw_device_id.clone(), c.owner_device_id.clone()))
     }
 }
 

@@ -1,6 +1,7 @@
 use crate::events::{emit_checked, LiveItemUpdate};
 use crate::remote::auth::StoredDevice;
 use crate::remote::protocol::{
+    RemoteCameraIcePayload, RemoteCameraOfferPayload, RemoteCameraStartPayload,
     RemoteCommand, RemoteCommandResult, RemoteCommandType, RemoteEventKind,
     RemoteLowerThirdPayload, RemoteSongControl, RemoteSongSearch, RemoteSongSummary,
     RemoteVerseRef, RemoteRole,
@@ -313,8 +314,15 @@ pub fn op_hide_lower_third(app: &AppHandle, state: &AppState, source: Option<Str
 // Authorization helpers
 // ---------------------------------------------------------------------------
 
-fn require_operator(device: &StoredDevice) -> Result<(), String> {
-    if device.role == RemoteRole::Viewer {
+fn require_operator(control: &RemoteControl, device: &StoredDevice) -> Result<(), String> {
+    // Read the *live* role from the token store rather than the cached socket
+    // copy so an operator-demoted device is restricted immediately.
+    let role = control
+        .tokens
+        .device(&device.id)
+        .map(|d| d.role)
+        .unwrap_or_else(|| device.role.clone());
+    if role == RemoteRole::Viewer {
         Err("Viewer role cannot mutate state".into())
     } else {
         Ok(())
@@ -361,12 +369,11 @@ pub async fn dispatch(
 ) -> RemoteCommandResult {
     // Mutating commands must pass the lease + revision gates before touching
     // authoritative state. Read-only commands skip the lease check.
-    let mutating = is_mutating(command.r#type.clone());
-    if mutating {
+    if is_mutating(command.r#type.clone()) {
         if let Err(e) = check_revision(control, command.expected_revision) {
             return err_result(&command.command_id, control.hub.current_revision(), "stale_revision", &e);
         }
-        if let Err(e) = require_operator(device) {
+        if let Err(e) = require_operator(control, device) {
             return err_result(&command.command_id, control.hub.current_revision(), "forbidden", &e);
         }
         // `RemoteRequestControl` is what *acquires* the lease, so it must
@@ -379,40 +386,6 @@ pub async fn dispatch(
     }
 
     let source = Some(device.id.clone());
-    let mutating_ops = match command.r#type {
-        RemoteCommandType::RemotePair
-        | RemoteCommandType::RemoteAuthenticate
-        | RemoteCommandType::RemoteRequestControl
-        | RemoteCommandType::RemoteReleaseControl
-        | RemoteCommandType::RemoteRenewLease
-        | RemoteCommandType::SnapshotGet
-        | RemoteCommandType::BibleVersions
-        | RemoteCommandType::BibleBooks
-        | RemoteCommandType::BibleChapters
-        | RemoteCommandType::BibleVerseNumbers
-        | RemoteCommandType::BibleChapter
-        | RemoteCommandType::BibleSearch
-        | RemoteCommandType::ServiceList
-        | RemoteCommandType::SongsSearch
-        | RemoteCommandType::BibleStage
-        | RemoteCommandType::BibleGoLive
-        | RemoteCommandType::BibleStageNext
-        | RemoteCommandType::BibleGoLiveNext
-        | RemoteCommandType::BibleStagePrevious
-        | RemoteCommandType::BibleGoLivePrevious
-        | RemoteCommandType::BibleAddToService
-        | RemoteCommandType::DisplayGoLive
-        | RemoteCommandType::DisplayStageNext
-        | RemoteCommandType::DisplayStagePrevious
-        | RemoteCommandType::DisplayClearLive
-        | RemoteCommandType::DisplayClearAll
-        | RemoteCommandType::DisplayBlackout
-        | RemoteCommandType::SongStage
-        | RemoteCommandType::SongGoLive
-        | RemoteCommandType::LowerThirdShow
-        | RemoteCommandType::LowerThirdHide => true,
-    };
-    let _ = mutating_ops;
 
     match command.r#type {
         RemoteCommandType::SnapshotGet => {
@@ -539,6 +512,13 @@ pub async fn dispatch(
             let name = device.name.clone();
             let acquired = control.lease.request(&device.id, &name);
             control.hub.publish(RemoteEventKind::ControllerChanged, json!({ "controller_state": control.lease.state() }), None);
+            if acquired {
+                control.hub.publish(
+                    RemoteEventKind::OperatorNotice,
+                    json!({ "message": format!("{} is now controlling the presentation", name) }),
+                    None,
+                );
+            }
             let rev = control.hub.current_revision();
             if acquired {
                 RemoteCommandResult::ok_with(&command.command_id, rev, json!({ "controller_state": control.lease.state() }))
@@ -652,11 +632,81 @@ pub async fn dispatch(
                 Err(e) => err_result(&command.command_id, control.hub.current_revision(), "queue_stage_failed", &e),
             }
         }
+        RemoteCommandType::CameraStart => {
+            let req = command_payload::<RemoteCameraStartPayload>(command).ok();
+            match req {
+                Some(req) => {
+                    let device_id = format!("phone-camera-{}", req.device_id);
+                    *state.presentation.staged_item.lock() = Some(DisplayItem::Camera(crate::store::CameraBackground {
+                        device_id: device_id.clone(),
+                        opacity: 1.0,
+                        object_fit: "cover".into(),
+                        mirrored: false,
+                    }));
+                    emit_checked(app, "item-staged", state.presentation.staged_item.lock().as_ref().unwrap());
+                    state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": *state.presentation.staged_item.lock() }), source);
+                    // Register the phone camera and remember the phone (remote
+                    // session id) that owns it so operator signaling can be
+                    // routed back to exactly this phone.
+                    control.register_phone_camera(&device_id, &req.device_id, &req.device_name, &device.id).await;
+                    RemoteCommandResult::ok_with(&command.command_id, control.hub.current_revision(), json!({ "device_id": device_id }))
+                }
+                None => err_result(&command.command_id, control.hub.current_revision(), "missing_payload", "Missing camera start payload"),
+            }
+        }
+        RemoteCommandType::CameraStop => {
+            let device_id = command_payload::<serde_json::Value>(command)
+                .ok()
+                .and_then(|v| v.get("device_id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                .unwrap_or_default();
+            if !device_id.is_empty() {
+                let prefixed = format!("phone-camera-{}", device_id);
+                control.unregister_phone_camera(&prefixed).await;
+                // Tell the operator window to tear down the answering peer.
+                emit_checked(app, "phone-camera-stop", &json!({ "device_id": prefixed }));
+            }
+            RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
+        }
+        RemoteCommandType::CameraOffer => {
+            let req = command_payload::<RemoteCameraOfferPayload>(command).ok();
+            match req {
+                Some(req) => {
+                    // Phone (offerer) -> relay its SDP offer to the operator
+                    // window, which hosts the answering peer connection.
+                    let prefixed = format!("phone-camera-{}", req.device_id);
+                    emit_checked(app, "phone-camera-offer", &json!({ "device_id": prefixed, "device_name": req.device_id, "sdp": req.sdp }));
+                    RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
+                }
+                None => err_result(&command.command_id, control.hub.current_revision(), "missing_payload", "Missing camera offer payload"),
+            }
+        }
+        RemoteCommandType::CameraAnswer => {
+            // Reserved: the operator is the answerer in this design, so a
+            // phone-originated answer is unexpected. No-op for safety.
+            RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
+        }
+        RemoteCommandType::CameraIce => {
+            let req = command_payload::<RemoteCameraIcePayload>(command).ok();
+            match req {
+                Some(req) => {
+                    // Phone's local ICE candidate -> relay to the operator window's peer.
+                    let prefixed = format!("phone-camera-{}", req.device_id);
+                    emit_checked(app, "phone-camera-ice", &json!({
+                        "device_id": prefixed,
+                        "candidate": req.candidate,
+                        "sdp_mid": req.sdp_mid,
+                        "sdp_m_line_index": req.sdp_m_line_index,
+                    }));
+                    RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
+                }
+                None => err_result(&command.command_id, control.hub.current_revision(), "missing_payload", "Missing camera ICE payload"),
+            }
+        }
         _ => err_result(&command.command_id, control.hub.current_revision(), NOT_IMPLEMENTED, "Command not implemented in this build"),
     }
 }
 
-fn is_mutating(t: RemoteCommandType) -> bool {
+pub(crate)     fn is_mutating(t: RemoteCommandType) -> bool {
     matches!(
         t,
         RemoteCommandType::RemoteRequestControl
@@ -679,6 +729,11 @@ fn is_mutating(t: RemoteCommandType) -> bool {
             | RemoteCommandType::SongGoLive
             | RemoteCommandType::LowerThirdShow
             | RemoteCommandType::LowerThirdHide
+            | RemoteCommandType::CameraStart
+            | RemoteCommandType::CameraStop
+            | RemoteCommandType::CameraOffer
+            | RemoteCommandType::CameraAnswer
+            | RemoteCommandType::CameraIce
     )
 }
 

@@ -66,6 +66,13 @@ export function OutputWindow() {
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [mainCameraStream, setMainCameraStream] = useState<MediaStream | null>(null);
 
+  // Phone WebRTC relay. The operator window hosts the *answering* peer for each
+  // phone camera; the backend relays offer/ICE from the phone here and carries
+  // our answer/ICE back to the phone over the remote hub. Media flows directly
+  // phone <-> this window over the LAN, so no frames pass through Rust.
+  const phonePCsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const [phoneStreams, setPhoneStreams] = useState<Record<string, MediaStream>>({});
+
   const [windowScale, setWindowScale] = useState(1);
   const isMounted = useRef(true);
 
@@ -365,6 +372,10 @@ export function OutputWindow() {
       }
     };
 
+    // Phone cameras are handled by the WebRTC relay effect; skip them here so
+    // this effect never opens a bogus getUserMedia or clears the relayed stream.
+    const isPhoneCamera = liveItem?.type === "Camera" && liveItem?.data?.deviceId?.startsWith("phone-camera-");
+    if (isPhoneCamera) return () => {};
     if (liveItem?.type === "Camera" && liveItem.data.deviceId && !liveItem.data.deviceId.startsWith("native:") && !liveItem.data.deviceId.startsWith("ndi:")) {
       startBrowserCamera(liveItem.data.deviceId);
     } else {
@@ -380,6 +391,106 @@ export function OutputWindow() {
       }
     };
   }, [liveItem?.type === "Camera" ? liveItem.data.deviceId : null]);
+
+  // Phone camera WebRTC relay: host the answering peer for each phone.
+  useEffect(() => {
+    let unlistenOffer: (() => void) | null = null;
+    let unlistenIce: (() => void) | null = null;
+    let unlistenStop: (() => void) | null = null;
+
+    const teardown = (deviceId: string) => {
+      const pc = phonePCsRef.current.get(deviceId);
+      if (pc) {
+        pc.close();
+        phonePCsRef.current.delete(deviceId);
+      }
+      setPhoneStreams((prev) => {
+        if (!(deviceId in prev)) return prev;
+        const next = { ...prev };
+        const stream = next[deviceId];
+        delete next[deviceId];
+        stream?.getTracks().forEach((t) => t.stop());
+        return next;
+      });
+    };
+
+    const handleOffer = async (deviceId: string, sdp: string, pcKey: string) => {
+      // Tear down any previous attempt for this camera before answering anew.
+      teardown(deviceId);
+      try {
+        const pc = new RTCPeerConnection({
+          iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+        });
+        phonePCsRef.current.set(deviceId, pc);
+
+        pc.onicecandidate = (ev) => {
+          if (ev.candidate) {
+            invoke("phone_camera_ice", {
+              device_id: pcKey,
+              candidate: ev.candidate.candidate,
+              sdp_mid: ev.candidate.sdpMid ?? "",
+              sdp_m_line_index: ev.candidate.sdpMLineIndex ?? 0,
+            }).catch((e) => console.error("phone_camera_ice failed:", e));
+          }
+        };
+
+        pc.ontrack = (ev) => {
+          const stream = new MediaStream();
+          ev.streams[0]?.getTracks().forEach((t) => stream.addTrack(t));
+          ev.track && stream.addTrack(ev.track);
+          setPhoneStreams((prev) => ({ ...prev, [deviceId]: stream }));
+        };
+
+        await pc.setRemoteDescription({ type: "offer", sdp });
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        await invoke("phone_camera_answer", { device_id: pcKey, sdp: answer.sdp ?? "" });
+      } catch (err) {
+        console.error("Phone camera answer setup failed:", err);
+        teardown(deviceId);
+      }
+    };
+
+    (async () => {
+      unlistenOffer = await listen("phone-camera-offer", (e) => {
+        const p = e.payload as { device_id: string; device_name: string; sdp: string };
+        handleOffer(p.device_id, p.sdp, p.device_id);
+      });
+      unlistenIce = await listen("phone-camera-ice", (e) => {
+        const p = e.payload as { device_id: string; candidate: string; sdp_mid: string; sdp_m_line_index: number };
+        const pc = phonePCsRef.current.get(p.device_id);
+        if (pc && p.candidate) {
+          pc.addIceCandidate({ candidate: p.candidate, sdpMid: p.sdp_mid, sdpMLineIndex: p.sdp_m_line_index }).catch(
+            (err) => console.error("phone ICE failed:", err)
+          );
+        }
+      });
+      unlistenStop = await listen("phone-camera-stop", (e) => {
+        const deviceId = (e.payload as { device_id: string }).device_id;
+        teardown(deviceId);
+      });
+    })();
+
+    return () => {
+      unlistenOffer?.();
+      unlistenIce?.();
+      unlistenStop?.();
+      phonePCsRef.current.forEach((pc) => pc.close());
+      phonePCsRef.current.clear();
+    };
+  }, []);
+
+  // When the live item is a phone camera, present the relayed stream instead of
+  // a local getUserMedia feed (which cannot open a "phone-camera-*" device id).
+  useEffect(() => {
+    const deviceId = liveItem?.type === "Camera" ? liveItem.data.deviceId : null;
+    const phoneStream = deviceId && deviceId.startsWith("phone-camera-") ? phoneStreams[deviceId] : undefined;
+    if (phoneStream) {
+      setMainCameraStream(phoneStream);
+    } else {
+      setMainCameraStream(null);
+    }
+  }, [liveItem?.type === "Camera" ? liveItem.data.deviceId : null, phoneStreams]);
 
   useEffect(() => {
     if (bgVideoRef.current && videoBg) {

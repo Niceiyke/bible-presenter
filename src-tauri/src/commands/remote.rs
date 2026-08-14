@@ -72,6 +72,11 @@ fn status_info(control: &RemoteControl, pairing_code: Option<String>) -> RemoteS
 #[tauri::command]
 pub async fn remote_enable(app: AppHandle, state: State<'_, AppState>) -> Result<RemoteStatusInfo, String> {
     let control = state.remote.clone();
+
+    // Serialize the whole enable path so two rapid clicks can't double-bind
+    // the listener. A second caller sees `enabled == true` and short-circuits.
+    let _guard = control.start_lock.lock().await;
+
     if control.is_enabled() {
         control.ensure_pairing();
         control.persist_devices();
@@ -90,13 +95,22 @@ pub async fn remote_enable(app: AppHandle, state: State<'_, AppState>) -> Result
     let ctx = crate::remote::server::RemoteCtx {
         app: app.clone(),
         state: state.inner().clone(),
-        control,
+        control: control.clone(),
     };
-    let addr = crate::remote::server::start(ctx).await?;
-    state.remote.persist_devices();
-    crate::store::log_msg(&app, &format!("Remote Control enabled on {}", addr));
-
-    Ok(status_info(&state.remote, Some(pairing)))
+    match crate::remote::server::start(ctx).await {
+        Ok(addr) => {
+            state.remote.persist_devices();
+            crate::store::log_msg(&app, &format!("Remote Control enabled on {}", addr));
+            Ok(status_info(&state.remote, Some(pairing)))
+        }
+        Err(e) => {
+            // `start` only flips `enabled` on success, but make sure the
+            // stale bound address (if any) is cleared and the lease released.
+            *state.remote.bound_addr.lock() = None;
+            crate::store::log_msg(&app, &format!("Remote Control failed to start: {}", e));
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -170,7 +184,84 @@ pub async fn remote_claim_control(app: AppHandle, state: State<'_, AppState>) ->
         let holder = control.lease.holder_id().unwrap_or_default();
         control.lease.release(&holder);
         control.hub_publish_controller_changed();
+        control.hub.publish(
+            crate::remote::protocol::RemoteEventKind::OperatorNotice,
+            serde_json::json!({ "message": "The desktop operator took back control" }),
+            None,
+        );
         crate::store::log_msg(&app, "Desktop reclaims remote controller lease");
     }
     Ok(status_info(&control, control.is_enabled().then(|| control.token_for_display())))
+}
+
+/// Changes the role of a paired device (e.g. demote a volunteer to Viewer).
+/// Takes effect immediately for the connected device: the dispatch gate reads
+/// the live role from the token store on every command.
+#[tauri::command]
+pub async fn remote_set_role(app: AppHandle, state: State<'_, AppState>, device_id: String, role: RemoteRole) -> Result<RemoteStatusInfo, String> {
+    let control = state.remote.clone();
+    if !control.tokens.set_role(&device_id, role.clone()) {
+        return Err(format!("No paired device with id {}", device_id));
+    }
+    control.persist_devices();
+
+    // If the device was demoted to Viewer while holding control, revoke the
+    // lease immediately so it cannot keep mutating until it expires.
+    if role == RemoteRole::Viewer && control.lease.holder_id().as_deref() == Some(device_id.as_str()) {
+        control.lease.revoke_for(&device_id);
+        control.hub_publish_controller_changed();
+    }
+
+    crate::store::log_msg(&app, &format!("Remote device role updated: {} -> {:?}", device_id, role));
+    Ok(status_info(&control, control.is_enabled().then(|| control.token_for_display())))
+}
+
+/// The operator window relays its WebRTC answer back to the phone that owns the
+/// given phone camera. `device_id` is the prefixed id ("phone-camera-...").
+#[tauri::command]
+pub async fn phone_camera_answer(state: State<'_, AppState>, device_id: String, sdp: String) -> Result<(), String> {
+    let control = state.remote.clone();
+    let (raw_id, owner) = control
+        .phone_camera_route(&device_id)
+        .await
+        .ok_or_else(|| format!("No active phone camera {}", device_id))?;
+    // Route the answer to the phone over the hub; the per-connection loop
+    // delivers it only to the addressed device. The payload carries the id the
+    // phone itself used so it can match its own device.
+    control.hub.publish_to(
+        crate::remote::protocol::RemoteEventKind::CameraAnswer,
+        serde_json::json!({ "device_id": raw_id, "sdp": sdp }),
+        None,
+        Some(owner),
+    );
+    Ok(())
+}
+
+/// The operator window relays one of its local ICE candidates to the phone
+/// that owns the given phone camera.
+#[tauri::command]
+pub async fn phone_camera_ice(
+    state: State<'_, AppState>,
+    device_id: String,
+    candidate: String,
+    sdp_mid: String,
+    sdp_m_line_index: u32,
+) -> Result<(), String> {
+    let control = state.remote.clone();
+    let (raw_id, owner) = control
+        .phone_camera_route(&device_id)
+        .await
+        .ok_or_else(|| format!("No active phone camera {}", device_id))?;
+    control.hub.publish_to(
+        crate::remote::protocol::RemoteEventKind::CameraIce,
+        serde_json::json!({
+            "device_id": raw_id,
+            "candidate": candidate,
+            "sdp_mid": sdp_mid,
+            "sdp_m_line_index": sdp_m_line_index,
+        }),
+        None,
+        Some(owner),
+    );
+    Ok(())
 }

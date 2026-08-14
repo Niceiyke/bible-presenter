@@ -47,26 +47,45 @@ async fn ws_handler(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(ctx): State<RemoteCtx>,
 ) -> Response {
-    ws.on_upgrade(move |socket| handle_socket(socket, ctx, addr))
+    // Bound frame/message sizes so a malicious or buggy client cannot OOM the
+    // operator machine with giant WS payloads. Commands and events are small;
+    // 1 MiB frames leave ample headroom for large schedule snapshots.
+    ws.max_frame_size(1024 * 1024)
+        .max_message_size(4 * 1024 * 1024)
+        .on_upgrade(move |socket| handle_socket(socket, ctx, addr))
 }
+
+/// Milliseconds of silence before a connected device is treated as dead and
+/// dropped (its controller lease, if held, is then freed immediately instead
+/// of waiting for the 10-minute TTL). The server pings every 15s, so ~2.5x
+/// that interval tolerates a couple of lost pongs on flaky Wi-Fi.
+const CLIENT_TIMEOUT_MS: u64 = 40_000;
 
 /// Binds the remote server on a random local port and returns the bound
 /// address. `files_dir` must already contain the compiled `remote.html`.
 /// Records the bound address and task handle on `control` so `remote_disable`
 /// can shut the server down and `remote_status` can report port/URLs.
+///
+/// `enabled` is set only after the bind succeeds, so a failed bind never
+/// leaves the server half-started (reported enabled with no port/task).
 pub async fn start(ctx: RemoteCtx) -> Result<SocketAddr, String> {
     let control = ctx.control.clone();
-    control.enabled.store(true, std::sync::atomic::Ordering::SeqCst);
     let app = router(ctx);
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.map_err(|e| e.to_string())?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
+    let task_control = control.clone();
     let handle = tokio::spawn(async move {
         let _ = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
         )
         .await;
+        // The server shut down on its own (not via disable) — clear the
+        // runtime flags so status is accurate.
+        task_control.enabled.store(false, std::sync::atomic::Ordering::SeqCst);
+        *task_control.bound_addr.lock() = None;
     });
+    control.enabled.store(true, std::sync::atomic::Ordering::SeqCst);
     *control.task.lock() = Some(handle);
     *control.bound_addr.lock() = Some(addr);
     Ok(addr)
@@ -120,6 +139,7 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
         revision: ctx.control.hub.current_revision(),
         timestamp: now_unix(),
         source_device_id: None,
+        target_device_id: None,
         payload: serde_json::to_value(&snapshot).unwrap_or_else(|_| json!({})),
     };
     if sender
@@ -142,19 +162,30 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
     let (incoming_tx, mut incoming_rx) = mpsc::unbounded_channel::<Message>();
     let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<Message>();
 
+    // Last time any frame arrived from this device (epoch millis). Updated on
+    // every inbound frame, including pongs the browser auto-sends in response
+    // to our heartbeat pings. The watchdog below drops devices that go silent.
+    let last_activity_ms = Arc::new(std::sync::atomic::AtomicU64::new(now_unix() * 1000));
+
     {
         let incoming_tx = incoming_tx.clone();
+        let last_activity_ms = last_activity_ms.clone();
         let mut receiver = receiver;
         tokio::spawn(async move {
             while let Some(msg) = receiver.next().await {
                 match msg {
                     Ok(Message::Text(t)) => {
+                        last_activity_ms.store(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
                         if incoming_tx.send(Message::Text(t)).is_err() {
                             break;
                         }
                     }
+                    Ok(Message::Pong(_)) | Ok(Message::Ping(_)) | Ok(Message::Binary(_)) => {
+                        // Any inbound frame is proof of life; the payload of a
+                        // pong is not meaningful, so we only refresh the stamp.
+                        last_activity_ms.store(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+                    }
                     Ok(Message::Close(_)) | Err(_) => break,
-                    _ => {}
                 }
             }
             let _ = incoming_tx.send(Message::Close(None));
@@ -166,6 +197,15 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
+        let idle_for = now_unix() * 1000 - last_activity_ms.load(std::sync::atomic::Ordering::Relaxed);
+        let watchdog = if idle_for >= CLIENT_TIMEOUT_MS {
+            // Already silent for too long — let the select fire immediately.
+            tokio::time::sleep(std::time::Duration::ZERO)
+        } else {
+            tokio::time::sleep(std::time::Duration::from_millis(CLIENT_TIMEOUT_MS - idle_for))
+        };
+        tokio::pin!(watchdog);
+
         tokio::select! {
             msg = incoming_rx.recv() => {
                 let Some(raw) = msg else { break };
@@ -184,6 +224,15 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
             ev = hub_rx.recv() => {
                 match ev {
                     Ok(event) => {
+                        // Targeted events (e.g. operator->phone camera signaling)
+                        // are only delivered to the addressed device.
+                        let is_targeted_at_me = match event.target_device_id.as_ref() {
+                            Some(target) => target == &device_ctx.device.id,
+                            None => true,
+                        };
+                        if !is_targeted_at_me {
+                            continue;
+                        }
                         let json = serde_json::to_string(&event).unwrap_or_default();
                         if outgoing_tx.send(Message::Text(Utf8Bytes::from(json))).is_err() {
                             break;
@@ -203,6 +252,7 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
                             revision: ctx.control.hub.current_revision(),
                             timestamp: now_unix(),
                             source_device_id: None,
+                            target_device_id: None,
                             payload: serde_json::to_value(&snapshot).unwrap_or_else(|_| json!({})),
                         };
                         let json = serde_json::to_string(&event).unwrap_or_default();
@@ -217,6 +267,11 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
                 if outgoing_tx.send(Message::Ping(Bytes::new())).is_err() {
                     break;
                 }
+            }
+            _ = &mut watchdog => {
+                // No inbound frames for the timeout — the device is unreachable.
+                // Break so the cleanup below releases its controller lease now.
+                break;
             }
         }
     }
@@ -307,6 +362,19 @@ async fn handle_client_text(text: &str, ctx: &DeviceCtx, outgoing: &mpsc::Unboun
     ctx.control.sessions.touch(&ctx.device.id);
     ctx.control.tokens.touch_last_seen(&ctx.device.id);
 
+    // Throttle mutating commands per device so a faulty or hostile client
+    // cannot hammer the authoritative state. Read-only browsing is unbounded.
+    if commands::is_mutating(command.r#type.clone()) && !ctx.control.allow_mutating(&ctx.device.id) {
+        let result = RemoteCommandResult::err(
+            &command.command_id,
+            ctx.control.hub.current_revision(),
+            "rate_limited",
+            "Too many control commands — wait a moment and try again",
+        );
+        send_result(outgoing, &result);
+        return;
+    }
+
     if ctx.control.lease.is_held_by(&ctx.device.id) {
         let _ = ctx.control.lease.renew(&ctx.device.id);
     }
@@ -330,8 +398,6 @@ fn send_result(outgoing: &mpsc::UnboundedSender<Message>, result: &RemoteCommand
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn pair_result_serializes_device_token() {
         let json = serde_json::json!({

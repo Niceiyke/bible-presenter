@@ -274,6 +274,9 @@ fn main() {
             wordlyte_lib::commands::remote::remote_revoke_device,
             wordlyte_lib::commands::remote::remote_revoke_all,
             wordlyte_lib::commands::remote::remote_claim_control,
+            wordlyte_lib::commands::remote::remote_set_role,
+            wordlyte_lib::commands::remote::phone_camera_answer,
+            wordlyte_lib::commands::remote::phone_camera_ice,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

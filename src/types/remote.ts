@@ -42,7 +42,12 @@ export type RemoteCommandType =
   | "song.stage"
   | "song.go_live"
   | "lower_third.show"
-  | "lower_third.hide";
+  | "lower_third.hide"
+  | "camera.start"
+  | "camera.stop"
+  | "camera.offer"
+  | "camera.answer"
+  | "camera.ice";
 
 export interface RemoteCommand {
   command_id: string;
@@ -72,7 +77,9 @@ export type RemoteEventKind =
   | "output.changed"
   | "blackout.changed"
   | "controller.changed"
-  | "operator.notice";
+  | "operator.notice"
+  | "camera.answer"
+  | "camera.ice";
 
 export interface RemoteEvent {
   kind: RemoteEventKind;
@@ -199,6 +206,29 @@ export interface RemoteLowerThirdPayload {
   kind: "Nameplate" | "Lyrics" | "FreeText";
   data: unknown;
   template?: unknown;
+}
+
+export interface RemoteCameraStartPayload {
+  device_id: string;
+  device_name: string;
+  facing_mode?: "user" | "environment";
+}
+
+export interface RemoteCameraOfferPayload {
+  sdp: string;
+  device_id: string;
+}
+
+export interface RemoteCameraAnswerPayload {
+  sdp: string;
+  device_id: string;
+}
+
+export interface RemoteCameraIcePayload {
+  candidate: string;
+  sdp_mid: string;
+  sdp_m_line_index: number;
+  device_id: string;
 }
 
 export function isRemoteCommand(value: unknown): value is RemoteCommand {

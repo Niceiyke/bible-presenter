@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, ListOrdered, MessageSquare, Music2, Power, RefreshCw, Radio, UserCircle2, BookOpen, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ListOrdered, MessageSquare, Music2, Power, RefreshCw, Radio, UserCircle2, BookOpen, X, Video } from "lucide-react";
 import { storedName, useRemote } from "./wsClient";
 import { Btn, Card, Label, TextInput, cx } from "./ui";
 import { OnAirPanel } from "./panels/OnAirPanel";
@@ -7,8 +7,9 @@ import { BiblePanel } from "./panels/BiblePanel";
 import { SongsPanel } from "./panels/SongsPanel";
 import { ServicePanel } from "./panels/ServicePanel";
 import { LowerThirdPanel } from "./panels/LowerThirdPanel";
+import { CameraPanel } from "./panels/CameraPanel";
 
-type Tab = "onair" | "bible" | "songs" | "service" | "lower";
+type Tab = "onair" | "bible" | "songs" | "service" | "lower" | "camera";
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "onair", label: "On Air", icon: <Radio size={14} /> },
@@ -16,6 +17,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "songs", label: "Songs", icon: <Music2 size={14} /> },
   { id: "service", label: "Service", icon: <ListOrdered size={14} /> },
   { id: "lower", label: "Lower ⅓", icon: <MessageSquare size={14} /> },
+  { id: "camera", label: "Camera", icon: <Video size={14} /> },
 ];
 
 interface Toast {
@@ -186,6 +188,7 @@ export function App() {
             {tab === "songs" && <SongsPanel {...panelProps} />}
             {tab === "service" && <ServicePanel {...panelProps} />}
             {tab === "lower" && <LowerThirdPanel {...panelProps} />}
+            {tab === "camera" && <CameraPanel {...panelProps} />}
           </main>
 
           <nav className="grid grid-cols-5 border-t border-slate-800 bg-slate-950/95 pb-[env(safe-area-inset-bottom)]">

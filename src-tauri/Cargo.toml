@@ -1,6 +1,6 @@
 [package]
 name = "wordlyte"
-version = "1.10.4"
+version = "1.10.5"
 description = "Wordlyte — A professional, real-time Bible projection tool for churches."
 authors = ["Wordlyte Team"]
 edition = "2021"
@@ -31,6 +31,9 @@ zip = { version = "2.2.1", features = ["deflate"] }
 sha2 = "0.10"
 axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.6", features = ["fs"] }
+webrtc = "0.11"
+tracing = "0.1"
+log = "0.4"
 
 [lib]
 name = "wordlyte_lib"

@@ -33,6 +33,14 @@ impl RemoteHub {
     /// event; slow consumers that fall behind receive a `RecvError::Lagged`
     /// and reconnect their snapshot.
     pub fn publish(&self, kind: RemoteEventKind, payload: serde_json::Value, source_device_id: Option<String>) -> u64 {
+        self.publish_to(kind, payload, source_device_id, None)
+    }
+
+    /// Publishes an event that is addressed to a single connected device. The
+    /// server's per-connection loop only forwards it to the device whose id
+    /// matches `target_device_id`. Used to relay operator->phone camera
+    /// signaling without broadcasting it to every client.
+    pub fn publish_to(&self, kind: RemoteEventKind, payload: serde_json::Value, source_device_id: Option<String>, target_device_id: Option<String>) -> u64 {
         let mut rev = self.revision.lock();
         *rev += 1;
         let revision = *rev;
@@ -46,6 +54,7 @@ impl RemoteHub {
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0),
             source_device_id,
+            target_device_id,
             payload,
         };
         let _ = self.tx.send(event);

@@ -57,6 +57,11 @@ const MUTATING = new Set<RemoteCommandType>([
   "song.go_live",
   "lower_third.show",
   "lower_third.hide",
+  "camera.start",
+  "camera.stop",
+  "camera.offer",
+  "camera.answer",
+  "camera.ice",
 ]);
 
 export type RemoteConnState = "connecting" | "pairing" | "connected" | "error";
@@ -221,6 +226,13 @@ export function useRemote(): UseRemote {
           setConn("connected");
           setSnapshot(snap);
         }
+        return;
+      }
+      // Camera relay events (operator answer / ICE) are delivered to the
+      // phone's peer-connection panels via window postMessage, which the
+      // CameraPanel/usePhoneCamera components subscribe to.
+      if (event.kind === "camera.answer" || event.kind === "camera.ice") {
+        window.postMessage(JSON.stringify({ kind: event.kind, payload: event.payload }), "*");
         return;
       }
       setSnapshot((prev) => (prev ? applyEvent(prev, event) : prev));

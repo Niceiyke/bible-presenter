@@ -92,6 +92,16 @@ pub enum RemoteCommandType {
     LowerThirdShow,
     #[serde(rename = "lower_third.hide")]
     LowerThirdHide,
+    #[serde(rename = "camera.start")]
+    CameraStart,
+    #[serde(rename = "camera.stop")]
+    CameraStop,
+    #[serde(rename = "camera.offer")]
+    CameraOffer,
+    #[serde(rename = "camera.answer")]
+    CameraAnswer,
+    #[serde(rename = "camera.ice")]
+    CameraIce,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,6 +172,10 @@ pub enum RemoteEventKind {
     ControllerChanged,
     #[serde(rename = "operator.notice")]
     OperatorNotice,
+    #[serde(rename = "camera.answer")]
+    CameraAnswer,
+    #[serde(rename = "camera.ice")]
+    CameraIce,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -171,6 +185,11 @@ pub struct RemoteEvent {
     pub timestamp: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_device_id: Option<String>,
+    /// When set, only the matching connected device receives this event; when
+    /// unset the event is broadcast to every connected device. Used to relay
+    /// operator->phone camera signaling without leaking it to other clients.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_device_id: Option<String>,
     pub payload: serde_json::Value,
 }
 
@@ -253,6 +272,34 @@ pub struct RemoteLowerThirdPayload {
     pub data: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteCameraStartPayload {
+    pub device_id: String,
+    pub device_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facing_mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteCameraOfferPayload {
+    pub sdp: String,
+    pub device_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteCameraAnswerPayload {
+    pub sdp: String,
+    pub device_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteCameraIcePayload {
+    pub candidate: String,
+    pub sdp_mid: String,
+    pub sdp_m_line_index: u32,
+    pub device_id: String,
 }
 
 /// Authoritative, read-only snapshot pushed to a connected remote. Mirrors the
