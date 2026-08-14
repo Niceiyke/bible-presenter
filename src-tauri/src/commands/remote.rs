@@ -273,16 +273,6 @@ pub async fn phone_camera_answer(app: AppHandle, state: State<'_, AppState>, dev
     }
 }
 
-/// The main window's PhoneCameraProvider writes lifecycle diagnostics (mount,
-/// listener registration, offer receipt) to the backend log. This is how we
-/// can tell, without DevTools, whether the provider is actually running inside
-/// the packaged operator window.
-#[tauri::command]
-pub fn phone_camera_host_log(app: AppHandle, message: String) -> Result<(), String> {
-    crate::store::log_msg(&app, &format!("[host] {}", message));
-    Ok(())
-}
-
 /// The operator window relays one of its local ICE candidates to the phone
 /// that owns the given phone camera.
 #[tauri::command]
