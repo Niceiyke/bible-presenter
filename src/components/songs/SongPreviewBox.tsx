@@ -1,4 +1,4 @@
-import React, { useRef } from "react";
+import React from "react";
 import type { SongSlideData } from "../../types";
 import { useSlideFit } from "../../hooks/useSlideFit";
 import { SongSlideRenderer } from "../shared/Renderers";
@@ -25,8 +25,7 @@ export function SongPreviewBox({
   fill?: boolean;
   className?: string;
 }) {
-  const boxRef = useRef<HTMLDivElement>(null);
-  const fit = useSlideFit(boxRef);
+  const [boxRef, fit] = useSlideFit();
   const fitReady = fit.width > 0 && fit.height > 0;
 
   return (

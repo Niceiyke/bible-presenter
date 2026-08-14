@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useSlideFit } from "../hooks/useSlideFit";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -58,10 +58,8 @@ export function StageWindow() {
   // `useSlideFit` — the largest 16:9 sub-rectangle that fits in the measured
   // height drives the scale, so the stage preview matches the on-air
   // proportions without overflowing the narrower confidence panels.
-  const liveSlideBoxRef = useRef<HTMLDivElement | null>(null);
-  const stagedSlideBoxRef = useRef<HTMLDivElement | null>(null);
-  const liveSlideFit = useSlideFit(liveSlideBoxRef);
-  const stagedSlideFit = useSlideFit(stagedSlideBoxRef);
+  const [liveSlideBoxRef, liveSlideFit] = useSlideFit();
+  const [stagedSlideBoxRef, stagedSlideFit] = useSlideFit();
 
   useEffect(() => {
     invoke<DisplayItem>("get_current_item").then(setLiveItem).catch((e: any) => signalOperatorWarning(`Stage hydrate (live): ${e?.message ?? e}`));

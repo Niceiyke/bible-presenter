@@ -379,15 +379,57 @@ async fn handle_client_text(text: &str, ctx: &DeviceCtx, outgoing: &mpsc::Unboun
         let _ = ctx.control.lease.renew(&ctx.device.id);
     }
 
-    let result = commands::dispatch(
-        &ctx.app,
-        &ctx.state,
-        &ctx.control,
-        &ctx.device,
-        &command,
-    )
-    .await;
+    // Run dispatch on its own task so a panicking handler (e.g. an unexpected
+    // unwrap on authoritative state) cannot unwind the connection loop and
+    // drop the socket without a Close frame. The panic surfaces here as a
+    // `JoinError` and becomes an error result + a system-log entry instead of
+    // a dead connection.
+    let command_id = command.command_id.clone();
+    let command_type = command.r#type.clone();
+    let task_ctx = ctx.clone();
+    let dispatch_task = tokio::spawn(async move {
+        commands::dispatch(
+            &task_ctx.app,
+            &task_ctx.state,
+            &task_ctx.control,
+            &task_ctx.device,
+            &command,
+        )
+        .await
+    });
+
+    let result = match dispatch_task.await {
+        Ok(result) => result,
+        Err(join_err) => {
+            let message = if join_err.is_panic() {
+                let reason = panic_reason(join_err.into_panic());
+                format!("remote '{}' panicked while handling command '{:?}': {}", ctx.device.name, command_type, reason)
+            } else {
+                format!("remote command '{:?}' was cancelled before completing", command_type)
+            };
+            crate::events::emit_checked(&ctx.app, "system-log", &serde_json::json!({
+                "level": "error",
+                "message": message,
+                "timestamp": std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0),
+            }));
+            RemoteCommandResult::err(&command_id, ctx.control.hub.current_revision(), "internal_error", "Command failed internally — see operator logs")
+        }
+    };
     send_result(outgoing, &result);
+}
+
+/// Formats the panic payload of a crashed command task into a loggable string.
+fn panic_reason(payload: Box<dyn std::any::Any + Send + 'static>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        return s.to_string();
+    }
+    if let Some(s) = payload.downcast_ref::<String>() {
+        return s.clone();
+    }
+    "unknown panic payload".to_string()
 }
 
 fn send_result(outgoing: &mpsc::UnboundedSender<Message>, result: &RemoteCommandResult) {

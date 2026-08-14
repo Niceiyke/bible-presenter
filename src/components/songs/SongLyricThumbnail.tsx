@@ -1,4 +1,4 @@
-import React, { useRef } from "react";
+import React from "react";
 import type { Song, SongSlideData } from "../../types";
 import { getSongSequence } from "../../utils/song";
 import { useAppStore } from "../../store";
@@ -18,8 +18,7 @@ interface SongLyricThumbnailProps {
  *  size or DPI scaling. Never stages or broadcasts. */
 export function SongLyricThumbnail({ song }: SongLyricThumbnailProps) {
   const showSectionLabel = useAppStore((s) => !!s.settings.show_song_section_labels);
-  const boxRef = useRef<HTMLDivElement>(null);
-  const fit = useSlideFit(boxRef);
+  const [boxRef, fit] = useSlideFit();
   const fitReady = fit.width > 0 && fit.height > 0;
 
   const sequence = getSongSequence(song);

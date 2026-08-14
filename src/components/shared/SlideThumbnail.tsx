@@ -21,7 +21,7 @@
  * slide rail — each thumbnail is a few percent-sized nodes.
  */
 
-import React, { useRef } from "react";
+import React from "react";
 import { CustomSlideRenderer } from "./Renderers";
 import type { CustomSlide, SlideTheme } from "../../types";
 import { useSlideFit } from "../../hooks/useSlideFit";
@@ -47,8 +47,7 @@ export function SlideThumbnail({
   width,
   height,
 }: SlideThumbnailProps) {
-  const boxRef = useRef<HTMLDivElement>(null);
-  const { width: fitW, height: fitH, scale } = useSlideFit(boxRef);
+  const [boxRef, { width: fitW, height: fitH, scale }] = useSlideFit();
 
   const ready = fitW > 0 && fitH > 0;
 

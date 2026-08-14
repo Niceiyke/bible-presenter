@@ -74,8 +74,7 @@ export function PreviewCard({
   // Letterbox the 16:9 slide/song design inside the (possibly non-16:9)
   // preview card so text never overflows: the renderer fills the largest
   // 16:9 sub-rectangle that fits, and its height derives the font scale.
-  const slideFitRef = useRef<HTMLDivElement | null>(null);
-  const slideFit = useSlideFit(slideFitRef);
+  const [slideFitRef, slideFit] = useSlideFit();
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cameraPreviewRef = useRef<HTMLVideoElement | null>(null);

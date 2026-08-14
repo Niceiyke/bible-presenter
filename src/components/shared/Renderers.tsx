@@ -1016,8 +1016,7 @@ export function SmallItemPreview({
   // sub-rectangle that fits and scales fonts from its height, so wider or
   // narrower hosts never overflow text. The previous hardcoded scales
   // (0.1 / 0.2) only matched one fixed box height.
-  const boxRef = useRef<HTMLDivElement>(null);
-  const fit = useSlideFit(boxRef);
+  const [boxRef, fit] = useSlideFit();
   const fitReady = fit.width > 0 && fit.height > 0;
 
   switch (item.type) {
