@@ -17,6 +17,8 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
   // constraints can read the live state without re-creating closures.
   const isStreamingRef = useRef(false);
   const trackRef = useRef<MediaStreamTrack | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const reconnectPeerRef = useRef<(target: "operator" | "output") => void>(() => {});
   const [zoomCaps, setZoomCaps] = useState<{ min: number; max: number; step: number } | null>(null);
   const [zoom, setZoom] = useState(1);
   const [torchSupported, setTorchSupported] = useState(false);
@@ -29,6 +31,7 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
   const cleanup = useCallback(() => {
     isStreamingRef.current = false;
     trackRef.current = null;
+    streamRef.current = null;
     setZoomCaps(null);
     setZoom(1);
     setTorchSupported(false);
@@ -42,6 +45,91 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
     }
     setIsStreaming(false);
   }, [stream]);
+
+  const makeOffer = useCallback(async (pc: RTCPeerConnection, target: "operator" | "output") => {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await client.command("camera.offer", {
+      sdp: offer.sdp!,
+      device_id: deviceId,
+      target,
+    });
+  }, [client, deviceId]);
+
+  const setupPeer = useCallback((pc: RTCPeerConnection, target: "operator" | "output") => {
+    // Handle ICE candidates, tagged with the peer target so the backend
+    // relays them to the correct operator-side window.
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        client.command("camera.ice", {
+          candidate: event.candidate.candidate,
+          sdp_mid: event.candidate.sdpMid,
+          sdp_m_line_index: event.candidate.sdpMLineIndex,
+          device_id: deviceId,
+          target,
+        }).catch(console.error);
+      }
+    };
+  }, [client, deviceId]);
+
+  // Keep re-offering a peer that never connected while the camera is
+  // streaming. The operator main window hosts the "operator" answering peer
+  // from app startup, but a projection ("output") window that is opened — or a
+  // window that reloaded — *after* the phone started would otherwise never pick
+  // up the offer. Stops when the peer connects, the camera stops, or the peer
+  // object is replaced by a restart.
+  const keepReOffering = useCallback(async (pc: RTCPeerConnection, target: "operator" | "output") => {
+    while (
+      isStreamingRef.current &&
+      pcsRef.current[target] === pc &&
+      (pc.connectionState === "new" || pc.connectionState === "connecting")
+    ) {
+      await new Promise((r) => setTimeout(r, 2500));
+      if (!isStreamingRef.current || pcsRef.current[target] !== pc) break;
+      if (pc.connectionState !== "new" && pc.connectionState !== "connecting") break;
+      try {
+        await makeOffer(pc, target);
+      } catch {
+        break;
+      }
+    }
+  }, [makeOffer]);
+
+  // Peer state transitions: connected → toast; failed/disconnected → rebuild
+  // the peer and re-offer so an operator/projector window reload recovers
+  // automatically instead of killing the camera.
+  const wirePeerState = useCallback((pc: RTCPeerConnection, target: "operator" | "output") => {
+    pc.onconnectionstatechange = () => {
+      const st = pc.connectionState;
+      if (st === "connected") {
+        pushToast(target === "operator" ? "Camera streaming to operator" : "Camera ready on projector", "info");
+      } else if (st === "failed" || st === "disconnected") {
+        setTimeout(() => {
+          if (pcsRef.current[target] === pc) reconnectPeerRef.current(target);
+        }, 1500);
+      }
+    };
+  }, [pushToast]);
+
+  // Rebuild one peer from scratch when the operator-side window hosting it
+  // reloads or drops: the camera keeps running and a fresh offer is answered
+  // as soon as the window is back. Used instead of tearing the camera down.
+  const reconnectPeer = useCallback((target: "operator" | "output") => {
+    const old = pcsRef.current[target];
+    if (old) {
+      old.onconnectionstatechange = null;
+      old.close();
+    }
+    if (!isStreamingRef.current || !streamRef.current) return;
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+    pcsRef.current = { ...pcsRef.current, [target]: pc };
+    setupPeer(pc, target);
+    streamRef.current.getVideoTracks().forEach((t) => pc.addTrack(t, streamRef.current!));
+    wirePeerState(pc, target);
+    makeOffer(pc, target).catch(() => {});
+    keepReOffering(pc, target);
+  }, [setupPeer, makeOffer, keepReOffering, wirePeerState]);
+  reconnectPeerRef.current = reconnectPeer;
 
   const startStreaming = useCallback(async () => {
     if (!client.isHeldBySelf) {
@@ -66,6 +154,7 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
       });
 
       setStream(mediaStream);
+      streamRef.current = mediaStream;
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
       }
@@ -107,52 +196,10 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
         outputPc.addTrack(track, mediaStream);
       });
 
-      const setupPeer = (pc: RTCPeerConnection, target: "operator" | "output") => {
-        // Handle ICE candidates, tagged with the peer target so the backend
-        // relays them to the correct operator-side window.
-        pc.onicecandidate = (event) => {
-          if (event.candidate) {
-            client.command("camera.ice", {
-              candidate: event.candidate.candidate,
-              sdp_mid: event.candidate.sdpMid,
-              sdp_m_line_index: event.candidate.sdpMLineIndex,
-              device_id: deviceId,
-              target,
-            }).catch(console.error);
-          }
-        };
-      };
-
       setupPeer(operatorPc, "operator");
       setupPeer(outputPc, "output");
-
-      // Only the operator peer is authoritative: if it drops, the camera is
-      // dead and the operator can no longer see it. The output/projector peer
-      // is best-effort — the output window may be closed, so its failure must
-      // not tear down the whole camera.
-      operatorPc.onconnectionstatechange = () => {
-        if (operatorPc.connectionState === "failed" || operatorPc.connectionState === "disconnected") {
-          pushToast("Camera connection lost", "error");
-          cleanup();
-        } else if (operatorPc.connectionState === "connected") {
-          pushToast("Camera streaming to operator", "info");
-        }
-      };
-      outputPc.onconnectionstatechange = () => {
-        if (outputPc.connectionState === "connected") {
-          pushToast("Camera ready on projector", "info");
-        }
-      };
-
-      const makeOffer = async (pc: RTCPeerConnection, target: "operator" | "output") => {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        await client.command("camera.offer", {
-          sdp: offer.sdp!,
-          device_id: deviceId,
-          target,
-        });
-      };
+      wirePeerState(operatorPc, "operator");
+      wirePeerState(outputPc, "output");
 
       // Send start command and offers (operator first so the preview connects
       // even if the projection window never answers).
@@ -165,28 +212,6 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
       await makeOffer(operatorPc, "operator");
       await makeOffer(outputPc, "output");
 
-      // Keep re-offering any peer that never connected while the camera is
-      // streaming. The operator main window hosts the "operator" answering
-      // peer from app startup, but a projection ("output") window that is
-      // opened — or a window that reloaded — *after* the phone started would
-      // otherwise never pick up the offer. Stops when the peer connects, the
-      // camera stops, or the peer object is replaced by a restart.
-      const keepReOffering = async (pc: RTCPeerConnection, target: "operator" | "output") => {
-        while (
-          isStreamingRef.current &&
-          pcsRef.current[target] === pc &&
-          (pc.connectionState === "new" || pc.connectionState === "connecting")
-        ) {
-          await new Promise((r) => setTimeout(r, 2500));
-          if (!isStreamingRef.current || pcsRef.current[target] !== pc) break;
-          if (pc.connectionState !== "new" && pc.connectionState !== "connecting") break;
-          try {
-            await makeOffer(pc, target);
-          } catch {
-            break;
-          }
-        }
-      };
       keepReOffering(operatorPc, "operator");
       keepReOffering(outputPc, "output");
 
@@ -198,7 +223,7 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
       pushToast(msg, "error");
       cleanup();
     }
-  }, [client, deviceId, deviceName, facingMode, pushToast, cleanup]);
+  }, [client, deviceId, deviceName, facingMode, pushToast, cleanup, setupPeer, makeOffer, wirePeerState, keepReOffering]);
 
   const stopStreaming = useCallback(async () => {
     try {

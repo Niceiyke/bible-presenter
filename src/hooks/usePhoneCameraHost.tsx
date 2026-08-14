@@ -12,17 +12,36 @@ import { invoke } from "@tauri-apps/api/core";
 
 interface PhoneCameraHostValue {
   streams: Record<string, MediaStream>;
+  states: Record<string, RTCPeerConnectionState>;
 }
 
-const PhoneCameraContext = createContext<PhoneCameraHostValue>({ streams: {} });
+const PhoneCameraContext = createContext<PhoneCameraHostValue>({ streams: {}, states: {} });
 
 export function usePhoneCameraStreams(): Record<string, MediaStream> {
   return useContext(PhoneCameraContext).streams;
 }
 
+export function usePhoneCameraStates(): Record<string, RTCPeerConnectionState> {
+  return useContext(PhoneCameraContext).states;
+}
+
 export function PhoneCameraProvider({ children }: { children: React.ReactNode }) {
   const [streams, setStreams] = useState<Record<string, MediaStream>>({});
+  const [states, setStates] = useState<Record<string, RTCPeerConnectionState>>({});
   const pcsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+
+  const setPeerState = (deviceId: string, state: RTCPeerConnectionState | null) => {
+    setStates((prev) => {
+      if (state === null || state === "closed") {
+        if (!(deviceId in prev)) return prev;
+        const next = { ...prev };
+        delete next[deviceId];
+        return next;
+      }
+      if (prev[deviceId] === state) return prev;
+      return { ...prev, [deviceId]: state };
+    });
+  };
 
   useEffect(() => {
     // The provider only ever mounts inside the main operator console (see
@@ -35,6 +54,7 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
         pc.close();
         pcsRef.current.delete(deviceId);
       }
+      setPeerState(deviceId, null);
       setStreams((prev) => {
         if (!(deviceId in prev)) return prev;
         const next = { ...prev };
@@ -63,6 +83,10 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
               target: "operator",
             }).catch((e) => console.error("phone_camera_ice failed:", e));
           }
+        };
+
+        pc.onconnectionstatechange = () => {
+          setPeerState(deviceId, pc.connectionState);
         };
 
         pc.ontrack = (ev) => {
@@ -117,6 +141,6 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
     };
   }, []);
 
-  const value = { streams };
+  const value = { streams, states };
   return <PhoneCameraContext.Provider value={value}>{children}</PhoneCameraContext.Provider>;
 }

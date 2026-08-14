@@ -432,6 +432,9 @@ export function useItemActions() {
       // Mirror the authoritative state the backend just broadcast.
       setSettings(payload.settings);
       setPropItems(payload.props ?? []);
+      if (payload.camera) {
+        setLiveItem(payload.camera);
+      }
       if (payload.lower_third_data) {
         setLtVisible(true);
         useAppStore.getState().setCurrentLowerThird({
@@ -446,11 +449,13 @@ export function useItemActions() {
     } catch (err: any) {
       setBackendError(`Apply scene failed: ${err?.message ?? err}`);
     }
-  }, [setSettings, setPropItems, setLtVisible, setToast, ltTemplate, setBackendError]);
+  }, [setSettings, setPropItems, setLiveItem, setLtVisible, setToast, ltTemplate, setBackendError]);
 
   const captureScene = useCallback(async (name: string) => {
     try {
-      const saved = await invoke<Scene>("capture_scene", { name });
+      const live = useAppStore.getState().liveItem;
+      const camera = live?.type === "Camera" ? live : null;
+      const saved = await invoke<Scene>("capture_scene", { name, camera });
       setScenes([...useAppStore.getState().scenes, saved]);
       setToast(`Captured scene "${saved.name}"`);
     } catch (err: any) {

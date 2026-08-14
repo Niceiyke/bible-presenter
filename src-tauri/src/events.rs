@@ -25,6 +25,7 @@ pub struct ScenePayload {
     pub props: Vec<store::PropItem>,
     pub lower_third_data: Option<store::LowerThirdData>,
     pub lower_third_template: Option<serde_json::Value>,
+    pub camera: Option<store::DisplayItem>,
 }
 
 /// Emit an event and forward failures to the `system-log` channel so the

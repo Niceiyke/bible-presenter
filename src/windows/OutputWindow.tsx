@@ -25,7 +25,7 @@ import { Music } from "lucide-react";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { signalOperatorWarning } from "../hooks/useAppInitialization";
 import { useFonts } from "../hooks/useFonts";
-import PhoneCameraVideo, { usePhoneCameraOrientation } from "../components/shared/PhoneCameraVideo";
+import PhoneCameraVideo, { usePhoneCameraOrientation, usePhoneCameraLook } from "../components/shared/PhoneCameraVideo";
 
 function ProjectionErrorFallback() {
   return (
@@ -68,6 +68,9 @@ export function OutputWindow() {
   const [mainCameraStream, setMainCameraStream] = useState<MediaStream | null>(null);
   const liveCameraDeviceId = liveItem?.type === "Camera" ? (liveItem.data.deviceId ?? null) : null;
   const livePhoneOrientation = usePhoneCameraOrientation(
+    liveCameraDeviceId?.startsWith("phone-camera-") ? liveCameraDeviceId : null
+  );
+  const livePhoneLook = usePhoneCameraLook(
     liveCameraDeviceId?.startsWith("phone-camera-") ? liveCameraDeviceId : null
   );
   // Locally-opened background camera stream (owned by this effect, unlike the
@@ -773,6 +776,7 @@ export function OutputWindow() {
                 <PhoneCameraVideo
                   stream={mainCameraStream}
                   orientation={livePhoneOrientation}
+                  look={livePhoneLook}
                   mirrored={liveItem.data.mirrored}
                   objectFit={(liveItem.data.objectFit as any) ?? "cover"}
                   style={{ opacity: liveItem.data.opacity ?? 1 }}

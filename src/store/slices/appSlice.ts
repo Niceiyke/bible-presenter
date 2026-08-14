@@ -2,7 +2,8 @@ import { StateCreator } from "zustand";
 import { AppStore } from "../index";
 import { DEFAULT_SETTINGS, PresentationSettings, CustomPresentation, CustomSlide, PresentationSummary, SlideTemplate, Scene, CameraBackground } from "../../types";
 import type { DisplayItem } from "../../types";
-import type { PhoneCameraOrientation } from "../../types/remote";
+import type { PhoneCameraOrientation, CameraLook } from "../../types/remote";
+import { DEFAULT_CAMERA_LOOK } from "../../types/remote";
 
 export interface LogEntry {
   level: string;
@@ -90,6 +91,8 @@ export interface AppSlice {
   setCameraName: (deviceId: string, name: string) => void;
   cameraDefaults: Record<string, Omit<CameraBackground, "deviceId">>;
   setCameraDefaults: (deviceId: string, partial: Partial<Omit<CameraBackground, "deviceId">>) => void;
+  cameraLook: Record<string, CameraLook>;
+  setCameraLook: (deviceId: string, partial: Partial<CameraLook>) => void;
 }
 
 export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) => ({
@@ -220,5 +223,22 @@ export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) =>
       /* localStorage unavailable — keep in-memory only */
     }
     return { cameraDefaults };
+  }),
+  cameraLook: (() => {
+    try {
+      return JSON.parse(localStorage.getItem("cameraLook") ?? "{}") as Record<string, CameraLook>;
+    } catch {
+      return {};
+    }
+  })(),
+  setCameraLook: (deviceId, partial) => set((s) => {
+    const prev = s.cameraLook[deviceId];
+    const cameraLook = { ...s.cameraLook, [deviceId]: { ...(prev ?? DEFAULT_CAMERA_LOOK), ...partial } };
+    try {
+      localStorage.setItem("cameraLook", JSON.stringify(cameraLook));
+    } catch {
+      /* localStorage unavailable — keep in-memory only */
+    }
+    return { cameraLook };
   }),
 });

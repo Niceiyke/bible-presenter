@@ -232,6 +232,27 @@ export type RemoteCameraTarget = "operator" | "output";
  *  orientation across sessions and windows. */
 export type PhoneCameraOrientation = "portrait" | "landscape";
 
+/** Per-feed display tuning applied to a camera feed (CSS filter + transform).
+ *  Stored per phone camera device id in the operator store and persisted to
+ *  localStorage so a feed keeps its look across sessions and windows. */
+export interface CameraLook {
+  brightness: number;
+  contrast: number;
+  saturation: number;
+  zoom: number;
+  panX: number;
+  panY: number;
+}
+
+export const DEFAULT_CAMERA_LOOK: CameraLook = {
+  brightness: 1,
+  contrast: 1,
+  saturation: 1,
+  zoom: 1,
+  panX: 0,
+  panY: 0,
+};
+
 export interface RemoteCameraStartPayload {
   device_id: string;
   device_name: string;

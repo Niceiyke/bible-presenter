@@ -1,6 +1,7 @@
 use crate::state::AppState;
-use crate::store::Scene;
+use crate::store::{DisplayItem, Scene};
 use crate::events::{emit_checked, ScenePayload};
+use crate::remote::commands::op_go_live_item;
 use tauri::{AppHandle, State};
 
 #[tauri::command]
@@ -49,6 +50,11 @@ pub async fn apply_scene(app: AppHandle, state: State<'_, AppState>, id: String)
         emit_checked(&app, "lower-third-update", &Option::<serde_json::Value>::None);
     }
 
+    // Camera feed that was live at capture time
+    if let Some(cam) = &scene.camera {
+        op_go_live_item(&app, &state, cam.clone(), None);
+    }
+
     Ok(ScenePayload {
         id: scene.id,
         name: scene.name,
@@ -56,13 +62,15 @@ pub async fn apply_scene(app: AppHandle, state: State<'_, AppState>, id: String)
         props: scene.props,
         lower_third_data: scene.lower_third_data,
         lower_third_template: scene.lower_third_template,
+        camera: scene.camera,
     })
 }
 
 /// Capture the current live state as a new scene. Convenience for the
-/// "Save current state as scene" button.
+/// "Save current state as scene" button. `camera` is the live camera feed
+/// (if any) that should be restored when the scene is applied.
 #[tauri::command]
-pub async fn capture_scene(state: State<'_, AppState>, name: String) -> Result<Scene, String> {
+pub async fn capture_scene(state: State<'_, AppState>, name: String, camera: Option<DisplayItem>) -> Result<Scene, String> {
     let settings = state.presentation.settings.lock().clone();
     let props = state.presentation.props_layer.lock().clone();
     let lt = state.presentation.lower_third.lock().clone();
@@ -82,6 +90,7 @@ pub async fn capture_scene(state: State<'_, AppState>, name: String) -> Result<S
         props,
         lower_third_data,
         lower_third_template,
+        camera,
         created_at: 0,
     };
     state.media_schedule.save_scene(scene).map_err(|e| e.to_string())

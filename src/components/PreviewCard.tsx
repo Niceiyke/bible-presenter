@@ -43,7 +43,7 @@ export function PreviewCard({
   isLocalPreview?: boolean;
   hideHeader?: boolean;
 }) {
-  const { appDataDir, settings, cameraOrientations } = useAppStore();
+  const { appDataDir, settings, cameraOrientations, cameraLook } = useAppStore();
   const phoneStreams = usePhoneCameraStreams();
   const isVideo = item?.type === "Media" && (item.data as MediaItem).media_type === "Video";
   const isAudio = item?.type === "Media" && (item.data as MediaItem).media_type === "Audio";
@@ -350,6 +350,7 @@ export function PreviewCard({
                 <PhoneCameraVideo
                   stream={item.data.deviceId.startsWith("phone-camera-") ? phoneStreams[item.data.deviceId] ?? null : undefined}
                   orientation={item.data.deviceId.startsWith("phone-camera-") ? cameraOrientations[item.data.deviceId] ?? "portrait" : "portrait"}
+                  look={item.data.deviceId.startsWith("phone-camera-") ? cameraLook[item.data.deviceId] ?? null : null}
                   mirrored={item.data.mirrored}
                   objectFit="contain"
                   videoRef={(el) => { cameraPreviewRef.current = el; }}

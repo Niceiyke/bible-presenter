@@ -2,10 +2,12 @@ import React, { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store";
 import { useTauriEvent } from "../hooks/useTauriEvent";
-import { usePhoneCameraStreams } from "../hooks/usePhoneCameraHost";
+import { usePhoneCameraStreams, usePhoneCameraStates } from "../hooks/usePhoneCameraHost";
 import PhoneCameraVideo from "./shared/PhoneCameraVideo";
-import { Camera, RefreshCw, Video, Play, Monitor, AlertTriangle, Smartphone, Tag, Zap, ArrowLeftRight } from "lucide-react";
-import type { DisplayItem, CameraBackground } from "../types";
+import { Camera, RefreshCw, Video, Play, Monitor, AlertTriangle, Smartphone, Tag, Zap, ArrowLeftRight, Aperture, SlidersHorizontal } from "lucide-react";
+import type { DisplayItem, CameraBackground, MediaItem } from "../types";
+import type { CameraLook } from "../types/remote";
+import { DEFAULT_CAMERA_LOOK } from "../types/remote";
 
 interface CameraTabProps {
   onStage?: (item: DisplayItem) => void;
@@ -33,9 +35,13 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     setCameraName,
     cameraDefaults,
     setCameraDefaults,
+    cameraLook,
+    setCameraLook,
     liveItem,
+    setToast,
   } = useAppStore();
   const phoneStreams = usePhoneCameraStreams();
+  const phoneStates = usePhoneCameraStates();
   const [phoneCameras, setPhoneCameras] = useState<PhoneCameraInfo[]>([]);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -141,6 +147,50 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     { label: "B", value: abB, set: setAbB },
   ];
 
+  const look = selectedCameraId ? cameraLook[selectedCameraId] : undefined;
+  const lookSliders: { key: keyof CameraLook; label: string; min: number; max: number; step: number; format: (v: number) => string }[] = [
+    { key: "brightness", label: "Brightness", min: 0.5, max: 1.5, step: 0.05, format: (v) => `${Math.round(v * 100)}%` },
+    { key: "contrast", label: "Contrast", min: 0.5, max: 1.5, step: 0.05, format: (v) => `${Math.round(v * 100)}%` },
+    { key: "saturation", label: "Saturation", min: 0, max: 2, step: 0.05, format: (v) => `${Math.round(v * 100)}%` },
+    { key: "zoom", label: "Zoom", min: 1, max: 3, step: 0.05, format: (v) => `${v.toFixed(1)}×` },
+    { key: "panX", label: "Pan X", min: -50, max: 50, step: 1, format: (v) => `${v}%` },
+    { key: "panY", label: "Pan Y", min: -50, max: 50, step: 1, format: (v) => `${v}%` },
+  ];
+
+  const setLook = (key: keyof CameraLook, value: number) => {
+    if (selectedCameraId) setCameraLook(selectedCameraId, { [key]: value });
+  };
+
+  const handleSnapshot = async () => {
+    const el = videoRef.current;
+    if (!el || !el.videoWidth || !el.videoHeight) {
+      setToast("Wait for the camera feed to start before taking a snapshot");
+      return;
+    }
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const rotate = isPhoneSelected && (cameraOrientations[selectedCameraId!] ?? "portrait") === "landscape";
+    if (rotate) {
+      canvas.width = el.videoHeight;
+      canvas.height = el.videoWidth;
+      ctx.translate(canvas.width, 0);
+      ctx.rotate(Math.PI / 2);
+    } else {
+      canvas.width = el.videoWidth;
+      canvas.height = el.videoHeight;
+    }
+    ctx.drawImage(el, 0, 0, el.videoWidth, el.videoHeight);
+    const dataUrl = canvas.toDataURL("image/png");
+    try {
+      const item = await invoke<MediaItem>("save_camera_snapshot", { dataUrl });
+      if (onStage) onStage({ type: "Media", data: item });
+      setToast(`Snapshot staged: ${item.name}`);
+    } catch (err: any) {
+      setToast(`Snapshot failed: ${err?.message ?? err}`);
+    }
+  };
+
   const handleStage = () => {
     const data = getCameraData();
     if (data && onStage) onStage({ type: "Camera", data });
@@ -236,6 +286,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
               <PhoneCameraVideo
                 stream={phoneStreams[selectedCameraId!] ?? null}
                 orientation={cameraOrientations[selectedCameraId!] ?? "portrait"}
+                look={cameraLook[selectedCameraId!] ?? null}
                 objectFit="contain"
                 videoRef={(el) => { videoRef.current = el; }}
               />
@@ -337,6 +388,32 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                 />
                 <span className="text-[10px] text-slate-400 w-8 text-right shrink-0">{Math.round(opacityValue * 100)}%</span>
               </div>
+
+              <div className="flex flex-col gap-2 px-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                  <SlidersHorizontal size={12} /> Color / Crop
+                </span>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                  {lookSliders.map((s) => {
+                    const val = look?.[s.key] ?? DEFAULT_CAMERA_LOOK[s.key];
+                    return (
+                      <label key={s.key} className="flex items-center gap-2 text-[9px] font-bold uppercase tracking-wider text-slate-500">
+                        <span className="w-14 shrink-0">{s.label}</span>
+                        <input
+                          type="range"
+                          min={s.min}
+                          max={s.max}
+                          step={s.step}
+                          value={val}
+                          onChange={(e) => setLook(s.key, parseFloat(e.target.value))}
+                          className="flex-1 h-1.5 accent-amber-500 cursor-pointer"
+                        />
+                        <span className="w-9 text-right text-slate-400 shrink-0">{s.format(val)}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
             </>
           )}
 
@@ -382,6 +459,16 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
             </button>
           </div>
 
+          <button
+            onClick={handleSnapshot}
+            disabled={!selectedCameraId}
+            className="w-full py-2.5 px-4 bg-slate-800/80 hover:bg-slate-700 disabled:opacity-50 text-slate-200 rounded-xl font-bold transition-all border border-slate-700 flex items-center justify-center gap-2"
+            title="Capture the current frame as an image and stage it"
+          >
+            <Aperture size={16} />
+            Snapshot &amp; Stage
+          </button>
+
           <div className="grid grid-cols-2 gap-4">
             <button 
               onClick={setAsGlobalBg}
@@ -409,35 +496,15 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                   <h2 className="text-xs font-black text-slate-500 uppercase tracking-widest">All Phone Feeds</h2>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {phoneCameras.map(cam => {
-                    const active = selectedCameraId === cam.device_id;
-                    return (
-                      <button
-                        key={cam.device_id}
-                        onClick={() => setSelectedCameraId(cam.device_id)}
-                        className={`relative aspect-video rounded-lg overflow-hidden border transition-all group ${
-                          active ? "border-amber-500 ring-2 ring-amber-500/40" : "border-slate-800 hover:border-slate-600"
-                        }`}
-                        title={displayName(cam)}
-                      >
-                        <PhoneCameraVideo
-                          stream={phoneStreams[cam.device_id] ?? null}
-                          orientation={cameraOrientations[cam.device_id] ?? "portrait"}
-                          objectFit="cover"
-                          mirrored={cameraDefaults[cam.device_id]?.mirrored ?? false}
-                        />
-                        {!phoneStreams[cam.device_id] && (
-                          <div className="absolute inset-0 flex items-center justify-center bg-black/60">
-                            <p className="text-[8px] font-bold uppercase tracking-widest text-slate-300">Connecting…</p>
-                          </div>
-                        )}
-                        <div className="absolute bottom-0 inset-x-0 px-1.5 py-0.5 bg-black/70 text-left">
-                          <p className="text-[9px] font-bold truncate text-slate-200">{displayName(cam)}</p>
-                        </div>
-                        {active && <div className="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-500 animate-pulse" />}
-                      </button>
-                    );
-                  })}
+                  {phoneCameras.map(cam => (
+                    <PhoneFeedTile
+                      key={cam.device_id}
+                      cam={cam}
+                      name={displayName(cam)}
+                      selected={selectedCameraId === cam.device_id}
+                      onSelect={() => setSelectedCameraId(cam.device_id)}
+                    />
+                  ))}
                 </div>
               </section>
 
@@ -475,6 +542,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                               stream={phoneStreams[slot.value] ?? null}
                               orientation={cameraOrientations[slot.value] ?? "portrait"}
                               objectFit="cover"
+                              look={cameraLook[slot.value] ?? null}
                               mirrored={cameraDefaults[slot.value]?.mirrored ?? false}
                             />
                           ) : (
@@ -585,5 +653,63 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
         </div>
       </div>
     </div>
+  );
+}
+
+/** A single thumbnail in the "All Phone Feeds" grid, showing the feed plus its
+ *  live resolution and peer state. */
+function PhoneFeedTile({ cam, name, selected, onSelect }: {
+  cam: PhoneCameraInfo;
+  name: string;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const { cameraOrientations, cameraDefaults, cameraLook } = useAppStore();
+  const phoneStreams = usePhoneCameraStreams();
+  const phoneStates = usePhoneCameraStates();
+  const [meta, setMeta] = useState<{ w: number; h: number } | null>(null);
+  const stream = phoneStreams[cam.device_id] ?? null;
+  const state = phoneStates[cam.device_id];
+  const connected = state === "connected" || (state == null && !!stream);
+
+  return (
+    <button
+      onClick={onSelect}
+      className={`relative aspect-video rounded-lg overflow-hidden border transition-all ${
+        selected ? "border-amber-500 ring-2 ring-amber-500/40" : "border-slate-800 hover:border-slate-600"
+      }`}
+      title={name}
+    >
+      <PhoneCameraVideo
+        stream={stream}
+        orientation={cameraOrientations[cam.device_id] ?? "portrait"}
+        objectFit="cover"
+        look={cameraLook[cam.device_id] ?? null}
+        mirrored={cameraDefaults[cam.device_id]?.mirrored ?? false}
+        onMetadata={(w, h) => setMeta({ w, h })}
+      />
+      {!stream && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+          <p className="text-[8px] font-bold uppercase tracking-widest text-slate-300">Connecting…</p>
+        </div>
+      )}
+      {meta && connected && (
+        <div className="absolute top-1 left-1 px-1 py-0.5 bg-black/70 rounded text-[8px] font-mono font-bold text-slate-300">
+          {meta.w}×{meta.h}
+        </div>
+      )}
+      <div
+        className={`absolute top-1 right-1 px-1 py-0.5 rounded text-[7px] font-black uppercase tracking-widest flex items-center gap-1 ${
+          connected ? "bg-green-500/80 text-white" : "bg-slate-700/80 text-slate-300"
+        }`}
+      >
+        {connected ? <span className="w-1 h-1 rounded-full bg-white animate-pulse" /> : null}
+        {connected ? "LIVE" : "CONN"}
+      </div>
+      <div className="absolute bottom-0 inset-x-0 px-1.5 py-0.5 bg-black/70 text-left">
+        <p className="text-[9px] font-bold truncate text-slate-200">{name}</p>
+      </div>
+      {selected && <div className="absolute bottom-1 right-1 w-2 h-2 rounded-full bg-amber-500 animate-pulse" />}
+    </button>
   );
 }

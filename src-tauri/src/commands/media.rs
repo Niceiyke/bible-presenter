@@ -12,6 +12,30 @@ pub async fn add_media(app: AppHandle, state: State<'_, AppState>, path: String)
     state.media_schedule.add_media(Some(app), std::path::PathBuf::from(path)).map_err(|e| e.to_string())
 }
 
+/// Persists a camera snapshot (a base64 `data:image/png;base64,` URL captured
+/// from a live feed) into the media library as an Image item. The returned
+/// MediaItem can be staged/projected like any other image.
+#[tauri::command]
+pub async fn save_camera_snapshot(app: AppHandle, state: State<'_, AppState>, data_url: String) -> Result<store::MediaItem, String> {
+    let png = data_url
+        .strip_prefix("data:image/png;base64,")
+        .ok_or_else(|| "Expected a PNG data URL".to_string())?;
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(png)
+        .map_err(|e| format!("Invalid PNG data: {}", e))?;
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("wordlyte-snapshot-{}.png", ts));
+    std::fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
+    let result = state.media_schedule.add_media(Some(app), tmp.clone()).map_err(|e| e.to_string());
+    let _ = std::fs::remove_file(&tmp);
+    result
+}
+
 /// Streaming media import: copies in 1 MiB chunks with a `download-progress`
 /// event per chunk (fraction 0.0–1.0) and runs the whole copy on a blocking
 /// thread so large videos don't stall the async runtime.

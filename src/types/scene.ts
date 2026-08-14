@@ -1,4 +1,4 @@
-import type { PresentationSettings, PropItem, LowerThirdData, LowerThirdTemplate } from "./";
+import type { PresentationSettings, PropItem, LowerThirdData, LowerThirdTemplate, DisplayItem } from "./";
 
 export interface Scene {
   id: string;
@@ -7,5 +7,6 @@ export interface Scene {
   props: PropItem[];
   lower_third_data?: LowerThirdData;
   lower_third_template?: LowerThirdTemplate;
+  camera?: DisplayItem | null;
   created_at: number;
 }

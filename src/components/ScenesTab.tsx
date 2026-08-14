@@ -16,6 +16,7 @@ interface ScenesTabProps {
 interface SceneChanges {
   props: number;
   lowerThird: boolean;
+  camera: boolean;
   settings: string[];
 }
 
@@ -34,6 +35,7 @@ function describeChanges(scene: Scene, current: {
   return {
     props: scene.props.length,
     lowerThird: !!scene.lower_third_data,
+    camera: !!scene.camera,
     settings: settingsDiffs,
   };
 }
@@ -57,7 +59,7 @@ export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: 
       settingsTheme: settings.theme,
     });
     // If the scene touches live-facing layers, require explicit confirmation.
-    if (changes.props > 0 || changes.lowerThird || changes.settings.length > 0 || propItems.length > 0 || ltVisible) {
+    if (changes.props > 0 || changes.lowerThird || changes.camera || changes.settings.length > 0 || propItems.length > 0 || ltVisible) {
       setPendingApply(scene);
     } else {
       applyScene(scene.id);
@@ -126,12 +128,17 @@ export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: 
                           Lower third
                         </span>
                       )}
+                      {s.camera && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-red-400 border border-slate-700">
+                          Camera
+                        </span>
+                      )}
                       {changes.settings.map((d) => (
                         <span key={d} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-amber-400 border border-slate-700">
                           {d}
                         </span>
                       ))}
-                      {changes.props === 0 && !s.lower_third_data && changes.settings.length === 0 && (
+                      {changes.props === 0 && !s.lower_third_data && !s.camera && changes.settings.length === 0 && (
                         <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-slate-500 border border-slate-700">
                           Settings only
                         </span>
@@ -181,6 +188,7 @@ export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: 
             <p className="text-console-text-muted">• Replaces <span className="text-console-text font-bold">{propItems.length} active prop{propItems.length !== 1 ? "s" : ""}</span>.</p>
           )}
           {ltVisible && <p className="text-console-text-muted">• Hides or replaces the lower third.</p>}
+          {pendingApply?.camera && <p className="text-console-text-muted">• Switches to the stored camera feed.</p>}
           {pendingApply?.lower_third_data && <p className="text-console-text-muted">• Shows a scene lower third.</p>}
           {pendingApply && describeChanges(pendingApply, { propItems: propItems.length, ltVisible, settingsTheme: settings.theme }).settings.length > 0 && (
             <p className="text-console-text-muted">• Changes theme and/or background.</p>

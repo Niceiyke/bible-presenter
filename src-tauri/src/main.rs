@@ -196,6 +196,7 @@ fn main() {
             wordlyte_lib::commands::media::list_media,
             wordlyte_lib::commands::media::add_media,
             wordlyte_lib::commands::media::add_media_streaming,
+            wordlyte_lib::commands::media::save_camera_snapshot,
             wordlyte_lib::commands::media::relink_media,
             wordlyte_lib::commands::media::delete_media,
             wordlyte_lib::commands::media::set_media_fit,

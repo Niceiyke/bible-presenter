@@ -774,6 +774,11 @@ pub struct Scene {
     /// the frontend's template schema.
     pub lower_third_data: Option<LowerThirdData>,
     pub lower_third_template: Option<serde_json::Value>,
+    /// Camera feed that was live when the scene was captured; restored to live
+    /// when the scene is applied. Absent in scenes captured before this field
+    /// existed.
+    #[serde(default)]
+    pub camera: Option<DisplayItem>,
     pub created_at: u64,
 }
 
