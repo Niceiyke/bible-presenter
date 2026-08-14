@@ -158,6 +158,33 @@ describe("useRemote handshake", () => {
     expect(lastWs().last().payload).toEqual({ device_token: "tok-1" });
   });
 
+  it("restores the device identity from the snapshot after reload", async () => {
+    localStorage.setItem("wordlyte.remote.token", "tok-1");
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const { result } = renderHook(() => useRemote());
+    act(() => lastWs().open());
+    expect(result.current.selfId).toBeNull();
+
+    // A reloaded client re-authenticates (no pair result), so only the
+    // snapshot's controller_device_id can re-identify it. Without this,
+    // isHeldBySelf never matches controller_state.device_id and
+    // controller-gated buttons (e.g. Start Camera) stay disabled.
+    act(() => {
+      lastWs().recv({ kind: "snapshot", revision: 2, timestamp: 1, payload: makeSnapshot({ revision: 2, controller_device_id: "d1" }) });
+    });
+    expect(result.current.selfId).toBe("d1");
+
+    act(() => {
+      lastWs().recv({
+        kind: "controller.changed",
+        revision: 3,
+        timestamp: 1,
+        payload: { controller_state: { kind: "held", device_id: "d1", device_name: "iPad", expires_at: 9999999999 } },
+      });
+    });
+    expect(result.current.isHeldBySelf).toBe(true);
+  });
+
   it("drops the stored token and lands on pairing when the token is rejected", async () => {
     localStorage.setItem("wordlyte.remote.token", "stale");
     vi.stubGlobal("WebSocket", FakeWebSocket);

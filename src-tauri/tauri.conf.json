@@ -1,6 +1,6 @@
 {
   "productName": "Wordlyte",
-  "version": "1.10.8",
+  "version": "1.10.9",
   "identifier": "io.wordlyte.app",
   "build": {
     "beforeDevCommand": "npm run dev",

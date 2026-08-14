@@ -120,7 +120,12 @@ pub async fn remote_disable(app: AppHandle, state: State<'_, AppState>) -> Resul
     }
     state.remote.enabled.store(false, Ordering::SeqCst);
     *state.remote.bound_addr.lock() = None;
-    state.remote.sessions.list().into_iter().for_each(|d| state.remote.sessions.disconnect(&d.device_id));
+    state.remote.sessions.clear();
+    // Releasing the lease on disable means re-enabling starts with a clean
+    // slate instead of resurrecting a stale controller lease.
+    if let Some(holder) = state.remote.lease.holder_id() {
+        state.remote.lease.release(&holder);
+    }
     crate::store::log_msg(&app, "Remote Control disabled");
     Ok(status_info(&state.remote, None))
 }
@@ -166,7 +171,7 @@ pub async fn remote_revoke_all(app: AppHandle, state: State<'_, AppState>) -> Re
     let control = state.remote.clone();
     let count = control.tokens.revoke_all();
     control.persist_devices();
-    control.sessions.list().into_iter().for_each(|d| control.sessions.disconnect(&d.device_id));
+    control.sessions.clear();
     if control.lease.holder_id().is_some() {
         let holder = control.lease.holder_id().unwrap_or_default();
         control.lease.release(&holder);

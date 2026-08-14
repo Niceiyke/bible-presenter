@@ -329,8 +329,12 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
 
     // Cleanup: unregister session and release the controller lease so another
     // device can take over. Disconnecting never alters displayed content.
-    ctx.control.sessions.disconnect(&device_id.clone());
-    if ctx.control.lease.holder_id().as_deref() == Some(device_id.as_str()) {
+    //
+    // Only the *last* connection of a device may release its lease: a page
+    // refresh or flaky network often leaves the old socket waiting on the
+    // watchdog while the fresh one reconnects, and tearing the lease down for
+    // a device that is still live would silently drop control mid-service.
+    if ctx.control.sessions.disconnect(&device_id.clone()) && ctx.control.lease.holder_id().as_deref() == Some(device_id.as_str()) {
         ctx.control.lease.release(&device_id);
         ctx.control.hub.publish(
             RemoteEventKind::ControllerChanged,

@@ -191,6 +191,13 @@ pub struct ConnectedDevice {
     pub device_name: String,
     pub connected_at: u64,
     pub last_active_at: u64,
+    /// How many sockets are currently open for this device. A page refresh or
+    /// a flaky network can briefly hold two connections for the same device
+    /// (the old one still waiting on the watchdog, the new one reconnecting).
+    /// Counting connections lets a disconnect know whether it was the *last*
+    /// one, so server cleanup never tears down the controller lease out from
+    /// under a live fresh connection of the same device.
+    pub connections: usize,
 }
 
 impl ConnectedDevices {
@@ -200,15 +207,25 @@ impl ConnectedDevices {
 
     pub fn connect(&self, device_id: &str, device_name: &str) {
         let now = now_unix();
-        self.inner.lock().insert(
-            device_id.to_string(),
-            ConnectedDevice {
-                device_id: device_id.to_string(),
-                device_name: device_name.to_string(),
-                connected_at: now,
-                last_active_at: now,
-            },
-        );
+        let mut map = self.inner.lock();
+        match map.get_mut(device_id) {
+            Some(d) => {
+                d.connections += 1;
+                d.last_active_at = now;
+            }
+            None => {
+                map.insert(
+                    device_id.to_string(),
+                    ConnectedDevice {
+                        device_id: device_id.to_string(),
+                        device_name: device_name.to_string(),
+                        connected_at: now,
+                        last_active_at: now,
+                        connections: 1,
+                    },
+                );
+            }
+        }
     }
 
     pub fn touch(&self, device_id: &str) {
@@ -217,8 +234,30 @@ impl ConnectedDevices {
         }
     }
 
-    pub fn disconnect(&self, device_id: &str) {
-        self.inner.lock().remove(device_id);
+    /// Closes one connection of the device. Returns true when this was the
+    /// device's last connection (the entry is fully removed, or there was no
+    /// entry left at all); false when other sockets of the same device are
+    /// still open, in which case the entry stays so cleanup can keep the
+    /// controller lease alive for the surviving socket.
+    pub fn disconnect(&self, device_id: &str) -> bool {
+        let mut map = self.inner.lock();
+        let last = match map.get_mut(device_id) {
+            Some(d) => {
+                d.connections = d.connections.saturating_sub(1);
+                d.connections == 0
+            }
+            None => true,
+        };
+        if last {
+            map.remove(device_id);
+        }
+        last
+    }
+
+    /// Drops every tracked connection (used when the server is disabled and
+    /// every socket is being torn down at once).
+    pub fn clear(&self) {
+        self.inner.lock().clear();
     }
 
     pub fn list(&self) -> Vec<ConnectedDevice> {
@@ -239,8 +278,41 @@ mod connected_tests {
         devices.connect("d2", "Phone");
         assert_eq!(devices.list().len(), 2);
         devices.touch("d1");
-        devices.disconnect("d2");
+        assert!(devices.disconnect("d2"));
         assert_eq!(devices.list().len(), 1);
         assert_eq!(devices.list()[0].device_id, "d1");
+    }
+
+    #[test]
+    fn overlapping_connections_of_same_device_survive_single_disconnect() {
+        let devices = ConnectedDevices::new();
+        devices.connect("d1", "iPad");
+        devices.connect("d1", "iPad");
+        assert_eq!(devices.list().len(), 1);
+        assert_eq!(devices.list()[0].connections, 2);
+
+        // A refresh: the old socket drops while the new one is still live.
+        assert!(!devices.disconnect("d1"));
+        assert_eq!(devices.list().len(), 1);
+
+        // The final connection closing removes the entry.
+        assert!(devices.disconnect("d1"));
+        assert!(devices.list().is_empty());
+    }
+
+    #[test]
+    fn disconnect_of_unknown_device_reports_last_connection() {
+        let devices = ConnectedDevices::new();
+        assert!(devices.disconnect("ghost"));
+        assert!(devices.list().is_empty());
+    }
+
+    #[test]
+    fn clear_drops_everything() {
+        let devices = ConnectedDevices::new();
+        devices.connect("d1", "iPad");
+        devices.connect("d2", "Phone");
+        devices.clear();
+        assert!(devices.list().is_empty());
     }
 }

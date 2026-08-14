@@ -275,7 +275,6 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
             <Btn
               variant="primary"
               onClick={startStreaming}
-              disabled={!client.isHeldBySelf}
               className="col-span-2 h-12 flex items-center justify-center gap-2 text-sm font-bold"
             >
               <Video size={18} />

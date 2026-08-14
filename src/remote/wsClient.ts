@@ -276,6 +276,13 @@ export function useRemote(): UseRemote {
           retryRef.current = 0;
           setConn("connected");
           setSnapshot(snap);
+          // Restore the device identity on reload/reconnect. Only the pairing
+          // response sets `selfId`; after re-authenticating with a stored
+          // token the server identifies us in the snapshot's
+          // `controller_device_id`, and without it `isHeldBySelf` can never
+          // match `controller_state.device_id` — controller-gated actions
+          // (e.g. Start Camera) stay silently disabled.
+          if (snap.controller_device_id) setSelfId(snap.controller_device_id);
         }
         return;
       }
