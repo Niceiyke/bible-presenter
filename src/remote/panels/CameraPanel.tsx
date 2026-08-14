@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Video, VideoOff, Camera, RotateCcw, Settings, AlertTriangle, Maximize2, Minimize2 } from "lucide-react";
+import { Video, VideoOff, Camera, RotateCcw, Settings, AlertTriangle, Maximize2, Minimize2, Sun, ZoomIn } from "lucide-react";
 import { useRemote } from "../wsClient";
 import { Card, Btn, cx } from "../ui";
 
@@ -13,12 +13,26 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
   const [error, setError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const pcsRef = useRef<{ operator: RTCPeerConnection | null; output: RTCPeerConnection | null }>({ operator: null, output: null });
+  // Streaming lifecycle refs so the open-ended peer re-offer loops and zoom/torch
+  // constraints can read the live state without re-creating closures.
+  const isStreamingRef = useRef(false);
+  const trackRef = useRef<MediaStreamTrack | null>(null);
+  const [zoomCaps, setZoomCaps] = useState<{ min: number; max: number; step: number } | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [torchSupported, setTorchSupported] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
 
   const deviceId = client.selfId ?? `phone-${Date.now()}`;
   const deviceName = client.selfName || "Phone Camera";
   const canCamera = client.snapshot?.permissions?.camera ?? false;
 
   const cleanup = useCallback(() => {
+    isStreamingRef.current = false;
+    trackRef.current = null;
+    setZoomCaps(null);
+    setZoom(1);
+    setTorchSupported(false);
+    setTorchOn(false);
     const pcs = [pcsRef.current.operator, pcsRef.current.output];
     pcs.forEach((pc) => pc?.close());
     pcsRef.current = { operator: null, output: null };
@@ -37,6 +51,7 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
 
     setError(null);
     setIsStreaming(true);
+    isStreamingRef.current = true;
 
     try {
       // Get camera stream
@@ -53,6 +68,26 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
       setStream(mediaStream);
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
+      }
+
+      // Read the hardware capabilities so zoom/torch controls only appear when
+      // this device/browser actually supports them.
+      const track = mediaStream.getVideoTracks()[0] ?? null;
+      trackRef.current = track;
+      if (track) {
+        try {
+          const caps = track.getCapabilities() as MediaTrackCapabilities & {
+            zoom?: { min: number; max: number; step?: number };
+            torch?: boolean;
+          };
+          if (caps?.zoom && Number.isFinite(caps.zoom.min) && Number.isFinite(caps.zoom.max)) {
+            setZoomCaps({ min: caps.zoom.min, max: caps.zoom.max, step: caps.zoom.step || 0.01 });
+            setZoom(caps.zoom.min > 1 ? caps.zoom.min : 1);
+          }
+          setTorchSupported(!!caps?.torch);
+        } catch {
+          // Capabilities unavailable — hide the controls.
+        }
       }
 
       // Create two peer connections: one for the operator main window
@@ -130,16 +165,30 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
       await makeOffer(operatorPc, "operator");
       await makeOffer(outputPc, "output");
 
-      // The operator main window answers the "operator" offer. Its listeners
-      // are registered at app startup, but a fast phone could still race it —
-      // or a re-connect may have dropped the answer. Re-send the offer a few
-      // times until the operator peer actually connects so a transient miss on
-      // the operator side can never leave the preview stuck on "connecting".
-      for (let attempt = 1; attempt <= 3 && operatorPc.connectionState === "connecting"; attempt++) {
-        await new Promise((r) => setTimeout(r, 2000));
-        console.log("[phone-camera] operator peer still connecting — re-sending offer (attempt " + attempt + ")");
-        await makeOffer(operatorPc, "operator");
-      }
+      // Keep re-offering any peer that never connected while the camera is
+      // streaming. The operator main window hosts the "operator" answering
+      // peer from app startup, but a projection ("output") window that is
+      // opened — or a window that reloaded — *after* the phone started would
+      // otherwise never pick up the offer. Stops when the peer connects, the
+      // camera stops, or the peer object is replaced by a restart.
+      const keepReOffering = async (pc: RTCPeerConnection, target: "operator" | "output") => {
+        while (
+          isStreamingRef.current &&
+          pcsRef.current[target] === pc &&
+          (pc.connectionState === "new" || pc.connectionState === "connecting")
+        ) {
+          await new Promise((r) => setTimeout(r, 2500));
+          if (!isStreamingRef.current || pcsRef.current[target] !== pc) break;
+          if (pc.connectionState !== "new" && pc.connectionState !== "connecting") break;
+          try {
+            await makeOffer(pc, target);
+          } catch {
+            break;
+          }
+        }
+      };
+      keepReOffering(operatorPc, "operator");
+      keepReOffering(outputPc, "output");
 
       pushToast("Camera streaming started", "info");
     } catch (err) {
@@ -171,6 +220,29 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
       setTimeout(() => startStreaming(), 100);
     }
   }, [facingMode, isStreaming, cleanup, startStreaming]);
+
+  const applyZoom = useCallback(async (z: number) => {
+    setZoom(z);
+    const t = trackRef.current;
+    if (!t) return;
+    try {
+      await t.applyConstraints({ advanced: [{ zoom: z }] as unknown as MediaTrackConstraintSet[] });
+    } catch (err) {
+      console.error("zoom failed:", err);
+    }
+  }, []);
+
+  const toggleTorch = useCallback(async () => {
+    const t = trackRef.current;
+    if (!t) return;
+    const next = !torchOn;
+    try {
+      await t.applyConstraints({ advanced: [{ torch: next }] as unknown as MediaTrackConstraintSet[] });
+      setTorchOn(next);
+    } catch (err) {
+      console.error("torch failed:", err);
+    }
+  }, [torchOn]);
 
   // Handle incoming answer and ICE from the main app, routing each to the
   // matching peer connection by its `target`.
@@ -289,6 +361,43 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
           </div>
         )}
       </div>
+
+      {/* Zoom + torch controls (only when the device reports support) */}
+      {isStreaming && (zoomCaps || torchSupported) && (
+        <div className="flex items-center gap-3 px-1">
+          {zoomCaps && (
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              <ZoomIn size={14} className="text-slate-400 shrink-0" />
+              <input
+                type="range"
+                min={zoomCaps.min}
+                max={zoomCaps.max}
+                step={zoomCaps.step}
+                value={zoom}
+                onChange={(e) => applyZoom(parseFloat(e.target.value))}
+                className="flex-1 h-1.5 accent-cyan-500 cursor-pointer"
+                title="Zoom"
+              />
+              <span className="text-[10px] text-slate-400 w-8 text-right shrink-0">{zoom.toFixed(1)}×</span>
+            </div>
+          )}
+          {torchSupported && (
+            <button
+              onClick={toggleTorch}
+              className={cx(
+                "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wide transition-colors border",
+                torchOn
+                  ? "bg-amber-500/20 border-amber-500/50 text-amber-400"
+                  : "bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700",
+              )}
+              title="Toggle torch / flash"
+            >
+              <Sun size={13} />
+              Torch
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Controls */}
       {!canCamera && !isStreaming ? (

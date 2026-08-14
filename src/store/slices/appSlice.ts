@@ -1,6 +1,6 @@
 import { StateCreator } from "zustand";
 import { AppStore } from "../index";
-import { DEFAULT_SETTINGS, PresentationSettings, CustomPresentation, CustomSlide, PresentationSummary, SlideTemplate, Scene } from "../../types";
+import { DEFAULT_SETTINGS, PresentationSettings, CustomPresentation, CustomSlide, PresentationSummary, SlideTemplate, Scene, CameraBackground } from "../../types";
 import type { DisplayItem } from "../../types";
 import type { PhoneCameraOrientation } from "../../types/remote";
 
@@ -86,6 +86,10 @@ export interface AppSlice {
   setPendingScheduleItem: (v: DisplayItem | null) => void;
   cameraOrientations: Record<string, PhoneCameraOrientation>;
   setCameraOrientation: (deviceId: string, orientation: PhoneCameraOrientation) => void;
+  cameraNames: Record<string, string>;
+  setCameraName: (deviceId: string, name: string) => void;
+  cameraDefaults: Record<string, Omit<CameraBackground, "deviceId">>;
+  setCameraDefaults: (deviceId: string, partial: Partial<Omit<CameraBackground, "deviceId">>) => void;
 }
 
 export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) => ({
@@ -183,5 +187,38 @@ export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) =>
       /* localStorage unavailable — keep in-memory only */
     }
     return { cameraOrientations };
+  }),
+  cameraNames: (() => {
+    try {
+      return JSON.parse(localStorage.getItem("cameraNames") ?? "{}") as Record<string, string>;
+    } catch {
+      return {};
+    }
+  })(),
+  setCameraName: (deviceId, name) => set((s) => {
+    const cameraNames = { ...s.cameraNames, [deviceId]: name };
+    try {
+      localStorage.setItem("cameraNames", JSON.stringify(cameraNames));
+    } catch {
+      /* localStorage unavailable — keep in-memory only */
+    }
+    return { cameraNames };
+  }),
+  cameraDefaults: (() => {
+    try {
+      return JSON.parse(localStorage.getItem("cameraDefaults") ?? "{}") as Record<string, Omit<CameraBackground, "deviceId">>;
+    } catch {
+      return {};
+    }
+  })(),
+  setCameraDefaults: (deviceId, partial) => set((s) => {
+    const prev = s.cameraDefaults[deviceId] ?? { mirrored: false, objectFit: "cover", opacity: 1 };
+    const cameraDefaults = { ...s.cameraDefaults, [deviceId]: { ...prev, ...partial } };
+    try {
+      localStorage.setItem("cameraDefaults", JSON.stringify(cameraDefaults));
+    } catch {
+      /* localStorage unavailable — keep in-memory only */
+    }
+    return { cameraDefaults };
   }),
 });

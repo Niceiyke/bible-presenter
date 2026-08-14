@@ -4,7 +4,7 @@ import { useAppStore } from "../store";
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { usePhoneCameraStreams } from "../hooks/usePhoneCameraHost";
 import PhoneCameraVideo from "./shared/PhoneCameraVideo";
-import { Camera, RefreshCw, Video, Play, Monitor, AlertTriangle, Smartphone } from "lucide-react";
+import { Camera, RefreshCw, Video, Play, Monitor, AlertTriangle, Smartphone, Tag, Zap, ArrowLeftRight } from "lucide-react";
 import type { DisplayItem, CameraBackground } from "../types";
 
 interface CameraTabProps {
@@ -29,6 +29,11 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     setSettings,
     cameraOrientations,
     setCameraOrientation,
+    cameraNames,
+    setCameraName,
+    cameraDefaults,
+    setCameraDefaults,
+    liveItem,
   } = useAppStore();
   const phoneStreams = usePhoneCameraStreams();
   const [phoneCameras, setPhoneCameras] = useState<PhoneCameraInfo[]>([]);
@@ -36,8 +41,14 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [cameraError, setCameraError] = useState<CameraError>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [abA, setAbA] = useState<string | null>(null);
+  const [abB, setAbB] = useState<string | null>(null);
 
   const isPhoneSelected = selectedCameraId?.startsWith("phone-camera-") ?? false;
+  const liveDeviceId = liveItem?.type === "Camera" ? liveItem.data.deviceId : null;
+
+  const displayName = (cam: PhoneCameraInfo) => cameraNames[cam.device_id] || cam.device_name;
 
   // Keep the phone-camera list in sync with the backend registry.
   useEffect(() => {
@@ -60,15 +71,75 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     refreshCameras();
   }, []);
 
-  const getCameraData = (): CameraBackground | null => {
-    if (!selectedCameraId) return null;
+  // Pre-fill the A/B slots with the first two phones once they appear.
+  useEffect(() => {
+    if (phoneCameras.length >= 1 && !abA) setAbA(phoneCameras[0].device_id);
+    if (phoneCameras.length >= 2 && !abB) setAbB(phoneCameras[1].device_id);
+  }, [phoneCameras, abA, abB]);
+
+  // Keep the rename input in sync when the selected camera changes.
+  useEffect(() => {
+    if (isPhoneSelected && selectedCameraId) {
+      setRenameValue(cameraNames[selectedCameraId] ?? "");
+    } else {
+      setRenameValue("");
+    }
+  }, [selectedCameraId, isPhoneSelected, cameraNames]);
+
+  const getCameraDataFor = (deviceId: string): CameraBackground => {
+    const d = cameraDefaults[deviceId];
     return {
-      deviceId: selectedCameraId,
-      opacity: 1,
-      objectFit: "cover",
-      mirrored: false,
+      deviceId,
+      opacity: d?.opacity ?? 1,
+      objectFit: d?.objectFit ?? "cover",
+      mirrored: d?.mirrored ?? false,
     };
   };
+
+  const getCameraData = (): CameraBackground | null => {
+    if (!selectedCameraId) return null;
+    return getCameraDataFor(selectedCameraId);
+  };
+
+  const handleRename = (deviceId: string, name: string) => {
+    setRenameValue(name);
+    setCameraName(deviceId, name);
+  };
+
+  const toggleMirror = () => {
+    if (selectedCameraId) {
+      setCameraDefaults(selectedCameraId, { mirrored: !(cameraDefaults[selectedCameraId]?.mirrored ?? false) });
+    }
+  };
+
+  const setFit = (fit: "cover" | "contain" | "fill") => {
+    if (selectedCameraId) setCameraDefaults(selectedCameraId, { objectFit: fit });
+  };
+
+  const setOpacity = (opacity: number) => {
+    if (selectedCameraId) setCameraDefaults(selectedCameraId, { opacity });
+  };
+
+  const abGoLive = (deviceId: string) => {
+    if (onLive) onLive({ type: "Camera", data: getCameraDataFor(deviceId) });
+  };
+
+  const abSwap = () => {
+    const t = abA;
+    setAbA(abB);
+    setAbB(t);
+  };
+
+  const selectedPhoneName = isPhoneSelected && selectedCameraId
+    ? (phoneCameras.find((c) => c.device_id === selectedCameraId)?.device_name ?? "Phone Camera")
+    : "";
+  const mirrorOn = selectedCameraId ? (cameraDefaults[selectedCameraId]?.mirrored ?? false) : false;
+  const fitValue = selectedCameraId ? (cameraDefaults[selectedCameraId]?.objectFit ?? "cover") : "cover";
+  const opacityValue = selectedCameraId ? (cameraDefaults[selectedCameraId]?.opacity ?? 1) : 1;
+  const abSlots: { label: "A" | "B"; value: string | null; set: (v: string | null) => void }[] = [
+    { label: "A", value: abA, set: setAbA },
+    { label: "B", value: abB, set: setAbB },
+  ];
 
   const handleStage = () => {
     const data = getCameraData();
@@ -218,6 +289,57 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
             </div>
           )}
 
+          {isPhoneSelected && (
+            <>
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  <Tag size={12} className="inline mr-1 -mt-0.5" />Camera name
+                </span>
+                <input
+                  value={renameValue}
+                  onChange={(e) => handleRename(selectedCameraId!, e.target.value)}
+                  placeholder={selectedPhoneName}
+                  className="px-2 py-1 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-200 w-44 focus:outline-none focus:border-amber-500/60"
+                  title="Friendly name shown instead of the phone's default"
+                />
+              </div>
+
+              <div className="flex items-center gap-3 px-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 shrink-0">Defaults</span>
+                <button
+                  onClick={toggleMirror}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase transition-all ${
+                    mirrorOn ? "bg-cyan-600 text-white" : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+                  }`}
+                  title="Mirror this camera's feed when staged"
+                >
+                  Mirror
+                </button>
+                <select
+                  value={fitValue}
+                  onChange={(e) => setFit(e.target.value as "cover" | "contain" | "fill")}
+                  className="px-1.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-[10px] font-bold text-slate-300"
+                  title="Fit when staged"
+                >
+                  <option value="cover">Cover</option>
+                  <option value="contain">Fit</option>
+                  <option value="fill">Fill</option>
+                </select>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={opacityValue}
+                  onChange={(e) => setOpacity(parseFloat(e.target.value))}
+                  className="flex-1 h-1.5 accent-amber-500 cursor-pointer"
+                  title="Opacity when staged"
+                />
+                <span className="text-[10px] text-slate-400 w-8 text-right shrink-0">{Math.round(opacityValue * 100)}%</span>
+              </div>
+            </>
+          )}
+
           {cameraError && (
             <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-red-950/60 border border-red-800/60 text-red-300 text-xs">
               <AlertTriangle size={14} className="shrink-0 mt-0.5 text-red-400" />
@@ -278,6 +400,111 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
               Clear Background
             </button>
           </div>
+
+          {phoneCameras.length > 0 && (
+            <>
+              {/* All phone feeds */}
+              <section>
+                <div className="flex items-center justify-between mb-2">
+                  <h2 className="text-xs font-black text-slate-500 uppercase tracking-widest">All Phone Feeds</h2>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {phoneCameras.map(cam => {
+                    const active = selectedCameraId === cam.device_id;
+                    return (
+                      <button
+                        key={cam.device_id}
+                        onClick={() => setSelectedCameraId(cam.device_id)}
+                        className={`relative aspect-video rounded-lg overflow-hidden border transition-all group ${
+                          active ? "border-amber-500 ring-2 ring-amber-500/40" : "border-slate-800 hover:border-slate-600"
+                        }`}
+                        title={displayName(cam)}
+                      >
+                        <PhoneCameraVideo
+                          stream={phoneStreams[cam.device_id] ?? null}
+                          orientation={cameraOrientations[cam.device_id] ?? "portrait"}
+                          objectFit="cover"
+                          mirrored={cameraDefaults[cam.device_id]?.mirrored ?? false}
+                        />
+                        {!phoneStreams[cam.device_id] && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+                            <p className="text-[8px] font-bold uppercase tracking-widest text-slate-300">Connecting…</p>
+                          </div>
+                        )}
+                        <div className="absolute bottom-0 inset-x-0 px-1.5 py-0.5 bg-black/70 text-left">
+                          <p className="text-[9px] font-bold truncate text-slate-200">{displayName(cam)}</p>
+                        </div>
+                        {active && <div className="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-500 animate-pulse" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+
+              {/* A/B switcher */}
+              <section>
+                <h2 className="text-xs font-black text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                  <Zap size={12} /> A/B Camera Switcher
+                </h2>
+                <div className="grid grid-cols-2 gap-3">
+                  {abSlots.map((slot) => {
+                    const isOnAir = slot.value !== null && slot.value === liveDeviceId;
+                    return (
+                      <div
+                        key={slot.label}
+                        className={`rounded-xl border overflow-hidden ${
+                          isOnAir ? "border-red-500/60 bg-red-950/20" : "border-slate-800 bg-slate-900/40"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between px-2.5 py-1.5 gap-2">
+                          <span className="text-[10px] font-black uppercase tracking-widest text-slate-300">{slot.label}</span>
+                          <select
+                            value={slot.value ?? ""}
+                            onChange={(e) => slot.set(e.target.value || null)}
+                            className="max-w-[120px] px-1.5 py-0.5 rounded bg-slate-800 text-[10px] text-slate-300 border border-slate-700"
+                          >
+                            <option value="">— none —</option>
+                            {phoneCameras.map((c) => (
+                              <option key={c.device_id} value={c.device_id}>{displayName(c)}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="aspect-video bg-black">
+                          {slot.value ? (
+                            <PhoneCameraVideo
+                              stream={phoneStreams[slot.value] ?? null}
+                              orientation={cameraOrientations[slot.value] ?? "portrait"}
+                              objectFit="cover"
+                              mirrored={cameraDefaults[slot.value]?.mirrored ?? false}
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center text-slate-600 text-[9px] font-bold uppercase">—</div>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => slot.value && abGoLive(slot.value)}
+                          disabled={!slot.value}
+                          className={`w-full py-1.5 text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 ${
+                            isOnAir
+                              ? "bg-red-600 text-white"
+                              : "bg-slate-800 hover:bg-red-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-slate-200"
+                          }`}
+                        >
+                          <Play size={11} fill="currentColor" /> {isOnAir ? "On Air" : "Go Live"}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <button
+                  onClick={abSwap}
+                  className="mt-2 w-full py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-[10px] font-bold uppercase tracking-widest text-slate-300 flex items-center justify-center gap-1.5 border border-slate-700"
+                >
+                  <ArrowLeftRight size={11} /> Swap A and B
+                </button>
+              </section>
+            </>
+          )}
         </div>
 
         {/* Sidebar / Settings */}
@@ -339,7 +566,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                   >
                     <Smartphone size={14} className={selectedCameraId === cam.device_id ? "text-amber-400" : "text-slate-600"} />
                     <div className={`w-2 h-2 rounded-full ${selectedCameraId === cam.device_id ? "bg-amber-500 animate-pulse" : "bg-red-500 animate-pulse"}`} />
-                    <span className="text-sm font-medium truncate flex-1">{cam.device_name}</span>
+                    <span className="text-sm font-medium truncate flex-1">{displayName(cam)}</span>
                     <span className="text-[8px] font-black uppercase tracking-widest text-red-500/80 shrink-0">LIVE</span>
                   </button>
                 ))}
