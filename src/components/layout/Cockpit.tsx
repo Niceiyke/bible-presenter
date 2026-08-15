@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { AlertTriangle, CalendarDays, ChevronRight, Clock, EyeOff, Layers, Undo2, X, Zap, Loader2 } from "lucide-react";
 import { useAppStore } from "../../store";
-import { displayItemLabel, getItemUid } from "../../utils";
+import { displayItemLabel, getItemUid, resolvePath } from "../../utils";
 import { PreviewCard } from "../PreviewCard";
 import { LowerThirdPreview } from "../LowerThirdPreview";
+import { PropsRenderer } from "../shared/Renderers";
 import { ClearAllModal } from "./ClearAllModal";
 import { Button, ProgressBar } from "../ui";
 import { itemMetaAt } from "../../items/registry";
@@ -45,7 +46,8 @@ export function Cockpit({
     busyActions,
     setBackendError,
     setBusyAction,
-    currentLowerThird, ltVisible,
+    currentLowerThird,
+    propItems, appDataDir,
   } = useAppStore();
 
   const [clearModalOpen, setClearModalOpen] = useState(false);
@@ -202,14 +204,88 @@ export function Cockpit({
           </div>
           <div className="w-full rounded-lg overflow-hidden ring-2 ring-state-live/30 bg-black relative" style={{ aspectRatio: "16/9" }}>
             <PreviewCard item={liveItem} label="" accent="" badge={null} empty="Output is empty" hideHeader />
-            {ltVisible && currentLowerThird && (
+
+            {/* Background logo — full-screen black backdrop, mirroring the
+                output window's z-50 layer exactly. */}
+            {!settings.is_blanked && settings.show_background_logo && (settings.background_logo_path || settings.background_logo_text) && (
+              <div className="absolute inset-0 z-50 bg-black">
+                {settings.background_logo_text ? (
+                  <div className="w-full h-full flex items-center justify-center px-4 text-center">
+                    <p
+                      className="font-black leading-tight drop-shadow-lg"
+                      style={{ color: settings.background_logo_text_color ?? "#ffffff", fontSize: "2.25rem" }}
+                    >
+                      {settings.background_logo_text}
+                    </p>
+                  </div>
+                ) : settings.background_logo_path?.toLowerCase().match(/\.(mp4|webm|mov|mkv|avi)$/) ? (
+                  <video
+                    src={convertFileSrc(resolvePath(settings.background_logo_path, appDataDir))}
+                    className="w-full h-full"
+                    style={{ objectFit: settings.background_logo_fit ?? "cover" }}
+                    autoPlay
+                    loop
+                    muted
+                  />
+                ) : settings.background_logo_path ? (
+                  <img
+                    src={convertFileSrc(resolvePath(settings.background_logo_path, appDataDir))}
+                    className="w-full h-full"
+                    style={{ objectFit: settings.background_logo_fit ?? "cover" }}
+                    alt="Background Logo"
+                  />
+                ) : null}
+              </div>
+            )}
+
+            {/* Corner logo (bottom-right), mirroring the output's z-60 layer. */}
+            {!settings.is_blanked && (settings.logo_text || settings.logo_path) && (
+              <div className="absolute bottom-2 right-2 z-60">
+                {settings.logo_text ? (
+                  <p
+                    className="font-black leading-tight opacity-60 text-right"
+                    style={{ color: settings.logo_text_color ?? "#ffffff", fontSize: "0.9rem" }}
+                  >
+                    {settings.logo_text}
+                  </p>
+                ) : settings.logo_path?.toLowerCase().match(/\.(mp4|webm|mov|mkv|avi)$/) ? (
+                  <video
+                    src={convertFileSrc(resolvePath(settings.logo_path, appDataDir))}
+                    className="w-10 h-10 object-contain opacity-50"
+                    autoPlay
+                    loop
+                    muted
+                  />
+                ) : settings.logo_path ? (
+                  <img
+                    src={convertFileSrc(resolvePath(settings.logo_path, appDataDir))}
+                    className="w-10 h-10 object-contain opacity-50"
+                    alt="Logo"
+                  />
+                ) : null}
+              </div>
+            )}
+
+            {/* Persistent props overlays — same layer as the output window. */}
+            {!settings.is_blanked && propItems.length > 0 && (
+              <PropsRenderer items={propItems} appDataDir={appDataDir} />
+            )}
+
+            {/* Lower third — authoritative backend state, shown whenever it is
+                on air regardless of the local ltVisible flag. */}
+            {!settings.is_blanked && currentLowerThird && (
               <LowerThirdPreview
                 data={currentLowerThird.data}
                 template={currentLowerThird.template}
                 refHeight={settings.reference_output_height ?? 1080}
                 background="transparent"
-                className="absolute inset-0 pointer-events-none"
+                className="absolute inset-0 z-40 pointer-events-none"
               />
+            )}
+
+            {/* Blackout — mirrors the output window's full-black early return. */}
+            {settings.is_blanked && (
+              <div className="absolute inset-0 z-[70] bg-black" />
             )}
           </div>
           {metaRow(liveItem, "live")}

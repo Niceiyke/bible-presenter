@@ -5,6 +5,21 @@ import { Card, Btn, cx } from "../ui";
 
 type FacingMode = "user" | "environment";
 
+/** Physical phone orientation: portrait when the device is held upright,
+ *  landscape when rotated a quarter turn. Falls back to the viewport aspect
+ *  ratio when the ScreenOrientation API is unavailable. */
+function readPhoneOrientation(): "portrait" | "landscape" {
+  try {
+    const so = screen.orientation as ScreenOrientation | undefined;
+    if (so && typeof so.type === "string") {
+      return so.type.startsWith("portrait") ? "portrait" : "landscape";
+    }
+  } catch {
+    /* fall through */
+  }
+  return window.innerHeight >= window.innerWidth ? "portrait" : "landscape";
+}
+
 export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof useRemote>; pushToast: (msg: unknown, kind?: "error" | "info") => void }) {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<FacingMode>("environment");
@@ -202,6 +217,7 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
         device_id: deviceId,
         device_name: deviceName,
         facing_mode: facingMode,
+        orientation: readPhoneOrientation(),
       });
 
       await makeOffer(operatorPc, "operator");

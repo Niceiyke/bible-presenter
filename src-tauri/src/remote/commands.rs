@@ -722,7 +722,7 @@ pub async fn dispatch(
                     // the Camera tab, so a phone starting a camera must not
                     // steal the staged slot from another phone or from the
                     // operator's staged content.
-                    control.register_phone_camera(&device_id, &req.device_id, &req.device_name, &device.id).await;
+                    control.register_phone_camera(&device_id, &req.device_id, &req.device_name, &device.id, req.orientation.clone()).await;
                     crate::store::log_msg(app, &format!("Remote camera: registered {} (\"{}\") owned by {}", device_id, req.device_name, device.id));
                     emit_phone_cameras(app, control).await;
                     RemoteCommandResult::ok_with(&command.command_id, control.hub.current_revision(), json!({ "device_id": device_id }))

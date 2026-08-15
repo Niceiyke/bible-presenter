@@ -11,7 +11,7 @@ import {
 } from "./shared/Renderers";
 import { useAppStore } from "../store";
 import { usePhoneCameraStreams } from "../hooks/usePhoneCameraHost";
-import PhoneCameraVideo from "./shared/PhoneCameraVideo";
+import PhoneCameraVideo, { usePhoneCameraOrientation } from "./shared/PhoneCameraVideo";
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { useReferenceHeight } from "../hooks/useReferenceHeight";
 import { useSlideFit } from "../hooks/useSlideFit";
@@ -43,12 +43,18 @@ export function PreviewCard({
   isLocalPreview?: boolean;
   hideHeader?: boolean;
 }) {
-  const { appDataDir, settings, cameraOrientations, cameraLook } = useAppStore();
+  const { appDataDir, settings, cameraLook } = useAppStore();
   const phoneStreams = usePhoneCameraStreams();
   const isVideo = item?.type === "Media" && (item.data as MediaItem).media_type === "Video";
   const isAudio = item?.type === "Media" && (item.data as MediaItem).media_type === "Audio";
   const isCamera = item?.type === "Camera";
   const showControls = isVideo || isAudio;
+
+  // Operator override first, then the phone-reported physical orientation, so
+  // the live/staged preview matches the phone regardless of how the browser
+  // delivered the frame.
+  const isPhoneCamera = isCamera && item?.data.deviceId?.startsWith("phone-camera-") === true;
+  const phoneOrientation = usePhoneCameraOrientation(isPhoneCamera ? item.data.deviceId : null);
 
   const themeColors = THEMES[settings.theme]?.colors ?? THEMES.dark.colors;
   const effectiveColors = settings.custom_theme_colors ? { ...themeColors, ...settings.custom_theme_colors } : themeColors;
@@ -349,7 +355,7 @@ export function PreviewCard({
               <div className="w-full h-full relative border border-slate-800 rounded-lg overflow-hidden bg-black">
                 <PhoneCameraVideo
                   stream={item.data.deviceId.startsWith("phone-camera-") ? phoneStreams[item.data.deviceId] ?? null : undefined}
-                  orientation={item.data.deviceId.startsWith("phone-camera-") ? cameraOrientations[item.data.deviceId] ?? "portrait" : "portrait"}
+                  orientation={item.data.deviceId.startsWith("phone-camera-") ? phoneOrientation : "portrait"}
                   look={item.data.deviceId.startsWith("phone-camera-") ? cameraLook[item.data.deviceId] ?? null : null}
                   mirrored={item.data.mirrored}
                   objectFit="contain"

@@ -345,6 +345,10 @@ pub struct RemoteCameraStartPayload {
     pub device_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub facing_mode: Option<String>,
+    /// The phone's physical screen orientation ("portrait" | "landscape") so
+    /// the operator windows can auto-correct the display rotation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

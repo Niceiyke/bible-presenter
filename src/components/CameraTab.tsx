@@ -6,7 +6,7 @@ import { usePhoneCameraStreams, usePhoneCameraStates } from "../hooks/usePhoneCa
 import PhoneCameraVideo from "./shared/PhoneCameraVideo";
 import { Camera, RefreshCw, Video, Play, Monitor, AlertTriangle, Smartphone, Tag, Zap, ArrowLeftRight, Aperture, SlidersHorizontal } from "lucide-react";
 import type { DisplayItem, CameraBackground, MediaItem } from "../types";
-import type { CameraLook } from "../types/remote";
+import type { CameraLook, PhoneCameraOrientation } from "../types/remote";
 import { DEFAULT_CAMERA_LOOK } from "../types/remote";
 
 interface CameraTabProps {
@@ -19,6 +19,7 @@ type CameraError = "permission" | "device" | "unknown" | null;
 interface PhoneCameraInfo {
   device_id: string;
   device_name: string;
+  orientation?: PhoneCameraOrientation;
 }
 
 export function CameraTab({ onStage, onLive }: CameraTabProps) {
@@ -64,6 +65,30 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
   useTauriEvent("phone-cameras-changed", (e) => {
     setPhoneCameras(e.cameras ?? []);
   });
+
+  // Persist the phone-reported physical orientation so auxiliary windows
+  // (output, stage) can read it through `usePhoneCameraOrientation`, which
+  // shares localStorage across the WebView2 origin.
+  useEffect(() => {
+    try {
+      const map = JSON.parse(localStorage.getItem("reportedCameraOrientations") ?? "{}") as Record<string, unknown>;
+      let changed = false;
+      for (const cam of phoneCameras) {
+        if (cam.orientation && map[cam.device_id] !== cam.orientation) {
+          map[cam.device_id] = cam.orientation;
+          changed = true;
+        }
+      }
+      if (changed) localStorage.setItem("reportedCameraOrientations", JSON.stringify(map));
+    } catch {
+      /* localStorage unavailable — reported orientation won't cross windows */
+    }
+  }, [phoneCameras]);
+
+  // Effective display orientation: the operator's explicit override wins,
+  // otherwise fall back to the phone-reported physical orientation.
+  const effectiveOrientation = (deviceId: string): PhoneCameraOrientation =>
+    cameraOrientations[deviceId] ?? phoneCameras.find((c) => c.device_id === deviceId)?.orientation ?? "portrait";
 
   // If the selected phone camera goes away (phone disconnected / stopped),
   // drop the selection so the preview doesn't linger on a dead feed.
@@ -170,17 +195,25 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    const rotate = isPhoneSelected && (cameraOrientations[selectedCameraId!] ?? "portrait") === "landscape";
+    // Mirror the same correction PhoneCameraVideo applies so the saved frame
+    // matches the preview: rotate only when the delivered frame contradicts
+    // the phone's physical orientation.
+    const w = el.videoWidth;
+    const h = el.videoHeight;
+    const rotate =
+      isPhoneSelected &&
+      w !== h &&
+      (effectiveOrientation(selectedCameraId!) === "portrait" ? w > h : w < h);
     if (rotate) {
-      canvas.width = el.videoHeight;
-      canvas.height = el.videoWidth;
+      canvas.width = h;
+      canvas.height = w;
       ctx.translate(canvas.width, 0);
       ctx.rotate(Math.PI / 2);
     } else {
-      canvas.width = el.videoWidth;
-      canvas.height = el.videoHeight;
+      canvas.width = w;
+      canvas.height = h;
     }
-    ctx.drawImage(el, 0, 0, el.videoWidth, el.videoHeight);
+    ctx.drawImage(el, 0, 0, w, h);
     const dataUrl = canvas.toDataURL("image/png");
     try {
       const item = await invoke<MediaItem>("save_camera_snapshot", { dataUrl });
@@ -285,7 +318,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
             {isPhoneSelected ? (
               <PhoneCameraVideo
                 stream={phoneStreams[selectedCameraId!] ?? null}
-                orientation={cameraOrientations[selectedCameraId!] ?? "portrait"}
+                orientation={effectiveOrientation(selectedCameraId!)}
                 look={cameraLook[selectedCameraId!] ?? null}
                 objectFit="contain"
                 videoRef={(el) => { videoRef.current = el; }}
@@ -320,7 +353,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
           {isPhoneSelected && (
             <div className="flex items-center justify-between px-1">
               <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                <Smartphone size={12} className="inline mr-1 -mt-0.5" />Display orientation
+                <Smartphone size={12} className="inline mr-1 -mt-0.5" />Phone orientation
               </span>
               <div className="flex rounded-lg overflow-hidden border border-slate-700">
                 {(["portrait", "landscape"] as const).map((mode) => (
@@ -328,7 +361,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                     key={mode}
                     onClick={() => setCameraOrientation(selectedCameraId!, mode)}
                     className={`px-3 py-1 text-[10px] font-black uppercase transition-all ${
-                      (cameraOrientations[selectedCameraId!] ?? "portrait") === mode
+                      effectiveOrientation(selectedCameraId!) === mode
                         ? "bg-cyan-600 text-white"
                         : "bg-slate-800 hover:bg-slate-700 text-slate-300"
                     }`}
@@ -540,7 +573,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                           {slot.value ? (
                             <PhoneCameraVideo
                               stream={phoneStreams[slot.value] ?? null}
-                              orientation={cameraOrientations[slot.value] ?? "portrait"}
+                              orientation={effectiveOrientation(slot.value)}
                               objectFit="cover"
                               look={cameraLook[slot.value] ?? null}
                               mirrored={cameraDefaults[slot.value]?.mirrored ?? false}
@@ -682,7 +715,7 @@ function PhoneFeedTile({ cam, name, selected, onSelect }: {
     >
       <PhoneCameraVideo
         stream={stream}
-        orientation={cameraOrientations[cam.device_id] ?? "portrait"}
+        orientation={cameraOrientations[cam.device_id] ?? cam.orientation ?? "portrait"}
         objectFit="cover"
         look={cameraLook[cam.device_id] ?? null}
         mirrored={cameraDefaults[cam.device_id]?.mirrored ?? false}

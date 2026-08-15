@@ -260,6 +260,7 @@ export interface RemoteCameraStartPayload {
   device_id: string;
   device_name: string;
   facing_mode?: "user" | "environment";
+  orientation?: PhoneCameraOrientation;
 }
 
 export interface RemoteCameraOfferPayload {

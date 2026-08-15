@@ -80,6 +80,9 @@ pub struct PhoneCamera {
     /// The remote Control device.id that owns this camera (used to target
     /// operator->phone signaling back to the right phone).
     pub owner_device_id: String,
+    /// Physical screen orientation reported by the phone on `camera.start`
+    /// ("portrait" | "landscape"), used to auto-correct display rotation.
+    pub orientation: Option<String>,
 }
 
 /// Operator-facing summary of a connected phone camera (the Camera tab lists
@@ -89,6 +92,8 @@ pub struct PhoneCameraInfo {
     /// Prefixed id, also used as the DisplayItem device id ("phone-camera-...").
     pub device_id: String,
     pub device_name: String,
+    /// Physical screen orientation reported by the phone ("portrait" | "landscape").
+    pub orientation: Option<String>,
 }
 
 impl RemoteControl {
@@ -215,12 +220,13 @@ impl RemoteControl {
     /// Register a phone camera device. Called when a remote client sends
     /// `camera.start` command. `owner_device_id` is the remote Control
     /// session id of the phone so operator->phone signaling can be targeted.
-    pub async fn register_phone_camera(&self, device_id: &str, raw_device_id: &str, device_name: &str, owner_device_id: &str) {
+    pub async fn register_phone_camera(&self, device_id: &str, raw_device_id: &str, device_name: &str, owner_device_id: &str, orientation: Option<String>) {
         let camera = PhoneCamera {
             device_id: device_id.to_string(),
             raw_device_id: raw_device_id.to_string(),
             device_name: device_name.to_string(),
             owner_device_id: owner_device_id.to_string(),
+            orientation,
         };
         self.phone_cameras.write().await.insert(device_id.to_string(), camera);
     }
@@ -241,6 +247,7 @@ impl RemoteControl {
             .map(|c| PhoneCameraInfo {
                 device_id: c.device_id.clone(),
                 device_name: c.device_name.clone(),
+                orientation: c.orientation.clone(),
             })
             .collect();
         list.sort_by(|a, b| a.device_name.cmp(&b.device_name));

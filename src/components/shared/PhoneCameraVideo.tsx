@@ -3,31 +3,51 @@ import type { CSSProperties } from "react";
 import type { PhoneCameraOrientation, CameraLook } from "../../types/remote";
 
 const STORAGE_KEY = "cameraOrientations";
+const REPORTED_STORAGE_KEY = "reportedCameraOrientations";
 
-function readStoredOrientation(deviceId: string | null | undefined): PhoneCameraOrientation {
-  if (!deviceId) return "portrait";
+function readMapValue(key: string, deviceId: string | null | undefined, allowed: readonly PhoneCameraOrientation[]): PhoneCameraOrientation | null {
+  if (!deviceId) return null;
   try {
-    const map = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}") as Record<string, PhoneCameraOrientation>;
-    return map?.[deviceId] ?? "portrait";
+    const map = JSON.parse(localStorage.getItem(key) ?? "{}") as Record<string, unknown>;
+    const v = map?.[deviceId];
+    return allowed.includes(v as PhoneCameraOrientation) ? (v as PhoneCameraOrientation) : null;
   } catch {
-    return "portrait";
+    return null;
   }
 }
 
+function readStoredOrientation(deviceId: string | null | undefined): PhoneCameraOrientation | null {
+  return readMapValue(STORAGE_KEY, deviceId, ["portrait", "landscape"]);
+}
+
+/** Physical orientation reported by the phone in its `camera.start` payload
+ *  ("portrait" | "landscape"). The main window persists it here so auxiliary
+ *  windows (output, stage) can fall back to it without mounting the store. */
+function readReportedOrientation(deviceId: string | null | undefined): PhoneCameraOrientation | null {
+  return readMapValue(REPORTED_STORAGE_KEY, deviceId, ["portrait", "landscape"]);
+}
+
+/** Stored operator override first, then the phone-reported orientation, then
+ *  portrait as a last resort. */
+function readEffectiveOrientation(deviceId: string | null | undefined): PhoneCameraOrientation {
+  return readStoredOrientation(deviceId) ?? readReportedOrientation(deviceId) ?? "portrait";
+}
+
 /**
- * Reads the persisted per-phone-camera orientation. The operator windows
- * (main, output, stage) share the same WebView2 origin and localStorage, and
- * the main window writes this map on every change, so listening to the
- * `storage` event keeps auxiliary windows (which do not mount the operator
- * store) in sync.
+ * Reads the effective per-phone-camera orientation (operator override, else
+ * the phone-reported physical orientation). The operator windows (main,
+ * output, stage) share the same WebView2 origin and localStorage, and the
+ * main window writes this map on every change, so listening to the `storage`
+ * event keeps auxiliary windows (which do not mount the operator store) in
+ * sync.
  */
 export function usePhoneCameraOrientation(deviceId: string | null | undefined): PhoneCameraOrientation {
-  const [orientation, setOrientation] = useState<PhoneCameraOrientation>(() => readStoredOrientation(deviceId));
+  const [orientation, setOrientation] = useState<PhoneCameraOrientation>(() => readEffectiveOrientation(deviceId));
   useEffect(() => {
-    setOrientation(readStoredOrientation(deviceId));
+    setOrientation(readEffectiveOrientation(deviceId));
     const onStorage = (e: StorageEvent) => {
-      if (!e.key || e.key === STORAGE_KEY) {
-        setOrientation(readStoredOrientation(deviceId));
+      if (!e.key || e.key === STORAGE_KEY || e.key === REPORTED_STORAGE_KEY) {
+        setOrientation(readEffectiveOrientation(deviceId));
       }
     };
     window.addEventListener("storage", onStorage);
@@ -70,6 +90,9 @@ interface Props {
   /** Relayed MediaStream to show. When omitted, srcObject is managed by the
    *  caller through `videoRef` (e.g. PreviewCard's own getUserMedia flow). */
   stream?: MediaStream | null;
+  /** How the phone is physically held: "portrait" upright, "landscape" rotated
+   *  a quarter turn. The stream is rotated to match this, compensating for
+   *  whichever orientation the browser delivered. */
   orientation: PhoneCameraOrientation;
   mirrored?: boolean;
   /** object-fit used when NOT rotating. "landscape" always uses `contain` on
@@ -87,11 +110,17 @@ interface Props {
 }
 
 /**
- * Renders a camera feed with a per-camera display orientation. Phone cameras
- * stream whatever orientation the sensor produces (portrait when the phone is
- * held portrait); we can't re-orient the frames themselves, so "landscape"
- * rotates the video 90deg and scales it to cover the container. Used by the
- * operator preview (Cockpit, Camera tab) and the projected output window.
+ * Renders a camera feed matching the phone's physical orientation. The
+ * operator windows receive whatever orientation the browser delivers (the
+ * sensor is landscape even when the phone is held portrait, with rotation
+ * metadata that the browser may or may not apply), so we only rotate the
+ * frame when the delivered frame contradicts the phone's orientation: a
+ * portrait phone delivering landscape frames needs a 90deg turn, a landscape
+ * phone delivering portrait frames does too. `videoSize` is the rotation-
+ * corrected frame dimension reported by the video element, so the two cases
+ * are distinguished by comparing it against the requested orientation. Used
+ * by the operator preview (Cockpit, Camera tab) and the projected output
+ * window.
  */
 export default function PhoneCameraVideo({
   stream,
@@ -125,7 +154,11 @@ export default function PhoneCameraVideo({
     return () => ro.disconnect();
   }, []);
 
-  const rotate = orientation === "landscape";
+  const rotate =
+    !!videoSize &&
+    videoSize.w !== videoSize.h &&
+    ((orientation === "portrait" && videoSize.w > videoSize.h) ||
+      (orientation === "landscape" && videoSize.w < videoSize.h));
   const scale =
     rotate && box && box.w > 0 && box.h > 0
       ? Math.max(box.w / box.h, videoSize && videoSize.h > 0 && videoSize.w > 0 ? videoSize.h / videoSize.w : 1.78)
