@@ -22,6 +22,7 @@ function makeSnapshot(overrides: Partial<RemoteSnapshot> = {}): RemoteSnapshot {
     bible_versions: ["KJV"],
     active_bible_version: "KJV",
     songs: [],
+    lt_templates: [],
     ...overrides,
   };
 }

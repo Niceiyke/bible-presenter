@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { PhoneCameraOrientation, CameraLook, CameraChromaConfig } from "../../types/remote";
 
 const STORAGE_KEY = "cameraOrientations";
@@ -40,19 +41,55 @@ function readEffectiveOrientation(deviceId: string | null | undefined): PhoneCam
  * output, stage) share the same WebView2 origin and localStorage, and the
  * main window writes this map on every change, so listening to the `storage`
  * event keeps auxiliary windows (which do not mount the operator store) in
- * sync.
+ * sync. The `phone-cameras-changed` Tauri event is also consumed directly so
+ * the feed re-orients the instant the phone reports a rotation — `storage`
+ * events never fire in the window that performed the write, which would
+ * otherwise leave the main window's own preview stale until some other
+ * re-render.
  */
 export function usePhoneCameraOrientation(deviceId: string | null | undefined): PhoneCameraOrientation | null {
   const [orientation, setOrientation] = useState<PhoneCameraOrientation | null>(() => readEffectiveOrientation(deviceId));
   useEffect(() => {
-    setOrientation(readEffectiveOrientation(deviceId));
+    const refresh = () => setOrientation(readEffectiveOrientation(deviceId));
+    refresh();
     const onStorage = (e: StorageEvent) => {
       if (!e.key || e.key === STORAGE_KEY || e.key === REPORTED_STORAGE_KEY) {
-        setOrientation(readEffectiveOrientation(deviceId));
+        refresh();
       }
     };
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
+    if (deviceId) {
+      listen("phone-cameras-changed", (e) => {
+        if (cancelled) return;
+        const cameras = (e.payload as { cameras?: { device_id?: string; orientation?: PhoneCameraOrientation }[] })?.cameras ?? [];
+        const cam = cameras.find((c) => c.device_id === deviceId);
+        if (cam?.orientation) {
+          // Persist the freshly reported orientation so the localStorage
+          // fallback (used by windows/views without a live Tauri listener)
+          // is never stale, then re-read the effective value.
+          try {
+            const map = JSON.parse(localStorage.getItem(REPORTED_STORAGE_KEY) ?? "{}") as Record<string, unknown>;
+            if (map[deviceId] !== cam.orientation) {
+              map[deviceId] = cam.orientation;
+              localStorage.setItem(REPORTED_STORAGE_KEY, JSON.stringify(map));
+            }
+          } catch {
+            /* localStorage unavailable — in-memory state still updates */
+          }
+          refresh();
+        }
+      }).then((f) => {
+        unlisten = f;
+        if (cancelled) { f(); unlisten = undefined; }
+      });
+    }
+    return () => {
+      cancelled = true;
+      unlisten?.();
+      window.removeEventListener("storage", onStorage);
+    };
   }, [deviceId]);
   return orientation;
 }
@@ -252,6 +289,28 @@ export default function PhoneCameraVideo({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // Keep `videoSize` current: browsers may re-negotiate the delivered frame
+  // dimensions when the phone physically rotates (the element fires `resize`
+  // whenever `videoWidth`/`videoHeight` change). The rotation heuristic below
+  // compares `videoSize` against the phone-reported orientation, so a stale
+  // size would apply (or omit) a 90deg turn on an already-rotated frame and
+  // the subject would appear flipped until the next metadata load.
+  useEffect(() => {
+    const el = rawVideoRef.current;
+    if (!el) return;
+    const syncSize = () => {
+      if (el.videoWidth > 0 && el.videoHeight > 0) {
+        setVideoSize({ w: el.videoWidth, h: el.videoHeight });
+      }
+    };
+    el.addEventListener("resize", syncSize);
+    el.addEventListener("loadedmetadata", syncSize);
+    return () => {
+      el.removeEventListener("resize", syncSize);
+      el.removeEventListener("loadedmetadata", syncSize);
+    };
+  }, [isChroma]);
 
   // Chroma-key pipeline: a hidden <video> feeds a WebGL fragment shader that
   // keys out the selected color; the visible <canvas> keeps the same

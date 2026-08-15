@@ -157,10 +157,14 @@ pub enum RemoteCommandType {
     StudioGoLive,
     #[serde(rename = "songs.search")]
     SongsSearch,
+    #[serde(rename = "song.lines")]
+    SongLines,
     #[serde(rename = "song.stage")]
     SongStage,
     #[serde(rename = "song.go_live")]
     SongGoLive,
+    #[serde(rename = "lower_third.templates")]
+    LowerThirdTemplates,
     #[serde(rename = "lower_third.show")]
     LowerThirdShow,
     #[serde(rename = "lower_third.hide")]
@@ -334,6 +338,15 @@ pub struct RemoteSongSearch {
     pub include_hymns: bool,
 }
 
+/// Read-only request for the flattened lyric lines of one song (the exact
+/// `{ text, section_label }` sequence the operator's lower-third lyrics mode
+/// uses). Lets the phone drive line-by-line navigation without shipping every
+/// lyric line in the snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteSongLinesRequest {
+    pub song_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteSongControl {
     pub song_id: String,
@@ -343,12 +356,39 @@ pub struct RemoteSongControl {
     pub section_index: Option<usize>,
 }
 
+/// Lightweight saved lower-third template summary (id + display name) sent in
+/// snapshots so the phone can offer a template picker without the full JSON.
+/// The full template is resolved server-side from `template_id` on show.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteLtTemplateSummary {
+    pub id: String,
+    pub name: String,
+}
+
+/// Scroll override a phone can attach to a FreeText lower third. Merged onto
+/// the resolved template (`scrollEnabled` / `scrollDirection` / `scrollCount`)
+/// so a phone user can toggle ticker behavior without editing templates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteLtScroll {
+    pub enabled: bool,
+    /// "ltr" | "rtl"
+    pub direction: String,
+    /// 0 = infinite
+    pub count: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteLowerThirdPayload {
     pub kind: String,
     pub data: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<serde_json::Value>,
+    /// Saved-template id to resolve server-side. Ignored when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_id: Option<String>,
+    /// Optional scroll override for FreeText; merged onto the resolved template.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scroll: Option<RemoteLtScroll>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -454,6 +494,7 @@ pub struct RemoteSnapshot {
     pub bible_versions: Vec<String>,
     pub active_bible_version: String,
     pub songs: Vec<RemoteSongSummary>,
+    pub lt_templates: Vec<RemoteLtTemplateSummary>,
 }
 
 #[cfg(test)]
@@ -500,6 +541,7 @@ mod tests {
             bible_versions: vec!["KJV".into()],
             active_bible_version: "KJV".into(),
             songs: Vec::new(),
+            lt_templates: Vec::new(),
         };
         let json = serde_json::to_string(&s).unwrap();
         let back: serde_json::Value = serde_json::from_str(&json).unwrap();

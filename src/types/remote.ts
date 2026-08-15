@@ -57,8 +57,10 @@ export type RemoteCommandType =
   | "studio.stage"
   | "studio.go_live"
   | "songs.search"
+  | "song.lines"
   | "song.stage"
   | "song.go_live"
+  | "lower_third.templates"
   | "lower_third.show"
   | "lower_third.hide"
   | "camera.start"
@@ -132,6 +134,56 @@ export interface RemoteSongSummary {
   section_labels: string[];
 }
 
+export interface RemoteSongsSearch {
+  query: string;
+  include_hymns?: boolean;
+}
+
+/** Read-only request for the flattened lyric lines of one song (the exact
+ *  `{ text, section_label }` sequence the operator's lower-third lyrics mode
+ *  uses). */
+export interface RemoteSongLinesRequest {
+  song_id: string;
+}
+
+/** One flattened lyric line as returned by `song.lines`. `section_label` is
+ *  empty when the "Show song section labels" output setting is off. */
+export interface RemoteLtLine {
+  text: string;
+  section_label: string;
+}
+
+export interface RemoteSongControlPayload {
+  song_id: string;
+  style?: "FullScreen" | "LowerThird";
+  section_index?: number;
+}
+
+/** Lightweight saved lower-third template summary (id + name) sent in
+ *  snapshots so the phone can offer a template picker without the full JSON. */
+export interface RemoteLtTemplateSummary {
+  id: string;
+  name: string;
+}
+
+/** Scroll override a phone can attach to a FreeText lower third. Merged onto
+ *  the resolved template server-side. */
+export interface RemoteLtScroll {
+  enabled: boolean;
+  direction: "ltr" | "rtl";
+  count: number;
+}
+
+export interface RemoteLowerThirdPayload {
+  kind: "Nameplate" | "Lyrics" | "FreeText";
+  data: unknown;
+  template?: unknown;
+  /** Saved-template id to resolve server-side. Ignored when absent. */
+  template_id?: string;
+  /** Optional scroll override for FreeText; merged onto the resolved template. */
+  scroll?: RemoteLtScroll;
+}
+
 export interface RemoteSnapshot {
   protocol_version: number;
   revision: number;
@@ -151,6 +203,8 @@ export interface RemoteSnapshot {
   bible_versions: string[];
   active_bible_version: string;
   songs: RemoteSongSummary[];
+  /** Lightweight saved lower-third template summaries for the phone picker. */
+  lt_templates: RemoteLtTemplateSummary[];
 }
 
 export interface RemoteStatus {
@@ -214,23 +268,6 @@ export interface RemoteSearchResult {
 export interface RemoteServiceList {
   active_service: ServiceMeta | null;
   entries: ScheduleEntry[];
-}
-
-export interface RemoteSongsSearch {
-  query: string;
-  include_hymns?: boolean;
-}
-
-export interface RemoteSongControlPayload {
-  song_id: string;
-  style?: "FullScreen" | "LowerThird";
-  section_index?: number;
-}
-
-export interface RemoteLowerThirdPayload {
-  kind: "Nameplate" | "Lyrics" | "FreeText";
-  data: unknown;
-  template?: unknown;
 }
 
 /** WebRTC peer target for a phone camera: which operator-side window answers. */

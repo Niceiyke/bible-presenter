@@ -195,9 +195,19 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
   };
 
   const abSwap = () => {
-    const t = abA;
-    setAbA(abB);
-    setAbB(t);
+    const wasA = abA;
+    const wasB = abB;
+    setAbA(wasB);
+    setAbB(wasA);
+    // A production A/B cut: when one slot is on air, swapping also switches the
+    // live output to the other camera (now occupying slot A). Otherwise the
+    // button would only re-label the two feeds, which is surprising on a live
+    // cut switcher.
+    if (liveDeviceId === wasA && wasB) {
+      if (onLive) onLive({ type: "Camera", data: getCameraDataFor(wasB) });
+    } else if (liveDeviceId === wasB && wasA) {
+      if (onLive) onLive({ type: "Camera", data: getCameraDataFor(wasA) });
+    }
   };
 
   const mirrorOn = selectedCameraId ? (cameraDefaults[selectedCameraId]?.mirrored ?? false) : false;

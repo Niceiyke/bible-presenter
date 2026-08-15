@@ -3,8 +3,8 @@ use crate::remote::auth::StoredDevice;
 use crate::remote::protocol::{
     RemoteCameraIcePayload, RemoteCameraOfferPayload, RemoteCameraStartPayload,
     RemoteCommand, RemoteCommandResult, RemoteCommandType, RemoteEventKind,
-    RemoteLowerThirdPayload, RemotePermission, RemoteSongControl, RemoteSongSearch,
-    RemoteSongSummary, RemoteStudioPresentation, RemoteStudioSlideInfo,
+    RemoteLowerThirdPayload, RemotePermission, RemoteSongControl, RemoteSongLinesRequest,
+    RemoteSongSearch, RemoteSongSummary, RemoteStudioPresentation, RemoteStudioSlideInfo,
     RemoteStudioSlidePayload, RemoteTimerPayload, RemoteVerseRef,
 };
 use crate::remote::{RemoteControl, DESKTOP_CONTROLLER_ID};
@@ -413,6 +413,42 @@ pub fn op_hide_lower_third(app: &AppHandle, state: &AppState, source: Option<Str
     state.remote.hub.publish(RemoteEventKind::LowerThirdChanged, json!({ "lower_third": null }), source);
 }
 
+/// Resolves the full lower-third template the remote wants to project. A
+/// `template_id` referencing a saved template wins; otherwise the raw
+/// `template` JSON is used as-is; otherwise an empty object (renders with
+/// defaults). A FreeText `scroll` override is merged onto the resolved
+/// template so phone users can toggle ticker behavior without editing
+/// templates on the operator machine.
+fn resolve_lt_template(
+    state: &AppState,
+    raw: Option<serde_json::Value>,
+    template_id: Option<String>,
+    scroll: Option<crate::remote::protocol::RemoteLtScroll>,
+) -> Option<serde_json::Value> {
+    let mut tpl = match &template_id {
+        Some(id) => state
+            .media_schedule
+            .load_lt_templates()
+            .ok()
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .find(|t| t.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+            .or(raw),
+        None => raw,
+    };
+    if let Some(scroll) = scroll {
+        let mut obj = tpl.unwrap_or_else(|| serde_json::json!({}));
+        if let Some(map) = obj.as_object_mut() {
+            map.insert("scrollEnabled".into(), json!(scroll.enabled));
+            map.insert("scrollDirection".into(), json!(scroll.direction));
+            map.insert("scrollCount".into(), json!(scroll.count));
+        }
+        tpl = Some(obj);
+    }
+    tpl
+}
+
 // ---------------------------------------------------------------------------
 // Authorization helpers
 // ---------------------------------------------------------------------------
@@ -502,11 +538,26 @@ pub async fn dispatch(
     device: &StoredDevice,
     command: &RemoteCommand,
 ) -> RemoteCommandResult {
+    // Camera start/stop are register-only for the phone feed (the operator
+    // picks which feed to stage in the Camera tab), so they deliberately do
+    // NOT require the controller lease — a phone may stream a camera without
+    // taking over presentation control. They are also exempt from the revision
+    // gate: re-registering on rotation (to report the new physical
+    // orientation) must never be dropped just because the phone's
+    // `expected_revision` raced with an unrelated hub event, or the projected
+    // feed would keep the stale orientation until the revision caught up.
+    let camera_register = matches!(
+        command.r#type,
+        RemoteCommandType::CameraStart | RemoteCommandType::CameraStop
+    );
+
     // Mutating commands must pass the revision + permission gates before
     // touching authoritative state. Read-only commands skip the lease check.
     if is_mutating(command.r#type.clone()) {
-        if let Err(e) = check_revision(control, command.expected_revision) {
-            return err_result(&command.command_id, control.hub.current_revision(), "stale_revision", &e);
+        if !camera_register {
+            if let Err(e) = check_revision(control, command.expected_revision) {
+                return err_result(&command.command_id, control.hub.current_revision(), "stale_revision", &e);
+            }
         }
         // `RemoteRequestControl` is what *acquires* the lease, so it bypasses
         // the lease gate but still needs at least one content permission to be
@@ -533,14 +584,9 @@ pub async fn dispatch(
                     return err_result(&command.command_id, control.hub.current_revision(), "forbidden", &e);
                 }
             }
-            // Camera start/stop are register-only for the phone feed (the
-            // operator picks which feed to stage in the Camera tab), so they
+            // Camera start/stop are register-only for the phone feed, so they
             // deliberately do NOT require the controller lease — a phone may
             // stream a camera without taking over presentation control.
-            let camera_register = matches!(
-                command.r#type,
-                RemoteCommandType::CameraStart | RemoteCommandType::CameraStop
-            );
             if !camera_register {
                 if let Err(e) = require_lease(control, device) {
                     return err_result(&command.command_id, control.hub.current_revision(), "lease_required", &e);
@@ -822,6 +868,33 @@ pub async fn dispatch(
                 err_result(&command.command_id, control.hub.current_revision(), "missing_payload", "Missing song search query")
             }
         }
+        RemoteCommandType::SongLines => {
+            let req = command_payload::<RemoteSongLinesRequest>(command).ok();
+            match req {
+                Some(req) => match resolve_song(app, state, &req.song_id).await {
+                    Some(song) => {
+                        let show_section_labels = {
+                            let settings = state.presentation.settings.lock();
+                            settings.show_song_section_labels
+                        };
+                        let lines: Vec<serde_json::Value> = song_sequence(&song)
+                            .iter()
+                            .flat_map(|sec| {
+                                sec.lines.iter().map(move |line| {
+                                    json!({
+                                        "text": line,
+                                        "section_label": if show_section_labels { sec.label.clone() } else { String::new() },
+                                    })
+                                })
+                            })
+                            .collect();
+                        RemoteCommandResult::ok_with(&command.command_id, control.hub.current_revision(), json!(lines))
+                    }
+                    None => err_result(&command.command_id, control.hub.current_revision(), "song_not_found", "Song not found"),
+                },
+                None => err_result(&command.command_id, control.hub.current_revision(), "missing_payload", "Missing song id"),
+            }
+        }
         RemoteCommandType::SongStage | RemoteCommandType::SongGoLive => {
             let req = command_payload::<RemoteSongControl>(command).ok();
             let resp = match req {
@@ -891,7 +964,8 @@ pub async fn dispatch(
                     let data_json = json!({ "kind": req.kind, "data": req.data });
                     match serde_json::from_value::<LowerThirdData>(data_json) {
                         Ok(data) => {
-                            op_show_lower_third(app, state, data, req.template, source.clone());
+                            let template = resolve_lt_template(state, req.template, req.template_id, req.scroll);
+                            op_show_lower_third(app, state, data, template, source.clone());
                             RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
                         }
                         Err(e) => err_result(&command.command_id, control.hub.current_revision(), "invalid_lower_third", &e.to_string()),
@@ -899,6 +973,23 @@ pub async fn dispatch(
                 }
                 None => err_result(&command.command_id, control.hub.current_revision(), "missing_payload", "Missing lower-third payload"),
             }
+        }
+        RemoteCommandType::LowerThirdTemplates => {
+            let templates = state
+                .media_schedule
+                .load_lt_templates()
+                .ok()
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default();
+            let summaries: Vec<serde_json::Value> = templates
+                .iter()
+                .filter_map(|t| {
+                    let id = t.get("id")?.as_str()?.to_string();
+                    let name = t.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+                    Some(json!({ "id": id, "name": name }))
+                })
+                .collect();
+            RemoteCommandResult::ok_with(&command.command_id, control.hub.current_revision(), json!(summaries))
         }
         RemoteCommandType::LowerThirdHide => {
             op_hide_lower_third(app, state, source.clone());

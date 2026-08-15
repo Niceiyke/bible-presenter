@@ -1,5 +1,6 @@
 use crate::remote::protocol::{
-    RemoteControllerState, RemotePermissions, RemoteRole, RemoteSnapshot, RemoteSongSummary,
+    RemoteControllerState, RemoteLtTemplateSummary, RemotePermissions, RemoteRole, RemoteSnapshot,
+    RemoteSongSummary,
 };
 use crate::state::AppState;
 use crate::store::Song;
@@ -78,6 +79,20 @@ pub fn build_snapshot(
         })
         .collect();
 
+    let lt_templates: Vec<RemoteLtTemplateSummary> = state
+        .media_schedule
+        .load_lt_templates()
+        .ok()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|t| {
+            let id = t.get("id")?.as_str()?.to_string();
+            let name = t.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+            Some(RemoteLtTemplateSummary { id, name })
+        })
+        .collect();
+
     let (active_service, schedule_entries) = active_service_snapshot(state);
 
     let output_visible = app
@@ -104,6 +119,7 @@ pub fn build_snapshot(
         bible_versions,
         active_bible_version,
         songs,
+        lt_templates,
     }
 }
 

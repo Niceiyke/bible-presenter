@@ -241,7 +241,9 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
   // Keep the reported physical orientation current: if the phone is rotated
   // while streaming, re-register the camera (register-only and idempotent on
   // the backend) so the operator's camera list and `reportedCameraOrientations`
-  // map update and the preview/output windows re-orient live.
+  // map update and the preview/output windows re-orient live. On failure the
+  // tracked orientation is reverted so a later rotation/resize retries — the
+  // backend never drops camera re-registration on a stale revision.
   const orientationRef = useRef<"portrait" | "landscape">(readPhoneOrientation());
   useEffect(() => {
     const sync = () => {
@@ -257,7 +259,8 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
           orientation: next,
         })
         .catch(() => {
-          // Transient failure — the operator keeps the last known orientation.
+          // Transient failure — revert so the next event retries the report.
+          orientationRef.current = next === "portrait" ? "landscape" : "portrait";
         });
     };
     window.addEventListener("orientationchange", sync);
