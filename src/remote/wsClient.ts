@@ -57,6 +57,8 @@ const MUTATING = new Set<RemoteCommandType>([
   "timer.stage",
   "timer.go_live",
   "timer.toggle",
+  "studio.stage",
+  "studio.go_live",
   "song.stage",
   "song.go_live",
   "lower_third.show",

@@ -53,6 +53,9 @@ export type RemoteCommandType =
   | "timer.go_live"
   | "timer.toggle"
   | "service.list"
+  | "studio.list"
+  | "studio.stage"
+  | "studio.go_live"
   | "songs.search"
   | "song.stage"
   | "song.go_live"
@@ -270,6 +273,23 @@ export interface RemoteTimerPayload {
   timer_type: "countdown" | "countup" | "clock";
   duration_secs?: number;
   label?: string;
+}
+
+export interface RemoteStudioSlidePayload {
+  presentation_id: string;
+  slide_index: number;
+}
+
+export interface RemoteStudioSlideInfo {
+  index: number;
+  title: string;
+}
+
+export interface RemoteStudioPresentation {
+  id: string;
+  name: string;
+  slide_count: number;
+  slides: RemoteStudioSlideInfo[];
 }
 
 export interface RemoteCameraOfferPayload {

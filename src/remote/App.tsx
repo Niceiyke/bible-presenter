@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Clock, ListOrdered, MessageSquare, Music2, Power, RefreshCw, Radio, UserCircle2, BookOpen, X, Video } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, ListOrdered, MessageSquare, Music2, Power, RefreshCw, Radio, UserCircle2, BookOpen, X, Video, Presentation } from "lucide-react";
 import { storedName, useRemote } from "./wsClient";
 import { Btn, Card, Label, TextInput, cx } from "./ui";
 import { OnAirPanel } from "./panels/OnAirPanel";
@@ -9,10 +9,11 @@ import { ServicePanel } from "./panels/ServicePanel";
 import { LowerThirdPanel } from "./panels/LowerThirdPanel";
 import { CameraPanel } from "./panels/CameraPanel";
 import { TimersPanel } from "./panels/TimersPanel";
+import { StudioPanel } from "./panels/StudioPanel";
 import { itemTitle } from "./itemLabel";
 import type { DisplayItem } from "../types/display";
 
-type Tab = "onair" | "bible" | "songs" | "service" | "lower" | "camera" | "timers";
+type Tab = "onair" | "bible" | "songs" | "service" | "lower" | "camera" | "timers" | "studio";
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "onair", label: "On Air", icon: <Radio size={14} /> },
@@ -22,6 +23,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "lower", label: "Lower ⅓", icon: <MessageSquare size={14} /> },
   { id: "camera", label: "Camera", icon: <Video size={14} /> },
   { id: "timers", label: "Timers", icon: <Clock size={14} /> },
+  { id: "studio", label: "Studio", icon: <Presentation size={14} /> },
 ];
 
 /** Stable identity for a live item so "Now Live" notifications fire only on
@@ -272,9 +274,10 @@ export function App() {
             {tab === "lower" && <LowerThirdPanel {...panelProps} />}
             {tab === "camera" && <CameraPanel {...panelProps} />}
             {tab === "timers" && <TimersPanel {...panelProps} />}
+            {tab === "studio" && <StudioPanel {...panelProps} />}
           </main>
 
-          <nav className="grid grid-cols-7 border-t border-slate-800 bg-slate-950/95 pb-[env(safe-area-inset-bottom)]">
+          <nav className="grid grid-cols-8 border-t border-slate-800 bg-slate-950/95 pb-[env(safe-area-inset-bottom)]">
             {TABS.map((t) => (
               <button
                 key={t.id}

@@ -149,6 +149,12 @@ pub enum RemoteCommandType {
     TimerToggle,
     #[serde(rename = "service.list")]
     ServiceList,
+    #[serde(rename = "studio.list")]
+    StudioList,
+    #[serde(rename = "studio.stage")]
+    StudioStage,
+    #[serde(rename = "studio.go_live")]
+    StudioGoLive,
     #[serde(rename = "songs.search")]
     SongsSearch,
     #[serde(rename = "song.stage")]
@@ -365,6 +371,31 @@ pub struct RemoteTimerPayload {
     pub duration_secs: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteStudioSlidePayload {
+    pub presentation_id: String,
+    pub slide_index: u32,
+}
+
+/// One slide of a presentation as listed by `studio.list`. Only lightweight
+/// metadata crosses the wire — the full `CustomSlide` content stays on the
+/// operator machine and is rebuilt server-side when the slide is staged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteStudioSlideInfo {
+    pub index: u32,
+    /// Best-effort first-line text of the slide, or empty when the slide is
+    /// image-only or has no extractable text.
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteStudioPresentation {
+    pub id: String,
+    pub name: String,
+    pub slide_count: u32,
+    pub slides: Vec<RemoteStudioSlideInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

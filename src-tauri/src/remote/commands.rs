@@ -4,11 +4,12 @@ use crate::remote::protocol::{
     RemoteCameraIcePayload, RemoteCameraOfferPayload, RemoteCameraStartPayload,
     RemoteCommand, RemoteCommandResult, RemoteCommandType, RemoteEventKind,
     RemoteLowerThirdPayload, RemotePermission, RemoteSongControl, RemoteSongSearch,
-    RemoteSongSummary, RemoteTimerPayload, RemoteVerseRef,
+    RemoteSongSummary, RemoteStudioPresentation, RemoteStudioSlideInfo,
+    RemoteStudioSlidePayload, RemoteTimerPayload, RemoteVerseRef,
 };
 use crate::remote::{RemoteControl, DESKTOP_CONTROLLER_ID};
 use crate::state::AppState;
-use crate::store::{DisplayItem, LowerThirdData, LyricSection, Schedule, ScheduleEntry, SearchResponse, Song, SongSlideData};
+use crate::store::{CustomSlideData, DisplayItem, LowerThirdData, LyricSection, Schedule, ScheduleEntry, SearchResponse, Song, SongSlideData};
 use serde_json::json;
 use tauri::AppHandle;
 
@@ -253,6 +254,96 @@ fn song_searchable(song: &Song) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Studio presentation helpers
+// ---------------------------------------------------------------------------
+
+/// Best-effort first-line text of a slide for the phone list. Prefers the text
+/// element carrying the "title" role, otherwise the first non-empty text
+/// element. Falls back to "Slide N" for image-only slides.
+fn slide_title(slide: &crate::store::CustomSlide, index: usize) -> String {
+    let mut first_text: Option<String> = None;
+    for el in &slide.elements {
+        if el.kind != "text" {
+            continue;
+        }
+        let mut runs: Vec<String> = Vec::new();
+        collect_text(&el.content, &mut runs);
+        let compact = runs.join(" ").split_whitespace().collect::<Vec<_>>().join(" ");
+        if compact.is_empty() {
+            continue;
+        }
+        if el.role.as_deref() == Some("title") {
+            return truncate_title(&compact);
+        }
+        if first_text.is_none() {
+            first_text = Some(compact);
+        }
+    }
+    first_text
+        .map(|t| truncate_title(&t))
+        .unwrap_or_else(|| format!("Slide {}", index + 1))
+}
+
+/// Recursively collect text runs from a ProseMirror JSON doc. The legacy
+/// HTML-string escape hatch is stripped of tags before it is returned.
+fn collect_text(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(s) => {
+            if s.contains('<') {
+                let stripped = strip_html(s);
+                if !stripped.trim().is_empty() {
+                    out.push(stripped);
+                }
+            } else if !s.trim().is_empty() {
+                out.push(s.clone());
+            }
+        }
+        serde_json::Value::Object(map) => {
+            if let Some(t) = map.get("text").and_then(|v| v.as_str()) {
+                if !t.trim().is_empty() {
+                    out.push(t.to_string());
+                }
+            }
+            if let Some(arr) = map.get("content").and_then(|v| v.as_array()) {
+                for child in arr {
+                    collect_text(child, out);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for child in arr {
+                collect_text(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn strip_html(s: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for ch in s.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out
+}
+
+fn truncate_title(t: &str) -> String {
+    const MAX: usize = 48;
+    let t = t.trim();
+    if t.chars().count() <= MAX {
+        t.to_string()
+    } else {
+        format!("{}…", t.chars().take(MAX).collect::<String>())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Service queue helpers
 // ---------------------------------------------------------------------------
 
@@ -366,7 +457,9 @@ fn required_permission(t: RemoteCommandType) -> Option<RemotePermission> {
         | DisplayLogoToggle
         | TimerStage
         | TimerGoLive
-        | TimerToggle => RemotePermission::Presentation,
+        | TimerToggle
+        | StudioStage
+        | StudioGoLive => RemotePermission::Presentation,
         _ => return None,
     })
 }
@@ -634,6 +727,77 @@ pub async fn dispatch(
                 Err(e) => err_result(&command.command_id, control.hub.current_revision(), "add_to_service_failed", &e),
             }
         }
+        RemoteCommandType::StudioList => {
+            let mut result: Vec<RemoteStudioPresentation> = Vec::new();
+            if let Ok(summaries) = state.media_schedule.list_studio_presentations() {
+                for s in summaries {
+                    let slides = state
+                        .media_schedule
+                        .load_studio_presentation(&s.id)
+                        .map(|p| {
+                            p.slides
+                                .iter()
+                                .enumerate()
+                                .map(|(i, sl)| RemoteStudioSlideInfo {
+                                    index: i as u32,
+                                    title: slide_title(sl, i),
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    result.push(RemoteStudioPresentation {
+                        id: s.id,
+                        name: s.name,
+                        slide_count: s.slide_count,
+                        slides,
+                    });
+                }
+            }
+            RemoteCommandResult::ok_with(&command.command_id, control.hub.current_revision(), json!(result))
+        }
+        RemoteCommandType::StudioStage | RemoteCommandType::StudioGoLive => {
+            let req = command_payload::<RemoteStudioSlidePayload>(command).ok();
+            let resp = match req {
+                Some(req) => match state.media_schedule.load_studio_presentation(&req.presentation_id) {
+                    Ok(pres) => match pres.slides.get(req.slide_index as usize) {
+                        Some(slide) => {
+                            let item = DisplayItem::CustomSlide(CustomSlideData {
+                                presentation_id: pres.id,
+                                presentation_name: pres.name,
+                                slide_index: req.slide_index,
+                                slide_count: pres.slides.len() as u32,
+                                background: slide.background.clone(),
+                                background_color: None,
+                                background_image: None,
+                                background_video: None,
+                                background_video_loop: None,
+                                background_video_muted: None,
+                                header_enabled: None,
+                                header_height_pct: None,
+                                header: None,
+                                body: None,
+                                elements: slide.elements.clone(),
+                                theme: pres.theme.clone(),
+                                notes: slide.notes.clone(),
+                            });
+                            if command.r#type == RemoteCommandType::StudioGoLive {
+                                op_go_live_item(app, state, item, source.clone());
+                            } else {
+                                op_stage(app, state, item, source.clone(), control.hub.current_revision());
+                            }
+                            Ok(())
+                        }
+                        None => Err(format!("Slide index {} out of range", req.slide_index)),
+                    },
+                    Err(e) => Err(format!("Presentation not found: {}", e)),
+                },
+                None => Err("Missing slide payload".into()),
+            };
+            match resp {
+                Ok(()) => RemoteCommandResult::ok(&command.command_id, control.hub.current_revision()),
+                Err(e) => err_result(&command.command_id, control.hub.current_revision(), "studio_failed", &e),
+            }
+        }
         RemoteCommandType::SongsSearch => {
             let req = command_payload::<RemoteSongSearch>(command).ok();
             if let Some(req) = req {
@@ -872,6 +1036,8 @@ pub(crate) fn is_mutating(t: RemoteCommandType) -> bool {
             | RemoteCommandType::TimerStage
             | RemoteCommandType::TimerGoLive
             | RemoteCommandType::TimerToggle
+            | RemoteCommandType::StudioStage
+            | RemoteCommandType::StudioGoLive
             | RemoteCommandType::LowerThirdShow
             | RemoteCommandType::LowerThirdHide
             | RemoteCommandType::CameraStart
@@ -935,6 +1101,9 @@ mod tests {
         assert!(is_mutating(RemoteCommandType::TimerStage));
         assert!(is_mutating(RemoteCommandType::TimerGoLive));
         assert!(is_mutating(RemoteCommandType::TimerToggle));
+        assert!(is_mutating(RemoteCommandType::StudioStage));
+        assert!(is_mutating(RemoteCommandType::StudioGoLive));
+        assert!(!is_mutating(RemoteCommandType::StudioList));
         assert!(is_mutating(RemoteCommandType::CameraStart));
         assert!(!is_mutating(RemoteCommandType::BibleSearch));
         assert!(!is_mutating(RemoteCommandType::SnapshotGet));
@@ -957,9 +1126,105 @@ mod tests {
         assert_eq!(required_permission(TimerStage), Some(RemotePermission::Presentation));
         assert_eq!(required_permission(TimerGoLive), Some(RemotePermission::Presentation));
         assert_eq!(required_permission(TimerToggle), Some(RemotePermission::Presentation));
+        assert_eq!(required_permission(StudioStage), Some(RemotePermission::Presentation));
+        assert_eq!(required_permission(StudioGoLive), Some(RemotePermission::Presentation));
+        // Read-only presentation listing needs no permission.
+        assert_eq!(required_permission(StudioList), None);
         // Lease lifecycle commands are not content-gated.
         assert_eq!(required_permission(RemoteRequestControl), None);
         assert_eq!(required_permission(RemoteRenewLease), None);
         assert_eq!(required_permission(BibleSearch), None);
+    }
+
+    fn text_el(content: serde_json::Value, role: Option<String>) -> crate::store::SlideElement {
+        crate::store::SlideElement {
+            id: "el".into(),
+            kind: "text".into(),
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 40.0,
+            z_index: 0,
+            rotation: None,
+            flip_x: None,
+            flip_y: None,
+            entrance: None,
+            content,
+            font_size: None,
+            font_family: None,
+            color: None,
+            align: None,
+            v_align: None,
+            bold: None,
+            italic: None,
+            opacity: None,
+            locked: None,
+            shadow: None,
+            shadow_color: None,
+            group_id: None,
+            loop_video: None,
+            muted: None,
+            role,
+            auto_size: None,
+            shape: None,
+            fill_color: None,
+            stroke_color: None,
+            stroke_width: None,
+            border_radius: None,
+            object_fit: None,
+            object_position: None,
+            filter: None,
+            filter_value: None,
+            border: None,
+        }
+    }
+
+    fn make_slide(elements: Vec<crate::store::SlideElement>) -> crate::store::CustomSlide {
+        crate::store::CustomSlide {
+            id: "slide".into(),
+            background: None,
+            background_color: String::new(),
+            background_image: None,
+            background_video: None,
+            background_video_loop: None,
+            background_video_muted: None,
+            elements,
+            notes: None,
+            group_id: None,
+            header_enabled: None,
+            header_height_pct: None,
+            header: None,
+            body: None,
+            master_ref: None,
+        }
+    }
+
+    #[test]
+    fn slide_title_prefers_title_role_and_falls_back_to_slide_number() {
+        let doc = serde_json::json!({
+            "type": "doc",
+            "content": [
+                { "type": "paragraph", "content": [
+                    { "type": "text", "text": "The Good News" }
+                ]}
+            ]
+        });
+        let slide = make_slide(vec![text_el(doc, Some("title".into()))]);
+        assert_eq!(slide_title(&slide, 0), "The Good News");
+
+        // No text elements -> fall back to "Slide N".
+        let empty = make_slide(vec![]);
+        assert_eq!(slide_title(&empty, 2), "Slide 3");
+
+        // Legacy HTML-string escape hatch is stripped of tags.
+        let html = make_slide(vec![text_el(serde_json::json!("<p>Welcome <b>Home</b></p>"), None)]);
+        assert_eq!(slide_title(&html, 0), "Welcome Home");
+
+        // First text element wins when no title role exists.
+        let multi = make_slide(vec![
+            text_el(serde_json::json!({ "type": "doc", "content": [{ "type": "paragraph", "content": [{ "text": "Intro" }] }] }), None),
+            text_el(serde_json::json!({ "type": "doc", "content": [{ "type": "paragraph", "content": [{ "text": "Body" }] }] }), Some("body".into())),
+        ]);
+        assert_eq!(slide_title(&multi, 0), "Intro");
     }
 }
