@@ -1,7 +1,7 @@
 import React from "react";
 import {
   BookOpen, CalendarDays, Image as ImageIcon, Layers, Mic, Monitor,
-  Settings, Timer, Zap, Paintbrush, PanelLeftClose, PanelLeftOpen, Video,
+  MonitorSmartphone, Settings, Timer, Zap, Paintbrush, PanelLeftClose, PanelLeftOpen, Video,
 } from "lucide-react";
 import { useAppStore } from "../../store";
 
@@ -51,6 +51,7 @@ const GROUPS: NavGroup[] = [
   {
     label: "System",
     entries: [
+      { id: "remote", label: "Remote", icon: MonitorSmartphone, tab: "remote" },
       { id: "settings", label: "Settings", icon: Settings, tab: "settings", shortcut: "F9" },
     ],
   },

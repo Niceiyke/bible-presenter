@@ -27,7 +27,7 @@ export function useAppInitialization() {
     setStagedItem, setStartupIssues, setIsInitialized,
     setAppDataDir, setRecentItems,
     setBackendError, addLog, setScenes,
-    setBackendAvailable,
+    setBackendAvailable, setToast,
   } = useAppStore();
 
   useEffect(() => {
@@ -179,6 +179,22 @@ export function useAppInitialization() {
       addLog({ level: ev.payload.level ?? "warn", message: ev.payload.message, timestamp: Date.now() });
       setBackendError(ev.payload.message);
     });
+    // Remote device connect/disconnect/revoke notifications.
+    const unlistenRemoteDeviceEvent = listen<{ event: string; device_name: string }>("remote-device-event", (ev) => {
+      const { event, device_name } = ev.payload ?? {};
+      if (!event || !device_name) return;
+      const msg =
+        event === "connected"
+          ? `${device_name} connected to Remote Control`
+          : event === "disconnected"
+            ? `${device_name} disconnected`
+            : event === "revoked"
+              ? `${device_name} revoked`
+              : event === "auto_revoked"
+                ? `${device_name} auto-revoked (idle)`
+                : "";
+      if (msg) setToast(msg);
+    });
 
     // P4.8 — Async media probes (thumbnail/duration) complete in the
     // background; merge the updated item so the library card refreshes live.
@@ -196,6 +212,7 @@ export function useAppInitialization() {
       unlistenStudioSlidesSync.then(f => f());
       unlistenLog.then(f => f());
       unlistenOpWarn.then(f => f());
+      unlistenRemoteDeviceEvent.then(f => f());
       unlistenMediaProbed.then(f => f());
       unlistenMediaUpdated.then(f => f());
     };

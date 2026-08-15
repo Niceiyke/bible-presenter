@@ -1,6 +1,6 @@
 import React from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, Monitor, Repeat, Keyboard, X, Signal, Video, User, EyeOff } from "lucide-react";
+import { AlertTriangle, Monitor, Repeat, Keyboard, X, Signal, Video, User, EyeOff, MonitorSmartphone } from "lucide-react";
 import { useAppStore } from "../../store";
 import { IconButton, StatusBadge } from "../ui";
 import { displayItemLabel } from "../../utils";
@@ -16,7 +16,31 @@ export function AppHeader() {
     settings,
     services, activeServiceId,
     backendAvailable,
+    setActiveTab,
   } = useAppStore();
+
+  const [remoteCount, setRemoteCount] = React.useState<number | null>(null);
+
+  React.useEffect(() => {
+    let alive = true;
+    const poll = async () => {
+      try {
+        const st = await invoke<any>("remote_status");
+        if (!alive) return;
+        setRemoteCount(
+          st?.enabled ? (st.devices?.filter((d: any) => d.connected).length ?? 0) : null
+        );
+      } catch {
+        if (alive) setRemoteCount(null);
+      }
+    };
+    poll();
+    const id = window.setInterval(poll, 5000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, []);
 
   const outputBusy = busyActions.includes("output");
 
@@ -80,6 +104,21 @@ export function AppHeader() {
           label={backendAvailable ? "Backend Ready" : "Backend Offline"}
           className="hidden lg:inline-flex"
         />
+        {remoteCount !== null && (
+          <button
+            onClick={() => setActiveTab("remote")}
+            title="Remote Control — click to open"
+            aria-label="Remote Control devices"
+            className="hover:opacity-80 transition-opacity shrink-0"
+          >
+            <StatusBadge
+              tone={remoteCount > 0 ? "success" : "neutral"}
+              icon={<MonitorSmartphone size={10} />}
+              label={`Remote ${remoteCount}`}
+              className="hidden md:inline-flex"
+            />
+          </button>
+        )}
       </div>
 
       {backendError && (

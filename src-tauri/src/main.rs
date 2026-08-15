@@ -277,6 +277,8 @@ fn main() {
             wordlyte_lib::commands::remote::remote_claim_control,
             wordlyte_lib::commands::remote::remote_set_role,
             wordlyte_lib::commands::remote::remote_set_permissions,
+            wordlyte_lib::commands::remote::remote_set_auto_revoke,
+            wordlyte_lib::commands::remote::remote_rename_device,
             wordlyte_lib::commands::remote::phone_camera_answer,
             wordlyte_lib::commands::remote::phone_camera_ice,
             wordlyte_lib::commands::remote::list_phone_cameras,

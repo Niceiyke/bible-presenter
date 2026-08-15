@@ -16,6 +16,7 @@ const SongsTab = lazy(() => import("../SongsTab").then((m) => ({ default: m.Song
 const StudioTab = lazy(() => import("../StudioTab").then((m) => ({ default: m.StudioTab })));
 const ScheduleTab = lazy(() => import("../ScheduleTab").then((m) => ({ default: m.ScheduleTab })));
 const SettingsTab = lazy(() => import("../SettingsTab").then((m) => ({ default: m.SettingsTab })));
+const RemoteTab = lazy(() => import("../RemoteTab").then((m) => ({ default: m.RemoteTab })));
 const LtDesignerTab = lazy(() => import("../LtDesignerTab").then((m) => ({ default: m.LtDesignerTab })));
 
 interface ContentBrowserProps {
@@ -132,6 +133,7 @@ export function ContentBrowser({
         )}
         {activeTab === "schedule" && <ScheduleTab onSendItem={sendLive} onPersist={persistSchedule} stageItem={stageItem} />}
         {activeTab === "settings" && <SettingsTab onUpdateSettings={updateSettings} onUploadMedia={handleFileUpload} />}
+        {activeTab === "remote" && <RemoteTab />}
         {activeTab === "props" && <PropsTab onUpdateProps={updateProps} />}
         {activeTab === "scenes" && (
           <ScenesTab

@@ -101,6 +101,7 @@ fn now_millis() -> u64 {
 /// leaves the server half-started (reported enabled with no port/task).
 pub async fn start(ctx: RemoteCtx) -> Result<SocketAddr, String> {
     let control = ctx.control.clone();
+    let sweep_app = ctx.app.clone();
     let app = router(ctx);
     let preferred = control.stored_port();
     let listener = match preferred {
@@ -135,6 +136,33 @@ pub async fn start(ctx: RemoteCtx) -> Result<SocketAddr, String> {
     control.enabled.store(true, std::sync::atomic::Ordering::SeqCst);
     *control.task.lock() = Some(handle);
     *control.bound_addr.lock() = Some(addr);
+
+    // Idle auto-revoke sweeper: while the server is enabled, periodically
+    // revoke paired devices that have been neither connected nor seen for
+    // longer than the configured threshold. Exits on its own once disabled.
+    let sweep_control = control.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        while sweep_control.is_enabled() {
+            tick.tick().await;
+            let removed = sweep_control.sweep_idle_devices();
+            for name in &removed {
+                emit_checked(
+                    &sweep_app,
+                    "remote-device-event",
+                    &json!({ "event": "auto_revoked", "device_name": name }),
+                );
+            }
+            if !removed.is_empty() {
+                crate::store::log_msg(
+                    &sweep_app,
+                    &format!("Auto-revoked idle remote devices: {}", removed.join(", ")),
+                );
+            }
+        }
+    });
+
     Ok(addr)
 }
 
@@ -156,6 +184,11 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
     ctx.control.sessions.connect(&device.id, &device.name);
     ctx.control.tokens.touch_last_seen(&device.id);
     ctx.control.persist_devices();
+    emit_checked(
+        &ctx.app,
+        "remote-device-event",
+        &json!({ "event": "connected", "device_name": device.name.clone() }),
+    );
 
     let device_id = device.id.clone();
 
@@ -337,6 +370,11 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
     crate::store::log_msg(
         &ctx.app,
         &format!("Remote device '{}' disconnected ({})", device_ctx.device.name, drop_reason),
+    );
+    emit_checked(
+        &ctx.app,
+        "remote-device-event",
+        &json!({ "event": "disconnected", "device_name": device_ctx.device.name.clone() }),
     );
 
     // Cleanup: unregister session and release the controller lease so another

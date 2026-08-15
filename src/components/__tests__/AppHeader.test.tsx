@@ -19,7 +19,11 @@ describe("AppHeader output window toggle", () => {
   });
 
   it("flips output visibility when the backend toggles the window", async () => {
-    mockInvoke.mockResolvedValueOnce(undefined);
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "remote_status") return { enabled: false, devices: [] };
+      if (cmd === "toggle_output_window") return undefined;
+      throw new Error(`unexpected command ${cmd}`);
+    });
     useAppStore.setState({ outputVisible: false });
     render(<AppHeader />);
 
@@ -32,7 +36,11 @@ describe("AppHeader output window toggle", () => {
   });
 
   it("does not flip output and surfaces an error when the window toggle fails", async () => {
-    mockInvoke.mockRejectedValueOnce(new Error("monitor gone"));
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "remote_status") return { enabled: false, devices: [] };
+      if (cmd === "toggle_output_window") throw new Error("monitor gone");
+      throw new Error(`unexpected command ${cmd}`);
+    });
     useAppStore.setState({ outputVisible: true });
     render(<AppHeader />);
 

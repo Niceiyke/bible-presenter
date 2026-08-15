@@ -49,6 +49,12 @@ pub struct RemoteControl {
     /// File holding the last-bound remote port so restarts reuse it instead of
     /// jumping to a new random port (which would orphan phones' saved URLs).
     pub port_file: PathBuf,
+    /// File holding remote preferences (e.g. the idle auto-revoke threshold).
+    pub prefs_file: PathBuf,
+    /// Idle auto-revoke threshold in hours. When set, paired devices that are
+    /// neither connected nor seen for longer than this are revoked so stale
+    /// devices can't linger indefinitely. `None` = never auto-revoke.
+    pub auto_revoke_hours: Mutex<Option<u32>>,
     /// File holding the persisted self-signed TLS certificate + key. Serving
     /// the remote bundle over HTTPS makes the phone's page a secure context so
     /// `getUserMedia` (phone camera) works over the LAN.
@@ -102,6 +108,13 @@ impl RemoteControl {
         if let Some(dir) = devices_file.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
+        let prefs_file = app_data_dir.join("remote_prefs.json");
+        let auto_revoke_hours = std::fs::read_to_string(&prefs_file)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v.get("auto_revoke_hours").and_then(|h| h.as_u64()))
+            .map(|h| h as u32)
+            .filter(|h| *h > 0);
         let control = Self {
             enabled: AtomicBool::new(false),
             start_lock: tokio::sync::Mutex::new(()),
@@ -114,6 +127,8 @@ impl RemoteControl {
             mutation_history: Mutex::new(HashMap::new()),
             devices_file: devices_file.clone(),
             port_file: app_data_dir.join("remote_port.txt"),
+            prefs_file: prefs_file.clone(),
+            auto_revoke_hours: Mutex::new(auto_revoke_hours),
             tls_file: app_data_dir.join("remote_tls.json"),
             task: Mutex::new(None),
             pairing_code_plain: Mutex::new(None),
@@ -133,6 +148,49 @@ impl RemoteControl {
 
     pub fn persist_devices(&self) {
         let _ = self.tokens.persist(&self.devices_file);
+    }
+
+    /// Current idle auto-revoke threshold in hours (`None` = disabled).
+    pub fn auto_revoke_hours(&self) -> Option<u32> {
+        *self.auto_revoke_hours.lock()
+    }
+
+    /// Sets (or clears, with `None`) the idle auto-revoke threshold and
+    /// persists it to `remote_prefs.json`.
+    pub fn set_auto_revoke_hours(&self, hours: Option<u32>) {
+        let hours = hours.filter(|h| *h > 0);
+        *self.auto_revoke_hours.lock() = hours;
+        let json = serde_json::json!({ "auto_revoke_hours": hours });
+        if let Some(dir) = self.prefs_file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&self.prefs_file, serde_json::to_string(&json).unwrap_or_else(|_| "{}".into()));
+    }
+
+    /// Revokes paired devices that are neither currently connected nor have
+    /// been seen for longer than the configured idle threshold. Returns the
+    /// names of the revoked devices so the caller can log/notify.
+    pub fn sweep_idle_devices(&self) -> Vec<String> {
+        let Some(hours) = self.auto_revoke_hours() else {
+            return Vec::new();
+        };
+        let now = auth::now_unix();
+        let threshold = now.saturating_sub(hours as u64 * 3600);
+        let connected: Vec<String> = self.sessions.list().into_iter().map(|d| d.device_id).collect();
+        let mut removed = Vec::new();
+        for device in self.tokens.list_devices() {
+            if connected.contains(&device.id) {
+                continue;
+            }
+            let last_seen = device.last_seen_at.unwrap_or(device.paired_at);
+            if last_seen < threshold && self.tokens.revoke_device(&device.id) {
+                removed.push(device.name);
+            }
+        }
+        if !removed.is_empty() {
+            self.persist_devices();
+        }
+        removed
     }
 
     /// Returns the port bound on the last run, if any. Used so `start` can

@@ -249,6 +249,18 @@ impl TokenStore {
         }
     }
 
+    /// Renames a paired device. Returns false if the device is unknown.
+    pub fn rename_device(&self, device_id: &str, name: String) -> bool {
+        let mut devices = self.devices.lock();
+        match devices.get_mut(device_id) {
+            Some(d) => {
+                d.name = name;
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn revoke_all(&self) -> usize {
         let mut devices = self.devices.lock();
         let count = devices.len();

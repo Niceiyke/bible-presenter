@@ -162,6 +162,7 @@ export interface RemoteStatus {
   devices: RemoteDeviceInfo[];
   controller_state: RemoteControllerState;
   revision: number;
+  auto_revoke_hours?: number | null;
 }
 
 export interface RemotePairPayload {

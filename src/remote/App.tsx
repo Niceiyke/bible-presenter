@@ -61,6 +61,17 @@ export function App() {
   const [pairing, setPairing] = useState(false);
   const [pairErr, setPairErr] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  // A `#pair=<code>` fragment (appended by the operator's QR code) auto-pairs
+  // this device. The fragment is cleared immediately so a later refresh can't
+  // re-pair with an already-used code.
+  const [autoPairCode, setAutoPairCode] = useState<string | null>(() => {
+    const m = window.location.hash.match(/^#pair=([A-Za-z0-9_-]+)/);
+    if (m) {
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+      return m[1];
+    }
+    return null;
+  });
 
   const pushToast = useCallback((msg: unknown, kind: "error" | "info" = "error") => {
     const text = msg instanceof Error ? msg.message : String(msg ?? "");
@@ -132,6 +143,30 @@ export function App() {
       setPairing(false);
     }
   };
+
+  // Auto-pair from a `#pair=<code>` fragment once the handshake reaches the
+  // pairing screen. On failure the code stays in the input so the operator can
+  // retry manually (expired/rate-limited codes are transient). The ref guards
+  // against StrictMode double-invoking the effect (the code is single-use).
+  const autoPairStartedRef = useRef(false);
+  useEffect(() => {
+    if (!autoPairCode) return;
+    if (client.conn !== "pairing") return;
+    if (autoPairStartedRef.current) return;
+    autoPairStartedRef.current = true;
+    const name = deviceName.trim() || "My Device";
+    setCode(autoPairCode);
+    setDeviceName(name);
+    setPairing(true);
+    setPairErr(null);
+    client
+      .pair(autoPairCode, name)
+      .catch((e) => setPairErr(String((e as Error).message ?? e)))
+      .finally(() => {
+        setAutoPairCode(null);
+        setPairing(false);
+      });
+  }, [autoPairCode, client.conn]);
 
   const takeOrRelease = async () => {
     try {
@@ -258,7 +293,7 @@ export function App() {
               </Btn>
             </div>
             <p className="mt-3 text-[10px] text-slate-500 leading-relaxed">
-              Ask the operator for the code and URL (Settings → Remote Control). The URL is shown on their screen.
+              {pairing ? "Pairing…" : "Scan the QR code in the operator's Remote tab to pair automatically, or enter the code shown there."}
             </p>
           </Card>
         </div>

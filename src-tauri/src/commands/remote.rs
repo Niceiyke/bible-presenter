@@ -1,3 +1,4 @@
+use crate::events::emit_checked;
 use crate::remote::protocol::{RemoteControllerState, RemotePermissions, RemoteRole};
 use crate::remote::{public_urls, PhoneCameraInfo, RemoteControl};
 use crate::state::AppState;
@@ -39,6 +40,8 @@ pub struct RemoteStatusInfo {
     pub devices: Vec<RemoteDeviceInfo>,
     pub controller_state: RemoteControllerState,
     pub revision: u64,
+    /// Idle auto-revoke threshold in hours (`None` = disabled).
+    pub auto_revoke_hours: Option<u32>,
 }
 
 fn status_info(control: &RemoteControl, pairing_code: Option<String>) -> RemoteStatusInfo {
@@ -76,7 +79,18 @@ fn status_info(control: &RemoteControl, pairing_code: Option<String>) -> RemoteS
         devices,
         controller_state: control.lease.state(),
         revision: control.hub.current_revision(),
+        auto_revoke_hours: control.auto_revoke_hours(),
     }
+}
+
+/// Notifies the operator shell that a device connected/disconnected/was
+/// revoked so it can show a toast and refresh its device count.
+fn emit_device_event(app: &AppHandle, event: &str, device_name: String) {
+    emit_checked(
+        app,
+        "remote-device-event",
+        &serde_json::json!({ "event": event, "device_name": device_name }),
+    );
 }
 
 #[tauri::command]
@@ -144,11 +158,50 @@ pub async fn remote_disable(app: AppHandle, state: State<'_, AppState>) -> Resul
 pub async fn remote_status(state: State<'_, AppState>) -> Result<RemoteStatusInfo, String> {
     let control = state.remote.clone();
     if control.is_enabled() {
+        // Sweep idle devices on every status poll so auto-revocation is
+        // reflected promptly even if the periodic task is not running.
+        control.sweep_idle_devices();
         control.ensure_pairing();
         Ok(status_info(&control, Some(control.token_for_display())))
     } else {
         Ok(status_info(&control, None))
     }
+}
+
+/// Sets (or clears, with `None`) the idle auto-revoke threshold in hours.
+/// Paired devices that are neither connected nor seen for longer than the
+/// threshold are revoked automatically.
+#[tauri::command]
+pub async fn remote_set_auto_revoke(app: AppHandle, state: State<'_, AppState>, hours: Option<u32>) -> Result<RemoteStatusInfo, String> {
+    let control = state.remote.clone();
+    control.set_auto_revoke_hours(hours);
+    crate::store::log_msg(
+        &app,
+        &match hours {
+            Some(h) => format!("Remote auto-revoke set to {} hours", h),
+            None => "Remote auto-revoke disabled".to_string(),
+        },
+    );
+    Ok(status_info(&control, control.is_enabled().then(|| control.token_for_display())))
+}
+
+/// Renames a paired device so the operator can identify it in the UI.
+#[tauri::command]
+pub async fn remote_rename_device(app: AppHandle, state: State<'_, AppState>, device_id: String, name: String) -> Result<RemoteStatusInfo, String> {
+    let control = state.remote.clone();
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("Device name cannot be empty".into());
+    }
+    if name.len() > 48 {
+        return Err("Device name is too long (max 48 characters)".into());
+    }
+    if !control.tokens.rename_device(&device_id, name.clone()) {
+        return Err(format!("No paired device with id {}", device_id));
+    }
+    control.persist_devices();
+    crate::store::log_msg(&app, &format!("Remote device renamed to \"{}\"", name));
+    Ok(status_info(&control, control.is_enabled().then(|| control.token_for_display())))
 }
 
 /// Regenerates the pairing code, invalidating any prior outstanding code.
@@ -168,9 +221,11 @@ pub async fn remote_revoke_device(app: AppHandle, state: State<'_, AppState>, de
         control.hub_publish_controller_changed();
     }
     control.sessions.disconnect(&device_id);
+    let name = control.tokens.device(&device_id).map(|d| d.name).unwrap_or_else(|| device_id.clone());
     let revoked = control.tokens.revoke_device(&device_id);
     if revoked {
         control.persist_devices();
+        emit_device_event(&app, "revoked", name);
     }
     crate::store::log_msg(&app, &format!("Remote device revoked: {}", device_id));
     Ok(status_info(&control, control.is_enabled().then(|| control.token_for_display())))
