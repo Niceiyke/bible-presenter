@@ -17,6 +17,11 @@ export type CameraBackground = {
   deviceId: string; opacity: number;
   objectFit: "cover" | "contain" | "fill";
   mirrored: boolean;
+  /** Solid color painted behind the feed when it doesn't fully cover the
+   *  output (letterbox/transparent areas), so the operator can put a studio
+   *  backdrop behind a camera. Optional; absent = fall through to the global
+   *  background layers. */
+  backdropColor?: string;
 };
 
 export type AudioBackground = {

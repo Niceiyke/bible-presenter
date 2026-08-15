@@ -2,12 +2,14 @@ import React, { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store";
 import { useTauriEvent } from "../hooks/useTauriEvent";
-import { usePhoneCameraStreams, usePhoneCameraStates, usePhoneCameraStats } from "../hooks/usePhoneCameraHost";
+import { usePhoneCameraStreams, usePhoneCameraStats } from "../hooks/usePhoneCameraHost";
+import { useSharedLocalCameraStream } from "../hooks/useSharedLocalCameraStream";
+import { CameraFeed, useLocalFeedStats } from "./shared/CameraFeed";
 import PhoneCameraVideo from "./shared/PhoneCameraVideo";
 import { Camera, RefreshCw, Video, Play, Monitor, AlertTriangle, Smartphone, Tag, Zap, ArrowLeftRight, Aperture, SlidersHorizontal } from "lucide-react";
 import type { DisplayItem, CameraBackground, MediaItem } from "../types";
 import type { CameraLook, PhoneCameraOrientation } from "../types/remote";
-import { DEFAULT_CAMERA_LOOK } from "../types/remote";
+import { DEFAULT_CAMERA_LOOK, DEFAULT_CAMERA_CHROMA } from "../types/remote";
 
 interface CameraTabProps {
   onStage?: (item: DisplayItem) => void;
@@ -21,6 +23,8 @@ interface PhoneCameraInfo {
   device_name: string;
   orientation?: PhoneCameraOrientation;
 }
+
+const BACKDROP_COLORS = ["#000000", "#0f172a", "#475569", "#ffffff", "#00B140", "#0047AB", "#C41E3A", "#6B21A8"];
 
 export function CameraTab({ onStage, onLive }: CameraTabProps) {
   const { 
@@ -38,16 +42,16 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     setCameraDefaults,
     cameraLook,
     setCameraLook,
+    cameraChroma,
+    setCameraChroma,
     liveItem,
     setToast,
   } = useAppStore();
   const phoneStreams = usePhoneCameraStreams();
-  const phoneStates = usePhoneCameraStates();
   const phoneStats = usePhoneCameraStats();
   const [phoneCameras, setPhoneCameras] = useState<PhoneCameraInfo[]>([]);
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
   const [cameraError, setCameraError] = useState<CameraError>(null);
   const [renameValue, setRenameValue] = useState("");
   const [abA, setAbA] = useState<string | null>(null);
@@ -56,7 +60,29 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
   const isPhoneSelected = selectedCameraId?.startsWith("phone-camera-") ?? false;
   const liveDeviceId = liveItem?.type === "Camera" ? liveItem.data.deviceId : null;
 
+  // Local camera previews share a single cached getUserMedia stream per device
+  // across the preview, the A/B switcher and the All Camera Feeds grid, so a
+  // camera is never opened more than once at a time.
+  const previewLocal = useSharedLocalCameraStream(isPhoneSelected ? null : selectedCameraId, "camera-tab-preview");
+  const localStats = useLocalFeedStats(videoRef, isPhoneSelected ? null : selectedCameraId);
+
   const displayName = (cam: PhoneCameraInfo) => cameraNames[cam.device_id] || cam.device_name;
+
+  // Generic name for any camera id (local webcam or phone camera).
+  const cameraDisplayName = (id: string) => {
+    const phone = phoneCameras.find((c) => c.device_id === id);
+    if (phone) return cameraNames[id] || phone.device_name;
+    const local = availableCameras.find((c) => c.deviceId === id);
+    return cameraNames[id] || local?.label || "Camera";
+  };
+
+  // Unified camera list (local webcams first, then phone cameras) for the
+  // A/B switcher and the All Camera Feeds grid.
+  const combinedCameras: { id: string; isPhone: boolean }[] = [
+    ...availableCameras.map((c) => ({ id: c.deviceId, isPhone: false })),
+    ...phoneCameras.map((c) => ({ id: c.device_id, isPhone: true })),
+  ];
+  const combinedKey = combinedCameras.map((c) => c.id).join("|");
 
   // Keep the phone-camera list in sync with the backend registry.
   useEffect(() => {
@@ -91,6 +117,9 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
   const effectiveOrientation = (deviceId: string): PhoneCameraOrientation =>
     cameraOrientations[deviceId] ?? phoneCameras.find((c) => c.device_id === deviceId)?.orientation ?? "portrait";
 
+  const reportedOrientationFor = (deviceId: string): PhoneCameraOrientation | undefined =>
+    phoneCameras.find((c) => c.device_id === deviceId)?.orientation;
+
   // If the selected phone camera goes away (phone disconnected / stopped),
   // drop the selection so the preview doesn't linger on a dead feed.
   useEffect(() => {
@@ -103,20 +132,28 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     refreshCameras();
   }, []);
 
-  // Pre-fill the A/B slots with the first two phones once they appear.
+  // Pre-fill the A/B slots with the first two cameras (local webcams first,
+  // then phones) once they appear.
   useEffect(() => {
-    if (phoneCameras.length >= 1 && !abA) setAbA(phoneCameras[0].device_id);
-    if (phoneCameras.length >= 2 && !abB) setAbB(phoneCameras[1].device_id);
-  }, [phoneCameras, abA, abB]);
+    const ids = combinedCameras.map((c) => c.id);
+    if (ids.length >= 1 && !abA) setAbA(ids[0]);
+    if (ids.length >= 2 && !abB) setAbB(ids[1]);
+  }, [combinedKey, abA, abB]);
+
+  // Surface local-camera stream errors (permission/device/unavailable) with
+  // the same messaging the phone-less preview used before.
+  useEffect(() => {
+    setCameraError(isPhoneSelected ? null : previewLocal.error);
+  }, [isPhoneSelected, previewLocal.error]);
 
   // Keep the rename input in sync when the selected camera changes.
   useEffect(() => {
-    if (isPhoneSelected && selectedCameraId) {
-      setRenameValue(cameraNames[selectedCameraId] ?? "");
+    if (selectedCameraId) {
+      setRenameValue(cameraDisplayName(selectedCameraId));
     } else {
       setRenameValue("");
     }
-  }, [selectedCameraId, isPhoneSelected, cameraNames]);
+  }, [selectedCameraId, cameraNames, availableCameras, phoneCameras]);
 
   const getCameraDataFor = (deviceId: string): CameraBackground => {
     const d = cameraDefaults[deviceId];
@@ -125,6 +162,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
       opacity: d?.opacity ?? 1,
       objectFit: d?.objectFit ?? "cover",
       mirrored: d?.mirrored ?? false,
+      backdropColor: d?.backdropColor ?? undefined,
     };
   };
 
@@ -162,12 +200,10 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     setAbB(t);
   };
 
-  const selectedPhoneName = isPhoneSelected && selectedCameraId
-    ? (phoneCameras.find((c) => c.device_id === selectedCameraId)?.device_name ?? "Phone Camera")
-    : "";
   const mirrorOn = selectedCameraId ? (cameraDefaults[selectedCameraId]?.mirrored ?? false) : false;
   const fitValue = selectedCameraId ? (cameraDefaults[selectedCameraId]?.objectFit ?? "cover") : "cover";
   const opacityValue = selectedCameraId ? (cameraDefaults[selectedCameraId]?.opacity ?? 1) : 1;
+  const backdropValue = selectedCameraId ? cameraDefaults[selectedCameraId]?.backdropColor : undefined;
   const abSlots: { label: "A" | "B"; value: string | null; set: (v: string | null) => void }[] = [
     { label: "A", value: abA, set: setAbA },
     { label: "B", value: abB, set: setAbB },
@@ -186,6 +222,15 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
   const setLook = (key: keyof CameraLook, value: number) => {
     if (selectedCameraId) setCameraLook(selectedCameraId, { [key]: value });
   };
+
+  // Chroma key (green/blue screen) config for the selected camera. Stored per
+  // device id so the output window can key the same feed live.
+  const chroma = selectedCameraId ? (cameraChroma[selectedCameraId] ?? DEFAULT_CAMERA_CHROMA) : undefined;
+  const chromaSliders: { key: "threshold" | "smoothness" | "spill"; label: string; min: number; max: number; step: number; format: (v: number) => string }[] = [
+    { key: "threshold", label: "Threshold", min: 0, max: 1, step: 0.01, format: (v) => `${v.toFixed(2)}` },
+    { key: "smoothness", label: "Smoothness", min: 0, max: 1, step: 0.01, format: (v) => `${v.toFixed(2)}` },
+    { key: "spill", label: "Spill", min: 0, max: 1, step: 0.01, format: (v) => `${v.toFixed(2)}` },
+  ];
 
   const handleSnapshot = async () => {
     const el = videoRef.current;
@@ -237,67 +282,6 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     }
   };
 
-  useEffect(() => {
-    if (!selectedCameraId) {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      }
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
-      }
-      return;
-    }
-
-    // Phone cameras arrive over a WebRTC relay hosted by the main window
-    // (see PhoneCameraProvider); their ids are synthetic and can never be
-    // opened with getUserMedia. PhoneCameraVideo binds the relayed feed, so
-    // there is nothing to do here.
-    if (selectedCameraId.startsWith("phone-camera-")) {
-      setCameraError(null);
-      return;
-    }
-
-    // Always cleanup existing stream before starting a new one
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
-    }
-
-    navigator.mediaDevices.getUserMedia({ 
-      video: { deviceId: { exact: selectedCameraId } } 
-    }).then(stream => {
-      setCameraError(null);
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-    }).catch(err => {
-      console.error("CameraTab: failed to get stream", err);
-      const name = (err as DOMException)?.name ?? "";
-      if (name === "NotAllowedError" || name === "PermissionDeniedError") {
-        setCameraError("permission");
-      } else if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") {
-        setCameraError("device");
-      } else {
-        setCameraError("unknown");
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      }
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
-      }
-    });
-
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, [selectedCameraId, phoneStreams]);
-
   const setAsGlobalBg = () => {
     const data = getCameraData();
     if (!data) return;
@@ -316,24 +300,22 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
         {/* Preview Area */}
         <div className="flex-1 flex flex-col gap-4">
           <div className="aspect-video bg-black rounded-xl overflow-hidden border border-slate-800 relative group">
-            {isPhoneSelected ? (
-              <PhoneCameraVideo
-                stream={phoneStreams[selectedCameraId!] ?? null}
-                orientation={effectiveOrientation(selectedCameraId!)}
-                look={cameraLook[selectedCameraId!] ?? null}
-                objectFit="contain"
-                videoRef={(el) => { videoRef.current = el; }}
-              />
+            {selectedCameraId ? (
+              <div className="relative w-full h-full">
+                {!isPhoneSelected && cameraDefaults[selectedCameraId]?.backdropColor ? (
+                  <div className="absolute inset-0" style={{ background: cameraDefaults[selectedCameraId]!.backdropColor }} />
+                ) : null}
+                <PhoneCameraVideo
+                  stream={isPhoneSelected ? (phoneStreams[selectedCameraId] ?? null) : previewLocal.stream}
+                  orientation={isPhoneSelected ? effectiveOrientation(selectedCameraId) : null}
+                  look={cameraLook[selectedCameraId] ?? null}
+                  mirrored={mirrorOn}
+                  objectFit="contain"
+                  chromaKey={chroma ?? null}
+                  videoRef={(el) => { videoRef.current = el; }}
+                />
+              </div>
             ) : (
-              <video 
-                ref={videoRef}
-                autoPlay
-                playsInline
-                className="w-full h-full object-contain"
-              />
-            )}
-            
-            {!selectedCameraId && (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 gap-2">
                 <Video size={48} />
                 <p>No camera selected</p>
@@ -346,16 +328,32 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                 </p>
               </div>
             )}
+            {!isPhoneSelected && selectedCameraId && !previewLocal.stream && !previewLocal.error && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <p className="px-2 py-1 bg-black/60 rounded text-[9px] font-bold uppercase tracking-widest text-slate-300">
+                  Opening camera…
+                </p>
+              </div>
+            )}
             <div className="absolute bottom-4 left-4 px-3 py-1 bg-black/60 backdrop-blur-md rounded-full text-[10px] font-bold text-amber-500 border border-amber-500/30 opacity-0 group-hover:opacity-100 transition-opacity uppercase">
               {isPhoneSelected ? "PHONE PREVIEW" : "BROWSER PREVIEW"}
             </div>
-            {isPhoneSelected && phoneStats[selectedCameraId!] && (
+            {selectedCameraId && (
               <div className="absolute top-2 right-2 px-2 py-1 bg-black/70 backdrop-blur-md rounded-md text-[9px] font-bold text-cyan-300 border border-cyan-500/30 flex items-center gap-2 tabular-nums">
-                <span>{phoneStats[selectedCameraId!].fps ?? "—"} fps</span>
-                <span>RTT {phoneStats[selectedCameraId!].rttMs != null ? `${Math.round(phoneStats[selectedCameraId!].rttMs!)}ms` : "—"}</span>
-                <span>{phoneStats[selectedCameraId!].width && phoneStats[selectedCameraId!].height
-                  ? `${phoneStats[selectedCameraId!].width}×${phoneStats[selectedCameraId!].height}`
-                  : ""}</span>
+                {isPhoneSelected ? (
+                  <>
+                    <span>{phoneStats[selectedCameraId]?.fps ?? "—"} fps</span>
+                    <span>RTT {phoneStats[selectedCameraId]?.rttMs != null ? `${Math.round(phoneStats[selectedCameraId]!.rttMs!)}ms` : "—"}</span>
+                    <span>{phoneStats[selectedCameraId]?.width && phoneStats[selectedCameraId]?.height
+                      ? `${phoneStats[selectedCameraId]!.width}×${phoneStats[selectedCameraId]!.height}`
+                      : ""}</span>
+                  </>
+                ) : (
+                  <>
+                    <span>{localStats.fps ?? "—"} fps</span>
+                    <span>{localStats.width && localStats.height ? `${localStats.width}×${localStats.height}` : ""}</span>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -383,7 +381,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
             </div>
           )}
 
-          {isPhoneSelected && (
+          {selectedCameraId && (
             <>
               <div className="flex items-center justify-between px-1">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
@@ -392,9 +390,9 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                 <input
                   value={renameValue}
                   onChange={(e) => handleRename(selectedCameraId!, e.target.value)}
-                  placeholder={selectedPhoneName}
+                  placeholder={cameraDisplayName(selectedCameraId)}
                   className="px-2 py-1 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-200 w-44 focus:outline-none focus:border-amber-500/60"
-                  title="Friendly name shown instead of the phone's default"
+                  title="Friendly name shown instead of the device default"
                 />
               </div>
 
@@ -432,6 +430,36 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                 <span className="text-[10px] text-slate-400 w-8 text-right shrink-0">{Math.round(opacityValue * 100)}%</span>
               </div>
 
+              <div className="flex items-center gap-2 px-1 flex-wrap">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 shrink-0">Backdrop</span>
+                <div className="flex items-center gap-1.5">
+                  {BACKDROP_COLORS.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setCameraDefaults(selectedCameraId!, { backdropColor: c })}
+                      className={`w-5 h-5 rounded-full border transition-all ${
+                        backdropValue === c ? "border-amber-400 ring-2 ring-amber-400/40" : "border-slate-600 hover:border-slate-400"
+                      }`}
+                      style={{ background: c }}
+                      title={c}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    value={backdropValue ?? "#000000"}
+                    onChange={(e) => setCameraDefaults(selectedCameraId!, { backdropColor: e.target.value })}
+                    className="w-5 h-5 rounded cursor-pointer border border-slate-600"
+                    title="Custom backdrop color"
+                  />
+                  <button
+                    onClick={() => setCameraDefaults(selectedCameraId!, { backdropColor: undefined })}
+                    className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
+                  >
+                    None
+                  </button>
+                </div>
+              </div>
+
               <div className="flex flex-col gap-2 px-1">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
                   <SlidersHorizontal size={12} /> Color / Crop
@@ -457,6 +485,61 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                   })}
                 </div>
               </div>
+
+              <div className="flex flex-col gap-2 px-1 pt-1 border-t border-slate-800">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                    <Aperture size={12} /> Chroma Key
+                  </span>
+                  <button
+                    onClick={() => setCameraChroma(selectedCameraId!, { enabled: !chroma?.enabled })}
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase transition-all ${
+                      chroma?.enabled ? "bg-emerald-600 text-white" : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+                    }`}
+                    title="Remove a solid-color background so only the subject remains"
+                  >
+                    {chroma?.enabled ? "Enabled" : "Off"}
+                  </button>
+                </div>
+                {chroma?.enabled && (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 w-14 shrink-0">Key Color</span>
+                      <input
+                        type="color"
+                        value={chroma.keyColor}
+                        onChange={(e) => setCameraChroma(selectedCameraId!, { keyColor: e.target.value })}
+                        className="w-7 h-7 rounded cursor-pointer border border-slate-600"
+                        title="Background color to remove (use a uniform green or blue screen)"
+                      />
+                      <span className="text-[10px] text-slate-400 font-mono">{chroma.keyColor}</span>
+                    </div>
+                    <div className="grid grid-cols-1 gap-y-1.5">
+                      {chromaSliders.map((s) => (
+                        <label key={s.key} className="flex items-center gap-2 text-[9px] font-bold uppercase tracking-wider text-slate-500">
+                          <span className="w-14 shrink-0">{s.label}</span>
+                          <input
+                            type="range"
+                            min={s.min}
+                            max={s.max}
+                            step={s.step}
+                            value={chroma[s.key]}
+                            onChange={(e) => setCameraChroma(selectedCameraId!, { [s.key]: parseFloat(e.target.value) })}
+                            className="flex-1 h-1.5 accent-emerald-500 cursor-pointer"
+                          />
+                          <span className="w-9 text-right text-slate-400 shrink-0">{s.format(chroma[s.key])}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() => setCameraChroma(selectedCameraId!, { ...DEFAULT_CAMERA_CHROMA })}
+                      className="self-start px-2 py-0.5 rounded text-[9px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                )}
+              </div>
             </>
           )}
 
@@ -476,7 +559,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                 </p>
               </div>
               <button
-                onClick={() => { setCameraError(null); refreshCameras(); }}
+                onClick={() => { setCameraError(null); refreshCameras(); previewLocal.retry(); }}
                 className="shrink-0 px-2 py-1 text-[10px] font-black uppercase bg-red-900/50 hover:bg-red-800 rounded-md border border-red-800 transition-all"
               >
                 Retry
@@ -531,27 +614,29 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
             </button>
           </div>
 
-          {phoneCameras.length > 0 && (
+          {combinedCameras.length > 0 && (
             <>
-              {/* All phone feeds */}
+              {/* All camera feeds (local webcams + phones) */}
               <section>
                 <div className="flex items-center justify-between mb-2">
-                  <h2 className="text-xs font-black text-slate-500 uppercase tracking-widest">All Phone Feeds</h2>
+                  <h2 className="text-xs font-black text-slate-500 uppercase tracking-widest">All Camera Feeds</h2>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {phoneCameras.map(cam => (
-                    <PhoneFeedTile
-                      key={cam.device_id}
-                      cam={cam}
-                      name={displayName(cam)}
-                      selected={selectedCameraId === cam.device_id}
-                      onSelect={() => setSelectedCameraId(cam.device_id)}
+                  {combinedCameras.map((cam) => (
+                    <CameraFeedTile
+                      key={cam.id}
+                      id={cam.id}
+                      isPhone={cam.isPhone}
+                      name={cameraDisplayName(cam.id)}
+                      selected={selectedCameraId === cam.id}
+                      reportedOrientation={reportedOrientationFor(cam.id)}
+                      onSelect={() => setSelectedCameraId(cam.id)}
                     />
                   ))}
                 </div>
               </section>
 
-              {/* A/B switcher */}
+              {/* A/B switcher (works for phone AND local cameras) */}
               <section>
                 <h2 className="text-xs font-black text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-1.5">
                   <Zap size={12} /> A/B Camera Switcher
@@ -574,19 +659,17 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                             className="max-w-[120px] px-1.5 py-0.5 rounded bg-slate-800 text-[10px] text-slate-300 border border-slate-700"
                           >
                             <option value="">— none —</option>
-                            {phoneCameras.map((c) => (
-                              <option key={c.device_id} value={c.device_id}>{displayName(c)}</option>
+                            {combinedCameras.map((c) => (
+                              <option key={c.id} value={c.id}>{cameraDisplayName(c.id)}</option>
                             ))}
                           </select>
                         </div>
                         <div className="aspect-video bg-black">
                           {slot.value ? (
-                            <PhoneCameraVideo
-                              stream={phoneStreams[slot.value] ?? null}
-                              orientation={effectiveOrientation(slot.value)}
+                            <CameraFeed
+                              deviceId={slot.value}
+                              reportedOrientation={reportedOrientationFor(slot.value)}
                               objectFit="cover"
-                              look={cameraLook[slot.value] ?? null}
-                              mirrored={cameraDefaults[slot.value]?.mirrored ?? false}
                             />
                           ) : (
                             <div className="w-full h-full flex items-center justify-center text-slate-600 text-[9px] font-bold uppercase">—</div>
@@ -699,21 +782,18 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
   );
 }
 
-/** A single thumbnail in the "All Phone Feeds" grid, showing the feed plus its
- *  live resolution and peer state. */
-function PhoneFeedTile({ cam, name, selected, onSelect }: {
-  cam: PhoneCameraInfo;
+/** A single thumbnail in the "All Camera Feeds" grid, showing the live feed
+ *  (local webcam or phone camera) plus its resolution and feed state. */
+function CameraFeedTile({ id, isPhone, name, selected, reportedOrientation, onSelect }: {
+  id: string;
+  isPhone: boolean;
   name: string;
   selected: boolean;
+  reportedOrientation?: PhoneCameraOrientation;
   onSelect: () => void;
 }) {
-  const { cameraOrientations, cameraDefaults, cameraLook } = useAppStore();
-  const phoneStreams = usePhoneCameraStreams();
-  const phoneStates = usePhoneCameraStates();
   const [meta, setMeta] = useState<{ w: number; h: number } | null>(null);
-  const stream = phoneStreams[cam.device_id] ?? null;
-  const state = phoneStates[cam.device_id];
-  const connected = state === "connected" || (state == null && !!stream);
+  const [status, setStatus] = useState<{ connected: boolean; error: string | null }>({ connected: false, error: null });
 
   return (
     <button
@@ -723,31 +803,32 @@ function PhoneFeedTile({ cam, name, selected, onSelect }: {
       }`}
       title={name}
     >
-      <PhoneCameraVideo
-        stream={stream}
-        orientation={cameraOrientations[cam.device_id] ?? cam.orientation ?? "portrait"}
+      <CameraFeed
+        deviceId={id}
+        reportedOrientation={reportedOrientation}
         objectFit="cover"
-        look={cameraLook[cam.device_id] ?? null}
-        mirrored={cameraDefaults[cam.device_id]?.mirrored ?? false}
         onMetadata={(w, h) => setMeta({ w, h })}
+        onStatus={setStatus}
       />
-      {!stream && (
+      {!status.connected && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/60">
-          <p className="text-[8px] font-bold uppercase tracking-widest text-slate-300">Connecting…</p>
+          <p className="text-[8px] font-bold uppercase tracking-widest text-slate-300">
+            {status.error ? "No feed" : isPhone ? "Connecting…" : "Opening…"}
+          </p>
         </div>
       )}
-      {meta && connected && (
+      {meta && status.connected && (
         <div className="absolute top-1 left-1 px-1 py-0.5 bg-black/70 rounded text-[8px] font-mono font-bold text-slate-300">
           {meta.w}×{meta.h}
         </div>
       )}
       <div
         className={`absolute top-1 right-1 px-1 py-0.5 rounded text-[7px] font-black uppercase tracking-widest flex items-center gap-1 ${
-          connected ? "bg-green-500/80 text-white" : "bg-slate-700/80 text-slate-300"
+          status.connected ? "bg-green-500/80 text-white" : "bg-slate-700/80 text-slate-300"
         }`}
       >
-        {connected ? <span className="w-1 h-1 rounded-full bg-white animate-pulse" /> : null}
-        {connected ? "LIVE" : "CONN"}
+        {status.connected ? <span className="w-1 h-1 rounded-full bg-white animate-pulse" /> : null}
+        {status.connected ? "LIVE" : isPhone ? "CONN" : "OFF"}
       </div>
       <div className="absolute bottom-0 inset-x-0 px-1.5 py-0.5 bg-black/70 text-left">
         <p className="text-[9px] font-bold truncate text-slate-200">{name}</p>

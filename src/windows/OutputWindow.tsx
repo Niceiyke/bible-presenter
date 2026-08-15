@@ -25,7 +25,7 @@ import { Music } from "lucide-react";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { signalOperatorWarning } from "../hooks/useAppInitialization";
 import { useFonts } from "../hooks/useFonts";
-import PhoneCameraVideo, { usePhoneCameraOrientation, usePhoneCameraLook } from "../components/shared/PhoneCameraVideo";
+import PhoneCameraVideo, { usePhoneCameraOrientation, usePhoneCameraLook, useCameraChroma } from "../components/shared/PhoneCameraVideo";
 
 function ProjectionErrorFallback() {
   return (
@@ -70,9 +70,8 @@ export function OutputWindow() {
   const livePhoneOrientation = usePhoneCameraOrientation(
     liveCameraDeviceId?.startsWith("phone-camera-") ? liveCameraDeviceId : null
   );
-  const livePhoneLook = usePhoneCameraLook(
-    liveCameraDeviceId?.startsWith("phone-camera-") ? liveCameraDeviceId : null
-  );
+  const liveCameraLook = usePhoneCameraLook(liveCameraDeviceId);
+  const liveCameraChroma = useCameraChroma(liveCameraDeviceId);
   // Locally-opened background camera stream (owned by this effect, unlike the
   // relayed phone streams which belong to the phone's peer connections).
   const localBgCameraRef = useRef<MediaStream | null>(null);
@@ -334,6 +333,12 @@ export function OutputWindow() {
   const cameraBg = getCameraBackground(settings, liveItem);
   const audioBg = getAudioBackground(settings, liveItem);
   const bgImage = getImageBackground(settings, liveItem);
+
+  const bgCameraLook = usePhoneCameraLook(cameraBg?.deviceId ?? null);
+  const bgCameraChroma = useCameraChroma(cameraBg?.deviceId ?? null);
+  const bgPhoneOrientation = usePhoneCameraOrientation(
+    cameraBg?.deviceId?.startsWith("phone-camera-") ? cameraBg.deviceId : null
+  );
 
   // Browser-only camera stream lifecycle. Phone cameras stream over the WebRTC
   // relay hosted by this window's "output" peer (their ids are synthetic and
@@ -651,23 +656,30 @@ export function OutputWindow() {
         </div>
       )}
 
+      {/* Per-camera backdrop painted behind the background camera feed */}
+      {cameraBg?.backdropColor ? (
+        <div
+          className="absolute inset-0 z-0 pointer-events-none"
+          style={{ background: cameraBg.backdropColor }}
+        />
+      ) : null}
+
       {/* Background camera element */}
-      <video
-        ref={(el) => {
-          if (el && cameraStream) el.srcObject = cameraStream;
-          cameraRef.current = el;
-        }}
-        className="absolute inset-0 w-full h-full pointer-events-none"
-        style={{
-          zIndex: 0,
-          objectFit: cameraBg?.objectFit ?? "cover",
-          opacity: cameraBg?.opacity ?? 1,
-          visibility: cameraBg?.deviceId ? "visible" : "hidden",
-          transform: cameraBg?.mirrored ? "scaleX(-1)" : "none",
-        }}
-        autoPlay
-        playsInline
-      />
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{ zIndex: 0, visibility: cameraBg?.deviceId ? "visible" : "hidden" }}
+      >
+        <PhoneCameraVideo
+          stream={cameraStream}
+          orientation={cameraBg?.deviceId?.startsWith("phone-camera-") ? bgPhoneOrientation : null}
+          look={bgCameraLook}
+          mirrored={cameraBg?.mirrored}
+          objectFit={(cameraBg?.objectFit as any) ?? "cover"}
+          style={{ opacity: cameraBg?.opacity ?? 1 }}
+          chromaKey={bgCameraChroma}
+          videoRef={(el) => { cameraRef.current = el; }}
+        />
+      </div>
 
       <video
         ref={bgVideoRef}
@@ -773,13 +785,20 @@ export function OutputWindow() {
               </div>
             ) : liveItem.type === "Camera" ? (
               <div className="absolute inset-0">
+                {liveItem.data.backdropColor ? (
+                  <div
+                    className="absolute inset-0"
+                    style={{ background: liveItem.data.backdropColor }}
+                  />
+                ) : null}
                 <PhoneCameraVideo
                   stream={mainCameraStream}
                   orientation={livePhoneOrientation}
-                  look={livePhoneLook}
+                  look={liveCameraLook}
                   mirrored={liveItem.data.mirrored}
                   objectFit={(liveItem.data.objectFit as any) ?? "cover"}
                   style={{ opacity: liveItem.data.opacity ?? 1 }}
+                  chromaKey={liveCameraChroma}
                   videoRef={(el) => { mainCameraRef.current = el; }}
                 />
               </div>

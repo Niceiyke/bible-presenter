@@ -11,6 +11,7 @@ import {
 } from "./shared/Renderers";
 import { useAppStore } from "../store";
 import { usePhoneCameraStreams } from "../hooks/usePhoneCameraHost";
+import { useSharedLocalCameraStream } from "../hooks/useSharedLocalCameraStream";
 import PhoneCameraVideo, { usePhoneCameraOrientation } from "./shared/PhoneCameraVideo";
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { useReferenceHeight } from "../hooks/useReferenceHeight";
@@ -43,7 +44,7 @@ export function PreviewCard({
   isLocalPreview?: boolean;
   hideHeader?: boolean;
 }) {
-  const { appDataDir, settings, cameraLook } = useAppStore();
+  const { appDataDir, settings, cameraLook, cameraChroma } = useAppStore();
   const phoneStreams = usePhoneCameraStreams();
   const isVideo = item?.type === "Media" && (item.data as MediaItem).media_type === "Video";
   const isAudio = item?.type === "Media" && (item.data as MediaItem).media_type === "Audio";
@@ -86,7 +87,6 @@ export function PreviewCard({
   const [slideFitRef, slideFit] = useSlideFit();
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const cameraPreviewRef = useRef<HTMLVideoElement | null>(null);
   const videoCleanupRef = useRef<(() => void) | null>(null);
   const videoItemRef = useRef<MediaItem | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -121,45 +121,17 @@ export function PreviewCard({
   // never sees a stale (null) item during the initial stage/live mount.
   videoItemRef.current = item?.type === "Media" ? (item.data as MediaItem) : null;
 
-  useEffect(() => {
-    let activeStream: MediaStream | null = null;
-
-    const startBrowser = async (deviceId: string) => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-          video: { deviceId: { exact: deviceId } } 
-        });
-        activeStream = stream;
-        if (cameraPreviewRef.current) {
-          cameraPreviewRef.current.srcObject = stream;
-        }
-      } catch (err) {
-        console.error("PreviewCard: browser camera failed", err);
-      }
-    };
-
-    const deviceId = item?.type === "Camera" ? item.data.deviceId : null;
-    if (isCamera && deviceId) {
-      if (deviceId.startsWith("phone-camera-")) {
-        // Phone cameras stream over a WebRTC relay hosted by the main window
-        // (see PhoneCameraProvider); "phone-camera-*" ids are synthetic and
-        // can never be opened with getUserMedia. Bind the relayed feed once it
-        // arrives.
-        const stream = phoneStreams[deviceId];
-        if (cameraPreviewRef.current) {
-          cameraPreviewRef.current.srcObject = stream ?? null;
-        }
-      } else if (!deviceId.startsWith("native:") && !deviceId.startsWith("ndi:")) {
-        startBrowser(deviceId);
-      }
-    }
-
-    return () => {
-      if (activeStream) {
-        activeStream.getTracks().forEach(t => t.stop());
-      }
-    };
-  }, [isCamera, item?.type === "Camera" ? item.data.deviceId : null, phoneStreams]);
+  // Camera preview streams: phone cameras come from the WebRTC relay hosted by
+  // the operator window; local webcams share the app-wide cached stream so the
+  // Cockpit preview never opens a second getUserMedia for the same device.
+  const cameraDeviceId = item?.type === "Camera" ? item.data.deviceId : null;
+  const previewLocal = useSharedLocalCameraStream(
+    isCamera && !isPhoneCamera && cameraDeviceId && !cameraDeviceId.startsWith("native:") && !cameraDeviceId.startsWith("ndi:")
+      ? cameraDeviceId
+      : null,
+    `previewcard:${cameraDeviceId ?? "none"}`,
+  );
+  const previewStream = isCamera ? (isPhoneCamera ? (phoneStreams[cameraDeviceId!] ?? null) : previewLocal.stream) : null;
 
   const setVideoRefCallback = useCallback(
     (el: HTMLVideoElement | null) => {
@@ -353,13 +325,19 @@ export function PreviewCard({
               </div>
             ) : item.type === "Camera" ? (
               <div className="w-full h-full relative border border-slate-800 rounded-lg overflow-hidden bg-black">
+                {item.data.backdropColor ? (
+                  <div
+                    className="absolute inset-0"
+                    style={{ background: item.data.backdropColor }}
+                  />
+                ) : null}
                 <PhoneCameraVideo
-                  stream={item.data.deviceId.startsWith("phone-camera-") ? phoneStreams[item.data.deviceId] ?? null : undefined}
-                  orientation={item.data.deviceId.startsWith("phone-camera-") ? phoneOrientation : null}
-                  look={item.data.deviceId.startsWith("phone-camera-") ? cameraLook[item.data.deviceId] ?? null : null}
+                  stream={previewStream}
+                  orientation={isPhoneCamera ? phoneOrientation : null}
+                  look={cameraLook[item.data.deviceId] ?? null}
                   mirrored={item.data.mirrored}
                   objectFit="contain"
-                  videoRef={(el) => { cameraPreviewRef.current = el; }}
+                  chromaKey={cameraChroma[item.data.deviceId] ?? null}
                 />
                 <div className="absolute top-2 left-2 px-1.5 py-0.5 bg-red-500/80 rounded text-[8px] font-black text-white flex items-center gap-1 animate-pulse">
                   <div className="w-1.5 h-1.5 rounded-full bg-white" />

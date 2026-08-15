@@ -263,6 +263,31 @@ export const DEFAULT_CAMERA_LOOK: CameraLook = {
   panY: 0,
 };
 
+/** Chroma-key (green/blue screen) configuration for a camera feed: the keyed
+ *  background is removed so only the subject remains, composited over the
+ *  camera backdrop color or the global background. Stored per camera device id
+ *  in the operator store and persisted to localStorage so the pipeline follows
+ *  the feed across sessions and windows. */
+export interface CameraChromaConfig {
+  enabled: boolean;
+  /** Hex color to key out, e.g. "#00B140". */
+  keyColor: string;
+  /** 0-1: how close a pixel's chroma must be to the key color before removal. */
+  threshold: number;
+  /** 0-1: softness of the removal edge (smoothstep band around threshold). */
+  smoothness: number;
+  /** 0-1: green/magenta spill suppression on the subject's edges. */
+  spill: number;
+}
+
+export const DEFAULT_CAMERA_CHROMA: CameraChromaConfig = {
+  enabled: false,
+  keyColor: "#00B140",
+  threshold: 0.4,
+  smoothness: 0.1,
+  spill: 0.5,
+};
+
 export interface RemoteCameraStartPayload {
   device_id: string;
   device_name: string;
