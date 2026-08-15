@@ -355,7 +355,7 @@ export function PreviewCard({
               <div className="w-full h-full relative border border-slate-800 rounded-lg overflow-hidden bg-black">
                 <PhoneCameraVideo
                   stream={item.data.deviceId.startsWith("phone-camera-") ? phoneStreams[item.data.deviceId] ?? null : undefined}
-                  orientation={item.data.deviceId.startsWith("phone-camera-") ? phoneOrientation : "portrait"}
+                  orientation={item.data.deviceId.startsWith("phone-camera-") ? phoneOrientation : null}
                   look={item.data.deviceId.startsWith("phone-camera-") ? cameraLook[item.data.deviceId] ?? null : null}
                   mirrored={item.data.mirrored}
                   objectFit="contain"

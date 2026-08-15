@@ -238,6 +238,36 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
     }
   }, [outputNeeded, createPeer]);
 
+  // Keep the reported physical orientation current: if the phone is rotated
+  // while streaming, re-register the camera (register-only and idempotent on
+  // the backend) so the operator's camera list and `reportedCameraOrientations`
+  // map update and the preview/output windows re-orient live.
+  const orientationRef = useRef<"portrait" | "landscape">(readPhoneOrientation());
+  useEffect(() => {
+    const sync = () => {
+      if (!isStreamingRef.current) return;
+      const next = readPhoneOrientation();
+      if (next === orientationRef.current) return;
+      orientationRef.current = next;
+      client
+        .command("camera.start", {
+          device_id: deviceId,
+          device_name: deviceName,
+          facing_mode: facingMode,
+          orientation: next,
+        })
+        .catch(() => {
+          // Transient failure — the operator keeps the last known orientation.
+        });
+    };
+    window.addEventListener("orientationchange", sync);
+    window.addEventListener("resize", sync);
+    return () => {
+      window.removeEventListener("orientationchange", sync);
+      window.removeEventListener("resize", sync);
+    };
+  }, [client, deviceId, deviceName, facingMode]);
+
   const startStreaming = useCallback(async () => {
     setError(null);
     setIsStreaming(true);

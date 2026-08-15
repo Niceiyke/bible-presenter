@@ -27,10 +27,11 @@ function readReportedOrientation(deviceId: string | null | undefined): PhoneCame
   return readMapValue(REPORTED_STORAGE_KEY, deviceId, ["portrait", "landscape"]);
 }
 
-/** Stored operator override first, then the phone-reported orientation, then
- *  portrait as a last resort. */
-function readEffectiveOrientation(deviceId: string | null | undefined): PhoneCameraOrientation {
-  return readStoredOrientation(deviceId) ?? readReportedOrientation(deviceId) ?? "portrait";
+/** Stored operator override first, then the phone-reported orientation. Returns
+ *  `null` when neither is known so caller-provided feeds that are NOT phone
+ *  cameras (local webcams, Media cameras) are never auto-rotated. */
+function readEffectiveOrientation(deviceId: string | null | undefined): PhoneCameraOrientation | null {
+  return readStoredOrientation(deviceId) ?? readReportedOrientation(deviceId);
 }
 
 /**
@@ -41,8 +42,8 @@ function readEffectiveOrientation(deviceId: string | null | undefined): PhoneCam
  * event keeps auxiliary windows (which do not mount the operator store) in
  * sync.
  */
-export function usePhoneCameraOrientation(deviceId: string | null | undefined): PhoneCameraOrientation {
-  const [orientation, setOrientation] = useState<PhoneCameraOrientation>(() => readEffectiveOrientation(deviceId));
+export function usePhoneCameraOrientation(deviceId: string | null | undefined): PhoneCameraOrientation | null {
+  const [orientation, setOrientation] = useState<PhoneCameraOrientation | null>(() => readEffectiveOrientation(deviceId));
   useEffect(() => {
     setOrientation(readEffectiveOrientation(deviceId));
     const onStorage = (e: StorageEvent) => {
@@ -92,8 +93,10 @@ interface Props {
   stream?: MediaStream | null;
   /** How the phone is physically held: "portrait" upright, "landscape" rotated
    *  a quarter turn. The stream is rotated to match this, compensating for
-   *  whichever orientation the browser delivered. */
-  orientation: PhoneCameraOrientation;
+   *  whichever orientation the browser delivered. Pass `null` when the feed is
+   *  NOT a phone camera (local webcam, Media camera) — those are never
+   *  auto-rotated because the browser already orients them natively. */
+  orientation: PhoneCameraOrientation | null;
   mirrored?: boolean;
   /** object-fit used when NOT rotating. "landscape" always uses `contain` on
    *  the pre-rotation step so the whole frame is shown before being rotated
@@ -118,8 +121,9 @@ interface Props {
  * portrait phone delivering landscape frames needs a 90deg turn, a landscape
  * phone delivering portrait frames does too. `videoSize` is the rotation-
  * corrected frame dimension reported by the video element, so the two cases
- * are distinguished by comparing it against the requested orientation. Used
- * by the operator preview (Cockpit, Camera tab) and the projected output
+ * are distinguished by comparing it against the requested orientation. When
+ * `orientation` is `null` (any non-phone feed) the frame is never rotated.
+ * Used by the operator preview (Cockpit, Camera tab) and the projected output
  * window.
  */
 export default function PhoneCameraVideo({
@@ -155,6 +159,7 @@ export default function PhoneCameraVideo({
   }, []);
 
   const rotate =
+    orientation !== null &&
     !!videoSize &&
     videoSize.w !== videoSize.h &&
     ((orientation === "portrait" && videoSize.w > videoSize.h) ||
