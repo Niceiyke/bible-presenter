@@ -80,17 +80,21 @@ function SliderRow({ label, min, max, step = 1, value, onChange, unit = "" }: {
   );
 }
 
+const toPickerHex = (v: string): string =>
+  v && v.startsWith("#") && /^#[0-9a-fA-F]{6}$/.test(v) ? v : "#000000";
+
 function ColorSwatch({ value, onChange, label }: { value: string; onChange: (v: string) => void; label: string }) {
-  const id = `cs-${label.replace(/\s/g, "")}`;
   return (
-    <label htmlFor={id} className="flex items-center gap-1.5 cursor-pointer group">
-      <div
-        className="w-6 h-6 rounded border-2 border-slate-700 group-hover:border-amber-500/50 transition-colors shadow-inner shrink-0"
-        style={{ background: value }}
+    <div className="flex items-center gap-1.5">
+      <input
+        type="color"
+        value={toPickerHex(value)}
+        onChange={e => onChange(e.target.value)}
+        aria-label={label}
+        className="w-6 h-6 rounded cursor-pointer border-2 border-slate-700 hover:border-amber-500/50 transition-colors bg-transparent p-0"
       />
-      <span className="text-[9px] font-mono text-slate-500 group-hover:text-slate-400 transition-colors">{value.toUpperCase()}</span>
-      <input type="color" id={id} value={value} onChange={e => onChange(e.target.value)} className="sr-only" />
-    </label>
+      <span className="text-[9px] font-mono text-slate-500">{value.toUpperCase()}</span>
+    </div>
   );
 }
 

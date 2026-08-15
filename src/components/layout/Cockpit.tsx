@@ -4,6 +4,7 @@ import { AlertTriangle, CalendarDays, ChevronRight, Clock, EyeOff, Layers, Undo2
 import { useAppStore } from "../../store";
 import { displayItemLabel, getItemUid } from "../../utils";
 import { PreviewCard } from "../PreviewCard";
+import { LowerThirdPreview } from "../LowerThirdPreview";
 import { ClearAllModal } from "./ClearAllModal";
 import { Button, ProgressBar } from "../ui";
 import { itemMetaAt } from "../../items/registry";
@@ -44,6 +45,7 @@ export function Cockpit({
     busyActions,
     setBackendError,
     setBusyAction,
+    currentLowerThird, ltVisible,
   } = useAppStore();
 
   const [clearModalOpen, setClearModalOpen] = useState(false);
@@ -198,8 +200,17 @@ export function Cockpit({
               </Button>
             </div>
           </div>
-          <div className="w-full rounded-lg overflow-hidden ring-2 ring-state-live/30 bg-black" style={{ aspectRatio: "16/9" }}>
+          <div className="w-full rounded-lg overflow-hidden ring-2 ring-state-live/30 bg-black relative" style={{ aspectRatio: "16/9" }}>
             <PreviewCard item={liveItem} label="" accent="" badge={null} empty="Output is empty" hideHeader />
+            {ltVisible && currentLowerThird && (
+              <LowerThirdPreview
+                data={currentLowerThird.data}
+                template={currentLowerThird.template}
+                refHeight={settings.reference_output_height ?? 1080}
+                background="transparent"
+                className="absolute inset-0 pointer-events-none"
+              />
+            )}
           </div>
           {metaRow(liveItem, "live")}
           {progress(liveItem, "live")}

@@ -157,7 +157,7 @@ export function useItemActions() {
         kind: "Lyrics",
         data: {
           line1: staged.data.lines[0] ?? "",
-          line2: staged.data.lines[1],
+          line2: ltLinesPerDisplay === 2 ? staged.data.lines[1] : undefined,
           section_label: settings.show_song_section_labels ? staged.data.section_label : undefined
         }
       };
@@ -182,7 +182,7 @@ export function useItemActions() {
       stageItem(nextLiveItem);
     }
     return true;
-  }, [nextLiveItem, stageItem, settings, setPreviousItem, setLiveItem, ltTemplate, ltSavedTemplates, songs, setLtVisible, updateSettings, setBackendError, setBusyAction]);
+  }, [nextLiveItem, stageItem, settings, setPreviousItem, setLiveItem, ltTemplate, ltSavedTemplates, ltLinesPerDisplay, songs, setLtVisible, updateSettings, setBackendError, setBusyAction]);
 
   const sendLive = useCallback(async (item: DisplayItem): Promise<boolean> => {
     const current = useAppStore.getState().liveItem;
@@ -209,7 +209,7 @@ export function useItemActions() {
         kind: "Lyrics",
         data: {
           line1: item.data.lines[0] ?? "",
-          line2: item.data.lines[1],
+          line2: ltLinesPerDisplay === 2 ? item.data.lines[1] : undefined,
           section_label: settings.show_song_section_labels ? item.data.section_label : undefined
         }
       };
@@ -247,7 +247,7 @@ export function useItemActions() {
       stageItem(next);
     }
     return true;
-  }, [stageItem, setRecentItems, getNextItem, setPreviousItem, setLiveItem, settings, ltTemplate, ltSavedTemplates, songs, setLtVisible, updateSettings, setBackendError, setBusyAction]);
+  }, [stageItem, setRecentItems, getNextItem, setPreviousItem, setLiveItem, settings, ltTemplate, ltSavedTemplates, ltLinesPerDisplay, songs, setLtVisible, updateSettings, setBackendError, setBusyAction]);
 
   const clearAll = useCallback(async (): Promise<ClearSnapshot | null> => {
     const snapshot: ClearSnapshot = {

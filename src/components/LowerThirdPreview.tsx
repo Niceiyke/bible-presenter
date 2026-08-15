@@ -8,6 +8,7 @@ const BG_CLASSES: Record<string, string> = {
   green: "bg-[#00b140]",
   checkered:
     "bg-[length:20px_20px] [background-image:linear-gradient(45deg,#333_25%,transparent_25%),linear-gradient(-45deg,#333_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#333_75%),linear-gradient(-45deg,transparent_75%,#333_75%)] [background-position:0_0,0_10px,10px_-10px,-10px_0px] bg-[#1e1e1e]",
+  transparent: "bg-transparent",
 };
 
 /**
@@ -26,7 +27,7 @@ export function LowerThirdPreview({
   data: LowerThirdData;
   template: LowerThirdTemplate;
   refHeight?: number;
-  background?: "dark" | "green" | "checkered";
+  background?: "dark" | "green" | "checkered" | "transparent";
   className?: string;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);

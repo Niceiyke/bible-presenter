@@ -2,11 +2,11 @@ import { useEffect, useState, useMemo } from "react";
 import { useSlideFit } from "../hooks/useSlideFit";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { DisplayItem, PresentationSettings, TimerData } from "../types";
+import type { DisplayItem, PresentationSettings, TimerData, LowerThirdData, LowerThirdTemplate } from "../types";
 import { THEMES } from "../types";
 import { displayItemLabel } from "../utils";
 import { stageDetail as stageDetailFor } from "../items/registry";
-import { CustomSlideRenderer } from "../components/shared/Renderers";
+import { CustomSlideRenderer, LowerThirdOverlay } from "../components/shared/Renderers";
 import { useAppStore } from "../store";
 import { useT } from "../i18n";
 import { signalOperatorWarning } from "../hooks/useAppInitialization";
@@ -48,7 +48,7 @@ export function StageWindow() {
   const [liveItem, setLiveItem] = useState<DisplayItem | null>(null);
   const [stagedItem, setStagedItem] = useState<DisplayItem | null>(null);
   const [settings, setSettings] = useState<PresentationSettings | null>(null);
-  const [ltOnAir, setLtOnAir] = useState(false);
+  const [ltPayload, setLtPayload] = useState<{ data: LowerThirdData; template: LowerThirdTemplate } | null>(null);
   const [clock, setClock] = useState(formatClock(new Date()));
   const [, forceTick] = useState(0);
 
@@ -60,13 +60,14 @@ export function StageWindow() {
   // proportions without overflowing the narrower confidence panels.
   const [liveSlideBoxRef, liveSlideFit] = useSlideFit();
   const [stagedSlideBoxRef, stagedSlideFit] = useSlideFit();
+  const [ltHostRef, ltFit] = useSlideFit();
 
   useEffect(() => {
     invoke<DisplayItem>("get_current_item").then(setLiveItem).catch((e: any) => signalOperatorWarning(`Stage hydrate (live): ${e?.message ?? e}`));
     invoke<DisplayItem>("get_staged_item").then(setStagedItem).catch(() => {});
     invoke<string>("get_app_data_dir").then(setAppDataDir).catch(() => {});
     invoke<PresentationSettings>("get_settings").then((s) => { if (s) setSettings(s); }).catch(() => {});
-    invoke<any>("get_current_lower_third").then((lt) => setLtOnAir(!!lt)).catch(() => {});
+    invoke<any>("get_current_lower_third").then((lt) => setLtPayload(lt ?? null)).catch(() => {});
 
     const tick = () => {
       setClock(formatClock(new Date()));
@@ -89,7 +90,7 @@ export function StageWindow() {
       setSettings(ev.payload);
     });
     const unlisten4 = listen<any>("lower-third-update", (ev) => {
-      setLtOnAir(!!ev.payload);
+      setLtPayload(ev.payload ?? null);
     });
     return () => {
       unlisten1.then((f) => f());
@@ -134,7 +135,7 @@ export function StageWindow() {
       >
         <div className="flex items-center gap-3">
           <span className="text-xs font-bold uppercase tracking-widest" style={{ color: useTheme ? "rgba(255,255,255,0.5)" : "#64748b" }}>{t("stage.label")}</span>
-          {ltOnAir && (
+          {ltPayload && (
             <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest" style={{ backgroundColor: accent + "33", color: accent }}>
               {t("stage.ltOnAir")}
             </span>
@@ -155,7 +156,7 @@ export function StageWindow() {
             <span className="text-xs font-black uppercase tracking-widest" style={{ color: "#ef4444" }}>{t("stage.nowLive")}</span>
           </div>
           <p className="text-xl font-bold mb-3 shrink-0 truncate" style={{ color: useTheme ? "rgba(255,255,255,0.8)" : "#cbd5e1" }}>{itemSummary(liveItem)}</p>
-          <div className="text-4xl font-serif leading-snug flex-1 overflow-hidden" style={{ color: textCol }}>
+          <div ref={ltHostRef} className="text-4xl font-serif leading-snug flex-1 overflow-hidden relative">
             {liveItem?.type === "CustomSlide" ? (
               <div ref={liveSlideBoxRef} className="w-full h-full relative border rounded-lg overflow-hidden flex items-center justify-center" style={{ borderColor: useTheme ? "rgba(255,255,255,0.08)" : "#1e293b" }}>
                 {liveSlideFit.width > 0 && liveSlideFit.height > 0 && (
@@ -170,6 +171,13 @@ export function StageWindow() {
               </div>
             ) : (
               <p className="line-clamp-[8] whitespace-pre-wrap">{itemDetail(liveItem)}</p>
+            )}
+            {ltPayload && ltFit.width > 0 && (
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="relative" style={{ width: ltFit.width, height: ltFit.height }}>
+                  <LowerThirdOverlay data={ltPayload.data} template={ltPayload.template} scale={ltFit.scale} />
+                </div>
+              </div>
             )}
           </div>
         </div>

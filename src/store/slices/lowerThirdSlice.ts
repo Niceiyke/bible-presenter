@@ -77,7 +77,7 @@ export const createLowerThirdSlice: StateCreator<AppStore, [], [], LowerThirdSli
   setLtSongId: (v) => set({ ltSongId: v }),
   ltLineIndex: 0,
   setLtLineIndex: (v) => set((s) => ({ ltLineIndex: typeof v === "function" ? v(s.ltLineIndex) : v })),
-  ltLinesPerDisplay: 2,
+  ltLinesPerDisplay: 1,
   setLtLinesPerDisplay: (v: 1 | 2) => set({ ltLinesPerDisplay: v }),
   ltAutoAdvance: false,
   setLtAutoAdvance: (v) => set({ ltAutoAdvance: v }),

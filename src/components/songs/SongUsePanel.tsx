@@ -37,6 +37,7 @@ export function SongUsePanel({ song, source, onClose, onStage, onLive, onAddToSc
   const {
     ltTemplate, ltSavedTemplates, songs, setLtSongId, setLtMode, setLtLineIndex,
     ltVisible, setLtVisible, busyActions, setBackendError,
+    ltLinesPerDisplay,
     settings,
   } = useAppStore();
   const t = useT();
@@ -95,12 +96,12 @@ export function SongUsePanel({ song, source, onClose, onStage, onLive, onAddToSc
     : null;
 
   const flatLines = useMemo(() => flattenSongForLowerThird(song), [song]);
-  const overlayPayload = ltBuildLyricsPayload(flatLines, Math.min(clamped, Math.max(0, flatLines.length - 1)), 2);
+  const overlayPayload = ltBuildLyricsPayload(flatLines, Math.min(clamped, Math.max(0, flatLines.length - 1)), ltLinesPerDisplay);
   const overlayData = overlayPayload ?? {
     kind: "Lyrics" as const,
     data: {
       line1: current?.lines[0] ?? "",
-      line2: current?.lines[1],
+      line2: ltLinesPerDisplay === 2 ? current?.lines[1] : undefined,
       section_label: current?.label ?? "",
     },
   };
@@ -234,7 +235,7 @@ export function SongUsePanel({ song, source, onClose, onStage, onLive, onAddToSc
                         kind: "Lyrics",
                         data: {
                           line1: next.lines[0] ?? "",
-                          line2: next.lines[1],
+                          line2: ltLinesPerDisplay === 2 ? next.lines[1] : undefined,
                           section_label: next.label,
                         },
                       } as any}
