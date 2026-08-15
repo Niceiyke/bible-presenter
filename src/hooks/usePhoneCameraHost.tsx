@@ -13,9 +13,22 @@ import { invoke } from "@tauri-apps/api/core";
 interface PhoneCameraHostValue {
   streams: Record<string, MediaStream>;
   states: Record<string, RTCPeerConnectionState>;
+  stats: Record<string, PhoneCameraStats>;
 }
 
-const PhoneCameraContext = createContext<PhoneCameraHostValue>({ streams: {}, states: {} });
+/** Receiver-side latency/quality metrics sampled from the answering peer's
+ *  `getStats()` (see PhoneCameraProvider). `rttMs` is the WebRTC round-trip
+ *  time to the phone, `jitterMs` the inbound-rtp jitter, `fps` the decoded
+ *  frame rate and `width`/`height` the decoded resolution. */
+export interface PhoneCameraStats {
+  rttMs: number | null;
+  jitterMs: number | null;
+  fps: number | null;
+  width: number | null;
+  height: number | null;
+}
+
+const PhoneCameraContext = createContext<PhoneCameraHostValue>({ streams: {}, states: {}, stats: {} });
 
 export function usePhoneCameraStreams(): Record<string, MediaStream> {
   return useContext(PhoneCameraContext).streams;
@@ -25,10 +38,16 @@ export function usePhoneCameraStates(): Record<string, RTCPeerConnectionState> {
   return useContext(PhoneCameraContext).states;
 }
 
+export function usePhoneCameraStats(): Record<string, PhoneCameraStats> {
+  return useContext(PhoneCameraContext).stats;
+}
+
 export function PhoneCameraProvider({ children }: { children: React.ReactNode }) {
   const [streams, setStreams] = useState<Record<string, MediaStream>>({});
   const [states, setStates] = useState<Record<string, RTCPeerConnectionState>>({});
+  const [stats, setStats] = useState<Record<string, PhoneCameraStats>>({});
   const pcsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const lastFramesRef = useRef<Record<string, { framesDecoded: number; ts: number }>>({});
 
   const setPeerState = (deviceId: string, state: RTCPeerConnectionState | null) => {
     setStates((prev) => {
@@ -141,6 +160,59 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
     };
   }, []);
 
-  const value = { streams, states };
+  // Sample receiver-side latency/quality from each answering peer every
+  // second: round-trip time (candidate-pair), inbound jitter, decoded frame
+  // rate (delta of framesDecoded) and decoded resolution. Consumed by the
+  // Camera tab to show a live latency readout.
+  useEffect(() => {
+    const interval = window.setInterval(async () => {
+      const next: Record<string, PhoneCameraStats> = {};
+      for (const [deviceId, pc] of pcsRef.current) {
+        if (pc.connectionState !== "connected") continue;
+        try {
+          const report = await pc.getStats();
+          let rttMs: number | null = null;
+          let jitterMs: number | null = null;
+          let framesDecoded: number | null = null;
+          let width: number | null = null;
+          let height: number | null = null;
+          report.forEach((s) => {
+            const stat = s as RTCStats & Record<string, unknown>;
+            if (stat.type === "candidate-pair" && stat.selected === true) {
+              if (typeof stat.currentRoundTripTime === "number") rttMs = (stat.currentRoundTripTime as number) * 1000;
+            } else if (stat.type === "inbound-rtp" && stat.kind === "video") {
+              if (typeof stat.jitter === "number") jitterMs = (stat.jitter as number) * 1000;
+              if (typeof stat.framesDecoded === "number") framesDecoded = stat.framesDecoded as number;
+              if (typeof stat.frameWidth === "number") width = stat.frameWidth as number;
+              if (typeof stat.frameHeight === "number") height = stat.frameHeight as number;
+            }
+          });
+          let fps: number | null = null;
+          if (framesDecoded !== null) {
+            const now = performance.now();
+            const last = lastFramesRef.current[deviceId];
+            if (last && framesDecoded >= last.framesDecoded) {
+              const dt = (now - last.ts) / 1000;
+              if (dt > 0.4) fps = Math.max(0, Math.round((framesDecoded - last.framesDecoded) / dt));
+            }
+            lastFramesRef.current[deviceId] = { framesDecoded, ts: now };
+          }
+          next[deviceId] = { rttMs, jitterMs, fps, width, height };
+        } catch {
+          /* stats unavailable for this peer — skip */
+        }
+      }
+      setStats((prev) => {
+        const merged: Record<string, PhoneCameraStats> = {};
+        for (const key of Object.keys(prev)) {
+          if (key in next) merged[key] = prev[key];
+        }
+        return { ...merged, ...next };
+      });
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const value = { streams, states, stats };
   return <PhoneCameraContext.Provider value={value}>{children}</PhoneCameraContext.Provider>;
 }

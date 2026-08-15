@@ -20,6 +20,62 @@ function readPhoneOrientation(): "portrait" | "landscape" {
   return window.innerHeight >= window.innerWidth ? "portrait" : "landscape";
 }
 
+// Capture at 720p30 by default: half the encode work of 1080p (and roughly half
+// the Wi-Fi load), which is the single biggest lever for phone camera latency.
+const CAPTURE_WIDTH = 1280;
+const CAPTURE_HEIGHT = 720;
+const MAX_BITRATE = 2_500_000; // bps cap keeps frames from bursting/buffering
+const MAX_FRAMERATE = 30;
+
+/** Prefer H.264 Constrained Baseline so the phone can use its hardware media
+ *  encoder (VP8/VP9 are software-encoded and measurably slower on phones).
+ *  Runs after the transceiver is created but before the offer, so the m-line
+ *  negotiation carries the preference. */
+function preferH264(pc: RTCPeerConnection) {
+  try {
+    const caps = RTCRtpSender.getCapabilities?.("video");
+    if (!caps) return;
+    const baseline = caps.codecs.filter(
+      (c) => /^H264/.test(c.mimeType) && c.sdpFmtpLine?.includes("profile-level-id=42e01f")
+    );
+    const otherH264 = caps.codecs.filter(
+      (c) => /^H264/.test(c.mimeType) && !c.sdpFmtpLine?.includes("profile-level-id=42e01f")
+    );
+    const others = caps.codecs.filter((c) => !/^H264/.test(c.mimeType));
+    const ordered = [...baseline, ...otherH264, ...others];
+    pc.getTransceivers().forEach((t) => {
+      if (t.sender?.track?.kind === "video") {
+        try {
+          t.setCodecPreferences(ordered);
+        } catch {
+          /* not supported — keep browser default */
+        }
+      }
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Cap bitrate and hold the frame rate after the peer connects, instead of
+ *  letting WebRTC congestion control burst frames ahead (which reads as lag). */
+async function tuneSender(pc: RTCPeerConnection) {
+  try {
+    const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+    if (!sender) return;
+    const params = sender.getParameters();
+    if (!params.encodings || params.encodings.length === 0) {
+      params.encodings = [{ maxBitrate: MAX_BITRATE, maxFramerate: MAX_FRAMERATE }];
+    } else {
+      params.encodings[0] = { ...params.encodings[0], maxBitrate: MAX_BITRATE, maxFramerate: MAX_FRAMERATE };
+    }
+    params.degradationPreference = "maintain-framerate";
+    await sender.setParameters(params);
+  } catch {
+    /* setParameters may be restricted on some engines — keep default tuning */
+  }
+}
+
 export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof useRemote>; pushToast: (msg: unknown, kind?: "error" | "info") => void }) {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<FacingMode>("environment");
@@ -118,6 +174,7 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
       const st = pc.connectionState;
       if (st === "connected") {
         pushToast(target === "operator" ? "Camera streaming to operator" : "Camera ready on projector", "info");
+        tuneSender(pc);
       } else if (st === "failed" || st === "disconnected") {
         setTimeout(() => {
           if (pcsRef.current[target] === pc) reconnectPeerRef.current(target);
@@ -125,6 +182,21 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
       }
     };
   }, [pushToast]);
+
+  // Build one peer: create the connection, add the local video, prefer the
+  // hardware H.264 encoder, wire ICE + state, offer, and keep re-offering
+  // while it has not connected. Both the "operator" (preview) and "output"
+  // (projection) peers are created through here.
+  const createPeer = useCallback((target: "operator" | "output") => {
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+    pcsRef.current = { ...pcsRef.current, [target]: pc };
+    setupPeer(pc, target);
+    streamRef.current?.getVideoTracks().forEach((t) => pc.addTrack(t, streamRef.current!));
+    preferH264(pc);
+    wirePeerState(pc, target);
+    makeOffer(pc, target).catch(() => {});
+    keepReOffering(pc, target);
+  }, [setupPeer, makeOffer, keepReOffering, wirePeerState]);
 
   // Rebuild one peer from scratch when the operator-side window hosting it
   // reloads or drops: the camera keeps running and a fresh offer is answered
@@ -136,15 +208,35 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
       old.close();
     }
     if (!isStreamingRef.current || !streamRef.current) return;
-    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-    pcsRef.current = { ...pcsRef.current, [target]: pc };
-    setupPeer(pc, target);
-    streamRef.current.getVideoTracks().forEach((t) => pc.addTrack(t, streamRef.current!));
-    wirePeerState(pc, target);
-    makeOffer(pc, target).catch(() => {});
-    keepReOffering(pc, target);
-  }, [setupPeer, makeOffer, keepReOffering, wirePeerState]);
+    createPeer(target);
+  }, [createPeer]);
   reconnectPeerRef.current = reconnectPeer;
+
+  // The "output" (projection) peer exists only while this phone's camera is
+  // actually live on a visible projection window — the only time its frames
+  // are being encoded toward the projector. While the feed is merely
+  // previewed or staged, the operator peer alone is enough, so the phone
+  // avoids double-encoding for the whole streamed session.
+  const myDeviceId = `phone-camera-${deviceId}`;
+  const liveItemData = client.snapshot?.live_item;
+  const outputNeeded =
+    (client.snapshot?.output_visible ?? false) &&
+    liveItemData?.type === "Camera" &&
+    liveItemData.data.deviceId === myDeviceId;
+  const outputNeededRef = useRef(outputNeeded);
+  outputNeededRef.current = outputNeeded;
+
+  useEffect(() => {
+    if (!isStreamingRef.current) return;
+    if (outputNeeded) {
+      if (!pcsRef.current.output) createPeer("output");
+    } else if (pcsRef.current.output) {
+      const pc = pcsRef.current.output;
+      pcsRef.current.output = null;
+      pc.onconnectionstatechange = null;
+      pc.close();
+    }
+  }, [outputNeeded, createPeer]);
 
   const startStreaming = useCallback(async () => {
     setError(null);
@@ -152,13 +244,13 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
     isStreamingRef.current = true;
 
     try {
-      // Get camera stream
+      // Get camera stream at 720p30 (see CAPTURE_* constants).
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode,
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-          frameRate: { ideal: 30 },
+          width: { ideal: CAPTURE_WIDTH },
+          height: { ideal: CAPTURE_HEIGHT },
+          frameRate: { ideal: MAX_FRAMERATE },
         },
         audio: false,
       });
@@ -189,42 +281,22 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
         }
       }
 
-      // Create two peer connections: one for the operator main window
-      // (preview) and one for the output projection window. Both send the same
-      // local video; each window answers its own peer.
-      const operatorPc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-      });
-      const outputPc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-      });
-      pcsRef.current = { operator: operatorPc, output: outputPc };
+      // Create the "operator" peer (preview) immediately — the main window
+      // hosts its answering peer from startup. The "output" (projection) peer
+      // is created lazily only when this camera is actually live on an open
+      // projection window (see the outputNeeded effect below), so the phone
+      // never double-encodes while nothing is being projected.
+      createPeer("operator");
+      if (outputNeededRef.current) createPeer("output");
 
-      // Add video track to both peers
-      mediaStream.getVideoTracks().forEach(track => {
-        operatorPc.addTrack(track, mediaStream);
-        outputPc.addTrack(track, mediaStream);
-      });
-
-      setupPeer(operatorPc, "operator");
-      setupPeer(outputPc, "output");
-      wirePeerState(operatorPc, "operator");
-      wirePeerState(outputPc, "output");
-
-      // Send start command and offers (operator first so the preview connects
-      // even if the projection window never answers).
+      // Send start command (the operator preview connects even if the
+      // projection window never answers).
       await client.command("camera.start", {
         device_id: deviceId,
         device_name: deviceName,
         facing_mode: facingMode,
         orientation: readPhoneOrientation(),
       });
-
-      await makeOffer(operatorPc, "operator");
-      await makeOffer(outputPc, "output");
-
-      keepReOffering(operatorPc, "operator");
-      keepReOffering(outputPc, "output");
 
       pushToast("Camera streaming started", "info");
     } catch (err) {
@@ -234,7 +306,7 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
       pushToast(msg, "error");
       cleanup();
     }
-  }, [client, deviceId, deviceName, facingMode, pushToast, cleanup, setupPeer, makeOffer, wirePeerState, keepReOffering]);
+  }, [client, deviceId, deviceName, facingMode, pushToast, cleanup, createPeer]);
 
   const stopStreaming = useCallback(async () => {
     try {

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store";
 import { useTauriEvent } from "../hooks/useTauriEvent";
-import { usePhoneCameraStreams, usePhoneCameraStates } from "../hooks/usePhoneCameraHost";
+import { usePhoneCameraStreams, usePhoneCameraStates, usePhoneCameraStats } from "../hooks/usePhoneCameraHost";
 import PhoneCameraVideo from "./shared/PhoneCameraVideo";
 import { Camera, RefreshCw, Video, Play, Monitor, AlertTriangle, Smartphone, Tag, Zap, ArrowLeftRight, Aperture, SlidersHorizontal } from "lucide-react";
 import type { DisplayItem, CameraBackground, MediaItem } from "../types";
@@ -43,6 +43,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
   } = useAppStore();
   const phoneStreams = usePhoneCameraStreams();
   const phoneStates = usePhoneCameraStates();
+  const phoneStats = usePhoneCameraStats();
   const [phoneCameras, setPhoneCameras] = useState<PhoneCameraInfo[]>([]);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -348,6 +349,15 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
             <div className="absolute bottom-4 left-4 px-3 py-1 bg-black/60 backdrop-blur-md rounded-full text-[10px] font-bold text-amber-500 border border-amber-500/30 opacity-0 group-hover:opacity-100 transition-opacity uppercase">
               {isPhoneSelected ? "PHONE PREVIEW" : "BROWSER PREVIEW"}
             </div>
+            {isPhoneSelected && phoneStats[selectedCameraId!] && (
+              <div className="absolute top-2 right-2 px-2 py-1 bg-black/70 backdrop-blur-md rounded-md text-[9px] font-bold text-cyan-300 border border-cyan-500/30 flex items-center gap-2 tabular-nums">
+                <span>{phoneStats[selectedCameraId!].fps ?? "—"} fps</span>
+                <span>RTT {phoneStats[selectedCameraId!].rttMs != null ? `${Math.round(phoneStats[selectedCameraId!].rttMs!)}ms` : "—"}</span>
+                <span>{phoneStats[selectedCameraId!].width && phoneStats[selectedCameraId!].height
+                  ? `${phoneStats[selectedCameraId!].width}×${phoneStats[selectedCameraId!].height}`
+                  : ""}</span>
+              </div>
+            )}
           </div>
 
           {isPhoneSelected && (
