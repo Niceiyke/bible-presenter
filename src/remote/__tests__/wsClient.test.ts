@@ -17,6 +17,7 @@ function makeSnapshot(overrides: Partial<RemoteSnapshot> = {}): RemoteSnapshot {
     schedule_entries: [],
     output_visible: false,
     blackout: false,
+    background_logo: false,
     lower_third: null,
     bible_versions: ["KJV"],
     active_bible_version: "KJV",
@@ -375,6 +376,19 @@ describe("useRemote event hydration", () => {
       lastWs().recv({ kind: "controller.changed", revision: 3, timestamp: 1, payload: { controller_state: { kind: "held", device_id: "d1", device_name: "iPad", expires_at: 9999999999 } } });
     });
     expect(result.current.controllerState?.kind).toBe("held");
+  });
+
+  it("applies a logo.changed event to the snapshot", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const { result } = renderHook(() => useRemote());
+    act(() => lastWs().open());
+    act(() => recvSnapshot(lastWs(), 2));
+
+    act(() => {
+      lastWs().recv({ kind: "logo.changed", revision: 3, timestamp: 1, payload: { logo: true } });
+    });
+    expect(result.current.snapshot?.background_logo).toBe(true);
+    expect(result.current.snapshot?.revision).toBe(3);
   });
 
   it("tracks whether this device holds the lease", async () => {

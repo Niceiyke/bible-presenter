@@ -99,6 +99,7 @@ pub fn build_snapshot(
         schedule_entries,
         output_visible,
         blackout: settings.is_blanked,
+        background_logo: settings.show_background_logo,
         lower_third,
         bible_versions,
         active_bible_version,

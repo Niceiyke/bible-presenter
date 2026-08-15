@@ -1,5 +1,5 @@
 import React from "react";
-import { EyeOff, Moon, Play, Radio, Send, XCircle } from "lucide-react";
+import { EyeOff, Layers, Moon, Play, Radio, Send, XCircle } from "lucide-react";
 import { Btn, Card, Label, cx } from "../ui";
 import { itemSubtitle, itemTitle } from "../itemLabel";
 import type { PanelProps } from "../panelTypes";
@@ -34,6 +34,7 @@ export function OnAirPanel({ client, pushToast }: PanelProps) {
   const live = snapshot?.live_item ?? null;
   const staged = snapshot?.staged_item ?? null;
   const blackout = snapshot?.blackout ?? false;
+  const backgroundLogo = snapshot?.background_logo ?? false;
   const canPresent = snapshot?.permissions?.presentation ?? false;
 
   const act = (type: Parameters<typeof command>[0], payload?: unknown, msg?: string) => {
@@ -81,6 +82,13 @@ export function OnAirPanel({ client, pushToast }: PanelProps) {
             className="col-span-2"
           >
             <Moon size={13} /> {blackout ? "Blackout ON — tap to restore" : "Blackout output"}
+          </Btn>
+          <Btn
+            variant={backgroundLogo ? "primary" : "ghost"}
+            onClick={() => act("display.logo_toggle")}
+            className="col-span-2"
+          >
+            <Layers size={13} /> {backgroundLogo ? "Logo ON — tap to hide" : "Show logo"}
           </Btn>
         </div>
         <p className="mt-2 text-[10px] text-slate-600">

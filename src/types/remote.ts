@@ -48,6 +48,7 @@ export type RemoteCommandType =
   | "display.clear_live"
   | "display.clear_all"
   | "display.blackout"
+  | "display.logo_toggle"
   | "service.list"
   | "songs.search"
   | "song.stage"
@@ -87,6 +88,7 @@ export type RemoteEventKind =
   | "lower_third.changed"
   | "output.changed"
   | "blackout.changed"
+  | "logo.changed"
   | "controller.changed"
   | "operator.notice"
   | "camera.answer"
@@ -138,6 +140,7 @@ export interface RemoteSnapshot {
   schedule_entries: ScheduleEntry[];
   output_visible: boolean;
   blackout: boolean;
+  background_logo: boolean;
   lower_third: unknown | null;
   bible_versions: string[];
   active_bible_version: string;

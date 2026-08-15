@@ -357,7 +357,8 @@ fn required_permission(t: RemoteCommandType) -> Option<RemotePermission> {
         | DisplayStagePrevious
         | DisplayClearLive
         | DisplayClearAll
-        | DisplayBlackout => RemotePermission::Presentation,
+        | DisplayBlackout
+        | DisplayLogoToggle => RemotePermission::Presentation,
         _ => return None,
     })
 }
@@ -431,8 +432,18 @@ pub async fn dispatch(
                     return err_result(&command.command_id, control.hub.current_revision(), "forbidden", &e);
                 }
             }
-            if let Err(e) = require_lease(control, device) {
-                return err_result(&command.command_id, control.hub.current_revision(), "lease_required", &e);
+            // Camera start/stop are register-only for the phone feed (the
+            // operator picks which feed to stage in the Camera tab), so they
+            // deliberately do NOT require the controller lease — a phone may
+            // stream a camera without taking over presentation control.
+            let camera_register = matches!(
+                command.r#type,
+                RemoteCommandType::CameraStart | RemoteCommandType::CameraStop
+            );
+            if !camera_register {
+                if let Err(e) = require_lease(control, device) {
+                    return err_result(&command.command_id, control.hub.current_revision(), "lease_required", &e);
+                }
             }
         }
     }
@@ -690,6 +701,18 @@ pub async fn dispatch(
                 Err(e) => err_result(&command.command_id, control.hub.current_revision(), "queue_stage_failed", &e),
             }
         }
+        RemoteCommandType::DisplayLogoToggle => {
+            let mut settings = state.presentation.settings.lock().clone();
+            let next = !settings.show_background_logo;
+            settings.show_background_logo = next;
+            if state.media_schedule.save_settings(&settings).is_err() {
+                return err_result(&command.command_id, control.hub.current_revision(), "settings_failed", "Failed to save logo settings");
+            }
+            *state.presentation.settings.lock() = settings.clone();
+            emit_checked(app, "settings-changed", &settings);
+            state.remote.hub.publish(RemoteEventKind::LogoChanged, json!({ "logo": next }), source.clone());
+            RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
+        }
         RemoteCommandType::CameraStart => {
             let req = command_payload::<RemoteCameraStartPayload>(command).ok();
             match req {
@@ -775,8 +798,9 @@ pub async fn dispatch(
 /// never touch presentation state. Gating them on the lease/revision would
 /// make a session fail mid-handshake whenever the phone's revision went stale
 /// or ICE candidate bursts tripped the command rate limiter. `camera.start` /
-/// `camera.stop` remain mutating because they alter staged state and camera
-/// registration.
+/// `camera.stop` remain mutating (permission + revision + rate limit apply)
+/// but are exempt from the controller lease in `dispatch` because they only
+/// register the phone feed.
 pub(crate) fn is_mutating(t: RemoteCommandType) -> bool {
     matches!(
         t,
@@ -796,6 +820,7 @@ pub(crate) fn is_mutating(t: RemoteCommandType) -> bool {
             | RemoteCommandType::DisplayClearLive
             | RemoteCommandType::DisplayClearAll
             | RemoteCommandType::DisplayBlackout
+            | RemoteCommandType::DisplayLogoToggle
             | RemoteCommandType::SongStage
             | RemoteCommandType::SongGoLive
             | RemoteCommandType::LowerThirdShow
@@ -857,6 +882,8 @@ mod tests {
         assert!(is_mutating(RemoteCommandType::BibleGoLive));
         assert!(is_mutating(RemoteCommandType::DisplayClearAll));
         assert!(is_mutating(RemoteCommandType::DisplayBlackout));
+        assert!(is_mutating(RemoteCommandType::DisplayLogoToggle));
+        assert!(is_mutating(RemoteCommandType::CameraStart));
         assert!(!is_mutating(RemoteCommandType::BibleSearch));
         assert!(!is_mutating(RemoteCommandType::SnapshotGet));
         assert!(!is_mutating(RemoteCommandType::BibleChapter));
@@ -874,6 +901,7 @@ mod tests {
         assert_eq!(required_permission(DisplayGoLive), Some(RemotePermission::Presentation));
         assert_eq!(required_permission(DisplayClearAll), Some(RemotePermission::Presentation));
         assert_eq!(required_permission(DisplayBlackout), Some(RemotePermission::Presentation));
+        assert_eq!(required_permission(DisplayLogoToggle), Some(RemotePermission::Presentation));
         // Lease lifecycle commands are not content-gated.
         assert_eq!(required_permission(RemoteRequestControl), None);
         assert_eq!(required_permission(RemoteRenewLease), None);

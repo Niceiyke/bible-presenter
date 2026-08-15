@@ -1,6 +1,6 @@
 [package]
 name = "wordlyte"
-version = "1.10.20"
+version = "1.10.21"
 description = "Wordlyte — A professional, real-time Bible projection tool for churches."
 authors = ["Wordlyte Team"]
 edition = "2021"

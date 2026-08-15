@@ -53,6 +53,7 @@ const MUTATING = new Set<RemoteCommandType>([
   "display.clear_live",
   "display.clear_all",
   "display.blackout",
+  "display.logo_toggle",
   "song.stage",
   "song.go_live",
   "lower_third.show",
@@ -120,6 +121,9 @@ function applyEvent(snapshot: RemoteSnapshot, event: RemoteEvent): RemoteSnapsho
       return next;
     case "blackout.changed":
       next.blackout = Boolean(p.blackout);
+      return next;
+    case "logo.changed":
+      next.background_logo = Boolean(p.logo);
       return next;
     case "controller.changed":
       next.controller_state = p.controller_state as RemoteControllerState;

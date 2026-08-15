@@ -139,6 +139,8 @@ pub enum RemoteCommandType {
     DisplayClearAll,
     #[serde(rename = "display.blackout")]
     DisplayBlackout,
+    #[serde(rename = "display.logo_toggle")]
+    DisplayLogoToggle,
     #[serde(rename = "service.list")]
     ServiceList,
     #[serde(rename = "songs.search")]
@@ -227,6 +229,8 @@ pub enum RemoteEventKind {
     OutputChanged,
     #[serde(rename = "blackout.changed")]
     BlackoutChanged,
+    #[serde(rename = "logo.changed")]
+    LogoChanged,
     #[serde(rename = "controller.changed")]
     ControllerChanged,
     #[serde(rename = "operator.notice")]
@@ -394,6 +398,7 @@ pub struct RemoteSnapshot {
     pub schedule_entries: Vec<store::ScheduleEntry>,
     pub output_visible: bool,
     pub blackout: bool,
+    pub background_logo: bool,
     pub lower_third: Option<serde_json::Value>,
     pub bible_versions: Vec<String>,
     pub active_bible_version: String,
@@ -439,6 +444,7 @@ mod tests {
             schedule_entries: Vec::new(),
             output_visible: false,
             blackout: false,
+            background_logo: false,
             lower_third: None,
             bible_versions: vec!["KJV".into()],
             active_bible_version: "KJV".into(),

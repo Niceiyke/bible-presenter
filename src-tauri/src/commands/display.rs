@@ -90,11 +90,9 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<store::Presentat
 #[tauri::command]
 pub async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: store::PresentationSettings) -> Result<(), String> {
     state.media_schedule.save_settings(&settings).map_err(|e| e.to_string())?;
-    let prev_blanked = {
+    let (prev_blanked, prev_logo) = {
         let guard = state.presentation.settings.lock();
-        let prev = guard.is_blanked;
-        drop(guard);
-        prev
+        (guard.is_blanked, guard.show_background_logo)
     };
     *state.presentation.settings.lock() = settings.clone();
     emit_checked(&app, "settings-changed", &settings);
@@ -102,6 +100,13 @@ pub async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings:
         state.remote.hub.publish(
             RemoteEventKind::BlackoutChanged,
             json!({ "blackout": settings.is_blanked }),
+            None,
+        );
+    }
+    if prev_logo != settings.show_background_logo {
+        state.remote.hub.publish(
+            RemoteEventKind::LogoChanged,
+            json!({ "logo": settings.show_background_logo }),
             None,
         );
     }

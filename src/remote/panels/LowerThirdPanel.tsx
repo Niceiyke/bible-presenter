@@ -4,8 +4,8 @@ import { Btn, Card, Label, TextInput, cx } from "../ui";
 import type { PanelProps } from "../panelTypes";
 
 function kindBadge(lower: unknown): string {
-  const raw = lower as { kind?: string } | null;
-  return raw?.kind ?? "";
+  const raw = lower as { data?: { kind?: string } } | null;
+  return raw?.data?.kind ?? "";
 }
 
 export function LowerThirdPanel({ client, pushToast }: PanelProps) {

@@ -132,11 +132,6 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
   reconnectPeerRef.current = reconnectPeer;
 
   const startStreaming = useCallback(async () => {
-    if (!client.isHeldBySelf) {
-      pushToast("You need control to start camera", "error");
-      return;
-    }
-
     setError(null);
     setIsStreaming(true);
     isStreamingRef.current = true;
@@ -356,7 +351,7 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
           <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 gap-3">
             <Camera size={48} />
             <p className="text-sm">Tap "Start Camera" to begin streaming</p>
-            <p className="text-[10px] opacity-70">Requires operator control</p>
+            <p className="text-[10px] opacity-70">Needs camera permission from the operator</p>
           </div>
         )}
 
@@ -478,7 +473,7 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
       {/* Status info */}
       <div className="flex items-center justify-between text-[10px] text-slate-500 pt-2 border-t border-slate-800">
         <span>
-          {client.isHeldBySelf ? "You have control" : "Waiting for control"}
+          {canCamera ? "Camera permission granted" : "No camera permission"}
         </span>
         <span className={cx("flex items-center gap-1", isStreaming ? "text-green-400" : "text-slate-500")}>
           <span className={cx("w-1.5 h-1.5 rounded-full", isStreaming ? "bg-green-400 animate-pulse" : "bg-slate-700")} />
