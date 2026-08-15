@@ -49,6 +49,9 @@ export type RemoteCommandType =
   | "display.clear_all"
   | "display.blackout"
   | "display.logo_toggle"
+  | "timer.stage"
+  | "timer.go_live"
+  | "timer.toggle"
   | "service.list"
   | "songs.search"
   | "song.stage"
@@ -261,6 +264,12 @@ export interface RemoteCameraStartPayload {
   device_name: string;
   facing_mode?: "user" | "environment";
   orientation?: PhoneCameraOrientation;
+}
+
+export interface RemoteTimerPayload {
+  timer_type: "countdown" | "countup" | "clock";
+  duration_secs?: number;
+  label?: string;
 }
 
 export interface RemoteCameraOfferPayload {

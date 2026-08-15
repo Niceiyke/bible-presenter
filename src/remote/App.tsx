@@ -1,5 +1,5 @@
-import React, { useCallback, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, ListOrdered, MessageSquare, Music2, Power, RefreshCw, Radio, UserCircle2, BookOpen, X, Video } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, CheckCircle2, Clock, ListOrdered, MessageSquare, Music2, Power, RefreshCw, Radio, UserCircle2, BookOpen, X, Video } from "lucide-react";
 import { storedName, useRemote } from "./wsClient";
 import { Btn, Card, Label, TextInput, cx } from "./ui";
 import { OnAirPanel } from "./panels/OnAirPanel";
@@ -8,8 +8,11 @@ import { SongsPanel } from "./panels/SongsPanel";
 import { ServicePanel } from "./panels/ServicePanel";
 import { LowerThirdPanel } from "./panels/LowerThirdPanel";
 import { CameraPanel } from "./panels/CameraPanel";
+import { TimersPanel } from "./panels/TimersPanel";
+import { itemTitle } from "./itemLabel";
+import type { DisplayItem } from "../types/display";
 
-type Tab = "onair" | "bible" | "songs" | "service" | "lower" | "camera";
+type Tab = "onair" | "bible" | "songs" | "service" | "lower" | "camera" | "timers";
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "onair", label: "On Air", icon: <Radio size={14} /> },
@@ -18,7 +21,29 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "service", label: "Service", icon: <ListOrdered size={14} /> },
   { id: "lower", label: "Lower ⅓", icon: <MessageSquare size={14} /> },
   { id: "camera", label: "Camera", icon: <Video size={14} /> },
+  { id: "timers", label: "Timers", icon: <Clock size={14} /> },
 ];
+
+/** Stable identity for a live item so "Now Live" notifications fire only on
+ *  actual content changes, not on every revision bump. */
+function liveKeyOf(item: DisplayItem): string {
+  switch (item.type) {
+    case "Verse":
+      return `verse:${item.data.book}:${item.data.chapter}:${item.data.verse}`;
+    case "Song":
+      return `song:${item.data.song_id ?? item.data.title}:${item.data.slide_index}`;
+    case "Media":
+      return `media:${item.data.id ?? item.data.name}`;
+    case "Camera":
+      return `camera:${item.data.deviceId}`;
+    case "CustomSlide":
+      return `slide:${item.data.presentation_id ?? ""}:${item.data.slide_index}`;
+    case "Timer":
+      return `timer:${item.data.timer_type}:${item.data.label ?? ""}:${item.data.started_at ?? ""}`;
+    default:
+      return `item:${itemTitle(item)}`;
+  }
+}
 
 interface Toast {
   id: number;
@@ -43,6 +68,48 @@ export function App() {
   }, []);
 
   const panelProps = useMemo(() => ({ client, pushToast }), [client, pushToast]);
+
+  // Keep the screen awake while the operator console is open on the phone.
+  useEffect(() => {
+    let wakeLock: WakeLockSentinel | null = null;
+    let active = true;
+    const acquire = async () => {
+      if (!active) return;
+      try {
+        if ("wakeLock" in navigator && typeof navigator.wakeLock?.request === "function") {
+          wakeLock = await navigator.wakeLock.request("screen");
+        }
+      } catch {
+        /* Wake Lock is best-effort (e.g. battery saver, unsupported browsers). */
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") acquire();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    void acquire();
+    return () => {
+      active = false;
+      document.removeEventListener("visibilitychange", onVisibility);
+      wakeLock?.release?.().catch(() => {});
+    };
+  }, []);
+
+  // Notify when a different item goes live. The first snapshot is skipped so a
+  // fresh connection doesn't spam a "Now Live" toast.
+  const liveItem = client.snapshot?.live_item ?? null;
+  const liveKey = liveItem ? liveKeyOf(liveItem) : null;
+  const prevLiveKeyRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (prevLiveKeyRef.current === undefined) {
+      prevLiveKeyRef.current = liveKey;
+      return;
+    }
+    if (liveKey && liveKey !== prevLiveKeyRef.current) {
+      pushToast(`Now Live: ${itemTitle(liveItem)}`, "info");
+    }
+    prevLiveKeyRef.current = liveKey;
+  }, [liveKey, liveItem, pushToast]);
 
   const doPair = async () => {
     if (!code.trim()) {
@@ -144,6 +211,14 @@ export function App() {
         </div>
       )}
 
+      {/* Now Live banner */}
+      {client.conn === "connected" && liveItem && (
+        <div className="flex items-center gap-2 px-3 py-1.5 border-b border-red-900/50 bg-red-950/40 text-red-200 text-[11px]">
+          <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shrink-0" />
+          <span className="truncate font-semibold">Now Live: {itemTitle(liveItem)}</span>
+        </div>
+      )}
+
       {/* Body */}
       {client.conn === "connecting" && (
         <div className="flex-1 flex items-center justify-center">
@@ -196,9 +271,10 @@ export function App() {
             {tab === "service" && <ServicePanel {...panelProps} />}
             {tab === "lower" && <LowerThirdPanel {...panelProps} />}
             {tab === "camera" && <CameraPanel {...panelProps} />}
+            {tab === "timers" && <TimersPanel {...panelProps} />}
           </main>
 
-          <nav className="grid grid-cols-5 border-t border-slate-800 bg-slate-950/95 pb-[env(safe-area-inset-bottom)]">
+          <nav className="grid grid-cols-7 border-t border-slate-800 bg-slate-950/95 pb-[env(safe-area-inset-bottom)]">
             {TABS.map((t) => (
               <button
                 key={t.id}

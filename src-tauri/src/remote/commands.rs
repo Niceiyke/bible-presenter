@@ -4,7 +4,7 @@ use crate::remote::protocol::{
     RemoteCameraIcePayload, RemoteCameraOfferPayload, RemoteCameraStartPayload,
     RemoteCommand, RemoteCommandResult, RemoteCommandType, RemoteEventKind,
     RemoteLowerThirdPayload, RemotePermission, RemoteSongControl, RemoteSongSearch,
-    RemoteSongSummary, RemoteVerseRef,
+    RemoteSongSummary, RemoteTimerPayload, RemoteVerseRef,
 };
 use crate::remote::{RemoteControl, DESKTOP_CONTROLLER_ID};
 use crate::state::AppState;
@@ -16,6 +16,11 @@ const NOT_IMPLEMENTED: &str = "not_implemented";
 
 fn err_result(command_id: &str, revision: u64, code: &str, message: &str) -> RemoteCommandResult {
     RemoteCommandResult::err(command_id, revision, code, message)
+}
+
+fn now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 /// Broadcast the current phone-camera list so every window's Camera tab stays
@@ -358,7 +363,10 @@ fn required_permission(t: RemoteCommandType) -> Option<RemotePermission> {
         | DisplayClearLive
         | DisplayClearAll
         | DisplayBlackout
-        | DisplayLogoToggle => RemotePermission::Presentation,
+        | DisplayLogoToggle
+        | TimerStage
+        | TimerGoLive
+        | TimerToggle => RemotePermission::Presentation,
         _ => return None,
     })
 }
@@ -674,6 +682,44 @@ pub async fn dispatch(
                 Err(e) => err_result(&command.command_id, control.hub.current_revision(), "song_failed", &e),
             }
         }
+        RemoteCommandType::TimerStage | RemoteCommandType::TimerGoLive => {
+            let req = command_payload::<RemoteTimerPayload>(command).ok();
+            match req {
+                Some(req) => {
+                    let timer = crate::store::TimerData {
+                        timer_type: req.timer_type,
+                        duration_secs: req.duration_secs,
+                        label: req.label,
+                        started_at: if command.r#type == RemoteCommandType::TimerGoLive { Some(now_ms()) } else { None },
+                    };
+                    let item = DisplayItem::Timer(timer);
+                    if command.r#type == RemoteCommandType::TimerGoLive {
+                        op_go_live_item(app, state, item, source.clone());
+                    } else {
+                        op_stage(app, state, item, source.clone(), control.hub.current_revision());
+                    }
+                    RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
+                }
+                None => err_result(&command.command_id, control.hub.current_revision(), "missing_payload", "Missing timer payload"),
+            }
+        }
+        RemoteCommandType::TimerToggle => {
+            let toggled = {
+                let mut live = state.presentation.live_item.lock();
+                if let Some(DisplayItem::Timer(ref mut t)) = *live {
+                    t.started_at = if t.started_at.is_some() { None } else { Some(now_ms()) };
+                    true
+                } else {
+                    false
+                }
+            };
+            if toggled {
+                let item = state.presentation.live_item.lock().clone();
+                emit_checked(app, "live-item-update", &LiveItemUpdate { detected_item: item.clone() });
+                state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": item }), source);
+            }
+            RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
+        }
         RemoteCommandType::LowerThirdShow => {
             let req = command_payload::<RemoteLowerThirdPayload>(command).ok();
             match req {
@@ -823,6 +869,9 @@ pub(crate) fn is_mutating(t: RemoteCommandType) -> bool {
             | RemoteCommandType::DisplayLogoToggle
             | RemoteCommandType::SongStage
             | RemoteCommandType::SongGoLive
+            | RemoteCommandType::TimerStage
+            | RemoteCommandType::TimerGoLive
+            | RemoteCommandType::TimerToggle
             | RemoteCommandType::LowerThirdShow
             | RemoteCommandType::LowerThirdHide
             | RemoteCommandType::CameraStart
@@ -883,6 +932,9 @@ mod tests {
         assert!(is_mutating(RemoteCommandType::DisplayClearAll));
         assert!(is_mutating(RemoteCommandType::DisplayBlackout));
         assert!(is_mutating(RemoteCommandType::DisplayLogoToggle));
+        assert!(is_mutating(RemoteCommandType::TimerStage));
+        assert!(is_mutating(RemoteCommandType::TimerGoLive));
+        assert!(is_mutating(RemoteCommandType::TimerToggle));
         assert!(is_mutating(RemoteCommandType::CameraStart));
         assert!(!is_mutating(RemoteCommandType::BibleSearch));
         assert!(!is_mutating(RemoteCommandType::SnapshotGet));
@@ -902,6 +954,9 @@ mod tests {
         assert_eq!(required_permission(DisplayClearAll), Some(RemotePermission::Presentation));
         assert_eq!(required_permission(DisplayBlackout), Some(RemotePermission::Presentation));
         assert_eq!(required_permission(DisplayLogoToggle), Some(RemotePermission::Presentation));
+        assert_eq!(required_permission(TimerStage), Some(RemotePermission::Presentation));
+        assert_eq!(required_permission(TimerGoLive), Some(RemotePermission::Presentation));
+        assert_eq!(required_permission(TimerToggle), Some(RemotePermission::Presentation));
         // Lease lifecycle commands are not content-gated.
         assert_eq!(required_permission(RemoteRequestControl), None);
         assert_eq!(required_permission(RemoteRenewLease), None);

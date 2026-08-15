@@ -141,6 +141,12 @@ pub enum RemoteCommandType {
     DisplayBlackout,
     #[serde(rename = "display.logo_toggle")]
     DisplayLogoToggle,
+    #[serde(rename = "timer.stage")]
+    TimerStage,
+    #[serde(rename = "timer.go_live")]
+    TimerGoLive,
+    #[serde(rename = "timer.toggle")]
+    TimerToggle,
     #[serde(rename = "service.list")]
     ServiceList,
     #[serde(rename = "songs.search")]
@@ -349,6 +355,16 @@ pub struct RemoteCameraStartPayload {
     /// the operator windows can auto-correct the display rotation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orientation: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteTimerPayload {
+    /// "countdown" | "countup" | "clock"
+    pub timer_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

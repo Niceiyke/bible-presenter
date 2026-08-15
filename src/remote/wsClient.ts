@@ -54,6 +54,9 @@ const MUTATING = new Set<RemoteCommandType>([
   "display.clear_all",
   "display.blackout",
   "display.logo_toggle",
+  "timer.stage",
+  "timer.go_live",
+  "timer.toggle",
   "song.stage",
   "song.go_live",
   "lower_third.show",
@@ -80,6 +83,18 @@ export function storedToken(): string | null {
 
 export function storedName(): string {
   return localStorage.getItem(LS_DEVICE_NAME) ?? "";
+}
+
+/** Short physical tap on mutating actions (phones only). No-op where the
+ *  Vibration API is unavailable. */
+function buzz() {
+  try {
+    if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+      navigator.vibrate(20);
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 interface Pending {
@@ -383,7 +398,14 @@ export function useRemote(): UseRemote {
         pendingRef.current.delete(command_id);
         reject(new Error("Command timed out"));
       }, 15000);
-      pendingRef.current.set(command_id, { resolve: resolve as (v: unknown) => void, reject, timer });
+      pendingRef.current.set(command_id, {
+        resolve: (value: unknown) => {
+          if (mutating) buzz();
+          resolve(value as T);
+        },
+        reject,
+        timer,
+      });
     });
   }, []);
 
