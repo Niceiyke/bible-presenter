@@ -153,6 +153,7 @@ fn main() {
                 remote: remote_control,
                 outputs,
                 rtmp: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                cpu_sampler: Arc::new(Mutex::new(None)),
             };
 
             app.manage(state);

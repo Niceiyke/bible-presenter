@@ -50,16 +50,32 @@ pub fn system_info() -> SystemInfo {
 /// Cheap polled metric for the live performance monitor.
 #[tauri::command]
 pub fn system_metrics(state: State<'_, AppState>) -> SystemMetrics {
-    let mut sys = System::new();
-    sys.refresh_cpu_usage();
-    sys.refresh_memory();
+    // Reuse one `System` across polls: sysinfo needs a previous snapshot to
+    // compute CPU usage, so a fresh System per call reports the cumulative
+    // since-boot usage (busy ≈ total → stuck at 100%). The first poll seeds
+    // the baseline and reports 0; later polls return the delta over the 3s
+    // poll interval.
+    let mut sampler = state.cpu_sampler.lock();
+    let (cpu_usage_percent, total_ram, used_ram) = if let Some(sys) = sampler.as_mut() {
+        sys.refresh_cpu_usage();
+        sys.refresh_memory();
+        (sys.global_cpu_usage(), sys.total_memory(), sys.used_memory())
+    } else {
+        let mut sys = System::new();
+        sys.refresh_cpu_usage();
+        sys.refresh_memory();
+        let (total_ram, used_ram) = (sys.total_memory(), sys.used_memory());
+        *sampler = Some(sys);
+        (0.0, total_ram, used_ram)
+    };
+
     let disks = Disks::new_with_refreshed_list();
     let total_disk: u64 = disks.iter().map(|d| d.total_space()).sum();
     let available_disk: u64 = disks.iter().map(|d| d.available_space()).sum();
     let used_disk = total_disk.saturating_sub(available_disk);
     SystemMetrics {
-        cpu_usage_percent: sys.global_cpu_usage(),
-        used_ram_percent: ram_percent(sys.total_memory(), sys.used_memory()),
+        cpu_usage_percent,
+        used_ram_percent: ram_percent(total_ram, used_ram),
         used_disk_percent: percent(used_disk, total_disk),
         active_rtmp_sessions: state.rtmp.lock().len(),
     }
