@@ -2,7 +2,7 @@ import React from "react";
 import {
   BookOpen, CalendarDays, Image as ImageIcon, Layers, Mic, Monitor,
   MonitorSmartphone, Settings, Timer, Zap, Paintbrush, PanelLeftClose, PanelLeftOpen, Video,
-  CircleDot, Radio, Gauge,
+  CircleDot, Radio, Gauge, LayoutGrid,
 } from "lucide-react";
 import { useAppStore } from "../../store";
 
@@ -47,6 +47,7 @@ const GROUPS: NavGroup[] = [
       { id: "camera", label: "Camera", icon: Video, openDeck: "camera" },
       { id: "scenes", label: "Scenes", icon: Zap, openDeck: "scenes" },
       { id: "lt-designer", label: "LT Designer", icon: Paintbrush, tab: "lt-designer", shortcut: "F5" },
+      { id: "scene-builder", label: "Scene Builder", icon: LayoutGrid, tab: "scene-builder" },
     ],
   },
   {
@@ -93,7 +94,7 @@ export function LeftNav() {
   const select = (e: NavEntry) => {
     if (e.tab) {
       setActiveTab(e.tab);
-      if (e.tab === "schedule" || e.tab === "scenes") setBottomDeckOpen(false);
+      if (e.tab === "schedule" || e.tab === "scenes" || e.tab === "scene-builder") setBottomDeckOpen(false);
     } else if (e.openDeck) {
       setBottomDeckMode(e.openDeck);
       setBottomDeckOpen(true);

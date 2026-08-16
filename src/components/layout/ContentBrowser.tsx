@@ -6,6 +6,7 @@ import { stableId, newDefaultSlide } from "../../utils";
 import { CameraTab } from "../CameraTab";
 import { PropsTab } from "../PropsTab";
 import { ScenesTab } from "../ScenesTab";
+import { SceneBuilder } from "../SceneBuilder";
 import type { DisplayItem, PresentationSettings, PropItem, CustomPresentation, Scene } from "../../types";
 
 // P10: workspace tabs are loaded on demand so the initial bundle stays lean and
@@ -21,6 +22,57 @@ const LtDesignerTab = lazy(() => import("../LtDesignerTab").then((m) => ({ defau
 const RecordingsTab = lazy(() => import("../RecordingsTab").then((m) => ({ default: m.RecordingsTab })));
 const StreamerTab = lazy(() => import("../StreamerTab").then((m) => ({ default: m.StreamerTab })));
 const SystemTab = lazy(() => import("../SystemTab").then((m) => ({ default: m.SystemTab })));
+
+/**
+ * Full-page Scene Builder workspace (mirrors the LT Designer tab layout).
+ * Owns the scene being edited in the store so ScenesTab can hand a specific
+ * scene over (or seed a fresh one) before navigating here.
+ */
+function SceneBuilderPage({
+  saveScene,
+  applyScene,
+}: {
+  saveScene: (scene: Scene) => Promise<void>;
+  applyScene: (id: string) => Promise<void>;
+}) {
+  const settings = useAppStore((s) => s.settings);
+  const sceneBuilderScene = useAppStore((s) => s.sceneBuilderScene);
+  const setSceneBuilderScene = useAppStore((s) => s.setSceneBuilderScene);
+  const setActiveTab = useAppStore((s) => s.setActiveTab);
+
+  const scene = sceneBuilderScene ?? {
+    id: stableId(),
+    name: "",
+    settings: { ...settings },
+    props: [],
+    layout: { zones: [] },
+    created_at: Date.now(),
+  };
+
+  const close = () => {
+    setSceneBuilderScene(null);
+    setActiveTab("scenes");
+  };
+
+  return (
+    <SceneBuilder
+      scene={scene}
+      onSceneChange={setSceneBuilderScene}
+      onSave={async (sc) => {
+        await saveScene(sc);
+        setSceneBuilderScene(null);
+        setActiveTab("scenes");
+      }}
+      onApply={async (id) => {
+        if (!useAppStore.getState().scenes.some((s) => s.id === id)) {
+          await saveScene(scene);
+        }
+        await applyScene(id);
+      }}
+      onClose={close}
+    />
+  );
+}
 
 interface ContentBrowserProps {
   stageItem: (item: DisplayItem) => Promise<boolean>;
@@ -63,7 +115,7 @@ export function ContentBrowser({
   } = useAppStore();
 
 return (
-    <div className={activeTab === "lt-designer" || activeTab === "scenes"
+    <div className={activeTab === "lt-designer" || activeTab === "scenes" || activeTab === "scene-builder"
       ? "flex-1 min-h-0 overflow-hidden"
       : "flex-1 min-h-0 overflow-y-auto p-4 custom-scrollbar"}>
       <Suspense fallback={null}>
@@ -123,6 +175,7 @@ return (
           />
         )}
         {activeTab === "lt-designer" && <LtDesignerTab onSetToast={setToast} onLoadMedia={async () => {}} />}
+        {activeTab === "scene-builder" && <SceneBuilderPage saveScene={saveScene} applyScene={applyScene} />}
         {activeTab === "songs" && (
           <SongsTab
             onStage={stageItem} onLive={sendLive} onAddToSchedule={addToSchedule}
