@@ -2,7 +2,7 @@ import React from "react";
 import {
   BookOpen, CalendarDays, Image as ImageIcon, Layers, Mic, Monitor,
   MonitorSmartphone, Settings, Timer, Zap, Paintbrush, PanelLeftClose, PanelLeftOpen, Video,
-  CircleDot,
+  CircleDot, Radio,
 } from "lucide-react";
 import { useAppStore } from "../../store";
 
@@ -53,6 +53,7 @@ const GROUPS: NavGroup[] = [
     label: "System",
     entries: [
       { id: "recordings", label: "Recordings", icon: CircleDot, tab: "recordings" },
+      { id: "streaming", label: "Streaming", icon: Radio, tab: "streaming" },
       { id: "remote", label: "Remote", icon: MonitorSmartphone, tab: "remote" },
       { id: "settings", label: "Settings", icon: Settings, tab: "settings", shortcut: "F9" },
     ],

@@ -263,8 +263,18 @@ Seed defaults, identical to today's behavior:
      recorded), REC/STOP/Abort transport, elapsed timer, saved-recordings list with
      size/date, delete and open-folder. Tab registered in `appSlice.activeTab`,
      `LeftNav` (System → Recordings), and `ContentBrowser`.
-4. **Phase 4 — Streamer surface** (~3 days +): WHIP via `RTCPeerConnection`
-   (WebView2-native WebRTC); RTMP/SRT later on the existing `webrtc` crate if needed.
+4. **Phase 4 — Streamer surface** ✅ (implemented on `feat/output-manager`): WHIP via
+   `RTCPeerConnection` (WebView2-native WebRTC); RTMP/SRT later on the existing
+   `webrtc` crate if needed.
+   - `src/hooks/useStreamer.ts`: WHIP client — ICE candidate gathering, SDP offer
+     POSTed as `application/sdp` (Bearer auth), answer applied, `connectionstate`
+     → live, best-effort `DELETE` of the WHIP resource on stop, `getStats` bitrate
+     polling. Unit-tested with stubbed `RTCPeerConnection`/`fetch`.
+   - `src/components/StreamerTab.tsx`: live `ProgramFeedPreview`, WHIP endpoint +
+     token config persisted to the `stream-main` output's `streaming` field via
+     `outputs_update`, Go Live/Stop transport, status + bitrate indicators. Tab
+     registered in `appSlice.activeTab`, `LeftNav` (System → Streaming), and
+     `ContentBrowser`. No backend changes — WebView2 handles RTP natively.
 5. **Phase 5 — Multi-bus** (future): sources → PGM/AUX buses → outputs, turning
    `SceneComposition` zones into the first-class bus primitive.
 
