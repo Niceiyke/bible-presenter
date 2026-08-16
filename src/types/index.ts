@@ -16,6 +16,7 @@ export type { Scene, SceneZone, SceneZoneSource, SceneLayout, SceneCompositionDa
 export type {
   OutputKind, OutputSource, OutputPresentation, OutputOverlays, OutputGeometry,
   OutputRecording, OutputStreaming, OutputConfig, OutputState,
+  StreamPlatform, StreamDestination,
 } from "./output";
 export { FONTS, DEFAULT_SETTINGS, THEMES } from "./settings";
 export { DEFAULT_LT_TEMPLATE } from "./lowerThird";

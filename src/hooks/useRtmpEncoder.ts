@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 /**
- * `useRtmpEncoder` — WebCodecs H.264 + AAC encoder for the RTMP streamer
- * surface (Phase 6).
+ * `useRtmpEncoder` — WebCodecs H.264 + AAC encoder for one RTMP destination
+ * (Phase 6).
  *
  * Takes the `ProgramFeedCanvas` compositor's `MediaStream` video track, encodes
  * it in the webview with `VideoEncoder` (H.264, Annex-B output — the OBS-style
@@ -11,11 +11,17 @@ import { invoke } from "@tauri-apps/api/core";
  * feeds ffmpeg (`-c copy`) for mux-only RTMP publish. No re-encode, hardware
  * acceleration preferred, low latency.
  *
- * Optional audio (`options.audio.enabled`): captures the operator's input
- * device with `getUserMedia` (mic / line-in / mixer feed — audio processing
- * disabled so the PA mix is not mangled), encodes AAC with `AudioEncoder`, wraps
- * each frame in an ADTS header, and feeds `rtmp_send_audio` to the backend's
- * loopback TCP input.
+ * Multi-platform: each destination mounts its own instance with a distinct
+ * `sessionId`; the backend keys ffmpeg sessions by it, so several destinations
+ * can be live from the one compositor simultaneously (video track cloned per
+ * destination upstream).
+ *
+ * Audio: either the shared input track is passed via `start`'s `audioTrack`
+ * option (multi-platform hub), or — when `options.audio.enabled` is set and no
+ * track is given — the hook captures an input device itself with `getUserMedia`
+ * (mic / line-in / mixer feed — audio processing disabled so the PA mix is not
+ * mangled), encodes AAC with `AudioEncoder`, wraps each frame in an ADTS header,
+ * and feeds `rtmp_send_audio` to the backend's loopback TCP input.
  *
  * The hook is window-agnostic and unit-testable: the WebCodecs classes,
  * `MediaStreamTrackProcessor`, `getUserMedia`, and `invoke` are the only
@@ -34,13 +40,15 @@ export interface UseRtmpEncoderAudioOptions {
 }
 
 export interface UseRtmpEncoderOptions {
+  /** Backend session key — one per destination so several can run at once. */
+  sessionId: string;
   /** Target video encode bitrate in kbps. */
   bitrateKbps?: number;
   /** Keyframe interval in seconds (ffmpeg/RTMP needs regular IDRs). */
   keyframeIntervalSec?: number;
   /** Encode frame rate (must match the compositor's capture FPS). */
   fps?: number;
-  /** Optional audio capture + AAC encode. */
+  /** Fallback audio capture when no shared track is passed to `start`. */
   audio?: UseRtmpEncoderAudioOptions;
 }
 
@@ -49,9 +57,15 @@ export interface UseRtmpEncoderResult {
   error: string | null;
   /** Approximate encoded bitrate in kbps (0 until live). */
   bitrateKbps: number;
-  /** Start encoding the given stream to RTMP. Resolves when ffmpeg accepts
-   *  the session. */
-  start: (stream: MediaStream, serverUrl: string, streamKey?: string) => Promise<boolean>;
+  /** Start encoding the given stream to this destination's RTMP session.
+   *  Resolves when ffmpeg accepts the session. Pass `audioTrack` to use the
+   *  hub's shared input instead of capturing one. */
+  start: (
+    stream: MediaStream,
+    serverUrl: string,
+    streamKey?: string,
+    audioTrack?: MediaStreamTrack | null
+  ) => Promise<boolean>;
   /** Stop encoding and tear down the RTMP session. */
   stop: () => Promise<void>;
 }
@@ -130,8 +144,8 @@ async function supportsH264(
   return null;
 }
 
-export function useRtmpEncoder(options: UseRtmpEncoderOptions = {}): UseRtmpEncoderResult {
-  const { bitrateKbps = 5000, keyframeIntervalSec = 2, fps = 30, audio } = options;
+export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderResult {
+  const { sessionId, bitrateKbps = 5000, keyframeIntervalSec = 2, fps = 30, audio } = options;
   const audioBitrateKbps = audio?.bitrateKbps ?? 128;
   const encoderRef = useRef<VideoEncoder | null>(null);
   const audioEncoderRef = useRef<AudioEncoder | null>(null);
@@ -216,15 +230,20 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions = {}): UseRtmpEnco
     }
     teardown();
     try {
-      await invoke("rtmp_stop");
+      await invoke("rtmp_stop", { sessionId });
     } catch (e: any) {
       setError(`Failed to stop RTMP: ${e?.message ?? e}`);
     }
     setStatus("idle");
-  }, [teardown]);
+  }, [teardown, sessionId]);
 
   const start = useCallback(
-    async (stream: MediaStream, serverUrl: string, streamKey?: string): Promise<boolean> => {
+    async (
+      stream: MediaStream,
+      serverUrl: string,
+      streamKey?: string,
+      sharedAudioTrack?: MediaStreamTrack | null
+    ): Promise<boolean> => {
       if (encoderRef.current) return false;
       const tracks = stream.getVideoTracks();
       if (tracks.length === 0) {
@@ -251,7 +270,14 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions = {}): UseRtmpEnco
       let audioTrack: MediaStreamTrack | null = null;
       let audioSampleRate = 48000;
       let audioChannels = 2;
-      if (audio?.enabled) {
+      if (sharedAudioTrack) {
+        // Hub-provided shared input — use it as-is (do not stop it on teardown,
+        // the hub owns it).
+        audioTrack = sharedAudioTrack;
+        const as = sharedAudioTrack.getSettings();
+        audioSampleRate = as?.sampleRate ?? 48000;
+        audioChannels = as?.channelCount ?? 2;
+      } else if (audio?.enabled) {
         if (typeof AudioEncoder === "undefined") {
           setStatus("error");
           setError("WebCodecs (AudioEncoder) is not available in this webview.");
@@ -297,7 +323,7 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions = {}): UseRtmpEnco
       if (!codec) {
         setStatus("error");
         setError("No supported H.264 profile found for this encoder.");
-        if (audioTrack) audioTrack.stop();
+        if (audioTrackRef.current === audioTrack) audioTrack?.stop();
         return false;
       }
 
@@ -309,7 +335,7 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions = {}): UseRtmpEnco
             const buf = new Uint8Array(chunk.byteLength);
             chunk.copyTo(buf);
             // Best-effort feed; the backend surfaces real ffmpeg failures.
-            invoke("rtmp_send", { dataBase64: bytesToBase64(buf) }).catch((e: any) => {
+            invoke("rtmp_send", { sessionId, dataBase64: bytesToBase64(buf) }).catch((e: any) => {
               if (runningRef.current) {
                 setStatus("error");
                 setError(`RTMP feed failed: ${e?.message ?? e}`);
@@ -328,7 +354,7 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions = {}): UseRtmpEnco
       } catch (e: any) {
         setStatus("error");
         setError(`Failed to create encoder: ${e?.message ?? e}`);
-        if (audioTrack) audioTrack.stop();
+        if (audioTrackRef.current === audioTrack) audioTrack?.stop();
         return false;
       }
       encoderRef.current = encoder;
@@ -352,7 +378,7 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions = {}): UseRtmpEnco
                 }
                 return;
               }
-              invoke("rtmp_send_audio", { dataBase64: bytesToBase64(adts) }).catch((e: any) => {
+              invoke("rtmp_send_audio", { sessionId, dataBase64: bytesToBase64(adts) }).catch((e: any) => {
                 if (runningRef.current) {
                   setStatus("error");
                   setError(`RTMP audio feed failed: ${e?.message ?? e}`);
@@ -378,14 +404,14 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions = {}): UseRtmpEnco
         } catch (e: any) {
           setStatus("error");
           setError(`Failed to create the audio encoder: ${e?.message ?? e}`);
-          audioTrack.stop();
+          if (audioTrackRef.current === audioTrack) audioTrack?.stop();
           teardown();
           return false;
         }
       }
 
       try {
-        await invoke("rtmp_start", { serverUrl, streamKey: streamKey || null, withAudio: !!audioTrack });
+        await invoke("rtmp_start", { sessionId, serverUrl, streamKey: streamKey || null, withAudio: !!audioTrack });
       } catch (e: any) {
         setStatus("error");
         setError(`Failed to start RTMP: ${e?.message ?? e}`);
@@ -466,7 +492,7 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions = {}): UseRtmpEnco
 
       return true;
     },
-    [audio, audioBitrateKbps, bitrateKbps, keyframeIntervalSec, fps, teardown, startBitratePolling]
+    [audio, audioBitrateKbps, bitrateKbps, keyframeIntervalSec, fps, teardown, startBitratePolling, sessionId]
   );
 
   // Pause stats when no longer live.

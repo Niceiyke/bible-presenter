@@ -330,8 +330,27 @@ Seed defaults, identical to today's behavior:
    only), and `spawn_audio_writer` accepts ffmpeg's connection (non-blocking,
    ~5s window, buffers early packets) then drains an mpsc channel into the
    socket. `rtmp_start` takes `with_audio` so the ffmpeg graph only includes
-   the AAC input when audio is live. Unit-tested (ADTS framing + URL/args) in
-   the same suites above.
+    the AAC input when audio is live. Unit-tested (ADTS framing + URL/args) in
+    the same suites above.
+6. **Phase 6.2 — Multi-platform Streaming Hub** ✅ (implemented on
+   `feat/output-manager`): `StreamerTab` becomes a hub that streams the one
+   compositor feed to **any number of destinations at once** (YouTube +
+   Facebook + Twitch + custom RTMP/WHIP simultaneously). Each destination is a
+   platform preset (`src/components/streaming/presets.ts` pre-fills the ingest
+   server — the operator only pastes their stream key), rendered as a
+   `DestinationCard` that owns its own transport instance (`useRtmpEncoder` with
+   a `sessionId`, or `useStreamer`). The compositor video track is **cloned per
+   destination** (a track can only have one `MediaStreamTrackProcessor`), and
+   the shared audio input is captured once and cloned per destination too.
+   Master **Go Live All** starts every enabled destination; per-card status /
+   bitrate / error and Stop-All round it out. Backend: RTMP sessions are keyed
+   by destination id in a `HashMap` on `AppState.rtmp` (`rtmp_start` /
+   `rtmp_send` / `rtmp_send_audio` / `rtmp_stop` all take `session_id`;
+   `rtmp_status` returns the list). Persistence: the `stream-main` output gains
+   a `stream_destinations` list (`StreamDestination` in `outputs.rs` + TS),
+   seeded from the legacy `streaming` field when present. Unit-tested:
+   `ffmpeg_args` graphs, preset table / `makeDestination` / `applyPreset`, and
+   the session-keyed `useRtmpEncoder` invoke calls.
 
 Phase 1 is strictly additive and safe to land independently; everything after it
 consumes the same model.

@@ -27,6 +27,9 @@ pub struct OutputConfig {
     /// Streamer-specific.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub streaming: Option<OutputStreaming>,
+    /// Streamer-specific: multi-destination hub config (one entry per platform).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_destinations: Option<Vec<StreamDestination>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -85,6 +88,31 @@ pub struct OutputStreaming {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_key: Option<String>,
+}
+
+/// One streaming destination in the multi-platform hub: a platform preset
+/// (youtube / facebook / twitch / custom-rtmp / custom-whip) plus the resolved
+/// ingest endpoint and whether it joins the master transport. Persisted with the
+/// `stream-main` output; the operator edits these in the Streaming workspace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamDestination {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub platform: String,
+    #[serde(default)]
+    pub mode: String,
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_key: Option<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub audio: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Ephemeral runtime status of an output (not persisted).
@@ -218,6 +246,7 @@ pub fn default_outputs() -> Vec<OutputConfig> {
             window_label: Some("output".into()),
             recording: None,
             streaming: None,
+            stream_destinations: None,
         },
         OutputConfig {
             id: "stage".into(),
@@ -232,6 +261,7 @@ pub fn default_outputs() -> Vec<OutputConfig> {
             window_label: Some("stage".into()),
             recording: None,
             streaming: None,
+            stream_destinations: None,
         },
         OutputConfig {
             id: "overflow".into(),
@@ -246,6 +276,7 @@ pub fn default_outputs() -> Vec<OutputConfig> {
             window_label: None,
             recording: None,
             streaming: None,
+            stream_destinations: None,
         },
         OutputConfig {
             id: "record-main".into(),
@@ -260,6 +291,7 @@ pub fn default_outputs() -> Vec<OutputConfig> {
             window_label: None,
             recording: Some(OutputRecording { format: "webm".into(), directory: None }),
             streaming: None,
+            stream_destinations: None,
         },
         OutputConfig {
             id: "stream-main".into(),
@@ -274,6 +306,7 @@ pub fn default_outputs() -> Vec<OutputConfig> {
             window_label: None,
             recording: None,
             streaming: Some(OutputStreaming { mode: "whip".into(), url: String::new(), stream_key: None }),
+            stream_destinations: None,
         },
     ]
 }

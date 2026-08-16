@@ -11,10 +11,15 @@ use tauri::State;
 /// RTMP ingest (Phase 6).
 ///
 /// The frontend encodes the program-feed compositor with WebCodecs (H.264,
-/// Annex-B) and streams the encoded packets here. The backend owns a long-lived
-/// `ffmpeg -f h264 -i pipe:` process doing **mux-only** work (`-c copy`) — it
-/// never re-encodes — and writes the encoded packets to ffmpeg's stdin on a
+/// Annex-B) and streams the encoded packets here. The backend owns long-lived
+/// `ffmpeg -f h264 -i pipe:` processes doing **mux-only** work (`-c copy`) — they
+/// never re-encode — and writes the encoded packets to each ffmpeg's stdin on a
 /// dedicated writer thread, so the UI thread never blocks on pipe backpressure.
+///
+/// Multiple sessions can run simultaneously (multi-platform streaming): every
+/// command is keyed by a `session_id` (the frontend destination id) and sessions
+/// live in a `HashMap` on `AppState.rtmp`, so YouTube + Facebook + Twitch can
+/// all be live from the one compositor stream at once.
 ///
 /// Optional audio (Phase 6.1): when enabled, ffmpeg gets a second input —
 /// ADTS AAC pulled from a loopback TCP socket (`-f adts -i tcp://127.0.0.1:PORT`)
@@ -26,6 +31,7 @@ use tauri::State;
 /// not installed the commands error cleanly instead of crashing.
 #[derive(Serialize)]
 pub struct RtmpStatus {
+    pub id: String,
     pub active: bool,
     pub url: Option<String>,
 }
@@ -167,19 +173,22 @@ fn ffmpeg_available() -> bool {
         .unwrap_or(false)
 }
 
-/// Start an RTMP ingest: spawn ffmpeg (mux-only H.264 -> FLV/RTMP) and keep it
-/// fed from the writer thread. `with_audio` adds a second loopback TCP input for
-/// ADTS AAC (WebCodecs-encoded by the frontend). Errors if a session is active.
+/// Start an RTMP ingest for one destination: spawn ffmpeg (mux-only H.264 ->
+/// FLV/RTMP) and keep it fed from the writer thread. `with_audio` adds a second
+/// loopback TCP input for ADTS AAC (WebCodecs-encoded by the frontend). Sessions
+/// are keyed by `session_id` so several can be live simultaneously. Errors if
+/// that destination already has a session.
 #[tauri::command]
 pub fn rtmp_start(
     state: State<'_, AppState>,
+    session_id: String,
     server_url: String,
     stream_key: Option<String>,
     with_audio: bool,
 ) -> Result<(), String> {
     let mut guard = state.rtmp.lock();
-    if guard.is_some() {
-        return Err("An RTMP session is already running — stop it first.".into());
+    if guard.contains_key(&session_id) {
+        return Err("This RTMP destination is already live — stop it first.".into());
     }
     let url = build_rtmp_url(&server_url, stream_key.as_deref());
     if !url.starts_with("rtmp://") {
@@ -215,15 +224,25 @@ pub fn rtmp_start(
         .ok_or_else(|| "ffmpeg stdin was not available.".to_string())?;
     let stdin_tx = spawn_writer(stdin);
     let audio_tx = audio_listener.map(spawn_audio_writer);
-    *guard = Some(RtmpSession { child, stdin_tx, audio_tx, url });
+    guard.insert(
+        session_id,
+        RtmpSession { child, stdin_tx, audio_tx, url },
+    );
     Ok(())
 }
 
-/// Feed one encoded H.264 packet (Annex-B, base64 over IPC) to ffmpeg's stdin.
+/// Feed one encoded H.264 packet (Annex-B, base64 over IPC) to a destination's
+/// ffmpeg stdin.
 #[tauri::command]
-pub fn rtmp_send(state: State<'_, AppState>, data_base64: String) -> Result<(), String> {
+pub fn rtmp_send(
+    state: State<'_, AppState>,
+    session_id: String,
+    data_base64: String,
+) -> Result<(), String> {
     let mut guard = state.rtmp.lock();
-    let session = guard.as_mut().ok_or("No active RTMP session.")?;
+    let session = guard
+        .get_mut(&session_id)
+        .ok_or("No active RTMP session for this destination.")?;
     let data = base64::engine::general_purpose::STANDARD
         .decode(&data_base64)
         .map_err(|e| format!("Invalid RTMP packet: {e}"))?;
@@ -233,11 +252,18 @@ pub fn rtmp_send(state: State<'_, AppState>, data_base64: String) -> Result<(), 
         .map_err(|_| "RTMP writer closed (ffmpeg exited).".to_string())
 }
 
-/// Feed one encoded AAC frame (ADTS, base64 over IPC) to ffmpeg's audio input.
+/// Feed one encoded AAC frame (ADTS, base64 over IPC) to a destination's
+/// ffmpeg audio input.
 #[tauri::command]
-pub fn rtmp_send_audio(state: State<'_, AppState>, data_base64: String) -> Result<(), String> {
+pub fn rtmp_send_audio(
+    state: State<'_, AppState>,
+    session_id: String,
+    data_base64: String,
+) -> Result<(), String> {
     let mut guard = state.rtmp.lock();
-    let session = guard.as_mut().ok_or("No active RTMP session.")?;
+    let session = guard
+        .get_mut(&session_id)
+        .ok_or("No active RTMP session for this destination.")?;
     let tx = session
         .audio_tx
         .as_ref()
@@ -249,11 +275,11 @@ pub fn rtmp_send_audio(state: State<'_, AppState>, data_base64: String) -> Resul
         .map_err(|_| "RTMP audio writer closed (ffmpeg exited).".to_string())
 }
 
-/// Stop the active ingest: signal EOF to ffmpeg, then wait (with a timeout and
-/// forced kill) for it to exit so the RTMP session is torn down cleanly.
+/// Stop one destination's ingest: signal EOF to ffmpeg, then wait (with a
+/// timeout and forced kill) for it to exit so the session is torn down cleanly.
 #[tauri::command]
-pub fn rtmp_stop(state: State<'_, AppState>) -> Result<(), String> {
-    let session = state.rtmp.lock().take();
+pub fn rtmp_stop(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let session = state.rtmp.lock().remove(&session_id);
     let Some(session) = session else { return Ok(()) };
     drop(session.stdin_tx); // EOF to ffmpeg -> flush + finalize the stream
     drop(session.audio_tx); // close the audio socket -> ffmpeg finishes the AAC stream
@@ -275,14 +301,18 @@ pub fn rtmp_stop(state: State<'_, AppState>) -> Result<(), String> {
     }
 }
 
-/// Runtime status of the RTMP ingest (ephemeral, not persisted).
+/// Runtime status of every active RTMP ingest (ephemeral, not persisted).
 #[tauri::command]
-pub fn rtmp_status(state: State<'_, AppState>) -> RtmpStatus {
+pub fn rtmp_status(state: State<'_, AppState>) -> Vec<RtmpStatus> {
     let guard = state.rtmp.lock();
-    RtmpStatus {
-        active: guard.is_some(),
-        url: guard.as_ref().map(|s| s.url.clone()),
-    }
+    guard
+        .iter()
+        .map(|(id, s)| RtmpStatus {
+            id: id.clone(),
+            active: true,
+            url: Some(s.url.clone()),
+        })
+        .collect()
 }
 
 #[cfg(test)]

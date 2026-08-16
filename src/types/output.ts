@@ -52,6 +52,25 @@ export interface OutputStreaming {
   stream_key?: string;
 }
 
+/** Platform presets the Streaming hub offers (Custom covers everything else). */
+export type StreamPlatform = "youtube" | "facebook" | "twitch" | "custom-rtmp" | "custom-whip";
+
+/**
+ * One streaming destination in the multi-platform hub. A preset + resolved
+ * ingest endpoint; `enabled` joins the master Go Live and `audio` carries the
+ * shared input track. Persisted on the `stream-main` output config.
+ */
+export interface StreamDestination {
+  id: string;
+  label: string;
+  platform: StreamPlatform;
+  mode: "whip" | "rtmp";
+  url: string;
+  stream_key?: string;
+  enabled: boolean;
+  audio: boolean;
+}
+
 export interface OutputConfig {
   id: string;
   kind: OutputKind;
@@ -66,6 +85,8 @@ export interface OutputConfig {
   window_label?: string;
   recording?: OutputRecording;
   streaming?: OutputStreaming;
+  /** Streamer-specific: multi-destination hub config. */
+  stream_destinations?: StreamDestination[];
 }
 
 /** Runtime status of an output (ephemeral, not persisted). */

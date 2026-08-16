@@ -199,7 +199,7 @@ describe("useRtmpEncoder", () => {
   });
 
   it("starts ffmpeg, encodes with H.264 annexb, and feeds packets", async () => {
-    const { result } = renderHook(() => useRtmpEncoder({ bitrateKbps: 6000, fps: 30 }));
+    const { result } = renderHook(() => useRtmpEncoder({ sessionId: "dest-test", bitrateKbps: 6000, fps: 30 }));
 
     let ok = false;
     await act(async () => {
@@ -209,6 +209,7 @@ describe("useRtmpEncoder", () => {
     expect(ok).toBe(true);
     expect(result.current.status).toBe("live");
     expect(mockInvoke).toHaveBeenCalledWith("rtmp_start", {
+      sessionId: "dest-test",
       serverUrl: "rtmp://host/live",
       streamKey: "key123",
       withAudio: false,
@@ -224,11 +225,12 @@ describe("useRtmpEncoder", () => {
   });
 
   it("sends streamKey as null when omitted", async () => {
-    const { result } = renderHook(() => useRtmpEncoder());
+    const { result } = renderHook(() => useRtmpEncoder({ sessionId: "dest-test" }));
     await act(async () => {
       await result.current.start(fakeStream(), "rtmp://host/live");
     });
     expect(mockInvoke).toHaveBeenCalledWith("rtmp_start", {
+      sessionId: "dest-test",
       serverUrl: "rtmp://host/live",
       streamKey: null,
       withAudio: false,
@@ -237,7 +239,7 @@ describe("useRtmpEncoder", () => {
 
   it("surfaces backend start failures", async () => {
     mockInvoke.mockRejectedValueOnce(new Error("ffmpeg not found on PATH"));
-    const { result } = renderHook(() => useRtmpEncoder());
+    const { result } = renderHook(() => useRtmpEncoder({ sessionId: "dest-test" }));
 
     let ok = true;
     await act(async () => {
@@ -250,7 +252,7 @@ describe("useRtmpEncoder", () => {
 
   it("errors when no H.264 profile is supported", async () => {
     FakeVideoEncoder.isConfigSupported.mockResolvedValue({ supported: false, config: {} });
-    const { result } = renderHook(() => useRtmpEncoder());
+    const { result } = renderHook(() => useRtmpEncoder({ sessionId: "dest-test" }));
 
     let ok = true;
     await act(async () => {
@@ -262,7 +264,7 @@ describe("useRtmpEncoder", () => {
 
   it("errors when WebCodecs is unavailable", async () => {
     vi.stubGlobal("VideoEncoder", undefined);
-    const { result } = renderHook(() => useRtmpEncoder());
+    const { result } = renderHook(() => useRtmpEncoder({ sessionId: "dest-test" }));
 
     let ok = true;
     await act(async () => {
@@ -273,7 +275,7 @@ describe("useRtmpEncoder", () => {
   });
 
   it("errors on a stream with no video track", async () => {
-    const { result } = renderHook(() => useRtmpEncoder());
+    const { result } = renderHook(() => useRtmpEncoder({ sessionId: "dest-test" }));
     let ok = true;
     await act(async () => {
       const noVideo = { getVideoTracks: () => [] } as unknown as MediaStream;
@@ -284,7 +286,7 @@ describe("useRtmpEncoder", () => {
   });
 
   it("stop flushes the encoder and tears down the RTMP session", async () => {
-    const { result } = renderHook(() => useRtmpEncoder());
+    const { result } = renderHook(() => useRtmpEncoder({ sessionId: "dest-test" }));
     await act(async () => {
       await result.current.start(fakeStream(), "rtmp://host/live", "k");
     });
@@ -293,7 +295,7 @@ describe("useRtmpEncoder", () => {
       await result.current.stop();
     });
     expect(result.current.status).toBe("idle");
-    expect(mockInvoke).toHaveBeenCalledWith("rtmp_stop");
+    expect(mockInvoke).toHaveBeenCalledWith("rtmp_stop", { sessionId: "dest-test" });
     expect(FakeVideoEncoder.instances[0]?.state).toBe("closed");
   });
 });
@@ -323,7 +325,7 @@ describe("useRtmpEncoder audio", () => {
   it("captures an input, encodes AAC, and feeds ADTS to the audio input", async () => {
     const audioTrack = stubGetUserMedia();
     const { result } = renderHook(() =>
-      useRtmpEncoder({ audio: { enabled: true, bitrateKbps: 160 } })
+      useRtmpEncoder({ sessionId: "dest-test", audio: { enabled: true, bitrateKbps: 160 } })
     );
 
     let ok = false;
@@ -334,6 +336,7 @@ describe("useRtmpEncoder audio", () => {
     expect(ok).toBe(true);
     expect(result.current.status).toBe("live");
     expect(mockInvoke).toHaveBeenCalledWith("rtmp_start", {
+      sessionId: "dest-test",
       serverUrl: "rtmp://host/live",
       streamKey: "k",
       withAudio: true,
@@ -362,7 +365,7 @@ describe("useRtmpEncoder audio", () => {
         }),
       },
     });
-    const { result } = renderHook(() => useRtmpEncoder({ audio: { enabled: true } }));
+    const { result } = renderHook(() => useRtmpEncoder({ sessionId: "dest-test", audio: { enabled: true } }));
 
     let ok = true;
     await act(async () => {
@@ -376,7 +379,7 @@ describe("useRtmpEncoder audio", () => {
 
   it("errors when audio is enabled but WebCodecs audio is unavailable", async () => {
     vi.stubGlobal("AudioEncoder", undefined);
-    const { result } = renderHook(() => useRtmpEncoder({ audio: { enabled: true } }));
+    const { result } = renderHook(() => useRtmpEncoder({ sessionId: "dest-test", audio: { enabled: true } }));
 
     let ok = true;
     await act(async () => {

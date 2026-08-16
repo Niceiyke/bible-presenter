@@ -148,7 +148,7 @@ fn main() {
                 download_in_progress: Arc::new(AtomicBool::new(false)),
                 remote: remote_control,
                 outputs,
-                rtmp: Arc::new(Mutex::new(None)),
+                rtmp: Arc::new(Mutex::new(std::collections::HashMap::new())),
             };
 
             app.manage(state);
