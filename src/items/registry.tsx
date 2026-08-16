@@ -281,6 +281,20 @@ const compositionKind: ItemKind<Extract<DisplayItem, { type: "SceneComposition" 
       SCENE: {item.data.name} · {item.data.zones.length} zone{item.data.zones.length !== 1 ? "s" : ""}
     </p>
   ),
+  // Phase 5: when a scene composition is live, stepping advances the content
+  // of the zone pinned to a live class. The first pinned zone whose content
+  // kind supports navigation (verse/song/slide) drives prev/next/first/last —
+  // sending that content live patches the zone in place, so the scene stays on
+  // air while its verse advances (camera + Bible) or its song steps.
+  nav: (i, lookup) => {
+    const zone = compositionDrivingZone(i);
+    if (!zone) return { prev: null, next: null, first: null, last: null };
+    return itemNav(zone.item, lookup);
+  },
+  nextLive: (i, lookup) => {
+    const zone = compositionDrivingZone(i);
+    return zone ? itemNextLive(zone.item, lookup) : null;
+  },
 };
 
 // ─── Registry ──────────────────────────────────────────────────────────────
@@ -297,6 +311,23 @@ export const ITEM_KINDS: { Verse: typeof verseKind; CustomSlide: typeof customSl
 
 export function kindOf(item: DisplayItem): ItemKind {
   return (ITEM_KINDS as Record<string, ItemKind>)[item.type];
+}
+
+/**
+ * Pick the zone that drives stepping when a scene composition is live: the
+ * first zone pinned to a live class (source !== "item") whose content kind
+ * supports navigation. Static/frozen zones and pinned camera/timer/media zones
+ * never drive stepping.
+ */
+function compositionDrivingZone(
+  item: Extract<DisplayItem, { type: "SceneComposition" }>
+): Extract<DisplayItem, { type: "SceneComposition" }>["data"]["zones"][number] | null {
+  for (const zone of item.data.zones) {
+    if (!zone.source || zone.source.type === "item") continue;
+    const kind = kindOf(zone.item);
+    if (kind.nextLive || kind.nav) return zone;
+  }
+  return null;
 }
 
 export function itemUid(item: DisplayItem | null): string {

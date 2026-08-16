@@ -290,8 +290,14 @@ Seed defaults, identical to today's behavior:
    take. The `SceneZoneSource` union lives in `src/types/scene.ts` and mirrors
    the serde-tagged `SceneZoneSource` in `src-tauri/src/store/media_schedule.rs`;
    the SceneBuilder inspector exposes the "Follows live content" selector.
+   Scene-aware stepping: when a composition is live, the Cockpit Next button and
+   the keyboard ArrowLeft/ArrowRight/Home/End delegate to the first pinned zone
+   whose content kind supports navigation (`compositionDrivingZone` in
+   `src/items/registry.tsx`) — so the operator advances the scene's verse/song
+   from the operator console without leaving the cockpit.
    Unit-tested in `remote/commands.rs` (`patch_scene_zones`, source matching,
-   serde round-trip) and covered by the transactional `useItemActions` path.
+   serde round-trip), `src/items/__tests__/registry.test.ts` (scene stepping),
+   and covered by the transactional `useItemActions` path.
 
 Phase 1 is strictly additive and safe to land independently; everything after it
 consumes the same model.
