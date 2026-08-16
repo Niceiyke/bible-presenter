@@ -228,9 +228,9 @@ Seed defaults, identical to today's behavior:
 
 ## 7. Phased roadmap
 
-1. **Phase 1 — Output manager core** (~1–2 wks): types, `OutputManager`, commands,
-   events, `outputSlice`, wire `OutputWindow`/`StageWindow` to read their config,
-   `outputs.json` persistence + migration. No behavior change.
+1. **Phase 1 — Output manager core** ✅ (implemented on `feat/output-manager`): types,
+   `OutputManager`, commands, events, `outputSlice`, wire `OutputWindow`/`StageWindow`
+   to read their config, `outputs.json` persistence + migration. No behavior change.
 2. **Phase 2 — Program feed compositor** (~1–2 wks): offscreen-canvas renderer that
    draws the program feed (verses, slides, songs, media, scene compositions, overlays)
    and exposes `captureStream()`; window outputs switch to it too for a single render

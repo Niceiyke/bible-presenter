@@ -8,7 +8,7 @@ import { normalizeSong } from "../utils/song";
 import {
   MediaItem, Song, LowerThirdTemplate,
   PresentationSettings, PropItem, ServiceMeta,
-  DisplayItem
+  DisplayItem, OutputConfig, OutputState,
 } from "../types";
 
 /** Helper for windows that can't reach the operator store directly
@@ -28,6 +28,7 @@ export function useAppInitialization() {
     setAppDataDir, setRecentItems,
     setBackendError, addLog, setScenes,
     setBackendAvailable, setToast,
+    setOutputs, setOutputState,
   } = useAppStore();
 
   useEffect(() => {
@@ -120,6 +121,12 @@ export function useAppInitialization() {
       // P1.6 — Load scenes.
       invoke<any[]>("list_scenes").then(setScenes).catch(() => {});
 
+      // Output manager — load configs + runtime states.
+      invoke<OutputConfig[]>("outputs_list").then(setOutputs).catch(() => {});
+      invoke<OutputState[]>("outputs_states").then((states) => {
+        states.forEach((s) => setOutputState(s));
+      }).catch(() => {});
+
       setIsInitialized(true);
     };
 
@@ -201,6 +208,14 @@ export function useAppInitialization() {
     const unlistenMediaProbed = listen<MediaItem>("media-probed", (ev) => { upsertMediaItem(ev.payload); });
     const unlistenMediaUpdated = listen<MediaItem>("media-updated", (ev) => { upsertMediaItem(ev.payload); });
 
+    // Output manager — authoritative config list + per-output runtime state.
+    const unlistenOutputConfig = listen<OutputConfig[]>("output-config-changed", (ev) => {
+      setOutputs(ev.payload);
+    });
+    const unlistenOutputState = listen<OutputState>("output-state-changed", (ev) => {
+      setOutputState(ev.payload);
+    });
+
     return () => {
       unlistenStaged.then(f => f());
       unlistenLive.then(f => f());
@@ -215,6 +230,8 @@ export function useAppInitialization() {
       unlistenRemoteDeviceEvent.then(f => f());
       unlistenMediaProbed.then(f => f());
       unlistenMediaUpdated.then(f => f());
+      unlistenOutputConfig.then(f => f());
+      unlistenOutputState.then(f => f());
     };
   }, []);
 

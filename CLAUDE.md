@@ -80,6 +80,17 @@ Window definitions are in `src-tauri/tauri.conf.json` and are created after `App
 
 `src/windows/StageWindow.tsx` renders Now Live and Up Next confidence views, timer/clock information, custom slide previews, settings, lower-third state, and stage theme behavior.
 
+## Output manager (Phase 1)
+
+The output manager is a configurable output-surface abstraction: every output (projection window, stage window, a future overflow monitor, recorder, streamer) is an `OutputConfig` that subscribes to a program source and renders it. Outputs never mutate engine state — they only subscribe.
+
+- Types: `src/types/output.ts` (`OutputConfig`, `OutputSource`, `OutputPresentation`, `OutputOverlays`, `OutputGeometry`, `OutputRecording`, `OutputStreaming`, `OutputState`). Sources: `live` | `staged` | `scene` | `item` | `blank`. Presentation overrides (theme / `reference_output_height` / background / blanked) layer on top of broadcast settings; overlays mask gates props / lower-third / logo per output.
+- Backend: `src-tauri/src/outputs.rs` (`OutputManager`, Arc-managed like `RemoteControl`, persisted to `outputs.json` under the app data dir with additive forward migration from `default_outputs()`). Registered on `AppState.outputs` in `src-tauri/src/state.rs` and initialized in `main.rs` before windows are built.
+- Commands: `src-tauri/src/commands/outputs.rs` — `outputs_list`, `outputs_states`, `outputs_update` (replace-all, idempotent), `outputs_set_visible` (toggles the bound window and re-broadcasts authoritative state on reveal).
+- Events: `output-config-changed` (full list, replace-all semantics) and `output-state-changed` (per-output runtime status). Typed in `src/hooks/useTauriEvent.ts`.
+- Frontend: `outputSlice` (`src/store/slices/outputSlice.ts`) holds `outputs` + `outputStates`, hydrated and kept in sync by `useAppInitialization.ts`. `OutputWindow`/`StageWindow` (separate webviews, local state) hydrate via `outputs_list` and listen to `output-config-changed`, applying `presentation`/`overlays` overrides. Default configs have empty overrides and full overlay masks, so behavior is identical until the operator customizes an output.
+- Recorder/streamer surfaces and the program-feed canvas compositor are future phases (see `docs/OUTPUT_MANAGER_DESIGN.md`).
+
 Do not apply operator-console color tokens directly to projected output. Audience themes are persisted separately in `src/types/settings.ts`.
 
 ## State management
@@ -93,6 +104,7 @@ Do not apply operator-console color tokens directly to projected output. Audienc
 - `lowerThirdSlice`: lower-third mode, template, visibility, song/lyrics state, presets, and current payload.
 - `serviceSlice`: service entries, service history, active service, service manager, and props.
 - `cameraSlice`: camera devices and selected camera state.
+- `outputSlice`: configurable output surfaces (`outputs`) and their runtime states (`outputStates`).
 
 When adding shared state, prefer the relevant slice instead of adding unrelated local state to `App.tsx`. Avoid duplicating authoritative live or service state in multiple components.
 

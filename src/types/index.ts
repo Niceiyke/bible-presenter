@@ -13,5 +13,9 @@ export type {
 } from "./settings";
 export type { StartupStatus } from "./status";
 export type { Scene, SceneZone, SceneLayout, SceneCompositionData } from "./scene";
+export type {
+  OutputKind, OutputSource, OutputPresentation, OutputOverlays, OutputGeometry,
+  OutputRecording, OutputStreaming, OutputConfig, OutputState,
+} from "./output";
 export { FONTS, DEFAULT_SETTINGS, THEMES } from "./settings";
 export { DEFAULT_LT_TEMPLATE } from "./lowerThird";

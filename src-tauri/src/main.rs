@@ -132,6 +132,8 @@ fn main() {
 
             let remote_control = Arc::new(remote::RemoteControl::new(remote_files_dir, &app_data_dir));
 
+            let outputs = Arc::new(wordlyte_lib::outputs::OutputManager::new(&app_data_dir));
+
             let state = AppState {
                 presentation: PresentationState {
                     live_item: Arc::new(Mutex::new(None)),
@@ -145,6 +147,7 @@ fn main() {
                 app_data_dir,
                 download_in_progress: Arc::new(AtomicBool::new(false)),
                 remote: remote_control,
+                outputs,
             };
 
             app.manage(state);
@@ -266,6 +269,10 @@ fn main() {
             wordlyte_lib::commands::scenes::delete_scene,
             wordlyte_lib::commands::scenes::apply_scene,
             wordlyte_lib::commands::scenes::capture_scene,
+            wordlyte_lib::commands::outputs::outputs_list,
+            wordlyte_lib::commands::outputs::outputs_states,
+            wordlyte_lib::commands::outputs::outputs_update,
+            wordlyte_lib::commands::outputs::outputs_set_visible,
             wordlyte_lib::commands::assets::get_startup_status,
             wordlyte_lib::commands::assets::download_bible_db_cmd,
             wordlyte_lib::commands::remote::remote_enable,

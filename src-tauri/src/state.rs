@@ -24,4 +24,6 @@ pub struct AppState {
     /// Remote Control server state — an Arc so Tauri state, the axum task and
     /// display commands all share one instance.
     pub remote: Arc<RemoteControl>,
+    /// Configurable output surfaces (projection, stage, recorder, streamer).
+    pub outputs: Arc<crate::outputs::OutputManager>,
 }
