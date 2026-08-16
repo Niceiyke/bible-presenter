@@ -231,12 +231,27 @@ Seed defaults, identical to today's behavior:
 1. **Phase 1 — Output manager core** ✅ (implemented on `feat/output-manager`): types,
    `OutputManager`, commands, events, `outputSlice`, wire `OutputWindow`/`StageWindow`
    to read their config, `outputs.json` persistence + migration. No behavior change.
-2. **Phase 2 — Program feed compositor** (~1–2 wks): offscreen-canvas renderer that
-   draws the program feed (verses, slides, songs, media, scene compositions, overlays)
-   and exposes `captureStream()`; window outputs switch to it too for a single render
-   path.
+2. **Phase 2 — Program feed compositor** ✅ (implemented on `feat/output-manager`):
+   offscreen-canvas renderer that draws the program feed (verses, slides, songs, media,
+   scene compositions, overlays) and exposes `captureStream()`. Window outputs may
+   switch to it later for a single render path.
+   - `src/components/outputs/canvasProgramFeed.ts`: pure Canvas 2D draw helpers —
+     backgrounds, verse typography (reference tag, split marker, theme colors), media
+     (image/video/audio card), cameras (native + phone), timers, songs, custom slides
+     (background + text/image/video/shape elements), scene-composition zones, props
+     (image/clock), logo, and lower thirds. Unit-tested with a stub context.
+   - `src/hooks/useCanvasCapture.ts`: rAF loop + `canvas.captureStream()` at a
+     configurable FPS, exposing the composited `MediaStream` to recorder/streamer.
+   - `src/components/outputs/ProgramFeedCanvas.tsx`: React wrapper owning the resource
+     pipeline (images/videos resolved via `convertFileSrc`, pre-warmed camera streams)
+     and compositing one `ProgramFeedFrame` per tick.
+   - `src/components/outputs/ProgramFeedPreview.tsx`: operator-facing verification
+     surface subscribing to the shared store; toggled in the Cockpit's On-Air preview
+     (PGM button) so the canvas composition can be eyeballed against the DOM
+     `PreviewCard`.
 3. **Phase 3 — Recorder surface** (~3 days): `MediaRecorder` → WebM, Recordings tab,
-   start/stop + status events, file listing in app-data.
+   start/stop + status events, file listing in app-data. The recorder consumes the
+   `ProgramFeedCanvas` stream directly.
 4. **Phase 4 — Streamer surface** (~3 days +): WHIP via `RTCPeerConnection`
    (WebView2-native WebRTC); RTMP/SRT later on the existing `webrtc` crate if needed.
 5. **Phase 5 — Multi-bus** (future): sources → PGM/AUX buses → outputs, turning

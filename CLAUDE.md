@@ -89,7 +89,7 @@ The output manager is a configurable output-surface abstraction: every output (p
 - Commands: `src-tauri/src/commands/outputs.rs` — `outputs_list`, `outputs_states`, `outputs_update` (replace-all, idempotent), `outputs_set_visible` (toggles the bound window and re-broadcasts authoritative state on reveal).
 - Events: `output-config-changed` (full list, replace-all semantics) and `output-state-changed` (per-output runtime status). Typed in `src/hooks/useTauriEvent.ts`.
 - Frontend: `outputSlice` (`src/store/slices/outputSlice.ts`) holds `outputs` + `outputStates`, hydrated and kept in sync by `useAppInitialization.ts`. `OutputWindow`/`StageWindow` (separate webviews, local state) hydrate via `outputs_list` and listen to `output-config-changed`, applying `presentation`/`overlays` overrides. Default configs have empty overrides and full overlay masks, so behavior is identical until the operator customizes an output.
-- Recorder/streamer surfaces and the program-feed canvas compositor are future phases (see `docs/OUTPUT_MANAGER_DESIGN.md`).
+- The Phase 2 program-feed canvas compositor (`src/components/outputs/canvasProgramFeed.ts` draw helpers, `useCanvasCapture` hook, `ProgramFeedCanvas`/`ProgramFeedPreview` components) rasterizes the same program the DOM renderers paint and exposes `captureStream()`. It is currently a verification surface (PGM toggle in the Cockpit On-Air preview); recorder/streamer surfaces will consume it in later phases (see `docs/OUTPUT_MANAGER_DESIGN.md`). The DOM path in `OutputWindow`/`StageWindow` remains authoritative.
 
 Do not apply operator-console color tokens directly to projected output. Audience themes are persisted separately in `src/types/settings.ts`.
 
