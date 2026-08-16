@@ -153,7 +153,11 @@ export function drawImageCover(
   const scale = Math.max(w / s.w, h / s.h);
   const sw = w / scale;
   const sh = h / scale;
-  ctx.drawImage(src as CanvasImageSource, 0, 0, sw, sh, x, y, w, h);
+  // Center the crop like CSS `object-fit: cover` — drawing from (0,0) would
+  // show only the top-left corner of a mismatched-aspect source.
+  const sx = (s.w - sw) / 2;
+  const sy = (s.h - sh) / 2;
+  ctx.drawImage(src as CanvasImageSource, sx, sy, sw, sh, x, y, w, h);
 }
 
 /** object-fit: contain within a box. */

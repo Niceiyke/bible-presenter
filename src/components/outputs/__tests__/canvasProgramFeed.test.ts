@@ -47,7 +47,8 @@ function makeCtx() {
       addColorStop: () => calls.push("addColorStop"),
     }),
     measureText: (t: string) => ({ width: t.length * 10 }),
-    drawImage: () => calls.push("drawImage"),
+    drawImage: (src: any, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number) =>
+      calls.push(`drawImage:${sx},${sy},${sw},${sh}->${dx},${dy},${dw},${dh}`),
     canvas: { width: 1920, height: 1080 },
   };
   return { ctx, calls };
@@ -176,6 +177,15 @@ describe("canvasProgramFeed", () => {
       drawImageCover(ctx, img, 0, 0, 1920, 1080);
       // 16:9 into 16:9 -> full-bleed drawImage
       expect(calls.some((c) => c.startsWith("drawImage"))).toBe(true);
+    });
+
+    it("centers the crop for a mismatched-aspect source", () => {
+      const { ctx, calls } = makeCtx();
+      const img = { naturalWidth: 1920, naturalHeight: 1080 } as HTMLImageElement;
+      drawImageCover(ctx, img, 0, 0, 1080, 1080);
+      // 16:9 into 1:1 -> crop 1080 wide centered on the source x-axis
+      const call = calls.find((c) => c.startsWith("drawImage")) ?? "";
+      expect(call).toBe("drawImage:420,0,1080,1080->0,0,1080,1080");
     });
   });
 
