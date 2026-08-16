@@ -150,6 +150,7 @@ export function ProgramFeedCanvas({
     const load = (path: string) => {
       if (next[path]) return;
       const img = new Image();
+      img.crossOrigin = "anonymous";
       img.onload = () => {
         if (cancelled) return;
         setImages((prev) => ({ ...prev, [path]: img }));
@@ -179,6 +180,7 @@ export function ProgramFeedCanvas({
       vid.muted = true;
       vid.playsInline = true;
       vid.loop = true;
+      vid.crossOrigin = "anonymous";
       vid.addEventListener("loadeddata", () => {
         if (cancelled) return;
         setVideos((prev) => ({ ...prev, [path]: vid }));
