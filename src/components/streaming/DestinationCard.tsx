@@ -20,6 +20,10 @@ interface DestinationCardProps {
   onRemove: () => void;
   onStatus: (id: string, status: DestTransportStatus, bitrateKbps: number) => void;
   onRegister: (id: string, handle: DestinationCardHandle | null) => void;
+  /** Capability gate: when set, the transport is unavailable (e.g. RTMP
+   *  needs ffmpeg + WebCodecs H.264) — the Go Live button is disabled and the
+   *  reason is surfaced on the card. */
+  blockedReason?: string | null;
 }
 
 function formatBitrate(kbps: number): string {
@@ -35,6 +39,7 @@ export function DestinationCard({
   onRemove,
   onStatus,
   onRegister,
+  blockedReason,
 }: DestinationCardProps) {
   const rtmp = useRtmpEncoder({ sessionId: dest.id });
   const streamer = useStreamer();
@@ -192,8 +197,14 @@ export function DestinationCard({
           ) : (
             <button
               onClick={() => start()}
-              disabled={!dest.url.trim()}
-              title={dest.url.trim() ? "Start this destination" : "Enter an ingest URL first"}
+              disabled={!dest.url.trim() || !!blockedReason}
+              title={
+                blockedReason
+                  ? blockedReason
+                  : dest.url.trim()
+                    ? "Start this destination"
+                    : "Enter an ingest URL first"
+              }
               className="px-3 py-1 rounded bg-red-700 hover:bg-red-600 disabled:bg-slate-800 disabled:text-slate-500 text-white text-[10px] font-bold uppercase tracking-wider transition-all flex items-center gap-1.5"
             >
               <Play size={9} /> Go Live
@@ -210,6 +221,11 @@ export function DestinationCard({
         </div>
       </div>
 
+      {blockedReason && (
+        <p className="text-[10px] text-amber-400 bg-amber-900/20 border border-amber-800/60 rounded px-2 py-1">
+          {blockedReason}
+        </p>
+      )}
       {live.status === "error" && live.error && (
         <p className="text-[10px] text-red-400 bg-red-900/30 border border-red-900 rounded px-2 py-1">{live.error}</p>
       )}

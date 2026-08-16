@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { markCaptureFrame } from "../system/captureMetrics";
 
 /**
  * `useCanvasCapture` — drives a `canvas.captureStream()`-backed compositor
@@ -73,6 +74,7 @@ export function useCanvasCapture(options: UseCanvasCaptureOptions = {}): CanvasC
         if (ctx) {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
           drawRef.current?.(ctx, canvas.width, canvas.height);
+          markCaptureFrame();
         }
       }
     }

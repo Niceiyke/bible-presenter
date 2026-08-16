@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Radio, Play, Square, Plus, Mic } from "lucide-react";
 import { useAppStore } from "../store";
+import { useSystemDiagnostics } from "../system/SystemDiagnosticsContext";
 import { ProgramFeedPreview } from "./outputs/ProgramFeedPreview";
 import { DestinationCard, type DestinationCardHandle, type DestTransportStatus } from "./streaming/DestinationCard";
 import { PLATFORM_PRESETS, makeDestination, newDestinationId } from "./streaming/presets";
@@ -32,6 +33,13 @@ interface CardStatus {
 export function StreamerTab() {
   const outputs = useAppStore((s) => s.outputs);
   const setOutputs = useAppStore((s) => s.setOutputs);
+
+  // Capability gating (Phase 7): RTMP needs WebCodecs H.264 + ffmpeg; shared
+  // audio needs at least one input device.
+  const { checks } = useSystemDiagnostics();
+  const capabilities = checks?.capabilities;
+  const rtmpBlockedReason = capabilities && !capabilities.rtmpAvailable ? capabilities.rtmpReason : null;
+  const audioUnavailableReason = capabilities && !capabilities.audioAvailable ? capabilities.audioReason : null;
 
   const [destinations, setDestinations] = useState<StreamDestination[]>([]);
   const [statuses, setStatuses] = useState<Record<string, CardStatus>>({});
@@ -202,6 +210,7 @@ export function StreamerTab() {
     await persistDestinations(destinations);
     const enabled = destinations.filter((d) => d.enabled);
     for (const d of enabled) {
+      if (rtmpBlockedReason && d.mode === "rtmp") continue;
       const handle = cardHandles.current.get(d.id);
       if (handle) void handle.start();
     }
@@ -217,6 +226,9 @@ export function StreamerTab() {
   const liveCount = Object.values(statuses).filter((s) => s.status === "live").length;
   const anyBusy = Object.values(statuses).some((s) => s.status === "live" || s.status === "connecting");
   const enabledCount = destinations.filter((d) => d.enabled).length;
+  const enabledBlocked = destinations.some(
+    (d) => d.enabled && d.mode === "rtmp" && !!rtmpBlockedReason
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -262,13 +274,15 @@ export function StreamerTab() {
             ) : (
               <button
                 onClick={handleGoLive}
-                disabled={!streamReady || enabledCount === 0}
+                disabled={!streamReady || enabledCount === 0 || enabledBlocked}
                 title={
                   enabledCount === 0
                     ? "Enable at least one destination"
-                    : !streamReady
-                      ? "Program feed not ready"
-                      : "Go live on every enabled destination"
+                    : enabledBlocked
+                      ? rtmpBlockedReason ?? "A required service is unavailable"
+                      : !streamReady
+                        ? "Program feed not ready"
+                        : "Go live on every enabled destination"
                 }
                 className="flex-1 py-2.5 rounded-md bg-red-700 hover:bg-red-600 disabled:bg-slate-800 disabled:text-slate-500 text-white text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
               >
@@ -278,6 +292,12 @@ export function StreamerTab() {
           </div>
 
           {!streamReady && <p className="text-[10px] text-slate-600">Program feed not ready yet…</p>}
+
+          {rtmpBlockedReason && (
+            <p className="text-[10px] text-amber-400 bg-amber-900/20 border border-amber-800/60 rounded px-2 py-1.5">
+              RTMP destinations are disabled: {rtmpBlockedReason}
+            </p>
+          )}
 
           {/* Shared audio input */}
           <div className="flex flex-wrap items-center gap-3 p-2 rounded-lg border border-slate-800 bg-slate-900/30">
@@ -312,6 +332,9 @@ export function StreamerTab() {
               </>
             )}
             {audioError && <span className="text-[10px] text-red-400">{audioError}</span>}
+            {!audioError && audioUnavailableReason && (
+              <span className="text-[10px] text-amber-400">{audioUnavailableReason}</span>
+            )}
           </div>
         </div>
 
@@ -344,6 +367,7 @@ export function StreamerTab() {
               onRemove={() => removeDestination(d.id)}
               onStatus={handleStatus}
               onRegister={handleRegister}
+              blockedReason={d.mode === "rtmp" ? rtmpBlockedReason : null}
             />
           ))}
 

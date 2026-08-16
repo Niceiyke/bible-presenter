@@ -163,7 +163,7 @@ fn spawn_audio_writer(listener: TcpListener) -> mpsc::Sender<Vec<u8>> {
     tx
 }
 
-fn ffmpeg_available() -> bool {
+pub fn ffmpeg_available() -> bool {
     Command::new("ffmpeg")
         .arg("-version")
         .stdout(Stdio::null())

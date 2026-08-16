@@ -349,8 +349,32 @@ Seed defaults, identical to today's behavior:
    `rtmp_status` returns the list). Persistence: the `stream-main` output gains
    a `stream_destinations` list (`StreamDestination` in `outputs.rs` + TS),
    seeded from the legacy `streaming` field when present. Unit-tested:
-   `ffmpeg_args` graphs, preset table / `makeDestination` / `applyPreset`, and
-   the session-keyed `useRtmpEncoder` invoke calls.
+`ffmpeg_args` graphs, preset table / `makeDestination` / `applyPreset`, and
+    the session-keyed `useRtmpEncoder` invoke calls.
+7. **Phase 7 — System diagnostics & performance monitor** ✅ (implemented on
+   `feat/output-manager`): a readiness/check battery plus a live performance
+   monitor, so the operator knows what the machine can do and how hard it is
+   working mid-show. Backend (`src-tauri/src/commands/system.rs`, new `sysinfo`
+   dependency): `system_info` returns a one-shot hardware snapshot (CPU model,
+   physical cores, RAM, disk, ffmpeg-on-PATH) and `system_metrics` a cheap polled
+   metric (CPU %, RAM %, disk %, active RTMP session count). Frontend:
+   `SystemDiagnosticsProvider` (mounted in `App.tsx`) runs the battery once —
+   backend info, `get_available_monitors` for display count, a WebCodecs H.264
+   `isConfigSupported` probe, WebRTC availability, `enumerateDevices` for audio/
+   camera presence, `hardwareConcurrency`/`deviceMemory` — and derives a pure
+   capability report (`src/system/capabilities.ts`): `rtmpAvailable`,
+   `whipAvailable`, `audioAvailable`, `cameraAvailable`, a streaming-capacity
+   tier with a recommended simultaneous-stream count, and human-readable
+   *reasons* for every disabled service. Gating: disabled services stay visible
+   but can't start — `StreamerTab` disables RTMP Go Live (and per-card transport)
+   when ffmpeg/WebCodecs H.264 is missing and warns when no audio input exists.
+   The System → Diagnostics workspace (`src/components/SystemTab.tsx`, registered
+   in `appSlice.activeTab` + `LeftNav` + `ContentBrowser`) shows the checklist,
+   hardware summary, capability/gating report, and a live performance panel.
+   Metrics poll only while that panel is open (zero idle cost); compositor
+   capture FPS is a rolling frame counter in `src/system/captureMetrics.ts`
+   ticked by `useCanvasCapture`. Unit-tested: `src/system/__tests__/
+   capabilities.test.ts` (gating matrix + capacity tiers).
 
 Phase 1 is strictly additive and safe to land independently; everything after it
 consumes the same model.

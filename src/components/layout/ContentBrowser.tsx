@@ -20,6 +20,7 @@ const RemoteTab = lazy(() => import("../RemoteTab").then((m) => ({ default: m.Re
 const LtDesignerTab = lazy(() => import("../LtDesignerTab").then((m) => ({ default: m.LtDesignerTab })));
 const RecordingsTab = lazy(() => import("../RecordingsTab").then((m) => ({ default: m.RecordingsTab })));
 const StreamerTab = lazy(() => import("../StreamerTab").then((m) => ({ default: m.StreamerTab })));
+const SystemTab = lazy(() => import("../SystemTab").then((m) => ({ default: m.SystemTab })));
 
 interface ContentBrowserProps {
   stageItem: (item: DisplayItem) => Promise<boolean>;
@@ -138,6 +139,7 @@ export function ContentBrowser({
         {activeTab === "remote" && <RemoteTab />}
         {activeTab === "recordings" && <RecordingsTab />}
         {activeTab === "streaming" && <StreamerTab />}
+        {activeTab === "diagnostics" && <SystemTab />}
         {activeTab === "props" && <PropsTab onUpdateProps={updateProps} />}
         {activeTab === "scenes" && (
           <ScenesTab

@@ -283,6 +283,8 @@ fn main() {
             wordlyte_lib::commands::rtmp::rtmp_send_audio,
             wordlyte_lib::commands::rtmp::rtmp_stop,
             wordlyte_lib::commands::rtmp::rtmp_status,
+            wordlyte_lib::commands::system::system_info,
+            wordlyte_lib::commands::system::system_metrics,
             wordlyte_lib::commands::assets::get_startup_status,
             wordlyte_lib::commands::assets::download_bible_db_cmd,
             wordlyte_lib::commands::remote::remote_enable,
