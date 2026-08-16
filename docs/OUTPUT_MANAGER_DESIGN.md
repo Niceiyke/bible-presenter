@@ -392,3 +392,113 @@ probing working offline.
 
 Phase 1 is strictly additive and safe to land independently; everything after it
 consumes the same model.
+
+---
+
+## 9. NDI — LAN source output & input (Phase 8)
+
+NDI serves two church segments:
+
+- **OBS mixed services**: Wordlyte renders graphics; OBS mixes + streams. Wordlyte
+  publishes its program as an NDI source and OBS consumes it via obs-ndi → NDI
+  **output** is the core requirement.
+- **Standalone services**: Wordlyte does everything including streaming; NDI
+  cameras (or a laptop with vMix/ProPresenter as a source) feed Wordlyte → NDI
+  **input** is the core requirement.
+
+Both directions are first-class; neither needs the other to ship.
+
+### 9.1 SDK model — build-time dep, bundled runtime (end users download nothing)
+
+There are two distinct NDI pieces:
+
+- **Build-time SDK** (headers + lib): only needed on the **developer/build
+  machine** to compile the sender against `grafton-ndi` (a bindgen build
+  dependency, so LLVM/clang are also required). The operator never installs
+  this. Download `https://ndi.video/for-developers/ndi-sdk/download/` (accept
+  the EULA — it is form-gated, so only a human can do it) and install to
+  `C:\Program Files\NDI\NDI 6 SDK` (or set `NDI_SDK_DIR`).
+- **Runtime DLL** (`Processing.NDI.Lib.x64.dll`): the only NDI component an end
+  user's machine needs, sitting next to the app exe. It ships **inside the
+  installer** via `bundle.resources` (mirroring the bundled ffmpeg flow) — the
+  church operator installs Wordlyte and NDI just works.
+
+License obligations: royalty-free + redistributable, but no reverse engineering;
+the SDK version shipped must be **less than 30 days old at product release** (so
+`scripts/fetch-ndi.ps1` re-fetches the runtime DLL at each release and the
+release process checks its build date); the app must credit NDI® and link
+`ndi.video` near any NDI usage (About box).
+
+The feature-gated scaffold ships first (committed as `7feae56`) so the whole
+surface compiles, tests, and gates correctly **without the SDK**:
+
+- `StreamDestination.mode` / `StreamPlatform` accept `"ndi"` (`src/types/output.ts`).
+- NDI preset in `src/components/streaming/presets.ts` (no ingest URL).
+- Backend `src-tauri/src/commands/ndi.rs` + the `ndi` cargo feature:
+  `ndi_status` (reports unsupported when the SDK isn't compiled in — drives
+  capability gating) and `ndi_start` / `ndi_send` / `ndi_stop` (error cleanly).
+- Capability `ndiAvailable` / `ndiReason` fed from `ndi_status` in the
+  diagnostics battery (`src/system/SystemDiagnosticsContext.tsx`), shown in the
+  System → Diagnostics checklist and gating NDI cards in `StreamerTab`.
+- `src/hooks/useNdiSender.ts`: WebCodecs H.264 Annex-B → `ndi_send`, modeled on
+  `useRtmpEncoder` (session-keyed, track cloned per destination); the card hides
+  the URL/key inputs and shows the announced source name (`Wordlyte – <label>`);
+  the audio checkbox is disabled until the SDK phase adds NDI audio.
+
+### 9.2 Sender pipeline (SDK phase)
+
+Reuses the hub's single-encode architecture: the compositor video track is
+cloned per destination, `useNdiSender` encodes H.264 Annex-B (hardware-
+accelerated where available, ~2s keyframe interval) and streams packets to the
+backend (`ndi_send`). The backend (`#[cfg(feature = "ndi")]` branches in
+`commands/ndi.rs`) wraps them with the SDK's H.264 send mode:
+
+1. `ndi_status`: probe the SDK (`NDIlib_initialize`, `NDIlib_is_supported_CPU`,
+   version + license age).
+2. `ndi_start(session_id, name)`: `NDIlib_send_create_v2` announcing
+   `"Wordlyte – <name>"`, an `NDIlib_avsync_create`, and `NDIlib_send_create`
+   for the H.264 video (NDI|HX). Sessions live in a `HashMap` on `AppState.ndi`,
+   keyed by `session_id` exactly like `AppState.rtmp`.
+3. `ndi_send(session_id, data_base64)`: decode + feed each Annex-B access unit
+   through `NDIlib_avsync_video` + `NDIlib_send_send_video_async_v2` (H.264
+   video needs the A/V-sync reference clock to derive PTS).
+4. `ndi_stop(session_id)`: destroy the avsync + sender (idempotent, unknown
+   session is a no-op).
+
+The frontend already collects bytes into `{app_data_dir}/recordings`-style
+buffers; NDI needs no persistent state beyond the session.
+
+**NDI audio (Phase 8.1)**: NDI|HX carries AAC audio in the payload. When the
+SDK phase lands, the hub's shared AAC encode (already produced per destination
+for RTMP) is fed via `ndi_send_audio` → `NDIlib_send_send_audio_v2`, re-enabling
+the per-card Audio checkbox.
+
+### 9.3 Input pipeline (later)
+
+NDI **input** = SDK discovery + receive → a camera source the operator can stage
+like any native camera:
+
+1. `ndi_list_sources`: `NDIlib_find_create_v2` discovery, returned as NDI|HX
+   sources (name + address + H.264/HQ capability).
+2. `ndi_receive_start(session_id, source)`: `NDIlib_recv_create_v2` with
+   `NDIlib_recv_bandwidth_lowest` (NDI|HX first — H.264 packets already match the
+   WebCodecs pipeline). Full-bandwidth NDI requires backend re-encode to H.264
+   and a faster pipe than IPC (raw frames at 1080p30 ≈ 380 MB/s) — out of scope
+   until needed.
+3. Frontend: pull H.264 access units (`NDIlib_recv_capture_v2`), decode with
+   WebCodecs `VideoDecoder`, and hand the frames to a `VideoTrackGenerator`
+   (WebView2-native) so the feed presents as a normal `MediaStreamTrack` to the
+   camera/zone sources, `ProgramFeedCanvas`, recorder, and streamer unchanged.
+
+### 9.4 Shipping
+
+`Processing.NDI.Lib.x64.dll` (+ `x86` for the installer if we support 32-bit)
+is **bundled into the installer**, not installed on the end-user machine:
+`scripts/fetch-ndi.ps1` (mirroring `scripts/fetch-ffmpeg.ps1`) downloads the
+current NDI runtime at release time into `src-tauri/binaries/ndi/`, ships it via
+`bundle.resources` → `bin/`, and is resolved by the same `binpaths`-style lookup
+as ffmpeg. Because NDI's license requires the shipped SDK to be **less than 30
+days old at product release**, the fetch script must run at each release and the
+release process must fail/skip if the bundled DLL's build date is stale. The
+About box adds NDI® attribution + `ndi.video` link. Verify end-to-end with
+obs-ndi (OBS source takes `Wordlyte – <label>`).
