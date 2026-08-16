@@ -16,10 +16,12 @@ export function ProgramFeedPreview({
   geometry = { width: 1920, height: 1080 },
   fps = 30,
   className,
+  onStream,
 }: {
   geometry?: { width: number; height: number };
   fps?: number;
   className?: string;
+  onStream?: (stream: MediaStream | null) => void;
 }) {
   const liveItem = useAppStore((s) => s.liveItem);
   const settings = useAppStore((s) => s.settings);
@@ -56,6 +58,7 @@ export function ProgramFeedPreview({
       cameraStreams={cameraStreams}
       fps={fps}
       className={className}
+      onStream={onStream}
     />
   );
 }

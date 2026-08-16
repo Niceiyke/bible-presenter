@@ -249,9 +249,20 @@ Seed defaults, identical to today's behavior:
      surface subscribing to the shared store; toggled in the Cockpit's On-Air preview
      (PGM button) so the canvas composition can be eyeballed against the DOM
      `PreviewCard`.
-3. **Phase 3 — Recorder surface** (~3 days): `MediaRecorder` → WebM, Recordings tab,
-   start/stop + status events, file listing in app-data. The recorder consumes the
-   `ProgramFeedCanvas` stream directly.
+3. **Phase 3 — Recorder surface** ✅ (implemented on `feat/output-manager`):
+   `MediaRecorder` → WebM, Recordings tab, start/stop, file listing in app-data. The
+   recorder consumes the `ProgramFeedCanvas` stream directly.
+   - `src-tauri/src/commands/recordings.rs`: `recordings_list`, `recording_save`
+     (base64 body written to `{app_data_dir}/recordings/`), `recording_delete`,
+     `recordings_open_folder` (OS reveal).
+   - `src/hooks/useRecorder.ts`: MediaRecorder wrapper — lazy creation on `start`,
+     WebM chunk collection, base64 persistence via `recording_save`, `cancel`
+     (abort without save), empty-capture + save-failure guards. Unit-tested with a
+     mocked MediaRecorder.
+   - `src/components/RecordingsTab.tsx`: live `ProgramFeedPreview` (the exact pixels
+     recorded), REC/STOP/Abort transport, elapsed timer, saved-recordings list with
+     size/date, delete and open-folder. Tab registered in `appSlice.activeTab`,
+     `LeftNav` (System → Recordings), and `ContentBrowser`.
 4. **Phase 4 — Streamer surface** (~3 days +): WHIP via `RTCPeerConnection`
    (WebView2-native WebRTC); RTMP/SRT later on the existing `webrtc` crate if needed.
 5. **Phase 5 — Multi-bus** (future): sources → PGM/AUX buses → outputs, turning

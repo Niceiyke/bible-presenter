@@ -12,3 +12,4 @@ pub mod assets;
 pub mod scenes;
 pub mod remote;
 pub mod outputs;
+pub mod recordings;
