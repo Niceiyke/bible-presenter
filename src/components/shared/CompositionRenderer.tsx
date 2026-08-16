@@ -196,6 +196,10 @@ export function ZoneContent({
   phoneStreams?: Record<string, MediaStream>;
 }) {
   const item = zone.item;
+  // Content scales with the zone's height relative to the full canvas, so a
+  // zone rendered at 50% of the output height draws text at half the full-canvas
+  // scale (matches the output and makes previews resize live as you drag).
+  const zoneScale = windowScale * (zone.h || 1);
   const container: CSSProperties = {
     position: "absolute",
     left: `${zone.x * 100}%`,
@@ -210,13 +214,13 @@ export function ZoneContent({
   let content: React.ReactNode = null;
   switch (item.type) {
     case "Verse":
-      content = <ZoneVerse item={item} settings={settings} colors={colors} windowScale={windowScale} />;
+      content = <ZoneVerse item={item} settings={settings} colors={colors} windowScale={zoneScale} />;
       break;
     case "Camera":
       content = <ZoneCamera item={item} phoneStreams={phoneStreams} />;
       break;
     case "CustomSlide":
-      content = <CustomSlideRenderer slide={item.data} scale={windowScale} appDataDir={appDataDir} theme={item.data.theme} />;
+      content = <CustomSlideRenderer slide={item.data} scale={zoneScale} appDataDir={appDataDir} theme={item.data.theme} />;
       break;
     case "Media":
       content = <ZoneMedia item={item} fit={zone.fit} muted={zone.muted} appDataDir={appDataDir} />;
@@ -228,7 +232,7 @@ export function ZoneContent({
       content = item.data.style === "FullSlide" || !item.data.style ? (
         <SongSlideRenderer
           data={item.data}
-          scale={windowScale}
+          scale={zoneScale}
           fontSize={settings.font_size}
           fontFamily={settings.verse_font_family}
           color={colors.verseText}

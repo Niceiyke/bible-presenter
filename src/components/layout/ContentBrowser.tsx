@@ -62,8 +62,8 @@ export function ContentBrowser({
     setBottomDeckOpen, setBottomDeckMode,
   } = useAppStore();
 
-  return (
-    <div className={activeTab === "lt-designer"
+return (
+    <div className={activeTab === "lt-designer" || activeTab === "scenes"
       ? "flex-1 min-h-0 overflow-hidden"
       : "flex-1 min-h-0 overflow-y-auto p-4 custom-scrollbar"}>
       <Suspense fallback={null}>

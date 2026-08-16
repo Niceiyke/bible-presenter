@@ -102,7 +102,8 @@ export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: 
   }
 
   return (
-    <div className="flex flex-col gap-6 max-w-2xl">
+    <div className="h-full min-h-0 overflow-y-auto p-4 custom-scrollbar">
+      <div className="flex flex-col gap-6 max-w-2xl">
       <div>
         <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">{t("scenes.title")}</h2>
         <p className="text-xs text-slate-500 mb-4">
@@ -246,6 +247,7 @@ export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: 
           )}
         </div>
       </ConfirmModal>
+      </div>
     </div>
   );
 }
