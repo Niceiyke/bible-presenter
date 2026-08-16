@@ -298,6 +298,24 @@ Seed defaults, identical to today's behavior:
    Unit-tested in `remote/commands.rs` (`patch_scene_zones`, source matching,
    serde round-trip), `src/items/__tests__/registry.test.ts` (scene stepping),
    and covered by the transactional `useItemActions` path.
+6. **Phase 6 — RTMP ingest** ✅ (implemented on `feat/output-manager`): the
+   streamer surface gains an RTMP mode alongside WHIP. The compositor stream is
+   encoded **once** in the webview with WebCodecs `VideoEncoder` (H.264,
+   Annex-B, `annexb` output; hardware-accelerated where available) and its
+   packets are streamed to the backend (`rtmp_send`), which feeds a long-lived
+   `ffmpeg -f h264 -i pipe:` doing **mux-only** `-c copy` work — ffmpeg never
+   re-encodes. Frontend: `src/hooks/useRtmpEncoder.ts` (`MediaStreamTrackProcessor`
+   pulls `VideoFrame`s from the compositor track, keyframes every ~2s, per-packet
+   base64 over IPC). Backend: `src-tauri/src/commands/rtmp.rs` (`rtmp_start` /
+   `rtmp_send` / `rtmp_stop` / `rtmp_status`; dedicated writer thread drains an
+   mpsc channel into ffmpeg stdin so the UI thread never blocks on pipe
+   backpressure; 5s stop timeout with forced kill). Session lives on
+   `AppState.rtmp` (`Arc<Mutex<Option<RtmpSession>>>`). The `stream-main` output's
+   `streaming` field persists `mode: "rtmp"` + `url` + `stream_key` through the
+   existing `outputs_update` flow; `StreamerTab` toggles WHIP/RTMP. ffmpeg is
+   resolved from PATH (same policy as thumbnail extraction) and errors cleanly
+   when missing. Unit-tested in `commands/rtmp.rs` (URL joining) and
+   `src/hooks/__tests__/useRtmpEncoder.test.ts` (WebCodecs stubs, feed, teardown).
 
 Phase 1 is strictly additive and safe to land independently; everything after it
 consumes the same model.

@@ -26,4 +26,7 @@ pub struct AppState {
     pub remote: Arc<RemoteControl>,
     /// Configurable output surfaces (projection, stage, recorder, streamer).
     pub outputs: Arc<crate::outputs::OutputManager>,
+    /// Active RTMP ingest session (ffmpeg child + writer channel). `None` when
+    /// idle. Guarded by a mutex so the frontend can start/send/stop atomically.
+    pub rtmp: Arc<Mutex<Option<crate::commands::rtmp::RtmpSession>>>,
 }

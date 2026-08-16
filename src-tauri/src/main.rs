@@ -148,6 +148,7 @@ fn main() {
                 download_in_progress: Arc::new(AtomicBool::new(false)),
                 remote: remote_control,
                 outputs,
+                rtmp: Arc::new(Mutex::new(None)),
             };
 
             app.manage(state);
@@ -277,6 +278,10 @@ fn main() {
             wordlyte_lib::commands::recordings::recording_save,
             wordlyte_lib::commands::recordings::recording_delete,
             wordlyte_lib::commands::recordings::recordings_open_folder,
+            wordlyte_lib::commands::rtmp::rtmp_start,
+            wordlyte_lib::commands::rtmp::rtmp_send,
+            wordlyte_lib::commands::rtmp::rtmp_stop,
+            wordlyte_lib::commands::rtmp::rtmp_status,
             wordlyte_lib::commands::assets::get_startup_status,
             wordlyte_lib::commands::assets::download_bible_db_cmd,
             wordlyte_lib::commands::remote::remote_enable,

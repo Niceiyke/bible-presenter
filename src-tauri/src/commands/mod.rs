@@ -13,3 +13,4 @@ pub mod scenes;
 pub mod remote;
 pub mod outputs;
 pub mod recordings;
+pub mod rtmp;
