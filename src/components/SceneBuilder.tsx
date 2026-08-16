@@ -4,10 +4,11 @@ import {
   Columns2, LayoutGrid, Maximize2, PictureInPicture2, Plus, Trash2,
   Video, Image as ImageIcon, BookOpen, Presentation, Music2, Clock,
   Camera as CameraIcon, ChevronUp, ChevronDown, ArrowUp, ArrowDown,
+  Radio, Link2,
 } from "lucide-react";
 import { useAppStore } from "../store";
 import {
-  Scene, SceneLayout, SceneZone, DisplayItem,
+  Scene, SceneLayout, SceneZone, SceneZoneSource, DisplayItem,
   MediaItem, CameraBackground, THEMES,
 } from "../types";
 import { stableId, resolvePath, buildCustomSlideItem } from "../utils";
@@ -310,6 +311,29 @@ const SOURCE_TABS: { id: SourceTab; label: string; icon: React.ReactNode }[] = [
   { id: "timer", label: "Timer", icon: <Clock size={11} /> },
 ];
 
+// ─── Live bus source (Phase 5) ────────────────────────────────────────────────
+
+/**
+ * Zone "follows" options. A zone pinned to a live content class is refreshed
+ * in place when that class of content is taken live while the scene is on air,
+ * instead of the whole scene being replaced (e.g. a camera + verse scene whose
+ * verse zone advances as the operator steps through the Bible).
+ */
+const LIVE_SOURCE_OPTIONS: { type: SceneZoneSource["type"]; label: string; icon: React.ReactNode; hint: string }[] = [
+  { type: "item", label: "Static", icon: <Link2 size={11} />, hint: "Frozen snapshot picked below" },
+  { type: "verse", label: "Verse", icon: <BookOpen size={11} />, hint: "Follows the on-air verse" },
+  { type: "camera", label: "Camera", icon: <CameraIcon size={11} />, hint: "Follows the on-air camera" },
+  { type: "timer", label: "Timer", icon: <Clock size={11} />, hint: "Follows the live timer" },
+  { type: "song", label: "Song", icon: <Music2 size={11} />, hint: "Follows the on-air song" },
+  { type: "media", label: "Media", icon: <ImageIcon size={11} />, hint: "Follows the on-air media" },
+  { type: "slide", label: "Slide", icon: <Presentation size={11} />, hint: "Follows the on-air slide" },
+];
+
+function liveSourceLabel(source: SceneZoneSource | undefined): string | null {
+  if (!source || source.type === "item") return null;
+  return LIVE_SOURCE_OPTIONS.find((o) => o.type === source.type)?.label ?? null;
+}
+
 function ContentPicker({
   onPick,
   onClose,
@@ -568,6 +592,11 @@ export function SceneBuilder({ scene, onSceneChange, onSave, onApply, onClose }:
                       <span className="absolute -top-6 left-0 z-50 bg-action-primary text-black text-[8px] font-black uppercase px-1 py-0.5 rounded whitespace-nowrap">
                         {sourceLabel(z.item)}
                       </span>
+                      {liveSourceLabel(z.source) && (
+                        <span className="absolute -top-6 left-1/2 z-50 -translate-x-1/2 bg-red-500 text-white text-[8px] font-black uppercase px-1 py-0.5 rounded whitespace-nowrap flex items-center gap-1">
+                          <Radio size={8} /> {liveSourceLabel(z.source)}
+                        </span>
+                      )}
                       {(["nw", "ne", "sw", "se"] as const).map((h) => (
                         <span
                           key={h}
@@ -610,6 +639,33 @@ export function SceneBuilder({ scene, onSceneChange, onSave, onApply, onClose }:
               >
                 {sourceLabel(selected.item)} → pick content
               </button>
+
+              <label className="flex flex-col gap-1">
+                <span className="text-[9px] font-bold uppercase tracking-widest text-console-text-subtle flex items-center gap-1">
+                  <Radio size={9} /> Follows live content
+                </span>
+                <div className="flex flex-wrap gap-1">
+                  {LIVE_SOURCE_OPTIONS.map((o) => (
+                    <button
+                      key={o.type}
+                      title={o.hint}
+                      onClick={() => updateZone(selected.id, { source: o.type === "item" ? undefined : { type: o.type } })}
+                      className={`flex items-center gap-1 px-1.5 py-1 rounded text-[9px] font-bold uppercase transition-all ${
+                        (selected.source?.type ?? "item") === o.type
+                          ? "bg-red-500 text-white"
+                          : "bg-console-surface-raised text-console-text-muted hover:text-console-text"
+                      }`}
+                    >
+                      {o.icon}{o.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[9px] text-console-text-subtle">
+                  {liveSourceLabel(selected.source)
+                    ? `When you send ${liveSourceLabel(selected.source)?.toLowerCase()} live, this zone updates in place on the output.`
+                    : "Static zone — content stays as picked below until you edit it."}
+                </p>
+              </label>
 
               <label className="flex flex-col gap-1">
                 <span className="text-[9px] font-bold uppercase tracking-widest text-console-text-subtle">Label</span>
@@ -702,6 +758,11 @@ export function SceneBuilder({ scene, onSceneChange, onSave, onApply, onClose }:
                   >
                     <span className="w-4 text-center text-console-text-subtle">{z.z}</span>
                     <span className="truncate flex-1">{z.label || sourceLabel(z.item)}</span>
+                    {liveSourceLabel(z.source) && (
+                      <span className="flex items-center gap-0.5 text-red-400" title={`Follows live ${liveSourceLabel(z.source)?.toLowerCase()}`}>
+                        <Radio size={9} />
+                      </span>
+                    )}
                     <span className="text-console-text-subtle">{Math.round(z.x * 100)},{Math.round(z.y * 100)} {Math.round(z.w * 100)}×{Math.round(z.h * 100)}</span>
                   </button>
                 ))}

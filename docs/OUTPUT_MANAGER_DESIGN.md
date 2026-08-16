@@ -275,8 +275,23 @@ Seed defaults, identical to today's behavior:
      `outputs_update`, Go Live/Stop transport, status + bitrate indicators. Tab
      registered in `appSlice.activeTab`, `LeftNav` (System → Streaming), and
      `ContentBrowser`. No backend changes — WebView2 handles RTP natively.
-5. **Phase 5 — Multi-bus** (future): sources → PGM/AUX buses → outputs, turning
-   `SceneComposition` zones into the first-class bus primitive.
+5. **Phase 5 — Multi-bus / zone bus primitives**: sources → PGM/AUX buses →
+   outputs, turning `SceneComposition` zones into the first-class bus primitive.
+   Implemented as *live-follow zones*: a `SceneZone` may carry a
+   `source: SceneZoneSource` (`item` static, or pinned to `verse`/`camera`/
+   `timer`/`song`/`media`/`slide`). When a scene composition is the current live
+   item and content of a pinned class is taken live (operator UI or remote), the
+   backend patches the matching zone(s) in place via `patch_scene_zones` inside
+   `op_commit_staged`/`op_go_live_item` instead of replacing the whole scene — so
+   a camera+verse scene's bible zone advances as the operator steps through the
+   Bible, a timer zone follows the live countdown, and the compositor
+   (recorder/streamer capture) and DOM outputs both pick the refresh up
+   automatically. Static zones (no `source`) keep the legacy replace-the-scene
+   take. The `SceneZoneSource` union lives in `src/types/scene.ts` and mirrors
+   the serde-tagged `SceneZoneSource` in `src-tauri/src/store/media_schedule.rs`;
+   the SceneBuilder inspector exposes the "Follows live content" selector.
+   Unit-tested in `remote/commands.rs` (`patch_scene_zones`, source matching,
+   serde round-trip) and covered by the transactional `useItemActions` path.
 
 Phase 1 is strictly additive and safe to land independently; everything after it
 consumes the same model.

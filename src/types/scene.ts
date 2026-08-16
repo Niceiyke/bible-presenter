@@ -1,6 +1,25 @@
 import type { PresentationSettings, PropItem, LowerThirdData, LowerThirdTemplate, DisplayItem } from "./";
 
 /**
+ * A zone's content source (Phase 5 — zones as bus primitives).
+ *
+ * A zone can hold a frozen snapshot (`{ type: "item" }`, the default and the
+ * only mode before Phase 5) or be *pinned* to a live content class. When
+ * pinned, sending that class of content live while the scene composition is on
+ * air updates the zone in place instead of replacing the whole scene — e.g. a
+ * `verse` zone in a camera+verse scene advances as the operator steps through
+ * the Bible, and a `timer` zone follows the live countdown.
+ */
+export type SceneZoneSource =
+  | { type: "item" } // static snapshot (default)
+  | { type: "verse" } // follow the on-air verse
+  | { type: "camera" } // follow the on-air camera
+  | { type: "timer" } // follow the live timer
+  | { type: "song" } // follow the on-air song
+  | { type: "media" } // follow the on-air media
+  | { type: "slide" }; // follow the on-air custom slide
+
+/**
  * A single composited "zone" inside a scene layout. Zones are positioned and
  * sized in normalized 0..1 coordinates over the reference output canvas
  * (1920×1080 by default) and stacked by `z`. Each zone renders one
@@ -9,8 +28,11 @@ import type { PresentationSettings, PropItem, LowerThirdData, LowerThirdTemplate
  */
 export interface SceneZone {
   id: string;
-  /** Content rendered inside this zone. */
+  /** Content rendered inside this zone. When `source` is pinned to a live
+   *  class, this item is the zone's *current* content (refreshed on take). */
   item: DisplayItem;
+  /** Optional live source the zone follows (default: static `item`). */
+  source?: SceneZoneSource;
   /** Normalized rect (0..1) on the reference canvas. */
   x: number;
   y: number;
