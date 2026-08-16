@@ -9,6 +9,8 @@ function inputs(overrides: Partial<CapabilityInputs> = {}): CapabilityInputs {
     webrtcAvailable: true,
     audioInputPresent: true,
     cameraPresent: true,
+    ndiSupported: true,
+    ndiReason: "NDI output is available.",
     monitors: 2,
     hardwareConcurrency: 8,
     deviceMemory: 16,
@@ -43,6 +45,17 @@ describe("computeCapabilities", () => {
     expect(
       computeCapabilities(inputs({ webrtcAvailable: false })).whipAvailable,
     ).toBe(false);
+  });
+
+  it("gates NDI on the backend SDK probe and passes its reason through", () => {
+    const enabled = computeCapabilities(inputs());
+    expect(enabled.ndiAvailable).toBe(true);
+    expect(enabled.ndiReason).toContain("available");
+    const gated = computeCapabilities(
+      inputs({ ndiSupported: false, ndiReason: "NDI output is not compiled into this build." }),
+    );
+    expect(gated.ndiAvailable).toBe(false);
+    expect(gated.ndiReason).toContain("not compiled");
   });
 
   it("gates shared audio and cameras on device presence", () => {

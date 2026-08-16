@@ -14,4 +14,5 @@ pub mod remote;
 pub mod outputs;
 pub mod recordings;
 pub mod rtmp;
+pub mod ndi;
 pub mod system;

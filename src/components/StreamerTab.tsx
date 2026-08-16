@@ -39,6 +39,7 @@ export function StreamerTab() {
   const { checks } = useSystemDiagnostics();
   const capabilities = checks?.capabilities;
   const rtmpBlockedReason = capabilities && !capabilities.rtmpAvailable ? capabilities.rtmpReason : null;
+  const ndiBlockedReason = capabilities && !capabilities.ndiAvailable ? capabilities.ndiReason : null;
   const audioUnavailableReason = capabilities && !capabilities.audioAvailable ? capabilities.audioReason : null;
 
   const [destinations, setDestinations] = useState<StreamDestination[]>([]);
@@ -210,7 +211,8 @@ export function StreamerTab() {
     await persistDestinations(destinations);
     const enabled = destinations.filter((d) => d.enabled);
     for (const d of enabled) {
-      if (rtmpBlockedReason && d.mode === "rtmp") continue;
+      if (d.mode === "rtmp" && rtmpBlockedReason) continue;
+      if (d.mode === "ndi" && ndiBlockedReason) continue;
       const handle = cardHandles.current.get(d.id);
       if (handle) void handle.start();
     }
@@ -227,7 +229,9 @@ export function StreamerTab() {
   const anyBusy = Object.values(statuses).some((s) => s.status === "live" || s.status === "connecting");
   const enabledCount = destinations.filter((d) => d.enabled).length;
   const enabledBlocked = destinations.some(
-    (d) => d.enabled && d.mode === "rtmp" && !!rtmpBlockedReason
+    (d) =>
+      (d.enabled && d.mode === "rtmp" && !!rtmpBlockedReason) ||
+      (d.enabled && d.mode === "ndi" && !!ndiBlockedReason)
   );
 
   return (
@@ -279,7 +283,7 @@ export function StreamerTab() {
                   enabledCount === 0
                     ? "Enable at least one destination"
                     : enabledBlocked
-                      ? rtmpBlockedReason ?? "A required service is unavailable"
+                      ? ndiBlockedReason ?? rtmpBlockedReason ?? "A required service is unavailable"
                       : !streamReady
                         ? "Program feed not ready"
                         : "Go live on every enabled destination"
@@ -296,6 +300,12 @@ export function StreamerTab() {
           {rtmpBlockedReason && (
             <p className="text-[10px] text-amber-400 bg-amber-900/20 border border-amber-800/60 rounded px-2 py-1.5">
               RTMP destinations are disabled: {rtmpBlockedReason}
+            </p>
+          )}
+
+          {ndiBlockedReason && (
+            <p className="text-[10px] text-amber-400 bg-amber-900/20 border border-amber-800/60 rounded px-2 py-1.5">
+              NDI destinations are disabled: {ndiBlockedReason}
             </p>
           )}
 
@@ -353,8 +363,8 @@ export function StreamerTab() {
 
           {destinations.length === 0 && (
             <p className="text-[11px] text-slate-600 p-3 rounded-lg border border-dashed border-slate-700">
-              No destinations yet. Add YouTube, Facebook Live, Twitch, or a custom RTMP / WHIP endpoint — the master
-              transport streams to every enabled destination at once.
+              No destinations yet. Add YouTube, Facebook Live, Twitch, NDI, or a custom RTMP / WHIP endpoint — the
+              master transport streams to every enabled destination at once.
             </p>
           )}
 
@@ -367,7 +377,9 @@ export function StreamerTab() {
               onRemove={() => removeDestination(d.id)}
               onStatus={handleStatus}
               onRegister={handleRegister}
-              blockedReason={d.mode === "rtmp" ? rtmpBlockedReason : null}
+              blockedReason={
+                d.mode === "rtmp" ? rtmpBlockedReason : d.mode === "ndi" ? ndiBlockedReason : null
+              }
             />
           ))}
 
@@ -388,8 +400,8 @@ export function StreamerTab() {
 
       <p className="text-[10px] text-slate-600">
         RTMP destinations encode the compositor once with WebCodecs (H.264, hardware-accelerated where available) and
-        pipe it to a backend ffmpeg mux (`-c copy`, no re-encode). WHIP uses WebRTC for sub-second latency. ffmpeg must
-        be on PATH for RTMP.
+        pipe it to a backend ffmpeg mux (`-c copy`, no re-encode). WHIP uses WebRTC for sub-second latency. NDI
+        destinations publish the same encode as an NDI|HX source on the LAN (needs the NDI SDK).
       </p>
     </div>
   );

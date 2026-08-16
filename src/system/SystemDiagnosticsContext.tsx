@@ -62,7 +62,7 @@ async function probeH264(): Promise<boolean> {
 }
 
 async function runChecks(): Promise<SystemChecks> {
-  const [backendInfo, monitorInfo, h264Supported, devices] = await Promise.all([
+  const [backendInfo, monitorInfo, h264Supported, devices, ndiStatus] = await Promise.all([
     isTauri()
       ? invoke<{ cpu_model: string; physical_cores: number | null; total_ram_mb: number; total_disk_mb: number; ffmpeg_available: boolean }>("system_info").catch(() => null)
       : Promise.resolve(null),
@@ -71,6 +71,9 @@ async function runChecks(): Promise<SystemChecks> {
       : Promise.resolve([] as MonitorInfo[]),
     probeH264(),
     navigator.mediaDevices?.enumerateDevices?.().catch(() => []) ?? Promise.resolve([] as MediaDeviceInfo[]),
+    isTauri()
+      ? invoke<{ supported: boolean; reason: string }>("ndi_status").catch(() => ({ supported: false, reason: "Could not query the backend for NDI support." }))
+      : Promise.resolve({ supported: false, reason: "NDI output requires the desktop app." }),
   ]);
 
   const webrtcAvailable = typeof RTCPeerConnection !== "undefined";
@@ -85,6 +88,8 @@ async function runChecks(): Promise<SystemChecks> {
     webrtcAvailable,
     audioInputPresent,
     cameraPresent,
+    ndiSupported: ndiStatus.supported,
+    ndiReason: ndiStatus.reason,
     monitors: monitorInfo.length,
     hardwareConcurrency,
     deviceMemory,

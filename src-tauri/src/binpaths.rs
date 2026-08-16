@@ -74,8 +74,8 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn scratch_dir() -> PathBuf {
-        let base = std::env::temp_dir().join("wordlyte_binpaths_test");
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!("wordlyte_binpaths_test_{tag}"));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).unwrap();
         base
@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn bundled_dir_wins_when_binary_present() {
-        let dir = scratch_dir();
+        let dir = scratch_dir("bundled");
         let file = dir.join("ffmpeg.exe");
         fs::write(&file, b"fake").unwrap();
         assert_eq!(resolve_in_dir(Some(&dir), "ffmpeg.exe"), file);
@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn missing_binary_falls_back_to_path() {
-        let dir = scratch_dir();
+        let dir = scratch_dir("missing");
         let resolved = resolve_in_dir(Some(&dir), "ffprobe.exe");
         assert_eq!(resolved, PathBuf::from("ffprobe.exe"));
         let _ = fs::remove_dir_all(&dir);

@@ -20,6 +20,8 @@ export function computeCapabilities(inputs: CapabilityInputs): SystemCapabilitie
     webrtcAvailable,
     audioInputPresent,
     cameraPresent,
+    ndiSupported,
+    ndiReason,
     monitors,
     hardwareConcurrency,
     deviceMemory,
@@ -29,6 +31,7 @@ export function computeCapabilities(inputs: CapabilityInputs): SystemCapabilitie
   const whipAvailable = webrtcAvailable;
   const audioAvailable = audioInputPresent;
   const cameraAvailable = cameraPresent;
+  const ndiAvailable = ndiSupported;
   const monitorsAvailable = monitors >= 1;
   const hwAccelLikely = h264Supported && hardwareConcurrency >= 4;
 
@@ -60,6 +63,7 @@ export function computeCapabilities(inputs: CapabilityInputs): SystemCapabilitie
     whipAvailable,
     audioAvailable,
     cameraAvailable,
+    ndiAvailable,
     monitorsAvailable,
     hwAccelLikely,
     recommendedMaxStreams,
@@ -67,5 +71,6 @@ export function computeCapabilities(inputs: CapabilityInputs): SystemCapabilitie
     rtmpReason,
     audioReason,
     cameraReason,
+    ndiReason,
   };
 }

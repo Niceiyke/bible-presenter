@@ -9,7 +9,7 @@ import type { StreamDestination, StreamPlatform } from "../../types";
 export interface PlatformPreset {
   platform: StreamPlatform;
   label: string;
-  mode: "whip" | "rtmp";
+  mode: "whip" | "rtmp" | "ndi";
   /** Ingest server URL (no stream key). */
   url: string;
   /** Where the operator finds their key. */
@@ -51,6 +51,13 @@ export const PLATFORM_PRESETS: PlatformPreset[] = [
     mode: "whip",
     url: "",
     hint: "Any WHIP endpoint — Cloudflare Stream, SRS, MediaMTX, Eyevinn.",
+  },
+  {
+    platform: "ndi",
+    label: "NDI",
+    mode: "ndi",
+    url: "",
+    hint: "Publishes this machine's program as an NDI source on the LAN (NDI|HX) — consumable by OBS (obs-ndi), vMix, ProPresenter, and NDI-enabled gear. Requires the NDI SDK.",
   },
 ];
 

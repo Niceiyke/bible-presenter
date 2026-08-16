@@ -53,7 +53,13 @@ export interface OutputStreaming {
 }
 
 /** Platform presets the Streaming hub offers (Custom covers everything else). */
-export type StreamPlatform = "youtube" | "facebook" | "twitch" | "custom-rtmp" | "custom-whip";
+export type StreamPlatform =
+  | "youtube"
+  | "facebook"
+  | "twitch"
+  | "custom-rtmp"
+  | "custom-whip"
+  | "ndi";
 
 /**
  * One streaming destination in the multi-platform hub. A preset + resolved
@@ -64,7 +70,7 @@ export interface StreamDestination {
   id: string;
   label: string;
   platform: StreamPlatform;
-  mode: "whip" | "rtmp";
+  mode: "whip" | "rtmp" | "ndi";
   url: string;
   stream_key?: string;
   enabled: boolean;

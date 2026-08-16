@@ -27,6 +27,10 @@ export interface CapabilityInputs {
   webrtcAvailable: boolean;
   audioInputPresent: boolean;
   cameraPresent: boolean;
+  /** Whether the backend can publish NDI sources (`ndi_status().supported`). */
+  ndiSupported: boolean;
+  /** Backend-provided human-readable reason when NDI is unavailable. */
+  ndiReason: string;
   monitors: number;
   hardwareConcurrency: number;
   deviceMemory: number;
@@ -38,6 +42,7 @@ export interface SystemCapabilities {
   whipAvailable: boolean;
   audioAvailable: boolean;
   cameraAvailable: boolean;
+  ndiAvailable: boolean;
   monitorsAvailable: boolean;
   hwAccelLikely: boolean;
   /** Estimated simultaneous RTMP streams this machine can sustain. */
@@ -46,6 +51,7 @@ export interface SystemCapabilities {
   rtmpReason: string;
   audioReason: string;
   cameraReason: string;
+  ndiReason: string;
 }
 
 /** The full diagnostics snapshot produced by the provider. */

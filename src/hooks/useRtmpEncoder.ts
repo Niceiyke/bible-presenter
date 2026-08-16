@@ -70,7 +70,7 @@ export interface UseRtmpEncoderResult {
   stop: () => Promise<void>;
 }
 
-interface EncoderFactory {
+export interface EncoderFactory {
   isConfigSupported: (config: VideoEncoderConfig) => Promise<VideoEncoderSupport>;
 }
 
@@ -109,7 +109,7 @@ export function wrapAdts(payload: Uint8Array, sampleRate: number, channels: numb
   return out;
 }
 
-function waitForEncoderConfig(encoder: VideoEncoder, config: VideoEncoderConfig): Promise<void> {
+export function waitForEncoderConfig(encoder: VideoEncoder, config: VideoEncoderConfig): Promise<void> {
   return new Promise((resolve, reject) => {
     encoder.configure(config);
     // Chrome resolves the config synchronously; treat `configure` as applied
@@ -118,7 +118,7 @@ function waitForEncoderConfig(encoder: VideoEncoder, config: VideoEncoderConfig)
   });
 }
 
-async function supportsH264(
+export async function supportsH264(
   Factory: EncoderFactory,
   width: number,
   height: number,
@@ -506,7 +506,7 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
 }
 
 /** Base64-encode bytes without a Blob/FileReader hop. */
-function bytesToBase64(bytes: Uint8Array): string {
+export function bytesToBase64(bytes: Uint8Array): string {
   let bin = "";
   for (let i = 0; i < bytes.length; i++) {
     bin += String.fromCharCode(bytes[i]);

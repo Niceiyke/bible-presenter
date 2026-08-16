@@ -10,6 +10,17 @@ describe("streaming presets", () => {
     expect(byPlatform.twitch).toMatchObject({ mode: "rtmp", url: "rtmp://live.twitch.tv/app" });
     expect(byPlatform["custom-rtmp"]).toMatchObject({ mode: "rtmp", url: "" });
     expect(byPlatform["custom-whip"]).toMatchObject({ mode: "whip", url: "" });
+    // NDI is a LAN source — no ingest URL; the label becomes the source name.
+    expect(byPlatform.ndi).toMatchObject({ mode: "ndi", url: "" });
+  });
+
+  it("makeDestination builds an NDI destination without an ingest URL", () => {
+    const d = makeDestination("ndi");
+    expect(d.platform).toBe("ndi");
+    expect(d.mode).toBe("ndi");
+    expect(d.url).toBe("");
+    expect(d.label).toBe("NDI");
+    expect(d.enabled).toBe(true);
   });
 
   it("makeDestination creates an enabled audio-carrying destination", () => {

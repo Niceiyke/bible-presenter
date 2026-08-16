@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef } from "react";
-import { Play, Square, Mic, Trash2, Globe, KeyRound, Radio } from "lucide-react";
+import { Play, Square, Mic, Trash2, Globe, KeyRound, Radio, MonitorPlay } from "lucide-react";
 import { useStreamer } from "../../hooks/useStreamer";
 import { useRtmpEncoder } from "../../hooks/useRtmpEncoder";
+import { useNdiSender } from "../../hooks/useNdiSender";
 import { PLATFORM_PRESETS, presetFor, applyPreset } from "./presets";
 import type { StreamDestination, StreamPlatform } from "../../types";
 
@@ -43,9 +44,10 @@ export function DestinationCard({
 }: DestinationCardProps) {
   const rtmp = useRtmpEncoder({ sessionId: dest.id });
   const streamer = useStreamer();
+  const ndi = useNdiSender({ sessionId: dest.id });
   const streamRef = useRef<MediaStream | null>(null);
 
-  const live = dest.mode === "rtmp" ? rtmp : streamer;
+  const live = dest.mode === "rtmp" ? rtmp : dest.mode === "ndi" ? ndi : streamer;
   const active = live.status === "live" || live.status === "connecting";
 
   const start = useCallback(async (): Promise<boolean> => {
@@ -61,12 +63,17 @@ export function DestinationCard({
     if (dest.mode === "rtmp") {
       return rtmp.start(stream, dest.url, dest.stream_key || undefined, a);
     }
+    if (dest.mode === "ndi") {
+      return ndi.start(stream, dest.label);
+    }
     return streamer.start(stream, { url: dest.url, token: dest.stream_key });
-  }, [active, dest, getSourceTracks, rtmp, streamer]);
+  }, [active, dest, getSourceTracks, rtmp, ndi, streamer]);
 
   const stop = useCallback(async () => {
     if (dest.mode === "rtmp") {
       await rtmp.stop();
+    } else if (dest.mode === "ndi") {
+      await ndi.stop();
     } else {
       await streamer.stop();
     }
@@ -75,7 +82,7 @@ export function DestinationCard({
       s.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
-  }, [dest.mode, rtmp, streamer]);
+  }, [dest.mode, rtmp, ndi, streamer]);
 
   useEffect(() => {
     onRegister(dest.id, { start, stop });
@@ -138,17 +145,26 @@ export function DestinationCard({
       </div>
 
       <div className="flex flex-col gap-2">
-        <div className="flex items-center gap-2">
-          <Globe size={11} className="text-slate-500 shrink-0" />
-          <input
-            value={dest.url}
-            onChange={(e) => onChange({ ...dest, url: e.target.value })}
-            placeholder={preset.mode === "rtmp" ? "rtmp://ingest.server/live" : "https://example.com/whip/stream"}
-            spellCheck={false}
-            disabled={active}
-            className="flex-1 px-2 py-1.5 bg-slate-950 border border-slate-700 rounded text-slate-200 text-xs font-mono focus:outline-none focus:border-slate-500"
-          />
-        </div>
+        {dest.mode === "ndi" ? (
+          <div className="flex items-center gap-2 text-[10px] text-slate-500">
+            <MonitorPlay size={11} className="text-slate-500 shrink-0" />
+            <span>
+              Publishes as <span className="font-mono text-slate-300">Wordlyte – {dest.label || "…"}</span> on the LAN.
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Globe size={11} className="text-slate-500 shrink-0" />
+            <input
+              value={dest.url}
+              onChange={(e) => onChange({ ...dest, url: e.target.value })}
+              placeholder={preset.mode === "rtmp" ? "rtmp://ingest.server/live" : "https://example.com/whip/stream"}
+              spellCheck={false}
+              disabled={active}
+              className="flex-1 px-2 py-1.5 bg-slate-950 border border-slate-700 rounded text-slate-200 text-xs font-mono focus:outline-none focus:border-slate-500"
+            />
+          </div>
+        )}
         {dest.mode === "rtmp" && (
           <div className="flex items-center gap-2">
             <KeyRound size={11} className="text-slate-500 shrink-0" />
@@ -181,7 +197,8 @@ export function DestinationCard({
             type="checkbox"
             checked={dest.audio}
             onChange={(e) => onChange({ ...dest, audio: e.target.checked })}
-            disabled={active}
+            disabled={active || dest.mode === "ndi"}
+            title={dest.mode === "ndi" ? "NDI audio (AAC in the NDI|HX payload) lands with the SDK phase." : undefined}
             className="accent-cyan-500"
           />
           <Mic size={10} /> Audio
@@ -197,13 +214,13 @@ export function DestinationCard({
           ) : (
             <button
               onClick={() => start()}
-              disabled={!dest.url.trim() || !!blockedReason}
+              disabled={(dest.mode !== "ndi" && !dest.url.trim()) || !!blockedReason}
               title={
                 blockedReason
                   ? blockedReason
-                  : dest.url.trim()
-                    ? "Start this destination"
-                    : "Enter an ingest URL first"
+                  : dest.mode !== "ndi" && !dest.url.trim()
+                    ? "Enter an ingest URL first"
+                    : "Start this destination"
               }
               className="px-3 py-1 rounded bg-red-700 hover:bg-red-600 disabled:bg-slate-800 disabled:text-slate-500 text-white text-[10px] font-bold uppercase tracking-wider transition-all flex items-center gap-1.5"
             >

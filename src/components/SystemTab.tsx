@@ -166,6 +166,7 @@ function CapabilityReport({ checks }: { checks: SystemChecks }) {
   const services: { name: string; available: boolean; reason: string }[] = [
     { name: "RTMP streaming", available: c.rtmpAvailable, reason: c.rtmpReason },
     { name: "WHIP streaming", available: c.whipAvailable, reason: c.whipAvailable ? "WebRTC available — sub-second latency." : "WebRTC unavailable in this build." },
+    { name: "NDI output", available: c.ndiAvailable, reason: c.ndiReason },
     { name: "Shared audio input", available: c.audioAvailable, reason: c.audioReason },
     { name: "Camera sources", available: c.cameraAvailable, reason: c.cameraReason },
     { name: "Output / stage windows", available: c.monitorsAvailable, reason: c.monitorsAvailable ? "At least one display is available." : "No display detected for output/stage windows." },
