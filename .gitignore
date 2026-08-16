@@ -12,6 +12,9 @@ src-tauri/models/*.onnx
 src-tauri/bible_data/*.db
 src-tauri/bible_data/*.npy
 
+# Bundled media binaries — fetched via scripts/fetch-ffmpeg.ps1 (not committed)
+src-tauri/binaries/*.exe
+
 # tokenizer.json is small (~2MB) and is committed
 !src-tauri/models/tokenizer.json
 

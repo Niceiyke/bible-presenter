@@ -1234,15 +1234,16 @@ impl MediaScheduleStore {
 
     /// Best-effort video metadata + thumbnail extraction via ffmpeg. Returns
     /// (thumbnail_path, duration_secs, width, height) where None values mean
-    /// "could not determine". ffmpeg is not bundled; if it isn't on PATH the
-    /// whole probe degrades to (None, None, None, None) instead of erroring.
+    /// "could not determine". ffmpeg is resolved bundled-first (with a PATH
+    /// fallback); if it isn't available the whole probe degrades to
+    /// (None, None, None, None) instead of erroring.
     fn probe_video(thumb_dir: &Path, media_path: &str, id: &str) -> (Option<String>, Option<f64>, Option<i64>, Option<i64>) {
         use std::process::Command;
         let thumb_path = thumb_dir.join(format!("{}.jpg", id));
 
         // 1) Frame extraction (thumbnail). -y overwrite, scale to 320w.
         if !thumb_path.exists() {
-            let ok = Command::new("ffmpeg")
+            let ok = Command::new(crate::binpaths::ffmpeg_path())
                 .args(["-y", "-ss", "1", "-i", media_path, "-frames:v", "1", "-vf", "scale=320:-1", "-q:v", "4"])
                 .arg(&thumb_path)
                 .stdout(std::process::Stdio::null())
@@ -1260,7 +1261,7 @@ impl MediaScheduleStore {
         let mut duration: Option<f64> = None;
         let mut width: Option<i64> = None;
         let mut height: Option<i64> = None;
-        if let Ok(out) = Command::new("ffprobe")
+        if let Ok(out) = Command::new(crate::binpaths::ffprobe_path())
             .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "format=duration:stream=width,height", "-of", "json"])
             .arg(media_path)
             .output()
@@ -1280,7 +1281,7 @@ impl MediaScheduleStore {
     /// Best-effort audio duration via ffprobe (None if ffmpeg is unavailable).
     fn probe_audio_duration(media_path: &str) -> Option<f64> {
         use std::process::Command;
-        if let Ok(out) = Command::new("ffprobe")
+        if let Ok(out) = Command::new(crate::binpaths::ffprobe_path())
             .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1"])
             .arg(media_path)
             .output()

@@ -164,13 +164,7 @@ fn spawn_audio_writer(listener: TcpListener) -> mpsc::Sender<Vec<u8>> {
 }
 
 pub fn ffmpeg_available() -> bool {
-    Command::new("ffmpeg")
-        .arg("-version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    crate::binpaths::ffmpeg_available()
 }
 
 /// Start an RTMP ingest for one destination: spawn ffmpeg (mux-only H.264 ->
@@ -210,7 +204,7 @@ pub fn rtmp_start(
         .map(|l| l.local_addr().map_err(|e| e.to_string()).map(|a| a.port()))
         .transpose()?;
 
-    let mut child = Command::new("ffmpeg")
+    let mut child = Command::new(crate::binpaths::ffmpeg_path())
         .args(ffmpeg_args(&url, audio_port))
         .stdin(Stdio::piped())
         .stderr(Stdio::null())

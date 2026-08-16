@@ -313,8 +313,8 @@ Seed defaults, identical to today's behavior:
    `AppState.rtmp` (`Arc<Mutex<Option<RtmpSession>>>`). The `stream-main` output's
    `streaming` field persists `mode: "rtmp"` + `url` + `stream_key` through the
    existing `outputs_update` flow; `StreamerTab` toggles WHIP/RTMP. ffmpeg is
-   resolved from PATH (same policy as thumbnail extraction) and errors cleanly
-   when missing. Unit-tested in `commands/rtmp.rs` (URL joining, mux-only args)
+   resolved bundled-first (see the note below) and errors cleanly when missing.
+   Unit-tested in `commands/rtmp.rs` (URL joining, mux-only args)
    and `src/hooks/__tests__/useRtmpEncoder.test.ts` (WebCodecs stubs, feed,
    teardown).
 6. **Phase 6.1 — RTMP audio** ✅ (implemented on `feat/output-manager`): the
@@ -356,8 +356,8 @@ Seed defaults, identical to today's behavior:
    monitor, so the operator knows what the machine can do and how hard it is
    working mid-show. Backend (`src-tauri/src/commands/system.rs`, new `sysinfo`
    dependency): `system_info` returns a one-shot hardware snapshot (CPU model,
-   physical cores, RAM, disk, ffmpeg-on-PATH) and `system_metrics` a cheap polled
-   metric (CPU %, RAM %, disk %, active RTMP session count). Frontend:
+   physical cores, RAM, disk, ffmpeg availability) and `system_metrics` a cheap
+   polled metric (CPU %, RAM %, disk %, active RTMP session count). Frontend:
    `SystemDiagnosticsProvider` (mounted in `App.tsx`) runs the battery once —
    backend info, `get_available_monitors` for display count, a WebCodecs H.264
    `isConfigSupported` probe, WebRTC availability, `enumerateDevices` for audio/
@@ -375,6 +375,20 @@ Seed defaults, identical to today's behavior:
    capture FPS is a rolling frame counter in `src/system/captureMetrics.ts`
    ticked by `useCanvasCapture`. Unit-tested: `src/system/__tests__/
    capabilities.test.ts` (gating matrix + capacity tiers).
+
+## 8. Bundled media binaries
+
+ffmpeg/ffprobe are resolved **bundled-first** via `src-tauri/src/binpaths.rs`:
+`{resource_dir}/bin/ffmpeg.exe` (shipped through `bundle.resources`, see
+`tauri.conf.json`) is used when present, with a PATH fallback so dev and
+machines without the bundle still work. The binaries are **not committed** to
+git — `scripts/fetch-ffmpeg.ps1` downloads the BtbN **LGPL** Windows build
+(no x264/x265 → no GPL obligations for the mux-only RTMP path) into
+`src-tauri/binaries/`, and must be run before `npm run tauri build` (tauri-build
+validates resource existence, so `cargo check`/`cargo test` need it too).
+`binpaths::init` is called in `main.rs` setup with the resolved resource dir.
+Removes the "install ffmpeg" hard gate for RTMP streaming and keeps media
+probing working offline.
 
 Phase 1 is strictly additive and safe to land independently; everything after it
 consumes the same model.

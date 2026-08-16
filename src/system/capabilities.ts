@@ -42,7 +42,7 @@ export function computeCapabilities(inputs: CapabilityInputs): SystemCapabilitie
   const rtmpReason = !h264Supported
     ? "WebCodecs H.264 encoding is unavailable in this WebView2 build; RTMP destinations are disabled."
     : !ffmpegAvailable
-      ? "ffmpeg was not found on PATH; RTMP destinations are disabled (add ffmpeg to PATH and restart)."
+      ? "ffmpeg was not found (bundled or on PATH); RTMP destinations are disabled. Reinstall or restore the bundled binaries."
       : hardwareConcurrency < 4
         ? "H.264 encoding is supported but CPU is limited — keep simultaneous RTMP streams low."
         : "RTMP destinations are available.";

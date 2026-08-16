@@ -86,7 +86,9 @@
     ],
     "resources": {
       "bible_data/hymns.json": "bible_data/hymns.json",
-      "../dist": "dist"
+      "../dist": "dist",
+      "binaries/ffmpeg.exe": "bin/ffmpeg.exe",
+      "binaries/ffprobe.exe": "bin/ffprobe.exe"
     },
     "windows": {
       "nsis": {

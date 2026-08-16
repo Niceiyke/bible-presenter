@@ -67,6 +67,10 @@ fn main() {
                 }
             };
 
+            // Media binaries (ffmpeg/ffprobe) resolve bundled-first from
+            // `{resource_dir}/bin`, falling back to PATH when absent.
+            wordlyte_lib::binpaths::init(&resource_path);
+
             let app_data_dir = app.path()
                 .app_local_data_dir()
                 .or_else(|_| app.path().app_data_dir())
