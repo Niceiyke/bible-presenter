@@ -434,6 +434,15 @@ export function useItemActions() {
       setPropItems(payload.props ?? []);
       if (payload.camera) {
         setLiveItem(payload.camera);
+      } else if (payload.layout) {
+        setLiveItem({
+          type: "SceneComposition",
+          data: {
+            scene_id: payload.id,
+            name: payload.name,
+            zones: payload.layout.zones,
+          },
+        });
       }
       if (payload.lower_third_data) {
         setLtVisible(true);

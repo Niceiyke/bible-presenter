@@ -1,9 +1,10 @@
 import React, { useState } from "react";
-import { Camera, Check, Trash2, Zap, AlertTriangle } from "lucide-react";
+import { Camera, Check, Trash2, Zap, AlertTriangle, LayoutGrid } from "lucide-react";
 import { useAppStore } from "../store";
 import { useT } from "../i18n";
 import { ConfirmModal } from "./ui";
-import { displayItemLabel } from "../utils";
+import { displayItemLabel, stableId } from "../utils";
+import { SceneBuilder } from "./SceneBuilder";
 import type { Scene } from "../types";
 
 interface ScenesTabProps {
@@ -45,6 +46,7 @@ export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: 
   const t = useT();
   const [newName, setNewName] = useState("");
   const [pendingApply, setPendingApply] = useState<Scene | null>(null);
+  const [builderScene, setBuilderScene] = useState<Scene | null>(null);
 
   const handleCapture = async () => {
     const name = newName.trim() || `Scene ${scenes.length + 1}`;
@@ -66,7 +68,38 @@ export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: 
     }
   };
 
+  const openNewBuilder = () => {
+    setBuilderScene({
+      id: stableId(),
+      name: "",
+      settings: { ...settings },
+      props: [],
+      layout: { zones: [] },
+      created_at: Date.now(),
+    });
+  };
+
   const liveItem = useAppStore.getState().liveItem;
+
+  if (builderScene) {
+    return (
+      <SceneBuilder
+        scene={builderScene}
+        onSceneChange={(scene) => setBuilderScene(scene)}
+        onSave={async (scene) => {
+          await saveScene(scene);
+          setBuilderScene(null);
+        }}
+        onApply={async (id) => {
+          if (!useAppStore.getState().scenes.some((s) => s.id === id)) {
+            await saveScene(builderScene);
+          }
+          await applyScene(id);
+        }}
+        onClose={() => setBuilderScene(null)}
+      />
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl">
@@ -90,6 +123,12 @@ export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: 
             className="px-3 py-2 rounded-md bg-amber-500 hover:bg-amber-400 text-black text-xs font-black uppercase flex items-center gap-1.5 transition-all"
           >
             <Camera size={13} /> {t("scenes.captureCurrent")}
+          </button>
+          <button
+            onClick={openNewBuilder}
+            className="px-3 py-2 rounded-md bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-black uppercase flex items-center gap-1.5 transition-all"
+          >
+            <LayoutGrid size={13} /> Scene Builder
           </button>
         </div>
 
@@ -133,6 +172,11 @@ export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: 
                           Camera
                         </span>
                       )}
+                      {s.layout?.zones.length ? (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-purple-400 border border-slate-700">
+                          Split {s.layout.zones.length}
+                        </span>
+                      ) : null}
                       {changes.settings.map((d) => (
                         <span key={d} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-amber-400 border border-slate-700">
                           {d}
@@ -146,6 +190,13 @@ export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: 
                     </div>
                   </div>
                   <div className="flex gap-1 shrink-0">
+                    <button
+                      onClick={() => setBuilderScene(s)}
+                      className="p-1.5 rounded-md bg-slate-800 hover:bg-cyan-900/40 text-slate-500 hover:text-cyan-300 transition-all"
+                      title="Edit scene"
+                    >
+                      <LayoutGrid size={13} />
+                    </button>
                     <button
                       onClick={() => handleApply(s)}
                       className="px-2.5 py-1.5 rounded-md bg-amber-500 hover:bg-amber-400 text-black text-[10px] font-black uppercase flex items-center gap-1 transition-all"

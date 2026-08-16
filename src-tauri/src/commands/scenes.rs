@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use crate::store::{DisplayItem, Scene};
+use crate::store::{DisplayItem, Scene, SceneCompositionData, SceneLayout};
 use crate::events::{emit_checked, ScenePayload};
 use crate::remote::commands::op_go_live_item;
 use tauri::{AppHandle, State};
@@ -19,10 +19,12 @@ pub async fn delete_scene(state: State<'_, AppState>, id: String) -> Result<(), 
     state.media_schedule.delete_scene(&id).map_err(|e| e.to_string())
 }
 
-/// Recall a scene: apply its settings, props, and (optional) lower-third to
-/// the live presentation state and broadcast everything in one shot. The
-/// caller receives the applied payload so the frontend can mirror it
-/// immediately without waiting for events to round-trip.
+/// Recall a scene: apply its settings, props, (optional) lower-third, and
+/// composition to the live presentation state and broadcast everything in one
+/// shot. When the scene carries a `layout`, a `SceneComposition` display item
+/// is staged/committed so the output window composites its zones. The caller
+/// receives the applied payload so the frontend can mirror it immediately
+/// without waiting for events to round-trip.
 #[tauri::command]
 pub async fn apply_scene(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<ScenePayload, String> {
     let scene = state.media_schedule.list_scenes().map_err(|e| e.to_string())?
@@ -50,8 +52,17 @@ pub async fn apply_scene(app: AppHandle, state: State<'_, AppState>, id: String)
         emit_checked(&app, "lower-third-update", &Option::<serde_json::Value>::None);
     }
 
-    // Camera feed that was live at capture time
-    if let Some(cam) = &scene.camera {
+    // Composition: stage + commit the multi-zone layout as a display item.
+    if let Some(layout) = &scene.layout {
+        let item = DisplayItem::SceneComposition(SceneCompositionData {
+            scene_id: scene.id.clone(),
+            name: scene.name.clone(),
+            zones: layout.zones.clone(),
+        });
+        let _ = crate::remote::commands::op_send_live(&app, &state, item, None);
+    } else if let Some(cam) = &scene.camera {
+        // Legacy single-camera scene: restore the camera feed that was live
+        // at capture time.
         op_go_live_item(&app, &state, cam.clone(), None);
     }
 
@@ -63,12 +74,15 @@ pub async fn apply_scene(app: AppHandle, state: State<'_, AppState>, id: String)
         lower_third_data: scene.lower_third_data,
         lower_third_template: scene.lower_third_template,
         camera: scene.camera,
+        layout: scene.layout,
     })
 }
 
 /// Capture the current live state as a new scene. Convenience for the
 /// "Save current state as scene" button. `camera` is the live camera feed
-/// (if any) that should be restored when the scene is applied.
+/// (if any) that should be restored when the scene is applied. When the live
+/// item is itself a `SceneComposition`, its zones are captured as the scene's
+/// layout so re-applying reproduces the exact split-screen composition.
 #[tauri::command]
 pub async fn capture_scene(state: State<'_, AppState>, name: String, camera: Option<DisplayItem>) -> Result<Scene, String> {
     let settings = state.presentation.settings.lock().clone();
@@ -83,6 +97,12 @@ pub async fn capture_scene(state: State<'_, AppState>, name: String, camera: Opt
         (None, None)
     };
 
+    // If the live item is a composition, capture its zones as the layout.
+    let mut layout = None;
+    if let Some(DisplayItem::SceneComposition(comp)) = state.presentation.live_item.lock().clone() {
+        layout = Some(SceneLayout { zones: comp.zones });
+    }
+
     let scene = Scene {
         id: String::new(),
         name,
@@ -91,6 +111,7 @@ pub async fn capture_scene(state: State<'_, AppState>, name: String, camera: Opt
         lower_third_data,
         lower_third_template,
         camera,
+        layout,
         created_at: 0,
     };
     state.media_schedule.save_scene(scene).map_err(|e| e.to_string())

@@ -4,6 +4,7 @@ import type { CustomSlideDisplayData } from "./slides";
 import type { TimerData } from "./timer";
 import type { SongSlideData } from "./song";
 import type { CameraBackground } from "./settings";
+import type { SceneCompositionData } from "./scene";
 
 export type DisplayItem =
   | { type: "Verse"; data: Verse }
@@ -11,7 +12,8 @@ export type DisplayItem =
   | { type: "Camera"; data: CameraBackground }
   | { type: "CustomSlide"; data: CustomSlideDisplayData }
   | { type: "Timer"; data: TimerData }
-  | { type: "Song"; data: SongSlideData };
+  | { type: "Song"; data: SongSlideData }
+  | { type: "SceneComposition"; data: SceneCompositionData };
 
 export interface ScheduleEntry {
   id: string;

@@ -20,6 +20,7 @@ import {
   LowerThirdOverlay,
   PropsRenderer,
 } from "../components/shared/Renderers";
+import { CompositionRenderer } from "../components/shared/CompositionRenderer";
 import { AnimatePresence, motion } from "framer-motion";
 import { Music } from "lucide-react";
 import { ErrorBoundary } from "../components/ErrorBoundary";
@@ -882,6 +883,14 @@ export function OutputWindow() {
                   showSectionLabel={!!settings.show_song_section_labels}
                 />
               ) : null
+            ) : liveItem.type === "SceneComposition" ? (
+              <CompositionRenderer
+                data={liveItem.data}
+                settings={settings}
+                appDataDir={appDataDir}
+                windowScale={windowScale}
+                phoneStreams={phoneStreams}
+              />
             ) : null}
             </ErrorBoundary>
           </motion.div>

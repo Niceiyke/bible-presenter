@@ -296,6 +296,7 @@ pub enum DisplayItem {
     CustomSlide(CustomSlideData),
     Timer(TimerData),
     Song(SongSlideData),
+    SceneComposition(SceneCompositionData),
 }
 
 impl DisplayItem {
@@ -307,6 +308,7 @@ impl DisplayItem {
             DisplayItem::CustomSlide(c) => format!("{} – slide {}", c.presentation_name, c.slide_index + 1),
             DisplayItem::Timer(t) => t.label.as_ref().filter(|l| !l.is_empty()).cloned().unwrap_or_else(|| format!("Timer: {}", t.timer_type)),
             DisplayItem::Song(s) => format!("{} ({})", s.title, s.section_label),
+            DisplayItem::SceneComposition(c) => format!("Scene: {} ({} zones)", c.name, c.zones.len()),
         }
     }
 }
@@ -763,6 +765,55 @@ pub struct LtPreset {
 // Scenes (recallable bundles of settings + props + lower-third)
 // ---------------------------------------------------------------------------
 
+/// A single composited zone inside a scene layout. Position/size are
+/// normalized 0..1 over the reference output canvas; zones are stacked by
+/// `z` and each renders its `item` (camera, media, verse, slide, song, timer)
+/// with the given object-fit.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneZone {
+    pub id: String,
+    pub item: DisplayItem,
+    #[serde(default)]
+    pub x: f64,
+    #[serde(default)]
+    pub y: f64,
+    #[serde(default)]
+    pub w: f64,
+    #[serde(default)]
+    pub h: f64,
+    #[serde(default = "zone_fit_default")]
+    pub fit: String,
+    #[serde(default = "zone_opacity_default")]
+    pub opacity: f32,
+    #[serde(default)]
+    pub z: i32,
+    #[serde(default)]
+    pub muted: Option<bool>,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+fn zone_fit_default() -> String { "cover".to_string() }
+fn zone_opacity_default() -> f32 { 1.0 }
+
+/// A scene's multi-zone split-screen composition.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SceneLayout {
+    pub zones: Vec<SceneZone>,
+}
+
+/// On-wire payload for a live `SceneComposition` display item. `scene_id`
+/// lets the output/stage windows keep a stable identity across edits of the
+/// same underlying scene.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneCompositionData {
+    pub scene_id: String,
+    pub name: String,
+    pub zones: Vec<SceneZone>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Scene {
     pub id: String,
@@ -779,6 +830,11 @@ pub struct Scene {
     /// existed.
     #[serde(default)]
     pub camera: Option<DisplayItem>,
+    /// Optional multi-zone split-screen composition. When present, applying
+    /// the scene stages a `SceneComposition` display item in addition to the
+    /// settings/props/lower-third layers.
+    #[serde(default)]
+    pub layout: Option<SceneLayout>,
     pub created_at: u64,
 }
 

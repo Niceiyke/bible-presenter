@@ -12,6 +12,6 @@ export type {
   PresentationSettings, MonitorInfo
 } from "./settings";
 export type { StartupStatus } from "./status";
-export type { Scene } from "./scene";
+export type { Scene, SceneZone, SceneLayout, SceneCompositionData } from "./scene";
 export { FONTS, DEFAULT_SETTINGS, THEMES } from "./settings";
 export { DEFAULT_LT_TEMPLATE } from "./lowerThird";

@@ -71,6 +71,9 @@ export function getItemUid(item: DisplayItem | null): string {
   if (item.type === "Camera") {
     return `camera-${item.data.deviceId}`;
   }
+  if (item.type === "SceneComposition") {
+    return `scene-${item.data.scene_id}-${item.data.zones.map((z) => z.id).join(",")}`;
+  }
   return "unknown";
 }
 
@@ -90,6 +93,9 @@ export function displayItemLabel(item: DisplayItem): string {
   if (item.type === "Song") {
     return `Song: ${item.data.title} (${item.data.section_label})`;
   }
+  if (item.type === "SceneComposition") {
+    return `Scene: ${item.data.name}`;
+  }
   return (item as any).data?.name || "Item";
 }
 
@@ -100,6 +106,7 @@ export function describeDisplayItem(item: DisplayItem): string {
   if (item.type === "CustomSlide") return `${item.data.presentation_name} (S${item.data.slide_index + 1})`;
   if (item.type === "Timer") return `Timer: ${item.data.timer_type}`;
   if (item.type === "Song") return `${item.data.title} (${item.data.section_label})`;
+  if (item.type === "SceneComposition") return `Scene "${item.data.name}" (${item.data.zones.length} zones)`;
   return "Unknown";
 }
 

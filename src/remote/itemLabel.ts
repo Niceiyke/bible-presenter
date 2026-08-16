@@ -15,6 +15,8 @@ export function itemTitle(item: DisplayItem | null): string {
       return item.data.presentation_name ?? "Custom slide";
     case "Timer":
       return item.data.label ?? "Timer";
+    case "SceneComposition":
+      return item.data.name;
     default:
       return "Item";
   }

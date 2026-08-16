@@ -262,15 +262,37 @@ const timerKind: ItemKind<Extract<DisplayItem, { type: "Timer" }>> = {
   ),
 };
 
+// ─── SceneComposition ──────────────────────────────────────────────────────
+
+const compositionKind: ItemKind<Extract<DisplayItem, { type: "SceneComposition" }>> = {
+  uid: (i) => `scene-${i.data.scene_id}-${i.data.zones.map((z) => z.id).join(",")}`,
+  label: (i) => `Scene: ${i.data.name}`,
+  describe: (i) => `Scene "${i.data.name}" (${i.data.zones.length} zones)`,
+  accent: "emerald",
+  stageDetail: (i) =>
+    i.data.zones
+      .map((z) => {
+        const label = displayItemLabel(z.item);
+        return z.label ? `${z.label}: ${label}` : label;
+      })
+      .join("\n"),
+  ScheduleTile: ({ item }) => (
+    <p className="text-emerald-400 text-[10px] font-bold uppercase truncate">
+      SCENE: {item.data.name} · {item.data.zones.length} zone{item.data.zones.length !== 1 ? "s" : ""}
+    </p>
+  ),
+};
+
 // ─── Registry ──────────────────────────────────────────────────────────────
 
-export const ITEM_KINDS: { Verse: typeof verseKind; CustomSlide: typeof customSlideKind; Song: typeof songKind; Media: typeof mediaKind; Camera: typeof cameraKind; Timer: typeof timerKind } = {
+export const ITEM_KINDS: { Verse: typeof verseKind; CustomSlide: typeof customSlideKind; Song: typeof songKind; Media: typeof mediaKind; Camera: typeof cameraKind; Timer: typeof timerKind; SceneComposition: typeof compositionKind } = {
   Verse: verseKind,
   CustomSlide: customSlideKind,
   Song: songKind,
   Media: mediaKind,
   Camera: cameraKind,
   Timer: timerKind,
+  SceneComposition: compositionKind,
 };
 
 export function kindOf(item: DisplayItem): ItemKind {
@@ -333,6 +355,7 @@ const TYPE_LABELS: Record<DisplayItem["type"], string> = {
   CustomSlide: "Slide",
   Timer: "Timer",
   Song: "Song",
+  SceneComposition: "Scene",
 };
 
 export function itemMeta(item: DisplayItem): ItemMeta {
@@ -416,6 +439,10 @@ export function itemMetaAt(item: DisplayItem, now: number): ItemMeta {
       base.detail = item.data.deviceId.startsWith("native:") || item.data.deviceId.startsWith("ndi:")
         ? item.data.deviceId.split(":")[1] ?? item.data.deviceId.slice(0, 12)
         : null;
+      return base;
+    case "SceneComposition":
+      base.title = item.data.name;
+      base.detail = `${item.data.zones.length} zone${item.data.zones.length !== 1 ? "s" : ""}`;
       return base;
     default:
       return base;
