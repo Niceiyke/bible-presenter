@@ -116,15 +116,14 @@ function MediaSource({ onPick }: { onPick: (item: DisplayItem) => void }) {
 function CameraSource({ onPick }: { onPick: (item: DisplayItem) => void }) {
   const availableCameras = useAppStore((s) => s.availableCameras);
   const phoneCameras = useAppStore((s) => s.phoneCameras);
-  const pick = (deviceId: string, label: string, phone: boolean) => {
+  const pick = (deviceId: string) => {
     const cam: CameraBackground = {
-      deviceId: phone ? `phone-camera-${deviceId}` : deviceId,
+      deviceId,
       opacity: 1,
       objectFit: "cover",
       mirrored: false,
     };
     onPick({ type: "Camera", data: cam });
-    void label;
   };
   return (
     <div className="flex flex-col gap-1 max-h-64 overflow-y-auto">
@@ -135,7 +134,7 @@ function CameraSource({ onPick }: { onPick: (item: DisplayItem) => void }) {
       {phoneCameras.map((c) => (
         <button
           key={c.deviceId}
-          onClick={() => pick(c.deviceId, c.label, true)}
+          onClick={() => pick(c.deviceId)}
           className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-console-surface-raised border border-console-border hover:border-action-primary text-left transition-all"
         >
           <CameraIcon size={13} className="text-red-400" />
@@ -149,7 +148,7 @@ function CameraSource({ onPick }: { onPick: (item: DisplayItem) => void }) {
       {availableCameras.map((c) => (
         <button
           key={c.deviceId}
-          onClick={() => pick(c.deviceId, c.label, false)}
+          onClick={() => pick(c.deviceId)}
           className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-console-surface-raised border border-console-border hover:border-action-primary text-left transition-all"
         >
           <CameraIcon size={13} className="text-slate-400" />

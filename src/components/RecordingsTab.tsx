@@ -1,10 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  FolderOpen, Play, RotateCcw, Square, Trash2, Video, Clock, HardDrive,
+  FolderOpen, Play, RotateCcw, Square, Trash2, Video, Clock, HardDrive, Mic,
 } from "lucide-react";
-import { useRecorder } from "../hooks/useRecorder";
-import { ProgramFeedPreview } from "./outputs/ProgramFeedPreview";
+import { useRecording } from "../hooks/useRecordingProvider";
 
 export interface RecordingFile {
   name: string;
@@ -35,14 +34,20 @@ function formatDate(ms: number): string {
 /**
  * `RecordingsTab` — Phase 3 recorder workspace.
  *
- * Shows the live program-feed compositor (the exact pixels that get recorded),
- * a REC/STOP transport, and the saved recordings list. Recorder output goes to
- * the app-data `recordings/` dir as WebM.
+ * The live program-feed compositor and the recorder are owned by the
+ * App-level `RecordingProvider`, so a recording survives navigating away and
+ * can capture the shared audio input. This tab previews the composited stream
+ * live (a `<video>` bound to the provider's stream), shows a REC/STOP
+ * transport, audio-input controls, and the saved recordings list. Recorder
+ * output goes to the app-data `recordings/` dir as WebM.
  */
 export function RecordingsTab() {
-  const streamRef = useRef<MediaStream | null>(null);
-  const [streamReady, setStreamReady] = useState(false);
-  const recorder = useRecorder();
+  const {
+    recording, elapsed, lastSaved, error, stream, streamReady,
+    start, stop, cancel,
+    audioEnabled, setAudioEnabled, audioDevices, audioDeviceId, setAudioDeviceId, audioError,
+  } = useRecording();
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const [recordings, setRecordings] = useState<RecordingFile[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -62,18 +67,12 @@ export function RecordingsTab() {
     refreshList();
   }, [refreshList]);
 
-  const handleRecordStart = () => {
-    if (!streamRef.current) return;
-    void recorder.start(streamRef.current);
-  };
-
-  const handleStream = useCallback((stream: MediaStream | null) => {
-    streamRef.current = stream;
-    setStreamReady(!!stream && stream.getVideoTracks().length > 0);
-  }, []);
+  useEffect(() => {
+    if (videoRef.current && stream) videoRef.current.srcObject = stream;
+  }, [stream]);
 
   const handleRecordStop = async () => {
-    const name = await recorder.stop();
+    const name = await stop();
     if (name) {
       await refreshList();
     }
@@ -112,32 +111,39 @@ export function RecordingsTab() {
         {/* Composer preview + transport */}
         <div className="flex flex-col gap-2">
           <div className="relative rounded-lg overflow-hidden border border-slate-700 bg-black" style={{ aspectRatio: "16/9" }}>
-            <ProgramFeedPreview
-              geometry={{ width: 1920, height: 1080 }}
-              fps={30}
-              onStream={handleStream}
-              className="absolute inset-0 w-full h-full"
-            />
-            {recorder.recording && (
+            {streamReady ? (
+              <video
+                ref={videoRef}
+                autoPlay
+                muted
+                playsInline
+                className="absolute inset-0 w-full h-full object-contain"
+              />
+            ) : (
+              <div className="absolute inset-0 flex items-center justify-center text-slate-600 text-xs">
+                Program feed idle — open a live item to preview.
+              </div>
+            )}
+            {recording && (
               <div className="absolute top-2 left-2 z-10 flex items-center gap-1.5 px-2 py-1 rounded bg-red-600 text-white text-[10px] font-black uppercase tracking-widest">
                 <span className="w-2 h-2 rounded-full bg-white animate-pulse" /> REC
-                <span className="font-mono normal-case">{formatDuration(recorder.elapsed)}</span>
+                <span className="font-mono normal-case">{formatDuration(elapsed)}</span>
               </div>
             )}
           </div>
 
           <div className="flex items-center gap-2">
-            {recorder.recording ? (
+            {recording ? (
               <button
                 onClick={handleRecordStop}
-                disabled={!recorder.recording}
+                disabled={!recording}
                 className="flex-1 py-2.5 rounded-md bg-red-600 hover:bg-red-500 text-white text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 disabled:opacity-50"
               >
                 <Square size={11} fill="currentColor" /> Stop &amp; Save
               </button>
             ) : (
               <button
-                onClick={handleRecordStart}
+                onClick={start}
                 disabled={!streamReady}
                 title={streamReady ? "Record the program feed" : "Program feed not ready"}
                 className="flex-1 py-2.5 rounded-md bg-red-700 hover:bg-red-600 disabled:bg-slate-800 disabled:text-slate-500 text-white text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
@@ -145,9 +151,9 @@ export function RecordingsTab() {
                 <span className="w-2.5 h-2.5 rounded-full bg-white" /> Record
               </button>
             )}
-            {recorder.recording && (
+            {recording && (
               <button
-                onClick={recorder.cancel}
+                onClick={cancel}
                 title="Abort without saving"
                 className="px-3 py-2.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded border border-slate-700 transition-all flex items-center gap-1"
               >
@@ -156,14 +162,47 @@ export function RecordingsTab() {
             )}
           </div>
 
-          {recorder.error && (
+          {/* Audio input for the recording */}
+          <div className="flex flex-wrap items-center gap-2 p-2 rounded-lg border border-slate-800 bg-slate-900/30">
+            <label className="flex items-center gap-2 text-[11px] text-slate-400 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={audioEnabled}
+                onChange={(e) => setAudioEnabled(e.target.checked)}
+                disabled={recording}
+                className="accent-cyan-500"
+              />
+              <Mic size={11} className="text-slate-500" /> Record audio input
+            </label>
+            {audioEnabled && (
+              <>
+                <select
+                  value={audioDeviceId}
+                  onChange={(e) => setAudioDeviceId(e.target.value)}
+                  disabled={recording}
+                  className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-[11px] text-slate-300"
+                >
+                  {audioDevices.length === 0 && <option value="">Default input…</option>}
+                  {audioDevices.map((d, i) => (
+                    <option key={d.deviceId} value={d.deviceId}>
+                      {d.label || `Input ${i + 1}`}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-[10px] text-slate-600">Mic / line-in / mixer feed — processing off.</span>
+              </>
+            )}
+            {audioError && <span className="text-[10px] text-red-400">{audioError}</span>}
+          </div>
+
+          {error && (
             <p className="text-[11px] text-red-400 bg-red-900/30 border border-red-900 rounded px-2 py-1.5">
-              {recorder.error}
+              {error}
             </p>
           )}
-          {recorder.lastSaved && !recorder.recording && (
+          {lastSaved && !recording && (
             <p className="text-[11px] text-emerald-400 bg-emerald-900/20 border border-emerald-900/50 rounded px-2 py-1.5 flex items-center gap-1.5">
-              <HardDrive size={11} /> Saved {recorder.lastSaved}
+              <HardDrive size={11} /> Saved {lastSaved}
             </p>
           )}
         </div>

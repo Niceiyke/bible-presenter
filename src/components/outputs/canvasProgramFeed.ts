@@ -294,6 +294,26 @@ export function getEffectiveBg(
   return settings.background;
 }
 
+/** Collect every camera device id the current program frame draws — the
+ *  effective background (which may be a camera), a live Camera item, or
+ *  cameras pinned inside scene-composition zones. The compositor uses this
+ *  to pre-open the needed streams before the draw pass. */
+export function collectCameraDeviceIds(
+  item: DisplayItem | null,
+  settings: PresentationSettings
+): string[] {
+  const ids = new Set<string>();
+  const bg = getEffectiveBg(settings, item);
+  if (bg.type === "Camera" && bg.value.deviceId) ids.add(bg.value.deviceId);
+  if (item?.type === "Camera" && item.data.deviceId) ids.add(item.data.deviceId);
+  if (item?.type === "SceneComposition") {
+    for (const zone of item.data.zones) {
+      if (zone.item.type === "Camera" && zone.item.data.deviceId) ids.add(zone.item.data.deviceId);
+    }
+  }
+  return [...ids];
+}
+
 // ─── Item renderers ──────────────────────────────────────────────────────────
 
 export interface ItemRenderContext {

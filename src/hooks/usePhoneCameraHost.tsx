@@ -1,6 +1,8 @@
-import React, { createContext, useContext, useEffect, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { useAppStore } from "../store";
+import type { PhoneCameraInfo as StoredPhoneCameraInfo } from "../store/slices/cameraSlice";
 
 // The phone opens two WebRTC peers: one targeted at the operator main window
 // ("operator") for the Cockpit preview, and one targeted at the projection
@@ -29,6 +31,14 @@ export interface PhoneCameraStats {
 }
 
 const PhoneCameraContext = createContext<PhoneCameraHostValue>({ streams: {}, states: {}, stats: {} });
+
+/** Shape of the backend's `PhoneCameraInfo` (device_id is already prefixed
+ *  `phone-camera-<raw>` and used as the store `deviceId`). */
+interface BackendPhoneCamera {
+  device_id: string;
+  device_name: string;
+  orientation?: string | null;
+}
 
 export function usePhoneCameraStreams(): Record<string, MediaStream> {
   return useContext(PhoneCameraContext).streams;
@@ -62,6 +72,42 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
     });
   };
 
+  // Keep the store's `phoneCameras` list (consumed by the SceneBuilder camera
+  // source and the canvas compositor) in sync with the backend's authoritative
+  // device list. Live streams are attached separately as each peer connects.
+  const reconcileCameras = useCallback((cameras: BackendPhoneCamera[]) => {
+    const state = useAppStore.getState();
+    const current = state.phoneCameras;
+    const seen = new Set<string>();
+    const additions: StoredPhoneCameraInfo[] = [];
+    for (const cam of cameras) {
+      seen.add(cam.device_id);
+      if (!current.some((c) => c.deviceId === cam.device_id)) {
+        additions.push({ deviceId: cam.device_id, label: cam.device_name || "Phone Camera" });
+      }
+    }
+    for (const c of current) {
+      if (!seen.has(c.deviceId)) state.removePhoneCamera(c.deviceId);
+    }
+    for (const cam of additions) state.addPhoneCamera(cam);
+  }, []);
+
+  useEffect(() => {
+    invoke<BackendPhoneCamera[]>("list_phone_cameras")
+      .then(reconcileCameras)
+      .catch((e) => console.error("list_phone_cameras failed:", e));
+    let unlistenChanged: (() => void) | null = null;
+    (async () => {
+      unlistenChanged = await listen("phone-cameras-changed", (e) => {
+        const payload = e.payload as { cameras?: BackendPhoneCamera[] };
+        reconcileCameras(payload.cameras ?? []);
+      });
+    })();
+    return () => {
+      unlistenChanged?.();
+    };
+  }, [reconcileCameras]);
+
   useEffect(() => {
     // The provider only ever mounts inside the main operator console (see
     // App.tsx), so it must not gate on the store `label` — a stale or
@@ -82,6 +128,7 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
         stream?.getTracks().forEach((t) => t.stop());
         return next;
       });
+      useAppStore.getState().updatePhoneCameraStream(deviceId, null);
     };
 
     const handleOffer = async (deviceId: string, sdp: string) => {
@@ -113,6 +160,11 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
           ev.streams[0]?.getTracks().forEach((t) => stream.addTrack(t));
           ev.track && stream.addTrack(ev.track);
           setStreams((prev) => ({ ...prev, [deviceId]: stream }));
+          const storeState = useAppStore.getState();
+          if (!storeState.phoneCameras.some((c) => c.deviceId === deviceId)) {
+            storeState.addPhoneCamera({ deviceId, label: "Phone Camera" });
+          }
+          storeState.updatePhoneCameraStream(deviceId, stream);
         };
 
         await pc.setRemoteDescription({ type: "offer", sdp });

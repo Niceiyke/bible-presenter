@@ -10,7 +10,7 @@ export interface PhoneCameraInfo {
   deviceId: string;
   label: string;
   peerConnection?: RTCPeerConnection;
-  stream?: MediaStream;
+  stream?: MediaStream | null;
 }
 
 export interface CameraSlice {
@@ -21,7 +21,7 @@ export interface CameraSlice {
   setSelectedCameraId: (id: string | null) => void;
   addPhoneCamera: (camera: PhoneCameraInfo) => void;
   removePhoneCamera: (deviceId: string) => void;
-  updatePhoneCameraStream: (deviceId: string, stream: MediaStream) => void;
+  updatePhoneCameraStream: (deviceId: string, stream: MediaStream | null) => void;
   refreshCameras: () => Promise<void>;
 }
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   drawProgramFrame,
+  getEffectiveBg,
   ProgramFeedFrame,
   CanvasResources,
 } from "./canvasProgramFeed";
@@ -40,6 +41,11 @@ export interface ProgramFeedCanvasProps {
   fps?: number;
   /** CSS size of the rendered canvas element (defaults to geometry px). */
   className?: string;
+  /** Whether the compositor should be running. When false the loop and the
+   *  capture stream are stopped (tracks ended), which is useful for an
+   *  always-mounted hidden canvas that must not waste CPU while idle.
+   *  Defaults to true. */
+  active?: boolean;
 }
 
 export function ProgramFeedCanvas({
@@ -49,8 +55,16 @@ export function ProgramFeedCanvas({
   onStream,
   fps = 30,
   className,
+  active = true,
 }: ProgramFeedCanvasProps) {
-  const { canvasRef, stream, running, start, stop, setDraw } = useCanvasCapture({ fps, autoStart: true });
+  const { canvasRef, stream, running, start, stop, setDraw } = useCanvasCapture({ fps, autoStart: false });
+
+  // Start/stop with the `active` flag. `start` is idempotent, so repeated
+  // renders with `active` true are cheap; flipping to false stops the tracks.
+  useEffect(() => {
+    if (active) start();
+    else stop();
+  }, [active, start, stop]);
 
   // External resources: images/videos keyed by resolved path; camera videos
   // keyed by device id (pre-warmed to a playing frame for drawImage).
@@ -75,8 +89,9 @@ export function ProgramFeedCanvas({
       else imgs.add(resolved);
     };
 
-    // Backgrounds
-    const bg = f.settings.background;
+    // Backgrounds — the effective one depends on the live item type, so
+    // resolve it the same way the draw pass does.
+    const bg = getEffectiveBg(f.settings, f.item);
     if (bg.type === "Image") addResolved(bg.value.path);
     else if (bg.type === "Video") addResolved(bg.value.path, true);
 
@@ -102,6 +117,14 @@ export function ProgramFeedCanvas({
             if (zone.item.type === "Media") {
               if (zone.item.data.media_type === "Image") addResolved(zone.item.data.path);
               else if (zone.item.data.media_type === "Video") addResolved(zone.item.data.path, true);
+            } else if (zone.item.type === "CustomSlide") {
+              const sb = zone.item.data.background;
+              if (sb.type === "image") addResolved(sb.value);
+              else if (sb.type === "video") addResolved(sb.value, true);
+              for (const el of zone.item.data.elements ?? []) {
+                if (el.kind === "image") addResolved(el.content);
+                else if (el.kind === "video") addResolved(el.content, true);
+              }
             }
           }
           break;
