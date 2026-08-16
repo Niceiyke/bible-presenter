@@ -52,6 +52,10 @@ jobs:
           mkdir -p src-tauri/bible_data
           echo "[]" > src-tauri/bible_data/hymns.json
 
+      - name: fetch ffmpeg binaries for bundling
+        shell: pwsh
+        run: ./scripts/fetch-ffmpeg.ps1
+
       - name: build and publish release
         uses: tauri-apps/tauri-action@v0.5
         env:
