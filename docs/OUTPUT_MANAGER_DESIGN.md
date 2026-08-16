@@ -314,8 +314,24 @@ Seed defaults, identical to today's behavior:
    `streaming` field persists `mode: "rtmp"` + `url` + `stream_key` through the
    existing `outputs_update` flow; `StreamerTab` toggles WHIP/RTMP. ffmpeg is
    resolved from PATH (same policy as thumbnail extraction) and errors cleanly
-   when missing. Unit-tested in `commands/rtmp.rs` (URL joining) and
-   `src/hooks/__tests__/useRtmpEncoder.test.ts` (WebCodecs stubs, feed, teardown).
+   when missing. Unit-tested in `commands/rtmp.rs` (URL joining, mux-only args)
+   and `src/hooks/__tests__/useRtmpEncoder.test.ts` (WebCodecs stubs, feed,
+   teardown).
+6. **Phase 6.1 — RTMP audio** ✅ (implemented on `feat/output-manager`): the
+   RTMP mode can carry an audio track. The operator enables an input device in
+   `StreamerTab` (mic / line-in / mixer feed — `getUserMedia` with echo
+   cancellation, noise suppression, and AGC **off** so the PA mix is not
+   mangled), selected from `enumerateDevices`. The track is encoded once with
+   WebCodecs `AudioEncoder` (AAC-LC `mp4a.40.2`, `AudioData` pulled by a second
+   `MediaStreamTrackProcessor`), each frame wrapped in a 7-byte ADTS header
+   (`wrapAdts` in `useRtmpEncoder.ts`), and streamed via `rtmp_send_audio`.
+   The backend opens a loopback `TcpListener`, passes its port to ffmpeg as a
+   second input (`-f adts -i tcp://127.0.0.1:<port>`, `-c:a copy` — still mux
+   only), and `spawn_audio_writer` accepts ffmpeg's connection (non-blocking,
+   ~5s window, buffers early packets) then drains an mpsc channel into the
+   socket. `rtmp_start` takes `with_audio` so the ffmpeg graph only includes
+   the AAC input when audio is live. Unit-tested (ADTS framing + URL/args) in
+   the same suites above.
 
 Phase 1 is strictly additive and safe to land independently; everything after it
 consumes the same model.

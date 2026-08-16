@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Signal, Square, Radio, Globe, KeyRound, Play, MonitorUp } from "lucide-react";
+import { Signal, Square, Radio, Globe, KeyRound, Play, MonitorUp, Mic } from "lucide-react";
 import { useAppStore } from "../store";
 import { useStreamer } from "../hooks/useStreamer";
 import { useRtmpEncoder } from "../hooks/useRtmpEncoder";
@@ -32,7 +32,12 @@ export function StreamerTab() {
   const outputs = useAppStore((s) => s.outputs);
   const setOutputs = useAppStore((s) => s.setOutputs);
   const streamer = useStreamer();
-  const rtmp = useRtmpEncoder();
+  const [audioEnabled, setAudioEnabled] = useState(false);
+  const [audioDeviceId, setAudioDeviceId] = useState("");
+  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
+  const rtmp = useRtmpEncoder({
+    audio: audioEnabled ? { enabled: true, deviceId: audioDeviceId || undefined } : undefined,
+  });
   const streamRef = useRef<MediaStream | null>(null);
   const [streamReady, setStreamReady] = useState(false);
 
@@ -52,6 +57,24 @@ export function StreamerTab() {
       setToken((prev) => prev || output!.streaming!.stream_key || "");
     }
   }, [output]);
+
+  // List audio input devices for the RTMP audio source selector.
+  useEffect(() => {
+    if (!audioEnabled) return;
+    let cancelled = false;
+    navigator.mediaDevices
+      .enumerateDevices()
+      .then((devices) => {
+        if (cancelled) return;
+        const inputs = devices.filter((d) => d.kind === "audioinput");
+        setAudioDevices(inputs);
+        setAudioDeviceId((prev) => prev || inputs[0]?.deviceId || "");
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [audioEnabled]);
 
   const persistConfig = useCallback(
     async (nextMode: StreamMode, nextUrl: string, nextToken: string) => {
@@ -200,6 +223,40 @@ export function StreamerTab() {
             {saving ? "Saving…" : "Save"}
           </button>
         </div>
+        {mode === "rtmp" && (
+          <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-slate-800">
+            <label className="flex items-center gap-2 text-[11px] text-slate-400 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={audioEnabled}
+                onChange={(e) => setAudioEnabled(e.target.checked)}
+                disabled={active.status !== "idle" && active.status !== "error"}
+                className="accent-cyan-500"
+              />
+              <Mic size={11} className="text-slate-500" /> Include audio
+            </label>
+            {audioEnabled && (
+              <select
+                value={audioDeviceId}
+                onChange={(e) => setAudioDeviceId(e.target.value)}
+                disabled={active.status !== "idle" && active.status !== "error"}
+                className="px-2 py-1 bg-slate-950 border border-slate-700 rounded text-slate-200 text-[11px] focus:outline-none focus:border-slate-500 max-w-[320px]"
+              >
+                {audioDevices.length === 0 && <option value="">Default input…</option>}
+                {audioDevices.map((d) => (
+                  <option key={d.deviceId} value={d.deviceId}>
+                    {d.label || `Input ${audioDevices.indexOf(d) + 1}`}
+                  </option>
+                ))}
+              </select>
+            )}
+            {audioEnabled && (
+              <span className="text-[10px] text-slate-600">
+                Mic / line-in / mixer feed — encoded as AAC (128 kbps), audio processing off.
+              </span>
+            )}
+          </div>
+        )}
         <p className="text-[10px] text-slate-600">
           {mode === "rtmp"
             ? "WebCodecs H.264 in the app piped to ffmpeg (-c copy, no re-encode) for YouTube/Facebook/Twitch ingest. Requires ffmpeg on PATH."
@@ -288,6 +345,13 @@ export function StreamerTab() {
                   <span className="text-slate-200 font-bold">ffmpeg:</span> must be installed and on PATH. Encoding
                   happens in the app (hardware-accelerated where available); ffmpeg never re-encodes.
                 </li>
+                {audioEnabled && (
+                  <li>
+                    <span className="text-slate-200 font-bold">Audio:</span> the selected input is encoded as AAC in
+                    the app (audio processing off — keep the PA mix clean) and muxed by ffmpeg with the video, so the
+                    audience hears the live mix.
+                  </li>
+                )}
                 <li>
                   <span className="text-slate-200 font-bold">Recording:</span> the same compositor drives the Recorder
                   workspace, so a stream can be recorded locally at the same time.

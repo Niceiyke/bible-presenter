@@ -2,6 +2,7 @@ use crate::state::AppState;
 use base64::Engine as _;
 use serde::Serialize;
 use std::io::Write;
+use std::net::{TcpListener, TcpStream};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -15,6 +16,12 @@ use tauri::State;
 /// never re-encodes — and writes the encoded packets to ffmpeg's stdin on a
 /// dedicated writer thread, so the UI thread never blocks on pipe backpressure.
 ///
+/// Optional audio (Phase 6.1): when enabled, ffmpeg gets a second input —
+/// ADTS AAC pulled from a loopback TCP socket (`-f adts -i tcp://127.0.0.1:PORT`)
+/// that the backend accepts and feeds from an `rtmp_send_audio` channel, mirroring
+/// the video writer. The frontend captures an input device with `getUserMedia`
+/// and encodes AAC with WebCodecs, so the A/V sync is preserved mux-only.
+///
 /// ffmpeg is resolved from PATH (same policy as thumbnail extraction). If it is
 /// not installed the commands error cleanly instead of crashing.
 #[derive(Serialize)]
@@ -23,11 +30,13 @@ pub struct RtmpStatus {
     pub url: Option<String>,
 }
 
-/// An active ffmpeg ingest: the child plus an mpsc sender drained by a writer
-/// thread that owns the process stdin. Dropping the sender signals EOF.
+/// An active ffmpeg ingest: the child plus mpsc senders drained by writer
+/// threads (video -> stdin, audio -> loopback TCP). Dropping the senders
+/// signals EOF / closes the socket.
 pub struct RtmpSession {
     pub child: Child,
     pub stdin_tx: mpsc::Sender<Vec<u8>>,
+    pub audio_tx: Option<mpsc::Sender<Vec<u8>>>,
     pub url: String,
 }
 
@@ -41,6 +50,58 @@ pub fn build_rtmp_url(server_url: &str, stream_key: Option<&str>) -> String {
     } else {
         format!("{}/{}", base, key)
     }
+}
+
+/// Mux-only ffmpeg arguments. Video is H.264 Annex-B read from stdin; optional
+/// audio is ADTS AAC read from a loopback TCP socket (ffmpeg connects, the
+/// backend accepts). Nothing is re-encoded — packets are copied straight into
+/// the FLV output for the RTMP ingest.
+fn ffmpeg_args(url: &str, audio_port: Option<u16>) -> Vec<String> {
+    let mut args = vec![
+        "-y".to_string(),
+        "-hide_banner".to_string(),
+        "-loglevel".to_string(),
+        "error".to_string(),
+        "-fflags".to_string(),
+        "nobuffer".to_string(),
+        "-f".to_string(),
+        "h264".to_string(),
+        "-framerate".to_string(),
+        "30".to_string(),
+        "-i".to_string(),
+        "pipe:0".to_string(),
+    ];
+    if let Some(port) = audio_port {
+        args.extend([
+            "-f".into(),
+            "adts".into(),
+            "-i".into(),
+            format!("tcp://127.0.0.1:{port}"),
+            "-map".into(),
+            "0:v:0".into(),
+            "-map".into(),
+            "1:a:0".into(),
+            "-c:v".into(),
+            "copy".into(),
+            "-c:a".into(),
+            "copy".into(),
+        ]);
+    } else {
+        args.extend([
+            "-map".into(),
+            "0:v:0".into(),
+            "-c:v".into(),
+            "copy".into(),
+        ]);
+    }
+    args.extend([
+        "-f".into(),
+        "flv".into(),
+        "-flvflags".into(),
+        "no_duration_filesize".into(),
+        url.to_string(),
+    ]);
+    args
 }
 
 /// Spawn the writer thread that drains the channel into ffmpeg's stdin.
@@ -58,6 +119,44 @@ fn spawn_writer(mut stdin: ChildStdin) -> mpsc::Sender<Vec<u8>> {
     tx
 }
 
+/// Spawn the audio writer thread: accept ffmpeg's loopback TCP connection (non
+/// blocking, up to ~5s, buffering anything that arrives before the handshake)
+/// then drain the channel into the socket. Closing the channel tears it down.
+fn spawn_audio_writer(listener: TcpListener) -> mpsc::Sender<Vec<u8>> {
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        let _ = listener.set_nonblocking(true);
+        let mut pending: Vec<Vec<u8>> = Vec::new();
+        let mut stream: Option<TcpStream> = None;
+        for _ in 0..100 {
+            if let Ok((s, _)) = listener.accept() {
+                stream = Some(s);
+                break;
+            }
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(data) => pending.push(data),
+                Err(mpsc::RecvTimeoutError::Disconnected) => return, // stopped before connect
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
+        }
+        let Some(mut stream) = stream else {
+            return; // ffmpeg never connected
+        };
+        for data in pending {
+            if stream.write_all(&data).is_err() {
+                return;
+            }
+        }
+        while let Ok(data) = rx.recv() {
+            if stream.write_all(&data).is_err() {
+                break; // ffmpeg closed the socket
+            }
+            let _ = stream.flush();
+        }
+    });
+    tx
+}
+
 fn ffmpeg_available() -> bool {
     Command::new("ffmpeg")
         .arg("-version")
@@ -69,12 +168,14 @@ fn ffmpeg_available() -> bool {
 }
 
 /// Start an RTMP ingest: spawn ffmpeg (mux-only H.264 -> FLV/RTMP) and keep it
-/// fed from the writer thread. Errors if a session is already active.
+/// fed from the writer thread. `with_audio` adds a second loopback TCP input for
+/// ADTS AAC (WebCodecs-encoded by the frontend). Errors if a session is active.
 #[tauri::command]
 pub fn rtmp_start(
     state: State<'_, AppState>,
     server_url: String,
     stream_key: Option<String>,
+    with_audio: bool,
 ) -> Result<(), String> {
     let mut guard = state.rtmp.lock();
     if guard.is_some() {
@@ -88,29 +189,20 @@ pub fn rtmp_start(
         return Err("ffmpeg was not found on PATH — install ffmpeg to use RTMP streaming.".into());
     }
 
+    let audio_listener = if with_audio {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .map_err(|e| format!("Failed to open the audio input socket: {e}"))?;
+        Some(listener)
+    } else {
+        None
+    };
+    let audio_port = audio_listener
+        .as_ref()
+        .map(|l| l.local_addr().map_err(|e| e.to_string()).map(|a| a.port()))
+        .transpose()?;
+
     let mut child = Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-fflags",
-            "nobuffer",
-            "-f",
-            "h264",
-            "-framerate",
-            "30",
-            "-i",
-            "pipe:0",
-            "-c:v",
-            "copy",
-            "-an",
-            "-f",
-            "flv",
-            "-flvflags",
-            "no_duration_filesize",
-            &url,
-        ])
+        .args(ffmpeg_args(&url, audio_port))
         .stdin(Stdio::piped())
         .stderr(Stdio::null())
         .stdout(Stdio::null())
@@ -122,7 +214,8 @@ pub fn rtmp_start(
         .take()
         .ok_or_else(|| "ffmpeg stdin was not available.".to_string())?;
     let stdin_tx = spawn_writer(stdin);
-    *guard = Some(RtmpSession { child, stdin_tx, url });
+    let audio_tx = audio_listener.map(spawn_audio_writer);
+    *guard = Some(RtmpSession { child, stdin_tx, audio_tx, url });
     Ok(())
 }
 
@@ -140,6 +233,22 @@ pub fn rtmp_send(state: State<'_, AppState>, data_base64: String) -> Result<(), 
         .map_err(|_| "RTMP writer closed (ffmpeg exited).".to_string())
 }
 
+/// Feed one encoded AAC frame (ADTS, base64 over IPC) to ffmpeg's audio input.
+#[tauri::command]
+pub fn rtmp_send_audio(state: State<'_, AppState>, data_base64: String) -> Result<(), String> {
+    let mut guard = state.rtmp.lock();
+    let session = guard.as_mut().ok_or("No active RTMP session.")?;
+    let tx = session
+        .audio_tx
+        .as_ref()
+        .ok_or("RTMP session has no audio input (start it with audio enabled).")?;
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(&data_base64)
+        .map_err(|e| format!("Invalid RTMP audio packet: {e}"))?;
+    tx.send(data)
+        .map_err(|_| "RTMP audio writer closed (ffmpeg exited).".to_string())
+}
+
 /// Stop the active ingest: signal EOF to ffmpeg, then wait (with a timeout and
 /// forced kill) for it to exit so the RTMP session is torn down cleanly.
 #[tauri::command]
@@ -147,6 +256,7 @@ pub fn rtmp_stop(state: State<'_, AppState>) -> Result<(), String> {
     let session = state.rtmp.lock().take();
     let Some(session) = session else { return Ok(()) };
     drop(session.stdin_tx); // EOF to ffmpeg -> flush + finalize the stream
+    drop(session.audio_tx); // close the audio socket -> ffmpeg finishes the AAC stream
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut child = session.child;
     loop {
@@ -194,5 +304,24 @@ mod tests {
     #[test]
     fn build_rtmp_url_rejects_wrong_scheme() {
         assert!(!build_rtmp_url("https://host/live", Some("k")).starts_with("rtmp://"));
+    }
+
+    #[test]
+    fn ffmpeg_args_video_only_has_no_audio_input() {
+        let args = ffmpeg_args("rtmp://host/live/key", None);
+        let joined = args.join(" ");
+        assert!(joined.contains("-f h264") && joined.contains("-i pipe:0"));
+        assert!(joined.contains("-map 0:v:0") && joined.contains("-c:v copy"));
+        assert!(!joined.contains("adts") && !joined.contains("tcp://") && !joined.contains("-c:a"));
+        assert!(joined.ends_with("-f flv -flvflags no_duration_filesize rtmp://host/live/key"));
+    }
+
+    #[test]
+    fn ffmpeg_args_with_audio_adds_loopback_aac_input() {
+        let args = ffmpeg_args("rtmp://host/live/key", Some(44111));
+        let joined = args.join(" ");
+        assert!(joined.contains("-f adts -i tcp://127.0.0.1:44111"));
+        assert!(joined.contains("-map 0:v:0 -map 1:a:0"));
+        assert!(joined.contains("-c:v copy -c:a copy"));
     }
 }

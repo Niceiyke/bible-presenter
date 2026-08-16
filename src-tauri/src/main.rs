@@ -280,6 +280,7 @@ fn main() {
             wordlyte_lib::commands::recordings::recordings_open_folder,
             wordlyte_lib::commands::rtmp::rtmp_start,
             wordlyte_lib::commands::rtmp::rtmp_send,
+            wordlyte_lib::commands::rtmp::rtmp_send_audio,
             wordlyte_lib::commands::rtmp::rtmp_stop,
             wordlyte_lib::commands::rtmp::rtmp_status,
             wordlyte_lib::commands::assets::get_startup_status,
