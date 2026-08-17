@@ -9,6 +9,7 @@ import type {
   BackgroundSetting,
 } from "../../types";
 import { THEMES } from "../../types";
+import { resolvePath } from "../../utils";
 
 /**
  * Canvas 2D program-feed renderer (Phase 2 of the output manager).
@@ -46,6 +47,15 @@ export interface CanvasResources {
 export interface CanvasGeometry {
   width: number;
   height: number;
+}
+
+/** Resolve a stored (possibly relative) media path to the same absolute key
+ *  the resource loader in `ProgramFeedCanvas` uses (`collectPaths` keys the
+ *  loaded elements by `resolvePath(path, appDataDir)`). Backgrounds, props,
+ *  logos, and slide media are persisted relativized, so lookups must resolve
+ *  too or they miss the loaded element and paint only the fallback. */
+export function resolveResPath(res: CanvasResources, path: string): string {
+  return resolvePath(path, res.appDataDir ?? null);
 }
 
 // ─── Color helpers ───────────────────────────────────────────────────────────
@@ -131,13 +141,23 @@ export function drawWrappedTextCentered(
 // ─── Image helpers ───────────────────────────────────────────────────────────
 
 function sourceSize(src: CanvasImageSource): { w: number; h: number } {
+  let w = 0, h = 0;
   if (src instanceof HTMLVideoElement) {
-    return { w: src.videoWidth || 1, h: src.videoHeight || 1 };
+    w = src.videoWidth || 0;
+    h = src.videoHeight || 0;
+  } else if (src instanceof HTMLImageElement) {
+    w = src.naturalWidth || 0;
+    h = src.naturalHeight || 0;
+  } else {
+    return { w: 1920, h: 1080 };
   }
-  if (src instanceof HTMLImageElement) {
-    return { w: src.naturalWidth || 1, h: src.naturalHeight || 1 };
+  // Zero/non-finite dims would make the crop math produce a 0-wide source
+  // rect, and real-canvas `drawImage` throws on that — which would kill the
+  // capture loop. Fall back to a sane size instead.
+  if (!(w > 0) || !(h > 0) || !Number.isFinite(w) || !Number.isFinite(h)) {
+    return { w: 1920, h: 1080 };
   }
-  return { w: 1920, h: 1080 };
+  return { w, h };
 }
 
 /** object-fit: cover within a box. */
@@ -205,7 +225,7 @@ export function drawBackgroundSetting(
       ctx.fillRect(0, 0, g.width, g.height);
       break;
     case "Image": {
-      const img = res.images?.[bg.value.path];
+      const img = res.images?.[resolveResPath(res, bg.value.path)];
       if (img) {
         ctx.save();
         ctx.globalAlpha = bg.value.opacity ?? 1;
@@ -218,7 +238,7 @@ export function drawBackgroundSetting(
       break;
     }
     case "Video": {
-      const vid = res.videos?.[bg.value.path];
+      const vid = res.videos?.[resolveResPath(res, bg.value.path)];
       if (vid && vid.readyState >= 2) {
         ctx.save();
         ctx.globalAlpha = bg.value.opacity ?? 1;
@@ -361,7 +381,7 @@ function drawVerse(ctx: CanvasRenderingContext2D, item: Extract<DisplayItem, { t
   ctx.shadowColor = "rgba(0,0,0,0.5)";
   ctx.shadowBlur = 16;
 
-  const wrapLines = wrapText(ctx, item.data.text, maxTextWidth);
+  const wrapLines = wrapText(ctx, item.data.text ?? "", maxTextWidth);
   const lineHeight = ptToPx(s.font_size, scale) * 1.25;
   const totalH = wrapLines.length * lineHeight;
   const refH = refLineHeight;
@@ -408,7 +428,7 @@ function drawVerse(ctx: CanvasRenderingContext2D, item: Extract<DisplayItem, { t
   ctx.restore();
 }
 
-function drawCamera(ctx: CanvasRenderingContext2D, item: Extract<DisplayItem, { type: "Camera" }>, g: CanvasGeometry, rctx: ItemRenderContext): void {
+function drawCamera(ctx: CanvasRenderingContext2D, item: Extract<DisplayItem, { type: "Camera" }>, g: CanvasGeometry, rctx: ItemRenderContext, fit?: "cover" | "contain" | "fill"): void {
   const data = item.data;
   if (data.backdropColor) {
     ctx.fillStyle = data.backdropColor;
@@ -423,31 +443,33 @@ function drawCamera(ctx: CanvasRenderingContext2D, item: Extract<DisplayItem, { 
   if (vid && vid.readyState >= 2) {
     ctx.save();
     ctx.globalAlpha = data.opacity ?? 1;
+    const objectFit = (fit ?? data.objectFit ?? "cover") as "cover" | "contain" | "fill";
     if (data.mirrored) {
       ctx.translate(g.width, 0);
       ctx.scale(-1, 1);
-      drawMediaFit(ctx, vid, 0, 0, g.width, g.height, (data.objectFit as any) ?? "cover");
+      drawMediaFit(ctx, vid, 0, 0, g.width, g.height, objectFit);
     } else {
-      drawMediaFit(ctx, vid, 0, 0, g.width, g.height, (data.objectFit as any) ?? "cover");
+      drawMediaFit(ctx, vid, 0, 0, g.width, g.height, objectFit);
     }
     ctx.restore();
   }
 }
 
-function drawMedia(ctx: CanvasRenderingContext2D, item: Extract<DisplayItem, { type: "Media" }>, g: CanvasGeometry, rctx: ItemRenderContext): void {
+function drawMedia(ctx: CanvasRenderingContext2D, item: Extract<DisplayItem, { type: "Media" }>, g: CanvasGeometry, rctx: ItemRenderContext, fit?: "cover" | "contain" | "fill"): void {
   const data = item.data;
+  const mediaFit = (fit ?? data.fit_mode ?? "contain") as "cover" | "contain" | "fill";
   if (data.media_type === "Image") {
-    const img = rctx.res.images?.[data.path];
+    const img = rctx.res.images?.[resolveResPath(rctx.res, data.path)];
     if (img) {
-      drawMediaFit(ctx, img, 0, 0, g.width, g.height, data.fit_mode ?? "contain");
+      drawMediaFit(ctx, img, 0, 0, g.width, g.height, mediaFit);
     } else {
       ctx.fillStyle = rctx.colors.background;
       ctx.fillRect(0, 0, g.width, g.height);
     }
   } else if (data.media_type === "Video") {
-    const vid = rctx.res.videos?.[data.path];
+    const vid = rctx.res.videos?.[resolveResPath(rctx.res, data.path)];
     if (vid && vid.readyState >= 2) {
-      drawMediaFit(ctx, vid, 0, 0, g.width, g.height, data.fit_mode ?? "contain");
+      drawMediaFit(ctx, vid, 0, 0, g.width, g.height, mediaFit);
     } else {
       ctx.fillStyle = rctx.colors.background;
       ctx.fillRect(0, 0, g.width, g.height);
@@ -557,7 +579,9 @@ function drawSong(ctx: CanvasRenderingContext2D, item: Extract<DisplayItem, { ty
   const padding = g.width * 0.08;
   const maxWidth = g.width - padding * 2;
 
-  let y = (g.height - (data.lines.length * lineHeight)) / 2;
+  const lines = data.lines ?? [];
+  const lineCount = lines.length;
+  let y = (g.height - (lineCount * lineHeight)) / 2;
   ctx.save();
   ctx.textAlign = "center";
   ctx.fillStyle = finalColor;
@@ -574,11 +598,11 @@ function drawSong(ctx: CanvasRenderingContext2D, item: Extract<DisplayItem, { ty
   }
 
   ctx.font = lineFont;
-  data.lines.forEach((line, i) => {
+  lines.forEach((line, i) => {
     ctx.fillText(line, g.width / 2, y + i * lineHeight);
   });
 
-  if (data.slide_index === data.total_slides - 1 && data.author) {
+  if ((data.total_slides ?? 1) - 1 === data.slide_index && data.author) {
     ctx.font = `${ptToPx(16, scale)}px ${finalFontFamily}`;
     ctx.fillStyle = hexToRgba("#ffffff", 0.3);
     ctx.fillText(`— ${data.author}`, g.width / 2, y + data.lines.length * lineHeight + ptToPx(24, scale));
@@ -595,18 +619,19 @@ function drawCustomSlide(ctx: CanvasRenderingContext2D, item: Extract<DisplayIte
     ctx.fillStyle = bg.value;
     ctx.fillRect(0, 0, g.width, g.height);
   } else if (bg.type === "gradient") {
+    const angle = (bg.angle ?? 0) * (Math.PI / 180);
     const grad = ctx.createLinearGradient(
-      g.width / 2 - Math.cos((bg.angle * Math.PI) / 180) * g.width,
-      g.height / 2 - Math.sin((bg.angle * Math.PI) / 180) * g.height,
-      g.width / 2 + Math.cos((bg.angle * Math.PI) / 180) * g.width,
-      g.height / 2 + Math.sin((bg.angle * Math.PI) / 180) * g.height
+      g.width / 2 - Math.cos(angle) * g.width,
+      g.height / 2 - Math.sin(angle) * g.height,
+      g.width / 2 + Math.cos(angle) * g.width,
+      g.height / 2 + Math.sin(angle) * g.height
     );
     grad.addColorStop(0, bg.from);
     grad.addColorStop(1, bg.to);
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, g.width, g.height);
   } else if (bg.type === "image") {
-    const img = rctx.res.images?.[bg.value];
+    const img = rctx.res.images?.[resolveResPath(rctx.res, bg.value)];
     if (img) {
       ctx.save();
       ctx.globalAlpha = bg.opacity ?? 1;
@@ -617,7 +642,7 @@ function drawCustomSlide(ctx: CanvasRenderingContext2D, item: Extract<DisplayIte
       ctx.fillRect(0, 0, g.width, g.height);
     }
   } else if (bg.type === "video") {
-    const vid = rctx.res.videos?.[bg.value];
+    const vid = rctx.res.videos?.[resolveResPath(rctx.res, bg.value)];
     if (vid && vid.readyState >= 2) {
       ctx.save();
       ctx.globalAlpha = bg.opacity ?? 1;
@@ -688,12 +713,12 @@ function drawCustomSlide(ctx: CanvasRenderingContext2D, item: Extract<DisplayIte
         ctx.fillText(line, tx, ty + fontPx + i * lineHeight);
       });
     } else if (el.kind === "image") {
-      const img = rctx.res.images?.[el.content];
+      const img = rctx.res.images?.[resolveResPath(rctx.res, el.content)];
       if (img) {
         drawMediaFit(ctx, img, x, y, w, h, el.objectFit ?? "contain");
       }
     } else if (el.kind === "video") {
-      const vid = rctx.res.videos?.[el.content];
+      const vid = rctx.res.videos?.[resolveResPath(rctx.res, el.content)];
       if (vid && vid.readyState >= 2) {
         drawMediaFit(ctx, vid, x, y, w, h, el.objectFit ?? "contain");
       }
@@ -731,9 +756,9 @@ function drawCustomSlide(ctx: CanvasRenderingContext2D, item: Extract<DisplayIte
   }
 }
 
-function drawSceneComposition(ctx: CanvasRenderingContext2D, item: Extract<DisplayItem, { type: "SceneComposition" }>, g: CanvasGeometry, rctx: ItemRenderContext): void {
+function drawSceneComposition(ctx: CanvasRenderingContext2D, item: Extract<DisplayItem, { type: "SceneComposition" }>, g: CanvasGeometry, rctx: ItemRenderContext, depth = 0): void {
   const data: SceneCompositionData = item.data;
-  const zones = data.zones.slice().sort((a, b) => a.z - b.z);
+  const zones = data.zones.slice().sort((a, b) => (a.z ?? 0) - (b.z ?? 0));
   for (const zone of zones) {
     const x = zone.x * g.width;
     const y = zone.y * g.height;
@@ -743,10 +768,17 @@ function drawSceneComposition(ctx: CanvasRenderingContext2D, item: Extract<Displ
     ctx.beginPath();
     ctx.rect(x, y, w, h);
     ctx.clip();
-    ctx.globalAlpha = zone.opacity;
+    ctx.globalAlpha = zone.opacity ?? 1;
     const zoneG = { width: w, height: h };
     const zoneRctx: ItemRenderContext = { ...rctx, scale: h / (rctx.settings.reference_output_height ?? 1080) };
-    drawItemCanvas(ctx, zone.item, zoneG, zoneRctx, zone.fit, zone.muted);
+    try {
+      drawItemCanvas(ctx, zone.item, zoneG, zoneRctx, zone.fit, zone.muted, depth);
+    } catch (err) {
+      // A bad zone must never stop the remaining zones (or the whole frame).
+      console.warn("[compositor] zone draw error:", zone.id, err);
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      ctx.fillRect(x, y, w, h);
+    }
     ctx.restore();
   }
 }
@@ -758,17 +790,24 @@ export function drawItemCanvas(
   g: CanvasGeometry,
   rctx: ItemRenderContext,
   fit?: "cover" | "contain" | "fill",
-  muted?: boolean
+  muted?: boolean,
+  depth = 0
 ): void {
+  if (depth > 4) {
+    // Recursion guard for nested scene compositions (flattened at build time).
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, g.width, g.height);
+    return;
+  }
   switch (item.type) {
     case "Verse":
       drawVerse(ctx, item, g, rctx);
       break;
     case "Camera":
-      drawCamera(ctx, item, g, rctx);
+      drawCamera(ctx, item, g, rctx, fit);
       break;
     case "Media":
-      drawMedia(ctx, item, g, rctx);
+      drawMedia(ctx, item, g, rctx, fit);
       break;
     case "Timer":
       drawTimer(ctx, item, g, rctx);
@@ -780,7 +819,7 @@ export function drawItemCanvas(
       drawCustomSlide(ctx, item, g, rctx);
       break;
     case "SceneComposition":
-      drawSceneComposition(ctx, item, g, rctx);
+      drawSceneComposition(ctx, item, g, rctx, depth + 1);
       break;
   }
 }
@@ -821,7 +860,7 @@ export function drawProps(ctx: CanvasRenderingContext2D, items: PropItem[], g: C
     ctx.save();
     ctx.globalAlpha = p.opacity;
     if (p.kind === "image" && p.path) {
-      const img = res.images?.[p.path];
+      const img = res.images?.[resolveResPath(res, p.path)];
       if (img) drawImageContain(ctx, img, x, y, w, h);
     } else if (p.kind === "clock") {
       const now = new Date();
@@ -859,8 +898,9 @@ export function drawLogo(ctx: CanvasRenderingContext2D, settings: PresentationSe
     ctx.fillText(settings.logo_text, g.width - 32, g.height - 32);
     ctx.restore();
   } else if (settings.logo_path) {
-    const img = res.images?.[settings.logo_path];
-    const vid = res.videos?.[settings.logo_path];
+    const logoPath = resolveResPath(res, settings.logo_path);
+    const img = res.images?.[logoPath];
+    const vid = res.videos?.[logoPath];
     if (img) {
       ctx.save();
       ctx.globalAlpha = 0.5;

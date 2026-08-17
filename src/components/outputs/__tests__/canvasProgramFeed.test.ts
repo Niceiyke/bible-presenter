@@ -265,6 +265,87 @@ describe("canvasProgramFeed", () => {
       expect(calls.some((c) => c.startsWith("fillText:00:00"))).toBe(true);
     });
 
+    it("draws every zone of a multi-zone scene, in z order", () => {
+      const { ctx, calls } = makeCtx();
+      const scene = {
+        type: "SceneComposition",
+        data: {
+          scene_id: "s2",
+          name: "Multi",
+          zones: [
+            {
+              id: "z1", x: 0, y: 0, w: 0.5, h: 1, fit: "cover", opacity: 1, z: 1,
+              item: { type: "Timer", data: { timer_type: "countup", started_at: Date.now() } },
+            },
+            {
+              id: "z2", x: 0.5, y: 0, w: 0.5, h: 1, fit: "cover", opacity: 1, z: 2,
+              item: { type: "Verse", data: { book: "JHN", chapter: 3, verse: 16, text: "For God so loved", version: "KJV" } },
+            },
+            {
+              id: "z3", x: 0, y: 0.5, w: 0.5, h: 0.5, fit: "cover", opacity: 1, z: 3,
+              item: {
+                type: "CustomSlide",
+                data: {
+                  presentation_id: "p1", presentation_name: "P", slide_index: 0, slide_count: 1,
+                  background: { type: "color", value: "#2244aa" },
+                  elements: [
+                    { id: "e1", kind: "text", x: 10, y: 10, w: 80, h: 20, z_index: 1,
+                      content: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "ZoneThree" }] }] },
+                      font_size: 32, font_family: "Arial", color: "#ffffff", align: "center", v_align: "middle" },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      } as DisplayItem;
+      drawProgramFrame(ctx, { width: 1920, height: 1080 }, frameFor(scene));
+      // One clip per zone
+      expect(calls.filter((c) => c === "clip").length).toBe(3);
+      // Content from the second and third zones present, not just the first
+      expect(calls.some((c) => c.startsWith("fillText:For God so loved"))).toBe(true);
+      expect(calls.some((c) => c.startsWith("fillText:ZoneThree"))).toBe(true);
+    });
+
+    it("keeps drawing later zones when one zone's draw throws", () => {
+      const { ctx, calls } = makeCtx();
+      const original = ctx.arc;
+      ctx.arc = () => { throw new Error("boom"); };
+      const scene = {
+        type: "SceneComposition",
+        data: {
+          scene_id: "s3",
+          name: "Throw",
+          zones: [
+            {
+              id: "z1", x: 0, y: 0, w: 0.5, h: 1, fit: "cover", opacity: 1, z: 1,
+              item: {
+                type: "CustomSlide",
+                data: {
+                  presentation_id: "p1", presentation_name: "P", slide_index: 0, slide_count: 1,
+                  background: { type: "color", value: "#2244aa" },
+                  elements: [
+                    { id: "e1", kind: "shape", shape: "circle", x: 10, y: 10, w: 20, h: 20, z_index: 1, color: "#ffffff" },
+                  ],
+                },
+              },
+            },
+            {
+              id: "z2", x: 0.5, y: 0, w: 0.5, h: 1, fit: "cover", opacity: 1, z: 2,
+              item: { type: "Verse", data: { book: "JHN", chapter: 3, verse: 16, text: "Still here", version: "KJV" } },
+            },
+          ],
+        },
+      } as any;
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      drawProgramFrame(ctx, { width: 1920, height: 1080 }, frameFor(scene));
+      // The verse in the second zone was still painted despite z1 throwing
+      expect(calls.some((c) => c.startsWith("fillText:Still here"))).toBe(true);
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
+      ctx.arc = original;
+    });
+
     it("honors the overlay mask (props drawn when enabled)", () => {
       const { ctx, calls } = makeCtx();
       const prop = {

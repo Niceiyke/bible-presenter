@@ -870,6 +870,10 @@ export function SceneBuilder({ scene, onSceneChange, onSave, onApply, onClose }:
                   className="relative bg-black rounded-xl overflow-visible border border-console-border shadow-[0_8px_60px_rgba(0,0,0,0.6)] select-none"
                   style={{ width: fit.w, height: fit.h }}
                   onPointerDown={() => setSelectedId(null)}
+                  onPointerMove={onPointerMove}
+                  onPointerUp={endDrag}
+                  onPointerLeave={endDrag}
+                  onPointerCancel={endDrag}
                 >
                   {/* Content layer — the zones themselves (clipped to canvas) */}
                   <div className="absolute inset-0 overflow-hidden rounded-xl pointer-events-none">

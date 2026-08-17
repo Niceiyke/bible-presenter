@@ -73,7 +73,17 @@ export function useCanvasCapture(options: UseCanvasCaptureOptions = {}): CanvasC
         const ctx = canvas.getContext("2d");
         if (ctx) {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
-          drawRef.current?.(ctx, canvas.width, canvas.height);
+          try {
+            drawRef.current?.(ctx, canvas.width, canvas.height);
+          } catch (err) {
+            // A draw error (e.g. a bad zone item or a non-finite canvas arg)
+            // must never kill the capture loop permanently — that would freeze
+            // recording/streaming on a stale frame. Paint a safe fallback and
+            // keep the loop alive on the next tick.
+            console.warn("[compositor] draw error:", err);
+            ctx.fillStyle = "#000000";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+          }
           markCaptureFrame();
         }
       }
