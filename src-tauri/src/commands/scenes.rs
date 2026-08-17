@@ -9,8 +9,26 @@ pub async fn list_scenes(state: State<'_, AppState>) -> Result<Vec<Scene>, Strin
     state.media_schedule.list_scenes().map_err(|e| e.to_string())
 }
 
+/// Free plan stores up to 3 scenes; paid plans are unlimited.
+fn check_scene_cap(state: &State<'_, AppState>) -> Result<(), String> {
+    let info = state.license.status();
+    if info.status == crate::license::LicenseStatus::Active
+        && info.tier == crate::license::LicenseTier::Free
+    {
+        let count = state.media_schedule.list_scenes().map_err(|e| e.to_string())?.len();
+        if count >= 3 {
+            return Err(
+                "The Free plan stores up to 3 scenes. Upgrade in Settings → License for unlimited scenes."
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn save_scene(state: State<'_, AppState>, scene: Scene) -> Result<Scene, String> {
+    check_scene_cap(&state)?;
     state.media_schedule.save_scene(scene).map_err(|e| e.to_string())
 }
 
@@ -85,6 +103,7 @@ pub async fn apply_scene(app: AppHandle, state: State<'_, AppState>, id: String)
 /// layout so re-applying reproduces the exact split-screen composition.
 #[tauri::command]
 pub async fn capture_scene(state: State<'_, AppState>, name: String, camera: Option<DisplayItem>) -> Result<Scene, String> {
+    check_scene_cap(&state)?;
     let settings = state.presentation.settings.lock().clone();
     let props = state.presentation.props_layer.lock().clone();
     let lt = state.presentation.lower_third.lock().clone();

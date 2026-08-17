@@ -1,0 +1,18 @@
+{
+  "name": "wordlyte-license-worker",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Wordlyte license validation + admin API (Cloudflare Worker)",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node scripts/test.mjs",
+    "issue": "node scripts/issue.mjs",
+    "revoke": "node scripts/revoke.mjs",
+    "extend": "node scripts/extend.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^3.80.0"
+  }
+}

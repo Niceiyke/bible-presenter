@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback, useLayoutEffect } from "react";
 import { listen, emit } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
-import type { DisplayItem, PropItem, PresentationSettings, LowerThirdData, LowerThirdTemplate } from "../types";
+import type { DisplayItem, PropItem, PresentationSettings, LowerThirdData, LowerThirdTemplate, OutputConfig } from "../types";
 import { THEMES } from "../types";
 import {
   getEffectiveBackground,
@@ -26,6 +26,8 @@ import { Music } from "lucide-react";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { signalOperatorWarning } from "../hooks/useAppInitialization";
 import { useFonts } from "../hooks/useFonts";
+import type { LicenseInfo } from "../types/license";
+import { tierCapabilities } from "../system/tiers";
 import PhoneCameraVideo, { usePhoneCameraOrientation, usePhoneCameraLook, useCameraChroma } from "../components/shared/PhoneCameraVideo";
 
 function ProjectionErrorFallback() {
@@ -61,6 +63,11 @@ export function OutputWindow() {
   const [monitorTest, setMonitorTest] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
+  // Output-manager config for this window (window_label === "output"). Applied
+  // as overrides on top of the broadcast settings; defaults are empty/full so
+  // behavior is identical until the operator customizes an output.
+  const [outputConfig, setOutputConfig] = useState<OutputConfig | null>(null);
+
   const bgVideoRef = useRef<HTMLVideoElement>(null);
   const bgAudioRef = useRef<HTMLAudioElement>(null);
   const cameraRef = useRef<HTMLVideoElement>(null);
@@ -86,6 +93,7 @@ export function OutputWindow() {
 
   const [windowScale, setWindowScale] = useState(1);
   const isMounted = useRef(true);
+  const [license, setLicense] = useState<LicenseInfo | null>(null);
 
   // Auto-fit font size when verse splitting is disabled
   const verseContainerRef = useRef<HTMLDivElement>(null);
@@ -182,6 +190,11 @@ export function OutputWindow() {
       setStagedItem(event.payload as DisplayItem | null);
     });
 
+    const unlistenOutputConfig = listen("output-config-changed", (event: any) => {
+      const configs = event.payload as OutputConfig[];
+      setOutputConfig(configs.find((c) => c.window_label === "output") ?? null);
+    });
+
     const unlistenLt = listen("lower-third-update", (event: any) => {
       if (event.payload) {
         setLowerThird({ data: event.payload.data as LowerThirdData, template: event.payload.template as LowerThirdTemplate });
@@ -271,7 +284,15 @@ export function OutputWindow() {
       invoke("get_settings").then((s: any) => { if (s) setSettings(s); }).catch((e: any) => signalOperatorWarning(`Output hydrate (settings): ${e?.message ?? e}`)),
       invoke<string>("get_app_data_dir").then(setAppDataDir).catch((e: any) => signalOperatorWarning(`Output hydrate (appdir): ${e?.message ?? e}`)),
       invoke<PropItem[]>("get_props").then(setPropItems).catch((e: any) => signalOperatorWarning(`Output hydrate (props): ${e?.message ?? e}`)),
+      invoke<OutputConfig[]>("outputs_list").then((configs) => {
+        setOutputConfig(configs.find((c) => c.window_label === "output") ?? null);
+      }).catch((e: any) => signalOperatorWarning(`Output hydrate (config): ${e?.message ?? e}`)),
+      invoke<LicenseInfo>("license_status").then(setLicense).catch((e: any) => signalOperatorWarning(`Output hydrate (license): ${e?.message ?? e}`)),
     ]);
+
+    const unlistenLicense = listen<LicenseInfo>("license-updated", (ev) => {
+      setLicense(ev.payload);
+    });
 
     return () => {
       if (mediaStateTimer) clearInterval(mediaStateTimer);
@@ -282,6 +303,8 @@ export function OutputWindow() {
       unlistenMedia.then((f) => f());
       unlistenProps.then((f) => f());
       unlistenMonitorTest.then((f) => f());
+      unlistenOutputConfig.then((f) => f());
+      unlistenLicense.then((f) => f());
     };
   }, []);
 
@@ -558,13 +581,27 @@ export function OutputWindow() {
     }
   }, [audioBg?.path, audioBg?.volume, audioBg?.loopAudio, liveItem?.type, appDataDir]);
 
-  if (settings.is_blanked) {
+  // Apply this output's presentation overrides (theme / scale / background /
+  // blanked) on top of the broadcast settings. All fields are optional, so
+  // with the default config this is a no-op and behavior is unchanged.
+  const effSettings: PresentationSettings = outputConfig?.presentation
+    ? {
+        ...settings,
+        theme: outputConfig.presentation.theme ?? settings.theme,
+        reference_output_height: outputConfig.presentation.reference_output_height ?? settings.reference_output_height,
+        background: outputConfig.presentation.background ?? settings.background,
+        is_blanked: outputConfig.presentation.blanked ?? settings.is_blanked,
+      }
+    : settings;
+  const overlays = outputConfig?.overlays ?? { props: true, lower_third: true, logo: true };
+
+  if (effSettings.is_blanked) {
     return <div className="fixed inset-0 bg-black cursor-none pointer-events-none select-none" />;
   }
 
-  const { colors } = THEMES[settings.theme] ?? THEMES.dark;
-  const isTop = settings.reference_position === "top";
-  const bgStyle = getEffectiveBackground(settings, liveItem, colors, appDataDir);
+  const { colors } = THEMES[effSettings.theme] ?? THEMES.dark;
+  const isTop = effSettings.reference_position === "top";
+  const bgStyle = getEffectiveBackground(effSettings, liveItem, colors, appDataDir);
 
   const refColor = settings.reference_color && settings.reference_color !== ""
     ? settings.reference_color
@@ -718,7 +755,7 @@ export function OutputWindow() {
         />
       )}
 
-      {settings.logo_text ? (
+      {overlays.logo && (settings.logo_text ? (
         <p
           className="absolute bottom-8 right-8 z-60 font-black leading-tight opacity-60 text-right"
           style={{ color: settings.logo_text_color ?? "#ffffff", fontSize: "1.5rem" }}
@@ -739,7 +776,7 @@ export function OutputWindow() {
           className="absolute bottom-8 right-8 w-24 h-24 object-contain opacity-50 z-60"
           alt="Logo"
         />
-      ) : null}
+      ) : null)}
 
       <AnimatePresence mode="wait">
         {liveItem ? (
@@ -910,10 +947,10 @@ export function OutputWindow() {
         )}
       </AnimatePresence>
 
-      <PropsRenderer items={propItems} appDataDir={appDataDir} />
+      {overlays.props && <PropsRenderer items={propItems} appDataDir={appDataDir} />}
 
       <AnimatePresence>
-        {lowerThird && (
+        {overlays.lower_third && lowerThird && (
           <LowerThirdOverlay
             key={lowerThird.data.kind === "Lyrics" ? `lt-${JSON.stringify(lowerThird.data)}` : "lt-static"}
             data={lowerThird.data}
@@ -923,6 +960,17 @@ export function OutputWindow() {
           />
         )}
       </AnimatePresence>
+
+      {license?.status === "active" && tierCapabilities(license.tier).watermark && (
+        <div className="absolute inset-0 z-[65] pointer-events-none flex items-end justify-center pb-3">
+          <span
+            className="text-[12px] font-black uppercase tracking-widest text-white/40"
+            style={{ textShadow: "0 1px 3px rgba(0,0,0,0.7)" }}
+          >
+            Wordlyte Free
+          </span>
+        </div>
+      )}
     </div>
   );
 }

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { X, Search, Zap, BookOpen, Plus } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { QuickBiblePicker } from "./QuickBiblePicker";
+import { tierCapabilities } from "../system/tiers";
 import type { Verse, DisplayItem } from "../types";
 import { useAppStore } from "../store";
 
@@ -11,10 +12,16 @@ interface BiblePickerModalProps {
 }
 
 export function BiblePickerModal({ onSelect, onClose }: BiblePickerModalProps) {
-  const { bibleVersion, setBibleVersion, availableVersions, books, settings } = useAppStore();
+  const { bibleVersion, setBibleVersion, availableVersions, books, settings, license } = useAppStore();
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Verse[]>([]);
   const [searchMode, setSearchMode] = useState<"quick" | "semantic">("quick");
+
+  const versionCap = tierCapabilities(license?.tier).maxBibleVersions;
+  const enabledVersionsAll = availableVersions.filter(v => !(settings.disabled_bible_versions || []).includes(v));
+  const enabledVersions = versionCap < enabledVersionsAll.length
+    ? enabledVersionsAll.slice(0, versionCap)
+    : enabledVersionsAll;
 
   const [searchError, setSearchError] = useState<string | null>(null);
 
@@ -46,7 +53,7 @@ export function BiblePickerModal({ onSelect, onClose }: BiblePickerModalProps) {
 
         <div className="p-4 border-b border-slate-800 bg-slate-900/50 flex flex-col gap-4 shrink-0">
           <div className="flex items-center gap-1.5 flex-wrap">
-            {availableVersions.filter(v => !(settings.disabled_bible_versions || []).includes(v)).map((v) => (
+            {enabledVersions.map((v) => (
               <button
                 key={v}
                 onClick={() => setBibleVersion(v)}

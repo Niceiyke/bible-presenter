@@ -34,6 +34,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: verify license server endpoint is configured
+        shell: bash
+        run: |
+          if grep -q "YOUR_SUBDOMAIN" src-tauri/src/license.rs; then
+            echo "::error::License endpoint placeholder (YOUR_SUBDOMAIN) is still set in src-tauri/src/license.rs. Update default_server_url() to your real workers.dev URL before building a release."
+            exit 1
+          fi
+          echo "License endpoint is configured."
+
       - name: setup node
         uses: actions/setup-node@v4
         with:
@@ -51,6 +60,10 @@ jobs:
           mkdir -p src-tauri/models
           mkdir -p src-tauri/bible_data
           echo "[]" > src-tauri/bible_data/hymns.json
+
+      - name: fetch ffmpeg binaries for bundling
+        shell: pwsh
+        run: ./scripts/fetch-ffmpeg.ps1
 
       - name: build and publish release
         uses: tauri-apps/tauri-action@v0.5

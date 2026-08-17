@@ -118,6 +118,34 @@ describe("useItemActions", () => {
       expect(useAppStore.getState().previousItem).toBeNull();
       expect(useAppStore.getState().backendError).toContain("Failed to send live");
     });
+
+    it("promotes the patched scene composition when commit_staged returns it (Phase 5 zone bus)", async () => {
+      // A scene composition with a verse zone is live; taking a verse live
+      // returns the *patched* composition (backend refreshed the pinned zone).
+      const sceneItem: DisplayItem = {
+        type: "SceneComposition",
+        data: {
+          scene_id: "s1",
+          name: "Cam + Bible",
+          zones: [
+            { id: "cam", item: { type: "Camera", data: { deviceId: "cam1", opacity: 1, objectFit: "cover", mirrored: false } }, source: { type: "camera" }, x: 0, y: 0, w: 0.5, h: 1, fit: "cover", opacity: 1, z: 1 },
+            { id: "verse", item: makeVerse(3), source: { type: "verse" }, x: 0.5, y: 0, w: 0.5, h: 1, fit: "cover", opacity: 1, z: 2 },
+          ],
+        },
+      };
+      useAppStore.setState({ liveItem: sceneItem });
+      mockInvoke.mockResolvedValueOnce(undefined); // stage_item ok
+      mockInvoke.mockResolvedValueOnce(sceneItem);  // commit_staged -> patched scene
+
+      const { result } = renderHook(() => useItemActions());
+      let ok = false;
+      await act(async () => { ok = await result.current.sendLive(makeVerse()); });
+
+      expect(ok).toBe(true);
+      // The scene stays on air (not replaced by the verse); previous is the old scene.
+      expect(useAppStore.getState().liveItem).toEqual(sceneItem);
+      expect(useAppStore.getState().previousItem).toEqual(sceneItem);
+    });
   });
 
   describe("goLive", () => {

@@ -9,7 +9,7 @@ use crate::remote::protocol::{
 };
 use crate::remote::{RemoteControl, DESKTOP_CONTROLLER_ID};
 use crate::state::AppState;
-use crate::store::{CustomSlideData, DisplayItem, LowerThirdData, LyricSection, Schedule, ScheduleEntry, SearchResponse, Song, SongSlideData};
+use crate::store::{CustomSlideData, DisplayItem, LowerThirdData, LyricSection, SceneCompositionData, SceneZone, SceneZoneSource, Schedule, ScheduleEntry, SearchResponse, Song, SongSlideData};
 use serde_json::json;
 use tauri::AppHandle;
 
@@ -35,6 +35,53 @@ async fn emit_phone_cameras(app: &AppHandle, control: &RemoteControl) {
 // Shared display operations (used by both Tauri commands and remote dispatch)
 // ---------------------------------------------------------------------------
 
+/// Map an incoming display item to the `SceneZoneSource` bus class that would
+/// consume it inside a scene composition. `SceneComposition` items never
+/// follow a zone (a zone can't host a nested scene) so they return `None`.
+fn zone_source_for(item: &DisplayItem) -> Option<SceneZoneSource> {
+    match item {
+        DisplayItem::Verse(_) => Some(SceneZoneSource::Verse),
+        DisplayItem::Camera(_) => Some(SceneZoneSource::Camera),
+        DisplayItem::Timer(_) => Some(SceneZoneSource::Timer),
+        DisplayItem::Song(_) => Some(SceneZoneSource::Song),
+        DisplayItem::Media(_) => Some(SceneZoneSource::Media),
+        DisplayItem::CustomSlide(_) => Some(SceneZoneSource::Slide),
+        DisplayItem::SceneComposition(_) => None,
+    }
+}
+
+/// Phase 5 — zones as bus primitives.
+///
+/// When a scene composition is the current live item and a new item is taken
+/// live, refresh the zones whose `source` matches the incoming item's content
+/// class *in place* instead of replacing the whole scene. Returns the patched
+/// composition when at least one zone follows the incoming class, or `None`
+/// when the live item isn't a composition or nothing follows it (callers fall
+/// back to the normal replace-everything take).
+fn patch_scene_zones(live: &DisplayItem, incoming: &DisplayItem) -> Option<DisplayItem> {
+    let DisplayItem::SceneComposition(comp) = live else { return None };
+    let source = zone_source_for(incoming)?;
+    let mut patched = false;
+    let zones: Vec<SceneZone> = comp.zones.iter().map(|z| {
+        if z.source.as_ref() == Some(&source) {
+            patched = true;
+            let mut z2 = z.clone();
+            z2.item = incoming.clone();
+            z2
+        } else {
+            z.clone()
+        }
+    }).collect();
+    if !patched {
+        return None;
+    }
+    Some(DisplayItem::SceneComposition(SceneCompositionData {
+        scene_id: comp.scene_id.clone(),
+        name: comp.name.clone(),
+        zones,
+    }))
+}
+
 pub fn op_stage(app: &AppHandle, state: &AppState, item: DisplayItem, source: Option<String>, revision: u64) {
     *state.presentation.staged_item.lock() = Some(item.clone());
     emit_checked(app, "item-staged", &item);
@@ -42,15 +89,23 @@ pub fn op_stage(app: &AppHandle, state: &AppState, item: DisplayItem, source: Op
     let _ = revision;
 }
 
+/// Commit the staged item as live, patching pinned scene-zone buses when the
+/// current live item is a composition that follows the staged content class.
 pub fn op_commit_staged(app: &AppHandle, state: &AppState, source: Option<String>) -> Option<DisplayItem> {
     let mut live = state.presentation.live_item.lock();
     let staged = state.presentation.staged_item.lock().clone();
-    *live = staged.clone();
+    let committed = match (&*live, &staged) {
+        (Some(live_item), Some(staged_item)) => {
+            Some(patch_scene_zones(live_item, staged_item).unwrap_or_else(|| staged_item.clone()))
+        }
+        _ => staged.clone(),
+    };
+    *live = committed.clone();
     drop(live);
-    let update = LiveItemUpdate { detected_item: staged.clone() };
+    let update = LiveItemUpdate { detected_item: committed.clone() };
     emit_checked(app, "live-item-update", &update);
-    state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": staged }), source);
-    staged
+    state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": committed }), source);
+    committed
 }
 
 pub fn op_clear_live(app: &AppHandle, state: &AppState, source: Option<String>) {
@@ -63,10 +118,19 @@ pub fn op_clear_live(app: &AppHandle, state: &AppState, source: Option<String>) 
 }
 
 pub fn op_go_live_item(app: &AppHandle, state: &AppState, item: DisplayItem, source: Option<String>) {
-    *state.presentation.live_item.lock() = Some(item.clone());
-    let update = LiveItemUpdate { detected_item: Some(item.clone()) };
+    let mut live = state.presentation.live_item.lock();
+    let committed = match &*live {
+        // Phase 5: when a scene composition is live and the sent item matches
+        // a pinned zone bus, refresh that zone in place instead of replacing
+        // the whole scene (e.g. remote "camera.send_live" into a camera zone).
+        Some(live_item) => patch_scene_zones(live_item, &item).unwrap_or(item.clone()),
+        None => item.clone(),
+    };
+    *live = Some(committed.clone());
+    drop(live);
+    let update = LiveItemUpdate { detected_item: Some(committed.clone()) };
     emit_checked(app, "live-item-update", &update);
-    state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": item }), source);
+    state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": committed }), source);
 }
 
 pub fn op_clear_all(app: &AppHandle, state: &AppState, source: Option<String>) {
@@ -1317,5 +1381,132 @@ mod tests {
             text_el(serde_json::json!({ "type": "doc", "content": [{ "type": "paragraph", "content": [{ "text": "Body" }] }] }), Some("body".into())),
         ]);
         assert_eq!(slide_title(&multi, 0), "Intro");
+    }
+
+    fn verse_item(book: &str, verse: i32, text: &str) -> DisplayItem {
+        DisplayItem::Verse(crate::store::Verse {
+            book: book.to_string(),
+            chapter: 1,
+            verse,
+            text: text.to_string(),
+            version: "test".to_string(),
+            split_index: None,
+            total_splits: None,
+            score: None,
+        })
+    }
+
+    fn camera_item(device: &str) -> DisplayItem {
+        DisplayItem::Camera(crate::store::CameraBackground {
+            device_id: device.to_string(),
+            opacity: 1.0,
+            object_fit: "cover".to_string(),
+            mirrored: false,
+        })
+    }
+
+    fn zone(id: &str, source: Option<SceneZoneSource>, item: DisplayItem) -> SceneZone {
+        SceneZone {
+            id: id.to_string(),
+            item,
+            source,
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+            fit: "cover".to_string(),
+            opacity: 1.0,
+            z: 1,
+            muted: None,
+            label: None,
+            font_size: None,
+            font_family: None,
+        }
+    }
+
+    fn scene(zones: Vec<SceneZone>) -> DisplayItem {
+        DisplayItem::SceneComposition(SceneCompositionData {
+            scene_id: "s1".to_string(),
+            name: "Test".to_string(),
+            zones,
+        })
+    }
+
+    #[test]
+    fn zone_source_matches_item_kind() {
+        assert_eq!(zone_source_for(&verse_item("John", 3, "For God so loved")), Some(SceneZoneSource::Verse));
+        assert_eq!(zone_source_for(&camera_item("cam1")), Some(SceneZoneSource::Camera));
+        assert_eq!(
+            zone_source_for(&DisplayItem::Timer(crate::store::TimerData { timer_type: "clock".into(), duration_secs: None, label: None, started_at: None })),
+            Some(SceneZoneSource::Timer)
+        );
+        // A scene composition never feeds a zone.
+        assert_eq!(zone_source_for(&scene(vec![])), None);
+    }
+
+    #[test]
+    fn patch_updates_matching_pinned_zone_in_place() {
+        let live = scene(vec![
+            zone("cam", Some(SceneZoneSource::Camera), camera_item("cam1")),
+            zone("verse", Some(SceneZoneSource::Verse), verse_item("John", 3, "old")),
+        ]);
+        let incoming = verse_item("John", 3, "For God so loved");
+        let patched = patch_scene_zones(&live, &incoming).unwrap();
+
+        let DisplayItem::SceneComposition(comp) = patched else { panic!("expected composition") };
+        // Camera zone untouched, verse zone refreshed.
+        assert_eq!(comp.zones.len(), 2);
+        let cam = comp.zones.iter().find(|z| z.id == "cam").unwrap();
+        let v = comp.zones.iter().find(|z| z.id == "verse").unwrap();
+        assert!(matches!(&cam.item, DisplayItem::Camera(c) if c.device_id == "cam1"));
+        assert!(matches!(&v.item, DisplayItem::Verse(x) if x.text == "For God so loved"));
+    }
+
+    #[test]
+    fn patch_returns_none_when_no_zone_follows_incoming() {
+        // Live scene has only a camera zone; a verse take must NOT patch.
+        let live = scene(vec![zone("cam", Some(SceneZoneSource::Camera), camera_item("cam1"))]);
+        assert!(patch_scene_zones(&live, &verse_item("John", 3, "hi")).is_none());
+
+        // Static (unpinned) zones never patch, so the whole scene is replaced.
+        let static_live = scene(vec![zone("verse", None, verse_item("John", 3, "old"))]);
+        assert!(patch_scene_zones(&static_live, &verse_item("John", 3, "new")).is_none());
+
+        // Incoming scene composition never patches.
+        assert!(patch_scene_zones(&live, &scene(vec![])).is_none());
+    }
+
+    #[test]
+    fn patch_preserves_scene_identity_and_geometry() {
+        let live = scene(vec![
+            zone("cam", Some(SceneZoneSource::Camera), camera_item("cam1")),
+            zone("verse", Some(SceneZoneSource::Verse), verse_item("John", 3, "old")),
+        ]);
+        let patched = patch_scene_zones(&live, &verse_item("John", 3, "new")).unwrap();
+        let DisplayItem::SceneComposition(comp) = patched else { panic!("expected composition") };
+        assert_eq!(comp.scene_id, "s1");
+        assert_eq!(comp.name, "Test");
+        let v = comp.zones.iter().find(|z| z.id == "verse").unwrap();
+        assert_eq!(v.x, 0.0);
+        assert_eq!(v.w, 1.0);
+        assert_eq!(v.source, Some(SceneZoneSource::Verse));
+    }
+
+    #[test]
+    fn scene_zone_source_serde_round_trips() {
+        let z = zone("verse", Some(SceneZoneSource::Verse), verse_item("John", 3, "hi"));
+        let json = serde_json::to_value(&z).unwrap();
+        assert_eq!(json["source"]["type"], "verse");
+        let back: SceneZone = serde_json::from_value(json).unwrap();
+        assert_eq!(back.source, Some(SceneZoneSource::Verse));
+
+        // Absent source defaults to a static zone.
+        let static_json = serde_json::json!({
+            "id": "z", "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0,
+            "fit": "cover", "opacity": 1.0, "z": 1,
+            "item": { "type": "Camera", "data": { "deviceId": "d", "opacity": 1.0, "objectFit": "cover", "mirrored": false } }
+        });
+        let back2: SceneZone = serde_json::from_value(static_json).unwrap();
+        assert_eq!(back2.source, None);
     }
 }

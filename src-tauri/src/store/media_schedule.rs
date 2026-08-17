@@ -765,6 +765,26 @@ pub struct LtPreset {
 // Scenes (recallable bundles of settings + props + lower-third)
 // ---------------------------------------------------------------------------
 
+/// A zone's content source (Phase 5 — zones as bus primitives).
+///
+/// `Item` is the legacy/static mode: the zone renders the frozen `item`
+/// snapshot. The remaining variants *pin* the zone to a live content class:
+/// when that class of content is taken live while the scene composition is on
+/// air, the zone's `item` is refreshed in place instead of replacing the
+/// whole scene (e.g. a `verse` zone advances as the operator steps through
+/// the Bible, a `timer` zone follows the live countdown).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum SceneZoneSource {
+    Item,
+    Verse,
+    Camera,
+    Timer,
+    Song,
+    Media,
+    Slide,
+}
+
 /// A single composited zone inside a scene layout. Position/size are
 /// normalized 0..1 over the reference output canvas; zones are stacked by
 /// `z` and each renders its `item` (camera, media, verse, slide, song, timer)
@@ -774,6 +794,10 @@ pub struct LtPreset {
 pub struct SceneZone {
     pub id: String,
     pub item: DisplayItem,
+    /// Live content source this zone follows. `None` (or `Item`) renders the
+    /// frozen `item` snapshot; a live source keeps `item` refreshed on take.
+    #[serde(default)]
+    pub source: Option<SceneZoneSource>,
     #[serde(default)]
     pub x: f64,
     #[serde(default)]
@@ -792,6 +816,12 @@ pub struct SceneZone {
     pub muted: Option<bool>,
     #[serde(default)]
     pub label: Option<String>,
+    /// Per-zone typography override (Verse/Song zones). `None` inherits the
+    /// global output font settings (or the song's own font).
+    #[serde(default)]
+    pub font_size: Option<f64>,
+    #[serde(default)]
+    pub font_family: Option<String>,
 }
 
 fn zone_fit_default() -> String { "cover".to_string() }
@@ -1210,15 +1240,16 @@ impl MediaScheduleStore {
 
     /// Best-effort video metadata + thumbnail extraction via ffmpeg. Returns
     /// (thumbnail_path, duration_secs, width, height) where None values mean
-    /// "could not determine". ffmpeg is not bundled; if it isn't on PATH the
-    /// whole probe degrades to (None, None, None, None) instead of erroring.
+    /// "could not determine". ffmpeg is resolved bundled-first (with a PATH
+    /// fallback); if it isn't available the whole probe degrades to
+    /// (None, None, None, None) instead of erroring.
     fn probe_video(thumb_dir: &Path, media_path: &str, id: &str) -> (Option<String>, Option<f64>, Option<i64>, Option<i64>) {
         use std::process::Command;
         let thumb_path = thumb_dir.join(format!("{}.jpg", id));
 
         // 1) Frame extraction (thumbnail). -y overwrite, scale to 320w.
         if !thumb_path.exists() {
-            let ok = Command::new("ffmpeg")
+            let ok = Command::new(crate::binpaths::ffmpeg_path())
                 .args(["-y", "-ss", "1", "-i", media_path, "-frames:v", "1", "-vf", "scale=320:-1", "-q:v", "4"])
                 .arg(&thumb_path)
                 .stdout(std::process::Stdio::null())
@@ -1236,7 +1267,7 @@ impl MediaScheduleStore {
         let mut duration: Option<f64> = None;
         let mut width: Option<i64> = None;
         let mut height: Option<i64> = None;
-        if let Ok(out) = Command::new("ffprobe")
+        if let Ok(out) = Command::new(crate::binpaths::ffprobe_path())
             .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "format=duration:stream=width,height", "-of", "json"])
             .arg(media_path)
             .output()
@@ -1256,7 +1287,7 @@ impl MediaScheduleStore {
     /// Best-effort audio duration via ffprobe (None if ffmpeg is unavailable).
     fn probe_audio_duration(media_path: &str) -> Option<f64> {
         use std::process::Command;
-        if let Ok(out) = Command::new("ffprobe")
+        if let Ok(out) = Command::new(crate::binpaths::ffprobe_path())
             .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1"])
             .arg(media_path)
             .output()

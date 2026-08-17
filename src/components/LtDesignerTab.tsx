@@ -4,6 +4,7 @@ import { emit } from "@tauri-apps/api/event";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { writeFile, readTextFile } from "@tauri-apps/plugin-fs";
 import { useAppStore } from "../store";
+import { tierCapabilities } from "../system/tiers";
 import { LowerThirdPreview } from "./LowerThirdPreview";
 import { stableId } from "../utils";
 import { useLtFlatLines } from "../hooks/useLtFlatLines";
@@ -248,7 +249,10 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
     media,
     ltPreviewBg, setLtPreviewBg,
     settings,
+    license,
   } = useAppStore();
+  const customTemplatesBlocked =
+    !!license && license.status === "active" && !tierCapabilities(license.tier).customTemplates;
 
   const ltFlatLines = useLtFlatLines();
 
@@ -277,6 +281,10 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
 
   const handleSave = () => {
     const exists = ltSavedTemplates.some(t => t.id === ltTemplate.id);
+    if (!exists && customTemplatesBlocked) {
+      onSetToast("Custom templates are a Pro feature. Upgrade in Settings → License.");
+      return;
+    }
     const newList = exists
       ? ltSavedTemplates.map(t => t.id === ltTemplate.id ? ltTemplate : t)
       : [...ltSavedTemplates, ltTemplate];
@@ -286,6 +294,10 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
   };
 
   const handleDuplicate = () => {
+    if (customTemplatesBlocked) {
+      onSetToast("Custom templates are a Pro feature. Upgrade in Settings → License.");
+      return;
+    }
     const n: LowerThirdTemplate = { ...ltTemplate, id: stableId(), name: `${ltTemplate.name} Copy` };
     saveTemplates([...ltSavedTemplates, n], "Template duplicated");
     setLtTemplate(n);
@@ -307,6 +319,10 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
   };
 
   const importTemplate = async () => {
+    if (customTemplatesBlocked) {
+      onSetToast("Custom templates are a Pro feature. Upgrade in Settings → License.");
+      return;
+    }
     try {
       const path = await open({ multiple: false, filters: [{ name: "Lower Third Template", extensions: ["lttemplate"] }] });
       if (path && typeof path === "string") {

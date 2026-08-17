@@ -67,6 +67,10 @@ fn main() {
                 }
             };
 
+            // Media binaries (ffmpeg/ffprobe) resolve bundled-first from
+            // `{resource_dir}/bin`, falling back to PATH when absent.
+            wordlyte_lib::binpaths::init(&resource_path);
+
             let app_data_dir = app.path()
                 .app_local_data_dir()
                 .or_else(|_| app.path().app_data_dir())
@@ -132,6 +136,12 @@ fn main() {
 
             let remote_control = Arc::new(remote::RemoteControl::new(remote_files_dir, &app_data_dir));
 
+            let outputs = Arc::new(wordlyte_lib::outputs::OutputManager::new(&app_data_dir));
+
+            let license = Arc::new(wordlyte_lib::license::LicenseManager::new(&app_data_dir));
+            let license_info = license.status();
+            log_msg(app, &format!("License status: {:?} (machine {})", license_info.status, &license_info.machine_id_hash[..16.min(license_info.machine_id_hash.len())]));
+
             let state = AppState {
                 presentation: PresentationState {
                     live_item: Arc::new(Mutex::new(None)),
@@ -145,6 +155,10 @@ fn main() {
                 app_data_dir,
                 download_in_progress: Arc::new(AtomicBool::new(false)),
                 remote: remote_control,
+                outputs,
+                rtmp: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                cpu_sampler: Arc::new(Mutex::new(None)),
+                license,
             };
 
             app.manage(state);
@@ -266,6 +280,25 @@ fn main() {
             wordlyte_lib::commands::scenes::delete_scene,
             wordlyte_lib::commands::scenes::apply_scene,
             wordlyte_lib::commands::scenes::capture_scene,
+            wordlyte_lib::commands::outputs::outputs_list,
+            wordlyte_lib::commands::outputs::outputs_states,
+            wordlyte_lib::commands::outputs::outputs_update,
+            wordlyte_lib::commands::outputs::outputs_set_visible,
+            wordlyte_lib::commands::recordings::recordings_list,
+            wordlyte_lib::commands::recordings::recording_save,
+            wordlyte_lib::commands::recordings::recording_delete,
+            wordlyte_lib::commands::recordings::recordings_open_folder,
+            wordlyte_lib::commands::rtmp::rtmp_start,
+            wordlyte_lib::commands::rtmp::rtmp_send,
+            wordlyte_lib::commands::rtmp::rtmp_send_audio,
+            wordlyte_lib::commands::rtmp::rtmp_stop,
+            wordlyte_lib::commands::rtmp::rtmp_status,
+            wordlyte_lib::commands::ndi::ndi_status,
+            wordlyte_lib::commands::ndi::ndi_start,
+            wordlyte_lib::commands::ndi::ndi_send,
+            wordlyte_lib::commands::ndi::ndi_stop,
+            wordlyte_lib::commands::system::system_info,
+            wordlyte_lib::commands::system::system_metrics,
             wordlyte_lib::commands::assets::get_startup_status,
             wordlyte_lib::commands::assets::download_bible_db_cmd,
             wordlyte_lib::commands::remote::remote_enable,
@@ -282,6 +315,10 @@ fn main() {
             wordlyte_lib::commands::remote::phone_camera_answer,
             wordlyte_lib::commands::remote::phone_camera_ice,
             wordlyte_lib::commands::remote::list_phone_cameras,
+            wordlyte_lib::commands::license::license_status,
+            wordlyte_lib::commands::license::license_activate,
+            wordlyte_lib::commands::license::license_refresh,
+            wordlyte_lib::commands::license::license_deactivate,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -6,6 +6,7 @@ import { displayItemLabel, getItemUid, resolvePath } from "../../utils";
 import { PreviewCard } from "../PreviewCard";
 import { LowerThirdPreview } from "../LowerThirdPreview";
 import { PropsRenderer } from "../shared/Renderers";
+import { ProgramFeedPreview } from "../outputs/ProgramFeedPreview";
 import { ClearAllModal } from "./ClearAllModal";
 import { Button, ProgressBar } from "../ui";
 import { itemMetaAt } from "../../items/registry";
@@ -53,6 +54,7 @@ export function Cockpit({
   const [clearModalOpen, setClearModalOpen] = useState(false);
   const [clearSnapshot, setClearSnapshot] = useState<ClearSnapshot | null>(null);
   const [, setNowTick] = useState(0);
+  const [pgmCanvasView, setPgmCanvasView] = useState(false);
 
   // Re-render every second while a live timer is showing so countdown
   // progress/remaining time stays accurate in the cockpit metadata row.
@@ -196,6 +198,12 @@ export function Cockpit({
                   <Clock size={9} /> Previous
                 </button>
               )}
+              <button onClick={() => setPgmCanvasView((v) => !v)}
+                aria-pressed={pgmCanvasView}
+                className={`px-2 py-1 text-[8px] font-black uppercase rounded flex items-center gap-1 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)] ${pgmCanvasView ? "bg-tool-design text-white" : "bg-console-surface-strong text-console-text-muted hover:text-console-text"}`}
+                title="Toggle the Phase 2 canvas compositor preview (what recording/streaming will capture)">
+                <Layers size={9} /> PGM
+              </button>
               <Button variant="live" size="md" onClick={clearLive} disabled={clearBusy} loading={clearBusy}
                 className="px-3" aria-label="Clear live output only">
                 <X size={12} /> Clear Live
@@ -203,11 +211,19 @@ export function Cockpit({
             </div>
           </div>
           <div className="w-full rounded-lg overflow-hidden ring-2 ring-state-live/30 bg-black relative" style={{ aspectRatio: "16/9" }}>
-            <PreviewCard item={liveItem} label="" accent="" badge={null} empty="Output is empty" hideHeader />
+            {pgmCanvasView ? (
+              /* Phase 2 canvas compositor — the single render path that
+                  recorder/streamer surfaces will capture. Its rasterization
+                  includes background, content, logo, props, lower third, and
+                  blanking, so the DOM overlays below are skipped in this mode. */
+              <ProgramFeedPreview className="absolute inset-0 w-full h-full" />
+            ) : (
+              <PreviewCard item={liveItem} label="" accent="" badge={null} empty="Output is empty" hideHeader />
+            )}
 
             {/* Background logo — full-screen black backdrop, mirroring the
                 output window's z-50 layer exactly. */}
-            {!settings.is_blanked && settings.show_background_logo && (settings.background_logo_path || settings.background_logo_text) && (
+            {!pgmCanvasView && !settings.is_blanked && settings.show_background_logo && (settings.background_logo_path || settings.background_logo_text) && (
               <div className="absolute inset-0 z-50 bg-black">
                 {settings.background_logo_text ? (
                   <div className="w-full h-full flex items-center justify-center px-4 text-center">
@@ -239,7 +255,7 @@ export function Cockpit({
             )}
 
             {/* Corner logo (bottom-right), mirroring the output's z-60 layer. */}
-            {!settings.is_blanked && (settings.logo_text || settings.logo_path) && (
+            {!pgmCanvasView && !settings.is_blanked && (settings.logo_text || settings.logo_path) && (
               <div className="absolute bottom-2 right-2 z-60">
                 {settings.logo_text ? (
                   <p
@@ -267,13 +283,13 @@ export function Cockpit({
             )}
 
             {/* Persistent props overlays — same layer as the output window. */}
-            {!settings.is_blanked && propItems.length > 0 && (
+            {!pgmCanvasView && !settings.is_blanked && propItems.length > 0 && (
               <PropsRenderer items={propItems} appDataDir={appDataDir} />
             )}
 
             {/* Lower third — authoritative backend state, shown whenever it is
                 on air regardless of the local ltVisible flag. */}
-            {!settings.is_blanked && currentLowerThird && (
+            {!pgmCanvasView && !settings.is_blanked && currentLowerThird && (
               <LowerThirdPreview
                 data={currentLowerThird.data}
                 template={currentLowerThird.template}

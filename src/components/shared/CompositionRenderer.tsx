@@ -9,7 +9,7 @@ import type {
 } from "../../types";
 import { THEMES } from "../../types";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { resolvePath } from "../../utils";
+import { resolvePath, getEffectiveBackground, getVideoBackground } from "../../utils";
 import {
   CustomSlideRenderer,
   TimerRenderer,
@@ -62,14 +62,21 @@ function ZoneVerse({
   settings,
   colors,
   windowScale,
+  font_size,
+  font_family,
 }: {
   item: Extract<DisplayItem, { type: "Verse" }>;
   settings: PresentationSettings;
   colors: ThemeColors;
   windowScale: number;
+  font_size?: number;
+  font_family?: string;
 }) {
   const isTop = settings.reference_position === "top";
-  const fontPt = Math.max(16, (settings.font_size * windowScale) / 2);
+  const fontPt = font_size != null
+    ? Math.max(8, font_size * windowScale)
+    : Math.max(16, (settings.font_size * windowScale) / 2);
+  const fontFamily = font_family ?? settings.verse_font_family ?? "Georgia, serif";
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center p-[6%] text-center">
       <div className="w-full flex flex-col items-center gap-3">
@@ -81,7 +88,7 @@ function ZoneVerse({
         )}
         <p
           className="leading-tight drop-shadow-xl"
-          style={{ color: colors.verseText, fontFamily: settings.verse_font_family ?? "Georgia, serif", fontSize: `${fontPt}pt` }}
+          style={{ color: colors.verseText, fontFamily, fontSize: `${fontPt}pt` }}
         >
           {item.data.text}
         </p>
@@ -176,6 +183,43 @@ function ZoneCamera({
 }
 
 /**
+ * Zone background layer — paints the content item's *effective* background
+ * (settings bible/media overrides, or the song's per-song background) behind
+ * the zone content, mirroring the single-item output path. Only used for
+ * zones whose renderer does not draw its own background (Verse, Song, Media);
+ * custom slides and cameras paint themselves.
+ */
+function ZoneBackground({
+  item,
+  settings,
+  colors,
+  appDataDir,
+}: {
+  item: DisplayItem;
+  settings: PresentationSettings;
+  colors: ThemeColors;
+  appDataDir: string | null;
+}) {
+  const style = getEffectiveBackground(settings, item, colors, appDataDir);
+  const videoBg = getVideoBackground(settings, item);
+  return (
+    <div className="absolute inset-0" style={style}>
+      {videoBg?.path && (
+        <video
+          src={convertFileSrc(resolvePath(videoBg.path, appDataDir))}
+          className="absolute inset-0 w-full h-full"
+          style={{ objectFit: videoBg.objectFit ?? "cover" }}
+          autoPlay
+          loop
+          muted
+          playsInline
+        />
+      )}
+    </div>
+  );
+}
+
+/**
  * Renders a single zone's content inside its (already positioned) container.
  * Reuses the same renderers as the single-item output path so compositions
  * look identical to live content.
@@ -196,6 +240,10 @@ export function ZoneContent({
   phoneStreams?: Record<string, MediaStream>;
 }) {
   const item = zone.item;
+  // Content scales with the zone's height relative to the full canvas, so a
+  // zone rendered at 50% of the output height draws text at half the full-canvas
+  // scale (matches the output and makes previews resize live as you drag).
+  const zoneScale = windowScale * (zone.h || 1);
   const container: CSSProperties = {
     position: "absolute",
     left: `${zone.x * 100}%`,
@@ -210,13 +258,13 @@ export function ZoneContent({
   let content: React.ReactNode = null;
   switch (item.type) {
     case "Verse":
-      content = <ZoneVerse item={item} settings={settings} colors={colors} windowScale={windowScale} />;
+      content = <ZoneVerse item={item} settings={settings} colors={colors} windowScale={zoneScale} font_size={zone.font_size} font_family={zone.font_family} />;
       break;
     case "Camera":
       content = <ZoneCamera item={item} phoneStreams={phoneStreams} />;
       break;
     case "CustomSlide":
-      content = <CustomSlideRenderer slide={item.data} scale={windowScale} appDataDir={appDataDir} theme={item.data.theme} />;
+      content = <CustomSlideRenderer slide={item.data} scale={zoneScale} appDataDir={appDataDir} theme={item.data.theme} />;
       break;
     case "Media":
       content = <ZoneMedia item={item} fit={zone.fit} muted={zone.muted} appDataDir={appDataDir} />;
@@ -228,9 +276,11 @@ export function ZoneContent({
       content = item.data.style === "FullSlide" || !item.data.style ? (
         <SongSlideRenderer
           data={item.data}
-          scale={windowScale}
+          scale={zoneScale}
           fontSize={settings.font_size}
           fontFamily={settings.verse_font_family}
+          fontSizeOverride={zone.font_size}
+          fontFamilyOverride={zone.font_family}
           color={colors.verseText}
           showSectionLabel={!!settings.show_song_section_labels}
         />
@@ -244,7 +294,14 @@ export function ZoneContent({
       break;
   }
 
-  return <div style={container}>{content}</div>;
+  return (
+    <div style={container}>
+      {(item.type === "Verse" || item.type === "Song" || item.type === "Media") && (
+        <ZoneBackground item={item} settings={settings} colors={colors} appDataDir={appDataDir} />
+      )}
+      {content}
+    </div>
+  );
 }
 
 /**

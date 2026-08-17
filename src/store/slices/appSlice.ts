@@ -16,8 +16,8 @@ export interface AppSlice {
   setLabel: (v: string) => void;
   settings: PresentationSettings;
   setSettings: (v: PresentationSettings | ((prev: PresentationSettings) => PresentationSettings)) => void;
-  activeTab: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "lt-designer" | "camera" | "scenes" | "remote";
-  setActiveTab: (v: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "lt-designer" | "camera" | "scenes" | "remote") => void;
+  activeTab: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "lt-designer" | "camera" | "scenes" | "scene-builder" | "remote" | "recordings" | "streaming" | "diagnostics";
+  setActiveTab: (v: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "lt-designer" | "camera" | "scenes" | "scene-builder" | "remote" | "recordings" | "streaming" | "diagnostics") => void;
   toast: string | null;
   setToast: (v: string | null) => void;
   sidebarWidth: number;
@@ -75,6 +75,9 @@ export interface AppSlice {
   setTemplates: (v: SlideTemplate[] | ((prev: SlideTemplate[]) => SlideTemplate[])) => void;
   scenes: Scene[];
   setScenes: (v: Scene[] | ((prev: Scene[]) => Scene[])) => void;
+  /** The scene currently open in the full-page Scene Builder tab. */
+  sceneBuilderScene: Scene | null;
+  setSceneBuilderScene: (v: Scene | null) => void;
   backendError: string | null;
   setBackendError: (v: string | null) => void;
   busyActions: string[];
@@ -161,6 +164,8 @@ export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) =>
   setTemplates: (v) => set((s) => ({ templates: typeof v === "function" ? v(s.templates) : v })),
   scenes: [],
   setScenes: (v) => set((s) => ({ scenes: typeof v === "function" ? v(s.scenes) : v })),
+  sceneBuilderScene: null,
+  setSceneBuilderScene: (v) => set({ sceneBuilderScene: v }),
   backendError: null,
   setBackendError: (v) => set({ backendError: v }),
   busyActions: [],

@@ -9,6 +9,7 @@ import { useAppStore } from "../store";
 import { QuickBiblePicker } from "./QuickBiblePicker";
 import { Button, IconButton, SearchField, EmptyState } from "./ui";
 import { displayItemLabel } from "../utils";
+import { tierCapabilities } from "../system/tiers";
 import type { DisplayItem, Verse } from "../types";
 
 interface BibleTabProps {
@@ -45,6 +46,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
     liveItem,
     nextVerse,
     setToast,
+    license,
   } = useAppStore();
 
   const [historyTab, setHistoryTab] = useState<"bible" | "media" | "presentation">("bible");
@@ -288,7 +290,11 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
     </div>
   );
 
-  const enabledVersions = availableVersions.filter(v => !(settings.disabled_bible_versions || []).includes(v));
+  const enabledVersionsAll = availableVersions.filter(v => !(settings.disabled_bible_versions || []).includes(v));
+  const versionCap = tierCapabilities(license?.tier).maxBibleVersions;
+  const enabledVersions = versionCap < enabledVersionsAll.length
+    ? enabledVersionsAll.slice(0, versionCap)
+    : enabledVersionsAll;
 
   return (
     <div className="flex flex-col gap-4">

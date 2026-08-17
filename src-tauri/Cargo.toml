@@ -39,10 +39,21 @@ tower-http = { version = "0.6", features = ["fs"] }
 webrtc = "0.11"
 tracing = "0.1"
 log = "0.4"
+sysinfo = "0.33"
+machine-uid = "0.4"
 
 [lib]
 name = "wordlyte_lib"
 crate-type = ["rlib"]
+
+# NDI output (Phase 8 scaffold). The sender pipeline (H.264 -> NDI|HX via the
+# official NDI SDK) is feature-gated: it needs the NDI 6 SDK installed (EULA,
+# see docs/OUTPUT_MANAGER_DESIGN.md) plus `grafton-ndi` + bindgen. The command
+# surface in `commands/ndi.rs` exists in both modes; `cargo build --features ndi`
+# enables the real pipeline once the dependency is added.
+[features]
+default = []
+ndi = []
 
 [[bin]]
 name = "wordlyte"

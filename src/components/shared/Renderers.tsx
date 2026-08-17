@@ -466,6 +466,8 @@ export function SongSlideRenderer({
   scale = 1,
   fontSize = 72,
   fontFamily = "Georgia, serif",
+  fontSizeOverride,
+  fontFamilyOverride,
   color = "#ffffff",
   showSectionLabel = false,
 }: {
@@ -473,13 +475,17 @@ export function SongSlideRenderer({
   scale?: number;
   fontSize?: number;
   fontFamily?: string;
+  /** Per-zone typography override (Scene Builder). Wins over the song's own
+   *  font and the output settings. */
+  fontSizeOverride?: number;
+  fontFamilyOverride?: string;
   color?: string;
   /** Whether the section label ("Verse 1", "Chorus") is projected. Controlled by
    *  the `show_song_section_labels` output setting; off by default. */
   showSectionLabel?: boolean;
 }) {
-  const finalFontSize = data.font_size || fontSize;
-  const finalFontFamily = data.font || fontFamily;
+  const finalFontSize = fontSizeOverride ?? (data.font_size || fontSize);
+  const finalFontFamily = fontFamilyOverride ?? (data.font || fontFamily);
   const finalColor = data.color || color;
   const fontWeight = data.font_weight || "normal";
 

@@ -1,0 +1,74 @@
+name: Deploy License Worker
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "workers/license/**"
+      - ".github/workflows/deploy-license-worker.yml"
+    branches: [ main ]
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_URL: https://wordlyte-license.oyomworld.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: verify wrangler.toml is configured
+        shell: bash
+        run: |
+          if grep -q "REPLACE_WITH_YOUR_KV_NAMESPACE_ID" workers/license/wrangler.toml; then
+            echo "::error::wrangler.toml still contains the KV namespace placeholder. Set the real KV namespace id before deploying."
+            exit 1
+          fi
+          echo "wrangler.toml is configured."
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: install wrangler
+        working-directory: workers/license
+        run: npm install
+
+      - name: run worker tests
+        working-directory: workers/license
+        run: npm test
+
+      - name: set ADMIN_TOKEN secret (from GitHub secret)
+        shell: bash
+        working-directory: workers/license
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          if [ -n "$ADMIN_TOKEN" ]; then
+            echo "$ADMIN_TOKEN" | npx wrangler secret put ADMIN_TOKEN
+          else
+            echo "::warning::ADMIN_TOKEN secret not set in GitHub; skipping secret write."
+          fi
+
+      - name: deploy worker
+        working-directory: workers/license
+        run: npx wrangler deploy
+
+      - name: smoke test deployed worker
+        shell: bash
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          if [ -z "$ADMIN_TOKEN" ]; then
+            echo "::warning::ADMIN_TOKEN secret not set in GitHub; skipping smoke test."
+            exit 0
+          fi
+          for i in $(seq 1 10); do
+            if curl -sf "$WORKER_URL/licenses" -H "authorization: Bearer $ADMIN_TOKEN" | grep -q '"status":"ok"'; then
+              echo "Smoke test passed."
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::Smoke test failed — worker not healthy after deploy."
+          exit 1

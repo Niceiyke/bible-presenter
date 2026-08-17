@@ -26,6 +26,9 @@ export interface EventMap {
   "phone-camera-stop": { device_id: string };
   "phone-cameras-changed": { cameras: { device_id: string; device_name: string; orientation?: "portrait" | "landscape" }[] };
   "remote-device-event": { event: "connected" | "disconnected" | "revoked" | "auto_revoked"; device_name: string };
+  "output-config-changed": import("../types").OutputConfig[];
+  "output-state-changed": import("../types").OutputState;
+  "license-updated": import("../types/license").LicenseInfo;
 }
 
 export type TauriEventName = keyof EventMap;

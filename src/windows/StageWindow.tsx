@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from "react";
 import { useSlideFit } from "../hooks/useSlideFit";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { DisplayItem, PresentationSettings, TimerData, LowerThirdData, LowerThirdTemplate } from "../types";
+import type { DisplayItem, PresentationSettings, TimerData, LowerThirdData, LowerThirdTemplate, OutputConfig } from "../types";
 import { THEMES } from "../types";
 import { displayItemLabel } from "../utils";
 import { stageDetail as stageDetailFor } from "../items/registry";
@@ -48,6 +48,7 @@ export function StageWindow() {
   const [liveItem, setLiveItem] = useState<DisplayItem | null>(null);
   const [stagedItem, setStagedItem] = useState<DisplayItem | null>(null);
   const [settings, setSettings] = useState<PresentationSettings | null>(null);
+  const [outputConfig, setOutputConfig] = useState<OutputConfig | null>(null);
   const [ltPayload, setLtPayload] = useState<{ data: LowerThirdData; template: LowerThirdTemplate } | null>(null);
   const [clock, setClock] = useState(formatClock(new Date()));
   const [, forceTick] = useState(0);
@@ -68,6 +69,9 @@ export function StageWindow() {
     invoke<string>("get_app_data_dir").then(setAppDataDir).catch(() => {});
     invoke<PresentationSettings>("get_settings").then((s) => { if (s) setSettings(s); }).catch(() => {});
     invoke<any>("get_current_lower_third").then((lt) => setLtPayload(lt ?? null)).catch(() => {});
+    invoke<OutputConfig[]>("outputs_list").then((configs) => {
+      setOutputConfig(configs.find((c) => c.window_label === "stage") ?? null);
+    }).catch(() => {});
 
     const tick = () => {
       setClock(formatClock(new Date()));
@@ -92,16 +96,26 @@ export function StageWindow() {
     const unlisten4 = listen<any>("lower-third-update", (ev) => {
       setLtPayload(ev.payload ?? null);
     });
+    const unlisten5 = listen<OutputConfig[]>("output-config-changed", (ev) => {
+      setOutputConfig(ev.payload.find((c) => c.window_label === "stage") ?? null);
+    });
     return () => {
       unlisten1.then((f) => f());
       unlisten2.then((f) => f());
       unlisten3.then((f) => f());
       unlisten4.then((f) => f());
+      unlisten5.then((f) => f());
     };
   }, []);
 
-  const useTheme = settings?.stage_uses_theme ?? false;
-  const theme = settings ? (THEMES[settings.theme] ?? THEMES.dark) : THEMES.dark;
+  // Apply the stage output's presentation override (theme) on top of the
+  // broadcast settings. Optional; with the default config this is a no-op.
+  const effSettings: PresentationSettings | null = outputConfig?.presentation
+    ? { ...settings!, theme: outputConfig.presentation.theme ?? settings!.theme }
+    : settings;
+
+  const useTheme = effSettings?.stage_uses_theme ?? false;
+  const theme = effSettings ? (THEMES[effSettings.theme] ?? THEMES.dark) : THEMES.dark;
   const colors = theme.colors;
   const bg = useTheme ? colors.background : "#020617";
   const textCol = useTheme ? colors.verseText : "#ffffff";

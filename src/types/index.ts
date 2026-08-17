@@ -12,6 +12,12 @@ export type {
   PresentationSettings, MonitorInfo
 } from "./settings";
 export type { StartupStatus } from "./status";
-export type { Scene, SceneZone, SceneLayout, SceneCompositionData } from "./scene";
+export type { Scene, SceneZone, SceneZoneSource, SceneLayout, SceneCompositionData } from "./scene";
+export type {
+  OutputKind, OutputSource, OutputPresentation, OutputOverlays, OutputGeometry,
+  OutputRecording, OutputStreaming, OutputConfig, OutputState,
+  StreamPlatform, StreamDestination,
+} from "./output";
+export { CAPTURE_RESOLUTIONS, CAPTURE_FPS_OPTIONS } from "./output";
 export { FONTS, DEFAULT_SETTINGS, THEMES } from "./settings";
 export { DEFAULT_LT_TEMPLATE } from "./lowerThird";

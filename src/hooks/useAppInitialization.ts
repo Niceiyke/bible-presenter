@@ -8,8 +8,9 @@ import { normalizeSong } from "../utils/song";
 import {
   MediaItem, Song, LowerThirdTemplate,
   PresentationSettings, PropItem, ServiceMeta,
-  DisplayItem
+  DisplayItem, OutputConfig, OutputState,
 } from "../types";
+import type { LicenseInfo } from "../types/license";
 
 /** Helper for windows that can't reach the operator store directly
  *  (e.g. the output window) to surface hydration/emit failures. */
@@ -28,6 +29,8 @@ export function useAppInitialization() {
     setAppDataDir, setRecentItems,
     setBackendError, addLog, setScenes,
     setBackendAvailable, setToast,
+    setOutputs, setOutputState,
+    setLicense,
   } = useAppStore();
 
   useEffect(() => {
@@ -120,6 +123,16 @@ export function useAppInitialization() {
       // P1.6 — Load scenes.
       invoke<any[]>("list_scenes").then(setScenes).catch(() => {});
 
+      // Output manager — load configs + runtime states.
+      invoke<OutputConfig[]>("outputs_list").then(setOutputs).catch(() => {});
+      invoke<OutputState[]>("outputs_states").then((states) => {
+        states.forEach((s) => setOutputState(s));
+      }).catch(() => {});
+
+      // License — hydrate before the operator shell is revealed so the first
+      // frame is either the gated activation screen or an active license.
+      invoke<LicenseInfo>("license_status").then(setLicense).catch(() => {});
+
       setIsInitialized(true);
     };
 
@@ -201,6 +214,20 @@ export function useAppInitialization() {
     const unlistenMediaProbed = listen<MediaItem>("media-probed", (ev) => { upsertMediaItem(ev.payload); });
     const unlistenMediaUpdated = listen<MediaItem>("media-updated", (ev) => { upsertMediaItem(ev.payload); });
 
+    // Output manager — authoritative config list + per-output runtime state.
+    const unlistenOutputConfig = listen<OutputConfig[]>("output-config-changed", (ev) => {
+      setOutputs(ev.payload);
+    });
+    const unlistenOutputState = listen<OutputState>("output-state-changed", (ev) => {
+      setOutputState(ev.payload);
+    });
+
+    // License — activation/refresh/deactivation broadcast the authoritative
+    // snapshot so the gate and the Settings section stay in sync.
+    const unlistenLicense = listen<LicenseInfo>("license-updated", (ev) => {
+      setLicense(ev.payload);
+    });
+
     return () => {
       unlistenStaged.then(f => f());
       unlistenLive.then(f => f());
@@ -215,6 +242,9 @@ export function useAppInitialization() {
       unlistenRemoteDeviceEvent.then(f => f());
       unlistenMediaProbed.then(f => f());
       unlistenMediaUpdated.then(f => f());
+      unlistenOutputConfig.then(f => f());
+      unlistenOutputState.then(f => f());
+      unlistenLicense.then(f => f());
     };
   }, []);
 

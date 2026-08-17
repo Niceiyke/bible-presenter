@@ -8,6 +8,7 @@ use tauri::{AppHandle, State};
 
 #[tauri::command]
 pub async fn stage_item(app: AppHandle, state: State<'_, AppState>, item: store::DisplayItem) -> Result<(), String> {
+    crate::license::ensure_allowed(&state)?;
     remote_stage(&app, &state, item, None, 0);
     Ok(())
 }
@@ -18,6 +19,7 @@ pub async fn stage_item(app: AppHandle, state: State<'_, AppState>, item: store:
 /// live item so callers can confirm the commit succeeded.
 #[tauri::command]
 pub async fn commit_staged(app: AppHandle, state: State<'_, AppState>) -> Result<Option<store::DisplayItem>, String> {
+    crate::license::ensure_allowed(&state)?;
     Ok(remote_commit_staged(&app, &state, None))
 }
 
@@ -26,12 +28,14 @@ pub async fn commit_staged(app: AppHandle, state: State<'_, AppState>) -> Result
 /// (matching historical behaviour).
 #[tauri::command]
 pub async fn go_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    crate::license::ensure_allowed(&state)?;
     remote_commit_staged(&app, &state, None);
     Ok(())
 }
 
 #[tauri::command]
 pub async fn go_live_item(app: AppHandle, state: State<'_, AppState>, item: store::DisplayItem) -> Result<(), String> {
+    crate::license::ensure_allowed(&state)?;
     op_go_live_item(&app, &state, item, None);
     Ok(())
 }

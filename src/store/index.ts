@@ -6,6 +6,8 @@ import { createMediaSlice, MediaSlice } from "./slices/mediaSlice";
 import { createLowerThirdSlice, LowerThirdSlice } from "./slices/lowerThirdSlice";
 import { createServiceSlice, ServiceSlice } from "./slices/serviceSlice";
 import { createCameraSlice, CameraSlice } from "./slices/cameraSlice";
+import { createOutputSlice, OutputSlice } from "./slices/outputSlice";
+import { createLicenseSlice, LicenseSlice } from "./slices/licenseSlice";
 
 export type AppStore = AppSlice &
   LiveSlice &
@@ -13,7 +15,9 @@ export type AppStore = AppSlice &
   MediaSlice &
   LowerThirdSlice &
   ServiceSlice &
-  CameraSlice;
+  CameraSlice &
+  OutputSlice &
+  LicenseSlice;
 
 export const useAppStore = create<AppStore>()((...a) => ({
   ...createAppSlice(...a),
@@ -23,4 +27,6 @@ export const useAppStore = create<AppStore>()((...a) => ({
   ...createLowerThirdSlice(...a),
   ...createServiceSlice(...a),
   ...createCameraSlice(...a),
+  ...createOutputSlice(...a),
+  ...createLicenseSlice(...a),
 }));

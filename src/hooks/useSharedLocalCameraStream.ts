@@ -11,9 +11,28 @@ const EMPTY: LocalEntry = { stream: null, error: null };
 const entries = new Map<string, LocalEntry>();
 const consumers = new Map<string, Set<string>>();
 const listeners = new Map<string, Set<() => void>>();
+const allListeners = new Set<() => void>();
+let allSnapshot: Record<string, MediaStream> = {};
 
 function notify(deviceId: string) {
   listeners.get(deviceId)?.forEach((cb) => cb());
+  notifyAll();
+}
+
+function notifyAll() {
+  const next: Record<string, MediaStream> = {};
+  for (const [id, entry] of entries) {
+    if (entry.stream) next[id] = entry.stream;
+  }
+  allSnapshot = next;
+  allListeners.forEach((cb) => cb());
+}
+
+function subscribeAll(cb: () => void) {
+  allListeners.add(cb);
+  return () => {
+    allListeners.delete(cb);
+  };
 }
 
 function subscribe(deviceId: string, cb: () => void) {
@@ -111,4 +130,64 @@ export function useSharedLocalCameraStream(
   }, [key, consumerId, refreshToken]);
 
   return { stream: snapshot.stream, error: snapshot.error, connected: !!snapshot.stream, retry };
+}
+
+/**
+ * Bulk variant for the compositor: opens every non-phone camera device id
+ * referenced by the live program and returns a map of currently-available
+ * streams (ref-counted against `consumerId`, snapshotted via the shared
+ * all-listeners cache). Phone cameras are excluded here — their streams come
+ * from the WebRTC relay and are merged by the caller.
+ */
+export function useSharedLocalCameraStreams(
+  deviceIds: string[],
+  consumerId: string
+): Record<string, MediaStream> {
+  const ids = [...new Set(deviceIds.filter((id) => id && !id.startsWith("phone-camera-")))];
+  const key = ids.join("|");
+
+  const subscribeCb = useCallback((cb: () => void) => subscribeAll(cb), []);
+  const snapshot = useSyncExternalStore(subscribeCb, () => allSnapshot, () => allSnapshot);
+
+  useEffect(() => {
+    for (const id of ids) {
+      const set = consumers.get(id) ?? new Set<string>();
+      set.add(consumerId);
+      consumers.set(id, set);
+      if (!entries.has(id)) {
+        entries.set(id, EMPTY);
+        navigator.mediaDevices
+          .getUserMedia({ video: { deviceId: { exact: id } } })
+          .then((s) => {
+            if ((consumers.get(id)?.size ?? 0) === 0) {
+              s.getTracks().forEach((t) => t.stop());
+              return;
+            }
+            entries.set(id, { stream: s, error: null });
+            notify(id);
+          })
+          .catch((err) => {
+            if ((consumers.get(id)?.size ?? 0) === 0) return;
+            entries.set(id, { stream: null, error: mapError(err) });
+            notify(id);
+          });
+      }
+    }
+    return () => {
+      for (const id of ids) {
+        const set2 = consumers.get(id);
+        if (!set2) continue;
+        set2.delete(consumerId);
+        if (set2.size === 0) {
+          consumers.delete(id);
+          entries.get(id)?.stream?.getTracks().forEach((t) => t.stop());
+          entries.delete(id);
+          notify(id);
+        }
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, consumerId]);
+
+  return snapshot;
 }
