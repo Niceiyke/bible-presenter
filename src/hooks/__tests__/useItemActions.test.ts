@@ -68,27 +68,28 @@ describe("useItemActions", () => {
     });
   });
 
-  describe("sendLive (transactional)", () => {
-    it("never commits when staging fails", async () => {
+  describe("sendLive (transactional single round-trip)", () => {
+    it("returns false and keeps live untouched when the backend rejects the atomic send", async () => {
+      const current = makeVerse(15);
       const item = makeVerse();
-      useAppStore.setState({ liveItem: item });
-      mockInvoke.mockRejectedValueOnce(new Error("stage failed"));
+      useAppStore.setState({ liveItem: current });
+      mockInvoke.mockRejectedValueOnce(new Error("send live boom"));
       const { result } = renderHook(() => useItemActions());
 
       let ok = true;
       await act(async () => { ok = await result.current.sendLive(item); });
 
       expect(ok).toBe(false);
-      expect(mockInvoke).not.toHaveBeenCalledWith("commit_staged");
+      expect(mockInvoke).toHaveBeenCalledWith("send_live_item", { item });
       // The prior live item is untouched — nothing wrong went on air.
-      expect(useAppStore.getState().liveItem).toEqual(item);
+      expect(useAppStore.getState().liveItem).toEqual(current);
       expect(useAppStore.getState().previousItem).toBeNull();
+      expect(useAppStore.getState().backendError).toContain("Failed to send live");
     });
 
-    it("commits and promotes the item to live when staging succeeds", async () => {
+    it("promotes the returned item to live in a single round-trip", async () => {
       const item = makeVerse();
-      // stage_item then commit_staged resolves with the committed item.
-      mockInvoke.mockResolvedValueOnce(undefined);
+      // send_live_item resolves with the committed item.
       mockInvoke.mockResolvedValueOnce(item);
       const { result } = renderHook(() => useItemActions());
 
@@ -96,18 +97,19 @@ describe("useItemActions", () => {
       await act(async () => { ok = await result.current.sendLive(item); });
 
       expect(ok).toBe(true);
-      expect(mockInvoke).toHaveBeenCalledWith("stage_item", { item });
-      expect(mockInvoke).toHaveBeenCalledWith("commit_staged");
+      expect(mockInvoke).toHaveBeenCalledWith("send_live_item", { item });
+      expect(mockInvoke).not.toHaveBeenCalledWith("stage_item");
+      expect(mockInvoke).not.toHaveBeenCalledWith("commit_staged");
       expect(useAppStore.getState().liveItem).toEqual(item);
       expect(useAppStore.getState().previousItem).toBeNull();
     });
 
-    it("returns false and keeps live unchanged when commit fails", async () => {
+    it("restores the previous staged item locally when the atomic send fails", async () => {
       const current = makeVerse(15);
       const item = makeVerse();
-      useAppStore.setState({ liveItem: current });
-      mockInvoke.mockResolvedValueOnce(undefined); // stage_item ok
-      mockInvoke.mockRejectedValueOnce(new Error("commit boom")); // commit fails
+      const previousStaged = makeVerse(10);
+      useAppStore.setState({ liveItem: current, stagedItem: previousStaged });
+      mockInvoke.mockRejectedValueOnce(new Error("commit boom"));
       const { result } = renderHook(() => useItemActions());
 
       let ok = true;
@@ -116,10 +118,11 @@ describe("useItemActions", () => {
       expect(ok).toBe(false);
       expect(useAppStore.getState().liveItem).toEqual(current);
       expect(useAppStore.getState().previousItem).toBeNull();
+      expect(useAppStore.getState().stagedItem).toEqual(previousStaged);
       expect(useAppStore.getState().backendError).toContain("Failed to send live");
     });
 
-    it("promotes the patched scene composition when commit_staged returns it (Phase 5 zone bus)", async () => {
+    it("promotes the patched scene composition returned by send_live_item (Phase 5 zone bus)", async () => {
       // A scene composition with a verse zone is live; taking a verse live
       // returns the *patched* composition (backend refreshed the pinned zone).
       const sceneItem: DisplayItem = {
@@ -134,8 +137,7 @@ describe("useItemActions", () => {
         },
       };
       useAppStore.setState({ liveItem: sceneItem });
-      mockInvoke.mockResolvedValueOnce(undefined); // stage_item ok
-      mockInvoke.mockResolvedValueOnce(sceneItem);  // commit_staged -> patched scene
+      mockInvoke.mockResolvedValueOnce(sceneItem);  // send_live_item -> patched scene
 
       const { result } = renderHook(() => useItemActions());
       let ok = false;
@@ -176,6 +178,20 @@ describe("useItemActions", () => {
       expect(ok).toBe(false);
       expect(useAppStore.getState().liveItem).toEqual(current);
       expect(useAppStore.getState().previousItem).toBeNull();
+    });
+
+    it("returns false and reports when there is nothing staged", async () => {
+      useAppStore.setState({ liveItem: makeVerse(), stagedItem: null });
+      mockInvoke.mockResolvedValueOnce(null); // commit_staged -> null
+      const { result } = renderHook(() => useItemActions());
+
+      let ok = true;
+      await act(async () => { ok = await result.current.goLive(); });
+
+      expect(ok).toBe(false);
+      expect(useAppStore.getState().liveItem).toEqual(makeVerse());
+      expect(useAppStore.getState().previousItem).toBeNull();
+      expect(useAppStore.getState().backendError).toContain("Nothing staged");
     });
   });
 
@@ -220,6 +236,35 @@ describe("useItemActions", () => {
       expect(useAppStore.getState().propItems).toEqual(props);
       expect(useAppStore.getState().ltVisible).toBe(true);
       expect(useAppStore.getState().backendError).toContain("Clear All failed");
+    });
+  });
+
+  describe("clearStaged", () => {
+    it("clears the staged item through the backend on success", async () => {
+      useAppStore.setState({ stagedItem: makeVerse() });
+      mockInvoke.mockResolvedValueOnce(undefined); // clear_staged
+      const { result } = renderHook(() => useItemActions());
+
+      let ok = false;
+      await act(async () => { ok = await result.current.clearStaged(); });
+
+      expect(ok).toBe(true);
+      expect(mockInvoke).toHaveBeenCalledWith("clear_staged");
+      expect(useAppStore.getState().stagedItem).toBeNull();
+    });
+
+    it("restores the staged item and reports the error when the backend rejects", async () => {
+      const staged = makeVerse();
+      useAppStore.setState({ stagedItem: staged });
+      mockInvoke.mockRejectedValueOnce(new Error("clear staged boom"));
+      const { result } = renderHook(() => useItemActions());
+
+      let ok = true;
+      await act(async () => { ok = await result.current.clearStaged(); });
+
+      expect(ok).toBe(false);
+      expect(useAppStore.getState().stagedItem).toEqual(staged);
+      expect(useAppStore.getState().backendError).toContain("Failed to clear staged");
     });
   });
 
@@ -269,8 +314,7 @@ describe("song overlay go-live failures (Phase 6)", () => {
     it("sendLive does not claim the overlay is visible when show_lower_third fails", async () => {
       useAppStore.setState({ ltVisible: false });
       const item = overlayItem();
-      mockInvoke.mockResolvedValueOnce(undefined); // stage_item
-      mockInvoke.mockResolvedValueOnce(item);        // commit_staged
+      mockInvoke.mockResolvedValueOnce(item);        // send_live_item
       mockInvoke.mockRejectedValueOnce(new Error("lt boom")); // show_lower_third
       const { result } = renderHook(() => useItemActions());
 
@@ -287,8 +331,7 @@ describe("song overlay go-live failures (Phase 6)", () => {
     it("sendLive flips the overlay visible only when show_lower_third succeeds", async () => {
       useAppStore.setState({ ltVisible: false });
       const item = overlayItem();
-      mockInvoke.mockResolvedValueOnce(undefined); // stage_item
-      mockInvoke.mockResolvedValueOnce(item);        // commit_staged
+      mockInvoke.mockResolvedValueOnce(item);        // send_live_item
       mockInvoke.mockResolvedValueOnce(undefined);   // show_lower_third
       const { result } = renderHook(() => useItemActions());
 

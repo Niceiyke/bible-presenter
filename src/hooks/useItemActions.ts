@@ -149,7 +149,13 @@ export function useItemActions() {
     } finally {
       setBusyAction("goLive", false);
     }
-    if (committed) setLiveItem(committed);
+    // A null commit means there was nothing staged — never claim success (a
+    // staged item can also have been cleared by the backend between checks).
+    if (!committed) {
+      setBackendError("Nothing staged to go live");
+      return false;
+    }
+    setLiveItem(committed);
     if (current) setPreviousItem(current);
 
     if (staged?.type === "Song" && staged.data.style === "LowerThird") {
@@ -186,17 +192,47 @@ export function useItemActions() {
 
   const sendLive = useCallback(async (item: DisplayItem): Promise<boolean> => {
     const current = useAppStore.getState().liveItem;
-    // Stage first; never commit when staging fails — commit would expose an
-    // older or invalid item to the audience.
-    const stagedOk = await stageItem(item);
-    if (!stagedOk) return false;
+    const prevStaged = useAppStore.getState().stagedItem;
 
+    // Apply auto-split just like stageItem so a long verse is capped before
+    // it reaches the backend (which then stages + commits atomically).
+    let finalItem = item;
+    if (item.type === "Verse" && item.data.split_index === undefined && settings.auto_split_verses) {
+      const key = getVerseKey(item.data, settings.verse_split_threshold);
+      let splits = verseSplitsRef.current[key];
+      if (!splits) {
+        try {
+          splits = await invoke("split_verse", {
+            verse: item.data,
+            threshold: settings.verse_split_threshold
+          });
+          const keys = Object.keys(verseSplitsRef.current);
+          if (keys.length >= MAX_VERSE_SPLITS) {
+            delete verseSplitsRef.current[keys[0]];
+          }
+          verseSplitsRef.current[key] = splits;
+        } catch (err: any) {
+          setBackendError(`Failed to split verse: ${err?.message ?? err}`);
+          return false;
+        }
+      }
+      if (splits.length > 1) {
+        finalItem = { type: "Verse", data: splits[0] };
+      }
+    }
+
+    // Stage and commit in ONE backend round trip so the audience can never
+    // observe a window where a new item is staged but not yet live, and a
+    // failed commit restores the previous staged item server-side.
     let committed: DisplayItem | null = null;
     setBusyAction("goLive", true);
     try {
-      committed = (await invoke<DisplayItem | null>("commit_staged")) ?? null;
+      committed = await invoke<DisplayItem>("send_live_item", { item: finalItem });
     } catch (err: any) {
       setBackendError(`Failed to send live: ${err?.message ?? err}`);
+      // Mirror the backend's staged restore so the cockpit doesn't keep
+      // showing the item that failed to go live.
+      setStagedItem(prevStaged);
       return false;
     } finally {
       setBusyAction("goLive", false);
@@ -247,7 +283,23 @@ export function useItemActions() {
       stageItem(next);
     }
     return true;
-  }, [stageItem, setRecentItems, getNextItem, setPreviousItem, setLiveItem, settings, ltTemplate, ltSavedTemplates, ltLinesPerDisplay, songs, setLtVisible, updateSettings, setBackendError, setBusyAction]);
+  }, [stageItem, setStagedItem, setRecentItems, getNextItem, setPreviousItem, setLiveItem, settings, ltTemplate, ltSavedTemplates, ltLinesPerDisplay, songs, setLtVisible, updateSettings, setBackendError, setBusyAction]);
+
+  const clearStaged = useCallback(async (): Promise<boolean> => {
+    const prev = useAppStore.getState().stagedItem;
+    setBusyAction("clear", true);
+    try {
+      await invoke("clear_staged");
+    } catch (err: any) {
+      setStagedItem(prev);
+      setBackendError(`Failed to clear staged: ${err?.message ?? err}`);
+      return false;
+    } finally {
+      setBusyAction("clear", false);
+    }
+    setStagedItem(null);
+    return true;
+  }, [setStagedItem, setBackendError, setBusyAction]);
 
   const clearAll = useCallback(async (): Promise<ClearSnapshot | null> => {
     const snapshot: ClearSnapshot = {
@@ -477,6 +529,7 @@ export function useItemActions() {
     stageItem,
     goLive,
     sendLive,
+    clearStaged,
     clearAll,
     undoClearAll,
     getNextItem,

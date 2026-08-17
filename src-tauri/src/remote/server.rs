@@ -274,6 +274,7 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
     }
 
     let mut hub_rx = ctx.control.hub.subscribe();
+    let mut revoked_rx = ctx.control.revoked_tx.subscribe();
     let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(15));
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -352,6 +353,12 @@ async fn handle_socket(socket: WebSocket, ctx: RemoteCtx, addr: SocketAddr) {
                         }
                     }
                     Err(_) => break 'conn "event bus closed",
+                }
+            }
+            revoked = revoked_rx.recv() => {
+                match revoked {
+                    Ok(id) if id == device_id => break 'conn "device revoked",
+                    Ok(_) | Err(_) => {}
                 }
             }
             _ = heartbeat.tick() => {
@@ -443,9 +450,11 @@ async fn authenticate_handshake(
                 .payload
                 .and_then(|v| serde_json::from_value(v).ok())
                 .ok_or(AuthError::UnknownToken)?;
-ctx.control
-            .tokens
-            .validate_pairing(&payload.pairing_token, &addr.ip().to_string())?;
+            // Validate + consume atomically so a pairing code can only ever be
+            // used by one handshake (audit #15: pairing race).
+            ctx.control
+                .tokens
+                .validate_and_consume_pairing(&payload.pairing_token, &addr.ip().to_string())?;
             let device_token = crate::remote::auth::new_token();
             let device = ctx.control.tokens.register_device(
                 &device_token,
@@ -454,7 +463,6 @@ ctx.control
                 // content permissions from Settings → Remote Control.
                 RemoteRole::Viewer,
             );
-            ctx.control.tokens.consume_pairing(&payload.pairing_token);
             ctx.control.persist_devices();
             Ok((device, Some(device_token)))
         }

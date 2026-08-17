@@ -128,6 +128,16 @@ export function LicenseGate() {
 
           {needsKeyInput && (
             <div className="mt-4 flex flex-col gap-2">
+              {license?.offline && (
+                <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                  <WifiOff size={12} className="text-amber-400 shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                    This computer is offline and cannot reach the license server.
+                    Activating a key requires an internet connection. Check the
+                    connection (or the license server), then retry.
+                  </p>
+                </div>
+              )}
               <input
                 autoFocus
                 value={key}

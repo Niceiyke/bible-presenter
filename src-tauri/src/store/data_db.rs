@@ -19,11 +19,24 @@ impl DataDb {
         match Self::try_open(db_path) {
             Ok(db) => Ok(db),
             Err(first_err) => {
-                // The database may have been left corrupt/empty by a crash mid-migration.
-                // Remove it (and any WAL/journal sidecars) and recreate from scratch.
-                let _ = std::fs::remove_file(db_path);
-                let _ = std::fs::remove_file(db_path.with_extension("db-wal"));
-                let _ = std::fs::remove_file(db_path.with_extension("db-shm"));
+                // The database may have been left corrupt/empty by a crash
+                // mid-migration. NEVER delete user data blindly — quarantine
+                // the damaged file (and any WAL/SHM sidecars) by renaming it
+                // aside so it can be inspected later, then recreate fresh
+                // (audit #4).
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let _ = std::fs::rename(db_path, db_path.with_extension(format!("corrupt-{}", stamp)));
+                let _ = std::fs::rename(
+                    db_path.with_extension("db-wal"),
+                    db_path.with_extension(format!("corrupt-{}.db-wal", stamp)),
+                );
+                let _ = std::fs::rename(
+                    db_path.with_extension("db-shm"),
+                    db_path.with_extension(format!("corrupt-{}.db-shm", stamp)),
+                );
                 Self::try_open(db_path).map_err(|e| format!("{}; recovery failed: {}", first_err, e))
             }
         }
@@ -52,6 +65,14 @@ impl DataDb {
 
     fn migrate(&self) -> Result<(), String> {
         let conn = self.conn.lock();
+        let current_version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
+        // Every step is idempotent (`CREATE TABLE IF NOT EXISTS` / additive
+        // columns), so running an older DB through all steps is safe. The
+        // `user_version` pragma records the schema for future versioned
+        // migrations (audit: forward migrations must be versioned, and the
+        // slide_templates table the studio editor writes to must exist).
         conn.execute_batch("
             CREATE TABLE IF NOT EXISTS media (
                 id TEXT PRIMARY KEY,
@@ -88,6 +109,10 @@ impl DataDb {
                 id TEXT PRIMARY KEY,
                 data TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS slide_templates (
+                id TEXT PRIMARY KEY,
+                data TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS kv_store (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -117,6 +142,12 @@ impl DataDb {
             if !cols.iter().any(|c| c == col) {
                 conn.execute_batch(ddl).map_err(|e| e.to_string())?;
             }
+        }
+
+        // Record the schema version (currently 1). Future migrations gate on
+        // `current_version` and bump it here.
+        if current_version < 1 {
+            conn.execute_batch("PRAGMA user_version = 1;").map_err(|e| e.to_string())?;
         }
         Ok(())
     }

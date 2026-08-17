@@ -82,16 +82,59 @@ fn patch_scene_zones(live: &DisplayItem, incoming: &DisplayItem) -> Option<Displ
     }))
 }
 
+/// Acquires the presentation mutation lock. Every `op_*` helper takes this
+/// first so desktop and remote callers can never interleave two mutations
+/// mid-transaction (audit: concurrent stage/send-live atomicity).
+fn lock_presentation(state: &AppState) -> parking_lot::MutexGuard<'_, ()> {
+    state.presentation.lock.lock()
+}
+
+/// Emits `live-item-update` carrying the current presentation revision so
+/// windows can order a hydration snapshot against live events.
+fn emit_live_update(app: &AppHandle, state: &AppState, detected_item: Option<DisplayItem>) {
+    let update = LiveItemUpdate {
+        detected_item,
+        revision: Some(state.presentation.current_revision()),
+    };
+    emit_checked(app, "live-item-update", &update);
+}
+
 pub fn op_stage(app: &AppHandle, state: &AppState, item: DisplayItem, source: Option<String>, revision: u64) {
+    let _guard = lock_presentation(state);
+    op_stage_locked(app, state, item, source, revision);
+}
+
+/// `op_stage` with the presentation lock already held (composite operations
+/// such as `op_send_live` call this to stay atomic).
+pub fn op_stage_locked(app: &AppHandle, state: &AppState, item: DisplayItem, source: Option<String>, _revision: u64) {
+    state.presentation.bump_revision();
     *state.presentation.staged_item.lock() = Some(item.clone());
     emit_checked(app, "item-staged", &item);
     state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": item }), source);
-    let _ = revision;
+}
+
+/// Clears the staged slot only (live stays untouched) and broadcasts the
+/// cleared state so every window — including the output/stage windows — drops
+/// the staged item. Replaces the frontend-only "clear staged" that left the
+/// backend slot populated.
+pub fn op_clear_staged(app: &AppHandle, state: &AppState, source: Option<String>) {
+    let _guard = lock_presentation(state);
+    state.presentation.bump_revision();
+    *state.presentation.staged_item.lock() = None;
+    emit_checked(app, "item-staged", &Option::<DisplayItem>::None);
+    state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": null }), source);
 }
 
 /// Commit the staged item as live, patching pinned scene-zone buses when the
 /// current live item is a composition that follows the staged content class.
+/// Returns `None` when nothing was staged (a no-op, never a mutation).
 pub fn op_commit_staged(app: &AppHandle, state: &AppState, source: Option<String>) -> Option<DisplayItem> {
+    let _guard = lock_presentation(state);
+    op_commit_staged_locked(app, state, source)
+}
+
+/// `op_commit_staged` with the presentation lock already held.
+pub fn op_commit_staged_locked(app: &AppHandle, state: &AppState, source: Option<String>) -> Option<DisplayItem> {
     let mut live = state.presentation.live_item.lock();
     let staged = state.presentation.staged_item.lock().clone();
     let committed = match (&*live, &staged) {
@@ -100,17 +143,20 @@ pub fn op_commit_staged(app: &AppHandle, state: &AppState, source: Option<String
         }
         _ => staged.clone(),
     };
+    committed.as_ref()?;
+    state.presentation.bump_revision();
     *live = committed.clone();
     drop(live);
-    let update = LiveItemUpdate { detected_item: committed.clone() };
-    emit_checked(app, "live-item-update", &update);
+    emit_live_update(app, state, committed.clone());
     state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": committed }), source);
     committed
 }
 
 pub fn op_clear_live(app: &AppHandle, state: &AppState, source: Option<String>) {
+    let _guard = lock_presentation(state);
+    state.presentation.bump_revision();
     *state.presentation.live_item.lock() = None;
-    emit_checked(app, "live-item-update", &LiveItemUpdate { detected_item: None });
+    emit_live_update(app, state, None);
     let staged = state.presentation.staged_item.lock().clone();
     emit_checked(app, "item-staged", &staged);
     state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": null }), source.clone());
@@ -118,6 +164,7 @@ pub fn op_clear_live(app: &AppHandle, state: &AppState, source: Option<String>) 
 }
 
 pub fn op_go_live_item(app: &AppHandle, state: &AppState, item: DisplayItem, source: Option<String>) {
+    let _guard = lock_presentation(state);
     let mut live = state.presentation.live_item.lock();
     let committed = match &*live {
         // Phase 5: when a scene composition is live and the sent item matches
@@ -126,20 +173,30 @@ pub fn op_go_live_item(app: &AppHandle, state: &AppState, item: DisplayItem, sou
         Some(live_item) => patch_scene_zones(live_item, &item).unwrap_or(item.clone()),
         None => item.clone(),
     };
+    state.presentation.bump_revision();
     *live = Some(committed.clone());
     drop(live);
-    let update = LiveItemUpdate { detected_item: Some(committed.clone()) };
-    emit_checked(app, "live-item-update", &update);
+    emit_live_update(app, state, Some(committed.clone()));
     state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": committed }), source);
 }
 
-pub fn op_clear_all(app: &AppHandle, state: &AppState, source: Option<String>) {
+/// Clear everything the audience can see: live item, staged item, lower-third
+/// overlay and props layer. Persists the cleared props so a restart does not
+/// resurrect previously cleared props. Persist-before-mutate keeps the
+/// operation transactional: on persistence failure nothing is cleared and the
+/// error is surfaced to the operator.
+pub fn op_clear_all(app: &AppHandle, state: &AppState, source: Option<String>) -> Result<(), String> {
+    let _guard = lock_presentation(state);
+
+    state.media_schedule.save_props(&[]).map_err(|e| e.to_string())?;
+
+    state.presentation.bump_revision();
     *state.presentation.live_item.lock() = None;
     *state.presentation.staged_item.lock() = None;
     *state.presentation.lower_third.lock() = None;
     state.presentation.props_layer.lock().clear();
 
-    emit_checked(app, "live-item-update", &LiveItemUpdate { detected_item: None });
+    emit_live_update(app, state, None);
     emit_checked(app, "item-staged", &Option::<DisplayItem>::None);
     emit_checked(app, "lower-third-update", &Option::<serde_json::Value>::None);
     emit_checked(app, "props-update", &Vec::<crate::store::PropItem>::new());
@@ -147,6 +204,7 @@ pub fn op_clear_all(app: &AppHandle, state: &AppState, source: Option<String>) {
     state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": null }), source.clone());
     state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": null }), source.clone());
     state.remote.hub.publish(RemoteEventKind::LowerThirdChanged, json!({ "lower_third": null }), source);
+    Ok(())
 }
 
 pub fn op_set_blackout(app: &AppHandle, state: &AppState, on: bool, source: Option<String>) -> Result<(), String> {
@@ -161,10 +219,14 @@ pub fn op_set_blackout(app: &AppHandle, state: &AppState, on: bool, source: Opti
 
 /// Transactional send-live: stage the resolved item, then commit only if
 /// staging succeeded. On commit failure the previous staged item is restored.
+/// The whole stage->commit sequence runs under one presentation lock so a
+/// concurrent desktop/remote caller can never commit a different item in the
+/// middle (audit: concurrent stage/send-live atomicity).
 pub fn op_send_live(app: &AppHandle, state: &AppState, item: DisplayItem, source: Option<String>) -> Result<DisplayItem, String> {
+    let _guard = lock_presentation(state);
     let previous_staged = state.presentation.staged_item.lock().clone();
-    op_stage(app, state, item.clone(), source.clone(), 0);
-    let committed = match op_commit_staged(app, state, source) {
+    op_stage_locked(app, state, item.clone(), source.clone(), 0);
+    let committed = match op_commit_staged_locked(app, state, source) {
         Some(c) => c,
         None => {
             *state.presentation.staged_item.lock() = previous_staged.clone();
@@ -464,6 +526,8 @@ pub fn op_stage_queue_neighbor(app: &AppHandle, state: &AppState, dir: i32, sour
 
 /// Shows a lower-third overlay through the authoritative presentation state.
 pub fn op_show_lower_third(app: &AppHandle, state: &AppState, data: LowerThirdData, template: Option<serde_json::Value>, source: Option<String>) {
+    let _guard = lock_presentation(state);
+    state.presentation.bump_revision();
     let payload = json!({ "data": data, "template": template.unwrap_or_else(|| json!({})) });
     *state.presentation.lower_third.lock() = Some(payload.clone());
     emit_checked(app, "lower-third-update", &Some(payload.clone()));
@@ -472,6 +536,8 @@ pub fn op_show_lower_third(app: &AppHandle, state: &AppState, data: LowerThirdDa
 
 /// Hides any lower-third overlay and propagates the null change.
 pub fn op_hide_lower_third(app: &AppHandle, state: &AppState, source: Option<String>) {
+    let _guard = lock_presentation(state);
+    state.presentation.bump_revision();
     *state.presentation.lower_third.lock() = None;
     emit_checked(app, "lower-third-update", &Option::<serde_json::Value>::None);
     state.remote.hub.publish(RemoteEventKind::LowerThirdChanged, json!({ "lower_third": null }), source);
@@ -518,14 +584,15 @@ fn resolve_lt_template(
 // ---------------------------------------------------------------------------
 
 fn require_permission(control: &RemoteControl, device: &StoredDevice, perm: RemotePermission) -> Result<(), String> {
-    // Read the *live* permissions from the token store rather than the cached
-    // socket copy so a device demoted/revoked by the operator is restricted
-    // immediately.
+    // Read the *live* permissions from the token store. A revoked device's
+    // token record is removed, so `device()` returns None and the permission
+    // check must FAIL — never fall back to the cached socket copy, which
+    // would let a revoked device keep its old permissions (audit #9).
     let permissions = control
         .tokens
         .device(&device.id)
         .map(|d| d.permissions)
-        .unwrap_or_else(|| device.permissions);
+        .ok_or_else(|| "This device is no longer paired — revoke and re-pair it".to_owned())?;
     if permissions.has(perm) {
         Ok(())
     } else {
@@ -577,9 +644,13 @@ fn require_lease(control: &RemoteControl, device: &StoredDevice) -> Result<(), S
 fn check_revision(control: &RemoteControl, expected: Option<u64>) -> Result<(), String> {
     if let Some(expected) = expected {
         let current = control.hub.current_revision();
-        if expected < current {
+        // Strict equality: both stale (expected < current) AND future
+        // (expected > current) revisions are rejected, so a client whose
+        // snapshot is out of sync can never mutate authoritative state.
+        // (audit #16 — future revisions were previously accepted.)
+        if expected != current {
             return Err(format!(
-                "Stale client (expected revision {}, current {})",
+                "Revision mismatch (expected {}, current {})",
                 expected, current
             ));
         }
@@ -618,6 +689,13 @@ pub async fn dispatch(
     // Mutating commands must pass the revision + permission gates before
     // touching authoritative state. Read-only commands skip the lease check.
     if is_mutating(command.r#type.clone()) {
+        // License re-check on EVERY mutation, not just when remote control is
+        // enabled: a revoked/expired license stops an already-connected phone
+        // from continuing to broadcast (audit #10). This is the license
+        // server's kill switch for the remote surface.
+        if let Err(e) = crate::license::ensure_allowed(state) {
+            return err_result(&command.command_id, control.hub.current_revision(), "license_required", &e);
+        }
         if !camera_register {
             if let Err(e) = check_revision(control, command.expected_revision) {
                 return err_result(&command.command_id, control.hub.current_revision(), "stale_revision", &e);
@@ -627,11 +705,17 @@ pub async fn dispatch(
         // the lease gate but still needs at least one content permission to be
         // meaningful (a read-only viewer cannot take control).
         if command.r#type == RemoteCommandType::RemoteRequestControl {
-            let permissions = control
-                .tokens
-                .device(&device.id)
-                .map(|d| d.permissions)
-                .unwrap_or_else(|| device.permissions);
+            let permissions = match control.tokens.device(&device.id) {
+                Some(d) => d.permissions,
+                None => {
+                    return err_result(
+                        &command.command_id,
+                        control.hub.current_revision(),
+                        "forbidden",
+                        "This device is no longer paired",
+                    )
+                }
+            };
             if !permissions.any() {
                 return err_result(
                     &command.command_id,
@@ -663,11 +747,17 @@ pub async fn dispatch(
 
     match command.r#type {
         RemoteCommandType::SnapshotGet => {
-            let permissions = control
-                .tokens
-                .device(&device.id)
-                .map(|d| d.permissions)
-                .unwrap_or_else(|| device.permissions);
+            let permissions = match control.tokens.device(&device.id) {
+                Some(d) => d.permissions,
+                None => {
+                    return err_result(
+                        &command.command_id,
+                        control.hub.current_revision(),
+                        "forbidden",
+                        "This device is no longer paired",
+                    )
+                }
+            };
             let snapshot = crate::remote::snapshot::build_snapshot(
                 app,
                 state,
@@ -778,8 +868,10 @@ pub async fn dispatch(
             RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
         }
         RemoteCommandType::DisplayClearAll => {
-            op_clear_all(app, state, source.clone());
-            RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
+            match op_clear_all(app, state, source.clone()) {
+                Ok(()) => RemoteCommandResult::ok(&command.command_id, control.hub.current_revision()),
+                Err(e) => err_result(&command.command_id, control.hub.current_revision(), "clear_failed", &e),
+            }
         }
         RemoteCommandType::DisplayBlackout => {
             let on = command_payload::<serde_json::Value>(command).map(|v| v.get("on").and_then(|v| v.as_bool()).unwrap_or(true)).unwrap_or(true);
@@ -1006,6 +1098,8 @@ pub async fn dispatch(
         }
         RemoteCommandType::TimerToggle => {
             let toggled = {
+                let _guard = lock_presentation(state);
+                state.presentation.bump_revision();
                 let mut live = state.presentation.live_item.lock();
                 if let Some(DisplayItem::Timer(ref mut t)) = *live {
                     t.started_at = if t.started_at.is_some() { None } else { Some(now_ms()) };
@@ -1016,7 +1110,7 @@ pub async fn dispatch(
             };
             if toggled {
                 let item = state.presentation.live_item.lock().clone();
-                emit_checked(app, "live-item-update", &LiveItemUpdate { detected_item: item.clone() });
+                emit_live_update(app, state, item.clone());
                 state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": item }), source);
             }
             RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
@@ -1102,10 +1196,27 @@ pub async fn dispatch(
                 .unwrap_or_default();
             if !device_id.is_empty() {
                 let prefixed = format!("phone-camera-{}", device_id);
-                control.unregister_phone_camera(&prefixed).await;
-                emit_phone_cameras(app, control).await;
-                // Tell the operator windows to tear down the answering peers.
-                emit_checked(app, "phone-camera-stop", &json!({ "device_id": prefixed }));
+                // Only the camera's owner may stop it — a different phone must
+                // not tear down another device's projected feed (audit #17).
+                let owner = control.phone_camera_owner(&prefixed).await;
+                match owner {
+                    Some(owner_id) if owner_id == device.id => {
+                        control.unregister_phone_camera(&prefixed).await;
+                        emit_phone_cameras(app, control).await;
+                        emit_checked(app, "phone-camera-stop", &json!({ "device_id": prefixed }));
+                    }
+                    Some(_) => {
+                        return err_result(
+                            &command.command_id,
+                            control.hub.current_revision(),
+                            "forbidden",
+                            "This device does not own that camera",
+                        )
+                    }
+                    None => {
+                        // Already unregistered (disconnect cleanup) — no-op.
+                    }
+                }
             }
             RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
         }
@@ -1113,6 +1224,12 @@ pub async fn dispatch(
             let req = command_payload::<RemoteCameraOfferPayload>(command).ok();
             match req {
                 Some(req) => {
+                    // Signaling relays stay exempt from lease/revision (a burst
+                    // of ICE must never fail a handshake) but still require the
+                    // Camera permission (audit #17).
+                    if let Err(e) = require_permission(control, device, RemotePermission::Camera) {
+                        return err_result(&command.command_id, control.hub.current_revision(), "forbidden", &e);
+                    }
                     // Phone (offerer) -> relay its SDP offer to the matching
                     // operator-side window ("operator" main window or "output"
                     // projection window), which hosts the answering peer.
@@ -1133,6 +1250,10 @@ pub async fn dispatch(
             let req = command_payload::<RemoteCameraIcePayload>(command).ok();
             match req {
                 Some(req) => {
+                    // Camera permission required (see CameraOffer).
+                    if let Err(e) = require_permission(control, device, RemotePermission::Camera) {
+                        return err_result(&command.command_id, control.hub.current_revision(), "forbidden", &e);
+                    }
                     // Phone's local ICE candidate -> relay to the matching
                     // operator-side window's peer.
                     let prefixed = format!("phone-camera-{}", req.device_id);
@@ -1238,13 +1359,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn revision_check_accepts_fresh_or_newer_clients() {
+    fn revision_check_requires_exact_match() {
         let control = RemoteControl::new(std::path::PathBuf::new(), &std::path::PathBuf::new());
         control.hub.publish(RemoteEventKind::Snapshot, json!({}), None); // rev 1
         assert!(check_revision(&control, Some(1)).is_ok());
-        assert!(check_revision(&control, Some(2)).is_ok());
+        // A client whose snapshot is newer than the server is just as stale as
+        // an older one — mutations must only come from the current revision
+        // (audit #16).
+        assert!(check_revision(&control, Some(2)).is_err());
         assert!(check_revision(&control, Some(0)).is_err());
         assert!(check_revision(&control, None).is_ok());
+    }
+
+    #[test]
+    fn targeted_publish_does_not_advance_revision() {
+        let control = RemoteControl::new(std::path::PathBuf::new(), &std::path::PathBuf::new());
+        control.hub.publish(RemoteEventKind::Snapshot, json!({}), None); // rev 1
+        let r = control.hub.publish_to(RemoteEventKind::OperatorNotice, json!({ "message": "hi" }), None, Some("dev-1".into()));
+        assert_eq!(r, 1);
+        assert_eq!(control.hub.current_revision(), 1);
+        // A normal broadcast still bumps.
+        control.hub.publish(RemoteEventKind::StagedChanged, json!({}), None);
+        assert_eq!(control.hub.current_revision(), 2);
     }
 
     #[test]

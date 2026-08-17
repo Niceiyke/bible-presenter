@@ -45,28 +45,39 @@ pub async fn delete_scene(state: State<'_, AppState>, id: String) -> Result<(), 
 /// without waiting for events to round-trip.
 #[tauri::command]
 pub async fn apply_scene(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<ScenePayload, String> {
+    // Applying a scene drives the on-air broadcast path — a scene cannot be
+    // recalled onto the projection while the license is not active.
+    crate::license::ensure_allowed(&state)?;
     let scene = state.media_schedule.list_scenes().map_err(|e| e.to_string())?
         .into_iter()
         .find(|s| s.id == id)
         .ok_or_else(|| format!("Scene '{}' not found", id))?;
 
-    // Settings
-    *state.presentation.settings.lock() = scene.settings.clone();
-    state.media_schedule.save_settings(&scene.settings).map_err(|e| e.to_string())?;
+    // Apply settings/props/lower-third under the presentation mutation lock so
+    // the snapshot is never half-updated, and persist BEFORE mutating so a
+    // write failure surfaces instead of silently applying state that would be
+    // lost on restart. The revision bump makes stale remote clients
+    // resynchronize.
+    {
+        let _guard = state.presentation.lock.lock();
+        state.media_schedule.save_settings(&scene.settings).map_err(|e| e.to_string())?;
+        *state.presentation.settings.lock() = scene.settings.clone();
+        state.media_schedule.save_props(&scene.props).map_err(|e| e.to_string())?;
+        *state.presentation.props_layer.lock() = scene.props.clone();
+        if let (Some(data), Some(template)) = (&scene.lower_third_data, &scene.lower_third_template) {
+            let payload = serde_json::json!({ "data": data, "template": template });
+            *state.presentation.lower_third.lock() = Some(payload.clone());
+        } else {
+            *state.presentation.lower_third.lock() = None;
+        }
+        state.presentation.bump_revision();
+    }
     emit_checked(&app, "settings-changed", &scene.settings);
-
-    // Props
-    *state.presentation.props_layer.lock() = scene.props.clone();
-    let _ = state.media_schedule.save_props(&scene.props);
     emit_checked(&app, "props-update", &scene.props);
-
-    // Lower-third
     if let (Some(data), Some(template)) = (&scene.lower_third_data, &scene.lower_third_template) {
         let payload = serde_json::json!({ "data": data, "template": template });
-        *state.presentation.lower_third.lock() = Some(payload.clone());
         emit_checked(&app, "lower-third-update", &Some(payload));
     } else {
-        *state.presentation.lower_third.lock() = None;
         emit_checked(&app, "lower-third-update", &Option::<serde_json::Value>::None);
     }
 

@@ -1,6 +1,8 @@
+use crate::license::{ensure_active_tier, LicenseTier};
+use crate::state::AppState;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 
 /// A saved recording file on disk.
 #[derive(Debug, Clone, Serialize)]
@@ -73,9 +75,12 @@ pub async fn recordings_list(app: AppHandle) -> Result<Vec<RecordingFile>, Strin
 #[tauri::command]
 pub async fn recording_save(
     app: AppHandle,
+    state: State<'_, AppState>,
     file_name: String,
     data_base64: String,
 ) -> Result<RecordingFile, String> {
+    // Recording is a paid feature — enforce on the backend, not just the UI.
+    ensure_active_tier(&state, LicenseTier::Pro)?;
     use base64::Engine as _;
     let data = base64::engine::general_purpose::STANDARD
         .decode(data_base64)

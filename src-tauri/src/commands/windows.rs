@@ -18,6 +18,34 @@ fn publish_output_visible(app: &AppHandle, state: &State<'_, AppState>) {
     );
 }
 
+/// Free plan: only one on-air window at a time. `outputs_set_visible` enforces
+/// this for the output-manager path; the legacy toggle commands must enforce
+/// the same cap so a Free operator cannot open both the output and stage
+/// windows (or design/studio) to bypass it. Only called when revealing.
+fn enforce_free_window_cap(app: &AppHandle, state: &AppState, this_label: &str) -> Result<(), String> {
+    let info = state.license.status();
+    if info.status == crate::license::LicenseStatus::Active
+        && info.tier == crate::license::LicenseTier::Free
+    {
+        let other_visible = ["output", "stage", "design", "studio"]
+            .iter()
+            .filter(|l| **l != this_label)
+            .filter(|l| {
+                app.get_webview_window(l)
+                    .and_then(|w| w.is_visible().ok())
+                    .unwrap_or(false)
+            })
+            .count();
+        if other_visible >= 1 {
+            return Err(
+                "The Free plan supports one on-air window at a time. See Settings → License to upgrade."
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     crate::license::ensure_allowed(&state)?;
@@ -25,6 +53,7 @@ pub async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) ->
         if window.is_visible().unwrap_or(false) {
             window.hide().map_err(|e: tauri::Error| e.to_string())?;
         } else {
+            enforce_free_window_cap(&app, &state, "output")?;
             position_output_on_preferred(app.clone(), &state)?;
             let _ = window.set_ignore_cursor_events(true);
             window.show().map_err(|e: tauri::Error| e.to_string())?;
@@ -36,7 +65,10 @@ pub async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) ->
             emit_checked(&app, "settings-changed", &current_settings);
 
             let live = state.presentation.live_item.lock().clone();
-            emit_checked(&app, "live-item-update", &LiveItemUpdate { detected_item: live });
+            emit_checked(&app, "live-item-update", &LiveItemUpdate {
+                detected_item: live,
+                revision: Some(state.presentation.current_revision()),
+            });
 
             let lt = state.presentation.lower_third.lock().clone();
             emit_checked(&app, "lower-third-update", &lt);
@@ -106,11 +138,15 @@ pub async fn toggle_stage_window(app: AppHandle, state: State<'_, AppState>) -> 
         if window.is_visible().unwrap_or(false) {
             window.hide().map_err(|e: tauri::Error| e.to_string())?;
         } else {
+            enforce_free_window_cap(&app, &state, "stage")?;
             window.show().map_err(|e: tauri::Error| e.to_string())?;
             window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
 
             let live = state.presentation.live_item.lock().clone();
-            emit_checked(&app, "live-item-update", &LiveItemUpdate { detected_item: live });
+            emit_checked(&app, "live-item-update", &LiveItemUpdate {
+                detected_item: live,
+                revision: Some(state.presentation.current_revision()),
+            });
             let staged = state.presentation.staged_item.lock().clone();
             emit_checked(&app, "item-staged", &staged);
 

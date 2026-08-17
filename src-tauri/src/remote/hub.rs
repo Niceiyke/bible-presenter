@@ -33,19 +33,30 @@ impl RemoteHub {
     /// event; slow consumers that fall behind receive a `RecvError::Lagged`
     /// and reconnect their snapshot.
     pub fn publish(&self, kind: RemoteEventKind, payload: serde_json::Value, source_device_id: Option<String>) -> u64 {
-        self.publish_to(kind, payload, source_device_id, None)
+        let mut rev = self.revision.lock();
+        *rev += 1;
+        let revision = *rev;
+        drop(rev);
+        self.send_event(kind, payload, source_device_id, None, revision);
+        revision
     }
 
     /// Publishes an event that is addressed to a single connected device. The
     /// server's per-connection loop only forwards it to the device whose id
     /// matches `target_device_id`. Used to relay operator->phone camera
     /// signaling without broadcasting it to every client.
+    ///
+    /// Targeted events do NOT advance the global revision: they only forward
+    /// signaling and never change authoritative state, so bumping the counter
+    /// would spuriously invalidate every other client's expected_revision
+    /// (audit #24).
     pub fn publish_to(&self, kind: RemoteEventKind, payload: serde_json::Value, source_device_id: Option<String>, target_device_id: Option<String>) -> u64 {
-        let mut rev = self.revision.lock();
-        *rev += 1;
-        let revision = *rev;
-        drop(rev);
+        let revision = self.current_revision();
+        self.send_event(kind, payload, source_device_id, target_device_id, revision);
+        revision
+    }
 
+    fn send_event(&self, kind: RemoteEventKind, payload: serde_json::Value, source_device_id: Option<String>, target_device_id: Option<String>, revision: u64) {
         let event = RemoteEvent {
             kind,
             revision,
@@ -58,7 +69,6 @@ impl RemoteHub {
             payload,
         };
         let _ = self.tx.send(event);
-        revision
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<RemoteEvent> {

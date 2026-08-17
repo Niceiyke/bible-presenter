@@ -257,7 +257,18 @@ export function useNdiSender(options: UseNdiSenderOptions): UseNdiSenderResult {
     if (status !== "live") clearStats();
   }, [status, clearStats]);
 
-  useEffect(() => teardown, [teardown]);
+  // Unmount: tear down the encoder AND tell the backend to close the NDI
+  // session so navigating away while live never leaks a backend session
+  // (mirrors `useRtmpEncoder`).
+  useEffect(() => {
+    return () => {
+      const wasLive = runningRef.current;
+      teardown();
+      if (wasLive) {
+        invoke("ndi_stop", { sessionId }).catch(() => {});
+      }
+    };
+  }, [teardown, sessionId]);
 
   return { status, error, bitrateKbps: bitrate, start, stop };
 }

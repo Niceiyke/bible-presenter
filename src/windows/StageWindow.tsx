@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from "react";
 import { useSlideFit } from "../hooks/useSlideFit";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { DisplayItem, PresentationSettings, TimerData, LowerThirdData, LowerThirdTemplate, OutputConfig } from "../types";
+import type { DisplayItem, PresentationSettings, TimerData, LowerThirdData, LowerThirdTemplate, OutputConfig, PresentationSnapshot } from "../types";
 import { THEMES } from "../types";
 import { displayItemLabel } from "../utils";
 import { stageDetail as stageDetailFor } from "../items/registry";
@@ -64,11 +64,56 @@ export function StageWindow() {
   const [ltHostRef, ltFit] = useSlideFit();
 
   useEffect(() => {
-    invoke<DisplayItem>("get_current_item").then(setLiveItem).catch((e: any) => signalOperatorWarning(`Stage hydrate (live): ${e?.message ?? e}`));
-    invoke<DisplayItem>("get_staged_item").then(setStagedItem).catch(() => {});
+    // Hydration gate (audit #7): presentation events arriving while this
+    // window boots are buffered and replayed after `presentation_snapshot`,
+    // so a racing backend change is never lost or overwritten by stale data.
+    let presentationOpen = false;
+    let presentationBuffer: Array<() => void> = [];
+    const applyOrBuffer = (fn: () => void) => {
+      if (presentationOpen) fn();
+      else presentationBuffer.push(fn);
+    };
+    const drainPresentation = () => {
+      for (const fn of presentationBuffer) fn();
+      presentationBuffer = [];
+      presentationOpen = true;
+    };
+
+    const unlisten1 = listen<{ detected_item: DisplayItem | null }>(
+      "live-item-update",
+      (ev) => applyOrBuffer(() => setLiveItem(ev.payload.detected_item ?? null))
+    );
+    const unlisten2 = listen<DisplayItem | null>("item-staged", (ev) => {
+      applyOrBuffer(() => setStagedItem(ev.payload ?? null));
+    });
+    const unlisten3 = listen<PresentationSettings>("settings-changed", (ev) => {
+      applyOrBuffer(() => setSettings(ev.payload));
+    });
+    const unlisten4 = listen<any>("lower-third-update", (ev) => {
+      applyOrBuffer(() => setLtPayload(ev.payload ?? null));
+    });
+    const unlisten5 = listen<OutputConfig[]>("output-config-changed", (ev) => {
+      setOutputConfig(ev.payload.find((c) => c.window_label === "stage") ?? null);
+    });
+
+    // Hydrate from the authoritative snapshot (single consistent read) instead
+    // of racing per-field invokes against the event stream.
+    invoke<PresentationSnapshot | null>("presentation_snapshot")
+      .then((snap) => {
+        if (snap) {
+          setLiveItem(snap.live ?? null);
+          setStagedItem(snap.staged ?? null);
+          setSettings(snap.settings);
+          setLtPayload((snap.lower_third as any) ?? null);
+        }
+        drainPresentation();
+      })
+      .catch((e: any) => {
+        signalOperatorWarning(`Stage hydrate (snapshot): ${e?.message ?? e}`);
+        drainPresentation();
+      });
+
     invoke<string>("get_app_data_dir").then(setAppDataDir).catch(() => {});
-    invoke<PresentationSettings>("get_settings").then((s) => { if (s) setSettings(s); }).catch(() => {});
-    invoke<any>("get_current_lower_third").then((lt) => setLtPayload(lt ?? null)).catch(() => {});
     invoke<OutputConfig[]>("outputs_list").then((configs) => {
       setOutputConfig(configs.find((c) => c.window_label === "stage") ?? null);
     }).catch(() => {});
@@ -79,34 +124,16 @@ export function StageWindow() {
     };
     tick();
     const id = setInterval(tick, 250);
-    return () => clearInterval(id);
-  }, [setAppDataDir]);
 
-  useEffect(() => {
-    const unlisten1 = listen<{ detected_item: DisplayItem | null }>(
-      "live-item-update",
-      (ev) => setLiveItem(ev.payload.detected_item ?? null)
-    );
-    const unlisten2 = listen<DisplayItem | null>("item-staged", (ev) => {
-      setStagedItem(ev.payload ?? null);
-    });
-    const unlisten3 = listen<PresentationSettings>("settings-changed", (ev) => {
-      setSettings(ev.payload);
-    });
-    const unlisten4 = listen<any>("lower-third-update", (ev) => {
-      setLtPayload(ev.payload ?? null);
-    });
-    const unlisten5 = listen<OutputConfig[]>("output-config-changed", (ev) => {
-      setOutputConfig(ev.payload.find((c) => c.window_label === "stage") ?? null);
-    });
     return () => {
+      clearInterval(id);
       unlisten1.then((f) => f());
       unlisten2.then((f) => f());
       unlisten3.then((f) => f());
       unlisten4.then((f) => f());
       unlisten5.then((f) => f());
     };
-  }, []);
+  }, [setAppDataDir]);
 
   // Apply the stage output's presentation override (theme) on top of the
   // broadcast settings. Optional; with the default config this is a no-op.

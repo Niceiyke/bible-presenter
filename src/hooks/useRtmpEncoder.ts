@@ -550,7 +550,18 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
     if (status !== "live") clearStats();
   }, [status, clearStats]);
 
-  useEffect(() => teardown, [teardown]);
+  // Unmount: tear down the encoder AND tell the backend to stop the ffmpeg
+  // ingest, so navigating away from the Streaming workspace while live never
+  // leaks a child process (or a writer thread blocked on a dead pipe).
+  useEffect(() => {
+    return () => {
+      const wasLive = runningRef.current;
+      teardown();
+      if (wasLive) {
+        invoke("rtmp_stop", { sessionId }).catch(() => {});
+      }
+    };
+  }, [teardown, sessionId]);
 
   return { status, error, bitrateKbps: bitrate, start, stop };
 }

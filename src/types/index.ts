@@ -1,6 +1,6 @@
 export type { Verse } from "./verse";
 export type { MediaItem, MediaItemType, MediaFitMode } from "./media";
-export type { DisplayItem, ScheduleEntry, Schedule, ServiceMeta } from "./display";
+export type { DisplayItem, ScheduleEntry, Schedule, ServiceMeta, PresentationSnapshot } from "./display";
 export type { SlideZone, TextZone, SlideElement, SlideElementKind, TextElement, ImageElement, VideoElement, ShapeElement, CustomSlide, CustomPresentation, CustomSlideDisplayData, PresentationSummary, SlideTemplate, PresentationExport, SlideBackground, ProseMirrorJSON, SlideTheme, SlideMaster, TextStyle } from "./slides";
 export { DEFAULT_SLIDE_BACKGROUND } from "./slides";
 export type { TimerData } from "./timer";

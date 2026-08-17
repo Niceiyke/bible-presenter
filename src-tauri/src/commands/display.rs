@@ -1,10 +1,44 @@
-use crate::remote::commands::{op_clear_all as remote_clear_all, op_clear_live as remote_clear_live, op_commit_staged as remote_commit_staged, op_go_live_item, op_stage as remote_stage};
+use crate::events::{emit_checked, LiveItemUpdate};
+use crate::remote::commands::{
+    op_clear_all as remote_clear_all, op_clear_live as remote_clear_live,
+    op_clear_staged as remote_clear_staged, op_commit_staged as remote_commit_staged,
+    op_go_live_item, op_send_live, op_stage as remote_stage,
+};
 use crate::remote::protocol::RemoteEventKind;
 use crate::state::AppState;
-use crate::events::{emit_checked, LiveItemUpdate};
 use crate::store;
+use serde::Serialize;
 use serde_json::json;
 use tauri::{AppHandle, State};
+
+/// Authoritative presentation snapshot for window hydration. Windows call
+/// `presentation_snapshot` after registering their event listeners and replay
+/// their buffered events on top of it, so a reopening window converges to the
+/// same state as the operator console.
+#[derive(Serialize)]
+pub struct PresentationSnapshot {
+    pub live: Option<store::DisplayItem>,
+    pub staged: Option<store::DisplayItem>,
+    pub settings: store::PresentationSettings,
+    pub lower_third: Option<serde_json::Value>,
+    pub props: Vec<store::PropItem>,
+    pub revision: u64,
+}
+
+#[tauri::command]
+pub async fn presentation_snapshot(state: State<'_, AppState>) -> Result<PresentationSnapshot, String> {
+    // Read the whole presentation under the mutation lock so the snapshot is
+    // consistent: no event can be half-way applied when we capture it.
+    let _guard = state.presentation.lock.lock();
+    Ok(PresentationSnapshot {
+        live: state.presentation.live_item.lock().clone(),
+        staged: state.presentation.staged_item.lock().clone(),
+        settings: state.presentation.settings.lock().clone(),
+        lower_third: state.presentation.lower_third.lock().clone(),
+        props: state.presentation.props_layer.lock().clone(),
+        revision: state.presentation.current_revision(),
+    })
+}
 
 #[tauri::command]
 pub async fn stage_item(app: AppHandle, state: State<'_, AppState>, item: store::DisplayItem) -> Result<(), String> {
@@ -33,6 +67,16 @@ pub async fn go_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), S
     Ok(())
 }
 
+/// Atomic stage-and-commit in one transaction: stages `item` and immediately
+/// takes it live under a single presentation lock, so no concurrent caller can
+/// commit a different item in between. The frontend `sendLive` uses this
+/// instead of two separate IPC invokes (audit: concurrent stage/send-live).
+#[tauri::command]
+pub async fn send_live_item(app: AppHandle, state: State<'_, AppState>, item: store::DisplayItem) -> Result<store::DisplayItem, String> {
+    crate::license::ensure_allowed(&state)?;
+    op_send_live(&app, &state, item, None)
+}
+
 #[tauri::command]
 pub async fn go_live_item(app: AppHandle, state: State<'_, AppState>, item: store::DisplayItem) -> Result<(), String> {
     crate::license::ensure_allowed(&state)?;
@@ -49,24 +93,39 @@ pub async fn clear_live(app: AppHandle, state: State<'_, AppState>) -> Result<()
     Ok(())
 }
 
+/// Clear the staged slot only (backend-authoritative) so the output/stage
+/// windows and a later window reopen no longer show a staged item that the
+/// operator already cleared from the Cockpit.
+#[tauri::command]
+pub async fn clear_staged(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    remote_clear_staged(&app, &state, None);
+    Ok(())
+}
+
 /// Clear everything the audience can see: live item, staged item, lower-third
 /// overlay and props layer. This is the "CLEAR ALL" semantic — one atomic
 /// reset across all presentation channels. Settings (theme/background/blank)
-/// are intentionally preserved.
+/// are intentionally preserved. Propagates persistence failure (cleared props
+/// must survive a restart) back to the operator instead of silently clearing.
 #[tauri::command]
 pub async fn clear_all(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    remote_clear_all(&app, &state, None);
-    Ok(())
+    remote_clear_all(&app, &state, None)
 }
 
 #[tauri::command]
 pub async fn update_timer(app: AppHandle, state: State<'_, AppState>, started_at: Option<u64>) -> Result<(), String> {
+    let _guard = state.presentation.lock.lock();
+    state.presentation.bump_revision();
     let mut live = state.presentation.live_item.lock();
     if let Some(store::DisplayItem::Timer(ref mut t)) = *live {
         t.started_at = started_at;
         let item = live.clone();
         drop(live);
-        emit_checked(&app, "live-item-update", &LiveItemUpdate { detected_item: item.clone() });
+        let update = LiveItemUpdate {
+            detected_item: item.clone(),
+            revision: Some(state.presentation.current_revision()),
+        };
+        emit_checked(&app, "live-item-update", &update);
         state.remote.hub.publish(
             RemoteEventKind::LiveChanged,
             json!({ "live_item": item }),
@@ -98,6 +157,7 @@ pub async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings:
         let guard = state.presentation.settings.lock();
         (guard.is_blanked, guard.show_background_logo)
     };
+    state.presentation.bump_revision();
     *state.presentation.settings.lock() = settings.clone();
     emit_checked(&app, "settings-changed", &settings);
     if prev_blanked != settings.is_blanked {

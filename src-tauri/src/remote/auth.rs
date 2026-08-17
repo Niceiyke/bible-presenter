@@ -187,6 +187,34 @@ impl TokenStore {
         }
     }
 
+    /// Validates AND consumes a pairing token atomically, holding the pairing
+    /// lock across the check + mark-used so two concurrent handshake requests
+    /// can never both pass validation (audit #15: pairing race). Per-IP rate
+    /// limiting is applied first.
+    pub fn validate_and_consume_pairing(&self, token: &str, client_ip: &str) -> Result<(), AuthError> {
+        let now = now_unix();
+        {
+            let mut attempts = self.pairing_attempts.lock();
+            let list = attempts.entry(client_ip.to_string()).or_default();
+            list.retain(|t| *t >= now.saturating_sub(PAIRING_RATE_WINDOW_SECS));
+            if list.len() >= PAIRING_RATE_LIMIT {
+                return Err(AuthError::RateLimited);
+            }
+            list.push(now);
+        }
+        let hash = hash_token(token);
+        let mut pairing = self.pairing.lock();
+        let code = pairing.get_mut(&hash).ok_or(AuthError::PairingUnknown)?;
+        if code.used {
+            return Err(AuthError::PairingAlreadyUsed);
+        }
+        if code.expires_at < now {
+            return Err(AuthError::PairingExpired);
+        }
+        code.used = true;
+        Ok(())
+    }
+
     pub fn register_device(
         &self,
         device_token: &str,

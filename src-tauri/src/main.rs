@@ -143,13 +143,7 @@ fn main() {
             log_msg(app, &format!("License status: {:?} (machine {})", license_info.status, &license_info.machine_id_hash[..16.min(license_info.machine_id_hash.len())]));
 
             let state = AppState {
-                presentation: PresentationState {
-                    live_item: Arc::new(Mutex::new(None)),
-                    staged_item: Arc::new(Mutex::new(None)),
-                    settings: Arc::new(Mutex::new(initial_settings.clone())),
-                    lower_third: Arc::new(Mutex::new(None)),
-                    props_layer: Arc::new(Mutex::new(Vec::new())),
-                },
+                presentation: PresentationState::new(initial_settings.clone()),
                 store,
                 media_schedule,
                 app_data_dir,
@@ -233,9 +227,12 @@ fn main() {
             wordlyte_lib::commands::display::stage_item,
             wordlyte_lib::commands::display::commit_staged,
             wordlyte_lib::commands::display::go_live,
+            wordlyte_lib::commands::display::send_live_item,
             wordlyte_lib::commands::display::go_live_item,
             wordlyte_lib::commands::display::clear_live,
+            wordlyte_lib::commands::display::clear_staged,
             wordlyte_lib::commands::display::clear_all,
+            wordlyte_lib::commands::display::presentation_snapshot,
             wordlyte_lib::commands::display::update_timer,
             wordlyte_lib::commands::display::get_current_item,
             wordlyte_lib::commands::display::get_staged_item,

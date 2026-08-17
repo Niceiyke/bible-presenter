@@ -52,14 +52,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: install frontend dependencies
-        run: npm install
+        run: npm ci
 
       - name: create data directories
         shell: bash
         run: |
           mkdir -p src-tauri/models
           mkdir -p src-tauri/bible_data
-          echo "[]" > src-tauri/bible_data/hymns.json
 
       - name: fetch ffmpeg binaries for bundling
         shell: pwsh

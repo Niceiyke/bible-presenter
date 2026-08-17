@@ -66,6 +66,10 @@ pub struct RemoteControl {
     pub pairing_code_plain: Mutex<Option<(String, String, u64)>>,
     /// Active phone cameras with their WebRTC peer connections.
     pub phone_cameras: Arc<RwLock<HashMap<String, PhoneCamera>>>,
+    /// Revocation signal: every connected socket subscribes; the operator
+    /// `notify_revoked` broadcasts the revoked device id and the matching
+    /// socket closes immediately (audit #9 — revocation must take effect now).
+    pub revoked_tx: tokio::sync::broadcast::Sender<String>,
 }
 
 /// Represents a phone camera connected via WebRTC. The backend does not
@@ -133,9 +137,16 @@ impl RemoteControl {
             task: Mutex::new(None),
             pairing_code_plain: Mutex::new(None),
             phone_cameras: Arc::new(RwLock::new(HashMap::new())),
+            revoked_tx: tokio::sync::broadcast::channel(64).0,
         };
         control.tokens.load(&devices_file);
         control
+    }
+
+    /// Broadcasts that a device was revoked so its live socket closes
+    /// immediately. Called by `remote_revoke_device` / `remote_revoke_all`.
+    pub fn notify_revoked(&self, device_id: &str) {
+        let _ = self.revoked_tx.send(device_id.to_string());
     }
 
     pub fn bound_addr(&self) -> Option<std::net::SocketAddr> {

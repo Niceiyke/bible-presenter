@@ -157,6 +157,10 @@ export function DestinationCard({
             <span>
               Publishes as <span className="font-mono text-slate-300">Wordlyte – {dest.label || "…"}</span> on the LAN.
             </span>
+            <span className="ml-auto px-1.5 py-0.5 rounded border border-amber-500/40 text-amber-400/90 text-[9px] font-bold uppercase tracking-wider"
+              title="NDI output is an experimental Phase 8 scaffold: it requires the NDI 6 SDK build and is not yet validated on production machines.">
+              Experimental
+            </span>
           </div>
         ) : (
           <div className="flex items-center gap-2">

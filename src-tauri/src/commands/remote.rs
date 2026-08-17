@@ -227,6 +227,7 @@ pub async fn remote_revoke_device(app: AppHandle, state: State<'_, AppState>, de
     let revoked = control.tokens.revoke_device(&device_id);
     if revoked {
         control.persist_devices();
+        control.notify_revoked(&device_id);
         emit_device_event(&app, "revoked", name);
     }
     crate::store::log_msg(&app, &format!("Remote device revoked: {}", device_id));
@@ -236,8 +237,17 @@ pub async fn remote_revoke_device(app: AppHandle, state: State<'_, AppState>, de
 #[tauri::command]
 pub async fn remote_revoke_all(app: AppHandle, state: State<'_, AppState>) -> Result<RemoteStatusInfo, String> {
     let control = state.remote.clone();
+    let revoked_ids: Vec<String> = control
+        .tokens
+        .list_devices()
+        .iter()
+        .map(|d| d.id.clone())
+        .collect();
     let count = control.tokens.revoke_all();
     control.persist_devices();
+    for id in &revoked_ids {
+        control.notify_revoked(id);
+    }
     control.sessions.clear();
     if control.lease.holder_id().is_some() {
         let holder = control.lease.holder_id().unwrap_or_default();

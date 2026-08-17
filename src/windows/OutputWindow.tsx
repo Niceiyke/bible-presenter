@@ -3,6 +3,7 @@ import { listen, emit } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import type { DisplayItem, PropItem, PresentationSettings, LowerThirdData, LowerThirdTemplate, OutputConfig } from "../types";
 import { THEMES } from "../types";
+import type { PresentationSnapshot } from "../types";
 import {
   getEffectiveBackground,
   getVideoBackground,
@@ -177,17 +178,32 @@ export function OutputWindow() {
   }, []);
 
   useEffect(() => {
+    // Hydration gate (audit #7): presentation events arriving while this
+    // window boots are buffered and replayed after `presentation_snapshot`,
+    // so a racing backend change is never lost or overwritten by stale data.
+    let presentationOpen = false;
+    let presentationBuffer: Array<() => void> = [];
+    const applyOrBuffer = (fn: () => void) => {
+      if (presentationOpen) fn();
+      else presentationBuffer.push(fn);
+    };
+    const drainPresentation = () => {
+      for (const fn of presentationBuffer) fn();
+      presentationBuffer = [];
+      presentationOpen = true;
+    };
+
     const unlistenTrans = listen("live-item-update", (event: any) => {
       const { detected_item } = event.payload;
-      setLiveItem(detected_item ?? null);
+      applyOrBuffer(() => setLiveItem(detected_item ?? null));
     });
 
     const unlistenSettings = listen("settings-changed", (event: any) => {
-      setSettings(event.payload as PresentationSettings);
+      applyOrBuffer(() => setSettings(event.payload as PresentationSettings));
     });
 
     const unlistenStaged = listen("item-staged", (event: any) => {
-      setStagedItem(event.payload as DisplayItem | null);
+      applyOrBuffer(() => setStagedItem(event.payload as DisplayItem | null));
     });
 
     const unlistenOutputConfig = listen("output-config-changed", (event: any) => {
@@ -196,11 +212,13 @@ export function OutputWindow() {
     });
 
     const unlistenLt = listen("lower-third-update", (event: any) => {
-      if (event.payload) {
-        setLowerThird({ data: event.payload.data as LowerThirdData, template: event.payload.template as LowerThirdTemplate });
-      } else {
-        setLowerThird(null);
-      }
+      applyOrBuffer(() => {
+        if (event.payload) {
+          setLowerThird({ data: event.payload.data as LowerThirdData, template: event.payload.template as LowerThirdTemplate });
+        } else {
+          setLowerThird(null);
+        }
+      });
     });
 
     const unlistenMedia = listen("media-control", (event: any) => {
@@ -271,19 +289,34 @@ export function OutputWindow() {
     emit("media-state", null);
 
     const unlistenProps = listen("props-update", (event: any) => {
-      setPropItems((event.payload as PropItem[]) ?? []);
+      applyOrBuffer(() => setPropItems((event.payload as PropItem[]) ?? []));
     });
 
     const unlistenMonitorTest = listen("monitor-test", (event: any) => {
       setMonitorTest(!!event.payload?.active);
     });
 
+    // Hydrate from the authoritative presentation snapshot instead of racing
+    // per-field invokes against the event stream (audit #7).
+    invoke<PresentationSnapshot | null>("presentation_snapshot")
+      .then((snap) => {
+        if (snap) {
+          setLiveItem(snap.live ?? null);
+          setStagedItem(snap.staged ?? null);
+          setSettings(snap.settings);
+          setPropItems(snap.props ?? []);
+          setLowerThird((snap.lower_third as any) ?? null);
+        }
+        // Replay anything buffered while the snapshot was in flight, then let
+        // new events apply directly.
+        drainPresentation();
+      })
+      .catch((e: any) => {
+        signalOperatorWarning(`Output hydrate (snapshot): ${e?.message ?? e}`);
+        drainPresentation();
+      }),
     Promise.all([
-      invoke("get_current_item").then((v: any) => { if (v) setLiveItem(v); }).catch((e: any) => signalOperatorWarning(`Output hydrate (live): ${e?.message ?? e}`)),
-      invoke("get_current_lower_third").then((lt: any) => { if (lt) setLowerThird(lt); }).catch((e: any) => signalOperatorWarning(`Output hydrate (LT): ${e?.message ?? e}`)),
-      invoke("get_settings").then((s: any) => { if (s) setSettings(s); }).catch((e: any) => signalOperatorWarning(`Output hydrate (settings): ${e?.message ?? e}`)),
       invoke<string>("get_app_data_dir").then(setAppDataDir).catch((e: any) => signalOperatorWarning(`Output hydrate (appdir): ${e?.message ?? e}`)),
-      invoke<PropItem[]>("get_props").then(setPropItems).catch((e: any) => signalOperatorWarning(`Output hydrate (props): ${e?.message ?? e}`)),
       invoke<OutputConfig[]>("outputs_list").then((configs) => {
         setOutputConfig(configs.find((c) => c.window_label === "output") ?? null);
       }).catch((e: any) => signalOperatorWarning(`Output hydrate (config): ${e?.message ?? e}`)),

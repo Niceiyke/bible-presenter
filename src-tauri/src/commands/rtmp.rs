@@ -1,3 +1,4 @@
+use crate::license::{ensure_active_tier, LicenseTier};
 use crate::state::AppState;
 use base64::Engine as _;
 use serde::Serialize;
@@ -43,8 +44,21 @@ pub struct RtmpSession {
     pub child: Child,
     pub stdin_tx: mpsc::Sender<Vec<u8>>,
     pub audio_tx: Option<mpsc::Sender<Vec<u8>>>,
+    /// In-flight packet counters used to bound buffering (drop-newest when the
+    /// encoder outpaces ffmpeg instead of growing without bound).
+    pub queued: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    pub audio_queued: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub url: String,
 }
+
+/// Max packets buffered per destination before the newest frame is dropped.
+/// 120 packets ≈ 4s at 30 fps — enough to absorb a jitter spike, bounded
+/// enough to prevent an out-of-memory cascade on a slow uplink.
+const MAX_QUEUED_PACKETS: usize = 120;
+/// Largest single encoded packet we accept over IPC (H.264 IDR frames and
+/// ADTS AAC frames are far smaller; this only guards against runaway/malformed
+/// input).
+const MAX_PACKET_BYTES: usize = 8 * 1024 * 1024;
 
 /// Build the full RTMP ingest URL from a server URL + optional stream key,
 /// e.g. `rtmp://host/live` + `mykey` -> `rtmp://host/live/mykey`.
@@ -111,26 +125,34 @@ fn ffmpeg_args(url: &str, audio_port: Option<u16>) -> Vec<String> {
 }
 
 /// Spawn the writer thread that drains the channel into ffmpeg's stdin.
-fn spawn_writer(mut stdin: ChildStdin) -> mpsc::Sender<Vec<u8>> {
+/// Returns the sender plus a live packet counter the caller bumps before send
+/// so `rtmp_send` can apply bounded (drop-newest) backpressure.
+fn spawn_writer(mut stdin: ChildStdin) -> (mpsc::Sender<Vec<u8>>, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let queued = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = queued.clone();
     std::thread::spawn(move || {
+        use std::sync::atomic::Ordering;
         while let Ok(data) = rx.recv() {
+            counter.fetch_sub(1, Ordering::SeqCst);
             if stdin.write_all(&data).is_err() {
                 break; // ffmpeg closed the pipe (crash / user stop)
             }
             let _ = stdin.flush();
         }
-        // Drop stdin when the channel closes -> EOF to ffmpeg.
     });
-    tx
+    (tx, queued)
 }
 
 /// Spawn the audio writer thread: accept ffmpeg's loopback TCP connection (non
 /// blocking, up to ~5s, buffering anything that arrives before the handshake)
 /// then drain the channel into the socket. Closing the channel tears it down.
-fn spawn_audio_writer(listener: TcpListener) -> mpsc::Sender<Vec<u8>> {
+fn spawn_audio_writer(listener: TcpListener) -> (mpsc::Sender<Vec<u8>>, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let queued = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = queued.clone();
     std::thread::spawn(move || {
+        use std::sync::atomic::Ordering;
         let _ = listener.set_nonblocking(true);
         let mut pending: Vec<Vec<u8>> = Vec::new();
         let mut stream: Option<TcpStream> = None;
@@ -149,18 +171,43 @@ fn spawn_audio_writer(listener: TcpListener) -> mpsc::Sender<Vec<u8>> {
             return; // ffmpeg never connected
         };
         for data in pending {
+            counter.fetch_sub(1, Ordering::SeqCst);
             if stream.write_all(&data).is_err() {
                 return;
             }
         }
         while let Ok(data) = rx.recv() {
+            counter.fetch_sub(1, Ordering::SeqCst);
             if stream.write_all(&data).is_err() {
                 break; // ffmpeg closed the socket
             }
             let _ = stream.flush();
         }
     });
-    tx
+    (tx, queued)
+}
+
+/// Enqueue a packet with bounded drop-newest backpressure. Ok(true) = queued,
+/// Ok(false) = dropped because the queue was full (a stale frame — real-time
+/// streams self-heal, and blocking the operator UI on pipe backpressure is
+/// worse than dropping). Err = the writer thread already exited.
+fn enqueue_bounded(
+    tx: &mpsc::Sender<Vec<u8>>,
+    queued: &std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    data: Vec<u8>,
+) -> Result<bool, mpsc::SendError<Vec<u8>>> {
+    use std::sync::atomic::Ordering;
+    if queued.load(Ordering::SeqCst) >= MAX_QUEUED_PACKETS {
+        return Ok(false);
+    }
+    queued.fetch_add(1, Ordering::SeqCst);
+    match tx.send(data) {
+        Ok(()) => Ok(true),
+        Err(e) => {
+            queued.fetch_sub(1, Ordering::SeqCst);
+            Err(e)
+        }
+    }
 }
 
 pub fn ffmpeg_available() -> bool {
@@ -180,6 +227,9 @@ pub fn rtmp_start(
     stream_key: Option<String>,
     with_audio: bool,
 ) -> Result<(), String> {
+    // Streaming is a paid feature (audit: tier enforcement must live on the
+    // backend, not just in the UI).
+    ensure_active_tier(&state, LicenseTier::Pro)?;
     let mut guard = state.rtmp.lock();
     if guard.contains_key(&session_id) {
         return Err("This RTMP destination is already live — stop it first.".into());
@@ -216,11 +266,23 @@ pub fn rtmp_start(
         .stdin
         .take()
         .ok_or_else(|| "ffmpeg stdin was not available.".to_string())?;
-    let stdin_tx = spawn_writer(stdin);
-    let audio_tx = audio_listener.map(spawn_audio_writer);
+    let (stdin_tx, queued) = spawn_writer(stdin);
+    let (audio_tx, audio_queued) = if let Some(listener) = audio_listener {
+        let (tx, counter) = spawn_audio_writer(listener);
+        (Some(tx), Some(counter))
+    } else {
+        (None, None)
+    };
     guard.insert(
         session_id,
-        RtmpSession { child, stdin_tx, audio_tx, url },
+        RtmpSession {
+            child,
+            stdin_tx,
+            audio_tx,
+            queued,
+            audio_queued: audio_queued.unwrap_or_default(),
+            url,
+        },
     );
     Ok(())
 }
@@ -240,9 +302,11 @@ pub fn rtmp_send(
     let data = base64::engine::general_purpose::STANDARD
         .decode(&data_base64)
         .map_err(|e| format!("Invalid RTMP packet: {e}"))?;
-    session
-        .stdin_tx
-        .send(data)
+    if data.len() > MAX_PACKET_BYTES {
+        return Err("RTMP packet exceeds the size limit.".into());
+    }
+    enqueue_bounded(&session.stdin_tx, &session.queued, data)
+        .map(|_| ())
         .map_err(|_| "RTMP writer closed (ffmpeg exited).".to_string())
 }
 
@@ -254,6 +318,8 @@ pub fn rtmp_send_audio(
     session_id: String,
     data_base64: String,
 ) -> Result<(), String> {
+    // Shared audio input is a Premium feature.
+    ensure_active_tier(&state, LicenseTier::Premium)?;
     let mut guard = state.rtmp.lock();
     let session = guard
         .get_mut(&session_id)
@@ -265,7 +331,11 @@ pub fn rtmp_send_audio(
     let data = base64::engine::general_purpose::STANDARD
         .decode(&data_base64)
         .map_err(|e| format!("Invalid RTMP audio packet: {e}"))?;
-    tx.send(data)
+    if data.len() > MAX_PACKET_BYTES {
+        return Err("RTMP audio packet exceeds the size limit.".into());
+    }
+    enqueue_bounded(tx, &session.audio_queued, data)
+        .map(|_| ())
         .map_err(|_| "RTMP audio writer closed (ffmpeg exited).".to_string())
 }
 

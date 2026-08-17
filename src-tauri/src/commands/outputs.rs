@@ -88,7 +88,10 @@ pub async fn outputs_set_visible(
                 let settings = s.presentation.settings.lock().clone();
                 emit_checked(&app, "settings-changed", &settings);
                 let live = s.presentation.live_item.lock().clone();
-                emit_checked(&app, "live-item-update", &crate::events::LiveItemUpdate { detected_item: live });
+                emit_checked(&app, "live-item-update", &crate::events::LiveItemUpdate {
+                    detected_item: live,
+                    revision: Some(s.presentation.current_revision()),
+                });
                 let lt = s.presentation.lower_third.lock().clone();
                 emit_checked(&app, "lower-third-update", &lt);
                 let props = s.presentation.props_layer.lock().clone();

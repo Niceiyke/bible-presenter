@@ -9,6 +9,7 @@ import {
   MediaItem, Song, LowerThirdTemplate,
   PresentationSettings, PropItem, ServiceMeta,
   DisplayItem, OutputConfig, OutputState,
+  PresentationSnapshot,
 } from "../types";
 import type { LicenseInfo } from "../types/license";
 
@@ -41,6 +42,26 @@ export function useAppInitialization() {
       return;
     }
 
+    // ── Hydration gate ─────────────────────────────────────────────────────
+    // Presentation-critical events that arrive between listener registration
+    // and snapshot application are buffered and replayed on top of the
+    // authoritative `presentation_snapshot`. This closes the hydration races
+    // (audit #7): a backend live/staged/settings/lower-third/props change that
+    // lands while this window boots can never be lost, and the snapshot can
+    // never overwrite a newer update. Events carry full sub-state, so replay
+    // after snapshot converges.
+    let presentationOpen = false;
+    let presentationBuffer: Array<() => void> = [];
+    const applyOrBuffer = (fn: () => void) => {
+      if (presentationOpen) fn();
+      else presentationBuffer.push(fn);
+    };
+    const drainPresentation = () => {
+      for (const fn of presentationBuffer) fn();
+      presentationBuffer = [];
+      presentationOpen = true;
+    };
+
     const loadAll = async () => {
       let ready = false;
       for (let attempt = 0; attempt < 15; attempt++) {
@@ -62,7 +83,7 @@ export function useAppInitialization() {
       const [
         versionsRes, mediaRes, studioRes, scheduleRes, songsRes, hymnLibraryRes,
         ltRes, settingsRes, propsRes,
-        servicesRes, currentLtRes, appDirRes
+        servicesRes, appDirRes, snapRes
       ] = await Promise.all([
         invoke<string[]>("get_bible_versions").catch(() => []),
         invoke<MediaItem[]>("list_media").catch(() => []),
@@ -74,8 +95,8 @@ export function useAppInitialization() {
         invoke<PresentationSettings>("get_settings").catch(() => null),
         invoke<PropItem[]>("get_props").catch(() => []),
         invoke<ServiceMeta[]>("list_services").catch(() => []),
-        invoke<any>("get_current_lower_third").catch(() => null),
         invoke<string>("get_app_data_dir").catch(() => null),
+        invoke<PresentationSnapshot | null>("presentation_snapshot").catch(() => null),
       ]);
 
       setMedia(mediaRes);
@@ -95,8 +116,6 @@ export function useAppInitialization() {
       const active = savedTpls.find(t => t.id === activeId) || savedTpls[0];
       setLtTemplate(active);
 
-      if (currentLtRes) setCurrentLowerThird(currentLtRes);
-
       if (settingsRes) setSettings(settingsRes);
 
       setAvailableVersions(versionsRes);
@@ -105,7 +124,25 @@ export function useAppInitialization() {
       setPropItems(propsRes);
       setServices(servicesRes.length ? servicesRes : [{ id: "default", name: "Sunday Service", item_count: 0, updated_at: Date.now() }]);
 
-      invoke("get_current_item").then((v: any) => { if (v) setLiveItem(v); }).catch(() => {});
+      // Apply the authoritative presentation snapshot, then replay any events
+      // buffered while we hydrated so the newest backend state wins.
+      if (snapRes) {
+        setLiveItem(snapRes.live ?? null);
+        setStagedItem(snapRes.staged ?? null);
+        if (snapRes.settings) setSettings(snapRes.settings);
+        setPropItems(snapRes.props ?? []);
+        setCurrentLowerThird((snapRes.lower_third as any) ?? null);
+        // The lower-third visibility flag is authoritative on the backend and
+        // derived from whether a payload is present (audit #8).
+        setLtVisible(!!snapRes.lower_third);
+      } else {
+        // No snapshot (older backend) — fall back to the legacy per-field
+        // hydration so a stale live item never lingers on a null payload.
+        invoke<DisplayItem | null>("get_current_item")
+          .then((v) => setLiveItem(v ?? null))
+          .catch(() => {});
+      }
+      drainPresentation();
 
       // P1.5 — Restore persisted recents and schedule undo/redo stacks.
       invoke<any>("load_workspace", { key: "recents" }).then((r) => {
@@ -138,22 +175,30 @@ export function useAppInitialization() {
 
     loadAll();
 
-    const unlistenStaged = listen("item-staged", (ev: any) => setStagedItem(ev.payload as DisplayItem));
+    const unlistenStaged = listen("item-staged", (ev: any) => applyOrBuffer(() => setStagedItem(ev.payload as DisplayItem)));
     const unlistenLive = listen<{ detected_item: DisplayItem | null }>("live-item-update", (ev) => {
       // Propagate null clears too — ignoring null leaves stale live state
       // after a clear operation.
-      setLiveItem(ev.payload.detected_item ?? null);
+      applyOrBuffer(() => setLiveItem(ev.payload.detected_item ?? null));
     });
-    const unlistenSettings = listen("settings-changed", (ev: any) => setSettings(ev.payload as PresentationSettings));
+    const unlistenSettings = listen("settings-changed", (ev: any) => applyOrBuffer(() => setSettings(ev.payload as PresentationSettings)));
+    const unlistenProps = listen<PropItem[]>("props-update", (ev) => {
+      // The main window now mirrors the authoritative props layer like the
+      // output/stage windows do, so a prop change made on the desktop is
+      // reflected everywhere.
+      applyOrBuffer(() => setPropItems(Array.isArray(ev.payload) ? ev.payload : []));
+    });
     const unlistenLtUpdate = listen("lower-third-update", (ev: any) => {
       const payload = ev.payload;
-      if (payload) {
-        setCurrentLowerThird(payload);
-        setLtVisible(true);
-      } else {
-        setCurrentLowerThird(null);
-        setLtVisible(false);
-      }
+      applyOrBuffer(() => {
+        if (payload) {
+          setCurrentLowerThird(payload);
+          setLtVisible(true);
+        } else {
+          setCurrentLowerThird(null);
+          setLtVisible(false);
+        }
+      });
     });
     const unlistenLtSync = listen<LowerThirdTemplate[]>("lower-third-template-sync", (ev) => {
       const incoming = ev.payload;
@@ -232,6 +277,7 @@ export function useAppInitialization() {
       unlistenStaged.then(f => f());
       unlistenLive.then(f => f());
       unlistenSettings.then(f => f());
+      unlistenProps.then(f => f());
       unlistenLtUpdate.then(f => f());
       unlistenLtSync.then(f => f());
       unlistenSongsSync.then(f => f());

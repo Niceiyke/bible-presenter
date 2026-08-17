@@ -76,7 +76,7 @@ export default function App() {
   useFonts(); // P2.5: inject @font-face for user-installed fonts.
 
   const {
-    nextLiveItem, stageItem, goLive, sendLive, clearAll, undoClearAll, getNextItem,
+    nextLiveItem, stageItem, goLive, sendLive, clearStaged, clearAll, undoClearAll, getNextItem,
     addToSchedule, addToService, persistSchedule, handleFileUpload, handleDeleteMedia,
     updateSettings, updateProps,
     loadScenes, saveScene, deleteScene, applyScene, captureScene,
@@ -268,6 +268,7 @@ export default function App() {
           stageItem={stageItem}
           goLive={goLive}
           sendLive={sendLive}
+          clearStaged={clearStaged}
           clearAll={clearAll}
           undoClearAll={undoClearAll}
           persistSchedule={persistSchedule}

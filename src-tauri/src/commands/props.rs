@@ -47,8 +47,10 @@ pub async fn set_props(app: AppHandle, state: State<'_, AppState>, props: Vec<st
             }
         }
     }
+    // Persist BEFORE mutating so a write failure never leaves the in-memory
+    // and on-disk layers diverging, and the caller can roll back cleanly.
+    state.media_schedule.save_props(&props).map_err(|e| e.to_string())?;
     *state.presentation.props_layer.lock() = props.clone();
     emit_checked(&app, "props-update", &props);
-    let _ = state.media_schedule.save_props(&props);
     Ok(())
 }

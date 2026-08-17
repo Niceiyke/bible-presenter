@@ -1,5 +1,7 @@
+use crate::license::{ensure_active_tier, LicenseTier};
+use crate::state::AppState;
 use serde::Serialize;
-use tauri::command;
+use tauri::{command, State};
 
 /// NDI output (Phase 8 scaffold).
 ///
@@ -55,7 +57,9 @@ pub fn ndi_status() -> NdiStatus {
 /// Open an NDI|HX send session. `name` is the NDI source name announced on the
 /// LAN (the destination label); once live, consumers discover "Wordlyte – <name>".
 #[command]
-pub fn ndi_start(session_id: String, _name: String) -> Result<(), String> {
+pub fn ndi_start(state: State<'_, AppState>, session_id: String, _name: String) -> Result<(), String> {
+    // NDI publishing is a Pro feature — enforce on the backend too.
+    ensure_active_tier(&state, LicenseTier::Pro)?;
     let _ = session_id;
     Err(not_compiled_reason())
 }

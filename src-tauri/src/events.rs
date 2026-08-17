@@ -5,6 +5,10 @@ use tauri::{AppHandle, Emitter};
 #[derive(Clone, Serialize)]
 pub struct LiveItemUpdate {
     pub detected_item: Option<store::DisplayItem>,
+    /// Presentation revision at the time of the change, so windows can drop
+    /// stale event applications that race a hydration snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

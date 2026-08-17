@@ -67,7 +67,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' blob:; connect-src 'self' asset: http://asset.localhost https://asset.localhost; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: asset: http://asset.localhost https://asset.localhost data:; media-src 'self' blob: asset: http://asset.localhost https://asset.localhost;",
+      "csp": "default-src 'self' blob:; connect-src 'self' asset: http://asset.localhost https://asset.localhost https: http:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: asset: http://asset.localhost https://asset.localhost data:; media-src 'self' blob: asset: http://asset.localhost https://asset.localhost;",
       "assetProtocol": {
         "enable": true,
         "scope": ["**"]

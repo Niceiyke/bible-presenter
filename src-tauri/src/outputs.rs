@@ -182,7 +182,13 @@ impl OutputManager {
         if let Some(dir) = self.configs_file.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        std::fs::write(&self.configs_file, json).map_err(|e| e.to_string())
+        // Atomic write: serialize to a temp file in the same directory then
+        // rename over the target, so a crash mid-write can never leave a
+        // truncated `outputs.json` that fails to parse on next launch
+        // (audit: persistence must be crash-safe).
+        let tmp = self.configs_file.with_extension("json.tmp");
+        std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, &self.configs_file).map_err(|e| e.to_string())
     }
 
     pub fn list(&self) -> Vec<OutputConfig> {

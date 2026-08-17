@@ -29,16 +29,6 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    const json = (data, status = 200) =>
-      new Response(JSON.stringify(data), {
-        status,
-        headers: {
-          "content-type": "application/json",
-          "cache-control": "no-store",
-          "access-control-allow-origin": "*",
-        },
-      });
-
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
@@ -95,7 +85,7 @@ export default {
       if (!/^[0-9a-f]{64}$/i.test(machineId))
         return json({ status: "invalid", message: "Missing or malformed machine id" }, 400);
 
-      const rec = await env.LICENSES.get(key, "json");
+      let rec = await env.LICENSES.get(key, "json");
       const serverTime = now();
       if (!rec)
         return json({
@@ -130,16 +120,21 @@ export default {
 
       let machines = rec.machines || [];
       if (!machines.includes(machineId)) {
-        if (machines.length >= rec.max_machines) {
-          return json({
-            status: "invalid",
-            message: `This key is already activated on ${machines.length} device(s) (limit ${rec.max_machines}). Contact the Wordlyte team to add more.`,
-            ...common(),
-          });
+        // Route the slot check + push through the LicenseRegistry Durable
+        // Object so two concurrent /validate calls from two machines cannot
+        // both read `length < max_machines` and over-commit the device cap
+        // (audit #11). The DO serializes mutations per license key.
+        const stub = env.LICENSE_REGISTRY.get(env.LICENSE_REGISTRY.idFromName(key));
+        const res = await stub.fetch("https://registry/register", {
+          method: "POST",
+          body: JSON.stringify({ key, machineId }),
+        });
+        const data = await res.json();
+        if (data.status !== "active") {
+          return json({ status: "invalid", message: data.message, ...common() });
         }
-        machines.push(machineId);
-        rec.machines = machines;
-        await env.LICENSES.put(key, JSON.stringify(rec));
+        rec = data.rec;
+        machines = rec.machines || [];
       }
 
       return json({ status: "active", message: "ok", ...common() });
@@ -302,11 +297,83 @@ async function collectLicenses(env) {
   return licenses;
 }
 
+const json = (data, status = 200) =>
+  new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+      "access-control-allow-origin": "*",
+    },
+  });
+
+/**
+ * Per-key serialization point for license record mutations (audit #11).
+ *
+ * Cloudflare KV is eventually consistent and has no compare-and-set, so a
+ * bare `get` + `put` in /validate would let two concurrent registrations both
+ * observe `machines.length < max_machines` and over-commit the device cap.
+ * Every license key maps to a deterministic DO id (idFromName), and a Durable
+ * Object processes its requests one at a time, so slot allocation is atomic
+ * per key. The record is cached in-memory for the life of the instance and
+ * written back to KV on every mutation; a fresh instance re-reads from KV.
+ */
+export class LicenseRegistry {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.cache = null;
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const { key } = await request.json().catch(() => ({}));
+    if (url.pathname === "/register" && key) {
+      return this.register(key, (await request.json().catch(() => ({}))).machineId);
+    }
+    return json({ status: "error", message: "Not found" }, 404);
+  }
+
+  async load(key) {
+    if (this.cache) return this.cache;
+    this.cache = await this.env.LICENSES.get(key, "json");
+    return this.cache;
+  }
+
+  async save(key, rec) {
+    this.cache = rec;
+    await this.env.LICENSES.put(key, JSON.stringify(rec));
+  }
+
+  async register(key, machineId) {
+    const rec = await this.load(key);
+    if (!rec) return json({ status: "invalid", message: "Unknown license key" });
+    if (rec.revoked) return json({ status: "revoked", message: "revoked" });
+    const serverTime = Math.floor(Date.now() / 1000);
+    if (serverTime >= rec.expires_at) return json({ status: "expired", message: "expired" });
+    const machines = rec.machines || [];
+    if (machines.includes(machineId)) return json({ status: "active", message: "ok", rec });
+    if (machines.length >= rec.max_machines) {
+      return json({
+        status: "invalid",
+        message: `This key is already activated on ${machines.length} device(s) (limit ${rec.max_machines}). Contact the Wordlyte team to add more.`,
+        rec,
+      });
+    }
+    machines.push(machineId);
+    rec.machines = machines;
+    await this.save(key, rec);
+    return json({ status: "active", message: "ok", rec });
+  }
+}
+
 function generateKey() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no I, O, 0, 1
-  const seg = (n) =>
-    Array.from({ length: n }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
-  return `WORDLYTE-${seg(4)}-${seg(4)}-${seg(4)}-${seg(4)}`;
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes); // audit #6: Web Crypto, never Math.random
+  let out = "";
+  for (const b of bytes) out += alphabet[b % alphabet.length];
+  return `WORDLYTE-${out.slice(0, 4)}-${out.slice(4, 8)}-${out.slice(8, 12)}-${out.slice(12, 16)}`;
 }
 
 const TIERS = ["free", "pro", "premium"];

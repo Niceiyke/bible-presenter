@@ -2,7 +2,7 @@ use crate::remote::RemoteControl;
 use crate::store;
 use parking_lot::Mutex;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -12,6 +12,38 @@ pub struct PresentationState {
     pub settings: Arc<Mutex<store::PresentationSettings>>,
     pub lower_third: Arc<Mutex<Option<serde_json::Value>>>,
     pub props_layer: Arc<Mutex<Vec<store::PropItem>>>,
+    /// Serializes whole presentation mutations (stage, commit, send-live,
+    /// clear) so desktop and remote callers can never interleave two
+    /// operations mid-transaction. All mutating `op_*` helpers take this
+    /// lock first, then the per-slot locks, so ordering stays consistent.
+    pub lock: Arc<Mutex<()>>,
+    /// Monotonic presentation revision, incremented on every mutation. Windows
+    /// use it to order a hydration snapshot against live events so stale state
+    /// can never overwrite a newer transition.
+    pub revision: Arc<AtomicU64>,
+}
+
+impl PresentationState {
+    pub fn new(settings: store::PresentationSettings) -> Self {
+        Self {
+            live_item: Arc::new(Mutex::new(None)),
+            staged_item: Arc::new(Mutex::new(None)),
+            settings: Arc::new(Mutex::new(settings)),
+            lower_third: Arc::new(Mutex::new(None)),
+            props_layer: Arc::new(Mutex::new(Vec::new())),
+            lock: Arc::new(Mutex::new(())),
+            revision: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// Increments and returns the next presentation revision.
+    pub fn bump_revision(&self) -> u64 {
+        self.revision.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    pub fn current_revision(&self) -> u64 {
+        self.revision.load(Ordering::SeqCst)
+    }
 }
 
 #[derive(Clone)]

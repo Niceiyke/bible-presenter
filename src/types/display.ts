@@ -3,8 +3,9 @@ import type { MediaItem } from "./media";
 import type { CustomSlideDisplayData } from "./slides";
 import type { TimerData } from "./timer";
 import type { SongSlideData } from "./song";
-import type { CameraBackground } from "./settings";
+import type { CameraBackground, PresentationSettings } from "./settings";
 import type { SceneCompositionData } from "./scene";
+import type { PropItem } from "./props";
 
 export type DisplayItem =
   | { type: "Verse"; data: Verse }
@@ -14,6 +15,21 @@ export type DisplayItem =
   | { type: "Timer"; data: TimerData }
   | { type: "Song"; data: SongSlideData }
   | { type: "SceneComposition"; data: SceneCompositionData };
+
+/**
+ * Authoritative presentation snapshot returned by the `presentation_snapshot`
+ * backend command. Windows register their listeners first, fetch this, then
+ * replay any buffered events on top so hydration converges to current state
+ * and a racing backend update is never lost or overwritten.
+ */
+export interface PresentationSnapshot {
+  live: DisplayItem | null;
+  staged: DisplayItem | null;
+  settings: PresentationSettings;
+  lower_third: unknown | null;
+  props: PropItem[];
+  revision: number;
+}
 
 export interface ScheduleEntry {
   id: string;

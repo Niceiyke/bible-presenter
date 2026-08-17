@@ -18,6 +18,7 @@ interface CockpitProps {
   stageItem: (item: DisplayItem) => Promise<boolean>;
   goLive: () => Promise<boolean>;
   sendLive: (item: DisplayItem) => Promise<boolean>;
+  clearStaged: () => Promise<boolean>;
   clearAll: () => Promise<ClearSnapshot | null>;
   undoClearAll: (snapshot: ClearSnapshot) => Promise<boolean>;
   persistSchedule: () => Promise<void>;
@@ -31,6 +32,7 @@ export function Cockpit({
   stageItem,
   goLive,
   sendLive,
+  clearStaged,
   clearAll,
   undoClearAll,
   persistSchedule,
@@ -39,7 +41,7 @@ export function Cockpit({
   setCockpitWidth,
 }: CockpitProps) {
   const {
-    stagedItem, setStagedItem,
+    stagedItem,
     liveItem, setLiveItem,
     previousItem,
     scheduleEntries, pushScheduleState,
@@ -151,7 +153,8 @@ export function Cockpit({
               )}
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
-              <Button variant="bare" size="sm" onClick={() => setStagedItem(null)}
+              <Button variant="bare" size="sm" onClick={() => clearStaged()}
+                disabled={!stagedItem}
                 className="text-console-text-subtle hover:text-state-live hover:bg-state-live-soft">
                 <X size={11} /> Clear
               </Button>

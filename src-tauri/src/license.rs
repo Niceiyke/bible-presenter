@@ -300,7 +300,14 @@ impl LicenseManager {
             machine_id,
             license: Mutex::new(license),
             server_url: default_server_url(),
-            client: reqwest::Client::new(),
+            // Bound both connect and total request time so a hung network or a
+            // stuck license endpoint can never block the app indefinitely
+            // (a license refresh runs on the operator path).
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 
