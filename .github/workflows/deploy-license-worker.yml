@@ -35,8 +35,12 @@ jobs:
         run: npm install
 
       - name: run worker tests
+        shell: bash
         working-directory: workers/license
-        run: npm test
+        run: |
+          echo "ADMIN_TOKEN=local-test-token" > .dev.vars
+          npm test
+          rm -f .dev.vars
 
       - name: set ADMIN_TOKEN secret (from GitHub secret)
         shell: bash

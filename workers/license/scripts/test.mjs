@@ -18,11 +18,19 @@ const ROOT = fileURLToPath(new URL("../", import.meta.url)).replace(/[\\/]$/, ""
 const PORT = 8797;
 const BASE = `http://127.0.0.1:${PORT}`;
 
-const devVars = readFileSync(join(ROOT, ".dev.vars"), "utf8")
-  .split(/\r?\n/)
-  .map((l) => l.trim())
-  .find((l) => l.startsWith("ADMIN_TOKEN="));
-const ADMIN_TOKEN = process.env.TEST_ADMIN_TOKEN || devVars?.slice("ADMIN_TOKEN=".length) || "local-test-token";
+let adminToken = process.env.TEST_ADMIN_TOKEN;
+if (!adminToken) {
+  try {
+    const devVars = readFileSync(join(ROOT, ".dev.vars"), "utf8")
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find((l) => l.startsWith("ADMIN_TOKEN="));
+    adminToken = devVars?.slice("ADMIN_TOKEN=".length);
+  } catch {
+    // No .dev.vars (e.g. CI) — fall back to the default below.
+  }
+}
+const ADMIN_TOKEN = adminToken || "local-test-token";
 
 const results = [];
 function check(name, cond) {
