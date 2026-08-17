@@ -74,11 +74,50 @@ export interface EncoderFactory {
   isConfigSupported: (config: VideoEncoderConfig) => Promise<VideoEncoderSupport>;
 }
 
-const H264_CODECS = [
-  "avc1.42E01E", // Baseline — max compatibility
-  "avc1.4D401F", // Main
-  "avc1.64001F", // High
+/** AVC levels: [level_idc, MaxFS (macroblocks/frame), MaxMBPS]. */
+const AVC_LEVELS: Array<[idc: number, maxFs: number, maxMbps: number]> = [
+  [10, 99, 1485],
+  [11, 396, 3000],
+  [12, 396, 6000],
+  [13, 396, 11880],
+  [20, 396, 11880],
+  [21, 792, 19800],
+  [22, 1620, 20250],
+  [30, 1620, 40500],
+  [31, 3600, 108000],
+  [32, 5120, 216000],
+  [40, 8192, 245760],
+  [41, 8192, 245760],
+  [42, 8704, 522240],
+  [50, 22080, 589824],
+  [51, 36864, 983040],
+  [52, 36864, 2073600],
 ];
+
+/**
+ * Minimum AVC level_idc that can encode `width`×`height` at `fps`. Chromium
+ * validates the codec string's level against the requested dimensions in
+ * `VideoEncoder.isConfigSupported`, so an underspecified level (e.g. 3.1 for
+ * 1080p30) is reported unsupported even though the profile is fine.
+ */
+export function requiredAvcLevel(width: number, height: number, fps: number): number {
+  const mbPerFrame = Math.ceil(width / 16) * Math.ceil(height / 16);
+  const mbps = mbPerFrame * Math.max(1, Math.round(fps));
+  for (const [idc, maxFs, maxMbps] of AVC_LEVELS) {
+    if (mbPerFrame <= maxFs && mbps <= maxMbps) return idc;
+  }
+  return 52;
+}
+
+/** AVC codec strings per profile, at the level required for the frame size. */
+function h264Codecs(width: number, height: number, fps: number): string[] {
+  const level = requiredAvcLevel(width, height, fps).toString(16).padStart(2, "0").toUpperCase();
+  return [
+    `avc1.42E0${level}`, // Baseline — max compatibility
+    `avc1.4D40${level}`, // Main
+    `avc1.6400${level}`, // High
+  ];
+}
 
 const AAC_CODEC = "mp4a.40.2"; // AAC-LC — universal RTMP audio
 
@@ -125,7 +164,7 @@ export async function supportsH264(
   bitrateKbps: number,
   fps: number
 ): Promise<string | null> {
-  for (const codec of H264_CODECS) {
+  for (const codec of h264Codecs(width, height, fps)) {
     const config: VideoEncoderConfig = {
       codec,
       width,

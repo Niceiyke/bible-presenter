@@ -119,7 +119,7 @@ describe("useNdiSender", () => {
     // The encoder was configured for H.264 Annex-B at 6 Mbps.
     const enc = FakeVideoEncoder.instances[0];
     expect(enc?.configureCalls.length).toBe(1);
-    expect(enc?.configureCalls[0].codec).toBe("avc1.42E01E");
+    expect(enc?.configureCalls[0].codec).toBe("avc1.42E028");
     expect(enc?.configureCalls[0].avc?.format).toBe("annexb");
     expect(enc?.configureCalls[0].bitrate).toBe(6_000_000);
     // Encoded packets were streamed to the backend.

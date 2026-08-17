@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useRtmpEncoder, wrapAdts } from "../useRtmpEncoder";
+import { useRtmpEncoder, wrapAdts, requiredAvcLevel, supportsH264 } from "../useRtmpEncoder";
+import type { EncoderFactory } from "../useRtmpEncoder";
 
 // Mock the Tauri bridge before anything imports the real modules.
 vi.mock("@tauri-apps/api/core", () => ({
@@ -217,7 +218,7 @@ describe("useRtmpEncoder", () => {
     // The encoder was configured for H.264 Annex-B at 6 Mbps.
     const enc = FakeVideoEncoder.instances[0];
     expect(enc?.configureCalls.length).toBe(1);
-    expect(enc?.configureCalls[0].codec).toBe("avc1.42E01E");
+    expect(enc?.configureCalls[0].codec).toBe("avc1.42E028");
     expect(enc?.configureCalls[0].avc?.format).toBe("annexb");
     expect(enc?.configureCalls[0].bitrate).toBe(6_000_000);
     // Encoded packets were streamed to the backend.
@@ -410,5 +411,57 @@ describe("wrapAdts", () => {
 
   it("rejects unsupported sample rates", () => {
     expect(() => wrapAdts(new Uint8Array(10), 12345, 2)).toThrow(/sample rate/);
+  });
+});
+
+describe("requiredAvcLevel", () => {
+  it("picks level 4.0 for 1080p30", () => {
+    expect(requiredAvcLevel(1920, 1080, 30)).toBe(40);
+  });
+
+  it("picks level 5.1 for 4K30", () => {
+    expect(requiredAvcLevel(3840, 2160, 30)).toBe(51);
+  });
+
+  it("stays low for SD content", () => {
+    expect(requiredAvcLevel(1280, 720, 30)).toBe(31);
+  });
+
+  it("caps at the top of the table for extreme resolutions", () => {
+    expect(requiredAvcLevel(7680, 4320, 60)).toBe(52);
+  });
+});
+
+describe("supportsH264", () => {
+  it("probes profiles at the level required for the frame size", async () => {
+    const isConfigSupported = vi.fn(async () => ({ supported: true, config: {} }));
+    const codec = await supportsH264({ isConfigSupported } as unknown as EncoderFactory, 1920, 1080, 6000, 30);
+    expect(codec).toBe("avc1.42E028");
+    expect(isConfigSupported).toHaveBeenCalledWith(
+      expect.objectContaining({
+        codec: "avc1.42E028",
+        width: 1920,
+        height: 1080,
+        bitrate: 6_000_000,
+        framerate: 30,
+        avc: { format: "annexb" },
+      })
+    );
+  });
+
+  it("falls back through profiles when a higher profile is required", async () => {
+    const isConfigSupported = vi.fn(async (config: VideoEncoderConfig) => ({
+      supported: config.codec.startsWith("avc1.64"),
+      config: {},
+    }));
+    const codec = await supportsH264({ isConfigSupported } as unknown as EncoderFactory, 3840, 2160, 12000, 30);
+    expect(codec).toBe("avc1.640033");
+    expect(isConfigSupported).toHaveBeenCalledTimes(3);
+  });
+
+  it("returns null when no profile at the required level is supported", async () => {
+    const isConfigSupported = vi.fn(async () => ({ supported: false, config: {} }));
+    const codec = await supportsH264({ isConfigSupported } as unknown as EncoderFactory, 1920, 1080, 6000, 30);
+    expect(codec).toBeNull();
   });
 });
