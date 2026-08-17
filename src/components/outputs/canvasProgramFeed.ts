@@ -772,6 +772,12 @@ function drawSceneComposition(ctx: CanvasRenderingContext2D, item: Extract<Displ
     ctx.beginPath();
     ctx.rect(x, y, w, h);
     ctx.clip();
+    // Shift the origin to the zone's top-left corner. Zone renderers draw
+    // relative to `(0,0)` (they get `zoneG = { width: w, height: h }`), so
+    // without this every zone paints in the canvas's top-left and the clip
+    // hides everything that falls outside its rect — only a zone at (0,0)
+    // ever appeared.
+    ctx.translate(x, y);
     ctx.globalAlpha = zone.opacity ?? 1;
     const zoneG = { width: w, height: h };
     const zoneRctx: ItemRenderContext = {
@@ -780,13 +786,18 @@ function drawSceneComposition(ctx: CanvasRenderingContext2D, item: Extract<Displ
       font_size: zone.font_size,
       font_family: zone.font_family,
     };
+    // The zone's effective background (song/bible/media override) paints
+    // behind its content — mirroring the single-item output path, where the
+    // content override background is drawn under the live item.
     try {
+      const zoneBg = getEffectiveBg(rctx.settings, zone.item);
+      drawBackgroundSetting(ctx, zoneBg, zoneG, rctx.res, rctx.colors.background);
       drawItemCanvas(ctx, zone.item, zoneG, zoneRctx, zone.fit, zone.muted, depth);
     } catch (err) {
       // A bad zone must never stop the remaining zones (or the whole frame).
       console.warn("[compositor] zone draw error:", zone.id, err);
       ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect(x, y, w, h);
+      ctx.fillRect(0, 0, w, h);
     }
     ctx.restore();
   }

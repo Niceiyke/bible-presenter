@@ -114,6 +114,11 @@ export function ProgramFeedCanvas({
         }
         case "SceneComposition": {
           for (const zone of item.data.zones) {
+            // The zone's effective background (bible/song/media override) is
+            // drawn behind the zone content, so load it like the draw pass.
+            const zbg = getEffectiveBg(f.settings, zone.item);
+            if (zbg.type === "Image") addResolved(zbg.value.path);
+            else if (zbg.type === "Video") addResolved(zbg.value.path, true);
             if (zone.item.type === "Media") {
               if (zone.item.data.media_type === "Image") addResolved(zone.item.data.path);
               else if (zone.item.data.media_type === "Video") addResolved(zone.item.data.path, true);

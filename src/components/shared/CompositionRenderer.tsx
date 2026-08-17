@@ -9,7 +9,7 @@ import type {
 } from "../../types";
 import { THEMES } from "../../types";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { resolvePath } from "../../utils";
+import { resolvePath, getEffectiveBackground, getVideoBackground } from "../../utils";
 import {
   CustomSlideRenderer,
   TimerRenderer,
@@ -183,6 +183,43 @@ function ZoneCamera({
 }
 
 /**
+ * Zone background layer — paints the content item's *effective* background
+ * (settings bible/media overrides, or the song's per-song background) behind
+ * the zone content, mirroring the single-item output path. Only used for
+ * zones whose renderer does not draw its own background (Verse, Song, Media);
+ * custom slides and cameras paint themselves.
+ */
+function ZoneBackground({
+  item,
+  settings,
+  colors,
+  appDataDir,
+}: {
+  item: DisplayItem;
+  settings: PresentationSettings;
+  colors: ThemeColors;
+  appDataDir: string | null;
+}) {
+  const style = getEffectiveBackground(settings, item, colors, appDataDir);
+  const videoBg = getVideoBackground(settings, item);
+  return (
+    <div className="absolute inset-0" style={style}>
+      {videoBg?.path && (
+        <video
+          src={convertFileSrc(resolvePath(videoBg.path, appDataDir))}
+          className="absolute inset-0 w-full h-full"
+          style={{ objectFit: videoBg.objectFit ?? "cover" }}
+          autoPlay
+          loop
+          muted
+          playsInline
+        />
+      )}
+    </div>
+  );
+}
+
+/**
  * Renders a single zone's content inside its (already positioned) container.
  * Reuses the same renderers as the single-item output path so compositions
  * look identical to live content.
@@ -257,7 +294,14 @@ export function ZoneContent({
       break;
   }
 
-  return <div style={container}>{content}</div>;
+  return (
+    <div style={container}>
+      {(item.type === "Verse" || item.type === "Song" || item.type === "Media") && (
+        <ZoneBackground item={item} settings={settings} colors={colors} appDataDir={appDataDir} />
+      )}
+      {content}
+    </div>
+  );
 }
 
 /**

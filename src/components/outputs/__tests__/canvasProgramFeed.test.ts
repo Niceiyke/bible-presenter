@@ -308,9 +308,40 @@ describe("canvasProgramFeed", () => {
       drawProgramFrame(ctx, { width: 1920, height: 1080 }, frameFor(scene));
       // One clip per zone
       expect(calls.filter((c) => c === "clip").length).toBe(3);
+      // Each zone's origin is translated to its top-left corner so content
+      // drawn relative to (0,0) lands inside the zone's clip rect.
+      expect(calls).toContain("translate:0,0");
+      expect(calls).toContain("translate:960,0");
+      expect(calls).toContain("translate:0,540");
       // Content from the second and third zones present, not just the first
       expect(calls.some((c) => c.startsWith("fillText:For God so loved"))).toBe(true);
       expect(calls.some((c) => c.startsWith("fillText:ZoneThree"))).toBe(true);
+    });
+
+    it("paints each zone's effective background behind its content", () => {
+      const { ctx, calls } = makeCtx();
+      const scene = {
+        type: "SceneComposition",
+        data: {
+          scene_id: "s6",
+          name: "Bgs",
+          zones: [
+            {
+              id: "z1", x: 0, y: 0, w: 0.5, h: 1, fit: "cover", opacity: 1, z: 1,
+              item: { type: "Verse", data: { book: "JHN", chapter: 3, verse: 16, text: "For God so loved", version: "KJV" } },
+            },
+          ],
+        },
+      } as DisplayItem;
+      // A bible background override on settings should paint inside the zone.
+      drawProgramFrame(
+        ctx,
+        { width: 1920, height: 1080 },
+        frameFor(scene, { bible_background: { type: "Color", value: "#123456" } })
+      );
+      // The zone's effective background fills the zone rect (0,0,960,1080).
+      const zoneBgs = calls.filter((c) => c === "fillRect:0,0,960,1080");
+      expect(zoneBgs.length).toBe(1);
     });
 
     it("applies per-zone typography overrides to a verse zone", () => {
