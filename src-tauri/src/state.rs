@@ -34,4 +34,7 @@ pub struct AppState {
     /// reuses one instance across `system_metrics` calls instead of creating a
     /// fresh one each time (which reports cumulative-usage ≈ 100% and sticks).
     pub cpu_sampler: Arc<Mutex<Option<sysinfo::System>>>,
+    /// License manager: machine fingerprint, persisted license record, and
+    /// online validation against the Cloudflare Worker.
+    pub license: Arc<crate::license::LicenseManager>,
 }

@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Camera, Check, Trash2, Zap, AlertTriangle, LayoutGrid } from "lucide-react";
 import { useAppStore } from "../store";
 import { useT } from "../i18n";
+import { tierCapabilities } from "../system/tiers";
 import { ConfirmModal } from "./ui";
 import { displayItemLabel, stableId } from "../utils";
 import type { Scene } from "../types";
@@ -41,12 +42,17 @@ function describeChanges(scene: Scene, current: {
 }
 
 export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: ScenesTabProps) {
-  const { scenes, settings, propItems, ltVisible, setSceneBuilderScene, setActiveTab } = useAppStore();
+  const { scenes, settings, propItems, ltVisible, setSceneBuilderScene, setActiveTab, license } = useAppStore();
   const t = useT();
   const [newName, setNewName] = useState("");
   const [pendingApply, setPendingApply] = useState<Scene | null>(null);
+  const sceneCap = tierCapabilities(license?.tier).maxScenes;
+  const sceneCapReached = scenes.length >= sceneCap;
 
   const handleCapture = async () => {
+    if (sceneCapReached) {
+      return;
+    }
     const name = newName.trim() || `Scene ${scenes.length + 1}`;
     await captureScene(name);
     setNewName("");
@@ -105,7 +111,9 @@ export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: 
           />
           <button
             onClick={handleCapture}
-            className="px-3 py-2 rounded-md bg-amber-500 hover:bg-amber-400 text-black text-xs font-black uppercase flex items-center gap-1.5 transition-all"
+            disabled={sceneCapReached}
+            title={sceneCapReached ? "Free plan stores up to 3 scenes — delete one or upgrade" : undefined}
+            className="px-3 py-2 rounded-md bg-amber-500 hover:bg-amber-400 disabled:bg-slate-800 disabled:text-slate-500 text-black text-xs font-black uppercase flex items-center gap-1.5 transition-all"
           >
             <Camera size={13} /> {t("scenes.captureCurrent")}
           </button>
@@ -116,6 +124,12 @@ export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: 
             <LayoutGrid size={13} /> Scene Builder
           </button>
         </div>
+
+        {sceneCapReached && (
+          <p className="text-[10px] text-amber-500 font-medium -mt-2 mb-4">
+            The Free plan stores up to {sceneCap} scenes. Upgrade in Settings → License for unlimited scenes.
+          </p>
+        )}
 
         {scenes.length === 0 ? (
           <div className="text-center py-10 border border-dashed border-slate-800 rounded-lg">

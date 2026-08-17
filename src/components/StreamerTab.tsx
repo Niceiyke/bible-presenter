@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Radio, Play, Square, Plus, Mic, MonitorPlay } from "lucide-react";
 import { useAppStore } from "../store";
 import { useSystemDiagnostics } from "../system/SystemDiagnosticsContext";
+import { tierCapabilities } from "../system/tiers";
 import { ProgramFeedPreview } from "./outputs/ProgramFeedPreview";
 import { DestinationCard, type DestinationCardHandle, type DestTransportStatus } from "./streaming/DestinationCard";
 import { PLATFORM_PRESETS, makeDestination, newDestinationId } from "./streaming/presets";
@@ -35,6 +36,8 @@ interface CardStatus {
 export function StreamerTab() {
   const outputs = useAppStore((s) => s.outputs);
   const setOutputs = useAppStore((s) => s.setOutputs);
+  const license = useAppStore((s) => s.license);
+  const setToast = useAppStore((s) => s.setToast);
 
   // Capability gating (Phase 7): RTMP needs WebCodecs H.264 + ffmpeg; shared
   // audio needs at least one input device.
@@ -43,6 +46,11 @@ export function StreamerTab() {
   const rtmpBlockedReason = capabilities && !capabilities.rtmpAvailable ? capabilities.rtmpReason : null;
   const ndiBlockedReason = capabilities && !capabilities.ndiAvailable ? capabilities.ndiReason : null;
   const audioUnavailableReason = capabilities && !capabilities.audioAvailable ? capabilities.audioReason : null;
+
+  // Tier gating: streaming is Pro+, NDI is Pro+, shared audio is Premium.
+  const streamCaps = tierCapabilities(license?.tier);
+  const streamingBlocked = !!license && license.status === "active" && !streamCaps.streaming;
+  const sharedAudioBlocked = !!license && license.status === "active" && !streamCaps.sharedAudioInput;
 
   const [destinations, setDestinations] = useState<StreamDestination[]>([]);
   const [statuses, setStatuses] = useState<Record<string, CardStatus>>({});
@@ -131,13 +139,25 @@ export function StreamerTab() {
 
   const addDestination = useCallback(
     (platform: StreamPlatform) => {
+      if (streamingBlocked) {
+        setToast("Streaming is a Pro feature. Upgrade in Settings → License.");
+        return;
+      }
       setDestinations((prev) => {
+        if (prev.length >= streamCaps.streamingDestinations) {
+          setToast(
+            streamCaps.streamingDestinations > 0
+              ? `Your plan supports ${streamCaps.streamingDestinations} simultaneous destination${streamCaps.streamingDestinations === 1 ? "" : "s"}. Upgrade for more.`
+              : "Streaming is a Pro feature. Upgrade in Settings → License."
+          );
+          return prev;
+        }
         const updated = [...prev, makeDestination(platform, newDestinationId())];
         persistDestinations(updated);
         return updated;
       });
     },
-    [persistDestinations]
+    [persistDestinations, streamingBlocked, streamCaps]
   );
 
   // Hydrate destinations from the persisted stream-main config, seeding from
@@ -232,6 +252,10 @@ export function StreamerTab() {
 
   const handleGoLive = async () => {
     if (!streamReady) return;
+    if (streamingBlocked) {
+      setToast("Streaming is a Pro feature. Upgrade in Settings → License.");
+      return;
+    }
     await persistDestinations(destinations);
     const enabled = destinations.filter((d) => d.enabled);
     for (const d of enabled) {
@@ -252,6 +276,7 @@ export function StreamerTab() {
   const liveCount = Object.values(statuses).filter((s) => s.status === "live").length;
   const anyBusy = Object.values(statuses).some((s) => s.status === "live" || s.status === "connecting");
   const enabledCount = destinations.filter((d) => d.enabled).length;
+  const destCapReached = destinations.length >= streamCaps.streamingDestinations;
   const enabledBlocked = destinations.some(
     (d) =>
       (d.enabled && d.mode === "rtmp" && !!rtmpBlockedReason) ||
@@ -302,15 +327,17 @@ export function StreamerTab() {
             ) : (
               <button
                 onClick={handleGoLive}
-                disabled={!streamReady || enabledCount === 0 || enabledBlocked}
+                disabled={!streamReady || enabledCount === 0 || enabledBlocked || streamingBlocked}
                 title={
-                  enabledCount === 0
-                    ? "Enable at least one destination"
-                    : enabledBlocked
-                      ? ndiBlockedReason ?? rtmpBlockedReason ?? "A required service is unavailable"
-                      : !streamReady
-                        ? "Program feed not ready"
-                        : "Go live on every enabled destination"
+                  streamingBlocked
+                    ? "Streaming is a Pro feature"
+                    : enabledCount === 0
+                      ? "Enable at least one destination"
+                      : enabledBlocked
+                        ? ndiBlockedReason ?? rtmpBlockedReason ?? "A required service is unavailable"
+                        : !streamReady
+                          ? "Program feed not ready"
+                          : "Go live on every enabled destination"
                 }
                 className="flex-1 py-2.5 rounded-md bg-red-700 hover:bg-red-600 disabled:bg-slate-800 disabled:text-slate-500 text-white text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
               >
@@ -318,6 +345,12 @@ export function StreamerTab() {
               </button>
             )}
           </div>
+
+          {streamingBlocked && (
+            <p className="text-[10px] text-amber-400 bg-amber-900/20 border border-amber-800/60 rounded px-2 py-1.5">
+              Streaming is a Pro feature — upgrade in Settings → License to go live.
+            </p>
+          )}
 
           {!streamReady && <p className="text-[10px] text-slate-600">Program feed not ready yet…</p>}
 
@@ -340,7 +373,8 @@ export function StreamerTab() {
                 type="checkbox"
                 checked={audioEnabled}
                 onChange={(e) => setAudioEnabled(e.target.checked)}
-                disabled={anyBusy}
+                disabled={anyBusy || sharedAudioBlocked}
+                title={sharedAudioBlocked ? "Shared audio input is a Premium feature" : undefined}
                 className="accent-cyan-500"
               />
               <Mic size={11} className="text-slate-500" /> Shared audio input
@@ -366,7 +400,12 @@ export function StreamerTab() {
               </>
             )}
             {audioError && <span className="text-[10px] text-red-400">{audioError}</span>}
-            {!audioError && audioUnavailableReason && (
+            {!audioError && sharedAudioBlocked && (
+              <span className="text-[10px] text-amber-400">
+                Shared audio input is a Premium feature.
+              </span>
+            )}
+            {!audioError && !sharedAudioBlocked && audioUnavailableReason && (
               <span className="text-[10px] text-amber-400">{audioUnavailableReason}</span>
             )}
           </div>
@@ -417,7 +456,8 @@ export function StreamerTab() {
             <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Destinations</h3>
             <button
               onClick={() => addDestination("custom-rtmp")}
-              disabled={anyBusy}
+              disabled={anyBusy || streamingBlocked || destCapReached}
+              title={destCapReached && !streamingBlocked ? "Your plan's destination limit reached" : undefined}
               className="flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 text-[10px] font-bold uppercase tracking-wider border border-slate-700 transition-all"
             >
               <Plus size={10} /> Add
@@ -453,7 +493,7 @@ export function StreamerTab() {
               <button
                 key={p.platform}
                 onClick={() => addDestination(p.platform)}
-                disabled={anyBusy}
+                disabled={anyBusy || streamingBlocked || destCapReached}
                 className="px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider border border-slate-700 bg-slate-800 text-slate-500 hover:text-cyan-400 hover:border-cyan-700 disabled:opacity-40 transition-all"
               >
                 {p.label}

@@ -95,6 +95,8 @@ fn emit_device_event(app: &AppHandle, event: &str, device_name: String) {
 
 #[tauri::command]
 pub async fn remote_enable(app: AppHandle, state: State<'_, AppState>) -> Result<RemoteStatusInfo, String> {
+    crate::license::ensure_allowed(&state)?;
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     let control = state.remote.clone();
 
     // Serialize the whole enable path so two rapid clicks can't double-bind

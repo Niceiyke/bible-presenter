@@ -4,6 +4,8 @@ import {
   FolderOpen, Play, RotateCcw, Square, Trash2, Video, Clock, HardDrive, Mic, MonitorPlay,
 } from "lucide-react";
 import { useRecording } from "../hooks/useRecordingProvider";
+import { useAppStore } from "../store";
+import { tierCapabilities } from "../system/tiers";
 import { CAPTURE_RESOLUTIONS, CAPTURE_FPS_OPTIONS } from "../types";
 
 export interface RecordingFile {
@@ -52,6 +54,8 @@ export function RecordingsTab() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [recordings, setRecordings] = useState<RecordingFile[]>([]);
   const [loading, setLoading] = useState(false);
+  const license = useAppStore((s) => s.license);
+  const recordingBlocked = !!license && license.status === "active" && !tierCapabilities(license.tier).recording;
 
   const refreshList = useCallback(async () => {
     setLoading(true);
@@ -146,8 +150,8 @@ export function RecordingsTab() {
             ) : (
               <button
                 onClick={start}
-                disabled={!streamReady}
-                title={streamReady ? "Record the program feed" : "Program feed not ready"}
+                disabled={!streamReady || recordingBlocked}
+                title={recordingBlocked ? "Recording is a Pro feature" : streamReady ? "Record the program feed" : "Program feed not ready"}
                 className="flex-1 py-2.5 rounded-md bg-red-700 hover:bg-red-600 disabled:bg-slate-800 disabled:text-slate-500 text-white text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
               >
                 <span className="w-2.5 h-2.5 rounded-full bg-white" /> Record
@@ -163,6 +167,12 @@ export function RecordingsTab() {
               </button>
             )}
           </div>
+
+          {recordingBlocked && (
+            <p className="text-[10px] text-amber-500 font-medium">
+              Recording is a Pro feature. Upgrade in Settings → License to record the program feed.
+            </p>
+          )}
 
           {/* Capture resolution + fps for the recording */}
           <div className="flex flex-wrap items-center gap-2 p-2 rounded-lg border border-slate-800 bg-slate-900/30">

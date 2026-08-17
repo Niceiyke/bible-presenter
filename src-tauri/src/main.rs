@@ -138,6 +138,10 @@ fn main() {
 
             let outputs = Arc::new(wordlyte_lib::outputs::OutputManager::new(&app_data_dir));
 
+            let license = Arc::new(wordlyte_lib::license::LicenseManager::new(&app_data_dir));
+            let license_info = license.status();
+            log_msg(app, &format!("License status: {:?} (machine {})", license_info.status, &license_info.machine_id_hash[..16.min(license_info.machine_id_hash.len())]));
+
             let state = AppState {
                 presentation: PresentationState {
                     live_item: Arc::new(Mutex::new(None)),
@@ -154,6 +158,7 @@ fn main() {
                 outputs,
                 rtmp: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 cpu_sampler: Arc::new(Mutex::new(None)),
+                license,
             };
 
             app.manage(state);
@@ -310,6 +315,10 @@ fn main() {
             wordlyte_lib::commands::remote::phone_camera_answer,
             wordlyte_lib::commands::remote::phone_camera_ice,
             wordlyte_lib::commands::remote::list_phone_cameras,
+            wordlyte_lib::commands::license::license_status,
+            wordlyte_lib::commands::license::license_activate,
+            wordlyte_lib::commands::license::license_refresh,
+            wordlyte_lib::commands::license::license_deactivate,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

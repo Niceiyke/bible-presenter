@@ -14,6 +14,8 @@ import { useLtFlatLines } from "./hooks/useLtFlatLines";
 import { PhoneCameraProvider } from "./hooks/usePhoneCameraHost";
 import { SystemDiagnosticsProvider } from "./system/SystemDiagnosticsContext";
 import { RecordingProvider } from "./hooks/useRecordingProvider";
+import { LicenseGate, OfflineLicenseBanner } from "./components/LicenseGate";
+import { isLicenseBlocked } from "./types/license";
 
 import { AppHeader } from "./components/layout/AppHeader";
 import { LeftNav } from "./components/layout/LeftNav";
@@ -61,6 +63,7 @@ export default function App() {
     services,
     addToServiceOpen, setAddToServiceOpen,
     pendingScheduleItem, setPendingScheduleItem,
+    license,
   } = useAppStore();
 
   const [editingPres, setEditingPres] = useState<CustomPresentation | null>(null);
@@ -149,8 +152,9 @@ export default function App() {
 
   // Neutral startup surface until the window role is known AND while the
   // backend is booting — never render operator controls into a window whose
-  // role is unresolved.
-  if (!label) {
+  // role is unresolved. The main window also stays on this surface until
+  // initialization finishes so the license gate never flashes the console.
+  if (!label || (label === "main" && !isInitialized)) {
     return (
       <div className="h-screen bg-slate-950 flex items-center justify-center flex-col gap-4 select-none">
         <div className="w-8 h-8 bg-amber-500 rounded-md flex items-center justify-center text-black font-black text-xs">WL</div>
@@ -198,6 +202,13 @@ export default function App() {
     );
   }
 
+  // License gate: block the operator console until the license is active
+  // (or backend hydration failed to report one). This is the primary UI
+  // control; the Rust commands additionally enforce it on the broadcast path.
+  if (label === "main" && isLicenseBlocked(license?.status)) {
+    return <LicenseGate />;
+  }
+
   return (
     <PhoneCameraProvider>
       <SystemDiagnosticsProvider>
@@ -213,6 +224,8 @@ export default function App() {
           <button onClick={() => setStartupIssues([])} className="text-amber-400 hover:text-white shrink-0"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
       )}
+
+      <OfflineLicenseBanner />
 
       <div className="flex-1 flex overflow-hidden">
 

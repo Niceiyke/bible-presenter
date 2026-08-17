@@ -2,18 +2,30 @@ import React from "react";
 import { useAppStore } from "../../../store";
 import { useT } from "../../../i18n";
 import { FONTS } from "../../../types";
+import { tierCapabilities } from "../../../system/tiers";
 import type { SettingsSectionProps } from "../shared";
 
 export function BibleVersionsSection({ onUpdateSettings }: SettingsSectionProps) {
-  const { settings, availableVersions } = useAppStore();
+  const { settings, availableVersions, license, setToast } = useAppStore();
   const t = useT();
+  const caps = tierCapabilities(license?.tier);
+  const disabled = settings.disabled_bible_versions || [];
+  const enabledCount = availableVersions.filter(v => !disabled.includes(v)).length;
+  const versionCapReached = enabledCount >= caps.maxBibleVersions;
 
   const toggleVersion = (v: string) => {
-    const disabled = settings.disabled_bible_versions || [];
-    const next = disabled.includes(v)
-      ? disabled.filter(x => x !== v)
-      : [...disabled, v];
-    onUpdateSettings({ ...settings, disabled_bible_versions: next });
+    if (disabled.includes(v)) {
+      // Enabling this version.
+      if (versionCapReached) {
+        setToast(
+          `The ${caps.maxBibleVersions > 0 ? "Free" : "current"} plan includes ${caps.maxBibleVersions} Bible version${caps.maxBibleVersions === 1 ? "" : "s"}. Upgrade to unlock all versions.`
+        );
+        return;
+      }
+      onUpdateSettings({ ...settings, disabled_bible_versions: disabled.filter(x => x !== v) });
+    } else {
+      onUpdateSettings({ ...settings, disabled_bible_versions: [...disabled, v] });
+    }
   };
 
   return (
@@ -21,18 +33,25 @@ export function BibleVersionsSection({ onUpdateSettings }: SettingsSectionProps)
       <div>
         <p className="text-xs text-slate-400 font-bold uppercase mb-3">{t("settings.ver.title")}</p>
         <p className="text-[10px] text-slate-500 uppercase font-bold mb-2">{t("settings.ver.enableDisable")}</p>
+        {caps.maxBibleVersions > 0 && versionCapReached && (
+          <p className="text-[10px] text-amber-500 mb-2">
+            The Free plan includes {caps.maxBibleVersions} Bible version. Upgrade to unlock all versions.
+          </p>
+        )}
         <div className="flex flex-wrap gap-2 mb-4">
           {availableVersions.map(v => (
             <button
               key={v}
               onClick={() => toggleVersion(v)}
-              className={`px-3 py-1.5 rounded-lg border text-[10px] font-bold transition-all ${
-                !(settings.disabled_bible_versions || []).includes(v)
+              disabled={disabled.includes(v) && versionCapReached}
+              title={disabled.includes(v) && versionCapReached ? "Upgrade to enable more versions" : undefined}
+              className={`px-3 py-1.5 rounded-lg border text-[10px] font-bold transition-all disabled:opacity-40 ${
+                !disabled.includes(v)
                   ? "bg-green-600 border-green-500 text-white"
                   : "bg-slate-800 border-slate-700 text-slate-500"
               }`}
             >
-              {v} {!(settings.disabled_bible_versions || []).includes(v) ? '✓' : '✕'}
+              {v} {!disabled.includes(v) ? '✓' : '✕'}
             </button>
           ))}
         </div>

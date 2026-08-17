@@ -10,6 +10,7 @@ import {
   PresentationSettings, PropItem, ServiceMeta,
   DisplayItem, OutputConfig, OutputState,
 } from "../types";
+import type { LicenseInfo } from "../types/license";
 
 /** Helper for windows that can't reach the operator store directly
  *  (e.g. the output window) to surface hydration/emit failures. */
@@ -29,6 +30,7 @@ export function useAppInitialization() {
     setBackendError, addLog, setScenes,
     setBackendAvailable, setToast,
     setOutputs, setOutputState,
+    setLicense,
   } = useAppStore();
 
   useEffect(() => {
@@ -127,6 +129,10 @@ export function useAppInitialization() {
         states.forEach((s) => setOutputState(s));
       }).catch(() => {});
 
+      // License — hydrate before the operator shell is revealed so the first
+      // frame is either the gated activation screen or an active license.
+      invoke<LicenseInfo>("license_status").then(setLicense).catch(() => {});
+
       setIsInitialized(true);
     };
 
@@ -216,6 +222,12 @@ export function useAppInitialization() {
       setOutputState(ev.payload);
     });
 
+    // License — activation/refresh/deactivation broadcast the authoritative
+    // snapshot so the gate and the Settings section stay in sync.
+    const unlistenLicense = listen<LicenseInfo>("license-updated", (ev) => {
+      setLicense(ev.payload);
+    });
+
     return () => {
       unlistenStaged.then(f => f());
       unlistenLive.then(f => f());
@@ -232,6 +244,7 @@ export function useAppInitialization() {
       unlistenMediaUpdated.then(f => f());
       unlistenOutputConfig.then(f => f());
       unlistenOutputState.then(f => f());
+      unlistenLicense.then(f => f());
     };
   }, []);
 

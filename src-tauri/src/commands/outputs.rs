@@ -48,7 +48,32 @@ pub async fn outputs_set_visible(
     id: String,
     visible: bool,
 ) -> Result<(), String> {
+    // Revealing a window/recorder/streamer is a broadcast action; hiding is
+    // always allowed so an operator can always take content off-air.
+    if visible {
+        crate::license::ensure_allowed(&state)?;
+    }
     let cfg = state.outputs.get(&id).ok_or_else(|| format!("Output '{}' not found", id))?;
+
+    // Free plan: only one on-air *window* output at a time. Recorders and
+    // streamers are software surfaces and are gated in the frontend.
+    if visible && cfg.window_label.is_some() {
+        let info = state.license.status();
+        if info.tier == crate::license::LicenseTier::Free {
+            let visible_windows = state
+                .outputs
+                .list()
+                .iter()
+                .filter(|o| o.window_label.is_some() && o.id != id && o.visible)
+                .count();
+            if visible_windows >= 1 {
+                return Err(
+                    "The Free plan supports one on-air window at a time. See Settings → License to upgrade."
+                        .to_owned(),
+                );
+            }
+        }
+    }
     state.outputs.set_visible(&id, visible)?;
 
     // Window outputs toggle their bound Tauri window.

@@ -20,6 +20,7 @@ fn publish_output_visible(app: &AppHandle, state: &State<'_, AppState>) {
 
 #[tauri::command]
 pub async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    crate::license::ensure_allowed(&state)?;
     if let Some(window) = app.get_webview_window("output") {
         if window.is_visible().unwrap_or(false) {
             window.hide().map_err(|e: tauri::Error| e.to_string())?;
@@ -76,6 +77,7 @@ fn position_output_on_preferred(app: AppHandle, state: &State<'_, AppState>) -> 
 /// operator can verify cable/signal routing before the service begins.
 #[tauri::command]
 pub async fn show_output_test_pattern(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    crate::license::ensure_allowed(&state)?;
     if let Some(window) = app.get_webview_window("output") {
         position_output_on_preferred(app.clone(), &state)?;
         let _ = window.set_ignore_cursor_events(true);
@@ -99,6 +101,7 @@ pub async fn hide_output_test_pattern(app: AppHandle, state: State<'_, AppState>
 
 #[tauri::command]
 pub async fn toggle_stage_window(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    crate::license::ensure_allowed(&state)?;
     if let Some(window) = app.get_webview_window("stage") {
         if window.is_visible().unwrap_or(false) {
             window.hide().map_err(|e: tauri::Error| e.to_string())?;

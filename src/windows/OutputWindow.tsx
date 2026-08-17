@@ -26,6 +26,8 @@ import { Music } from "lucide-react";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { signalOperatorWarning } from "../hooks/useAppInitialization";
 import { useFonts } from "../hooks/useFonts";
+import type { LicenseInfo } from "../types/license";
+import { tierCapabilities } from "../system/tiers";
 import PhoneCameraVideo, { usePhoneCameraOrientation, usePhoneCameraLook, useCameraChroma } from "../components/shared/PhoneCameraVideo";
 
 function ProjectionErrorFallback() {
@@ -91,6 +93,7 @@ export function OutputWindow() {
 
   const [windowScale, setWindowScale] = useState(1);
   const isMounted = useRef(true);
+  const [license, setLicense] = useState<LicenseInfo | null>(null);
 
   // Auto-fit font size when verse splitting is disabled
   const verseContainerRef = useRef<HTMLDivElement>(null);
@@ -284,7 +287,12 @@ export function OutputWindow() {
       invoke<OutputConfig[]>("outputs_list").then((configs) => {
         setOutputConfig(configs.find((c) => c.window_label === "output") ?? null);
       }).catch((e: any) => signalOperatorWarning(`Output hydrate (config): ${e?.message ?? e}`)),
+      invoke<LicenseInfo>("license_status").then(setLicense).catch((e: any) => signalOperatorWarning(`Output hydrate (license): ${e?.message ?? e}`)),
     ]);
+
+    const unlistenLicense = listen<LicenseInfo>("license-updated", (ev) => {
+      setLicense(ev.payload);
+    });
 
     return () => {
       if (mediaStateTimer) clearInterval(mediaStateTimer);
@@ -296,6 +304,7 @@ export function OutputWindow() {
       unlistenProps.then((f) => f());
       unlistenMonitorTest.then((f) => f());
       unlistenOutputConfig.then((f) => f());
+      unlistenLicense.then((f) => f());
     };
   }, []);
 
@@ -951,6 +960,17 @@ export function OutputWindow() {
           />
         )}
       </AnimatePresence>
+
+      {license?.status === "active" && tierCapabilities(license.tier).watermark && (
+        <div className="absolute inset-0 z-[65] pointer-events-none flex items-end justify-center pb-3">
+          <span
+            className="text-[12px] font-black uppercase tracking-widest text-white/40"
+            style={{ textShadow: "0 1px 3px rgba(0,0,0,0.7)" }}
+          >
+            Wordlyte Free
+          </span>
+        </div>
+      )}
     </div>
   );
 }

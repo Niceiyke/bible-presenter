@@ -14,6 +14,8 @@ import {
   Wifi,
 } from "lucide-react";
 import { useT } from "../../../i18n";
+import { useAppStore } from "../../../store";
+import { tierCapabilities } from "../../../system/tiers";
 import type { RemotePermissions, RemoteRole, RemoteStatus } from "../../../types/remote";
 import type { SettingsSectionProps } from "../shared";
 
@@ -50,6 +52,8 @@ function formatRemaining(expires_at?: number, now = Date.now()): string | null {
 
 export function RemoteSection(_props: SettingsSectionProps) {
   const t = useT();
+  const { license } = useAppStore();
+  const remoteBlocked = !!license && license.status === "active" && !tierCapabilities(license.tier).remoteControl;
   const [status, setStatus] = useState<RemoteStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -131,7 +135,7 @@ export function RemoteSection(_props: SettingsSectionProps) {
                 status?.enabled ? invoke("remote_disable") : invoke("remote_enable")
               )
             }
-            disabled={busy}
+            disabled={busy || (remoteBlocked && !status?.enabled)}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-[10px] font-black uppercase transition-all border shrink-0 disabled:opacity-50 ${
               status?.enabled
                 ? "bg-red-600 border-red-500 text-white hover:bg-red-500"
@@ -142,6 +146,12 @@ export function RemoteSection(_props: SettingsSectionProps) {
             {status?.enabled ? t("settings.remote.disable") : t("settings.remote.enable")}
           </button>
         </div>
+        {remoteBlocked && !status?.enabled && (
+          <p className="mt-2 text-[10px] text-amber-500 font-medium">
+            Remote Control is a Pro feature. Upgrade in Settings → License to control the presentation
+            from a phone or tablet.
+          </p>
+        )}
       </div>
 
       {status?.enabled && (

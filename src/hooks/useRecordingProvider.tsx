@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store";
 import { useRecorder } from "./useRecorder";
+import { tierCapabilities } from "../system/tiers";
 import { ProgramFeedPreview } from "../components/outputs/ProgramFeedPreview";
 
 /**
@@ -55,6 +56,8 @@ export function useRecording(): RecordingContextValue {
 export function RecordingProvider({ children }: { children: ReactNode }) {
   const recorder = useRecorder();
   const tabActive = useAppStore((s) => s.activeTab === "recordings");
+  const license = useAppStore((s) => s.license);
+  const setToast = useAppStore((s) => s.setToast);
   const outputs = useAppStore((s) => s.outputs);
   const setOutputs = useAppStore((s) => s.setOutputs);
 
@@ -137,11 +140,15 @@ export function RecordingProvider({ children }: { children: ReactNode }) {
 
   const start = useCallback(() => {
     if (recorder.recording || !stream) return;
+    if (license && license.status === "active" && !tierCapabilities(license.tier).recording) {
+      setToast("Recording is a Pro feature. Upgrade in Settings → License.");
+      return;
+    }
     const tracks: MediaStreamTrack[] = [...stream.getVideoTracks()];
     if (audioTrackRef.current) tracks.push(audioTrackRef.current);
     const recStream = new MediaStream(tracks);
     void recorder.start(recStream);
-  }, [recorder, stream]);
+  }, [recorder, stream, license, setToast]);
 
   const stop = useCallback(async () => recorder.stop(), [recorder]);
 

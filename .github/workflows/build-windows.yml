@@ -34,6 +34,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: verify license server endpoint is configured
+        shell: bash
+        run: |
+          if grep -q "YOUR_SUBDOMAIN" src-tauri/src/license.rs; then
+            echo "::error::License endpoint placeholder (YOUR_SUBDOMAIN) is still set in src-tauri/src/license.rs. Update default_server_url() to your real workers.dev URL before building a release."
+            exit 1
+          fi
+          echo "License endpoint is configured."
+
       - name: setup node
         uses: actions/setup-node@v4
         with:

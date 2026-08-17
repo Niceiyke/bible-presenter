@@ -22,3 +22,8 @@ src-tauri/binaries/*.exe
 src-tauri/*.log
 src-tauri/*.err.log
 src-tauri/check_*.log
+.env
+
+# Cloudflare Workers secrets (ADMIN_TOKEN lives here) and local build/dev artifacts
+.dev.vars
+.wrangler/

@@ -28,6 +28,7 @@ export interface EventMap {
   "remote-device-event": { event: "connected" | "disconnected" | "revoked" | "auto_revoked"; device_name: string };
   "output-config-changed": import("../types").OutputConfig[];
   "output-state-changed": import("../types").OutputState;
+  "license-updated": import("../types/license").LicenseInfo;
 }
 
 export type TauriEventName = keyof EventMap;
