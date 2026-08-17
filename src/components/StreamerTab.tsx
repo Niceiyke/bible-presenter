@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Radio, Play, Square, Plus, Mic } from "lucide-react";
+import { Radio, Play, Square, Plus, Mic, MonitorPlay } from "lucide-react";
 import { useAppStore } from "../store";
 import { useSystemDiagnostics } from "../system/SystemDiagnosticsContext";
 import { ProgramFeedPreview } from "./outputs/ProgramFeedPreview";
 import { DestinationCard, type DestinationCardHandle, type DestTransportStatus } from "./streaming/DestinationCard";
 import { PLATFORM_PRESETS, makeDestination, newDestinationId } from "./streaming/presets";
+import { suggestedBitrateKbps } from "../hooks/useRtmpEncoder";
+import { CAPTURE_RESOLUTIONS, CAPTURE_FPS_OPTIONS } from "../types";
 import type { OutputConfig, StreamDestination, StreamPlatform } from "../types";
 
 const STREAM_OUTPUT_ID = "stream-main";
@@ -57,6 +59,28 @@ export function StreamerTab() {
   const [audioError, setAudioError] = useState<string | null>(null);
 
   const output: OutputConfig | undefined = outputs.find((o) => o.id === STREAM_OUTPUT_ID);
+
+  const captureWidth = output?.geometry.width ?? 1920;
+  const captureHeight = output?.geometry.height ?? 1080;
+  const captureFps = output?.capture_fps ?? 30;
+  // RTMP/NDI encode the compositor feed once at the master capture settings;
+  // derive a sensible bitrate from the chosen resolution/fps.
+  const streamBitrateKbps = suggestedBitrateKbps(captureWidth, captureHeight, captureFps);
+
+  const persistCapture = useCallback(
+    async (width: number, height: number, fps: number) => {
+      const updated = outputs.map((o) =>
+        o.id === STREAM_OUTPUT_ID ? { ...o, geometry: { width, height }, capture_fps: fps } : o
+      );
+      try {
+        await invoke("outputs_update", { configs: updated });
+        setOutputs(updated);
+      } catch (e: any) {
+        console.error("outputs_update failed:", e);
+      }
+    },
+    [outputs, setOutputs]
+  );
 
   const persistDestinations = useCallback(
     async (next: StreamDestination[]) => {
@@ -255,8 +279,8 @@ export function StreamerTab() {
         <div className="flex flex-col gap-2">
           <div className="relative rounded-lg overflow-hidden border border-slate-700 bg-black" style={{ aspectRatio: "16/9" }}>
             <ProgramFeedPreview
-              geometry={{ width: 1920, height: 1080 }}
-              fps={30}
+              geometry={{ width: captureWidth, height: captureHeight }}
+              fps={captureFps}
               onStream={handleStream}
               className="absolute inset-0 w-full h-full"
             />
@@ -346,6 +370,45 @@ export function StreamerTab() {
               <span className="text-[10px] text-amber-400">{audioUnavailableReason}</span>
             )}
           </div>
+
+          {/* Capture resolution + fps for the streamed feed */}
+          <div className="flex flex-wrap items-center gap-3 p-2 rounded-lg border border-slate-800 bg-slate-900/30">
+            <span className="text-[11px] text-slate-400 flex items-center gap-1.5">
+              <MonitorPlay size={11} className="text-slate-500" /> Capture
+            </span>
+            <select
+              value={`${captureWidth}x${captureHeight}`}
+              onChange={(e) => {
+                const r = CAPTURE_RESOLUTIONS.find((r) => `${r.width}x${r.height}` === e.target.value);
+                if (r) void persistCapture(r.width, r.height, captureFps);
+              }}
+              disabled={anyBusy}
+              className="px-2 py-1 bg-slate-950 border border-slate-700 rounded text-slate-200 text-[11px] focus:outline-none focus:border-slate-500"
+              title="Stream resolution"
+            >
+              {CAPTURE_RESOLUTIONS.map((r) => (
+                <option key={r.label} value={`${r.width}x${r.height}`}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+            <select
+              value={captureFps}
+              onChange={(e) => void persistCapture(captureWidth, captureHeight, Number(e.target.value))}
+              disabled={anyBusy}
+              className="px-2 py-1 bg-slate-950 border border-slate-700 rounded text-slate-200 text-[11px] focus:outline-none focus:border-slate-500"
+              title="Stream frame rate"
+            >
+              {CAPTURE_FPS_OPTIONS.map((f) => (
+                <option key={f} value={f}>
+                  {f} fps
+                </option>
+              ))}
+            </select>
+            <span className="text-[10px] text-slate-600">
+              H.264 at ~{Math.round(streamBitrateKbps / 1000 * 10) / 10} Mbps — bitrate auto-derived from resolution/fps.
+            </span>
+          </div>
         </div>
 
         {/* Destinations */}
@@ -377,6 +440,8 @@ export function StreamerTab() {
               onRemove={() => removeDestination(d.id)}
               onStatus={handleStatus}
               onRegister={handleRegister}
+              fps={captureFps}
+              bitrateKbps={streamBitrateKbps}
               blockedReason={
                 d.mode === "rtmp" ? rtmpBlockedReason : d.mode === "ndi" ? ndiBlockedReason : null
               }

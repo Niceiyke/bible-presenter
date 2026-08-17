@@ -21,6 +21,10 @@ interface DestinationCardProps {
   onRemove: () => void;
   onStatus: (id: string, status: DestTransportStatus, bitrateKbps: number) => void;
   onRegister: (id: string, handle: DestinationCardHandle | null) => void;
+  /** Master capture fps — fed to the RTMP/NDI encoder config. */
+  fps?: number;
+  /** Master capture bitrate (auto-derived from resolution/fps). */
+  bitrateKbps?: number;
   /** Capability gate: when set, the transport is unavailable (e.g. RTMP
    *  needs ffmpeg + WebCodecs H.264) — the Go Live button is disabled and the
    *  reason is surfaced on the card. */
@@ -40,11 +44,13 @@ export function DestinationCard({
   onRemove,
   onStatus,
   onRegister,
+  fps = 30,
+  bitrateKbps,
   blockedReason,
 }: DestinationCardProps) {
-  const rtmp = useRtmpEncoder({ sessionId: dest.id });
+  const rtmp = useRtmpEncoder({ sessionId: dest.id, fps, bitrateKbps });
   const streamer = useStreamer();
-  const ndi = useNdiSender({ sessionId: dest.id });
+  const ndi = useNdiSender({ sessionId: dest.id, fps, bitrateKbps });
   const streamRef = useRef<MediaStream | null>(null);
 
   const live = dest.mode === "rtmp" ? rtmp : dest.mode === "ndi" ? ndi : streamer;

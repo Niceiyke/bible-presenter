@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  FolderOpen, Play, RotateCcw, Square, Trash2, Video, Clock, HardDrive, Mic,
+  FolderOpen, Play, RotateCcw, Square, Trash2, Video, Clock, HardDrive, Mic, MonitorPlay,
 } from "lucide-react";
 import { useRecording } from "../hooks/useRecordingProvider";
+import { CAPTURE_RESOLUTIONS, CAPTURE_FPS_OPTIONS } from "../types";
 
 export interface RecordingFile {
   name: string;
@@ -46,6 +47,7 @@ export function RecordingsTab() {
     recording, elapsed, lastSaved, error, stream, streamReady,
     start, stop, cancel,
     audioEnabled, setAudioEnabled, audioDevices, audioDeviceId, setAudioDeviceId, audioError,
+    captureWidth, captureHeight, captureFps, setCapture,
   } = useRecording();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [recordings, setRecordings] = useState<RecordingFile[]>([]);
@@ -160,6 +162,43 @@ export function RecordingsTab() {
                 <RotateCcw size={11} /> Abort
               </button>
             )}
+          </div>
+
+          {/* Capture resolution + fps for the recording */}
+          <div className="flex flex-wrap items-center gap-2 p-2 rounded-lg border border-slate-800 bg-slate-900/30">
+            <span className="text-[11px] text-slate-400 flex items-center gap-1.5">
+              <MonitorPlay size={11} className="text-slate-500" /> Capture
+            </span>
+            <select
+              value={`${captureWidth}x${captureHeight}`}
+              onChange={(e) => {
+                const r = CAPTURE_RESOLUTIONS.find((r) => `${r.width}x${r.height}` === e.target.value);
+                if (r) void setCapture(r.width, r.height, captureFps);
+              }}
+              disabled={recording}
+              className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-[11px] text-slate-300"
+              title="Recording resolution"
+            >
+              {CAPTURE_RESOLUTIONS.map((r) => (
+                <option key={r.label} value={`${r.width}x${r.height}`}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+            <select
+              value={captureFps}
+              onChange={(e) => void setCapture(captureWidth, captureHeight, Number(e.target.value))}
+              disabled={recording}
+              className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-[11px] text-slate-300"
+              title="Recording frame rate"
+            >
+              {CAPTURE_FPS_OPTIONS.map((f) => (
+                <option key={f} value={f}>
+                  {f} fps
+                </option>
+              ))}
+            </select>
+            <span className="text-[10px] text-slate-600">WebM — the compositor rescales the program feed.</span>
           </div>
 
           {/* Audio input for the recording */}

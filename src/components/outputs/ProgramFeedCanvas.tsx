@@ -66,6 +66,21 @@ export function ProgramFeedCanvas({
     else stop();
   }, [active, start, stop]);
 
+  // Restart the capture loop when the requested geometry or fps changes so the
+  // stream reflects the new capture resolution/cadence (changing canvas
+  // width/height resets the drawing buffer, and captureStream was created with
+  // the old fps). Skipped on mount so the `active` effect owns first start.
+  const prevCaptureRef = useRef<{ w: number; h: number; fps: number } | null>(null);
+  useEffect(() => {
+    const prev = prevCaptureRef.current;
+    prevCaptureRef.current = { w: geometry.width, h: geometry.height, fps };
+    if (!active) return;
+    if (prev && (prev.w !== geometry.width || prev.h !== geometry.height || prev.fps !== fps)) {
+      stop();
+      start();
+    }
+  }, [geometry.width, geometry.height, fps, active, start, stop]);
+
   // External resources: images/videos keyed by resolved path; camera videos
   // keyed by device id (pre-warmed to a playing frame for drawImage).
   const [images, setImages] = useState<Record<string, HTMLImageElement>>({});

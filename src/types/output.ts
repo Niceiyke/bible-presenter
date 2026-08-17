@@ -85,6 +85,9 @@ export interface OutputConfig {
   visible: boolean;
   source: OutputSource;
   geometry: OutputGeometry;
+  /** Recorder/streamer capture frame rate. Window outputs ignore it; when
+   *  absent the surfaces fall back to 30. */
+  capture_fps?: number;
   presentation?: OutputPresentation;
   overlays: OutputOverlays;
   /** Window-specific: Tauri window label this binds to. */
@@ -94,6 +97,18 @@ export interface OutputConfig {
   /** Streamer-specific: multi-destination hub config. */
   stream_destinations?: StreamDestination[];
 }
+
+/** 16:9 capture resolutions offered to the recorder/streamer surfaces. */
+export const CAPTURE_RESOLUTIONS = [
+  { label: "1280×720", width: 1280, height: 720 },
+  { label: "1600×900", width: 1600, height: 900 },
+  { label: "1920×1080", width: 1920, height: 1080 },
+  { label: "2560×1440", width: 2560, height: 1440 },
+  { label: "3840×2160", width: 3840, height: 2160 },
+] as const;
+
+/** Capture frame rates offered to the recorder/streamer surfaces. */
+export const CAPTURE_FPS_OPTIONS = [24, 25, 30, 50, 60] as const;
 
 /** Runtime status of an output (ephemeral, not persisted). */
 export interface OutputState {

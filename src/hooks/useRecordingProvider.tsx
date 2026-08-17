@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store";
 import { useRecorder } from "./useRecorder";
 import { ProgramFeedPreview } from "../components/outputs/ProgramFeedPreview";
@@ -35,6 +36,12 @@ interface RecordingContextValue {
   audioDeviceId: string;
   setAudioDeviceId: (id: string) => void;
   audioError: string | null;
+  /** Capture resolution/fps for the recording compositor. */
+  captureWidth: number;
+  captureHeight: number;
+  captureFps: number;
+  /** Persist a new capture resolution/fps to the `record-main` output. */
+  setCapture: (width: number, height: number, fps: number) => Promise<void>;
 }
 
 const RecordingContext = createContext<RecordingContextValue | null>(null);
@@ -48,6 +55,28 @@ export function useRecording(): RecordingContextValue {
 export function RecordingProvider({ children }: { children: ReactNode }) {
   const recorder = useRecorder();
   const tabActive = useAppStore((s) => s.activeTab === "recordings");
+  const outputs = useAppStore((s) => s.outputs);
+  const setOutputs = useAppStore((s) => s.setOutputs);
+
+  const recordOutput = outputs.find((o) => o.id === "record-main");
+  const captureWidth = recordOutput?.geometry.width ?? 1920;
+  const captureHeight = recordOutput?.geometry.height ?? 1080;
+  const captureFps = recordOutput?.capture_fps ?? 30;
+
+  const setCapture = useCallback(
+    async (width: number, height: number, fps: number) => {
+      const updated = outputs.map((o) =>
+        o.id === "record-main" ? { ...o, geometry: { width, height }, capture_fps: fps } : o
+      );
+      try {
+        await invoke("outputs_update", { configs: updated });
+        setOutputs(updated);
+      } catch (e: any) {
+        console.error("outputs_update failed:", e);
+      }
+    },
+    [outputs, setOutputs]
+  );
 
   const [stream, setStream] = useState<MediaStream | null>(null);
   const audioTrackRef = useRef<MediaStreamTrack | null>(null);
@@ -137,8 +166,12 @@ export function RecordingProvider({ children }: { children: ReactNode }) {
       audioDeviceId,
       setAudioDeviceId,
       audioError,
+      captureWidth,
+      captureHeight,
+      captureFps,
+      setCapture,
     }),
-    [recorder, stream, streamReady, start, stop, audioEnabled, audioDevices, audioDeviceId, audioError]
+    [recorder, stream, streamReady, start, stop, audioEnabled, audioDevices, audioDeviceId, audioError, captureWidth, captureHeight, captureFps, setCapture]
   );
 
   return (
@@ -149,8 +182,8 @@ export function RecordingProvider({ children }: { children: ReactNode }) {
         aria-hidden
       >
         <ProgramFeedPreview
-          geometry={{ width: 1920, height: 1080 }}
-          fps={30}
+          geometry={{ width: captureWidth, height: captureHeight }}
+          fps={captureFps}
           active={active}
           onStream={setStream}
         />

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useRtmpEncoder, wrapAdts, requiredAvcLevel, supportsH264 } from "../useRtmpEncoder";
+import { useRtmpEncoder, wrapAdts, requiredAvcLevel, supportsH264, suggestedBitrateKbps } from "../useRtmpEncoder";
 import type { EncoderFactory } from "../useRtmpEncoder";
 
 // Mock the Tauri bridge before anything imports the real modules.
@@ -463,5 +463,25 @@ describe("supportsH264", () => {
     const isConfigSupported = vi.fn(async () => ({ supported: false, config: {} }));
     const codec = await supportsH264({ isConfigSupported } as unknown as EncoderFactory, 1920, 1080, 6000, 30);
     expect(codec).toBeNull();
+  });
+});
+
+describe("suggestedBitrateKbps", () => {
+  it("derives ~6 Mbps for 1080p30", () => {
+    expect(suggestedBitrateKbps(1920, 1080, 30)).toBe(6000);
+  });
+
+  it("scales down for 720p30 and up for 1080p60", () => {
+    expect(suggestedBitrateKbps(1280, 720, 30)).toBe(3000);
+    expect(suggestedBitrateKbps(1920, 1080, 60)).toBe(12500);
+  });
+
+  it("allocates generously for 4K30", () => {
+    expect(suggestedBitrateKbps(3840, 2160, 30)).toBe(25000);
+  });
+
+  it("stays within the sane floor/ceiling", () => {
+    expect(suggestedBitrateKbps(640, 360, 24)).toBe(1000);
+    expect(suggestedBitrateKbps(7680, 4320, 60)).toBe(40000);
   });
 });

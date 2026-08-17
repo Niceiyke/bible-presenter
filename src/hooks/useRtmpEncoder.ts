@@ -119,6 +119,17 @@ function h264Codecs(width: number, height: number, fps: number): string[] {
   ];
 }
 
+/**
+ * Sensible H.264 video bitrate for a capture resolution/fps, snapped to tidy
+ * values (roughly the OBS "high quality" tier). Used as the RTMP/NDI encode
+ * default so 4K60 isn't starved at the 1080p30 default and 720p30 isn't
+ * over-allocated.
+ */
+export function suggestedBitrateKbps(width: number, height: number, fps: number): number {
+  const kbps = (width * height * fps * 0.1) / 1000;
+  return Math.max(1000, Math.min(40000, Math.round(kbps / 500) * 500));
+}
+
 const AAC_CODEC = "mp4a.40.2"; // AAC-LC — universal RTMP audio
 
 /** Sampling-frequency index table for the ADTS header (MPEG-4). */

@@ -16,6 +16,10 @@ pub struct OutputConfig {
     pub visible: bool,
     pub source: OutputSource,
     pub geometry: OutputGeometry,
+    /// Recorder/streamer capture frame rate. Window outputs ignore it; when
+    /// absent the frontend falls back to 30.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_fps: Option<u32>,
     pub presentation: Option<OutputPresentation>,
     pub overlays: OutputOverlays,
     /// Window-specific: Tauri window label this output binds to.
@@ -241,6 +245,7 @@ pub fn default_outputs() -> Vec<OutputConfig> {
             visible: false,
             source: OutputSource::Live,
             geometry: OutputGeometry { width: 1920, height: 1080 },
+            capture_fps: None,
             presentation: None,
             overlays: OutputOverlays { props: true, lower_third: true, logo: true },
             window_label: Some("output".into()),
@@ -256,6 +261,7 @@ pub fn default_outputs() -> Vec<OutputConfig> {
             visible: false,
             source: OutputSource::Live,
             geometry: OutputGeometry { width: 1280, height: 720 },
+            capture_fps: None,
             presentation: None,
             overlays: OutputOverlays { props: false, lower_third: true, logo: false },
             window_label: Some("stage".into()),
@@ -271,6 +277,7 @@ pub fn default_outputs() -> Vec<OutputConfig> {
             visible: false,
             source: OutputSource::Live,
             geometry: OutputGeometry { width: 1920, height: 1080 },
+            capture_fps: None,
             presentation: None,
             overlays: OutputOverlays { props: true, lower_third: true, logo: true },
             window_label: None,
@@ -286,6 +293,7 @@ pub fn default_outputs() -> Vec<OutputConfig> {
             visible: false,
             source: OutputSource::Live,
             geometry: OutputGeometry { width: 1920, height: 1080 },
+            capture_fps: Some(30),
             presentation: None,
             overlays: OutputOverlays { props: true, lower_third: true, logo: true },
             window_label: None,
@@ -301,6 +309,7 @@ pub fn default_outputs() -> Vec<OutputConfig> {
             visible: false,
             source: OutputSource::Live,
             geometry: OutputGeometry { width: 1920, height: 1080 },
+            capture_fps: Some(30),
             presentation: None,
             overlays: OutputOverlays { props: true, lower_third: true, logo: true },
             window_label: None,

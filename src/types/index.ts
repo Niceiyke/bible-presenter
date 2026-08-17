@@ -18,5 +18,6 @@ export type {
   OutputRecording, OutputStreaming, OutputConfig, OutputState,
   StreamPlatform, StreamDestination,
 } from "./output";
+export { CAPTURE_RESOLUTIONS, CAPTURE_FPS_OPTIONS } from "./output";
 export { FONTS, DEFAULT_SETTINGS, THEMES } from "./settings";
 export { DEFAULT_LT_TEMPLATE } from "./lowerThird";
