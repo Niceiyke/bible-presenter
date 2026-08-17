@@ -39,11 +39,16 @@ jobs:
         run: npm test
 
       - name: set ADMIN_TOKEN secret (from GitHub secret)
-        if: ${{ secrets.ADMIN_TOKEN != '' }}
+        shell: bash
         working-directory: workers/license
         env:
           ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
-        run: echo "$ADMIN_TOKEN" | npx wrangler secret put ADMIN_TOKEN
+        run: |
+          if [ -n "$ADMIN_TOKEN" ]; then
+            echo "$ADMIN_TOKEN" | npx wrangler secret put ADMIN_TOKEN
+          else
+            echo "::warning::ADMIN_TOKEN secret not set in GitHub; skipping secret write."
+          fi
 
       - name: deploy worker
         working-directory: workers/license
