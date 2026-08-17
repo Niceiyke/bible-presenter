@@ -816,6 +816,12 @@ pub struct SceneZone {
     pub muted: Option<bool>,
     #[serde(default)]
     pub label: Option<String>,
+    /// Per-zone typography override (Verse/Song zones). `None` inherits the
+    /// global output font settings (or the song's own font).
+    #[serde(default)]
+    pub font_size: Option<f64>,
+    #[serde(default)]
+    pub font_family: Option<String>,
 }
 
 fn zone_fit_default() -> String { "cover".to_string() }

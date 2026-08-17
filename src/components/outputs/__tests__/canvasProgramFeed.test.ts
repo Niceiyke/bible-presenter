@@ -51,6 +51,12 @@ function makeCtx() {
       calls.push(`drawImage:${sx},${sy},${sw},${sh}->${dx},${dy},${dw},${dh}`),
     canvas: { width: 1920, height: 1080 },
   };
+  let fontValue = "";
+  Object.defineProperty(ctx, "font", {
+    get: () => fontValue,
+    set: (v: string) => { fontValue = v; calls.push(`font:${v}`); },
+    configurable: true,
+  });
   return { ctx, calls };
 }
 
@@ -305,6 +311,52 @@ describe("canvasProgramFeed", () => {
       // Content from the second and third zones present, not just the first
       expect(calls.some((c) => c.startsWith("fillText:For God so loved"))).toBe(true);
       expect(calls.some((c) => c.startsWith("fillText:ZoneThree"))).toBe(true);
+    });
+
+    it("applies per-zone typography overrides to a verse zone", () => {
+      const { ctx, calls } = makeCtx();
+      const scene = {
+        type: "SceneComposition",
+        data: {
+          scene_id: "s4",
+          name: "Fonts",
+          zones: [
+            {
+              id: "z1", x: 0, y: 0, w: 1, h: 1, fit: "cover", opacity: 1, z: 1,
+              font_size: 96,
+              font_family: "Verdana",
+              item: { type: "Verse", data: { book: "JHN", chapter: 3, verse: 16, text: "For God so loved", version: "KJV" } },
+            },
+          ],
+        },
+      } as any;
+      drawProgramFrame(ctx, { width: 1920, height: 1080 }, frameFor(scene));
+      const fonts = calls.filter((c) => c.startsWith("font:")).map((c) => c.slice(5));
+      // ptToPx(96, scale=1) = 96 * 96/72 = 128px, family = override
+      expect(fonts.some((f) => f.includes("Verdana") && f.includes("128px"))).toBe(true);
+    });
+
+    it("applies per-zone typography overrides to a song zone", () => {
+      const { ctx, calls } = makeCtx();
+      const scene = {
+        type: "SceneComposition",
+        data: {
+          scene_id: "s5",
+          name: "FontsSong",
+          zones: [
+            {
+              id: "z1", x: 0, y: 0, w: 1, h: 1, fit: "cover", opacity: 1, z: 1,
+              font_size: 48,
+              font_family: "Arial",
+              item: { type: "Song", data: { title: "T", style: "FullSlide", lines: ["Line one"], slide_index: 0, total_slides: 1 } },
+            },
+          ],
+        },
+      } as any;
+      drawProgramFrame(ctx, { width: 1920, height: 1080 }, frameFor(scene));
+      const fonts = calls.filter((c) => c.startsWith("font:")).map((c) => c.slice(5));
+      // ptToPx(48 * 0.85, scale=1) = 40.8 * 96/72 = 54.4px, family = override
+      expect(fonts.some((f) => f.includes("Arial") && f.includes("54"))).toBe(true);
     });
 
     it("keeps drawing later zones when one zone's draw throws", () => {

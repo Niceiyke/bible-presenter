@@ -48,6 +48,10 @@ export interface SceneZone {
   muted?: boolean;
   /** Optional operator-facing label shown in the builder. */
   label?: string;
+  /** Per-zone typography override (Verse/Song zones). `undefined` inherits
+   *  the global output font settings (or the song's own font). */
+  font_size?: number;
+  font_family?: string;
 }
 
 /** A scene's multi-zone split-screen composition. */

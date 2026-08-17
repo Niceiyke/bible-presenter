@@ -346,6 +346,10 @@ export interface ItemRenderContext {
   res: CanvasResources;
   scale: number;
   now: number;
+  /** Per-zone typography override (Scene Builder). Wins over the song's own
+   *  font and the global output settings for Verse/Song zone content. */
+  font_size?: number;
+  font_family?: string;
 }
 
 function drawVerse(ctx: CanvasRenderingContext2D, item: Extract<DisplayItem, { type: "Verse" }>, g: CanvasGeometry, rctx: ItemRenderContext): void {
@@ -362,7 +366,7 @@ function drawVerse(ctx: CanvasRenderingContext2D, item: Extract<DisplayItem, { t
   const vFontSize = ptToPx(s.version_font_size ?? Math.round((s.reference_font_size ?? 36) * 0.65), scale);
   const vFontFamily = s.version_font_family ?? refFontFamily;
 
-  const verseFont = `${ptToPx(s.font_size, scale)}px ${s.verse_font_family ?? "Georgia, serif"}`;
+  const verseFont = `${ptToPx(rctx.font_size ?? s.font_size, scale)}px ${rctx.font_family ?? s.verse_font_family ?? "Georgia, serif"}`;
   const padding = 64 * (g.height / (s.reference_output_height ?? 1080));
   const maxTextWidth = g.width - padding * 2;
   const refLineHeight = refFontSize * 1.25;
@@ -382,7 +386,7 @@ function drawVerse(ctx: CanvasRenderingContext2D, item: Extract<DisplayItem, { t
   ctx.shadowBlur = 16;
 
   const wrapLines = wrapText(ctx, item.data.text ?? "", maxTextWidth);
-  const lineHeight = ptToPx(s.font_size, scale) * 1.25;
+  const lineHeight = ptToPx(rctx.font_size ?? s.font_size, scale) * 1.25;
   const totalH = wrapLines.length * lineHeight;
   const refH = refLineHeight;
   const gap = lineHeight * 0.6;
@@ -568,8 +572,8 @@ function drawSong(ctx: CanvasRenderingContext2D, item: Extract<DisplayItem, { ty
   const data = item.data;
   const s = rctx.settings;
   const scale = rctx.scale;
-  const finalFontSize = data.font_size || s.font_size;
-  const finalFontFamily = data.font || s.verse_font_family || "Georgia, serif";
+  const finalFontSize = rctx.font_size ?? data.font_size ?? s.font_size;
+  const finalFontFamily = rctx.font_family ?? data.font ?? s.verse_font_family ?? "Georgia, serif";
   const finalColor = data.color || rctx.colors.verseText;
   const fontWeight = data.font_weight || "normal";
   const showSectionLabel = !!s.show_song_section_labels;
@@ -770,7 +774,12 @@ function drawSceneComposition(ctx: CanvasRenderingContext2D, item: Extract<Displ
     ctx.clip();
     ctx.globalAlpha = zone.opacity ?? 1;
     const zoneG = { width: w, height: h };
-    const zoneRctx: ItemRenderContext = { ...rctx, scale: h / (rctx.settings.reference_output_height ?? 1080) };
+    const zoneRctx: ItemRenderContext = {
+      ...rctx,
+      scale: h / (rctx.settings.reference_output_height ?? 1080),
+      font_size: zone.font_size,
+      font_family: zone.font_family,
+    };
     try {
       drawItemCanvas(ctx, zone.item, zoneG, zoneRctx, zone.fit, zone.muted, depth);
     } catch (err) {

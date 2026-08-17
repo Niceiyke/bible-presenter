@@ -1419,6 +1419,8 @@ mod tests {
             z: 1,
             muted: None,
             label: None,
+            font_size: None,
+            font_family: None,
         }
     }
 

@@ -62,14 +62,21 @@ function ZoneVerse({
   settings,
   colors,
   windowScale,
+  font_size,
+  font_family,
 }: {
   item: Extract<DisplayItem, { type: "Verse" }>;
   settings: PresentationSettings;
   colors: ThemeColors;
   windowScale: number;
+  font_size?: number;
+  font_family?: string;
 }) {
   const isTop = settings.reference_position === "top";
-  const fontPt = Math.max(16, (settings.font_size * windowScale) / 2);
+  const fontPt = font_size != null
+    ? Math.max(8, font_size * windowScale)
+    : Math.max(16, (settings.font_size * windowScale) / 2);
+  const fontFamily = font_family ?? settings.verse_font_family ?? "Georgia, serif";
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center p-[6%] text-center">
       <div className="w-full flex flex-col items-center gap-3">
@@ -81,7 +88,7 @@ function ZoneVerse({
         )}
         <p
           className="leading-tight drop-shadow-xl"
-          style={{ color: colors.verseText, fontFamily: settings.verse_font_family ?? "Georgia, serif", fontSize: `${fontPt}pt` }}
+          style={{ color: colors.verseText, fontFamily, fontSize: `${fontPt}pt` }}
         >
           {item.data.text}
         </p>
@@ -214,7 +221,7 @@ export function ZoneContent({
   let content: React.ReactNode = null;
   switch (item.type) {
     case "Verse":
-      content = <ZoneVerse item={item} settings={settings} colors={colors} windowScale={zoneScale} />;
+      content = <ZoneVerse item={item} settings={settings} colors={colors} windowScale={zoneScale} font_size={zone.font_size} font_family={zone.font_family} />;
       break;
     case "Camera":
       content = <ZoneCamera item={item} phoneStreams={phoneStreams} />;
@@ -235,6 +242,8 @@ export function ZoneContent({
           scale={zoneScale}
           fontSize={settings.font_size}
           fontFamily={settings.verse_font_family}
+          fontSizeOverride={zone.font_size}
+          fontFamilyOverride={zone.font_family}
           color={colors.verseText}
           showSectionLabel={!!settings.show_song_section_labels}
         />

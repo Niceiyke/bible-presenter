@@ -5,14 +5,14 @@ import {
   Video, Image as ImageIcon, BookOpen, Presentation, Music2, Clock,
   Camera as CameraIcon, ChevronUp, ChevronDown, ArrowUp, ArrowDown,
   Radio, Link2, Move, SlidersHorizontal, Layers, Save, Monitor, Check,
-  ChevronRight,
+  ChevronRight, Type as TypeIcon,
 } from "lucide-react";
 import { useAppStore } from "../store";
 import {
   Scene, SceneLayout, SceneZone, SceneZoneSource, DisplayItem,
   MediaItem, CameraBackground, THEMES,
 } from "../types";
-import { stableId, resolvePath, buildCustomSlideItem } from "../utils";
+import { stableId, resolvePath, buildCustomSlideItem, FONTS } from "../utils";
 import { buildSongDisplayItem } from "../utils/song";
 import { ZoneContent } from "./shared/CompositionRenderer";
 
@@ -774,6 +774,43 @@ export function SceneBuilder({ scene, onSceneChange, onSave, onApply, onClose }:
                     )}
                   </div>
                 </Section>
+
+                {(selected.item.type === "Verse" || (selected.item.type === "Song" && selected.item.data.style !== "LowerThird")) && (
+                  <Section title="Typography" icon={TypeIcon}>
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[9px] font-bold uppercase tracking-widest text-console-text-subtle">Font family</span>
+                      <select
+                        value={selected.font_family ?? ""}
+                        onChange={(e) => updateZone(selected.id, { font_family: e.target.value || undefined })}
+                        className="w-full bg-console-surface-raised border border-console-border rounded-md px-2 py-1 text-xs text-console-text focus:outline-none focus:border-action-primary"
+                      >
+                        <option value="">Inherit</option>
+                        {FONTS.map((f) => (
+                          <option key={f} value={f}>{f}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[9px] font-bold uppercase tracking-widest text-console-text-subtle">Font size (pt)</span>
+                      <input
+                        type="number"
+                        step={1}
+                        min={8}
+                        max={400}
+                        value={selected.font_size ?? ""}
+                        placeholder="Inherit"
+                        onChange={(e) => {
+                          const v = parseFloat(e.target.value);
+                          updateZone(selected.id, { font_size: Number.isFinite(v) && v > 0 ? v : undefined });
+                        }}
+                        className="w-full bg-console-surface-raised border border-console-border rounded-md px-2 py-1 text-xs text-console-text focus:outline-none focus:border-action-primary"
+                      />
+                    </label>
+                    <p className="text-[9px] text-console-text-subtle">
+                      Leave blank to inherit the output font settings. Applies to verse and song text inside this zone.
+                    </p>
+                  </Section>
+                )}
               </>
             ) : (
               <p className="p-3 text-[11px] text-console-text-subtle leading-relaxed">
