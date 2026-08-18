@@ -16,6 +16,11 @@ export interface AppSlice {
   setLabel: (v: string) => void;
   settings: PresentationSettings;
   setSettings: (v: PresentationSettings | ((prev: PresentationSettings) => PresentationSettings)) => void;
+  /** Primary operator mode (Phase 8): Prepare (build content), Service (run the
+   *  live service), System (recording/streaming/diagnostics/settings). Service
+   *  is the default live workspace. */
+  operatorMode: "prepare" | "service" | "system";
+  setOperatorMode: (v: "prepare" | "service" | "system") => void;
   activeTab: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "lt-designer" | "camera" | "scenes" | "scene-builder" | "remote" | "recordings" | "streaming" | "diagnostics";
   setActiveTab: (v: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "lt-designer" | "camera" | "scenes" | "scene-builder" | "remote" | "recordings" | "streaming" | "diagnostics") => void;
   toast: string | null;
@@ -109,7 +114,9 @@ export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) =>
   setLabel: (v) => set({ label: v }),
   settings: DEFAULT_SETTINGS,
   setSettings: (v) => set((s) => ({ settings: typeof v === "function" ? v(s.settings) : v })),
-  activeTab: "bible",
+  operatorMode: "service",
+  setOperatorMode: (v) => set({ operatorMode: v }),
+  activeTab: "schedule",
   setActiveTab: (v) => set({ activeTab: v }),
   toast: null,
   setToast: (v) => set({ toast: v }),

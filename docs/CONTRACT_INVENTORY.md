@@ -1,4 +1,4 @@
-# Contract Inventory (Phase 0 freeze, updated for Phase 1/2/3/4/5/6/7)
+# Contract Inventory (Phase 0 freeze, updated for Phase 1/2/3/4/5/6/7/8)
 
 Status: living inventory — Phases 0-3 of `docs/UNIFIED_PRODUCTION_SUITE_PLAN.md`
 requires recording the current event names, command names, persisted files, and
@@ -327,6 +327,22 @@ tests). Contract:
   `activeConsumers`/`packetsEncoded`/`packetsDropped`, surfaced in
   `StreamerTab`. Destination caps are enforced in `goLive` (defense in depth)
   in addition to the Add-button gate.
+
+## 2h. Operator workflow (`operatorMode`, Phase 8)
+
+- **`operatorMode: "prepare" | "service" | "system"`** in `appSlice` (default
+  `"service"`, with `activeTab` default `"schedule"`). `LeftNav` renders a mode
+  switcher and shows only the current mode's groups: Prepare = Content +
+  Design (bible/songs/media/studio/lt-designer/scene-builder), Service = Service
+  Plan + Live Tools (schedule/lower-third/timers/props/camera/scenes), System =
+  recording/streaming/diagnostics/remote/settings. Switching modes navigates to
+  the mode's default tab when the current tab isn't in that mode.
+- **Cockpit** labels (`Staged · Preview`, `On Air · Program → Output`), an
+  output readiness indicator (`Output On/Off` from `outputStates`/`outputs`),
+  and an emergency `RESTORE` button (undoes a clear-all via `undoClearAll`).
+- **`FirstRunWizard`** (`src/components/FirstRunWizard.tsx`): one-time,
+  non-blocking onboarding shown after init when `pref_firstRunDismissed` is
+  unset; its primary action creates a service and opens the Service Plan.
 
 ## 3. Persisted files under the app data dir
 

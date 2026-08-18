@@ -51,7 +51,14 @@ export function Cockpit({
     setBusyAction,
     currentLowerThird,
     propItems, appDataDir,
+    outputs, outputStates,
   } = useAppStore();
+
+  // Authoritative output-window visibility (Phase 8 readiness indicator).
+  const outputOn =
+    outputStates["output"]?.visible ??
+    outputs.find((o) => o.window_label === "output")?.visible ??
+    false;
 
   const [clearModalOpen, setClearModalOpen] = useState(false);
   const [clearSnapshot, setClearSnapshot] = useState<ClearSnapshot | null>(null);
@@ -147,7 +154,7 @@ export function Cockpit({
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 min-w-0">
               <span className="w-2 h-2 rounded-full bg-state-stage shrink-0" />
-              <span className="text-[10px] font-black uppercase tracking-widest text-state-stage">Staged</span>
+              <span className="text-[10px] font-black uppercase tracking-widest text-state-stage">Staged · Preview</span>
               {stagedItem && (
                 <span className="text-[8px] font-bold text-console-text-subtle truncate hidden 2xl:inline">{displayItemLabel(stagedItem)}</span>
               )}
@@ -188,7 +195,7 @@ export function Cockpit({
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 min-w-0">
               <span className="w-2 h-2 rounded-full bg-state-live animate-pulse shrink-0" />
-              <span className="text-[10px] font-black uppercase tracking-widest text-state-live">On Air</span>
+              <span className="text-[10px] font-black uppercase tracking-widest text-state-live">On Air · Program → Output</span>
               {liveItem && (
                 <span className="text-[8px] font-bold text-console-text-subtle truncate hidden 2xl:inline">{displayItemLabel(liveItem)}</span>
               )}
@@ -212,6 +219,16 @@ export function Cockpit({
                 <X size={12} /> Clear Live
               </Button>
             </div>
+          </div>
+          {/* Output readiness indicator (Phase 8) */}
+          <div className="flex items-center gap-1.5 mt-1">
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${outputOn ? "bg-state-success" : "bg-state-warning"}`} />
+            <span className={`text-[8px] font-black uppercase tracking-widest ${outputOn ? "text-state-success" : "text-state-warning"}`}>
+              Output {outputOn ? "On" : "Off"}
+            </span>
+            {!outputOn && (
+              <span className="text-[8px] text-console-text-subtle">— press Ctrl+O to show the audience output</span>
+            )}
           </div>
           <div className="w-full rounded-lg overflow-hidden ring-2 ring-state-live/30 bg-black relative" style={{ aspectRatio: "16/9" }}>
             {pgmCanvasView ? (
@@ -332,6 +349,12 @@ export function Cockpit({
               {clearAllBusy ? <Loader2 size={11} className="animate-spin" /> : <Layers size={11} />}CLEAR ALL
             </button>
           </div>
+          {clearSnapshot && (
+            <button onClick={handleUndoClear} disabled={clearAllBusy}
+              className="mt-1.5 w-full py-1.5 rounded-md text-[9px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)] bg-state-live/20 hover:bg-state-live text-state-live hover:text-console-text disabled:opacity-50">
+              {clearAllBusy ? <Loader2 size={11} className="animate-spin" /> : <Undo2 size={11} />} RESTORE
+            </button>
+          )}
           <button onClick={() => { const nl = !settings.show_background_logo; updateSettings({ ...settings, show_background_logo: nl }); }}
             aria-pressed={settings.show_background_logo}
             className={`mt-1.5 w-full py-1.5 rounded-md text-[9px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)] ${settings.show_background_logo ? "bg-tool-design text-white" : "bg-console-surface-raised text-console-text-subtle hover:text-console-text-muted"}`}>

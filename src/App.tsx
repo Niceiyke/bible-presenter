@@ -30,6 +30,7 @@ import { Toast } from "./components/Toast";
 import { ShortcutsModal } from "./components/ShortcutsModal";
 import { LogViewer } from "./components/LogViewer";
 import { RecoveryModal } from "./components/RecoveryModal";
+import { FirstRunWizard, FIRST_RUN_KEY } from "./components/FirstRunWizard";
 import { MusicPlayer } from "./components/MusicPlayer";
 
 import { OutputWindow, StageWindow } from "./windows";
@@ -72,10 +73,21 @@ export default function App() {
   const [bottomDeckH, setBottomDeckH] = React.useState(() => Number(localStorage.getItem("pref_bottomDeckH") || 280));
   const [cockpitWidth, setCockpitWidth] = React.useState(() => Number(localStorage.getItem("pref_cockpitWidth") || 340));
   const [recovery, setRecovery] = useState<{ activeServiceId: string; scheduleEntries: ScheduleEntry[]; lastUpdate: number } | null>(null);
+  const [showFirstRun, setShowFirstRun] = useState(false);
 
   useAppInitialization();
   useBibleCascade();
   useFonts(); // P2.5: inject @font-face for user-installed fonts.
+
+  // Phase 8: show the first-run service setup wizard once, after the app is
+  // ready and the license is not blocking, until the operator dismisses it.
+  useEffect(() => {
+    if (!isInitialized) return;
+    if (isLicenseBlocked(license?.status)) return;
+    if (label !== "main") return;
+    if (localStorage.getItem(FIRST_RUN_KEY) === "1") return;
+    setShowFirstRun(true);
+  }, [isInitialized, license?.status, label]);
 
   const {
     nextLiveItem, stageItem, goLive, sendLive, clearStaged, clearAll, undoClearAll, getNextItem,
@@ -304,6 +316,8 @@ export default function App() {
           }}
         />
       )}
+
+      {showFirstRun && <FirstRunWizard onClose={() => setShowFirstRun(false)} />}
 
       {editingPres && (
         <Suspense fallback={null}>

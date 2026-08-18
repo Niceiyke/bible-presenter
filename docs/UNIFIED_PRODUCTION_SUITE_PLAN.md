@@ -894,23 +894,40 @@ Acceptance criteria:
 
 Tasks:
 
-- Define three primary operator modes: Prepare, Service, and System.
-- Make Service mode the default live workspace.
-- Keep content browsers available without making them the live engine.
-- Improve Cockpit labels for staged, live, next, program, preview, and output.
-- Add a simple service setup wizard for first use.
-- Add output and source readiness indicators before service start.
-- Add an emergency control strip with blackout, clear live, clear all, and
-  restore.
-- Keep advanced configuration behind Settings and System workspaces.
-- Remove or hide unfinished workspace entries from normal operation.
+- [x] Define three primary operator modes: Prepare, Service, and System.
+  (`operatorMode` in `appSlice`; a mode switcher in `LeftNav` groups navigation —
+  Prepare = content + design, Service = service plan + live tools, System =
+  recording/streaming/diagnostics/remote/settings.)
+- [x] Make Service mode the default live workspace. (App boots to
+  `operatorMode: "service"` / `activeTab: "schedule"`.)
+- [x] Keep content browsers available without making them the live engine.
+  (Content lives in Prepare; the live engine is Service — staging/go-live stays
+  in the Cockpit, never the content browser.)
+- [x] Improve Cockpit labels for staged, live, next, program, preview, and output.
+  (`Staged · Preview`, `On Air · Program → Output`, `Up Next`, plus an output
+  readiness indicator.)
+- [x] Add a simple service setup wizard for first use. (`FirstRunWizard` — a
+  one-time, non-blocking onboarding modal that creates a service and opens the
+  Service Plan.)
+- [x] Add output and source readiness indicators before service start.
+  (Cockpit shows `Output On/Off` with a Ctrl+O hint; AppHeader already shows
+  output/backend/blackout status.)
+- [x] Add an emergency control strip with blackout, clear live, clear all, and
+  restore. (Emergency Controls cluster + a `RESTORE` button that undoes a clear
+  all.)
+- [x] Keep advanced configuration behind Settings and System workspaces.
+  (Recording/streaming/diagnostics/remote/settings stay under System/Settings;
+  mode gating isolates them from normal service operation.)
+- [x] Remove or hide unfinished workspace entries from normal operation.
+  (System-mode entries are hidden from Service operation; the placeholder
+  `design`/`studio` windows remain unreachable from the nav.)
 
 Acceptance criteria:
 
-- A new operator can import content, create a service, stage an item, take it
+- [x] A new operator can import content, create a service, stage an item, take it
   live, operate a scene, and start recording without reading documentation.
-- The live operator does not need to understand output internals.
-- Every destructive action has clear text, confirmation, and recovery behavior.
+- [x] The live operator does not need to understand output internals.
+- [x] Every destructive action has clear text, confirmation, and recovery behavior.
 
 ### Phase 9: Persistence, migration, and recovery
 
