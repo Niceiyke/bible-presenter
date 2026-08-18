@@ -10,13 +10,16 @@ use tauri::{AppHandle, Emitter, Manager, State};
 // Constants
 // ---------------------------------------------------------------------------
 
-pub const BIBLE_DATA_ZIP_URL: &str = "https://github.com/Niceiyke/bible-presenter/releases/download/v1.0-models/bible_data.zip";
+/// DB-only Bible data asset: a zip containing just `wordlyte_bible.db` (no
+/// sentence-transformer embeddings — the app only reads the SQLite text DB;
+/// search is FTS5 keyword, not vector). Uploaded to the v2.0.0 release.
+pub const BIBLE_DATA_ZIP_URL: &str = "https://github.com/Niceiyke/bible-presenter/releases/download/v2.0.0/wordlyte_bible.zip";
 pub const BIBLE_DB_FILENAME: &str = "wordlyte_bible.db";
-/// Pinned SHA-256 of the `bible_data.zip` asset. MUST be set before a release
-/// ships (the release packaging gate in the build workflow checks this).
-/// Compute it from a freshly downloaded asset:
-///   certutil -hashfile bible_data.zip SHA256
-pub const BIBLE_DATA_ZIP_SHA256: Option<&str> = None;
+/// Pinned SHA-256 of the `wordlyte_bible.zip` asset (computed from the
+/// published DB-only zip; recompute after any re-publish):
+///   certutil -hashfile wordlyte_bible.zip SHA256
+pub const BIBLE_DATA_ZIP_SHA256: Option<&str> =
+    Some("3d05357e5d292b74547c544d2a78d58ce7cf1529d2df888de002d00f0c211281");
 
 // ---------------------------------------------------------------------------
 // Download progress
@@ -188,7 +191,7 @@ fn extract_zip_bytes(data: Vec<u8>, target_dir: &std::path::Path) -> anyhow::Res
 
         if !parts.is_empty() {
             let first = parts[0];
-            if first == target_folder_name || first == "bible_data" || first == "models" {
+            if first == target_folder_name || first == "bible_data" || first == "wordlyte_bible" || first == "models" {
                 parts.remove(0);
             }
         }
@@ -308,6 +311,16 @@ mod tests {
         let out = dir.join("wordlyte_bible.db");
         assert!(out.exists());
         assert_eq!(std::fs::read(&out).unwrap(), b"sqlite-bytes");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn extracts_root_level_db_entry() {
+        // The published DB-only asset lays the db at the zip root.
+        let dir = tmp_target("rootdb");
+        let zip = zip_with(&[("wordlyte_bible.db", b"sqlite-bytes")]);
+        extract_zip_bytes(zip, &dir).unwrap();
+        assert_eq!(std::fs::read(dir.join("wordlyte_bible.db")).unwrap(), b"sqlite-bytes");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
