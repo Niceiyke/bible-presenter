@@ -176,6 +176,34 @@ impl<'a> Engine<'a> {
         self.emit_event("live-item-update", serde_json::to_value(&update).expect("LiveItemUpdate serializes"));
     }
 
+    /// Emits `item-staged` wrapped with the current presentation revision so
+    /// windows can order it against a hydration snapshot. `None` clears the
+    /// staged slot.
+    fn emit_staged(&self, item: Option<&DisplayItem>) {
+        let revision = self.state.presentation.current_revision();
+        self.emit_event("item-staged", json!({ "item": item, "revision": revision }));
+    }
+
+    /// Emits `settings-changed` wrapped with the current presentation revision.
+    fn emit_settings(&self, settings: &PresentationSettings) {
+        let revision = self.state.presentation.current_revision();
+        self.emit_event("settings-changed", json!({ "settings": settings, "revision": revision }));
+    }
+
+    /// Emits `lower-third-update` wrapped with the current presentation
+    /// revision. The payload's `lower_third` field carries the
+    /// `{ data, template }` document or `null` when cleared.
+    fn emit_lower_third(&self, payload: Option<&serde_json::Value>) {
+        let revision = self.state.presentation.current_revision();
+        self.emit_event("lower-third-update", json!({ "lower_third": payload, "revision": revision }));
+    }
+
+    /// Emits `props-update` wrapped with the current presentation revision.
+    fn emit_props(&self, props: &[PropItem]) {
+        let revision = self.state.presentation.current_revision();
+        self.emit_event("props-update", json!({ "props": props, "revision": revision }));
+    }
+
     // -- Stage / commit / live ------------------------------------------------
 
     pub fn op_stage(
@@ -192,7 +220,7 @@ impl<'a> Engine<'a> {
     fn op_stage_locked(&self, item: DisplayItem, source: Option<String>, _revision: u64) -> MutationResult {
         self.state.presentation.bump_revision();
         *self.state.presentation.staged_item.lock() = Some(item.clone());
-        self.emit_event("item-staged", serde_json::to_value(&item).expect("DisplayItem serializes"));
+        self.emit_staged(Some(&item));
         self.state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": item }), source);
         MutationResult {
             snapshot: snapshot(self.state),
@@ -209,7 +237,7 @@ impl<'a> Engine<'a> {
         let _guard = lock_presentation(self.state);
         self.state.presentation.bump_revision();
         *self.state.presentation.staged_item.lock() = None;
-        self.emit_event("item-staged", serde_json::Value::Null);
+        self.emit_staged(None);
         self.state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": null }), source);
         Ok(MutationResult {
             snapshot: snapshot(self.state),
@@ -267,7 +295,7 @@ impl<'a> Engine<'a> {
         *self.state.presentation.live_item.lock() = None;
         self.emit_live_update(None);
         let staged = self.state.presentation.staged_item.lock().clone();
-        self.emit_event("item-staged", serde_json::to_value(&staged).expect("DisplayItem serializes"));
+        self.emit_staged(staged.as_ref());
         self.state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": null }), source.clone());
         self.state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": staged }), source);
         Ok(MutationResult {
@@ -318,7 +346,7 @@ impl<'a> Engine<'a> {
         drop(live);
         *self.state.presentation.staged_item.lock() = Some(item.clone());
 
-        self.emit_event("item-staged", serde_json::to_value(&item).expect("DisplayItem serializes"));
+        self.emit_staged(Some(&item));
         self.emit_live_update(Some(committed.clone()));
         self.state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": item }), source.clone());
         self.state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": committed.clone() }), source);
@@ -347,9 +375,9 @@ impl<'a> Engine<'a> {
         self.state.presentation.props_layer.lock().clear();
 
         self.emit_live_update(None);
-        self.emit_event("item-staged", serde_json::Value::Null);
-        self.emit_event("lower-third-update", serde_json::Value::Null);
-        self.emit_event("props-update", json!([]));
+        self.emit_staged(None);
+        self.emit_lower_third(None);
+        self.emit_props(&[]);
 
         self.state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": null }), source.clone());
         self.state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": null }), source.clone());
@@ -370,7 +398,7 @@ impl<'a> Engine<'a> {
         self.state.media_schedule.save_settings(&settings).map_err(|e| e.to_string())?;
         self.state.presentation.bump_revision();
         *self.state.presentation.settings.lock() = settings.clone();
-        self.emit_event("settings-changed", serde_json::to_value(&settings).expect("Settings serializes"));
+        self.emit_settings(&settings);
         self.state.remote.hub.publish(RemoteEventKind::BlackoutChanged, json!({ "blackout": on }), source);
         Ok(MutationResult {
             snapshot: snapshot(self.state),
@@ -391,7 +419,7 @@ impl<'a> Engine<'a> {
         self.state.media_schedule.save_settings(&settings).map_err(|e| e.to_string())?;
         self.state.presentation.bump_revision();
         *self.state.presentation.settings.lock() = settings.clone();
-        self.emit_event("settings-changed", serde_json::to_value(&settings).expect("Settings serializes"));
+        self.emit_settings(&settings);
         if prev_blanked != settings.is_blanked {
             self.state.remote.hub.publish(
                 RemoteEventKind::BlackoutChanged,
@@ -422,7 +450,7 @@ impl<'a> Engine<'a> {
         self.state.media_schedule.save_settings(&settings).map_err(|e| e.to_string())?;
         self.state.presentation.bump_revision();
         *self.state.presentation.settings.lock() = settings.clone();
-        self.emit_event("settings-changed", serde_json::to_value(&settings).expect("Settings serializes"));
+        self.emit_settings(&settings);
         self.state.remote.hub.publish(RemoteEventKind::LogoChanged, json!({ "logo": on }), source);
         Ok(MutationResult {
             snapshot: snapshot(self.state),
@@ -444,10 +472,7 @@ impl<'a> Engine<'a> {
         self.state.presentation.bump_revision();
         let payload = json!({ "data": data, "template": template.unwrap_or_else(|| json!({})) });
         *self.state.presentation.lower_third.lock() = Some(payload.clone());
-        self.emit_event(
-            "lower-third-update",
-            serde_json::to_value(Some(payload.clone())).expect("lower-third payload serializes"),
-        );
+        self.emit_lower_third(Some(&payload));
         self.state.remote.hub.publish(RemoteEventKind::LowerThirdChanged, json!({ "lower_third": payload }), source);
         Ok(MutationResult {
             snapshot: snapshot(self.state),
@@ -461,7 +486,7 @@ impl<'a> Engine<'a> {
         let _guard = lock_presentation(self.state);
         self.state.presentation.bump_revision();
         *self.state.presentation.lower_third.lock() = None;
-        self.emit_event("lower-third-update", serde_json::Value::Null);
+        self.emit_lower_third(None);
         self.state.remote.hub.publish(RemoteEventKind::LowerThirdChanged, json!({ "lower_third": null }), source);
         Ok(MutationResult {
             snapshot: snapshot(self.state),
@@ -540,7 +565,7 @@ impl<'a> Engine<'a> {
         self.state.media_schedule.save_props(&props).map_err(|e| e.to_string())?;
         self.state.presentation.bump_revision();
         *self.state.presentation.props_layer.lock() = props.clone();
-        self.emit_event("props-update", serde_json::to_value(&props).expect("Props serializes"));
+        self.emit_props(&props);
         Ok(MutationResult {
             snapshot: snapshot(self.state),
             committed: None,
@@ -627,21 +652,14 @@ impl<'a> Engine<'a> {
         *self.state.presentation.lower_third.lock() = lt_payload.clone();
 
         if let Some(staged) = &staged_out {
-            self.emit_event("item-staged", serde_json::to_value(staged).expect("DisplayItem serializes"));
+            self.emit_staged(Some(staged));
         }
         if live_out.is_some() {
             self.emit_live_update(live_out.clone());
         }
-        self.emit_event("settings-changed", serde_json::to_value(&scene.settings).expect("Settings serializes"));
-        self.emit_event("props-update", serde_json::to_value(&scene.props).expect("Props serializes"));
-        if let Some(payload) = &lt_payload {
-            self.emit_event(
-                "lower-third-update",
-                serde_json::to_value(Some(payload)).expect("lower-third payload serializes"),
-            );
-        } else {
-            self.emit_event("lower-third-update", serde_json::Value::Null);
-        }
+        self.emit_settings(&scene.settings);
+        self.emit_props(&scene.props);
+        self.emit_lower_third(lt_payload.as_ref());
 
         if let Some(staged) = &staged_out {
             self.state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": staged }), None);
@@ -664,6 +682,30 @@ impl<'a> Engine<'a> {
                 layout: scene.layout,
             }),
         })
+    }
+
+    /// Read-only rebroadcast of authoritative presentation state wrapped with
+    /// the current revision (NO bump — this is not a mutation). A freshly
+    /// revealed window hydrates through `set_output_visible` after registering
+    /// its listeners; every event carries the same revision and consumers apply
+    /// equal-revision events idempotently, so a stale reveal can never
+    /// overwrite newer state that arrived while the window was hidden.
+    pub fn rebroadcast(&self) {
+        let revision = self.state.presentation.current_revision();
+        let settings = self.state.presentation.settings.lock().clone();
+        self.emit_event("settings-changed", json!({ "settings": settings, "revision": revision }));
+        let live = self.state.presentation.live_item.lock().clone();
+        self.emit_event(
+            "live-item-update",
+            serde_json::to_value(LiveItemUpdate { detected_item: live, revision: Some(revision) })
+                .expect("LiveItemUpdate serializes"),
+        );
+        let lt = self.state.presentation.lower_third.lock().clone();
+        self.emit_event("lower-third-update", json!({ "lower_third": lt, "revision": revision }));
+        let props = self.state.presentation.props_layer.lock().clone();
+        self.emit_event("props-update", json!({ "props": props, "revision": revision }));
+        let staged = self.state.presentation.staged_item.lock().clone();
+        self.emit_event("item-staged", json!({ "item": staged, "revision": revision }));
     }
 }
 
@@ -712,6 +754,15 @@ fn validate_prop_path(path: &str, app_data_dir: &std::path::Path) -> Result<(), 
 /// reach `emit_checked_value` exactly like the historical direct emits.
 pub fn app_emit_sink(app: &AppHandle) -> impl Fn(&str, serde_json::Value) + '_ {
     move |event, payload| crate::events::emit_checked_value(app, event, &payload)
+}
+
+/// Re-broadcast authoritative presentation state (wrapped with the current
+/// revision, no bump) so a freshly-revealed window can hydrate even if it
+/// missed events while hidden. Used by `set_output_visible`.
+pub fn rebroadcast_presentation(app: &AppHandle, state: &AppState) {
+    let sink = app_emit_sink(app);
+    let engine = Engine { state, emit: &sink };
+    engine.rebroadcast();
 }
 
 #[cfg(test)]
@@ -1025,6 +1076,94 @@ mod tests {
         assert!(names.contains(&"item-staged"));
         assert!(names.contains(&"lower-third-update"));
         assert!(names.contains(&"props-update"));
+    }
+
+    #[test]
+    fn presentation_events_carry_revision_and_wrapped_payloads() {
+        let state = test_state();
+        let rec = EventRecorder::new();
+        let eng = rec.engine(&state);
+
+        eng.op_send_live(verse_item("John", 3, "For God so loved"), None).unwrap();
+        let rev = state.presentation.current_revision();
+
+        // Every event of one mutation carries the SAME revision, and each is
+        // wrapped under a named field so windows can order them against a
+        // hydration snapshot.
+        let events = rec.events();
+        for (_, payload) in &events {
+            assert_eq!(payload["revision"], rev);
+        }
+        let staged = events.iter().find(|(n, _)| n == "item-staged").unwrap().1.clone();
+        assert_eq!(staged["item"]["type"], "Verse");
+        let live = events.iter().find(|(n, _)| n == "live-item-update").unwrap().1.clone();
+        assert_eq!(live["detected_item"]["type"], "Verse");
+
+        eng.op_show_lower_third(
+            LowerThirdData::Nameplate(LowerThirdNameplate { name: "Jane".into(), title: None }),
+            None,
+            None,
+        ).unwrap();
+        let rev2 = state.presentation.current_revision();
+        let lt = rec.events().last().unwrap().1.clone();
+        assert_eq!(lt["lower_third"]["data"]["data"]["name"], "Jane");
+        assert_eq!(lt["revision"], rev2);
+
+        eng.op_set_props(vec![PropItem {
+            id: "p1".into(),
+            kind: "text".into(),
+            path: None,
+            text: Some("LOGO".into()),
+            color: None,
+            x: 0.0, y: 0.0, w: 10.0, h: 10.0,
+            opacity: 1.0, visible: true,
+        }]).unwrap();
+        let rev3 = state.presentation.current_revision();
+        let props = rec.events().last().unwrap().1.clone();
+        assert_eq!(props["props"][0]["text"], "LOGO");
+        assert_eq!(props["revision"], rev3);
+
+        // Clear-all null payloads keep the wrapped shape, all at the same
+        // (latest) revision.
+        let before = rec.events().len();
+        eng.op_clear_all(None).unwrap();
+        let rev4 = state.presentation.current_revision();
+        for (name, payload) in &rec.events()[before..] {
+            let check = match name.as_str() {
+                "live-item-update" => Some(payload["detected_item"] == serde_json::Value::Null),
+                "item-staged" => Some(payload["item"] == serde_json::Value::Null),
+                "lower-third-update" => Some(payload["lower_third"] == serde_json::Value::Null),
+                "props-update" => Some(payload["props"] == serde_json::json!([])),
+                _ => None,
+            };
+            if let Some(ok) = check {
+                assert!(ok, "unexpected payload for {}", name);
+                assert_eq!(payload["revision"], rev4, "revision mismatch for {}", name);
+            }
+        }
+    }
+
+    #[test]
+    fn rebroadcast_emits_wrapped_events_without_bumping_revision() {
+        let state = test_state();
+        let rec = EventRecorder::new();
+        let eng = rec.engine(&state);
+        eng.op_send_live(verse_item("John", 3, "For God so loved"), None).unwrap();
+        let rev = state.presentation.current_revision();
+
+        eng.rebroadcast();
+
+        let events = rec.events();
+        let expected = ["live-item-update", "settings-changed", "item-staged", "lower-third-update", "props-update"];
+        let names: Vec<&str> = events.iter().map(|(n, _)| n.as_str()).collect();
+        for name in expected {
+            assert!(names.contains(&name), "missing {}", name);
+        }
+        // Rebroadcast is a read: no revision bump, every event at current rev.
+        assert_eq!(state.presentation.current_revision(), rev);
+        for (_, payload) in &events {
+            assert_eq!(payload["revision"], rev);
+        }
     }
 
     #[test]

@@ -10,6 +10,15 @@ export type LowerThirdData =
   | { kind: "Lyrics"; data: { line1: string; line2?: string; section_label?: string } }
   | { kind: "FreeText"; data: { text: string } };
 
+/** The live lower-third document: content plus the template that renders it.
+ *  This is the shape carried by `presentation_snapshot.lower_third` and by the
+ *  `lower-third-update` event's `lower_third` field (Phase 2 revision-tagged
+ *  payloads). */
+export interface LowerThirdPayload {
+  data: LowerThirdData;
+  template: LowerThirdTemplate;
+};
+
 export interface LowerThirdTemplate {
   id: string; name: string;
   bgType: "solid" | "gradient" | "transparent" | "image";

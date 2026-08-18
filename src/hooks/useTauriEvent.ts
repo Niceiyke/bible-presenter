@@ -7,11 +7,11 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
  * `system-log`, whose payload is also typed below.
  */
 export interface EventMap {
-  "live-item-update": { detected_item: import("../types").DisplayItem | null };
-  "item-staged": import("../types").DisplayItem | null;
-  "settings-changed": import("../types").PresentationSettings;
-  "lower-third-update": { data: any; template: any } | null;
-  "props-update": import("../types").PropItem[];
+  "live-item-update": { detected_item: import("../types").DisplayItem | null; revision: number };
+  "item-staged": { item: import("../types").DisplayItem | null; revision: number };
+  "settings-changed": { settings: import("../types").PresentationSettings; revision: number };
+  "lower-third-update": { lower_third: import("../types").LowerThirdPayload | null; revision: number };
+  "props-update": { props: import("../types").PropItem[]; revision: number };
   "media-control": { action: string; volume?: number; currentTime?: number; rate?: number };
   "media-state": { playing: boolean; currentTime: number; duration: number; volume: number; muted: boolean; rate: number } | null;
   "songs-sync": import("../types").Song[];

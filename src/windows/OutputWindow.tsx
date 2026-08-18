@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback, useLayoutEffect } from "react";
 import { listen, emit } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
-import type { DisplayItem, PropItem, PresentationSettings, LowerThirdData, LowerThirdTemplate, OutputConfig } from "../types";
+import type { DisplayItem, PropItem, PresentationSettings, LowerThirdData, LowerThirdTemplate, LowerThirdPayload, OutputConfig } from "../types";
 import { THEMES } from "../types";
 import type { PresentationSnapshot } from "../types";
 import {
@@ -29,6 +29,7 @@ import { signalOperatorWarning } from "../hooks/useAppInitialization";
 import { useFonts } from "../hooks/useFonts";
 import type { LicenseInfo } from "../types/license";
 import { tierCapabilities } from "../system/tiers";
+import { PresentationSync } from "../system/presentationSync";
 import PhoneCameraVideo, { usePhoneCameraOrientation, usePhoneCameraLook, useCameraChroma } from "../components/shared/PhoneCameraVideo";
 
 function ProjectionErrorFallback() {
@@ -181,29 +182,20 @@ export function OutputWindow() {
     // Hydration gate (audit #7): presentation events arriving while this
     // window boots are buffered and replayed after `presentation_snapshot`,
     // so a racing backend change is never lost or overwritten by stale data.
-    let presentationOpen = false;
-    let presentationBuffer: Array<() => void> = [];
-    const applyOrBuffer = (fn: () => void) => {
-      if (presentationOpen) fn();
-      else presentationBuffer.push(fn);
-    };
-    const drainPresentation = () => {
-      for (const fn of presentationBuffer) fn();
-      presentationBuffer = [];
-      presentationOpen = true;
-    };
+    // Every event is revision-tagged (Phase 2), so a stale rebroadcast or an
+    // out-of-order delivery is dropped instead of overwriting newer state.
+    const presentationSync = new PresentationSync();
 
-    const unlistenTrans = listen("live-item-update", (event: any) => {
-      const { detected_item } = event.payload;
-      applyOrBuffer(() => setLiveItem(detected_item ?? null));
+    const unlistenTrans = listen<{ detected_item: DisplayItem | null; revision: number }>("live-item-update", (event) => {
+      presentationSync.apply(event.payload.revision, () => setLiveItem(event.payload.detected_item ?? null));
     });
 
-    const unlistenSettings = listen("settings-changed", (event: any) => {
-      applyOrBuffer(() => setSettings(event.payload as PresentationSettings));
+    const unlistenSettings = listen<{ settings: PresentationSettings; revision: number }>("settings-changed", (event) => {
+      presentationSync.apply(event.payload.revision, () => setSettings(event.payload.settings));
     });
 
-    const unlistenStaged = listen("item-staged", (event: any) => {
-      applyOrBuffer(() => setStagedItem(event.payload as DisplayItem | null));
+    const unlistenStaged = listen<{ item: DisplayItem | null; revision: number }>("item-staged", (event) => {
+      presentationSync.apply(event.payload.revision, () => setStagedItem(event.payload.item ?? null));
     });
 
     const unlistenOutputConfig = listen("output-config-changed", (event: any) => {
@@ -211,10 +203,11 @@ export function OutputWindow() {
       setOutputConfig(configs.find((c) => c.window_label === "output") ?? null);
     });
 
-    const unlistenLt = listen("lower-third-update", (event: any) => {
-      applyOrBuffer(() => {
-        if (event.payload) {
-          setLowerThird({ data: event.payload.data as LowerThirdData, template: event.payload.template as LowerThirdTemplate });
+    const unlistenLt = listen<{ lower_third: LowerThirdPayload | null; revision: number }>("lower-third-update", (event) => {
+      const payload = event.payload.lower_third;
+      presentationSync.apply(event.payload.revision, () => {
+        if (payload) {
+          setLowerThird({ data: payload.data, template: payload.template });
         } else {
           setLowerThird(null);
         }
@@ -288,8 +281,8 @@ export function OutputWindow() {
     mediaStateTimer = setInterval(broadcastMediaState, 500);
     emit("media-state", null);
 
-    const unlistenProps = listen("props-update", (event: any) => {
-      applyOrBuffer(() => setPropItems((event.payload as PropItem[]) ?? []));
+    const unlistenProps = listen<{ props: PropItem[]; revision: number }>("props-update", (event) => {
+      presentationSync.apply(event.payload.revision, () => setPropItems(event.payload.props ?? []));
     });
 
     const unlistenMonitorTest = listen("monitor-test", (event: any) => {
@@ -313,19 +306,21 @@ export function OutputWindow() {
       invoke<PresentationSnapshot | null>("presentation_snapshot")
         .then((snap) => {
           if (snap) {
-            setLiveItem(snap.live ?? null);
-            setStagedItem(snap.staged ?? null);
-            setSettings(snap.settings);
-            setPropItems(snap.props ?? []);
-            setLowerThird((snap.lower_third as any) ?? null);
+            presentationSync.applySnapshot(snap.revision, () => {
+              setLiveItem(snap.live ?? null);
+              setStagedItem(snap.staged ?? null);
+              setSettings(snap.settings);
+              setPropItems(snap.props ?? []);
+              setLowerThird((snap.lower_third as LowerThirdPayload | null) ?? null);
+            });
           }
           // Replay anything buffered while the snapshot was in flight, then let
           // new events apply directly.
-          drainPresentation();
+          presentationSync.open();
         })
         .catch((e: any) => {
           signalOperatorWarning(`Output hydrate (snapshot): ${e?.message ?? e}`);
-          drainPresentation();
+          presentationSync.open();
         });
       Promise.all([
         invoke<string>("get_app_data_dir").then(setAppDataDir).catch((e: any) => signalOperatorWarning(`Output hydrate (appdir): ${e?.message ?? e}`)),

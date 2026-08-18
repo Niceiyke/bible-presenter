@@ -113,11 +113,11 @@ emits through `crate::events::emit_checked` which forwards failures to
 
 | Event | Payload (frontend type) | Emitter |
 | --- | --- | --- |
-| `live-item-update` | `{ detected_item: DisplayItem \| null, revision?: number }` | `engine/presentation.rs`, `commands/outputs.rs` |
-| `item-staged` | `DisplayItem \| null` | `engine/presentation.rs` |
-| `settings-changed` | `PresentationSettings` | `engine/presentation.rs`, `commands/outputs.rs` |
-| `lower-third-update` | `{ data, template } \| null` | `engine/presentation.rs` |
-| `props-update` | `PropItem[]` | `engine/presentation.rs` |
+| `live-item-update` | `{ detected_item: DisplayItem \| null, revision: number }` | `engine/presentation.rs` (incl. `rebroadcast_presentation`) |
+| `item-staged` | `{ item: DisplayItem \| null, revision: number }` | `engine/presentation.rs` |
+| `settings-changed` | `{ settings: PresentationSettings, revision: number }` | `engine/presentation.rs` |
+| `lower-third-update` | `{ lower_third: LowerThirdPayload \| null, revision: number }` | `engine/presentation.rs` |
+| `props-update` | `{ props: PropItem[], revision: number }` | `engine/presentation.rs` |
 | `media-control` | `{ action, volume?, currentTime?, rate? }` | frontend → `commands/media.rs` |
 | `media-state` | `{ playing, currentTime, duration, volume, muted, rate } \| null` | frontend (media player) |
 | `songs-sync` | `Song[]` | songs command layer |
@@ -168,6 +168,19 @@ tests). Contract:
 - `op_get_props` and `snapshot` are free functions (reads, no lock/emit).
 - `PRESENTATION_SCHEMA_VERSION` and `PresentationSnapshot` moved here from
   `commands/display.rs`.
+- **Phase 2 — revision-tagged events.** Every presentation event above is
+  wrapped with the mutation's single `revision` (`{ <field>, revision }`), and
+  every event in one logical mutation shares that revision (equal applies).
+  The frontend guard is the pure `PresentationSync` class
+  (`src/system/presentationSync.ts`): buffering pre-snapshot events, replaying
+  only at-or-newer than the snapshot revision on `open()`, applying snapshots
+  only when not older than local state, and dropping stale broadcasts. All
+  production windows (operator main via `useAppInitialization.ts`, `OutputWindow`,
+  `StageWindow`) route the five presentation events through it.
+- `Engine::rebroadcast` (public; free fn `rebroadcast_presentation(app, state)`)
+  emits all five events wrapped with the CURRENT revision **without a bump** so
+  a freshly-revealed window (via `set_output_visible`) hydrates and a stale
+  reveal can never overwrite newer state.
 
 ## 3. Persisted files under the app data dir
 

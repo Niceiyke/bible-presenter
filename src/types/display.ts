@@ -20,7 +20,7 @@ export type DisplayItem =
  * Schema version of the presentation snapshot document. Consumers must reject a
  * snapshot whose `schema_version` they do not understand instead of guessing at
  * fields (Phase 0 contract freeze). Matches
- * `PRESENTATION_SCHEMA_VERSION` in `src-tauri/src/commands/display.rs`.
+ * `PRESENTATION_SCHEMA_VERSION` in `src-tauri/src/engine/presentation.rs`.
  */
 export const PRESENTATION_SCHEMA_VERSION = 1;
 

@@ -79,21 +79,11 @@ fn enforce_free_window_cap(app: &AppHandle, state: &AppState, this_label: &str) 
 }
 
 /// Re-broadcast authoritative presentation state so a freshly-revealed window
-/// can hydrate even if it missed events while hidden.
+/// can hydrate even if it missed events while hidden. Every presentation event
+/// is wrapped with the current revision by the engine (no bump), so a stale
+/// reveal can never overwrite newer state.
 fn rebroadcast_presentation(app: &AppHandle, state: &AppState) {
-    let settings = state.presentation.settings.lock().clone();
-    emit_checked(app, "settings-changed", &settings);
-    let live = state.presentation.live_item.lock().clone();
-    emit_checked(app, "live-item-update", &crate::events::LiveItemUpdate {
-        detected_item: live,
-        revision: Some(state.presentation.current_revision()),
-    });
-    let lt = state.presentation.lower_third.lock().clone();
-    emit_checked(app, "lower-third-update", &lt);
-    let props = state.presentation.props_layer.lock().clone();
-    emit_checked(app, "props-update", &props);
-    let staged = state.presentation.staged_item.lock().clone();
-    emit_checked(app, "item-staged", &staged);
+    crate::engine::rebroadcast_presentation(app, state);
 }
 
 /// THE single authoritative visibility path for window outputs (and the toggle

@@ -130,14 +130,25 @@ Typed event names and payloads are defined in `src/hooks/useTauriEvent.ts`.
 
 Important events include:
 
-- `live-item-update`: live item or null.
-- `item-staged`: staged item or null.
-- `settings-changed`: presentation settings.
-- `lower-third-update`: lower-third payload or null.
-- `props-update`: persistent props.
+- `live-item-update`: `{ detected_item, revision }` — live item or null.
+- `item-staged`: `{ item, revision }` — staged item or null.
+- `settings-changed`: `{ settings, revision }` — presentation settings.
+- `lower-third-update`: `{ lower_third, revision }` — lower-third payload
+  (`{ data, template }`) or null.
+- `props-update`: `{ props, revision }` — persistent props.
 - `media-control` and `media-state`: media transport commands and feedback.
 - `songs-sync`, `studio-sync`, and `studio-slides-sync`: content synchronization.
 - `system-log` and `operator-warning`: backend/operator diagnostics.
+
+The five presentation events are revision-tagged (one logical backend mutation
+bumps a single revision and wraps every affected event with it — equal applies).
+All production windows route them through the pure `PresentationSync` guard
+(`src/system/presentationSync.ts`): buffering until the `presentation_snapshot`
+is applied, replaying only at-or-newer events, and dropping stale broadcasts so
+an older event can never overwrite newer live/staged/settings/lower-third/props
+state. `Engine::rebroadcast` (`engine/presentation.rs`, used by
+`set_output_visible`) re-emits the current state at the current revision without
+bumping so a freshly-revealed window hydrates safely.
 
 Any change to live, staged, clear, settings, lower-third, props, or service behavior must verify all windows and all listeners, including null/clear payloads.
 

@@ -7,7 +7,7 @@ export { DEFAULT_SLIDE_BACKGROUND } from "./slides";
 export type { TimerData } from "./timer";
 export type { PropItem } from "./props";
 export type { LyricSection, SongStyle, Song, SongSlideData, SongArrangementStep, SongLine } from "./song";
-export type { LowerThirdData, LtPreset, LowerThirdTemplate } from "./lowerThird";
+export type { LowerThirdData, LtPreset, LowerThirdTemplate, LowerThirdPayload } from "./lowerThird";
 export type {
   ThemeColors, VideoBackground, CameraBackground, AudioBackground, ImageBackground, BackgroundSetting,
   PresentationSettings, MonitorInfo

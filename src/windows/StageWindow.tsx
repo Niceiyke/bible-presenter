@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from "react";
 import { useSlideFit } from "../hooks/useSlideFit";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { DisplayItem, PresentationSettings, TimerData, LowerThirdData, LowerThirdTemplate, OutputConfig, PresentationSnapshot } from "../types";
+import type { DisplayItem, PresentationSettings, TimerData, LowerThirdData, LowerThirdTemplate, LowerThirdPayload, OutputConfig, PresentationSnapshot } from "../types";
 import { THEMES } from "../types";
 import { displayItemLabel } from "../utils";
 import { stageDetail as stageDetailFor } from "../items/registry";
@@ -11,6 +11,7 @@ import { useAppStore } from "../store";
 import { useT } from "../i18n";
 import { signalOperatorWarning } from "../hooks/useAppInitialization";
 import { useFonts } from "../hooks/useFonts";
+import { PresentationSync } from "../system/presentationSync";
 
 function formatClock(d: Date) {
   const h = d.getHours().toString().padStart(2, "0");
@@ -67,30 +68,22 @@ export function StageWindow() {
     // Hydration gate (audit #7): presentation events arriving while this
     // window boots are buffered and replayed after `presentation_snapshot`,
     // so a racing backend change is never lost or overwritten by stale data.
-    let presentationOpen = false;
-    let presentationBuffer: Array<() => void> = [];
-    const applyOrBuffer = (fn: () => void) => {
-      if (presentationOpen) fn();
-      else presentationBuffer.push(fn);
-    };
-    const drainPresentation = () => {
-      for (const fn of presentationBuffer) fn();
-      presentationBuffer = [];
-      presentationOpen = true;
-    };
+    // Events are revision-tagged (Phase 2) so a stale broadcast is dropped
+    // instead of overwriting newer state.
+    const presentationSync = new PresentationSync();
 
-    const unlisten1 = listen<{ detected_item: DisplayItem | null }>(
+    const unlisten1 = listen<{ detected_item: DisplayItem | null; revision: number }>(
       "live-item-update",
-      (ev) => applyOrBuffer(() => setLiveItem(ev.payload.detected_item ?? null))
+      (ev) => presentationSync.apply(ev.payload.revision, () => setLiveItem(ev.payload.detected_item ?? null))
     );
-    const unlisten2 = listen<DisplayItem | null>("item-staged", (ev) => {
-      applyOrBuffer(() => setStagedItem(ev.payload ?? null));
+    const unlisten2 = listen<{ item: DisplayItem | null; revision: number }>("item-staged", (ev) => {
+      presentationSync.apply(ev.payload.revision, () => setStagedItem(ev.payload.item ?? null));
     });
-    const unlisten3 = listen<PresentationSettings>("settings-changed", (ev) => {
-      applyOrBuffer(() => setSettings(ev.payload));
+    const unlisten3 = listen<{ settings: PresentationSettings; revision: number }>("settings-changed", (ev) => {
+      presentationSync.apply(ev.payload.revision, () => setSettings(ev.payload.settings));
     });
-    const unlisten4 = listen<any>("lower-third-update", (ev) => {
-      applyOrBuffer(() => setLtPayload(ev.payload ?? null));
+    const unlisten4 = listen<{ lower_third: LowerThirdPayload | null; revision: number }>("lower-third-update", (ev) => {
+      presentationSync.apply(ev.payload.revision, () => setLtPayload(ev.payload.lower_third ?? null));
     });
     const unlisten5 = listen<OutputConfig[]>("output-config-changed", (ev) => {
       setOutputConfig(ev.payload.find((c) => c.window_label === "stage") ?? null);
@@ -106,16 +99,18 @@ export function StageWindow() {
       invoke<PresentationSnapshot | null>("presentation_snapshot")
         .then((snap) => {
           if (snap) {
-            setLiveItem(snap.live ?? null);
-            setStagedItem(snap.staged ?? null);
-            setSettings(snap.settings);
-            setLtPayload((snap.lower_third as any) ?? null);
+            presentationSync.applySnapshot(snap.revision, () => {
+              setLiveItem(snap.live ?? null);
+              setStagedItem(snap.staged ?? null);
+              setSettings(snap.settings);
+              setLtPayload((snap.lower_third as LowerThirdPayload | null) ?? null);
+            });
           }
-          drainPresentation();
+          presentationSync.open();
         })
         .catch((e: any) => {
           signalOperatorWarning(`Stage hydrate (snapshot): ${e?.message ?? e}`);
-          drainPresentation();
+          presentationSync.open();
         });
 
       invoke<string>("get_app_data_dir").then(setAppDataDir).catch(() => {});

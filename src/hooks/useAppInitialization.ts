@@ -6,11 +6,12 @@ import { useAppStore } from "../store";
 import { stableId } from "../utils";
 import { normalizeSong } from "../utils/song";
 import {
-  MediaItem, Song, LowerThirdTemplate,
+  MediaItem, Song, LowerThirdTemplate, LowerThirdPayload,
   PresentationSettings, PropItem, ServiceMeta,
   DisplayItem, OutputConfig, OutputState,
   PresentationSnapshot,
 } from "../types";
+import { PresentationSync } from "../system/presentationSync";
 import type { LicenseInfo } from "../types/license";
 
 /** Helper for windows that can't reach the operator store directly
@@ -48,19 +49,11 @@ export function useAppInitialization() {
     // authoritative `presentation_snapshot`. This closes the hydration races
     // (audit #7): a backend live/staged/settings/lower-third/props change that
     // lands while this window boots can never be lost, and the snapshot can
-    // never overwrite a newer update. Events carry full sub-state, so replay
-    // after snapshot converges.
-    let presentationOpen = false;
-    let presentationBuffer: Array<() => void> = [];
-    const applyOrBuffer = (fn: () => void) => {
-      if (presentationOpen) fn();
-      else presentationBuffer.push(fn);
-    };
-    const drainPresentation = () => {
-      for (const fn of presentationBuffer) fn();
-      presentationBuffer = [];
-      presentationOpen = true;
-    };
+    // never overwrite a newer update. Every event carries its mutation revision
+    // (Phase 2), so stale broadcasts that arrive after a newer mutation are
+    // dropped instead of applied. Events carry full sub-state, so replay after
+    // snapshot converges.
+    const presentationSync = new PresentationSync();
 
     const loadAll = async () => {
       // Wait for every presentation-critical listener to be REGISTERED before
@@ -140,17 +133,20 @@ export function useAppInitialization() {
       setPropItems(propsRes);
       setServices(servicesRes.length ? servicesRes : [{ id: "default", name: "Sunday Service", item_count: 0, updated_at: Date.now() }]);
 
-      // Apply the authoritative presentation snapshot, then replay any events
-      // buffered while we hydrated so the newest backend state wins.
+      // Apply the authoritative presentation snapshot (guarded so an older
+      // snapshot never overwrites a newer event already applied), then replay
+      // any events buffered while we hydrated so the newest backend state wins.
       if (snapRes) {
-        setLiveItem(snapRes.live ?? null);
-        setStagedItem(snapRes.staged ?? null);
-        if (snapRes.settings) setSettings(snapRes.settings);
-        setPropItems(snapRes.props ?? []);
-        setCurrentLowerThird((snapRes.lower_third as any) ?? null);
-        // The lower-third visibility flag is authoritative on the backend and
-        // derived from whether a payload is present (audit #8).
-        setLtVisible(!!snapRes.lower_third);
+        presentationSync.applySnapshot(snapRes.revision, () => {
+          setLiveItem(snapRes.live ?? null);
+          setStagedItem(snapRes.staged ?? null);
+          if (snapRes.settings) setSettings(snapRes.settings);
+          setPropItems(snapRes.props ?? []);
+          setCurrentLowerThird((snapRes.lower_third as LowerThirdPayload | null) ?? null);
+          // The lower-third visibility flag is authoritative on the backend and
+          // derived from whether a payload is present (audit #8).
+          setLtVisible(!!snapRes.lower_third);
+        });
       } else {
         // No snapshot (older backend) — fall back to the legacy per-field
         // hydration so a stale live item never lingers on a null payload.
@@ -158,7 +154,7 @@ export function useAppInitialization() {
           .then((v) => setLiveItem(v ?? null))
           .catch(() => {});
       }
-      drainPresentation();
+      presentationSync.open();
 
       // P1.5 — Restore persisted recents and schedule undo/redo stacks.
       invoke<any>("load_workspace", { key: "recents" }).then((r) => {
@@ -195,22 +191,26 @@ export function useAppInitialization() {
       setIsInitialized(true);
     };
 
-    const unlistenStaged = listen("item-staged", (ev: any) => applyOrBuffer(() => setStagedItem(ev.payload as DisplayItem)));
-    const unlistenLive = listen<{ detected_item: DisplayItem | null }>("live-item-update", (ev) => {
+    const unlistenStaged = listen<{ item: DisplayItem | null; revision: number }>("item-staged", (ev) => {
+      presentationSync.apply(ev.payload.revision, () => setStagedItem(ev.payload.item ?? null));
+    });
+    const unlistenLive = listen<{ detected_item: DisplayItem | null; revision: number }>("live-item-update", (ev) => {
       // Propagate null clears too — ignoring null leaves stale live state
       // after a clear operation.
-      applyOrBuffer(() => setLiveItem(ev.payload.detected_item ?? null));
+      presentationSync.apply(ev.payload.revision, () => setLiveItem(ev.payload.detected_item ?? null));
     });
-    const unlistenSettings = listen("settings-changed", (ev: any) => applyOrBuffer(() => setSettings(ev.payload as PresentationSettings)));
-    const unlistenProps = listen<PropItem[]>("props-update", (ev) => {
+    const unlistenSettings = listen<{ settings: PresentationSettings; revision: number }>("settings-changed", (ev) => {
+      presentationSync.apply(ev.payload.revision, () => setSettings(ev.payload.settings));
+    });
+    const unlistenProps = listen<{ props: PropItem[]; revision: number }>("props-update", (ev) => {
       // The main window now mirrors the authoritative props layer like the
       // output/stage windows do, so a prop change made on the desktop is
       // reflected everywhere.
-      applyOrBuffer(() => setPropItems(Array.isArray(ev.payload) ? ev.payload : []));
+      presentationSync.apply(ev.payload.revision, () => setPropItems(ev.payload.props ?? []));
     });
-    const unlistenLtUpdate = listen("lower-third-update", (ev: any) => {
-      const payload = ev.payload;
-      applyOrBuffer(() => {
+    const unlistenLtUpdate = listen<{ lower_third: LowerThirdPayload | null; revision: number }>("lower-third-update", (ev) => {
+      const payload = ev.payload.lower_third;
+      presentationSync.apply(ev.payload.revision, () => {
         if (payload) {
           setCurrentLowerThird(payload);
           setLtVisible(true);
