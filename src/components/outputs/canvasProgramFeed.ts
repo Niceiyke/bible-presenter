@@ -10,6 +10,8 @@ import type {
 import { resolvePath } from "../../utils";
 import type { ProgramFrame, LogoState } from "../../compositor/ProgramFrame";
 import { getEffectiveBg } from "../../compositor/ProgramFrameResolver";
+import { resolveLowerThird } from "../../compositor/LowerThirdResolver";
+import type { LtStyleSlot } from "../../compositor/LowerThirdResolver";
 
 /**
  * Canvas 2D program-feed renderer (Phase 2/3 of the output manager).
@@ -987,28 +989,17 @@ export function drawLogo(ctx: CanvasRenderingContext2D, state: LogoState, g: Can
 }
 
 export function drawLowerThird(ctx: CanvasRenderingContext2D, lt: LowerThirdPayload, g: CanvasGeometry, scale: number): void {
-  const t = lt.template;
-  const data = lt.data;
-  let headline = "";
-  let subline = "";
-  if (data.kind === "Nameplate") {
-    headline = data.data.name;
-    subline = data.data.title || "";
-  } else if (data.kind === "Lyrics") {
-    headline = data.data.line1;
-    subline = data.data.line2 || "";
-  } else if (!(data.kind === "FreeText" && t.scrollEnabled)) {
-    headline = data.data.text;
-  }
+  const layout = resolveLowerThird(lt);
+  const { content, slots, background, accent, border, boxShadow, textShadow, outline, geometry } = layout;
 
-  if (!headline) return;
+  if (!slots.showHeadline && !slots.showSubline && !slots.showKicker) return;
 
-  const isFullWidth = (t.widthPct ?? 70) >= 100;
-  const width = isFullWidth ? g.width : Math.max(10, Math.min(100, t.widthPct ?? 70)) * g.width / 100;
-  const hAlign = t.hAlign ?? "left";
-  const vAlign = t.vAlign ?? "bottom";
-  const offX = (t.offsetX ?? 40) * scale;
-  const offY = (t.offsetY ?? 40) * scale;
+  const isFullWidth = geometry.isFullWidth;
+  const width = isFullWidth ? g.width : Math.max(10, Math.min(100, geometry.widthPct)) * g.width / 100;
+  const hAlign = geometry.hAlign;
+  const vAlign = geometry.vAlign;
+  const offX = geometry.offsetX * scale;
+  const offY = geometry.offsetY * scale;
 
   let x: number;
   if (isFullWidth) x = 0;
@@ -1021,61 +1012,108 @@ export function drawLowerThird(ctx: CanvasRenderingContext2D, lt: LowerThirdPayl
   else if (vAlign === "bottom") y = g.height - offY;
   else y = g.height / 2 + offY;
 
-  const padX = (t.paddingX ?? 24) * scale;
-  const padY = (t.paddingY ?? 12) * scale;
-  const radius = (t.borderRadius ?? 8) * scale;
-  const primarySize = (t.primarySize ?? 32) * scale;
-  const secondarySize = (t.secondarySize ?? 20) * scale;
+  const padX = geometry.paddingX * scale;
+  const padY = geometry.paddingY * scale;
+  const radius = geometry.borderRadius * scale;
+  const headlineSize = slots.showHeadline ? slots.headline.size * scale : 0;
+  const sublineSize = slots.showSubline ? slots.subline.size * scale : 0;
+  const kickerSize = slots.showKicker ? slots.kicker.size * scale : 0;
 
-  // Measure box height from content
-  const boxH = padY * 2 + primarySize * 1.3 + (subline ? secondarySize * 1.2 : 0);
+  // Measure box height from the resolved slot sizes.
+  const boxH = padY * 2 + (kickerSize ? kickerSize * 1.2 : 0) + (headlineSize ? headlineSize * 1.3 : 0) + (sublineSize ? sublineSize * 1.2 : 0);
   const boxY = vAlign === "bottom" ? y - boxH : y;
 
-  // Background
-  if (t.bgType === "solid" || !t.bgType) {
-    ctx.fillStyle = hexToRgba(t.bgColor ?? "#000000", (t.bgOpacity ?? 70) / 100);
-  } else if (t.bgType === "gradient") {
-    const grad = ctx.createLinearGradient(x, boxY, x + width, boxY + boxH);
-    grad.addColorStop(0, hexToRgba(t.bgColor ?? "#000000", (t.bgOpacity ?? 70) / 100));
-    grad.addColorStop(1, hexToRgba(t.bgGradientEnd ?? "#111111", (t.bgOpacity ?? 70) / 100));
-    ctx.fillStyle = grad;
-  } else {
-    ctx.fillStyle = "transparent";
+  const bgAlpha = background.opacity / 100;
+  const bgFill = () => {
+    if (background.type === "solid") {
+      ctx.fillStyle = hexToRgba(background.color, bgAlpha);
+    } else if (background.type === "gradient") {
+      const grad = ctx.createLinearGradient(x, boxY, x + width, boxY + boxH);
+      grad.addColorStop(0, hexToRgba(background.color, bgAlpha));
+      grad.addColorStop(1, hexToRgba(background.gradientEnd, bgAlpha));
+      ctx.fillStyle = grad;
+    } else {
+      ctx.fillStyle = "transparent";
+    }
+  };
+
+  // Soft drop shadow under the box (boxShadow token).
+  if (boxShadow.enabled) {
+    ctx.save();
+    ctx.shadowColor = boxShadow.color;
+    ctx.shadowBlur = boxShadow.blur * scale;
+    ctx.shadowOffsetY = 4 * scale;
+    bgFill();
+    ctx.beginPath();
+    if (typeof ctx.roundRect === "function") ctx.roundRect(x, boxY, width, boxH, radius);
+    else ctx.rect(x, boxY, width, boxH);
+    ctx.fill();
+    ctx.restore();
   }
+
+  bgFill();
   ctx.beginPath();
   if (typeof ctx.roundRect === "function") ctx.roundRect(x, boxY, width, boxH, radius);
   else ctx.rect(x, boxY, width, boxH);
   ctx.fill();
 
-  // Accent bar
-  if (t.accentEnabled && t.accentSide) {
-    const side = t.accentSide;
-    const aw = (t.accentWidth ?? 6) * scale;
-    ctx.fillStyle = t.accentColor ?? "#f59e0b";
+  // Border.
+  if (border.enabled) {
+    ctx.strokeStyle = border.color;
+    ctx.lineWidth = border.width * scale;
+    ctx.stroke();
+  }
+
+  // Accent bar.
+  if (accent.enabled) {
+    const side = accent.side;
+    const aw = accent.width * scale;
+    ctx.fillStyle = accent.color;
     if (side === "left") ctx.fillRect(x, boxY, aw, boxH);
     else if (side === "right") ctx.fillRect(x + width - aw, boxY, aw, boxH);
     else if (side === "top") ctx.fillRect(x, boxY, width, aw);
     else ctx.fillRect(x, boxY + boxH - aw, width, aw);
   }
 
-  // Text
-  const textX = x + padX + (t.accentEnabled && t.accentSide === "left" ? (t.accentWidth ?? 6) * scale : 0);
+  // Text.
+  const textX = x + padX + (accent.enabled && accent.side === "left" ? accent.width * scale : 0);
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
-  const textY = boxY + padY + primarySize;
-  ctx.font = `${t.primaryBold ? "700" : "400"} ${t.primaryItalic ? "italic" : "normal"} ${primarySize}px ${t.primaryFont ?? "Arial, sans-serif"}`;
-  ctx.fillStyle = t.primaryColor ?? "#ffffff";
-  if (t.textShadow) {
-    ctx.shadowColor = t.textShadowColor ?? "rgba(0,0,0,0.5)";
-    ctx.shadowBlur = (t.textShadowBlur ?? 4) * scale;
-    ctx.shadowOffsetY = 2 * scale;
-  }
-  ctx.fillText(headline, textX, textY);
-  if (subline) {
+  let textY = boxY + padY + headlineSize * 1.3;
+
+  const setFont = (slot: LtStyleSlot, size: number) => {
+    ctx.font = `${slot.bold ? "700" : "400"} ${slot.italic ? "italic" : "normal"} ${size}px ${slot.font}`;
+    ctx.fillStyle = slot.color;
+  };
+  const paint = (text: string, xp: number, yp: number) => {
+    if (textShadow.enabled) {
+      ctx.shadowColor = textShadow.color;
+      ctx.shadowBlur = textShadow.blur * scale;
+      ctx.shadowOffsetY = 2 * scale;
+    }
+    if (outline.enabled) {
+      ctx.strokeStyle = outline.color;
+      ctx.lineWidth = outline.width * scale;
+      ctx.strokeText(text, xp, yp);
+    }
+    ctx.fillText(text, xp, yp);
     ctx.shadowBlur = 0;
-    ctx.font = `${t.secondaryBold ? "700" : "400"} ${t.secondaryItalic ? "italic" : "normal"} ${secondarySize}px ${t.secondaryFont ?? "Arial, sans-serif"}`;
-    ctx.fillStyle = t.secondaryColor ?? "#dddddd";
-    ctx.fillText(subline, textX, textY + primarySize * 0.6 + secondarySize);
+  };
+
+  if (slots.showKicker) {
+    setFont(slots.kicker, kickerSize);
+    paint(slots.kicker.uppercase ? content.kicker.toUpperCase() : content.kicker, textX, textY);
+    textY += kickerSize * 1.2;
+  }
+  if (slots.showHeadline) {
+    setFont(slots.headline, headlineSize);
+    paint(slots.headline.uppercase ? content.headline.toUpperCase() : content.headline, textX, textY);
+    textY += headlineSize * 0.6;
+  }
+  if (slots.showSubline) {
+    textY += sublineSize;
+    setFont(slots.subline, sublineSize);
+    paint(slots.subline.uppercase ? content.subline.toUpperCase() : content.subline, textX, textY);
   }
   ctx.shadowBlur = 0;
 }

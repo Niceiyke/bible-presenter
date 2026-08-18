@@ -687,9 +687,13 @@ Tasks:
   masked overlays, and resolved source — so the DOM renderers draw from the
   frame instead of re-deriving presentation state. The DOM renderers themselves
   remain authoritative for rich text and animations.)
-- [ ] Add a shared lower-third renderer model rather than separate simplified data
-  paths. (`drawLowerThird` covers the full template model on canvas; a shared
-  DOM+canvas renderer is the follow-up.)
+- [x] Add a shared lower-third renderer model rather than separate simplified data
+  paths. (`resolveLowerThird` in `src/compositor/LowerThirdResolver.ts` is the
+  single normalized descriptor — content→style slots, background, accent,
+  border/shadow/outline tokens, geometry, animation, scroll — consumed by BOTH
+  the canvas `drawLowerThird` and the DOM `LowerThirdOverlay`, so they can no
+  longer drift apart. The canvas path gained the kicker slot, slot mapping,
+  borders, box shadows, and text outlines it was missing.)
 - [x] Add fixture tests for each DisplayItem type and each overlay combination.
   (`src/compositor/__tests__/ProgramFrameResolver.test.ts`; the Phase 0
   fixture suite in `src/test/fixtures/` now draws resolved `ProgramFrame`s.)

@@ -15,7 +15,6 @@ import {
   PropItem,
   SongSlideData,
   PresentationSettings,
-  DEFAULT_LT_TEMPLATE,
   SlideElement,
   SlideBackground,
   SlideTheme,
@@ -26,6 +25,8 @@ import { ptToScaleHtml } from "../editors/slide/textStyleSystem";
 import { resolveElementTextStyle } from "../editors/slide/textStyleSystem";
 import { useAutoSizeText, resolveAutoSizeInputs } from "./useAutoSizeText";
 import { useSlideFit } from "../../hooks/useSlideFit";
+import { resolveLowerThird } from "../../compositor/LowerThirdResolver";
+import type { LtStyleSlot } from "../../compositor/LowerThirdResolver";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -578,13 +579,6 @@ function ReferenceTag({
   
 // ─── Lower Third Overlay ──────────────────────────────────────────────────────
 
-const substituteTokens = (text: string) => {
-  const now = new Date();
-  return text
-    .replace(/{time}/g, now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
-    .replace(/{date}/g, now.toLocaleDateString());
-};
-
 export function LowerThirdOverlay({
   data,
   template: rawTemplate,
@@ -600,40 +594,43 @@ export function LowerThirdOverlay({
    *  proportionally correct when the output window isn't at the reference. */
   scale?: number;
 }) {
-  const t = { ...DEFAULT_LT_TEMPLATE, ...(rawTemplate || {}) };
   const s = scale;
+  // Resolve the shared lower-third model: content → style slots, background,
+  // accent/border/shadow tokens, and geometry come from `resolveLowerThird` —
+  // the SAME pure descriptor the canvas `drawLowerThird` consumes, so the two
+  // renderers can never drift apart. This component keeps CSS positioning,
+  // animation, and ticker DOM behavior.
+  const layout = useMemo(() => resolveLowerThird({ data, template: rawTemplate }), [data, rawTemplate]);
+  const { content, slots, background, accent, border, boxShadow, textShadow, outline, geometry, animation } = layout;
   // Guards against onCycleComplete firing multiple times per scroll cycle
   const cycleCompleteFiredRef = useRef(false);
   const containerStyle = {
-    paddingLeft: t.paddingX * s, paddingRight: t.paddingX * s,
-    paddingTop: t.paddingY * s, paddingBottom: t.paddingY * s,
-    borderRadius: t.borderRadius * s, overflow: "hidden",
-    backdropFilter: t.bgBlur ? `blur(${t.bgBlurAmount ?? 8}px)` : undefined,
-    ...(t.bgType === "solid" ? { background: hexToRgba(t.bgColor, t.bgOpacity) } : 
-       t.bgType === "gradient" ? { background: `linear-gradient(135deg, ${hexToRgba(t.bgColor, t.bgOpacity)} 0%, ${hexToRgba(t.bgGradientEnd, t.bgOpacity)} 100%)` } :
-       t.bgType === "image" && t.bgImagePath ? { backgroundImage: `url("${convertFileSrc(t.bgImagePath)}")`, backgroundSize: "cover", backgroundPosition: "center", backgroundRepeat: "no-repeat" } :
+    paddingLeft: geometry.paddingX * s, paddingRight: geometry.paddingX * s,
+    paddingTop: geometry.paddingY * s, paddingBottom: geometry.paddingY * s,
+    borderRadius: geometry.borderRadius * s, overflow: "hidden",
+    backdropFilter: background.blurEnabled ? `blur(${background.blur}px)` : undefined,
+    ...(background.type === "solid" ? { background: hexToRgba(background.color, background.opacity) } : 
+       background.type === "gradient" ? { background: `linear-gradient(135deg, ${hexToRgba(background.color, background.opacity)} 0%, ${hexToRgba(background.gradientEnd, background.opacity)} 100%)` } :
+       background.type === "image" && background.imagePath ? { backgroundImage: `url("${convertFileSrc(background.imagePath)}")`, backgroundSize: "cover", backgroundPosition: "center", backgroundRepeat: "no-repeat" } :
        { background: "transparent" }),
-    ...(t.accentEnabled ? {
-      [`border${t.accentSide.charAt(0).toUpperCase() + t.accentSide.slice(1)}`]: `${t.accentWidth * s}px solid ${t.accentColor}`
+    ...(accent.enabled ? {
+      [`border${accent.side.charAt(0).toUpperCase() + accent.side.slice(1)}`]: `${accent.width * s}px solid ${accent.color}`
     } : {}),
-    ...(t.borderEnabled ? { border: `${t.borderWidth * s}px solid ${t.borderColor}` } : {}),
-    ...(t.boxShadow ? { boxShadow: `0 ${10 * s}px ${30 * s}px ${t.boxShadowColor || "rgba(0,0,0,0.5)"}` } : {})
+    ...(border.enabled ? { border: `${border.width * s}px solid ${border.color}` } : {}),
+    ...(boxShadow.enabled ? { boxShadow: `0 ${10 * s}px ${30 * s}px ${boxShadow.color}` } : {})
   } as React.CSSProperties;
 
-  const buildLtTextStyle = (
-    font: string, size: number, color: string,
-    bold: boolean, italic: boolean, uppercase: boolean
-  ): React.CSSProperties => ({
-    fontFamily: font, fontSize: size * s, color,
-    fontWeight: bold ? "bold" : "normal",
-    fontStyle: italic ? "italic" : "normal",
-    textTransform: uppercase ? "uppercase" : undefined,
-    textShadow: t.textShadow ? `0 ${2 * s}px ${t.textShadowBlur * s}px ${t.textShadowColor}` : "none",
-    WebkitTextStroke: t.textOutline ? `${t.textOutlineWidth * s}px ${t.textOutlineColor}` : undefined,
+  const buildLtTextStyle = (slot: LtStyleSlot): React.CSSProperties => ({
+    fontFamily: slot.font, fontSize: slot.size * s, color: slot.color,
+    fontWeight: slot.bold ? "bold" : "normal",
+    fontStyle: slot.italic ? "italic" : "normal",
+    textTransform: slot.uppercase ? "uppercase" : undefined,
+    textShadow: textShadow.enabled ? `0 ${2 * s}px ${textShadow.blur * s}px ${textShadow.color}` : "none",
+    WebkitTextStroke: outline.enabled ? `${outline.width * s}px ${outline.color}` : undefined,
     lineHeight: 1.25, margin: 0,
-    ...(t.maxLines > 0 ? {
+    ...(geometry.maxLines > 0 ? {
       display: "-webkit-box",
-      WebkitLineClamp: t.maxLines,
+      WebkitLineClamp: geometry.maxLines,
       WebkitBoxOrient: "vertical",
       overflow: "hidden",
       textOverflow: "ellipsis"
@@ -641,8 +638,8 @@ export function LowerThirdOverlay({
   });
 
     const getVariants = () => {
-      const entry = t.entryAnimation || t.animation;
-      const exit = t.exitAnimation || t.animation;
+      const entry = animation.entry;
+      const exit = animation.exit;
   
       const variants: any = {
         initial: { opacity: 1, x: 0, y: 0, filter: "blur(0px)" },
@@ -675,98 +672,73 @@ export function LowerThirdOverlay({
   // Keep layout positioning separate from Framer Motion's transform-based
   // animation. The transform template appends the alignment transform after
   // Motion has generated its entry/exit transform.
-  const isFullWidth = t.widthPct >= 100;
+  const isFullWidth = geometry.isFullWidth;
   const positionStyle: React.CSSProperties = {
     position: "absolute",
     zIndex: 40,
-    width: isFullWidth ? "100%" : `${Math.max(10, Math.min(100, t.widthPct))}%`,
+    width: isFullWidth ? "100%" : `${Math.max(10, Math.min(100, geometry.widthPct))}%`,
     boxSizing: "border-box",
     pointerEvents: "none",
   };
 
 if (isFullWidth) {
     positionStyle.left = 0;
-  } else if (t.hAlign === "left") {
-    positionStyle.left = t.offsetX * s;
-  } else if (t.hAlign === "right") {
-    positionStyle.right = t.offsetX * s;
+  } else if (geometry.hAlign === "left") {
+    positionStyle.left = geometry.offsetX * s;
+  } else if (geometry.hAlign === "right") {
+    positionStyle.right = geometry.offsetX * s;
   } else {
-    positionStyle.left = `calc(50% + ${t.offsetX * s}px)`;
+    positionStyle.left = `calc(50% + ${geometry.offsetX * s}px)`;
   }
 
-  if (t.vAlign === "top") {
-    positionStyle.top = t.offsetY * s;
-  } else if (t.vAlign === "bottom") {
-    positionStyle.bottom = t.offsetY * s;
+  if (geometry.vAlign === "top") {
+    positionStyle.top = geometry.offsetY * s;
+  } else if (geometry.vAlign === "bottom") {
+    positionStyle.bottom = geometry.offsetY * s;
   } else {
-    positionStyle.top = `calc(50% + ${t.offsetY * s}px)`;
+    positionStyle.top = `calc(50% + ${geometry.offsetY * s}px)`;
   }
 
   const alignmentTransform = [
-    !isFullWidth && t.hAlign === "center" ? "translateX(-50%)" : "",
-    t.vAlign === "middle" ? "translateY(-50%)" : "",
+    !isFullWidth && geometry.hAlign === "center" ? "translateX(-50%)" : "",
+    geometry.vAlign === "middle" ? "translateY(-50%)" : "",
   ].filter(Boolean).join(" ");
 
-const alignFlex = t.hAlign === "center"
+const alignFlex = geometry.hAlign === "center"
     ? "items-center text-center"
-    : t.hAlign === "right"
+    : geometry.hAlign === "right"
     ? "items-end"
     : "items-start";
 
-  // ── Content → style-slot resolution ──────────────────────────────────────
-  const tickerMode = data.kind === "FreeText" && t.scrollEnabled;
-  let headline = "";
-  let subline = "";
-  let kicker = "";
-  if (data.kind === "Nameplate") {
-    headline = data.data.name;
-    subline = data.data.title || "";
-  } else if (data.kind === "Lyrics") {
-    headline = data.data.line1;
-    subline = data.data.line2 || "";
-    if (data.data.section_label && t.labelVisible) kicker = data.data.section_label;
-  } else if (!tickerMode) {
-    headline = data.data.text;
-  }
-
-  const showHeadline = headline.length > 0 && t.nameStyle !== "none";
-  const showSubline = subline.length > 0 && t.titleStyle !== "none";
-  const showKicker = kicker.length > 0 && t.labelStyle !== "none";
-
-  const slotStyle = (slot: "primary" | "secondary" | "label"): React.CSSProperties => {
-    if (slot === "label") {
-      return buildLtTextStyle(t.secondaryFont, t.labelSize, t.labelColor, true, false, t.labelUppercase);
-    }
-    if (slot === "secondary") {
-      return buildLtTextStyle(t.secondaryFont, t.secondarySize, t.secondaryColor, t.secondaryBold, t.secondaryItalic, t.secondaryUppercase);
-    }
-    return buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase);
-  };
-
-  const headlineStyle = slotStyle(t.nameStyle === "none" ? "primary" : t.nameStyle);
-  const sublineStyle = slotStyle(t.titleStyle === "none" ? "primary" : t.titleStyle);
-  const kickerStyle = slotStyle(t.labelStyle === "none" ? "label" : t.labelStyle);
-
-  const badgeText =
-    data.kind === "Lyrics" ? (showKicker ? kicker : t.bannerBadgeText || "LIVE") : t.bannerBadgeText || "LIVE";
+  const tickerMode = content.tickerMode;
+  const showHeadline = slots.showHeadline;
+  const showSubline = slots.showSubline;
+  const showKicker = slots.showKicker;
+  const headline = content.headline;
+  const subline = content.subline;
+  const kicker = content.kicker;
+  const headlineStyle = buildLtTextStyle(slots.headline);
+  const sublineStyle = buildLtTextStyle(slots.subline);
+  const kickerStyle = buildLtTextStyle(slots.kicker);
+  const badgeText = content.badgeText;
 
   const body = tickerMode ? null : (
     <div className="w-full">
-      {t.variant === "modern" && (
+      {layout.variant === "modern" && (
         <div className={`flex flex-col ${alignFlex}`}>
           {showKicker && <p style={{ ...kickerStyle, letterSpacing: "0.1em", marginBottom: 4 }}>{kicker}</p>}
           {showHeadline && <p style={headlineStyle}>{headline}</p>}
           {showSubline && (
             <>
-              <div className="w-1/4 h-px my-2 opacity-30" style={{ backgroundColor: t.accentColor || t.secondaryColor }} />
+              <div className="w-1/4 h-px my-2 opacity-30" style={{ backgroundColor: accent.color || slots.subline.color }} />
               <p style={sublineStyle}>{subline}</p>
             </>
           )}
         </div>
       )}
-      {t.variant === "banner" && (
+      {layout.variant === "banner" && (
         <div className="flex items-center gap-4">
-          <div className="shrink-0 py-1 px-4 rounded" style={{ background: t.accentColor, color: t.bgColor }}>
+          <div className="shrink-0 py-1 px-4 rounded" style={{ background: accent.color, color: background.color }}>
             <p className="font-black text-xl uppercase tracking-tighter">{badgeText}</p>
           </div>
           <div className="flex-1 min-w-0">
@@ -775,19 +747,19 @@ const alignFlex = t.hAlign === "center"
           </div>
         </div>
       )}
-      {t.variant === "plaque" && (
+      {layout.variant === "plaque" && (
         <div className="flex flex-col">
           {showKicker && <p style={{ ...kickerStyle, letterSpacing: "0.35em", marginBottom: 6, opacity: 0.9 }}>{kicker}</p>}
           {showHeadline && <p style={headlineStyle}>{headline}</p>}
           {showSubline && (
             <>
-              <div className="w-1/3 h-px my-2 opacity-25" style={{ backgroundColor: t.accentColor || t.secondaryColor }} />
+              <div className="w-1/3 h-px my-2 opacity-25" style={{ backgroundColor: accent.color || slots.subline.color }} />
               <p style={{ ...sublineStyle, opacity: 0.92 }}>{subline}</p>
             </>
           )}
         </div>
       )}
-      {t.variant === "classic" && (
+      {layout.variant === "classic" && (
         <div className="w-full">
           {showKicker && <p style={{ ...kickerStyle, letterSpacing: "0.1em", marginBottom: 4 }}>{kicker}</p>}
           {showHeadline && <p style={headlineStyle}>{headline}</p>}
@@ -806,31 +778,31 @@ const alignFlex = t.hAlign === "center"
       }}
       initial={variants.initial}
       animate={variants.animate}
-      exit={{ ...variants.exit, transition: { duration: t.exitDuration ?? 0.2 } }}
+      exit={{ ...variants.exit, transition: { duration: animation.exitDuration ?? 0.2 } }}
       transition={{ 
-        duration: t.animationDuration || 0.5, 
+        duration: animation.duration || 0.5, 
         ease: "easeOut",
         scale: { type: "spring", stiffness: 300, damping: 20 },
-        filter: { duration: (t.animationDuration || 0.5) * 1.5 }
+        filter: { duration: (animation.duration || 0.5) * 1.5 }
       }}
     >
-      <div style={{ ...containerStyle, textAlign: t.hAlign, boxSizing: "border-box", minWidth: 0 }}>
+      <div style={{ ...containerStyle, textAlign: geometry.hAlign, boxSizing: "border-box", minWidth: 0 }}>
         {tickerMode && data.kind === "FreeText" ? (
           <div style={{ overflow: "hidden", position: "relative" }}>
             <motion.div
               className="whitespace-nowrap inline-block"
               style={{ minWidth: '100%' }}
-              initial={{ x: t.scrollDirection === "rtl" ? "100%" : "-100%" }}
-              animate={{ x: t.scrollDirection === "rtl" ? "-100%" : "100%" }}
+              initial={{ x: layout.scroll.direction === "rtl" ? "100%" : "-100%" }}
+              animate={{ x: layout.scroll.direction === "rtl" ? "-100%" : "100%" }}
               transition={{
-                duration: (11 - t.scrollSpeed) * 5,
+                duration: (11 - layout.scroll.speed) * 5,
                 ease: "linear",
                 repeat: Infinity,
                 repeatType: "loop",
               }}
               onUpdate={(latest: any) => {
                 const xValue = parseFloat(latest.x);
-                const nearEnd = t.scrollDirection === "rtl" ? xValue < -98 : xValue > 98;
+                const nearEnd = layout.scroll.direction === "rtl" ? xValue < -98 : xValue > 98;
                 if (nearEnd && !cycleCompleteFiredRef.current) {
                   cycleCompleteFiredRef.current = true;
                   onCycleComplete?.();
@@ -840,22 +812,22 @@ const alignFlex = t.hAlign === "center"
               }}
             >
               {Array.from({ length: 3 }).map((_, i) => (
-                <span key={i} style={{ display: "inline-block", marginRight: i < 2 ? t.scrollGap : 0 }}>
+                <span key={i} style={{ display: "inline-block", marginRight: i < 2 ? layout.scroll.gap : 0 }}>
                   {i > 0 && (
                     <span style={{
-                      margin: `0 ${t.scrollGap}px`,
-                      ...buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase),
+                      margin: `0 ${layout.scroll.gap}px`,
+                      ...buildLtTextStyle(slots.headline),
                       opacity: 0.7,
                     }}>
-                      {t.scrollSeparator}
+                      {layout.scroll.separator}
                     </span>
                   )}
                   <span style={{
-                    ...buildLtTextStyle(t.primaryFont, t.primarySize, t.primaryColor, t.primaryBold, t.primaryItalic, t.primaryUppercase),
+                    ...buildLtTextStyle(slots.headline),
                     display: "inline-block",
                     flexShrink: 0,
                   }}>
-                    {substituteTokens(data.data.text)}
+                    {content.bodyText}
                   </span>
                 </span>
               ))}

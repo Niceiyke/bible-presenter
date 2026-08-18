@@ -213,6 +213,12 @@ tests). Contract:
   tracks load failures (`onMissingMedia`) and reports them; `ProgramFeedPreview`
   resolves its frame through `resolveProgramFrame` (live source, all overlays
   unmasked) and patches `appDataDir` onto it.
+- **`src/compositor/LowerThirdResolver.ts`** - the shared lower-third renderer
+  model. `resolveLowerThird(payload)` produces the single normalized descriptor
+  (content→style slots, background, accent/border/shadow/outline tokens,
+  geometry, animation, scroll) that BOTH the canvas `drawLowerThird` and the DOM
+  `LowerThirdOverlay` consume, so the two paths cannot drift apart;
+  `substituteTokens` (`{time}`/`{date}`) lives here too.
 - **Contract:** every output (projection, stage preview, recorder, streamer)
   resolves the same frame from its own `OutputConfig` + the same snapshot;
   surfaces must not independently reconstruct live state. The DOM outputs
