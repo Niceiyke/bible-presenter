@@ -89,6 +89,24 @@ export function tierCapabilities(tier?: LicenseTier | null): TierCapabilities {
   return TIER_CAPABILITIES[tier ?? "free"] ?? TIER_CAPABILITIES.free;
 }
 
+/**
+ * Whether a workspace tab is available on the given capabilities. Gated
+ * workspaces (Remote, Recordings, Streaming) are hidden from the nav and
+ * redirected away from for plans that cannot use them.
+ */
+export function tabAllowed(tab: string, caps: TierCapabilities): boolean {
+  switch (tab) {
+    case "remote":
+      return caps.remoteControl;
+    case "recordings":
+      return caps.recording;
+    case "streaming":
+      return caps.streaming;
+    default:
+      return true;
+  }
+}
+
 export const TIER_LABELS: Record<LicenseTier, string> = {
   free: "Free",
   pro: "Pro",

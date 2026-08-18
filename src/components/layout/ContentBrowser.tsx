@@ -1,4 +1,4 @@
-import React, { lazy, Suspense } from "react";
+import React, { lazy, Suspense, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { useAppStore } from "../../store";
@@ -7,6 +7,7 @@ import { CameraTab } from "../CameraTab";
 import { PropsTab } from "../PropsTab";
 import { ScenesTab } from "../ScenesTab";
 import { SceneBuilder } from "../SceneBuilder";
+import { tabAllowed, tierCapabilities } from "../../system/tiers";
 import type { DisplayItem, PresentationSettings, PropItem, CustomPresentation, Scene } from "../../types";
 
 // P10: workspace tabs are loaded on demand so the initial bundle stays lean and
@@ -112,7 +113,19 @@ export function ContentBrowser({
     studioSlides, setStudioSlides,
     setToast,
     setBottomDeckOpen, setBottomDeckMode,
+    setActiveTab,
+    license,
   } = useAppStore();
+
+  // Plans without recording/streaming/remote are redirected off those
+  // workspaces (they are also hidden from the nav). Guards against a stale
+  // tab or a live downgrade while the operator is on one.
+  const caps = tierCapabilities(license?.tier);
+  useEffect(() => {
+    if (!tabAllowed(activeTab, caps)) {
+      setActiveTab("bible");
+    }
+  }, [activeTab, caps.remoteControl, caps.recording, caps.streaming, setActiveTab]);
 
 return (
     <div className={activeTab === "lt-designer" || activeTab === "scenes" || activeTab === "scene-builder"
@@ -189,9 +202,9 @@ return (
         )}
         {activeTab === "schedule" && <ScheduleTab onSendItem={sendLive} onPersist={persistSchedule} stageItem={stageItem} />}
         {activeTab === "settings" && <SettingsTab onUpdateSettings={updateSettings} onUploadMedia={handleFileUpload} />}
-        {activeTab === "remote" && <RemoteTab />}
-        {activeTab === "recordings" && <RecordingsTab />}
-        {activeTab === "streaming" && <StreamerTab />}
+        {activeTab === "remote" && caps.remoteControl && <RemoteTab />}
+        {activeTab === "recordings" && caps.recording && <RecordingsTab />}
+        {activeTab === "streaming" && caps.streaming && <StreamerTab />}
         {activeTab === "diagnostics" && <SystemTab />}
         {activeTab === "props" && <PropsTab onUpdateProps={updateProps} />}
         {activeTab === "scenes" && (

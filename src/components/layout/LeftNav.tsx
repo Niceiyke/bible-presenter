@@ -5,6 +5,7 @@ import {
   CircleDot, Radio, Gauge, LayoutGrid,
 } from "lucide-react";
 import { useAppStore } from "../../store";
+import { tabAllowed, tierCapabilities } from "../../system/tiers";
 
 type TabId = Parameters<ReturnType<typeof useAppStore.getState>["setActiveTab"]>[0];
 
@@ -67,7 +68,13 @@ export function LeftNav() {
     activeTab, setActiveTab,
     bottomDeckOpen, setBottomDeckOpen,
     bottomDeckMode, setBottomDeckMode,
+    license,
   } = useAppStore();
+
+  // Plans without recording/streaming/remote cannot use those workspaces —
+  // hide their nav entries entirely (the ContentBrowser also redirects away).
+  const caps = tierCapabilities(license?.tier);
+  const allowedEntries = (entries: NavEntry[]) => entries.filter((e) => !e.tab || tabAllowed(e.tab, caps));
 
   const [userCollapsed, setUserCollapsed] = React.useState<boolean | null>(
     () => (localStorage.getItem("pref_navCollapsed") === "1" ? true : localStorage.getItem("pref_navCollapsed") === "0" ? false : null)
@@ -115,7 +122,7 @@ export function LeftNav() {
               {group.label}
             </p>
           )}
-          {group.entries.map((entry) => {
+          {allowedEntries(group.entries).map((entry) => {
             const Icon = entry.icon;
             const active = isActive(entry);
             return (
