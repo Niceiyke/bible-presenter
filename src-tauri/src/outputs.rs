@@ -132,8 +132,29 @@ fn default_output_schema_version() -> u32 {
     OUTPUT_SCHEMA_VERSION
 }
 
+/// Lifecycle phase of an output surface (ephemeral runtime state, not
+/// persisted). The OutputManager tracks every output through the same phases so
+/// the operator (and any window) can tell what a surface is doing:
+///   - `configured`: configured but not running (recorder/streamer idle).
+///   - `starting`:    opening the capture pipeline (recorder/streamer booting).
+///   - `live`:        actively rendering / capturing / uploading.
+///   - `stopping`:    tearing down after a stop request.
+///   - `failed`:      failed to start or run; `reason` carries the cause.
+///   - `stopped`:     fully stopped / hidden.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputPhase {
+    #[default]
+    Configured,
+    Starting,
+    Live,
+    Stopping,
+    Failed,
+    Stopped,
+}
+
 /// Ephemeral runtime status of an output (not persisted).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputState {
     pub id: String,
     pub visible: bool,
@@ -141,6 +162,51 @@ pub struct OutputState {
     pub fps: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Lifecycle phase. Windows derive it from visibility; recorder/streamer
+    /// surfaces report transitions through `report_output_state`.
+    #[serde(default)]
+    pub phase: OutputPhase,
+    /// Human-readable reason for the current phase (e.g. a failure cause).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Unix milliseconds when the current `live` phase began (0 = not live).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<u64>,
+}
+
+impl OutputState {
+    /// Build a fresh runtime entry for an output config.
+    pub fn seed(config: &OutputConfig) -> Self {
+        let phase = match (&config.kind, config.visible) {
+            // Recorder/streamer start hidden; they go `starting`/`live` when the
+            // frontend adapter actually boots the pipeline.
+            (OutputKind::Window, true) => OutputPhase::Live,
+            (OutputKind::Window, false) => OutputPhase::Stopped,
+            (_, true) => OutputPhase::Starting,
+            (_, false) => OutputPhase::Configured,
+        };
+        Self {
+            id: config.id.clone(),
+            visible: config.visible,
+            rendering: config.enabled,
+            fps: 0,
+            error: None,
+            phase,
+            reason: None,
+            started_at: if phase == OutputPhase::Live {
+                Some(now_millis())
+            } else {
+                None
+            },
+        }
+    }
+}
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 pub struct OutputManager {
@@ -155,16 +221,7 @@ impl OutputManager {
         let configs = Self::load(&configs_file).unwrap_or_else(|_| default_outputs());
         let mut runtime = std::collections::HashMap::new();
         for c in &configs {
-            runtime.insert(
-                c.id.clone(),
-                OutputState {
-                    id: c.id.clone(),
-                    visible: c.visible,
-                    rendering: c.enabled,
-                    fps: 0,
-                    error: None,
-                },
-            );
+            runtime.insert(c.id.clone(), OutputState::seed(c));
         }
         Self {
             configs: Arc::new(RwLock::new(configs)),
@@ -232,6 +289,10 @@ impl OutputManager {
     }
 
     /// Flip one output's visibility, persisting first, then swapping in-memory.
+    /// The runtime entry is re-derived from the persisted config (single source
+    /// of truth) so a visibility change always re-seeds the lifecycle phase:
+    /// a hidden window is `stopped`, a visible one `live`; a recorder/streamer
+    /// that becomes visible enters `starting` until the adapter reports `live`.
     pub fn set_visible(&self, id: &str, visible: bool) -> Result<(), String> {
         let mut configs = self.configs.read().clone();
         let found = configs
@@ -241,22 +302,46 @@ impl OutputManager {
         found.visible = visible;
         self.persist_candidate(&configs)?;
         *self.configs.write() = configs;
+        for c in self.configs.read().iter() {
+            if c.id == id {
+                self.set_state(&OutputState::seed(c));
+                break;
+            }
+        }
         Ok(())
     }
 
-    pub fn update_state(&self, id: &str, visible: bool, rendering: bool, fps: u32, error: Option<String>) {
+    /// Replace one output's runtime state. Unlike `set_phase`, the caller
+    /// supplies the full ephemeral state (visibility, rendering, fps, error,
+    /// phase, reason, started_at) — used by recorder/streamer adapters reporting
+    /// through `report_output_state`. `started_at` is owned by the manager: it
+    /// is stamped when the entry enters `live` (kept across repeated live
+    /// reports) and cleared when it leaves.
+    pub fn set_state(&self, state: &OutputState) {
         let mut guard = self.runtime.write();
-        let entry = guard.entry(id.to_string()).or_insert_with(|| OutputState {
-            id: id.to_string(),
-            visible,
-            rendering,
-            fps,
-            error: None,
-        });
-        entry.visible = visible;
-        entry.rendering = rendering;
-        entry.fps = fps;
-        entry.error = error;
+        let previous = guard.get(&state.id).cloned();
+        let mut merged = state.clone();
+        merged.started_at = if state.phase == OutputPhase::Live {
+            Some(previous.and_then(|p| p.started_at).unwrap_or_else(now_millis))
+        } else {
+            None
+        };
+        guard.insert(state.id.clone(), merged);
+    }
+
+    /// Flip one output's lifecycle phase, preserving its other runtime fields
+    /// and stamping `started_at` when it enters `live`.
+    pub fn set_phase(&self, id: &str, phase: OutputPhase, reason: Option<String>) {
+        let mut guard = self.runtime.write();
+        if let Some(entry) = guard.get_mut(id) {
+            entry.phase = phase;
+            entry.reason = reason;
+            entry.started_at = if phase == OutputPhase::Live {
+                Some(now_millis())
+            } else {
+                None
+            };
+        }
     }
 
     pub fn state(&self, id: &str) -> Option<OutputState> {
@@ -461,6 +546,66 @@ mod tests {
         for c in manager.list() {
             assert_eq!(c.schema_version, OUTPUT_SCHEMA_VERSION);
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn runtime_phases_seed_from_config() {
+        // Hidden window => stopped; visible window => live; idle
+        // recorder/streamer => configured; a visible recorder => starting.
+        let dir = temp_app_data("phases");
+        let manager = OutputManager::new(&dir);
+        let states = manager.all_states();
+        let by_id: std::collections::HashMap<_, _> =
+            states.into_iter().map(|s| (s.id.clone(), s)).collect();
+
+        assert_eq!(by_id["output"].phase, OutputPhase::Stopped);
+        assert_eq!(by_id["stage"].phase, OutputPhase::Stopped);
+        assert_eq!(by_id["record-main"].phase, OutputPhase::Configured);
+        assert_eq!(by_id["stream-main"].phase, OutputPhase::Configured);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_visible_reseeds_phase() {
+        let dir = temp_app_data("phase-vis");
+        let manager = OutputManager::new(&dir);
+        manager.set_visible("output", true).unwrap();
+        assert_eq!(manager.state("output").unwrap().phase, OutputPhase::Live);
+        assert!(manager.state("output").unwrap().started_at.is_some());
+        manager.set_visible("output", false).unwrap();
+        assert_eq!(manager.state("output").unwrap().phase, OutputPhase::Stopped);
+        // Recorder visible => starting (the frontend adapter reports live once
+        // the capture pipeline is really running).
+        manager.set_visible("record-main", true).unwrap();
+        assert_eq!(
+            manager.state("record-main").unwrap().phase,
+            OutputPhase::Starting
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_phase_preserves_fields_and_stamps_started_at() {
+        let dir = temp_app_data("phase-transition");
+        let manager = OutputManager::new(&dir);
+        manager.set_visible("record-main", true).unwrap();
+        let mut reported = manager.state("record-main").unwrap();
+        reported.rendering = true;
+        reported.fps = 60;
+        reported.phase = OutputPhase::Live;
+        manager.set_state(&reported);
+        let after = manager.state("record-main").unwrap();
+        assert_eq!(after.phase, OutputPhase::Live);
+        assert!(after.started_at.is_some());
+        assert_eq!(after.fps, 60);
+        assert!(after.rendering);
+
+        manager.set_phase("record-main", OutputPhase::Failed, Some("boom".into()));
+        let failed = manager.state("record-main").unwrap();
+        assert_eq!(failed.phase, OutputPhase::Failed);
+        assert_eq!(failed.reason.as_deref(), Some("boom"));
+        assert!(failed.started_at.is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

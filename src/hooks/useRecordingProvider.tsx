@@ -3,8 +3,10 @@ import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store";
 import { useRecorder } from "./useRecorder";
+import { reportOutputState, setOutputVisible } from "./outputRuntime";
 import { tierCapabilities } from "../system/tiers";
 import { ProgramFeedPreview } from "../components/outputs/ProgramFeedPreview";
+import type { OutputPhase } from "../types";
 
 /**
  * `RecordingProvider` — App-level owner of the recorder + compositor pipeline
@@ -138,19 +140,97 @@ export function RecordingProvider({ children }: { children: ReactNode }) {
 
   const streamReady = !!stream && stream.getVideoTracks().length > 0;
 
-  const start = useCallback(() => {
+  // Report the recorder surface's lifecycle phase to the OutputManager (Phase
+  // 4). The backend owns `started_at` and broadcasts `output-state-changed`,
+  // so every window agrees on the recorder's phase. This path never touches
+  // the presentation engine.
+  const report = useCallback((phase: OutputPhase, reason?: string) => {
+    void reportOutputState({
+      id: "record-main",
+      visible: phase === "starting" || phase === "live" || phase === "stopping",
+      rendering: phase === "live",
+      fps: captureFps,
+      error: reason,
+      phase,
+      reason,
+    });
+  }, [captureFps]);
+
+  // The surface's phase is reconciled from the ACTUAL recorder state (via the
+  // effect below) rather than from closures, so a MediaRecorder start failure
+  // or a save-time error is never masked by a stale `recorder.error` read.
+  const surfaceStarted = useRef(false);
+  const stopping = useRef(false);
+
+  const start = useCallback(async () => {
     if (recorder.recording || !stream) return;
     if (license && license.status === "active" && !tierCapabilities(license.tier).recording) {
       setToast("Recording is a Pro feature. Upgrade in Settings → License.");
       return;
     }
+    // Persist the operator intent FIRST; if the write fails the adapter must
+    // not report a live phase (disk and runtime would diverge).
+    try {
+      await setOutputVisible("record-main", true);
+    } catch (e: any) {
+      report("failed", `Could not enable the recorder output: ${e?.message ?? e}`);
+      setToast("Failed to start recording — the output config could not be saved.");
+      return;
+    }
+    report("starting");
     const tracks: MediaStreamTrack[] = [...stream.getVideoTracks()];
     if (audioTrackRef.current) tracks.push(audioTrackRef.current);
     const recStream = new MediaStream(tracks);
-    void recorder.start(recStream);
-  }, [recorder, stream, license, setToast]);
+    surfaceStarted.current = true;
+    await recorder.start(recStream);
+  }, [recorder, stream, license, setToast, report]);
 
-  const stop = useCallback(async () => recorder.stop(), [recorder]);
+  const stop = useCallback(async (): Promise<string | null> => {
+    if (!recorder.recording) return null;
+    stopping.current = true;
+    report("stopping");
+    const name = await recorder.stop();
+    return name;
+  }, [recorder, report]);
+
+  const cancel = useCallback(() => {
+    surfaceStarted.current = false;
+    stopping.current = false;
+    recorder.cancel();
+    void setOutputVisible("record-main", false).catch((e: any) => {
+      console.error("outputs_set_visible failed after cancel:", e);
+    });
+    report("stopped");
+  }, [recorder, report]);
+
+  // Reconcile the runtime phase with the actual recorder state once the
+  // surface has been started: error → failed, recording → live, clean stop →
+  // stopped. This is the single writer of the recorder phase after start, so
+  // start/save failures always surface as `failed` with the reason.
+  useEffect(() => {
+    if (!surfaceStarted.current) return;
+    if (recorder.error) {
+      surfaceStarted.current = false;
+      stopping.current = false;
+      report("failed", recorder.error);
+      void setOutputVisible("record-main", false).catch((e: any) => {
+        console.error("outputs_set_visible failed after recorder error:", e);
+      });
+      return;
+    }
+    if (recorder.recording) {
+      report("live");
+      return;
+    }
+    if (stopping.current) {
+      surfaceStarted.current = false;
+      stopping.current = false;
+      void setOutputVisible("record-main", false).catch((e: any) => {
+        console.error("outputs_set_visible failed after stop:", e);
+      });
+      report("stopped");
+    }
+  }, [recorder.error, recorder.recording, report]);
 
   // Keep the compositor running while the tab is visible OR a recording is in
   // progress, so leaving the page mid-recording does not end the capture.
@@ -166,7 +246,7 @@ export function RecordingProvider({ children }: { children: ReactNode }) {
       streamReady,
       start,
       stop,
-      cancel: recorder.cancel,
+      cancel,
       audioEnabled,
       setAudioEnabled,
       audioDevices,
@@ -178,7 +258,7 @@ export function RecordingProvider({ children }: { children: ReactNode }) {
       captureFps,
       setCapture,
     }),
-    [recorder, stream, streamReady, start, stop, audioEnabled, audioDevices, audioDeviceId, audioError, captureWidth, captureHeight, captureFps, setCapture]
+    [recorder, stream, streamReady, start, stop, cancel, audioEnabled, audioDevices, audioDeviceId, audioError, captureWidth, captureHeight, captureFps, setCapture]
   );
 
   return (

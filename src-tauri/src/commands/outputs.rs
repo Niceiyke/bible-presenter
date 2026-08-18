@@ -143,8 +143,11 @@ pub fn set_output_visible(app: &AppHandle, state: &AppState, id: &str, visible: 
 
     // 2) Persist + mutate the in-memory config ONLY after the window op
     //    succeeded, so a failed operation never leaves disk/runtime/UI diverged.
+    //    The manager re-derives the runtime entry (phase etc.) from the
+    //    persisted config; windows go live/stopped with visibility, while
+    //    recorders/streamers enter `starting`/`stopped` and the frontend
+    //    adapter reports the real phase once the pipeline is actually up.
     state.outputs.set_visible(id, visible)?;
-    state.outputs.update_state(id, visible, cfg.enabled, 0, None);
     publish_configs(app);
     if let Some(s) = state.outputs.state(id) {
         publish_state(app, &s);
@@ -195,7 +198,21 @@ pub async fn outputs_set_visible(
 /// Internal helper for recorder/streamer surfaces to report runtime changes.
 pub fn report_output_state(app: &AppHandle, state: &OutputState) {
     if let Some(manager) = app.try_state::<AppState>() {
-        manager.outputs.update_state(&state.id, state.visible, state.rendering, state.fps, state.error.clone());
+        manager.outputs.set_state(state);
     }
     publish_state(app, state);
+}
+
+/// Recorder/streamer runtime adapters push lifecycle transitions here — the
+/// OutputManager merges the state into its runtime map and broadcasts it to
+/// every window. This is the authoritative path for a surface's phase
+/// (`starting`/`live`/`stopping`/`failed`/`stopped`); the persisted `visible`
+/// flag is flipped separately through `outputs_set_visible`.
+#[tauri::command]
+pub async fn report_output_state_cmd(
+    app: AppHandle,
+    state: OutputState,
+) -> Result<(), String> {
+    report_output_state(&app, &state);
+    Ok(())
 }

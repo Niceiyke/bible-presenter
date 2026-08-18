@@ -16,7 +16,7 @@ export type { StartupStatus } from "./status";
 export type { Scene, SceneZone, SceneZoneSource, SceneLayout, SceneCompositionData } from "./scene";
 export type {
   OutputKind, OutputSource, OutputPresentation, OutputOverlays, OutputGeometry,
-  OutputRecording, OutputStreaming, OutputConfig, OutputState,
+  OutputRecording, OutputStreaming, OutputConfig, OutputState, OutputPhase,
   StreamPlatform, StreamDestination,
 } from "./output";
 export { CAPTURE_RESOLUTIONS, CAPTURE_FPS_OPTIONS } from "./output";

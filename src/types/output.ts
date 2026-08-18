@@ -120,10 +120,26 @@ export const CAPTURE_RESOLUTIONS = [
 export const CAPTURE_FPS_OPTIONS = [24, 25, 30, 50, 60] as const;
 
 /** Runtime status of an output (ephemeral, not persisted). */
+export type OutputPhase =
+  | "configured" // recorder/streamer configured but not running
+  | "starting" // capture pipeline opening (recorder/streamer booting)
+  | "live" // actively rendering / capturing / uploading
+  | "stopping" // tearing down after a stop request
+  | "failed" // failed to start/run; `reason` carries the cause
+  | "stopped"; // fully stopped / hidden
+
+/** Runtime status of an output (ephemeral, not persisted). */
 export interface OutputState {
   id: string;
   visible: boolean;
   rendering: boolean;
   fps: number;
   error?: string;
+  /** Lifecycle phase (Phase 4). Windows derive it from visibility; the
+   *  recorder/streamer adapters report transitions via `report_output_state`. */
+  phase: OutputPhase;
+  /** Human-readable reason for the current phase (e.g. a failure cause). */
+  reason?: string;
+  /** Unix ms when the current `live` phase began. */
+  started_at?: number;
 }

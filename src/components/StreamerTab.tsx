@@ -1,282 +1,49 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import React, { useEffect, useRef } from "react";
 import { Radio, Play, Square, Plus, Mic, MonitorPlay } from "lucide-react";
-import { useAppStore } from "../store";
-import { useSystemDiagnostics } from "../system/SystemDiagnosticsContext";
-import { tierCapabilities } from "../system/tiers";
-import { ProgramFeedPreview } from "./outputs/ProgramFeedPreview";
-import { DestinationCard, type DestinationCardHandle, type DestTransportStatus } from "./streaming/DestinationCard";
-import { PLATFORM_PRESETS, makeDestination, newDestinationId } from "./streaming/presets";
-import { suggestedBitrateKbps } from "../hooks/useRtmpEncoder";
+import { useStreaming } from "../hooks/useStreamingProvider";
+import { DestinationCard } from "./streaming/DestinationCard";
+import { PLATFORM_PRESETS } from "./streaming/presets";
 import { CAPTURE_RESOLUTIONS, CAPTURE_FPS_OPTIONS } from "../types";
-import type { OutputConfig, StreamDestination, StreamPlatform } from "../types";
-
-const STREAM_OUTPUT_ID = "stream-main";
-
-interface CardStatus {
-  status: DestTransportStatus;
-  bitrateKbps: number;
-}
 
 /**
  * `StreamerTab` — Phase 4/6/6.2 Streaming Hub.
  *
- * A single program-feed compositor fanning out to any number of destinations
- * simultaneously. Each destination is a platform preset (YouTube, Facebook,
- * Twitch, Custom RTMP / WHIP) with its own ingest endpoint and transport:
+ * A thin view over the App-level `StreamingProvider`, which owns the shared
+ * program-feed compositor, the destination set, the shared audio input, and the
+ * master transport. Because the pipeline lives at app scope, a broadcast
+ * survives navigating to another workspace; the tab only previews the live
+ * composited stream (a `<video>` bound to the provider's stream) and drives its
+ * controls.
+ *
+ * Each destination is a platform preset (YouTube, Facebook, Twitch, Custom
+ * RTMP / WHIP) with its own ingest endpoint and transport:
  *   - RTMP: WebCodecs H.264 (+ shared AAC audio) piped to a backend
  *     `ffmpeg -c copy` mux-only publish.
  *   - WHIP: WebView2-native WebRTC, sub-second latency.
  *
  * Master Go Live starts every enabled destination at once (the compositor video
  * track is cloned per destination; the shared input audio track is cloned too),
- * and Stop All tears everything down. Destinations persist on the `stream-main`
- * output config (`stream_destinations`) through `outputs_update`.
+ * and Stop All tears everything down. The surface's lifecycle is reported to
+ * the OutputManager (`starting`/`live`/`failed`/`stopping`/`stopped`) so every
+ * window agrees on the stream's phase.
  */
 export function StreamerTab() {
-  const outputs = useAppStore((s) => s.outputs);
-  const setOutputs = useAppStore((s) => s.setOutputs);
-  const license = useAppStore((s) => s.license);
-  const setToast = useAppStore((s) => s.setToast);
+  const {
+    destinations, statuses, saving,
+    stream, streamReady, anyBusy, liveCount,
+    captureWidth, captureHeight, captureFps, streamBitrateKbps, setCapture,
+    updateDestination, removeDestination, addDestination,
+    registerHandle, reportStatus, goLive, stopAll, getSourceTracks,
+    audioEnabled, setAudioEnabled, audioDevices, audioDeviceId, setAudioDeviceId, audioError, audioUnavailableReason,
+    streamingBlocked, sharedAudioBlocked, rtmpBlockedReason, ndiBlockedReason, destCapReached, enabledCount,
+  } = useStreaming();
 
-  // Capability gating (Phase 7): RTMP needs WebCodecs H.264 + ffmpeg; shared
-  // audio needs at least one input device.
-  const { checks } = useSystemDiagnostics();
-  const capabilities = checks?.capabilities;
-  const rtmpBlockedReason = capabilities && !capabilities.rtmpAvailable ? capabilities.rtmpReason : null;
-  const ndiBlockedReason = capabilities && !capabilities.ndiAvailable ? capabilities.ndiReason : null;
-  const audioUnavailableReason = capabilities && !capabilities.audioAvailable ? capabilities.audioReason : null;
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  // Tier gating: streaming is Pro+, NDI is Pro+, shared audio is Premium.
-  const streamCaps = tierCapabilities(license?.tier);
-  const streamingBlocked = !!license && license.status === "active" && !streamCaps.streaming;
-  const sharedAudioBlocked = !!license && license.status === "active" && !streamCaps.sharedAudioInput;
-
-  const [destinations, setDestinations] = useState<StreamDestination[]>([]);
-  const [statuses, setStatuses] = useState<Record<string, CardStatus>>({});
-  const cardHandles = useRef<Map<string, DestinationCardHandle>>(new Map());
-  const videoTrackRef = useRef<MediaStreamTrack | null>(null);
-  const audioTrackRef = useRef<MediaStreamTrack | null>(null);
-  const [streamReady, setStreamReady] = useState(false);
-  const [saving, setSaving] = useState(false);
-
-  // Shared audio input (one source for every destination).
-  const [audioEnabled, setAudioEnabled] = useState(false);
-  const [audioDeviceId, setAudioDeviceId] = useState("");
-  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
-  const [audioError, setAudioError] = useState<string | null>(null);
-
-  const output: OutputConfig | undefined = outputs.find((o) => o.id === STREAM_OUTPUT_ID);
-
-  const captureWidth = output?.geometry.width ?? 1920;
-  const captureHeight = output?.geometry.height ?? 1080;
-  const captureFps = output?.capture_fps ?? 30;
-  // RTMP/NDI encode the compositor feed once at the master capture settings;
-  // derive a sensible bitrate from the chosen resolution/fps.
-  const streamBitrateKbps = suggestedBitrateKbps(captureWidth, captureHeight, captureFps);
-
-  const persistCapture = useCallback(
-    async (width: number, height: number, fps: number) => {
-      const updated = outputs.map((o) =>
-        o.id === STREAM_OUTPUT_ID ? { ...o, geometry: { width, height }, capture_fps: fps } : o
-      );
-      try {
-        await invoke("outputs_update", { configs: updated });
-        setOutputs(updated);
-      } catch (e: any) {
-        console.error("outputs_update failed:", e);
-      }
-    },
-    [outputs, setOutputs]
-  );
-
-  const persistDestinations = useCallback(
-    async (next: StreamDestination[]) => {
-      setSaving(true);
-      try {
-        const updated = outputs.map((o) =>
-          o.id === STREAM_OUTPUT_ID ? { ...o, stream_destinations: next } : o
-        );
-        await invoke("outputs_update", { configs: updated });
-        setOutputs(updated);
-      } catch (e: any) {
-        console.error("outputs_update failed:", e);
-      } finally {
-        setSaving(false);
-      }
-    },
-    [outputs, setOutputs]
-  );
-
-  const updateDestination = useCallback(
-    (next: StreamDestination) => {
-      setDestinations((prev) => {
-        const updated = prev.map((d) => (d.id === next.id ? next : d));
-        persistDestinations(updated);
-        return updated;
-      });
-    },
-    [persistDestinations]
-  );
-
-  const removeDestination = useCallback(
-    (id: string) => {
-      const handle = cardHandles.current.get(id);
-      if (handle) void handle.stop();
-      setStatuses((prev) => {
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-      setDestinations((prev) => {
-        const updated = prev.filter((d) => d.id !== id);
-        persistDestinations(updated);
-        return updated;
-      });
-    },
-    [persistDestinations]
-  );
-
-  const addDestination = useCallback(
-    (platform: StreamPlatform) => {
-      if (streamingBlocked) {
-        setToast("Streaming is a Pro feature. Upgrade in Settings → License.");
-        return;
-      }
-      setDestinations((prev) => {
-        if (prev.length >= streamCaps.streamingDestinations) {
-          setToast(
-            streamCaps.streamingDestinations > 0
-              ? `Your plan supports ${streamCaps.streamingDestinations} simultaneous destination${streamCaps.streamingDestinations === 1 ? "" : "s"}. Upgrade for more.`
-              : "Streaming is a Pro feature. Upgrade in Settings → License."
-          );
-          return prev;
-        }
-        const updated = [...prev, makeDestination(platform, newDestinationId())];
-        persistDestinations(updated);
-        return updated;
-      });
-    },
-    [persistDestinations, streamingBlocked, streamCaps]
-  );
-
-  // Hydrate destinations from the persisted stream-main config, seeding from
-  // the legacy single-destination `streaming` field when present.
   useEffect(() => {
-    if (!output) return;
-    const stored = output.stream_destinations;
-    if (stored && stored.length > 0) {
-      setDestinations(stored);
-      return;
-    }
-    if (output.streaming?.url) {
-      const legacy: StreamDestination = {
-        id: newDestinationId(),
-        label: output.streaming.mode === "rtmp" ? "Custom RTMP" : "Custom WHIP",
-        platform: output.streaming.mode === "rtmp" ? "custom-rtmp" : "custom-whip",
-        mode: output.streaming.mode === "rtmp" ? "rtmp" : "whip",
-        url: output.streaming.url,
-        stream_key: output.streaming.stream_key,
-        enabled: true,
-        audio: true,
-      };
-      setDestinations([legacy]);
-      void persistDestinations([legacy]);
-    }
-  }, [output, persistDestinations]);
+    if (videoRef.current && stream) videoRef.current.srcObject = stream;
+  }, [stream]);
 
-  const handleStream = useCallback((stream: MediaStream | null) => {
-    videoTrackRef.current = stream?.getVideoTracks()[0] ?? null;
-    setStreamReady(!!videoTrackRef.current);
-  }, []);
-
-  const getSourceTracks = useCallback(
-    () => ({ video: videoTrackRef.current, audio: audioTrackRef.current }),
-    []
-  );
-
-  // Capture / release the shared audio input.
-  useEffect(() => {
-    if (!audioEnabled) {
-      audioTrackRef.current?.stop();
-      audioTrackRef.current = null;
-      setAudioError(null);
-      return;
-    }
-    let cancelled = false;
-    navigator.mediaDevices
-      .enumerateDevices()
-      .then((devices) => {
-        if (cancelled) return;
-        const inputs = devices.filter((d) => d.kind === "audioinput");
-        setAudioDevices(inputs);
-        setAudioDeviceId((prev) => prev || inputs[0]?.deviceId || "");
-      })
-      .catch(() => {});
-    navigator.mediaDevices
-      .getUserMedia({
-        audio: {
-          deviceId: audioDeviceId ? { exact: audioDeviceId } : undefined,
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        },
-      })
-      .then((ms) => {
-        if (cancelled) {
-          ms.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        const t = ms.getAudioTracks()[0] ?? null;
-        audioTrackRef.current = t;
-        setAudioError(t ? null : "No audio input device was found.");
-      })
-      .catch((e: any) => {
-        if (!cancelled) setAudioError(`Failed to open the audio input: ${e?.message ?? e}`);
-      });
-    return () => {
-      cancelled = true;
-      audioTrackRef.current?.stop();
-      audioTrackRef.current = null;
-    };
-  }, [audioEnabled, audioDeviceId]);
-
-  const handleStatus = useCallback((id: string, status: DestTransportStatus, bitrateKbps: number) => {
-    setStatuses((prev) => ({ ...prev, [id]: { status, bitrateKbps } }));
-  }, []);
-
-  const handleRegister = useCallback((id: string, handle: DestinationCardHandle | null) => {
-    if (handle) cardHandles.current.set(id, handle);
-    else cardHandles.current.delete(id);
-  }, []);
-
-  const handleGoLive = async () => {
-    if (!streamReady) return;
-    if (streamingBlocked) {
-      setToast("Streaming is a Pro feature. Upgrade in Settings → License.");
-      return;
-    }
-    await persistDestinations(destinations);
-    const enabled = destinations.filter((d) => d.enabled);
-    for (const d of enabled) {
-      if (d.mode === "rtmp" && rtmpBlockedReason) continue;
-      if (d.mode === "ndi" && ndiBlockedReason) continue;
-      const handle = cardHandles.current.get(d.id);
-      if (handle) void handle.start();
-    }
-  };
-
-  const handleStopAll = async () => {
-    for (const d of destinations) {
-      const handle = cardHandles.current.get(d.id);
-      if (handle) await handle.stop();
-    }
-  };
-
-  const liveCount = Object.values(statuses).filter((s) => s.status === "live").length;
-  const anyBusy = Object.values(statuses).some((s) => s.status === "live" || s.status === "connecting");
-  const enabledCount = destinations.filter((d) => d.enabled).length;
-  const destCapReached = destinations.length >= streamCaps.streamingDestinations;
   const enabledBlocked = destinations.some(
     (d) =>
       (d.enabled && d.mode === "rtmp" && !!rtmpBlockedReason) ||
@@ -303,12 +70,19 @@ export function StreamerTab() {
         {/* Composer preview + master transport */}
         <div className="flex flex-col gap-2">
           <div className="relative rounded-lg overflow-hidden border border-slate-700 bg-black" style={{ aspectRatio: "16/9" }}>
-            <ProgramFeedPreview
-              geometry={{ width: captureWidth, height: captureHeight }}
-              fps={captureFps}
-              onStream={handleStream}
-              className="absolute inset-0 w-full h-full"
-            />
+            {streamReady ? (
+              <video
+                ref={videoRef}
+                autoPlay
+                muted
+                playsInline
+                className="absolute inset-0 w-full h-full object-contain"
+              />
+            ) : (
+              <div className="absolute inset-0 flex items-center justify-center text-slate-600 text-xs">
+                Program feed idle — open a live item to preview.
+              </div>
+            )}
             {liveCount > 0 && (
               <div className="absolute top-2 left-2 z-10 flex items-center gap-1.5 px-2 py-1 rounded bg-red-600 text-white text-[10px] font-black uppercase tracking-widest">
                 <span className="w-2 h-2 rounded-full bg-white animate-pulse" /> LIVE
@@ -319,14 +93,14 @@ export function StreamerTab() {
           <div className="flex items-center gap-2">
             {anyBusy ? (
               <button
-                onClick={handleStopAll}
+                onClick={() => void stopAll()}
                 className="flex-1 py-2.5 rounded-md bg-red-600 hover:bg-red-500 text-white text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
               >
                 <Square size={11} fill="currentColor" /> Stop All
               </button>
             ) : (
               <button
-                onClick={handleGoLive}
+                onClick={() => void goLive()}
                 disabled={!streamReady || enabledCount === 0 || enabledBlocked || streamingBlocked}
                 title={
                   streamingBlocked
@@ -419,7 +193,7 @@ export function StreamerTab() {
               value={`${captureWidth}x${captureHeight}`}
               onChange={(e) => {
                 const r = CAPTURE_RESOLUTIONS.find((r) => `${r.width}x${r.height}` === e.target.value);
-                if (r) void persistCapture(r.width, r.height, captureFps);
+                if (r) void setCapture(r.width, r.height, captureFps);
               }}
               disabled={anyBusy}
               className="px-2 py-1 bg-slate-950 border border-slate-700 rounded text-slate-200 text-[11px] focus:outline-none focus:border-slate-500"
@@ -433,7 +207,7 @@ export function StreamerTab() {
             </select>
             <select
               value={captureFps}
-              onChange={(e) => void persistCapture(captureWidth, captureHeight, Number(e.target.value))}
+              onChange={(e) => void setCapture(captureWidth, captureHeight, Number(e.target.value))}
               disabled={anyBusy}
               className="px-2 py-1 bg-slate-950 border border-slate-700 rounded text-slate-200 text-[11px] focus:outline-none focus:border-slate-500"
               title="Stream frame rate"
@@ -478,8 +252,8 @@ export function StreamerTab() {
               getSourceTracks={getSourceTracks}
               onChange={updateDestination}
               onRemove={() => removeDestination(d.id)}
-              onStatus={handleStatus}
-              onRegister={handleRegister}
+              onStatus={reportStatus}
+              onRegister={registerHandle}
               fps={captureFps}
               bitrateKbps={streamBitrateKbps}
               blockedReason={

@@ -718,24 +718,46 @@ Acceptance criteria:
 
 Tasks:
 
-- Split `OutputConfig` from `OutputState` completely.
-- Add output runtime adapters for projection, stage, recorder, and streamer.
-- Move recorder and streamer lifecycle ownership out of workspace components.
-- Make `outputs_set_visible` call the correct runtime adapter.
-- Add start/stop/apply/status transitions.
-- Use unique temporary files and a Windows-safe atomic replacement helper.
-- Roll back a window visibility change if persistence fails.
-- Broadcast output state changes with error and lifecycle reason.
-- Enforce license tier caps (Free = 1 on-air window) on the runtime adapter path
+- [x] Split `OutputConfig` from `OutputState` completely. (`OutputState` gained
+  the lifecycle fields — `phase` ∈ configured/starting/live/stopping/failed/
+  stopped, `reason`, `started_at` — in `src-tauri/src/outputs.rs` + the mirror
+  in `src/types/output.ts`. Windows derive their phase from visibility;
+  recorder/streamer adapters report transitions through the new
+  `report_output_state` command. `started_at` is owned by the backend
+  `OutputManager` — stamped on entering `live`, kept across repeated live
+  reports, cleared on leaving.)
+- [x] Add output runtime adapters for projection, stage, recorder, and streamer.
+  (Projection/stage: `OutputWindow`/`StageWindow` resolve `ProgramFrame`s.
+  Recorder: the `RecordingProvider` app-scoped adapter. Streamer: the new
+  app-scoped `StreamingProvider` in `src/hooks/useStreamingProvider.tsx`.
+  Shared helpers in `src/hooks/outputRuntime.ts` — `reportOutputState` and
+  `setOutputVisible`.)
+- [x] Move recorder and streamer lifecycle ownership out of workspace components.
+  (`RecordingProvider` already owned the recorder/compositor; the streaming hub
+  pipeline — compositor, destinations, shared audio, master transport, per-card
+  handles — now lives in `StreamingProvider`, and `StreamerTab` is a thin view
+  over it that previews the provider's live stream via a `<video>` element. A
+  broadcast survives navigating away.)
+- [x] Make `outputs_set_visible` call the correct runtime adapter. (For window
+  outputs it still toggles the bound window; for recorders/streamers it is the
+  persisted operator-intent flag that adapters flip before reporting a phase.)
+- [x] Add start/stop/apply/status transitions. (Recorder: starting → live /
+  failed → stopping → stopped. Streamer: master Go Live reports starting, then
+  live once any enabled destination is up (all-error → failed), Stop All reports
+  stopping → stopped. Per-destination statuses flow through `reportStatus`.)
+- [x] Use unique temporary files and a Windows-safe atomic replacement helper.
+- [x] Roll back a window visibility change if persistence fails.
+- [x] Broadcast output state changes with error and lifecycle reason.
+- [x] Enforce license tier caps (Free = 1 on-air window) on the runtime adapter path
   in addition to the existing `outputs_set_visible` guard.
 
 Acceptance criteria:
 
-- The output manager knows whether an output is configured, starting, live,
+- [x] The output manager knows whether an output is configured, starting, live,
   stopping, failed, or stopped.
-- Navigating between workspaces cannot stop an active recording or stream.
-- A failed output does not change live program state.
-- A failed persistence operation does not leave disk and runtime contradictory.
+- [x] Navigating between workspaces cannot stop an active recording or stream.
+- [x] A failed output does not change live program state.
+- [x] A failed persistence operation does not leave disk and runtime contradictory.
 
 ### Phase 5: Source registry and camera lifecycle
 

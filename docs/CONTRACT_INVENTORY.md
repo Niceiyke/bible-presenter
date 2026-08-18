@@ -1,4 +1,4 @@
-# Contract Inventory (Phase 0 freeze, updated for Phase 1/2/3)
+# Contract Inventory (Phase 0 freeze, updated for Phase 1/2/3/4)
 
 Status: living inventory — Phases 0-3 of `docs/UNIFIED_PRODUCTION_SUITE_PLAN.md`
 requires recording the current event names, command names, persisted files, and
@@ -78,7 +78,10 @@ clear ops.
 
 ### Outputs (`commands/outputs.rs`)
 `outputs_list`, `outputs_states`, `outputs_update` (replace-all, idempotent),
-`outputs_set_visible`
+`outputs_set_visible`, `report_output_state` (recorder/streamer lifecycle
+adapters push phase transitions — configured/starting/live/stopping/failed/
+stopped + reason; the backend owns `started_at` and broadcasts
+`output-state-changed`)
 
 ### Recordings (`commands/recordings.rs`)
 `recordings_list`, `recording_save`, `recording_delete`, `recordings_open_folder`
@@ -226,6 +229,30 @@ tests). Contract:
   canvas surfaces — consuming the frame's colors, effective background,
   blackout, masked overlays, and resolved source — and remain authoritative only
   for rich text/animations.
+
+## 2d. Output lifecycle (`OutputState`, Phase 4)
+
+- **`OutputState`** (`src-tauri/src/outputs.rs`, mirrored in
+  `src/types/output.ts`) carries the lifecycle: `phase` ∈
+  `configured`/`starting`/`live`/`stopping`/`failed`/`stopped`, a `reason`
+  (e.g. failure cause), and `started_at` (Unix ms of the current live phase).
+  It is ephemeral (never persisted); `OutputConfig` is the persisted document.
+- **Seeding:** `OutputManager` derives a window's phase from visibility
+  (visible → `live`, hidden → `stopped`) and seeds idle recorders/streamers as
+  `configured`. `set_visible` re-seeds from the persisted config after the
+  atomic write, so the runtime entry can never contradict disk.
+- **`report_output_state` command** (`commands/outputs.rs`): recorder/streamer
+  adapters push phase transitions (`starting` → `live`/`failed` → `stopping` →
+  `stopped`) here. `OutputManager::set_state` merges them into the runtime map
+  and owns `started_at` (stamped on entering live, kept across repeated live
+  reports, cleared on leaving); `output-state-changed` is broadcast to every
+  window. Adapters never touch the presentation engine, so a failed output can
+  never change live program state.
+- **Frontend adapters** (`src/hooks/outputRuntime.ts`, `useRecordingProvider.tsx`,
+  `useStreamingProvider.tsx`): Go Live / REC persist the operator intent FIRST
+  via `outputs_set_visible` (persist-then-swap), then report phases; a failed
+  write aborts the transition. The streaming pipeline is app-scoped
+  (`StreamingProvider`), so navigating workspaces cannot stop a broadcast.
 
 ## 3. Persisted files under the app data dir
 

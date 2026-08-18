@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { AppHeader } from "../layout/AppHeader";
 import { useAppStore } from "../../store";
+import type { OutputState } from "../../types";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -12,12 +13,13 @@ const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
 
 const initialState = useAppStore.getState();
 
-const outputState = (visible: boolean) => ({
+const outputState = (visible: boolean): OutputState => ({
   id: "output",
   visible,
   rendering: false,
   fps: 0,
   error: undefined,
+  phase: visible ? "live" : "stopped",
 });
 
 describe("AppHeader output window toggle", () => {

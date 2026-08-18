@@ -328,6 +328,7 @@ fn main() {
             wordlyte_lib::commands::outputs::outputs_states,
             wordlyte_lib::commands::outputs::outputs_update,
             wordlyte_lib::commands::outputs::outputs_set_visible,
+            wordlyte_lib::commands::outputs::report_output_state_cmd,
             wordlyte_lib::commands::recordings::recordings_list,
             wordlyte_lib::commands::recordings::recording_save,
             wordlyte_lib::commands::recordings::recording_delete,
