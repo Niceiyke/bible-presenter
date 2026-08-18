@@ -40,6 +40,16 @@ jobs:
         with:
           components: clippy
 
+      # tauri-build validates bundled resources at compile time, but dist/ and
+      # the ffmpeg binaries are gitignored (produced by the release build).
+      # Create placeholders so cargo check/clippy/test can run as a fast
+      # compile + lint gate; the release workflow fetches the real artifacts.
+      - name: create bundled-resource placeholders for tauri-build
+        shell: bash
+        run: |
+          mkdir -p src-tauri/binaries dist
+          touch src-tauri/binaries/ffmpeg.exe src-tauri/binaries/ffprobe.exe dist/.keep
+
       - name: cargo check
         working-directory: src-tauri
         run: cargo check
