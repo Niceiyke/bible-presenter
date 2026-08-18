@@ -26,6 +26,8 @@ cargo build --release       # Release build
 Vitest (jsdom) covers the transactional `useItemActions` core (stage failure, live transitions, clear propagation, settings/props rollback, service persistence), the schedule undo/redo slice, and the output-window toggle failure path. Rust unit tests exist in selected command modules. Production-safety work should extend these frontend tests to stage/live/clear state and Tauri event synchronization.
 
 The UI/UX roadmap is documented in `docs/UI_UX_MODERNIZATION_PLAN.md`.
+The unified production-suite architecture and implementation roadmap is
+documented in `docs/UNIFIED_PRODUCTION_SUITE_PLAN.md`.
 
 ## Stack
 
