@@ -31,7 +31,7 @@ export function useAppInitialization() {
     setBackendError, addLog, setScenes,
     setBackendAvailable, setToast,
     setOutputs, setOutputState,
-    setLicense,
+    setLicense, setBibleIndexing,
   } = useAppStore();
 
   useEffect(() => {
@@ -72,7 +72,7 @@ export function useAppInitialization() {
         unlistenLtUpdate, unlistenLtSync, unlistenSongsSync, unlistenStudioSync,
         unlistenStudioSlidesSync, unlistenLog, unlistenOpWarn, unlistenRemoteDeviceEvent,
         unlistenMediaProbed, unlistenMediaUpdated, unlistenOutputConfig, unlistenOutputState,
-        unlistenLicense,
+        unlistenLicense, unlistenBibleIndex,
       ]).catch(() => {});
       let ready = false;
       let startupIssues: string[] = [];
@@ -186,6 +186,12 @@ export function useAppInitialization() {
       // frame is either the gated activation screen or an active license.
       invoke<LicenseInfo>("license_status").then(setLicense).catch(() => {});
 
+      // Bible FTS search index may still be building off-thread on a fresh
+      // install; search degrades to LIKE until it reports ready.
+      invoke<boolean>("bible_fts_status")
+        .then((ready) => setBibleIndexing(!ready))
+        .catch(() => {});
+
       setIsInitialized(true);
     };
 
@@ -287,6 +293,11 @@ export function useAppInitialization() {
       setLicense(ev.payload);
     });
 
+    // Bible FTS search index status (off-thread rebuild on fresh installs).
+    const unlistenBibleIndex = listen<{ state: string }>("search-index-status", (ev) => {
+      setBibleIndexing(ev.payload?.state === "indexing");
+    });
+
     // All listeners are registered above; kick off hydration only now that the
     // event stream is fully covered (audit #2).
     loadAll();
@@ -309,6 +320,7 @@ export function useAppInitialization() {
       unlistenOutputConfig.then(f => f());
       unlistenOutputState.then(f => f());
       unlistenLicense.then(f => f());
+      unlistenBibleIndex.then(f => f());
     };
   }, []);
 

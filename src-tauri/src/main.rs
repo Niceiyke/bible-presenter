@@ -180,6 +180,17 @@ fn main() {
 
             app.manage(state);
 
+            // Build the Bible FTS search index OFF the UI thread. On a fresh
+            // install the rebuild is a large write (it also drives the
+            // -wal/-shm sidecar growth); doing it here in setup would freeze
+            // startup. The window opens immediately and search degrades to a
+            // LIKE scan until `search-index-status` reports ready.
+            let app_handle = app.handle().clone();
+            let bible_store = app.state::<AppState>().store.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                bible_store.rebuild_fts_if_needed(&app_handle);
+            });
+
             // Windows are declared with `create: false`, so they are only
             // built here — after state is managed. Config-declared windows
             // load their webviews immediately and fire hydrate invokes
@@ -226,6 +237,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             wordlyte_lib::commands::bible::get_bible_versions,
             wordlyte_lib::commands::bible::set_bible_version,
+            wordlyte_lib::commands::bible::bible_fts_status,
             wordlyte_lib::commands::bible::split_verse,
             wordlyte_lib::commands::bible::search_semantic_query,
             wordlyte_lib::commands::bible::read_file_base64,

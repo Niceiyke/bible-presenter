@@ -47,6 +47,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
     nextVerse,
     setToast,
     license,
+    bibleIndexing,
   } = useAppStore();
 
   const [historyTab, setHistoryTab] = useState<"bible" | "media" | "presentation">("bible");
@@ -354,6 +355,11 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
               <span className="text-console-text"> Psalm 23</span>) returns that verse or chapter directly.
               Anything else runs a keyword search within the active version.
             </p>
+            {bibleIndexing && (
+              <p className="text-[9px] font-bold text-action-primary bg-action-primary/10 border border-action-primary/30 rounded px-2 py-1 mb-2">
+                Building the search index for the first time — results are temporarily limited to basic matches.
+              </p>
+            )}
             {searchError && (
               <p className="text-state-error text-xs mb-2">{searchError}</p>
             )}
@@ -369,7 +375,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
                       searchMethod === "reference" ? "bg-action-primary/20 text-action-primary border border-action-primary/30" :
                       "bg-console-surface-strong text-console-text-muted border border-console-border"
                     }`}>
-                      {searchMethod === "reference" ? "Reference Match" : "Keyword Match"}
+                      {searchMethod === "reference" ? "Reference Match" : searchMethod === "like" ? "Basic Match" : "Keyword Match"}
                     </span>
                     <span className="text-[9px] text-console-text-subtle font-bold uppercase tracking-tighter">
                       {searchResults.length} result{searchResults.length === 1 ? "" : "s"}

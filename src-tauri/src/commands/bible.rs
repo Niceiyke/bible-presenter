@@ -7,6 +7,14 @@ pub async fn get_bible_versions(state: State<'_, AppState>) -> Result<Vec<String
     Ok(state.store.get_available_versions())
 }
 
+/// Reports whether the FTS5 search index is built and in sync. On a fresh
+/// install the index builds off-thread after startup; while false, search
+/// results come from the LIKE fallback.
+#[tauri::command]
+pub fn bible_fts_status(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.store.fts_search_ready())
+}
+
 #[tauri::command]
 pub async fn set_bible_version(app: AppHandle, state: State<'_, AppState>, version: String) -> Result<(), String> {
     state.store.set_active_version(&app, &version);

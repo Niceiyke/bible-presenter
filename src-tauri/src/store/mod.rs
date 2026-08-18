@@ -1,5 +1,6 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::collections::HashMap;
 use parking_lot::Mutex;
@@ -102,6 +103,15 @@ pub struct BibleStore {
     books: Vec<String>,
     available_versions: Vec<String>,
     active_version: Mutex<String>,
+    /// Path of the Bible database file. Empty for the in-memory placeholder.
+    /// Used to open a SEPARATE connection for the background FTS rebuild so the
+    /// shared connection stays available for reads while the index builds.
+    db_path: String,
+    /// Set once the FTS5 search index is built and in sync with the source
+    /// table. The rebuild is deliberately performed OFF the UI thread at
+    /// startup so a fresh install never freezes while the index is built
+    /// (the build is a large write that also drives -wal/-shm growth).
+    search_index_ready: AtomicBool,
 }
 
 impl BibleStore {
@@ -120,6 +130,8 @@ impl BibleStore {
             books: Vec::new(),
             available_versions: Vec::new(),
             active_version: Mutex::new("KJV".to_string()),
+            db_path: String::new(),
+            search_index_ready: AtomicBool::new(true), // nothing to index
         }
     }
 
@@ -155,20 +167,11 @@ impl BibleStore {
             tokenize='unicode61 remove_diacritics 2 porter'
         )", [])?;
 
-        // Keep the full-text index in sync with the source table. Rebuild whenever the
-        // row counts differ (e.g. a freshly downloaded/replaced bible.db) rather than only
-        // populating on the first launch, so the index can never go stale.
-        let count_fts: i64 = conn.query_row("SELECT count(*) FROM wordlyte_bible_fts", [], |r| r.get(0))?;
-        let count_src: i64 = conn.query_row(
-            "SELECT count(*) FROM wordlyte_bible WHERE language = 'EN' AND text IS NOT NULL AND text != ''",
-            [], |r| r.get(0)
-        )?;
-        if count_fts != count_src || count_fts == 0 {
-            log_msg(app, &format!(
-                "BibleStore: Rebuilding FTS5 index (fts={}, src={})...", count_fts, count_src
-            ));
-            conn.execute("INSERT INTO wordlyte_bible_fts(wordlyte_bible_fts) VALUES('rebuild')", [])?;
-        }
+        // NOTE: the FTS index is deliberately NOT rebuilt here. A fresh-install
+        // rebuild is a large write that freezes startup (and drives -wal/-shm
+        // growth). `main.rs` spawns `rebuild_fts_if_needed` on a background
+        // thread after the window opens; until it completes, search falls back
+        // to the LIKE scan.
 
         let books: Vec<String> = {
             let mut stmt = conn.prepare("SELECT DISTINCT title FROM wordlyte_bible ORDER BY title")?;
@@ -273,7 +276,77 @@ impl BibleStore {
             books,
             available_versions,
             active_version: Mutex::new(default_version),
+            db_path: db_path.to_string(),
+            search_index_ready: AtomicBool::new(false),
         })
+    }
+
+    /// True once the FTS5 index is built and in sync. Search callers can use
+    /// this to report/degrade gracefully while the index is being built.
+    pub fn fts_search_ready(&self) -> bool {
+        self.search_index_ready.load(Ordering::SeqCst)
+    }
+
+    /// (Re)builds the full-text index when it is missing or stale relative to
+    /// the source table. Runs on a background thread (see main.rs); the
+    /// `search-index-status` event reports `indexing` / `ready`. It opens a
+    /// DEDICATED connection so the shared read connection is never blocked —
+    /// searches keep working (via the LIKE fallback) while the index builds.
+    /// Afterwards the WAL is checkpointed (TRUNCATE) so the `-wal`/`-shm`
+    /// sidecars shrink instead of lingering after the large build write.
+    pub fn rebuild_fts_if_needed(&self, app: &tauri::AppHandle) {
+        if self.db_path.is_empty() {
+            // In-memory placeholder (no Bible DB yet) — nothing to index.
+            self.search_index_ready.store(true, Ordering::SeqCst);
+            return;
+        }
+
+        let needs = {
+            let conn = self.conn.lock();
+            let count_fts: i64 = conn
+                .query_row("SELECT count(*) FROM wordlyte_bible_fts", [], |r| r.get(0))
+                .unwrap_or(0);
+            let count_src: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM wordlyte_bible WHERE language = 'EN' AND text IS NOT NULL AND text != ''",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            count_fts != count_src || count_fts == 0
+        };
+
+        if !needs {
+            self.search_index_ready.store(true, Ordering::SeqCst);
+            return;
+        }
+
+        log_msg(app, "BibleStore: Rebuilding FTS5 search index in the background...");
+        let _ = app.emit("search-index-status", serde_json::json!({ "state": "indexing" }));
+
+        // Dedicated connection: the shared `self.conn` stays available to
+        // search readers while the (potentially slow) build holds this one.
+        let rebuild_result = Connection::open(&self.db_path)
+            .map_err(|e| e.to_string())
+            .and_then(|conn| {
+                conn.execute("INSERT INTO wordlyte_bible_fts(wordlyte_bible_fts) VALUES('rebuild')", [])
+                    .map(|_| conn)
+                    .map_err(|e| e.to_string())
+            });
+        match rebuild_result {
+            Ok(conn) => {
+                // Best-effort: fold the large build write back into the main DB
+                // so the -wal/-shm sidecars are truncated rather than left
+                // growing. A busy checkpoint (reader in flight) is harmless.
+                let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+                self.search_index_ready.store(true, Ordering::SeqCst);
+                log_msg(app, "BibleStore: FTS5 search index ready.");
+                let _ = app.emit("search-index-status", serde_json::json!({ "state": "ready" }));
+            }
+            Err(e) => {
+                log_msg(app, &format!("BibleStore: FTS5 index rebuild failed: {e}"));
+            }
+        }
     }
 
     pub fn get_available_versions(&self) -> Vec<String> {
@@ -439,6 +512,11 @@ impl BibleStore {
             return Ok(SearchResponse { results: ref_results, method: "reference".to_string() });
         }
 
+        // While the FTS index is still being built off-thread, search falls
+        // back to the LIKE scan and reports method "like" so the UI can show a
+        // degraded-search hint.
+        let indexing = !self.fts_search_ready();
+
         let mut results = self.search_fts_keyword(query, version);
 
         // Still surface the explicit reference at the top of keyword results.
@@ -449,7 +527,7 @@ impl BibleStore {
         }
 
         results.truncate(20);
-        Ok(SearchResponse { results, method: "keyword".to_string() })
+        Ok(SearchResponse { results, method: if indexing { "like".to_string() } else { "keyword".to_string() } })
     }
 
     /// True when the query contains tokens beyond a Bible reference (book words + numbers),

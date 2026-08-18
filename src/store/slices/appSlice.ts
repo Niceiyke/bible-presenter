@@ -40,6 +40,10 @@ export interface AppSlice {
   setIsSchedulePersistent: (v: boolean) => void;
   outputVisible: boolean;
   setOutputVisible: (v: boolean | ((prev: boolean) => boolean)) => void;
+  /** True while the Bible FTS search index is being built off-thread after
+   *  a fresh install; search still works via the LIKE fallback. */
+  bibleIndexing: boolean;
+  setBibleIndexing: (v: boolean) => void;
   showShortcuts: boolean;
   setShowShortcuts: (v: boolean | ((prev: boolean) => boolean)) => void;
   logs: LogEntry[];
@@ -129,6 +133,8 @@ export const createAppSlice: StateCreator<AppStore, [], [], AppSlice> = (set) =>
   setIsSchedulePersistent: (v) => set({ isSchedulePersistent: v }),
   outputVisible: false,
   setOutputVisible: (v) => set((s) => ({ outputVisible: typeof v === "function" ? v(s.outputVisible) : v })),
+  bibleIndexing: false,
+  setBibleIndexing: (v) => set({ bibleIndexing: v }),
   showShortcuts: false,
   setShowShortcuts: (v) => set((s) => ({ showShortcuts: typeof v === "function" ? v(s.showShortcuts) : v })),
   logs: [],
