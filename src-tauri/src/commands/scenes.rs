@@ -1,7 +1,7 @@
+use crate::engine::{self, Engine};
+use crate::events::ScenePayload;
 use crate::state::AppState;
-use crate::store::{DisplayItem, Scene, SceneCompositionData, SceneLayout};
-use crate::events::{emit_checked, ScenePayload};
-use crate::remote::commands::{op_go_live_item, op_send_live};
+use crate::store::{DisplayItem, Scene, SceneLayout};
 use tauri::{AppHandle, State};
 
 #[tauri::command]
@@ -50,85 +50,22 @@ pub async fn delete_scene(state: State<'_, AppState>, id: String) -> Result<(), 
 
 /// Recall a scene: apply its settings, props, (optional) lower-third, and
 /// composition to the live presentation state and broadcast everything in one
-/// shot. When the scene carries a `layout`, a `SceneComposition` display item
-/// is staged/committed so the output window composites its zones. The caller
-/// receives the applied payload so the frontend can mirror it immediately
-/// without waiting for events to round-trip.
+/// shot. Delegates to the engine's `op_apply_scene`, which runs the whole
+/// application as ONE logical mutation (single lock, single revision bump),
+/// compensates persistence failures, stages/commits the composition (or
+/// restores the legacy camera), and returns the applied payload so the
+/// frontend can mirror it immediately without waiting for events to
+/// round-trip.
 #[tauri::command]
 pub async fn apply_scene(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<ScenePayload, String> {
     // Applying a scene drives the on-air broadcast path — a scene cannot be
     // recalled onto the projection while the license is not active.
     crate::license::ensure_allowed(&state)?;
-    let scene = state.media_schedule.list_scenes().map_err(|e| e.to_string())?
-        .into_iter()
-        .find(|s| s.id == id)
-        .ok_or_else(|| format!("Scene '{}' not found", id))?;
-
-    let lt_payload = match (&scene.lower_third_data, &scene.lower_third_template) {
-        (Some(data), Some(template)) => {
-            Some(serde_json::json!({ "data": data, "template": template }))
-        }
-        _ => None,
-    };
-
-    // 1) Persist the complete payload BEFORE mutating in-memory presentation
-    //    state. If any write fails, compensate the others so the disk never
-    //    holds half a scene (audit: partial application on props failure).
-    let previous_settings = state.media_schedule.load_settings().map_err(|e| e.to_string())?;
-    state.media_schedule.save_settings(&scene.settings).map_err(|e| e.to_string())?;
-    if let Err(e) = state.media_schedule.save_props(&scene.props).map_err(|e| e.to_string()) {
-        let _ = state.media_schedule.save_settings(&previous_settings);
-        return Err(e);
-    }
-
-    // 2) Composition stage/commit runs BEFORE we mutate settings/props/lower
-    //    third, so a failed live take leaves the previous presentation state
-    //    fully intact (only the disk writes above are compensated).
-    if let Some(layout) = &scene.layout {
-        let item = DisplayItem::SceneComposition(SceneCompositionData {
-            scene_id: scene.id.clone(),
-            name: scene.name.clone(),
-            zones: layout.zones.clone(),
-        });
-        if let Err(e) = op_send_live(&app, &state, item, None) {
-            let _ = state.media_schedule.save_settings(&previous_settings);
-            let _ = state.media_schedule.save_props(&state.presentation.props_layer.lock().clone());
-            return Err(e);
-        }
-    } else if let Some(cam) = &scene.camera {
-        // Legacy single-camera scene: restore the camera feed that was live
-        // at capture time.
-        op_go_live_item(&app, &state, cam.clone(), None);
-    }
-
-    // 3) Mutate settings/props/lower-third in-memory under the presentation
-    //    mutation lock and bump the revision once so stale remote clients
-    //    resynchronize.
-    {
-        let _guard = state.presentation.lock.lock();
-        *state.presentation.settings.lock() = scene.settings.clone();
-        *state.presentation.props_layer.lock() = scene.props.clone();
-        *state.presentation.lower_third.lock() = lt_payload.clone();
-        state.presentation.bump_revision();
-    }
-    emit_checked(&app, "settings-changed", &scene.settings);
-    emit_checked(&app, "props-update", &scene.props);
-    if let Some(payload) = &lt_payload {
-        emit_checked(&app, "lower-third-update", &Some(payload));
-    } else {
-        emit_checked(&app, "lower-third-update", &Option::<serde_json::Value>::None);
-    }
-
-    Ok(ScenePayload {
-        id: scene.id,
-        name: scene.name,
-        settings: scene.settings,
-        props: scene.props,
-        lower_third_data: scene.lower_third_data,
-        lower_third_template: scene.lower_third_template,
-        camera: scene.camera,
-        layout: scene.layout,
-    })
+    let sink = engine::app_emit_sink(&app);
+    let engine = Engine { state: &state, emit: &sink };
+    engine
+        .op_apply_scene(id)
+        .map(|r| r.scene.expect("apply_scene always returns the applied scene"))
 }
 
 /// Capture the current live state as a new scene. Convenience for the

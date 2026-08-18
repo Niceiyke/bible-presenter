@@ -53,3 +53,10 @@ pub fn emit_checked(
         }));
     }
 }
+
+/// `emit_checked` for a pre-serialized JSON payload (used by the Broadcast
+/// Engine, which emits through an injected callback and serializes events to
+/// `serde_json::Value`).
+pub fn emit_checked_value(app: &AppHandle, event: &str, payload: &serde_json::Value) {
+    emit_checked(app, event, payload)
+}

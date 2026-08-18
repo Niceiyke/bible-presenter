@@ -1,4 +1,5 @@
-use crate::events::{emit_checked, LiveItemUpdate};
+use crate::engine::{self, Engine};
+use crate::events::emit_checked;
 use crate::remote::auth::StoredDevice;
 use crate::remote::protocol::{
     RemoteCameraIcePayload, RemoteCameraOfferPayload, RemoteCameraStartPayload,
@@ -9,7 +10,7 @@ use crate::remote::protocol::{
 };
 use crate::remote::{RemoteControl, DESKTOP_CONTROLLER_ID};
 use crate::state::AppState;
-use crate::store::{CustomSlideData, DisplayItem, LowerThirdData, LyricSection, SceneCompositionData, SceneZone, SceneZoneSource, Schedule, ScheduleEntry, SearchResponse, Song, SongSlideData};
+use crate::store::{CustomSlideData, DisplayItem, LowerThirdData, LyricSection, Schedule, ScheduleEntry, SearchResponse, Song, SongSlideData};
 use serde_json::json;
 use tauri::AppHandle;
 
@@ -19,222 +20,11 @@ fn err_result(command_id: &str, revision: u64, code: &str, message: &str) -> Rem
     RemoteCommandResult::err(command_id, revision, code, message)
 }
 
-fn now_ms() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
-}
-
 /// Broadcast the current phone-camera list so every window's Camera tab stays
 /// in sync when a phone starts/stops a camera or disconnects.
 async fn emit_phone_cameras(app: &AppHandle, control: &RemoteControl) {
     let cameras = control.list_phone_cameras().await;
     emit_checked(app, "phone-cameras-changed", &json!({ "cameras": cameras }));
-}
-
-// ---------------------------------------------------------------------------
-// Shared display operations (used by both Tauri commands and remote dispatch)
-// ---------------------------------------------------------------------------
-
-/// Map an incoming display item to the `SceneZoneSource` bus class that would
-/// consume it inside a scene composition. `SceneComposition` items never
-/// follow a zone (a zone can't host a nested scene) so they return `None`.
-fn zone_source_for(item: &DisplayItem) -> Option<SceneZoneSource> {
-    match item {
-        DisplayItem::Verse(_) => Some(SceneZoneSource::Verse),
-        DisplayItem::Camera(_) => Some(SceneZoneSource::Camera),
-        DisplayItem::Timer(_) => Some(SceneZoneSource::Timer),
-        DisplayItem::Song(_) => Some(SceneZoneSource::Song),
-        DisplayItem::Media(_) => Some(SceneZoneSource::Media),
-        DisplayItem::CustomSlide(_) => Some(SceneZoneSource::Slide),
-        DisplayItem::SceneComposition(_) => None,
-    }
-}
-
-/// Phase 5 — zones as bus primitives.
-///
-/// When a scene composition is the current live item and a new item is taken
-/// live, refresh the zones whose `source` matches the incoming item's content
-/// class *in place* instead of replacing the whole scene. Returns the patched
-/// composition when at least one zone follows the incoming class, or `None`
-/// when the live item isn't a composition or nothing follows it (callers fall
-/// back to the normal replace-everything take).
-fn patch_scene_zones(live: &DisplayItem, incoming: &DisplayItem) -> Option<DisplayItem> {
-    let DisplayItem::SceneComposition(comp) = live else { return None };
-    let source = zone_source_for(incoming)?;
-    let mut patched = false;
-    let zones: Vec<SceneZone> = comp.zones.iter().map(|z| {
-        if z.source.as_ref() == Some(&source) {
-            patched = true;
-            let mut z2 = z.clone();
-            z2.item = incoming.clone();
-            z2
-        } else {
-            z.clone()
-        }
-    }).collect();
-    if !patched {
-        return None;
-    }
-    Some(DisplayItem::SceneComposition(SceneCompositionData {
-        scene_id: comp.scene_id.clone(),
-        name: comp.name.clone(),
-        zones,
-    }))
-}
-
-/// Acquires the presentation mutation lock. Every `op_*` helper takes this
-/// first so desktop and remote callers can never interleave two mutations
-/// mid-transaction (audit: concurrent stage/send-live atomicity).
-fn lock_presentation(state: &AppState) -> parking_lot::MutexGuard<'_, ()> {
-    state.presentation.lock.lock()
-}
-
-/// Emits `live-item-update` carrying the current presentation revision so
-/// windows can order a hydration snapshot against live events.
-fn emit_live_update(app: &AppHandle, state: &AppState, detected_item: Option<DisplayItem>) {
-    let update = LiveItemUpdate {
-        detected_item,
-        revision: Some(state.presentation.current_revision()),
-    };
-    emit_checked(app, "live-item-update", &update);
-}
-
-pub fn op_stage(app: &AppHandle, state: &AppState, item: DisplayItem, source: Option<String>, revision: u64) {
-    let _guard = lock_presentation(state);
-    op_stage_locked(app, state, item, source, revision);
-}
-
-/// `op_stage` with the presentation lock already held (composite operations
-/// such as `op_send_live` call this to stay atomic).
-pub fn op_stage_locked(app: &AppHandle, state: &AppState, item: DisplayItem, source: Option<String>, _revision: u64) {
-    state.presentation.bump_revision();
-    *state.presentation.staged_item.lock() = Some(item.clone());
-    emit_checked(app, "item-staged", &item);
-    state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": item }), source);
-}
-
-/// Clears the staged slot only (live stays untouched) and broadcasts the
-/// cleared state so every window — including the output/stage windows — drops
-/// the staged item. Replaces the frontend-only "clear staged" that left the
-/// backend slot populated.
-pub fn op_clear_staged(app: &AppHandle, state: &AppState, source: Option<String>) {
-    let _guard = lock_presentation(state);
-    state.presentation.bump_revision();
-    *state.presentation.staged_item.lock() = None;
-    emit_checked(app, "item-staged", &Option::<DisplayItem>::None);
-    state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": null }), source);
-}
-
-/// Commit the staged item as live, patching pinned scene-zone buses when the
-/// current live item is a composition that follows the staged content class.
-/// Returns `None` when nothing was staged (a no-op, never a mutation).
-pub fn op_commit_staged(app: &AppHandle, state: &AppState, source: Option<String>) -> Option<DisplayItem> {
-    let _guard = lock_presentation(state);
-    op_commit_staged_locked(app, state, source)
-}
-
-/// `op_commit_staged` with the presentation lock already held.
-pub fn op_commit_staged_locked(app: &AppHandle, state: &AppState, source: Option<String>) -> Option<DisplayItem> {
-    let mut live = state.presentation.live_item.lock();
-    let staged = state.presentation.staged_item.lock().clone();
-    let committed = match (&*live, &staged) {
-        (Some(live_item), Some(staged_item)) => {
-            Some(patch_scene_zones(live_item, staged_item).unwrap_or_else(|| staged_item.clone()))
-        }
-        _ => staged.clone(),
-    };
-    committed.as_ref()?;
-    state.presentation.bump_revision();
-    *live = committed.clone();
-    drop(live);
-    emit_live_update(app, state, committed.clone());
-    state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": committed }), source);
-    committed
-}
-
-pub fn op_clear_live(app: &AppHandle, state: &AppState, source: Option<String>) {
-    let _guard = lock_presentation(state);
-    state.presentation.bump_revision();
-    *state.presentation.live_item.lock() = None;
-    emit_live_update(app, state, None);
-    let staged = state.presentation.staged_item.lock().clone();
-    emit_checked(app, "item-staged", &staged);
-    state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": null }), source.clone());
-    state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": staged }), source);
-}
-
-pub fn op_go_live_item(app: &AppHandle, state: &AppState, item: DisplayItem, source: Option<String>) {
-    let _guard = lock_presentation(state);
-    let mut live = state.presentation.live_item.lock();
-    let committed = match &*live {
-        // Phase 5: when a scene composition is live and the sent item matches
-        // a pinned zone bus, refresh that zone in place instead of replacing
-        // the whole scene (e.g. remote "camera.send_live" into a camera zone).
-        Some(live_item) => patch_scene_zones(live_item, &item).unwrap_or(item.clone()),
-        None => item.clone(),
-    };
-    state.presentation.bump_revision();
-    *live = Some(committed.clone());
-    drop(live);
-    emit_live_update(app, state, Some(committed.clone()));
-    state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": committed }), source);
-}
-
-/// Clear everything the audience can see: live item, staged item, lower-third
-/// overlay and props layer. Persists the cleared props so a restart does not
-/// resurrect previously cleared props. Persist-before-mutate keeps the
-/// operation transactional: on persistence failure nothing is cleared and the
-/// error is surfaced to the operator.
-pub fn op_clear_all(app: &AppHandle, state: &AppState, source: Option<String>) -> Result<(), String> {
-    let _guard = lock_presentation(state);
-
-    state.media_schedule.save_props(&[]).map_err(|e| e.to_string())?;
-
-    state.presentation.bump_revision();
-    *state.presentation.live_item.lock() = None;
-    *state.presentation.staged_item.lock() = None;
-    *state.presentation.lower_third.lock() = None;
-    state.presentation.props_layer.lock().clear();
-
-    emit_live_update(app, state, None);
-    emit_checked(app, "item-staged", &Option::<DisplayItem>::None);
-    emit_checked(app, "lower-third-update", &Option::<serde_json::Value>::None);
-    emit_checked(app, "props-update", &Vec::<crate::store::PropItem>::new());
-
-    state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": null }), source.clone());
-    state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": null }), source.clone());
-    state.remote.hub.publish(RemoteEventKind::LowerThirdChanged, json!({ "lower_third": null }), source);
-    Ok(())
-}
-
-pub fn op_set_blackout(app: &AppHandle, state: &AppState, on: bool, source: Option<String>) -> Result<(), String> {
-    let mut settings = state.presentation.settings.lock().clone();
-    settings.is_blanked = on;
-    state.media_schedule.save_settings(&settings).map_err(|e| e.to_string())?;
-    *state.presentation.settings.lock() = settings.clone();
-    emit_checked(app, "settings-changed", &settings);
-    state.remote.hub.publish(RemoteEventKind::BlackoutChanged, json!({ "blackout": on }), source);
-    Ok(())
-}
-
-/// Transactional send-live: stage the resolved item, then commit only if
-/// staging succeeded. On commit failure the previous staged item is restored.
-/// The whole stage->commit sequence runs under one presentation lock so a
-/// concurrent desktop/remote caller can never commit a different item in the
-/// middle (audit: concurrent stage/send-live atomicity).
-pub fn op_send_live(app: &AppHandle, state: &AppState, item: DisplayItem, source: Option<String>) -> Result<DisplayItem, String> {
-    let _guard = lock_presentation(state);
-    let previous_staged = state.presentation.staged_item.lock().clone();
-    op_stage_locked(app, state, item.clone(), source.clone(), 0);
-    let committed = match op_commit_staged_locked(app, state, source) {
-        Some(c) => c,
-        None => {
-            *state.presentation.staged_item.lock() = previous_staged.clone();
-            emit_checked(app, "item-staged", &previous_staged);
-            return Err("Could not commit staged item".into());
-        }
-    };
-    Ok(committed)
 }
 
 // ---------------------------------------------------------------------------
@@ -516,32 +306,18 @@ pub fn op_stage_queue_neighbor(app: &AppHandle, state: &AppState, dir: i32, sour
         None if dir > 0 => 0,
         None => entries.len() - 1,
     };
-    op_stage(app, state, entries[idx].item.clone(), source, 0);
+    let sink = crate::engine::app_emit_sink(app);
+    let engine = Engine {
+        state,
+        emit: &sink,
+    };
+    let _ = engine.op_stage(entries[idx].item.clone(), source, 0);
     Ok(())
 }
 
 // ---------------------------------------------------------------------------
 // Lower third helpers
 // ---------------------------------------------------------------------------
-
-/// Shows a lower-third overlay through the authoritative presentation state.
-pub fn op_show_lower_third(app: &AppHandle, state: &AppState, data: LowerThirdData, template: Option<serde_json::Value>, source: Option<String>) {
-    let _guard = lock_presentation(state);
-    state.presentation.bump_revision();
-    let payload = json!({ "data": data, "template": template.unwrap_or_else(|| json!({})) });
-    *state.presentation.lower_third.lock() = Some(payload.clone());
-    emit_checked(app, "lower-third-update", &Some(payload.clone()));
-    state.remote.hub.publish(RemoteEventKind::LowerThirdChanged, json!({ "lower_third": payload }), source);
-}
-
-/// Hides any lower-third overlay and propagates the null change.
-pub fn op_hide_lower_third(app: &AppHandle, state: &AppState, source: Option<String>) {
-    let _guard = lock_presentation(state);
-    state.presentation.bump_revision();
-    *state.presentation.lower_third.lock() = None;
-    emit_checked(app, "lower-third-update", &Option::<serde_json::Value>::None);
-    state.remote.hub.publish(RemoteEventKind::LowerThirdChanged, json!({ "lower_third": null }), source);
-}
 
 /// Resolves the full lower-third template the remote wants to project. A
 /// `template_id` referencing a saved template wins; otherwise the raw
@@ -745,6 +521,15 @@ pub async fn dispatch(
 
     let source = Some(device.id.clone());
 
+    // The dispatch drives the shared broadcast engine so remote and desktop
+    // mutations run through the same single-lock, single-revision, single-event
+    // contract.
+    let sink = crate::engine::app_emit_sink(app);
+    let engine = Engine {
+        state,
+        emit: &sink,
+    };
+
     match command.r#type {
         RemoteCommandType::SnapshotGet => {
             let permissions = match control.tokens.device(&device.id) {
@@ -808,18 +593,19 @@ pub async fn dispatch(
         RemoteCommandType::BibleStage => {
             let r = command_payload::<RemoteVerseRef>(command).ok();
             let resp = match r {
-                Some(r) => resolve_verse(state, &r).map(|item| op_stage(app, state, item, source.clone(), control.hub.current_revision())),
+                Some(r) => resolve_verse(state, &r).map(|item| engine.op_stage(item, source.clone(), control.hub.current_revision()).map(|_| ())),
                 None => Err("Missing verse reference".into()),
             };
             match resp {
-                Ok(()) => RemoteCommandResult::ok(&command.command_id, control.hub.current_revision()),
+                Ok(Ok(())) => RemoteCommandResult::ok(&command.command_id, control.hub.current_revision()),
+                Ok(Err(e)) => err_result(&command.command_id, control.hub.current_revision(), "stage_failed", &e),
                 Err(e) => err_result(&command.command_id, control.hub.current_revision(), "stage_failed", &e),
             }
         }
         RemoteCommandType::BibleGoLive => {
             let r = command_payload::<RemoteVerseRef>(command).ok();
             let resp = match r {
-                Some(r) => resolve_verse(state, &r).and_then(|item| op_send_live(app, state, item, source.clone())),
+                Some(r) => resolve_verse(state, &r).and_then(|item| engine.op_send_live(item, source.clone()).map(|_| ())),
                 None => Err("Missing verse reference".into()),
             };
             match resp {
@@ -836,7 +622,7 @@ pub async fn dispatch(
             };
             match next {
                 Some(item) => {
-                    op_stage(app, state, item, source.clone(), control.hub.current_revision());
+                    let _ = engine.op_stage(item, source.clone(), control.hub.current_revision());
                     RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
                 }
                 None => err_result(&command.command_id, control.hub.current_revision(), "no_next_verse", "No next/previous verse"),
@@ -851,32 +637,33 @@ pub async fn dispatch(
             };
             match next {
                 Some(item) => {
-                    let _ = op_send_live(app, state, item, source.clone());
+                    let _ = engine.op_send_live(item, source.clone());
                     RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
                 }
                 None => err_result(&command.command_id, control.hub.current_revision(), "no_next_verse", "No next/previous verse"),
             }
         }
         RemoteCommandType::DisplayGoLive => {
-            match op_commit_staged(app, state, source.clone()) {
-                Some(_) => RemoteCommandResult::ok(&command.command_id, control.hub.current_revision()),
-                None => err_result(&command.command_id, control.hub.current_revision(), "nothing_staged", "No staged item to go live"),
+            match engine.op_commit_staged(source.clone()) {
+                Ok(r) if r.committed.is_some() => RemoteCommandResult::ok(&command.command_id, control.hub.current_revision()),
+                Ok(_) => err_result(&command.command_id, control.hub.current_revision(), "nothing_staged", "No staged item to go live"),
+                Err(e) => err_result(&command.command_id, control.hub.current_revision(), "commit_failed", &e),
             }
         }
         RemoteCommandType::DisplayClearLive => {
-            op_clear_live(app, state, source.clone());
+            let _ = engine.op_clear_live(source.clone());
             RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
         }
         RemoteCommandType::DisplayClearAll => {
-            match op_clear_all(app, state, source.clone()) {
-                Ok(()) => RemoteCommandResult::ok(&command.command_id, control.hub.current_revision()),
+            match engine.op_clear_all(source.clone()) {
+                Ok(_) => RemoteCommandResult::ok(&command.command_id, control.hub.current_revision()),
                 Err(e) => err_result(&command.command_id, control.hub.current_revision(), "clear_failed", &e),
             }
         }
         RemoteCommandType::DisplayBlackout => {
             let on = command_payload::<serde_json::Value>(command).map(|v| v.get("on").and_then(|v| v.as_bool()).unwrap_or(true)).unwrap_or(true);
-            match op_set_blackout(app, state, on, source.clone()) {
-                Ok(()) => RemoteCommandResult::ok(&command.command_id, control.hub.current_revision()),
+            match engine.op_set_blackout(on, source.clone()) {
+                Ok(_) => RemoteCommandResult::ok(&command.command_id, control.hub.current_revision()),
                 Err(e) => err_result(&command.command_id, control.hub.current_revision(), "blackout_failed", &e),
             }
         }
@@ -983,9 +770,9 @@ pub async fn dispatch(
                                 notes: slide.notes.clone(),
                             });
                             if command.r#type == RemoteCommandType::StudioGoLive {
-                                op_go_live_item(app, state, item, source.clone());
+                                let _ = engine.op_go_live_item(item, source.clone());
                             } else {
-                                op_stage(app, state, item, source.clone(), control.hub.current_revision());
+                                let _ = engine.op_stage(item, source.clone(), control.hub.current_revision());
                             }
                             Ok(())
                         }
@@ -1058,9 +845,9 @@ pub async fn dispatch(
                     Some(song) => match build_song_slide(&song, req.section_index.unwrap_or(0), req.style.clone()) {
                         Ok(item) => {
                             if command.r#type == RemoteCommandType::SongGoLive {
-                                op_send_live(app, state, item, source.clone()).map(|_| ())
+                                engine.op_send_live(item, source.clone()).map(|_| ())
                             } else {
-                                op_stage(app, state, item, source.clone(), control.hub.current_revision());
+                                let _ = engine.op_stage(item, source.clone(), control.hub.current_revision());
                                 Ok(())
                             }
                         }
@@ -1083,13 +870,13 @@ pub async fn dispatch(
                         timer_type: req.timer_type,
                         duration_secs: req.duration_secs,
                         label: req.label,
-                        started_at: if command.r#type == RemoteCommandType::TimerGoLive { Some(now_ms()) } else { None },
+                        started_at: if command.r#type == RemoteCommandType::TimerGoLive { Some(engine::now_ms()) } else { None },
                     };
                     let item = DisplayItem::Timer(timer);
                     if command.r#type == RemoteCommandType::TimerGoLive {
-                        op_go_live_item(app, state, item, source.clone());
+                        let _ = engine.op_go_live_item(item, source.clone());
                     } else {
-                        op_stage(app, state, item, source.clone(), control.hub.current_revision());
+                        let _ = engine.op_stage(item, source.clone(), control.hub.current_revision());
                     }
                     RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
                 }
@@ -1097,23 +884,10 @@ pub async fn dispatch(
             }
         }
         RemoteCommandType::TimerToggle => {
-            let toggled = {
-                let _guard = lock_presentation(state);
-                state.presentation.bump_revision();
-                let mut live = state.presentation.live_item.lock();
-                if let Some(DisplayItem::Timer(ref mut t)) = *live {
-                    t.started_at = if t.started_at.is_some() { None } else { Some(now_ms()) };
-                    true
-                } else {
-                    false
-                }
-            };
-            if toggled {
-                let item = state.presentation.live_item.lock().clone();
-                emit_live_update(app, state, item.clone());
-                state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": item }), source);
+            match engine.op_toggle_timer(source.clone()) {
+                Ok(_) => RemoteCommandResult::ok(&command.command_id, control.hub.current_revision()),
+                Err(e) => err_result(&command.command_id, control.hub.current_revision(), "timer_failed", &e),
             }
-            RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
         }
         RemoteCommandType::LowerThirdShow => {
             let req = command_payload::<RemoteLowerThirdPayload>(command).ok();
@@ -1123,7 +897,7 @@ pub async fn dispatch(
                     match serde_json::from_value::<LowerThirdData>(data_json) {
                         Ok(data) => {
                             let template = resolve_lt_template(state, req.template, req.template_id, req.scroll);
-                            op_show_lower_third(app, state, data, template, source.clone());
+                            let _ = engine.op_show_lower_third(data, template, source.clone());
                             RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
                         }
                         Err(e) => err_result(&command.command_id, control.hub.current_revision(), "invalid_lower_third", &e.to_string()),
@@ -1150,7 +924,7 @@ pub async fn dispatch(
             RemoteCommandResult::ok_with(&command.command_id, control.hub.current_revision(), json!(summaries))
         }
         RemoteCommandType::LowerThirdHide => {
-            op_hide_lower_third(app, state, source.clone());
+            let _ = engine.op_hide_lower_third(source.clone());
             RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
         }
         RemoteCommandType::DisplayStageNext | RemoteCommandType::DisplayStagePrevious => {
@@ -1161,16 +935,14 @@ pub async fn dispatch(
             }
         }
         RemoteCommandType::DisplayLogoToggle => {
-            let mut settings = state.presentation.settings.lock().clone();
-            let next = !settings.show_background_logo;
-            settings.show_background_logo = next;
-            if state.media_schedule.save_settings(&settings).is_err() {
-                return err_result(&command.command_id, control.hub.current_revision(), "settings_failed", "Failed to save logo settings");
+            let next = {
+                let settings = state.presentation.settings.lock();
+                !settings.show_background_logo
+            };
+            match engine.op_set_logo(next, source.clone()) {
+                Ok(_) => RemoteCommandResult::ok(&command.command_id, control.hub.current_revision()),
+                Err(e) => err_result(&command.command_id, control.hub.current_revision(), "settings_failed", &e),
             }
-            *state.presentation.settings.lock() = settings.clone();
-            emit_checked(app, "settings-changed", &settings);
-            state.remote.hub.publish(RemoteEventKind::LogoChanged, json!({ "logo": next }), source.clone());
-            RemoteCommandResult::ok(&command.command_id, control.hub.current_revision())
         }
         RemoteCommandType::CameraStart => {
             let req = command_payload::<RemoteCameraStartPayload>(command).ok();
@@ -1517,132 +1289,5 @@ mod tests {
             text_el(serde_json::json!({ "type": "doc", "content": [{ "type": "paragraph", "content": [{ "text": "Body" }] }] }), Some("body".into())),
         ]);
         assert_eq!(slide_title(&multi, 0), "Intro");
-    }
-
-    fn verse_item(book: &str, verse: i32, text: &str) -> DisplayItem {
-        DisplayItem::Verse(crate::store::Verse {
-            book: book.to_string(),
-            chapter: 1,
-            verse,
-            text: text.to_string(),
-            version: "test".to_string(),
-            split_index: None,
-            total_splits: None,
-            score: None,
-        })
-    }
-
-    fn camera_item(device: &str) -> DisplayItem {
-        DisplayItem::Camera(crate::store::CameraBackground {
-            device_id: device.to_string(),
-            opacity: 1.0,
-            object_fit: "cover".to_string(),
-            mirrored: false,
-        })
-    }
-
-    fn zone(id: &str, source: Option<SceneZoneSource>, item: DisplayItem) -> SceneZone {
-        SceneZone {
-            id: id.to_string(),
-            item,
-            source,
-            x: 0.0,
-            y: 0.0,
-            w: 1.0,
-            h: 1.0,
-            fit: "cover".to_string(),
-            opacity: 1.0,
-            z: 1,
-            muted: None,
-            label: None,
-            font_size: None,
-            font_family: None,
-        }
-    }
-
-    fn scene(zones: Vec<SceneZone>) -> DisplayItem {
-        DisplayItem::SceneComposition(SceneCompositionData {
-            scene_id: "s1".to_string(),
-            name: "Test".to_string(),
-            zones,
-        })
-    }
-
-    #[test]
-    fn zone_source_matches_item_kind() {
-        assert_eq!(zone_source_for(&verse_item("John", 3, "For God so loved")), Some(SceneZoneSource::Verse));
-        assert_eq!(zone_source_for(&camera_item("cam1")), Some(SceneZoneSource::Camera));
-        assert_eq!(
-            zone_source_for(&DisplayItem::Timer(crate::store::TimerData { timer_type: "clock".into(), duration_secs: None, label: None, started_at: None })),
-            Some(SceneZoneSource::Timer)
-        );
-        // A scene composition never feeds a zone.
-        assert_eq!(zone_source_for(&scene(vec![])), None);
-    }
-
-    #[test]
-    fn patch_updates_matching_pinned_zone_in_place() {
-        let live = scene(vec![
-            zone("cam", Some(SceneZoneSource::Camera), camera_item("cam1")),
-            zone("verse", Some(SceneZoneSource::Verse), verse_item("John", 3, "old")),
-        ]);
-        let incoming = verse_item("John", 3, "For God so loved");
-        let patched = patch_scene_zones(&live, &incoming).unwrap();
-
-        let DisplayItem::SceneComposition(comp) = patched else { panic!("expected composition") };
-        // Camera zone untouched, verse zone refreshed.
-        assert_eq!(comp.zones.len(), 2);
-        let cam = comp.zones.iter().find(|z| z.id == "cam").unwrap();
-        let v = comp.zones.iter().find(|z| z.id == "verse").unwrap();
-        assert!(matches!(&cam.item, DisplayItem::Camera(c) if c.device_id == "cam1"));
-        assert!(matches!(&v.item, DisplayItem::Verse(x) if x.text == "For God so loved"));
-    }
-
-    #[test]
-    fn patch_returns_none_when_no_zone_follows_incoming() {
-        // Live scene has only a camera zone; a verse take must NOT patch.
-        let live = scene(vec![zone("cam", Some(SceneZoneSource::Camera), camera_item("cam1"))]);
-        assert!(patch_scene_zones(&live, &verse_item("John", 3, "hi")).is_none());
-
-        // Static (unpinned) zones never patch, so the whole scene is replaced.
-        let static_live = scene(vec![zone("verse", None, verse_item("John", 3, "old"))]);
-        assert!(patch_scene_zones(&static_live, &verse_item("John", 3, "new")).is_none());
-
-        // Incoming scene composition never patches.
-        assert!(patch_scene_zones(&live, &scene(vec![])).is_none());
-    }
-
-    #[test]
-    fn patch_preserves_scene_identity_and_geometry() {
-        let live = scene(vec![
-            zone("cam", Some(SceneZoneSource::Camera), camera_item("cam1")),
-            zone("verse", Some(SceneZoneSource::Verse), verse_item("John", 3, "old")),
-        ]);
-        let patched = patch_scene_zones(&live, &verse_item("John", 3, "new")).unwrap();
-        let DisplayItem::SceneComposition(comp) = patched else { panic!("expected composition") };
-        assert_eq!(comp.scene_id, "s1");
-        assert_eq!(comp.name, "Test");
-        let v = comp.zones.iter().find(|z| z.id == "verse").unwrap();
-        assert_eq!(v.x, 0.0);
-        assert_eq!(v.w, 1.0);
-        assert_eq!(v.source, Some(SceneZoneSource::Verse));
-    }
-
-    #[test]
-    fn scene_zone_source_serde_round_trips() {
-        let z = zone("verse", Some(SceneZoneSource::Verse), verse_item("John", 3, "hi"));
-        let json = serde_json::to_value(&z).unwrap();
-        assert_eq!(json["source"]["type"], "verse");
-        let back: SceneZone = serde_json::from_value(json).unwrap();
-        assert_eq!(back.source, Some(SceneZoneSource::Verse));
-
-        // Absent source defaults to a static zone.
-        let static_json = serde_json::json!({
-            "id": "z", "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0,
-            "fit": "cover", "opacity": 1.0, "z": 1,
-            "item": { "type": "Camera", "data": { "deviceId": "d", "opacity": 1.0, "objectFit": "cover", "mirrored": false } }
-        });
-        let back2: SceneZone = serde_json::from_value(static_json).unwrap();
-        assert_eq!(back2.source, None);
     }
 }

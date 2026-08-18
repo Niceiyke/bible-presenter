@@ -1,9 +1,15 @@
-# Contract Inventory (Phase 0 freeze)
+# Contract Inventory (Phase 0 freeze, updated for Phase 1 engine)
 
 Status: living inventory — Phase 0 of `docs/UNIFIED_PRODUCTION_SUITE_PLAN.md`
 requires recording the current event names, command names, persisted files, and
 schema versions BEFORE moving code. This document is that record. Keep it
 updated whenever a contract changes.
+
+As of Phase 1, all presentation mutations live in the **broadcast engine**
+(`src-tauri/src/engine/presentation.rs`); the `commands/display.rs`,
+`commands/props.rs`, `commands/lower_third.rs`, `commands/scenes.rs`, and
+`remote/commands.rs` are thin adapters. Command names and return shapes are
+unchanged (frontend contract frozen).
 
 ## 1. Tauri commands (registered in `src-tauri/src/main.rs`)
 
@@ -26,12 +32,22 @@ Rust function names unless noted.
 `clear_recovery`, `list_services`, `save_service`, `load_service`,
 `delete_service`
 
-### Display / broadcast (`commands/display.rs`)
+### Display / broadcast (`commands/display.rs` — engine adapters)
 `stage_item`, `commit_staged`, `go_live` (legacy → `commit_staged`),
 `send_live_item`, `go_live_item`, `clear_live`, `clear_staged`, `clear_all`,
 `presentation_snapshot` (returns `PresentationSnapshot` incl. `revision`),
 `update_timer`, `get_current_item`, `get_staged_item`, `get_settings`,
 `save_settings`
+
+Every mutating command delegates to the engine's `op_*` method and returns the
+legacy shape: `stage_item`→`()`, `commit_staged`→`Option<DisplayItem>`,
+`go_live`→`()`, `send_live_item`→`DisplayItem`, `go_live_item`→`()`,
+`clear_*`→`()`, `update_timer`→`()`, `save_settings`→`()`,
+`apply_scene`→`ScenePayload`, `presentation_snapshot`→`PresentationSnapshot`
+via `engine::snapshot`. `license::ensure_allowed` stays in the broadcast
+adapters (`stage_item`, `commit_staged`, `go_live`, `send_live_item`,
+`go_live_item`, `apply_scene`) and at the top of remote `dispatch` — not in the
+clear ops.
 
 ### Studio / presentations (`commands/studio_pres.rs`)
 `list_studio_presentations`, `save_studio_presentation`,
@@ -97,11 +113,11 @@ emits through `crate::events::emit_checked` which forwards failures to
 
 | Event | Payload (frontend type) | Emitter |
 | --- | --- | --- |
-| `live-item-update` | `{ detected_item: DisplayItem \| null, revision?: number }` | `commands/display.rs`, `remote/commands.rs`, `commands/outputs.rs` |
-| `item-staged` | `DisplayItem \| null` | `remote/commands.rs` |
-| `settings-changed` | `PresentationSettings` | `commands/display.rs`, `commands/scenes.rs`, `remote/commands.rs`, `commands/outputs.rs` |
-| `lower-third-update` | `{ data, template } \| null` | `remote/commands.rs`, `commands/scenes.rs` |
-| `props-update` | `PropItem[]` | `commands/props.rs`, `commands/scenes.rs`, `remote/commands.rs` |
+| `live-item-update` | `{ detected_item: DisplayItem \| null, revision?: number }` | `engine/presentation.rs`, `commands/outputs.rs` |
+| `item-staged` | `DisplayItem \| null` | `engine/presentation.rs` |
+| `settings-changed` | `PresentationSettings` | `engine/presentation.rs`, `commands/outputs.rs` |
+| `lower-third-update` | `{ data, template } \| null` | `engine/presentation.rs` |
+| `props-update` | `PropItem[]` | `engine/presentation.rs` |
 | `media-control` | `{ action, volume?, currentTime?, rate? }` | frontend → `commands/media.rs` |
 | `media-state` | `{ playing, currentTime, duration, volume, muted, rate } \| null` | frontend (media player) |
 | `songs-sync` | `Song[]` | songs command layer |
@@ -127,8 +143,31 @@ emits through `crate::events::emit_checked` which forwards failures to
 
 ### Remote protocol (WebSocket, `remote/protocol.rs` ↔ `src/types/remote.ts`)
 `REMOTE_PROTOCOL_VERSION` must match between `protocol.rs` and `remote.ts`. All
-mutating commands route through `remote/commands.rs` → shared `op_*` helpers,
-never a separate state owner.
+mutating commands route through `remote/commands.rs` → the shared broadcast
+engine (`engine/presentation.rs`), never a separate state owner.
+
+## 2b. Broadcast engine (`engine/presentation.rs`, Phase 1)
+
+Every presentation mutation (desktop command or remote dispatch) runs through
+`Engine<'a> { state: &AppState, emit: &EmitFn }` where `EmitFn` is the window
+event sink (`app_emit_sink(&AppHandle)` in production, an `EventRecorder` in
+tests). Contract:
+
+- One acquisition of the presentation mutation lock and exactly ONE revision
+  bump per logical mutation; every mutation returns `MutationResult`
+  (`snapshot` = post-mutation `PresentationSnapshot`, `committed` =
+  `Option<DisplayItem>`, `scene` = `Option<ScenePayload>`).
+- Mutations that persist first are transactional: a persistence failure aborts
+  before any in-memory state or event is touched, and multi-write operations
+  compensate the earlier writes (`op_clear_all`, `op_set_props`,
+  `op_save_settings`, `op_apply_scene`).
+- `op_commit_staged` is a true no-op when nothing is staged (no bump, no
+  events). `op_toggle_timer` returns `Result<(MutationResult, bool), String>`.
+- Scene-zone bus primitives live here: `zone_source_for` + `patch_scene_zones`
+  (Phase 5) are free functions; `op_apply_scene` is one logical transaction.
+- `op_get_props` and `snapshot` are free functions (reads, no lock/emit).
+- `PRESENTATION_SCHEMA_VERSION` and `PresentationSnapshot` moved here from
+  `commands/display.rs`.
 
 ## 3. Persisted files under the app data dir
 
@@ -166,7 +205,7 @@ never a separate state owner.
 
 | Document | Constant | Current | Location |
 | --- | --- | --- | --- |
-| `PresentationSnapshot` | `PRESENTATION_SCHEMA_VERSION` | 1 | `commands/display.rs`, `src/types/display.ts` |
+| `PresentationSnapshot` | `PRESENTATION_SCHEMA_VERSION` | 1 | `engine/presentation.rs`, `src/types/display.ts` |
 | `OutputConfig` | `OUTPUT_SCHEMA_VERSION` | 1 | `outputs.rs`, `src/types/output.ts` |
 | Remote protocol | `REMOTE_PROTOCOL_VERSION` | — | `remote/protocol.rs`, `src/types/remote.ts` |
 

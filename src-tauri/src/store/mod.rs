@@ -117,6 +117,12 @@ pub struct BibleStore {
 impl BibleStore {
     pub fn new_empty(app: &tauri::AppHandle) -> Self {
         log_msg(app, "BibleStore: Initializing in empty mode (waiting for database download).");
+        Self::empty_in_memory()
+    }
+
+    /// In-memory placeholder store without a Tauri handle. Used by the
+    /// Broadcast Engine tests to build an `AppState` without a real app.
+    pub(crate) fn empty_in_memory() -> Self {
         let conn = Connection::open_in_memory().expect("Failed to create in-memory DB");
         let patterns = RegexSet::new([
             r"(?i)\b([1-3]?\s*[a-z]+)\s+(\d+):(\d+)\b",

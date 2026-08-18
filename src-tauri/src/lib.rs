@@ -1,6 +1,7 @@
 pub mod store;
 pub mod state;
 pub mod events;
+pub mod engine;
 pub mod commands;
 pub mod remote;
 pub mod outputs;

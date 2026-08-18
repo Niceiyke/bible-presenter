@@ -1,6 +1,6 @@
+use crate::engine::{self, Engine};
 use crate::state::AppState;
 use crate::store;
-use crate::remote::commands::{op_hide_lower_third, op_show_lower_third};
 use tauri::{AppHandle, State};
 
 #[tauri::command]
@@ -10,16 +10,18 @@ pub async fn show_lower_third(
     data: store::LowerThirdData,
     template: serde_json::Value,
 ) -> Result<(), String> {
-    // Route through the same authoritative helper the remote path uses so the
-    // presentation revision bumps and connected phones receive LowerThirdChanged.
-    op_show_lower_third(&app, &state, data, Some(template), None);
-    Ok(())
+    // Route through the shared broadcast engine so the presentation revision
+    // bumps once and connected phones receive LowerThirdChanged.
+    let sink = engine::app_emit_sink(&app);
+    let engine = Engine { state: &state, emit: &sink };
+    engine.op_show_lower_third(data, Some(template), None).map(|_| ())
 }
 
 #[tauri::command]
 pub async fn hide_lower_third(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    op_hide_lower_third(&app, &state, None);
-    Ok(())
+    let sink = engine::app_emit_sink(&app);
+    let engine = Engine { state: &state, emit: &sink };
+    engine.op_hide_lower_third(None).map(|_| ())
 }
 
 #[tauri::command]
@@ -77,6 +79,7 @@ pub async fn show_lt_preset(
         }
     }
 
-    op_show_lower_third(&app, &state, preset.data, Some(tpl), None);
-    Ok(())
+    let sink = engine::app_emit_sink(&app);
+    let engine = Engine { state: &state, emit: &sink };
+    engine.op_show_lower_third(preset.data, Some(tpl), None).map(|_| ())
 }
