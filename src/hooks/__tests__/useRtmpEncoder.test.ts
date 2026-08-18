@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useRtmpEncoder, wrapAdts, requiredAvcLevel, supportsH264, suggestedBitrateKbps } from "../useRtmpEncoder";
 import type { EncoderFactory } from "../useRtmpEncoder";
+import { resetProgramEncoder, startProgramEncoder, getProgramEncoderSnapshot } from "../../system/programEncoder";
 
 // Mock the Tauri bridge before anything imports the real modules.
 vi.mock("@tauri-apps/api/core", () => ({
@@ -333,6 +334,57 @@ describe("useRtmpEncoder", () => {
     expect(result.current.status).toBe("error");
     expect(result.current.error).toContain("writer closed");
     expect(mockInvoke).toHaveBeenCalledWith("rtmp_stop", { sessionId: "dest-test" });
+  });
+});
+
+describe("useRtmpEncoder with shared program encoder (Phase 7)", () => {
+  beforeEach(() => {
+    FakeVideoEncoder.instances = [];
+    FakeTrackProcessor.instances = [];
+    FakeAudioEncoder.instances = [];
+    FakeVideoEncoder.isConfigSupported.mockReset();
+    FakeVideoEncoder.isConfigSupported.mockResolvedValue({ supported: true, config: {} });
+    mockInvoke.mockReset();
+    mockInvoke.mockResolvedValue(undefined);
+    vi.stubGlobal("VideoEncoder", FakeVideoEncoder);
+    vi.stubGlobal("VideoFrame", FakeVideoFrame);
+    vi.stubGlobal("MediaStreamTrackProcessor", FakeTrackProcessor);
+    vi.stubGlobal("AudioEncoder", FakeAudioEncoder);
+    vi.stubGlobal("AudioData", FakeAudioData);
+    resetProgramEncoder();
+  });
+
+  afterEach(() => {
+    resetProgramEncoder();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("shares ONE encoder with the program bus instead of creating its own", async () => {
+    // The hub starts the shared encoder for the master transport.
+    await act(async () => {
+      await startProgramEncoder(fakeStream().getVideoTracks()[0] as unknown as MediaStreamTrack, {
+        width: 1920,
+        height: 1080,
+        fps: 30,
+        bitrateKbps: 6000,
+      });
+    });
+    expect(FakeVideoEncoder.instances.length).toBe(1);
+
+    const { result } = renderHook(() => useRtmpEncoder({ sessionId: "dest-shared", bitrateKbps: 6000, fps: 30 }));
+    let ok = false;
+    await act(async () => {
+      ok = await result.current.start(fakeStream(), "rtmp://host/live", "k");
+    });
+
+    expect(ok).toBe(true);
+    expect(result.current.status).toBe("live");
+    // No second encoder — the destination subscribes to the shared one.
+    expect(FakeVideoEncoder.instances.length).toBe(1);
+    expect(mockInvoke).toHaveBeenCalledWith("rtmp_start", expect.anything());
+    // The destination registered as a packet consumer of the shared encoder.
+    expect(getProgramEncoderSnapshot().activeConsumers).toBe(1);
   });
 });
 

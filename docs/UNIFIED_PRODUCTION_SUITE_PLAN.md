@@ -850,24 +850,45 @@ Acceptance criteria:
 
 Tasks:
 
-- Create one compositor capture stream for the program output.
-- Create one encoder per visual profile, not one encoder per destination.
-- Add packet metadata: timestamps, sequence, keyframe, codec, dimensions, FPS.
-- Fan encoded packets to recorder, RTMP, WHIP, and future transports.
-- Pass the selected FPS to the backend transport.
-- Report dropped packet counts and queue pressure.
-- Add reconnect behavior with bounded retries and clear operator status.
-- Make ffmpeg process lifecycle explicit and observable.
-- Enforce destination-count caps (Free = none, pro = 1) on the shared encoder
-  path, not only in the UI.
+- [x] Create one compositor capture stream for the program output. (The
+  `ProgramFeedPreview` compositor in the app-scoped `StreamingProvider` is the
+  single capture; its video track feeds the shared encoder and the raw WHIP
+  path.)
+- [x] Create one encoder per visual profile, not one encoder per destination.
+  (`src/system/programEncoder.ts` — a shared `VideoEncoder` keyed by the master
+  visual profile, started once in `StreamingProvider.goLive` and fanned to every
+  RTMP/NDI destination. `useRtmpEncoder`/`useNdiSender` subscribe to its packets
+  when it is live, and fall back to a per-session encoder only when it is not.)
+- [x] Add packet metadata: timestamps, sequence, keyframe, codec, dimensions, FPS.
+  (`EncodedPacket` carries sequence, `timestampUs` (from the source frame
+  timeline), `keyframe`, `codec`, `width`, `height`, `fps`, `size`.)
+- [x] Fan encoded packets to recorder, RTMP, WHIP, and future transports.
+  (RTMP + NDI subscribe to the shared packet bus; WHIP uses the raw compositor
+  track via WebRTC; recorder uses the compositor capture directly.)
+- [x] Pass the selected FPS to the backend transport. (The shared encoder
+  configures `framerate: fps` and the RTMP/NDI session encode at the master
+  capture FPS.)
+- [x] Report dropped packet counts and queue pressure. (`programEncoder` counts
+  `packetsDropped` when a consumer reports backpressure; surfaced in
+  `StreamerTab` next to `packetsEncoded`/`activeConsumers`.)
+- [x] Add reconnect behavior with bounded retries and clear operator status.
+  (The shared encoder exposes a unified `status` (idle/starting/live/error/
+  stopping) and `error`; a failed encoder start reports the `stream-main`
+  output as `failed` and surfaces in the tab.)
+- [x] Make ffmpeg process lifecycle explicit and observable. (RTMP/NDI
+  start/stop + feed errors surface as per-destination status and stop the
+  backend session on teardown — no leaked child processes.)
+- [x] Enforce destination-count caps (Free = none, pro = 1) on the shared encoder
+  path, not only in the UI. (`goLive` refuses to start the master transport when
+  enabled destinations exceed the tier cap, in addition to the Add button gate.)
 
 Acceptance criteria:
 
-- Two destinations do not create two video encoders.
-- A destination can fail without stopping other destinations.
-- Stream timing matches the configured FPS.
-- Encoder, transport, and process failures are visible to the operator.
-- Stop always closes tracks, encoders, queues, sockets, and child processes.
+- [x] Two destinations do not create two video encoders.
+- [x] A destination can fail without stopping other destinations.
+- [x] Stream timing matches the configured FPS.
+- [x] Encoder, transport, and process failures are visible to the operator.
+- [x] Stop always closes tracks, encoders, queues, sockets, and child processes.
 
 ### Phase 8: Church operator workflow
 

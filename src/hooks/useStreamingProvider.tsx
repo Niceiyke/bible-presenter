@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store";
@@ -7,6 +7,13 @@ import { tierCapabilities } from "../system/tiers";
 import { reportOutputState, setOutputVisible, STREAM_OUTPUT_ID } from "./outputRuntime";
 import { useAudioGraph } from "./useAudioGraphProvider";
 import { suggestedBitrateKbps } from "./useRtmpEncoder";
+import {
+  getProgramEncoderSnapshot,
+  startProgramEncoder,
+  stopProgramEncoder,
+  subscribeProgramEncoder,
+  type ProgramEncoderSnapshot,
+} from "../system/programEncoder";
 import { ProgramFeedPreview } from "../components/outputs/ProgramFeedPreview";
 import { makeDestination, newDestinationId } from "../components/streaming/presets";
 import type {
@@ -66,6 +73,8 @@ interface StreamingContextValue {
   setAudioDeviceId: (id: string) => void;
   audioError: string | null;
   audioUnavailableReason: string | null;
+  /** Shared program encoder status (Phase 7) — operator-visible lifecycle. */
+  encoder: ProgramEncoderSnapshot;
   streamingBlocked: boolean;
   sharedAudioBlocked: boolean;
   rtmpBlockedReason: string | null;
@@ -131,6 +140,9 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
   // Shared audio gating lives in the audio graph provider (Premium); expose the
   // same flag for the tab's messaging.
   const sharedAudioBlocked = audio.blocked;
+
+  // Shared program encoder status (Phase 7) for operator visibility.
+  const encoder = useSyncExternalStore(subscribeProgramEncoder, getProgramEncoderSnapshot, getProgramEncoderSnapshot);
 
   const persistCapture = useCallback(
     async (width: number, height: number, fps: number) => {
@@ -280,6 +292,13 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
       setToast("Streaming is a Pro feature. Upgrade in Settings → License.");
       return;
     }
+    const enabled = destinations.filter((d) => d.enabled);
+    // Enforce the plan's destination cap on the shared-encoder path too (defense
+    // in depth beyond the Add button).
+    if (enabled.length > streamCaps.streamingDestinations) {
+      report("failed", `Your plan supports ${streamCaps.streamingDestinations} simultaneous destination${streamCaps.streamingDestinations === 1 ? "" : "s"}.`);
+      return;
+    }
     await persistDestinations(destinations);
     // Persist the operator intent FIRST; a failed write must not leave disk
     // and the reported runtime phase diverged.
@@ -292,14 +311,38 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
     }
     report("starting");
     setMasterActive(true);
-    const enabled = destinations.filter((d) => d.enabled);
+
+    // Phase 7: start ONE shared program encoder for the master visual profile
+    // (RTMP/NDI destinations subscribe to its packets) before starting any
+    // transport, so N destinations share one video encoder.
+    const needsEncoder = enabled.some((d) => d.mode === "rtmp" || d.mode === "ndi");
+    if (needsEncoder && stream) {
+      const track = stream.getVideoTracks()[0];
+      if (track) {
+        const ok = await startProgramEncoder(track, {
+          width: captureWidth,
+          height: captureHeight,
+          fps: captureFps,
+          bitrateKbps: streamBitrateKbps,
+        });
+        if (!ok) {
+          report("failed", `Encoder failed to start: ${getProgramEncoderSnapshot().error ?? "unknown"}`);
+          setMasterActive(false);
+          await setOutputVisible(STREAM_OUTPUT_ID, false).catch((e: any) => {
+            console.error("outputs_set_visible failed after encoder error:", e);
+          });
+          return;
+        }
+      }
+    }
+
     for (const d of enabled) {
       if (d.mode === "rtmp" && rtmpBlockedReason) continue;
       if (d.mode === "ndi" && ndiBlockedReason) continue;
       const handle = cardHandles.current.get(d.id);
       if (handle) void handle.start();
     }
-  }, [streamReady, streamingBlocked, setToast, persistDestinations, destinations, rtmpBlockedReason, ndiBlockedReason, report]);
+  }, [streamReady, streamingBlocked, setToast, persistDestinations, destinations, rtmpBlockedReason, ndiBlockedReason, report, streamCaps, stream, captureWidth, captureHeight, captureFps, streamBitrateKbps]);
 
   const stopAll = useCallback(async () => {
     if (!masterActive) return;
@@ -308,6 +351,7 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
       const handle = cardHandles.current.get(d.id);
       if (handle) await handle.stop();
     }
+    stopProgramEncoder();
     setMasterActive(false);
     await setOutputVisible(STREAM_OUTPUT_ID, false).catch((e: any) => {
       console.error("outputs_set_visible failed after stop:", e);
@@ -375,6 +419,7 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
       setAudioDeviceId,
       audioError,
       audioUnavailableReason,
+      encoder,
       streamingBlocked,
       sharedAudioBlocked,
       rtmpBlockedReason,
@@ -382,7 +427,7 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
       destCapReached,
       enabledCount,
     }),
-    [destinations, statuses, saving, stream, streamReady, anyBusy, liveCount, captureWidth, captureHeight, captureFps, streamBitrateKbps, persistCapture, updateDestination, removeDestination, addDestination, registerHandle, handleStatus, goLive, stopAll, getSourceTracks, audioEnabled, setAudioEnabled, audioDevices, audioDeviceId, setAudioDeviceId, audioError, audioUnavailableReason, streamingBlocked, sharedAudioBlocked, rtmpBlockedReason, ndiBlockedReason, destCapReached, enabledCount]
+    [destinations, statuses, saving, stream, streamReady, anyBusy, liveCount, captureWidth, captureHeight, captureFps, streamBitrateKbps, persistCapture, updateDestination, removeDestination, addDestination, registerHandle, handleStatus, goLive, stopAll, getSourceTracks, audioEnabled, setAudioEnabled, audioDevices, audioDeviceId, setAudioDeviceId, audioError, audioUnavailableReason, encoder, streamingBlocked, sharedAudioBlocked, rtmpBlockedReason, ndiBlockedReason, destCapReached, enabledCount]
   );
 
   return (

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { supportsH264, waitForEncoderConfig, bytesToBase64, type EncoderFactory } from "./useRtmpEncoder";
+import { programEncoderIsLive, subscribeProgramPackets } from "../system/programEncoder";
 
 /**
  * `useNdiSender` — NDI|HX transport for one NDI destination (Phase 8 scaffold).
@@ -55,6 +56,8 @@ export function useNdiSender(options: UseNdiSenderOptions): UseNdiSenderResult {
   const bytesRef = useRef(0);
   const runningRef = useRef(false);
   const frameCountRef = useRef(0);
+  /** Unsubscribe from the shared program encoder's video packets (Phase 7). */
+  const sharedVideoUnsubRef = useRef<(() => void) | null>(null);
   const [status, setStatus] = useState<NdiStreamerStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [bitrate, setBitrate] = useState(0);
@@ -82,6 +85,10 @@ export function useNdiSender(options: UseNdiSenderOptions): UseNdiSenderResult {
   const teardown = useCallback(() => {
     runningRef.current = false;
     clearStats();
+    if (sharedVideoUnsubRef.current) {
+      sharedVideoUnsubRef.current();
+      sharedVideoUnsubRef.current = null;
+    }
     if (readerRef.current) {
       readerRef.current.cancel().catch(() => {});
       readerRef.current = null;
@@ -141,7 +148,7 @@ export function useNdiSender(options: UseNdiSenderOptions): UseNdiSenderResult {
         setError("WebCodecs (VideoEncoder) is not available in this webview.");
         return false;
       }
-      if (typeof MediaStreamTrackProcessor === "undefined") {
+      if (typeof MediaStreamTrackProcessor === "undefined" && !programEncoderIsLive()) {
         setStatus("error");
         setError("MediaStreamTrackProcessor is not available in this webview.");
         return false;
@@ -150,49 +157,56 @@ export function useNdiSender(options: UseNdiSenderOptions): UseNdiSenderResult {
       setStatus("connecting");
       setError(null);
 
-      const codec = await supportsH264(
-        VideoEncoder as unknown as EncoderFactory,
-        width,
-        height,
-        bitrateKbps,
-        fps
-      );
-      if (!codec) {
-        setStatus("error");
-        setError("No supported H.264 profile found for this encoder.");
-        return false;
-      }
+      // Phase 7: when the shared program encoder is live, consume ITS video
+      // packets instead of running a per-destination encoder.
+      const useSharedVideo = programEncoderIsLive();
 
-      let encoder: VideoEncoder;
-      try {
-        encoder = new VideoEncoder({
-          output: (chunk) => {
-            bytesRef.current += chunk.byteLength;
-            const buf = new Uint8Array(chunk.byteLength);
-            chunk.copyTo(buf);
-            // Best-effort feed; the backend surfaces real NDI failures.
-            invoke("ndi_send", { sessionId, dataBase64: bytesToBase64(buf) }).catch((e: any) => {
+      let encoder: VideoEncoder | null = null;
+      let codec: string | null = null;
+      if (!useSharedVideo) {
+        codec = await supportsH264(
+          VideoEncoder as unknown as EncoderFactory,
+          width,
+          height,
+          bitrateKbps,
+          fps
+        );
+        if (!codec) {
+          setStatus("error");
+          setError("No supported H.264 profile found for this encoder.");
+          return false;
+        }
+
+        try {
+          encoder = new VideoEncoder({
+            output: (chunk) => {
+              bytesRef.current += chunk.byteLength;
+              const buf = new Uint8Array(chunk.byteLength);
+              chunk.copyTo(buf);
+              // Best-effort feed; the backend surfaces real NDI failures.
+              invoke("ndi_send", { sessionId, dataBase64: bytesToBase64(buf) }).catch((e: any) => {
+                if (runningRef.current) {
+                  setStatus("error");
+                  setError(`NDI feed failed: ${e?.message ?? e}`);
+                  teardown();
+                }
+              });
+            },
+            error: (e) => {
               if (runningRef.current) {
                 setStatus("error");
-                setError(`NDI feed failed: ${e?.message ?? e}`);
+                setError(`Encoder error: ${e?.message ?? e}`);
                 teardown();
               }
-            });
-          },
-          error: (e) => {
-            if (runningRef.current) {
-              setStatus("error");
-              setError(`Encoder error: ${e?.message ?? e}`);
-              teardown();
-            }
-          },
-        });
-      } catch (e: any) {
-        setStatus("error");
-        setError(`Failed to create encoder: ${e?.message ?? e}`);
-        return false;
+            },
+          });
+        } catch (e: any) {
+          setStatus("error");
+          setError(`Failed to create encoder: ${e?.message ?? e}`);
+          return false;
+        }
+        encoderRef.current = encoder;
       }
-      encoderRef.current = encoder;
 
       try {
         await invoke("ndi_start", { sessionId, name });
@@ -203,49 +217,67 @@ export function useNdiSender(options: UseNdiSenderOptions): UseNdiSenderResult {
         return false;
       }
 
-      const config: VideoEncoderConfig = {
-        codec,
-        width,
-        height,
-        bitrate: bitrateKbps * 1000,
-        framerate: fps,
-        avc: { format: "annexb" },
-      };
-      await waitForEncoderConfig(encoder, config);
+      if (useSharedVideo) {
+        runningRef.current = true;
+        frameCountRef.current = 0;
+        setStatus("live");
+        startBitratePolling();
+        sharedVideoUnsubRef.current = subscribeProgramPackets((packet) => {
+          bytesRef.current += packet.size;
+          invoke("ndi_send", { sessionId, dataBase64: bytesToBase64(packet.bytes) }).catch((e: any) => {
+            if (runningRef.current) {
+              setStatus("error");
+              setError(`NDI feed failed: ${e?.message ?? e}`);
+              teardown();
+            }
+          });
+          return true;
+        });
+      } else {
+        const config: VideoEncoderConfig = {
+          codec: codec as string,
+          width,
+          height,
+          bitrate: bitrateKbps * 1000,
+          framerate: fps,
+          avc: { format: "annexb" },
+        };
+        await waitForEncoderConfig(encoder as VideoEncoder, config);
 
-      runningRef.current = true;
-      frameCountRef.current = 0;
-      setStatus("live");
-      startBitratePolling();
+        runningRef.current = true;
+        frameCountRef.current = 0;
+        setStatus("live");
+        startBitratePolling();
 
-      const processor = new MediaStreamTrackProcessor<VideoFrame>({ track });
-      processorRef.current = processor;
-      const reader = processor.readable.getReader();
-      readerRef.current = reader;
+        const processor = new MediaStreamTrackProcessor<VideoFrame>({ track });
+        processorRef.current = processor;
+        const reader = processor.readable.getReader();
+        readerRef.current = reader;
 
-      const keyframeEvery = Math.max(1, Math.round(keyframeIntervalSec * fps));
-      (async () => {
-        try {
-          for (;;) {
-            const { value, done } = await reader.read();
-            if (done || !runningRef.current) break;
-            const frame = value as VideoFrame;
-            if (frame) {
-              frameCountRef.current += 1;
-              const isKey = frameCountRef.current === 1 || frameCountRef.current % keyframeEvery === 0;
-              try {
-                encoder.encode(frame, { keyFrame: isKey });
-              } catch {
-                // encoder closed mid-take
-              } finally {
-                frame.close();
+        const keyframeEvery = Math.max(1, Math.round(keyframeIntervalSec * fps));
+        (async () => {
+          try {
+            for (;;) {
+              const { value, done } = await reader.read();
+              if (done || !runningRef.current) break;
+              const frame = value as VideoFrame;
+              if (frame) {
+                frameCountRef.current += 1;
+                const isKey = frameCountRef.current === 1 || frameCountRef.current % keyframeEvery === 0;
+                try {
+                  (encoder as VideoEncoder).encode(frame, { keyFrame: isKey });
+                } catch {
+                  // encoder closed mid-take
+                } finally {
+                  frame.close();
+                }
               }
             }
+          } catch {
+            // reader cancelled on teardown
           }
-        } catch {
-          // reader cancelled on teardown
-        }
-      })();
+        })();
+      }
 
       return true;
     },

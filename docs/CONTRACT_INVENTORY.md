@@ -1,4 +1,4 @@
-# Contract Inventory (Phase 0 freeze, updated for Phase 1/2/3/4/5/6)
+# Contract Inventory (Phase 0 freeze, updated for Phase 1/2/3/4/5/6/7)
 
 Status: living inventory — Phases 0-3 of `docs/UNIFIED_PRODUCTION_SUITE_PLAN.md`
 requires recording the current event names, command names, persisted files, and
@@ -306,6 +306,27 @@ tests). Contract:
 - **A/V sync policy:** the program track and the compositor video track are both
   real-time live captures aligned at capture time and cloned together at start;
   per-sample packet timestamping is Phase 7.
+
+## 2g. Shared encoder / packet bus (`src/system/programEncoder.ts`, Phase 7)
+
+- **One encoder per visual profile.** `startProgramEncoder(track, profile)`
+  runs a single `VideoEncoder` (H.264 Annex-B) over the one compositor capture
+  track at the master `{width, height, fps, bitrateKbps}` profile; it is
+  idempotent for the same profile and restarts for a different one. The hub
+  (`StreamingProvider.goLive`) starts it before transports; `stopProgramEncoder`
+  closes it on Stop All.
+- **Packet bus.** `subscribeProgramPackets(cb)` registers a transport sink that
+  receives `EncodedPacket { sequence, timestampUs, keyframe, codec, width,
+  height, fps, size, bytes }` (timestamps from the source `VideoFrame`
+  timeline). Consumers return `false` to signal backpressure; the module counts
+  `packetsDropped`. `useRtmpEncoder`/`useNdiSender` subscribe when
+  `programEncoderIsLive()` (→ `rtmp_send`/`ndi_send` per packet) and fall back
+  to a per-session encoder otherwise, so existing standalone behavior and tests
+  are preserved.
+- **Status:** unified `status` (idle/starting/live/error/stopping) + `error` +
+  `activeConsumers`/`packetsEncoded`/`packetsDropped`, surfaced in
+  `StreamerTab`. Destination caps are enforced in `goLive` (defense in depth)
+  in addition to the Add-button gate.
 
 ## 3. Persisted files under the app data dir
 

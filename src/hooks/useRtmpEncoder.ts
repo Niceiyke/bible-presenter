@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { programEncoderIsLive, subscribeProgramPackets } from "../system/programEncoder";
 
 /**
  * `useRtmpEncoder` — WebCodecs H.264 + AAC encoder for one RTMP destination
@@ -204,6 +205,8 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
   const readerRef = useRef<ReadableStreamDefaultReader<VideoFrame> | null>(null);
   const audioReaderRef = useRef<ReadableStreamDefaultReader<AudioData> | null>(null);
   const audioTrackRef = useRef<MediaStreamTrack | null>(null);
+  /** Unsubscribe from the shared program encoder's video packets (Phase 7). */
+  const sharedVideoUnsubRef = useRef<(() => void) | null>(null);
   const bytesRef = useRef(0);
   const runningRef = useRef(false);
   const frameCountRef = useRef(0);
@@ -234,6 +237,10 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
   const teardown = useCallback(() => {
     runningRef.current = false;
     clearStats();
+    if (sharedVideoUnsubRef.current) {
+      sharedVideoUnsubRef.current();
+      sharedVideoUnsubRef.current = null;
+    }
     for (const ref of [readerRef, audioReaderRef]) {
       if (ref.current) {
         ref.current.cancel().catch(() => {});
@@ -321,11 +328,6 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
         setError("WebCodecs (VideoEncoder) is not available in this webview.");
         return false;
       }
-      if (typeof MediaStreamTrackProcessor === "undefined") {
-        setStatus("error");
-        setError("MediaStreamTrackProcessor is not available in this webview.");
-        return false;
-      }
 
       let audioTrack: MediaStreamTrack | null = null;
       let audioSampleRate = 48000;
@@ -373,45 +375,11 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
       setStatus("connecting");
       setError(null);
 
-      const codec = await supportsH264(
-        VideoEncoder as unknown as EncoderFactory,
-        width,
-        height,
-        bitrateKbps,
-        fps
-      );
-      if (!codec) {
-        fail("No supported H.264 profile found for this encoder.");
-        if (audioTrackRef.current === audioTrack) audioTrack?.stop();
-        return false;
-      }
-
-      let encoder: VideoEncoder;
-      try {
-        encoder = new VideoEncoder({
-          output: (chunk, _meta) => {
-            bytesRef.current += chunk.byteLength;
-            const buf = new Uint8Array(chunk.byteLength);
-            chunk.copyTo(buf);
-            // Best-effort feed; the backend surfaces real ffmpeg failures.
-            invoke("rtmp_send", { sessionId, dataBase64: bytesToBase64(buf) }).catch((e: any) => {
-              if (runningRef.current) {
-                fail(`RTMP feed failed: ${e?.message ?? e}`);
-              }
-            });
-          },
-          error: (e) => {
-            if (runningRef.current) {
-              fail(`Encoder error: ${e?.message ?? e}`);
-            }
-          },
-        });
-      } catch (e: any) {
-        fail(`Failed to create encoder: ${e?.message ?? e}`);
-        if (audioTrackRef.current === audioTrack) audioTrack?.stop();
-        return false;
-      }
-      encoderRef.current = encoder;
+      // Phase 7: when the shared program encoder is live (the hub started it
+      // for the master transport), this destination consumes ITS video packets
+      // instead of running its own encoder — so N destinations share one
+      // encoder. Otherwise it falls back to its own per-session encoder.
+      const useSharedVideo = programEncoderIsLive();
 
       let audioEncoder: AudioEncoder | null = null;
       if (audioTrack) {
@@ -463,49 +431,113 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
         return false;
       }
 
-      const config: VideoEncoderConfig = {
-        codec,
-        width,
-        height,
-        bitrate: bitrateKbps * 1000,
-        framerate: fps,
-        avc: { format: "annexb" },
-      };
-      await waitForEncoderConfig(encoder, config);
+      if (useSharedVideo) {
+        // Subscribe to the shared program encoder's packets and forward each to
+        // this session's ffmpeg ingest. The encoder (and its keyframe cadence)
+        // is owned by the hub; we only relay + count bytes for bitrate.
+        runningRef.current = true;
+        frameCountRef.current = 0;
+        setStatus("live");
+        startBitratePolling();
+        sharedVideoUnsubRef.current = subscribeProgramPackets((packet) => {
+          bytesRef.current += packet.size;
+          invoke("rtmp_send", { sessionId, dataBase64: bytesToBase64(packet.bytes) }).catch((e: any) => {
+            if (runningRef.current) {
+              fail(`RTMP feed failed: ${e?.message ?? e}`);
+            }
+          });
+          return true;
+        });
+      } else {
+        if (typeof MediaStreamTrackProcessor === "undefined") {
+          setStatus("error");
+          setError("MediaStreamTrackProcessor is not available in this webview.");
+          return false;
+        }
+        const codec = await supportsH264(
+          VideoEncoder as unknown as EncoderFactory,
+          width,
+          height,
+          bitrateKbps,
+          fps
+        );
+        if (!codec) {
+          fail("No supported H.264 profile found for this encoder.");
+          if (audioTrackRef.current === audioTrack) audioTrack?.stop();
+          return false;
+        }
 
-      runningRef.current = true;
-      frameCountRef.current = 0;
-      setStatus("live");
-      startBitratePolling();
-
-      const processor = new MediaStreamTrackProcessor<VideoFrame>({ track });
-      processorRef.current = processor;
-      const reader = processor.readable.getReader();
-      readerRef.current = reader;
-
-      const keyframeEvery = Math.max(1, Math.round(keyframeIntervalSec * fps));
-      (async () => {
+        let encoder: VideoEncoder;
         try {
-          for (;;) {
-            const { value, done } = await reader.read();
-            if (done || !runningRef.current) break;
-            const frame = value as VideoFrame;
-            if (frame) {
-              frameCountRef.current += 1;
-              const isKey = frameCountRef.current === 1 || frameCountRef.current % keyframeEvery === 0;
-              try {
-                encoder.encode(frame, { keyFrame: isKey });
-              } catch {
-                // encoder closed mid-take
-              } finally {
-                frame.close();
+          encoder = new VideoEncoder({
+            output: (chunk, _meta) => {
+              bytesRef.current += chunk.byteLength;
+              const buf = new Uint8Array(chunk.byteLength);
+              chunk.copyTo(buf);
+              // Best-effort feed; the backend surfaces real ffmpeg failures.
+              invoke("rtmp_send", { sessionId, dataBase64: bytesToBase64(buf) }).catch((e: any) => {
+                if (runningRef.current) {
+                  fail(`RTMP feed failed: ${e?.message ?? e}`);
+                }
+              });
+            },
+            error: (e) => {
+              if (runningRef.current) {
+                fail(`Encoder error: ${e?.message ?? e}`);
+              }
+            },
+          });
+        } catch (e: any) {
+          fail(`Failed to create encoder: ${e?.message ?? e}`);
+          if (audioTrackRef.current === audioTrack) audioTrack?.stop();
+          return false;
+        }
+        encoderRef.current = encoder;
+
+        const config: VideoEncoderConfig = {
+          codec,
+          width,
+          height,
+          bitrate: bitrateKbps * 1000,
+          framerate: fps,
+          avc: { format: "annexb" },
+        };
+        await waitForEncoderConfig(encoder, config);
+
+        runningRef.current = true;
+        frameCountRef.current = 0;
+        setStatus("live");
+        startBitratePolling();
+
+        const processor = new MediaStreamTrackProcessor<VideoFrame>({ track });
+        processorRef.current = processor;
+        const reader = processor.readable.getReader();
+        readerRef.current = reader;
+
+        const keyframeEvery = Math.max(1, Math.round(keyframeIntervalSec * fps));
+        (async () => {
+          try {
+            for (;;) {
+              const { value, done } = await reader.read();
+              if (done || !runningRef.current) break;
+              const frame = value as VideoFrame;
+              if (frame) {
+                frameCountRef.current += 1;
+                const isKey = frameCountRef.current === 1 || frameCountRef.current % keyframeEvery === 0;
+                try {
+                  encoder.encode(frame, { keyFrame: isKey });
+                } catch {
+                  // encoder closed mid-take
+                } finally {
+                  frame.close();
+                }
               }
             }
+          } catch {
+            // reader cancelled on teardown
           }
-        } catch {
-          // reader cancelled on teardown
-        }
-      })();
+        })();
+      }
 
       if (audioEncoder && audioTrack) {
         const audioProcessor = new MediaStreamTrackProcessor<AudioData>({ track: audioTrack });

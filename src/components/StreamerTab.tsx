@@ -35,6 +35,7 @@ export function StreamerTab() {
     updateDestination, removeDestination, addDestination,
     registerHandle, reportStatus, goLive, stopAll, getSourceTracks,
     audioEnabled, setAudioEnabled, audioDevices, audioDeviceId, setAudioDeviceId, audioError, audioUnavailableReason,
+    encoder,
     streamingBlocked, sharedAudioBlocked, rtmpBlockedReason, ndiBlockedReason, destCapReached, enabledCount,
   } = useStreaming();
 
@@ -127,6 +128,23 @@ export function StreamerTab() {
           )}
 
           {!streamReady && <p className="text-[10px] text-slate-600">Program feed not ready yet…</p>}
+
+          {encoder.status === "live" && (
+            <p className="text-[10px] text-slate-500">
+              Shared H.264 encoder: {encoder.activeConsumers} destination{encoder.activeConsumers === 1 ? "" : "s"} ·{" "}
+              {encoder.packetsEncoded} packets ·{" "}
+              {encoder.packetsDropped > 0 ? (
+                <span className="text-amber-400">{encoder.packetsDropped} dropped (queue pressure)</span>
+              ) : (
+                "0 dropped"
+              )}
+            </p>
+          )}
+          {encoder.status === "error" && (
+            <p className="text-[10px] text-red-400 bg-red-900/30 border border-red-900 rounded px-2 py-1.5">
+              Program encoder failed: {encoder.error ?? "unknown error"}
+            </p>
+          )}
 
           {rtmpBlockedReason && (
             <p className="text-[10px] text-amber-400 bg-amber-900/20 border border-amber-800/60 rounded px-2 py-1.5">
