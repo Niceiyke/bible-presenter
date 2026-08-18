@@ -60,7 +60,12 @@ function formatRemaining(expires_at?: number, now = Date.now()): string | null {
 
 export function RemoteTab() {
   const t = useT();
-  const { liveItem, settings, outputVisible, setToast } = useAppStore();
+  const { liveItem, settings, outputVisible, outputStates, setToast } = useAppStore();
+  // The OutputManager state broadcast by the backend is authoritative; the
+  // legacy `outputVisible` flag is only a pre-hydration fallback.
+  const outputOn =
+    outputStates["output"]?.visible ??
+    outputVisible;
 
   const [status, setStatus] = useState<RemoteStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -348,8 +353,8 @@ export function RemoteTab() {
                 <div className="flex flex-wrap gap-1.5 mt-2">
                   {settings.is_blanked && <StatusBadge tone="warning" label={t("remote.blanked")} />}
                   <StatusBadge
-                    tone={outputVisible ? "success" : "neutral"}
-                    label={outputVisible ? t("remote.outputVisible") : t("remote.outputHidden")}
+                    tone={outputOn ? "success" : "neutral"}
+                    label={outputOn ? t("remote.outputVisible") : t("remote.outputHidden")}
                   />
                   {settings.show_background_logo && <StatusBadge tone="design" label={t("remote.backgroundLogo")} />}
                   <StatusBadge

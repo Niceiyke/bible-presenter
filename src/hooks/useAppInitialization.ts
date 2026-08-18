@@ -63,10 +63,25 @@ export function useAppInitialization() {
     };
 
     const loadAll = async () => {
+      // Wait for every presentation-critical listener to be REGISTERED before
+      // any snapshot/hydration request. A `listen()` promise resolving late
+      // must never leave a window where an event fires but no listener exists
+      // (audit #2: hydration listener-registration race).
+      await Promise.all([
+        unlistenStaged, unlistenLive, unlistenSettings, unlistenProps,
+        unlistenLtUpdate, unlistenLtSync, unlistenSongsSync, unlistenStudioSync,
+        unlistenStudioSlidesSync, unlistenLog, unlistenOpWarn, unlistenRemoteDeviceEvent,
+        unlistenMediaProbed, unlistenMediaUpdated, unlistenOutputConfig, unlistenOutputState,
+        unlistenLicense,
+      ]).catch(() => {});
       let ready = false;
+      let startupIssues: string[] = [];
       for (let attempt = 0; attempt < 15; attempt++) {
         try {
-          await invoke("get_startup_status");
+          const status = await invoke<any>("get_startup_status");
+          // Surface storage/startup problems (e.g. data DB fell back to
+          // in-memory) instead of hiding them behind an empty workspace.
+          startupIssues = Array.isArray(status?.issues) ? status.issues : [];
           ready = true;
           break;
         } catch (e) {
@@ -79,6 +94,7 @@ export function useAppInitialization() {
         return;
       }
       setBackendAvailable(true);
+      setStartupIssues(startupIssues);
 
       const [
         versionsRes, mediaRes, studioRes, scheduleRes, songsRes, hymnLibraryRes,
@@ -172,8 +188,6 @@ export function useAppInitialization() {
 
       setIsInitialized(true);
     };
-
-    loadAll();
 
     const unlistenStaged = listen("item-staged", (ev: any) => applyOrBuffer(() => setStagedItem(ev.payload as DisplayItem)));
     const unlistenLive = listen<{ detected_item: DisplayItem | null }>("live-item-update", (ev) => {
@@ -272,6 +286,10 @@ export function useAppInitialization() {
     const unlistenLicense = listen<LicenseInfo>("license-updated", (ev) => {
       setLicense(ev.payload);
     });
+
+    // All listeners are registered above; kick off hydration only now that the
+    // event stream is fully covered (audit #2).
+    loadAll();
 
     return () => {
       unlistenStaged.then(f => f());

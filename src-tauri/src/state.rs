@@ -53,6 +53,10 @@ pub struct AppState {
     pub media_schedule: Arc<store::MediaScheduleStore>,
     pub app_data_dir: PathBuf,
     pub download_in_progress: Arc<AtomicBool>,
+    /// Non-fatal startup problems the operator must see (e.g. the data database
+    /// could not be opened and an in-memory fallback is in use). Surfaced via
+    /// `get_startup_status` -> the operator banner.
+    pub startup_issues: Arc<Mutex<Vec<String>>>,
     /// Remote Control server state — an Arc so Tauri state, the axum task and
     /// display commands all share one instance.
     pub remote: Arc<RemoteControl>,

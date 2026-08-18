@@ -1002,6 +1002,9 @@ pub struct MediaScheduleStore {
     media_dir: PathBuf,
     thumbnails_dir: PathBuf,
     data_db: Arc<DataDb>,
+    /// Non-fatal storage problems the operator must see (set at startup when
+    /// the real database could not be opened and an in-memory fallback is used).
+    pub startup_issues: parking_lot::Mutex<Vec<String>>,
 }
 
 // Derive Clone manually since the struct stores an Arc (cheap clone) plus
@@ -1014,6 +1017,7 @@ impl Clone for MediaScheduleStore {
             media_dir: self.media_dir.clone(),
             thumbnails_dir: self.thumbnails_dir.clone(),
             data_db: self.data_db.clone(),
+            startup_issues: parking_lot::Mutex::new(self.startup_issues.lock().clone()),
         }
     }
 }
@@ -1029,7 +1033,7 @@ impl MediaScheduleStore {
         let db_path = app_data_dir.join("wordlyte_data.db");
         let data_db = Arc::new(DataDb::open(&db_path).map_err(|e| anyhow::anyhow!(e))?);
 
-        let store = Self { app_data_dir, media_dir, thumbnails_dir, data_db };
+        let store = Self { app_data_dir, media_dir, thumbnails_dir, data_db, startup_issues: parking_lot::Mutex::new(Vec::new()) };
         store.try_migrate_from_json()?;
         Ok(store)
     }
@@ -1041,7 +1045,7 @@ impl MediaScheduleStore {
             if !d.exists() { fs::create_dir_all(d)?; }
         }
         let data_db = Arc::new(DataDb::open_in_memory().map_err(|e| anyhow::anyhow!(e))?);
-        Ok(Self { app_data_dir, media_dir, thumbnails_dir, data_db })
+        Ok(Self { app_data_dir, media_dir, thumbnails_dir, data_db, startup_issues: parking_lot::Mutex::new(Vec::new()) })
     }
 
     fn try_migrate_from_json(&self) -> Result<()> {
@@ -1543,20 +1547,49 @@ impl MediaScheduleStore {
         self.delete_media_with_file(id, true)
     }
 
+    /// Resolves a stored media path to a file that is safe to delete, returning
+    /// None when the file is NOT app-owned (a legacy/externally-linked absolute
+    /// path, or a relative path that escapes the media directory). External
+    /// files are never deleted destructively — only the library record is
+    /// dropped (audit #11).
+    fn app_owned_file(&self, stored_path: &str) -> Option<PathBuf> {
+        let raw = PathBuf::from(stored_path);
+        // Reject any `.` / `..` component lexically, so a stored relative path
+        // can never traverse out of the media directory.
+        use std::path::Component;
+        if raw
+            .components()
+            .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
+        {
+            return None;
+        }
+        let candidate = if raw.is_absolute() {
+            raw
+        } else {
+            self.media_dir.join(&raw)
+        };
+        if !candidate.starts_with(&self.media_dir) {
+            return None;
+        }
+        if let (Ok(can), Ok(media_can)) = (candidate.canonicalize(), self.media_dir.canonicalize()) {
+            if !can.starts_with(&media_can) {
+                return None;
+            }
+        }
+        Some(candidate)
+    }
+
     /// Delete a media record. `remove_file` controls whether the on-disk file
     /// and thumbnail are also removed ("delete file") or the entry is only
-    /// dropped from the library ("remove from library").
+    /// dropped from the library ("remove from library"). Only app-owned files
+    /// (inside the media dir) are ever deleted.
     pub fn delete_media_with_file(&self, id: String, remove_file: bool) -> Result<()> {
         if remove_file {
             if let Some(path) = self.data_db.get_media_path(&id).map_err(|e| anyhow::anyhow!(e))? {
-                // Resolve relative stored paths to the media dir before deleting.
-                let resolved = if PathBuf::from(&path).is_absolute() {
-                    PathBuf::from(&path)
-                } else {
-                    self.media_dir.join(&path)
-                };
+                if let Some(resolved) = self.app_owned_file(&path) {
+                    let _ = fs::remove_file(&resolved);
+                }
                 let thumb = self.thumbnails_dir.join(format!("{}.jpg", id));
-                let _ = fs::remove_file(&resolved);
                 let _ = fs::remove_file(&thumb);
             }
         }
@@ -1569,18 +1602,16 @@ impl MediaScheduleStore {
 
     /// Delete many media records. `remove_file` controls whether the on-disk
     /// files and thumbnails are also removed ("delete file") or the entries
-    /// are only dropped from the library ("remove from library").
+    /// are only dropped from the library ("remove from library"). Only
+    /// app-owned files are ever deleted.
     pub fn bulk_delete_media_with_file(&self, ids: Vec<String>, remove_file: bool) -> Result<()> {
         if remove_file {
             for id in &ids {
                 if let Ok(Some(path)) = self.data_db.get_media_path(id) {
-                    let resolved = if PathBuf::from(&path).is_absolute() {
-                        PathBuf::from(&path)
-                    } else {
-                        self.media_dir.join(&path)
-                    };
+                    if let Some(resolved) = self.app_owned_file(&path) {
+                        let _ = fs::remove_file(&resolved);
+                    }
                     let thumb = self.thumbnails_dir.join(format!("{}.jpg", id));
-                    let _ = fs::remove_file(&resolved);
                     let _ = fs::remove_file(&thumb);
                 }
             }
@@ -1878,5 +1909,63 @@ impl MediaScheduleStore {
             Some(json) => Ok(Some(serde_json::from_str(&json)?)),
             None => Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod media_delete_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn test_store(name: &str) -> (PathBuf, MediaScheduleStore) {
+        let dir = std::env::temp_dir().join(format!(
+            "wordlyte-media-delete-test-{}-{}",
+            std::process::id(),
+            name
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = MediaScheduleStore::in_memory(dir.clone()).unwrap();
+        (dir, store)
+    }
+
+    #[test]
+    fn relative_app_owned_file_is_deletable() {
+        let (dir, store) = test_store("rel");
+        let media = dir.join("media");
+        std::fs::create_dir_all(&media).unwrap();
+        std::fs::write(media.join("a.jpg"), b"x").unwrap();
+        let resolved = store.app_owned_file("a.jpg");
+        assert!(resolved.is_some());
+        assert_eq!(resolved.unwrap(), media.join("a.jpg"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn external_absolute_file_is_not_deletable() {
+        let (dir, store) = test_store("ext");
+        std::fs::create_dir_all(dir.join("media")).unwrap();
+        // A path outside the media dir must never be deleted.
+        assert!(store.app_owned_file("C:/Windows/win.ini").is_none());
+        assert!(store.app_owned_file(dir.to_string_lossy().as_ref()).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn relative_traversal_escapes_are_not_deletable() {
+        let (dir, store) = test_store("trav");
+        std::fs::create_dir_all(dir.join("media")).unwrap();
+        assert!(store.app_owned_file("../secret.txt").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn absolute_file_inside_media_dir_is_deletable() {
+        let (dir, store) = test_store("abs");
+        let media = dir.join("media");
+        std::fs::create_dir_all(&media).unwrap();
+        let f = media.join("b.jpg");
+        std::fs::write(&f, b"x").unwrap();
+        assert!(store.app_owned_file(&f.to_string_lossy()).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

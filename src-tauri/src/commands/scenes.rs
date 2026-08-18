@@ -1,7 +1,7 @@
 use crate::state::AppState;
 use crate::store::{DisplayItem, Scene, SceneCompositionData, SceneLayout};
 use crate::events::{emit_checked, ScenePayload};
-use crate::remote::commands::op_go_live_item;
+use crate::remote::commands::{op_go_live_item, op_send_live};
 use tauri::{AppHandle, State};
 
 #[tauri::command]
@@ -9,26 +9,37 @@ pub async fn list_scenes(state: State<'_, AppState>) -> Result<Vec<Scene>, Strin
     state.media_schedule.list_scenes().map_err(|e| e.to_string())
 }
 
-/// Free plan stores up to 3 scenes; paid plans are unlimited.
-fn check_scene_cap(state: &State<'_, AppState>) -> Result<(), String> {
-    let info = state.license.status();
-    if info.status == crate::license::LicenseStatus::Active
-        && info.tier == crate::license::LicenseTier::Free
+/// Free plan stores up to 3 scenes; paid plans are unlimited. The cap applies
+/// only when CREATING a scene — updating an existing one is always allowed.
+fn scene_save_allowed(
+    status: crate::license::LicenseStatus,
+    tier: crate::license::LicenseTier,
+    existing_count: usize,
+    is_update: bool,
+) -> Result<(), String> {
+    if is_update {
+        return Ok(());
+    }
+    if status == crate::license::LicenseStatus::Active && tier == crate::license::LicenseTier::Free
+        && existing_count >= 3
     {
-        let count = state.media_schedule.list_scenes().map_err(|e| e.to_string())?.len();
-        if count >= 3 {
-            return Err(
-                "The Free plan stores up to 3 scenes. Upgrade in Settings → License for unlimited scenes."
-                    .to_owned(),
-            );
-        }
+        return Err(
+            "The Free plan stores up to 3 scenes. Upgrade in Settings → License for unlimited scenes."
+                .to_owned(),
+        );
     }
     Ok(())
 }
 
+fn check_scene_cap(state: &State<'_, AppState>, is_update: bool) -> Result<(), String> {
+    let info = state.license.status();
+    let count = state.media_schedule.list_scenes().map_err(|e| e.to_string())?.len();
+    scene_save_allowed(info.status, info.tier, count, is_update)
+}
+
 #[tauri::command]
 pub async fn save_scene(state: State<'_, AppState>, scene: Scene) -> Result<Scene, String> {
-    check_scene_cap(&state)?;
+    check_scene_cap(&state, !scene.id.is_empty())?;
     state.media_schedule.save_scene(scene).map_err(|e| e.to_string())
 }
 
@@ -53,46 +64,59 @@ pub async fn apply_scene(app: AppHandle, state: State<'_, AppState>, id: String)
         .find(|s| s.id == id)
         .ok_or_else(|| format!("Scene '{}' not found", id))?;
 
-    // Apply settings/props/lower-third under the presentation mutation lock so
-    // the snapshot is never half-updated, and persist BEFORE mutating so a
-    // write failure surfaces instead of silently applying state that would be
-    // lost on restart. The revision bump makes stale remote clients
-    // resynchronize.
-    {
-        let _guard = state.presentation.lock.lock();
-        state.media_schedule.save_settings(&scene.settings).map_err(|e| e.to_string())?;
-        *state.presentation.settings.lock() = scene.settings.clone();
-        state.media_schedule.save_props(&scene.props).map_err(|e| e.to_string())?;
-        *state.presentation.props_layer.lock() = scene.props.clone();
-        if let (Some(data), Some(template)) = (&scene.lower_third_data, &scene.lower_third_template) {
-            let payload = serde_json::json!({ "data": data, "template": template });
-            *state.presentation.lower_third.lock() = Some(payload.clone());
-        } else {
-            *state.presentation.lower_third.lock() = None;
+    let lt_payload = match (&scene.lower_third_data, &scene.lower_third_template) {
+        (Some(data), Some(template)) => {
+            Some(serde_json::json!({ "data": data, "template": template }))
         }
-        state.presentation.bump_revision();
-    }
-    emit_checked(&app, "settings-changed", &scene.settings);
-    emit_checked(&app, "props-update", &scene.props);
-    if let (Some(data), Some(template)) = (&scene.lower_third_data, &scene.lower_third_template) {
-        let payload = serde_json::json!({ "data": data, "template": template });
-        emit_checked(&app, "lower-third-update", &Some(payload));
-    } else {
-        emit_checked(&app, "lower-third-update", &Option::<serde_json::Value>::None);
+        _ => None,
+    };
+
+    // 1) Persist the complete payload BEFORE mutating in-memory presentation
+    //    state. If any write fails, compensate the others so the disk never
+    //    holds half a scene (audit: partial application on props failure).
+    let previous_settings = state.media_schedule.load_settings().map_err(|e| e.to_string())?;
+    state.media_schedule.save_settings(&scene.settings).map_err(|e| e.to_string())?;
+    if let Err(e) = state.media_schedule.save_props(&scene.props).map_err(|e| e.to_string()) {
+        let _ = state.media_schedule.save_settings(&previous_settings);
+        return Err(e);
     }
 
-    // Composition: stage + commit the multi-zone layout as a display item.
+    // 2) Composition stage/commit runs BEFORE we mutate settings/props/lower
+    //    third, so a failed live take leaves the previous presentation state
+    //    fully intact (only the disk writes above are compensated).
     if let Some(layout) = &scene.layout {
         let item = DisplayItem::SceneComposition(SceneCompositionData {
             scene_id: scene.id.clone(),
             name: scene.name.clone(),
             zones: layout.zones.clone(),
         });
-        let _ = crate::remote::commands::op_send_live(&app, &state, item, None);
+        if let Err(e) = op_send_live(&app, &state, item, None) {
+            let _ = state.media_schedule.save_settings(&previous_settings);
+            let _ = state.media_schedule.save_props(&state.presentation.props_layer.lock().clone());
+            return Err(e);
+        }
     } else if let Some(cam) = &scene.camera {
         // Legacy single-camera scene: restore the camera feed that was live
         // at capture time.
         op_go_live_item(&app, &state, cam.clone(), None);
+    }
+
+    // 3) Mutate settings/props/lower-third in-memory under the presentation
+    //    mutation lock and bump the revision once so stale remote clients
+    //    resynchronize.
+    {
+        let _guard = state.presentation.lock.lock();
+        *state.presentation.settings.lock() = scene.settings.clone();
+        *state.presentation.props_layer.lock() = scene.props.clone();
+        *state.presentation.lower_third.lock() = lt_payload.clone();
+        state.presentation.bump_revision();
+    }
+    emit_checked(&app, "settings-changed", &scene.settings);
+    emit_checked(&app, "props-update", &scene.props);
+    if let Some(payload) = &lt_payload {
+        emit_checked(&app, "lower-third-update", &Some(payload));
+    } else {
+        emit_checked(&app, "lower-third-update", &Option::<serde_json::Value>::None);
     }
 
     Ok(ScenePayload {
@@ -114,7 +138,7 @@ pub async fn apply_scene(app: AppHandle, state: State<'_, AppState>, id: String)
 /// layout so re-applying reproduces the exact split-screen composition.
 #[tauri::command]
 pub async fn capture_scene(state: State<'_, AppState>, name: String, camera: Option<DisplayItem>) -> Result<Scene, String> {
-    check_scene_cap(&state)?;
+    check_scene_cap(&state, false)?;
     let settings = state.presentation.settings.lock().clone();
     let props = state.presentation.props_layer.lock().clone();
     let lt = state.presentation.lower_third.lock().clone();
@@ -145,4 +169,30 @@ pub async fn capture_scene(state: State<'_, AppState>, name: String, camera: Opt
         created_at: 0,
     };
     state.media_schedule.save_scene(scene).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ACTIVE: crate::license::LicenseStatus = crate::license::LicenseStatus::Active;
+
+    #[test]
+    fn create_at_cap_is_rejected_on_free() {
+        assert!(scene_save_allowed(ACTIVE, crate::license::LicenseTier::Free, 3, false).is_err());
+        assert!(scene_save_allowed(ACTIVE, crate::license::LicenseTier::Free, 2, false).is_ok());
+    }
+
+    #[test]
+    fn update_at_cap_is_allowed_on_free() {
+        // Editing an existing scene must never be blocked at the 3-scene cap.
+        assert!(scene_save_allowed(ACTIVE, crate::license::LicenseTier::Free, 3, true).is_ok());
+        assert!(scene_save_allowed(ACTIVE, crate::license::LicenseTier::Free, 10, true).is_ok());
+    }
+
+    #[test]
+    fn paid_tiers_ignore_the_cap() {
+        assert!(scene_save_allowed(ACTIVE, crate::license::LicenseTier::Pro, 3, false).is_ok());
+        assert!(scene_save_allowed(ACTIVE, crate::license::LicenseTier::Premium, 3, false).is_ok());
+    }
 }

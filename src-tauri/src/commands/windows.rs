@@ -1,108 +1,17 @@
 use crate::state::AppState;
-use crate::events::{emit_checked, MonitorInfo, LiveItemUpdate};
-use crate::remote::protocol::RemoteEventKind;
-use serde_json::json;
+use crate::events::{emit_checked, MonitorInfo};
 use tauri::{AppHandle, Manager, State};
 
-/// Broadcasts the current output-window visibility state to every connected
-/// remote so `output.changed` mirrors the actual window state.
-fn publish_output_visible(app: &AppHandle, state: &State<'_, AppState>) {
+/// Toggle the output window. This is the SAME authoritative path the Output
+/// Manager uses (`outputs_set_visible` → `set_output_visible`), so the header /
+/// keyboard shortcut can never diverge from the persisted/runtime output state.
+#[tauri::command]
+pub async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let visible = app
         .get_webview_window("output")
         .and_then(|w| w.is_visible().ok())
         .unwrap_or(false);
-    state.remote.hub.publish(
-        RemoteEventKind::OutputChanged,
-        json!({ "output_visible": visible }),
-        None,
-    );
-}
-
-/// Free plan: only one on-air window at a time. `outputs_set_visible` enforces
-/// this for the output-manager path; the legacy toggle commands must enforce
-/// the same cap so a Free operator cannot open both the output and stage
-/// windows (or design/studio) to bypass it. Only called when revealing.
-fn enforce_free_window_cap(app: &AppHandle, state: &AppState, this_label: &str) -> Result<(), String> {
-    let info = state.license.status();
-    if info.status == crate::license::LicenseStatus::Active
-        && info.tier == crate::license::LicenseTier::Free
-    {
-        let other_visible = ["output", "stage", "design", "studio"]
-            .iter()
-            .filter(|l| **l != this_label)
-            .filter(|l| {
-                app.get_webview_window(l)
-                    .and_then(|w| w.is_visible().ok())
-                    .unwrap_or(false)
-            })
-            .count();
-        if other_visible >= 1 {
-            return Err(
-                "The Free plan supports one on-air window at a time. See Settings → License to upgrade."
-                    .to_owned(),
-            );
-        }
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    crate::license::ensure_allowed(&state)?;
-    if let Some(window) = app.get_webview_window("output") {
-        if window.is_visible().unwrap_or(false) {
-            window.hide().map_err(|e: tauri::Error| e.to_string())?;
-        } else {
-            enforce_free_window_cap(&app, &state, "output")?;
-            position_output_on_preferred(app.clone(), &state)?;
-            let _ = window.set_ignore_cursor_events(true);
-            window.show().map_err(|e: tauri::Error| e.to_string())?;
-            window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
-
-            // Re-broadcast all current state so a freshly-revealed window can
-            // hydrate even if it missed events while hidden.
-            let current_settings = state.presentation.settings.lock().clone();
-            emit_checked(&app, "settings-changed", &current_settings);
-
-            let live = state.presentation.live_item.lock().clone();
-            emit_checked(&app, "live-item-update", &LiveItemUpdate {
-                detected_item: live,
-                revision: Some(state.presentation.current_revision()),
-            });
-
-            let lt = state.presentation.lower_third.lock().clone();
-            emit_checked(&app, "lower-third-update", &lt);
-
-            let props = state.presentation.props_layer.lock().clone();
-            emit_checked(&app, "props-update", &props);
-
-            let staged = state.presentation.staged_item.lock().clone();
-            emit_checked(&app, "item-staged", &staged);
-        }
-        publish_output_visible(&app, &state);
-    }
-    Ok(())
-}
-
-fn position_output_on_preferred(app: AppHandle, state: &State<'_, AppState>) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("output") {
-        let preferred = state.presentation.settings.lock().preferred_monitor.clone();
-        let monitors = window.available_monitors().map_err(|e: tauri::Error| e.to_string())?;
-        if monitors.len() > 1 {
-            if let Some(primary) = window.primary_monitor().map_err(|e: tauri::Error| e.to_string())? {
-                let target = monitors.iter().find(|m| {
-                    preferred.as_deref().is_some_and(|p| m.name().is_some_and(|n| n == p))
-                }).or_else(|| monitors.iter().find(|m| m.name() != primary.name()));
-                if let Some(mon) = target {
-                    let pos = mon.position();
-                    window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos.x, y: pos.y }))
-                        .map_err(|e: tauri::Error| e.to_string())?;
-                    window.set_fullscreen(true).map_err(|e: tauri::Error| e.to_string())?;
-                }
-            }
-        }
-    }
-    Ok(())
+    crate::commands::outputs::set_output_visible(&app, state.inner(), "output", !visible)
 }
 
 /// Show the output window on the preferred monitor with a test pattern so the
@@ -110,55 +19,25 @@ fn position_output_on_preferred(app: AppHandle, state: &State<'_, AppState>) -> 
 #[tauri::command]
 pub async fn show_output_test_pattern(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     crate::license::ensure_allowed(&state)?;
-    if let Some(window) = app.get_webview_window("output") {
-        position_output_on_preferred(app.clone(), &state)?;
-        let _ = window.set_ignore_cursor_events(true);
-        window.show().map_err(|e: tauri::Error| e.to_string())?;
-        window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
-        emit_checked(&app, "monitor-test", &serde_json::json!({ "active": true }));
-    }
-    publish_output_visible(&app, &state);
+    crate::commands::outputs::set_output_visible(&app, state.inner(), "output", true)?;
+    emit_checked(&app, "monitor-test", &serde_json::json!({ "active": true }));
     Ok(())
 }
 
 #[tauri::command]
 pub async fn hide_output_test_pattern(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     emit_checked(&app, "monitor-test", &serde_json::json!({ "active": false }));
-    if let Some(window) = app.get_webview_window("output") {
-        window.hide().map_err(|e: tauri::Error| e.to_string())?;
-    }
-    publish_output_visible(&app, &state);
-    Ok(())
+    crate::commands::outputs::set_output_visible(&app, state.inner(), "output", false)
 }
 
+/// Toggle the stage confidence monitor through the same authoritative path.
 #[tauri::command]
 pub async fn toggle_stage_window(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    crate::license::ensure_allowed(&state)?;
-    if let Some(window) = app.get_webview_window("stage") {
-        if window.is_visible().unwrap_or(false) {
-            window.hide().map_err(|e: tauri::Error| e.to_string())?;
-        } else {
-            enforce_free_window_cap(&app, &state, "stage")?;
-            window.show().map_err(|e: tauri::Error| e.to_string())?;
-            window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
-
-            let live = state.presentation.live_item.lock().clone();
-            emit_checked(&app, "live-item-update", &LiveItemUpdate {
-                detected_item: live,
-                revision: Some(state.presentation.current_revision()),
-            });
-            let staged = state.presentation.staged_item.lock().clone();
-            emit_checked(&app, "item-staged", &staged);
-
-            // Stage monitor also wants settings + lower-third so it can show a
-            // countdown and a "lower-third is on air" indicator.
-            let settings = state.presentation.settings.lock().clone();
-            emit_checked(&app, "settings-changed", &settings);
-            let lt = state.presentation.lower_third.lock().clone();
-            emit_checked(&app, "lower-third-update", &lt);
-        }
-    }
-    Ok(())
+    let visible = app
+        .get_webview_window("stage")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false);
+    crate::commands::outputs::set_output_visible(&app, state.inner(), "stage", !visible)
 }
 
 #[tauri::command]

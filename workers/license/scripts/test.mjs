@@ -151,6 +151,18 @@ try {
   r = await call("/validate", { method: "POST", body: { license_key: key, machine_id: M1 } });
   check("validate machine 1 again → active (idempotent)", r.status === 200 && r.data.status === "active" && r.data.machines_used === 2);
 
+  // stored record integrity: the machines array must hold the real fingerprints,
+  // never a phantom null/undefined entry (audit: the DO body was parsed twice).
+  r = await call("/licenses", { token: ADMIN_TOKEN });
+  const storedRec = r.data.licenses.find((l) => l.key === key);
+  check(
+    "stored machines are exactly M1 + M2 (no phantom entries)",
+    r.status === 200 && Array.isArray(storedRec?.machines) &&
+      storedRec.machines.length === 2 &&
+      storedRec.machines.includes(M1) && storedRec.machines.includes(M2) &&
+      storedRec.machines.every((m) => typeof m === "string" && /^[0-9a-f]{64}$/.test(m))
+  );
+
   // extend
   r = await call("/extend", {
     method: "POST",
@@ -197,6 +209,38 @@ try {
   // extend with no days and no tier → 400
   r = await call("/extend", { method: "POST", token: ADMIN_TOKEN, body: { license_key: key, days: 0 } });
   check("extend with days 0 and no tier → 400", r.status === 400);
+
+  // audit #9: an admin mutation followed by a new-device registration must not
+  // be overwritten by a warm Durable Object cache (stale tier/expiry/machines).
+  r = await call("/issue", {
+    method: "POST",
+    token: ADMIN_TOKEN,
+    body: { church_name: "Registry Test", email: "reg@example.com", duration_days: 30, max_machines: 2, tier: "pro" },
+  });
+  const key2 = r.data.license_key;
+  r = await call("/validate", { method: "POST", body: { license_key: key2, machine_id: M1 } });
+  check("registry key M1 → active", r.status === 200 && r.data.status === "active");
+  const expiryBefore = (await call("/licenses", { token: ADMIN_TOKEN })).data.licenses.find((l) => l.key === key2).expires_at;
+  r = await call("/extend", { method: "POST", token: ADMIN_TOKEN, body: { license_key: key2, days: 15 } });
+  check("registry key extend +15d", r.status === 200 && r.data.status === "ok" && r.data.expires_at === expiryBefore + 15 * 86400);
+  r = await call("/validate", { method: "POST", body: { license_key: key2, machine_id: M2 } });
+  check(
+    "registry key M2 after admin mutation → active, expiry preserved",
+    r.status === 200 && r.data.status === "active" && r.data.expires_at === expiryBefore + 15 * 86400
+  );
+  r = await call("/validate", { method: "POST", body: { license_key: key2, machine_id: M3 } });
+  check("registry key M3 → invalid (2-slot cap after admin mutation)", r.status === 200 && r.data.status === "invalid");
+  const stored2 = (await call("/licenses", { token: ADMIN_TOKEN })).data.licenses.find((l) => l.key === key2);
+  check(
+    "registry key stored machines have no phantom entries",
+    Array.isArray(stored2?.machines) && stored2.machines.length === 2 &&
+      stored2.machines.includes(M1) && stored2.machines.includes(M2) &&
+      stored2.machines.every((m) => typeof m === "string" && /^[0-9a-f]{64}$/.test(m))
+  );
+  r = await call("/revoke", { method: "POST", token: ADMIN_TOKEN, body: { license_key: key2, revoked: true } });
+  check("registry key revoke after registration", r.status === 200 && r.data.status === "ok" && r.data.revoked === true);
+  r = await call("/validate", { method: "POST", body: { license_key: key2, machine_id: M1 } });
+  check("registry key revoked → revoked", r.status === 200 && r.data.status === "revoked");
 
   // expiring
   r = await call("/expiring?days=365", { token: ADMIN_TOKEN });

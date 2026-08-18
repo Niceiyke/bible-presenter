@@ -26,7 +26,6 @@ export function useKeyboardShortcuts(props: Props): void {
     settings, setSettings, setIsBlackout,
     setActiveTab, setBottomDeckOpen, bottomDeckOpen,
     showShortcuts, setShowShortcuts,
-    outputVisible, setOutputVisible,
     songs, hymnLibrary, scheduleEntries, activeScheduleIdx, setActiveScheduleIdx,
     setBackendError,
   } = useAppStore();
@@ -116,7 +115,7 @@ export function useKeyboardShortcuts(props: Props): void {
           shortcutClearLive();
           break;
         case "Enter": if (stagedItem) goLive(); break;
-        case "o": if (e.ctrlKey) { e.preventDefault(); invoke("toggle_output_window").then(() => setOutputVisible((v: boolean) => !v)).catch((err: any) => setBackendError(`Output window: ${err?.message ?? err}`)); } break;
+        case "o": if (e.ctrlKey) { e.preventDefault(); invoke("toggle_output_window").catch((err: any) => setBackendError(`Output window: ${err?.message ?? err}`)); } break;
         case "b": if (e.ctrlKey) { e.preventDefault(); shortcutToggleBlackout(); } break;
         case "t": if (e.ctrlKey) { e.preventDefault(); setBottomDeckOpen(!bottomDeckOpen); } break;
         case "F1": setActiveTab("bible"); break;

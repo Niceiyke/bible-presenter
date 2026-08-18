@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useRecorder } from "../useRecorder";
+import { useRecorder, recordingSizeError } from "../useRecorder";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -180,5 +180,20 @@ describe("useRecorder", () => {
     expect(saved).toBeNull();
     expect(result.current.error).toContain("no frames");
     expect(mockInvoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("recordingSizeError", () => {
+  it("accepts normal recordings", () => {
+    expect(recordingSizeError(1024 * 1024)).toBeNull();
+    expect(recordingSizeError(2 * 1024 * 1024 * 1024)).toBeNull();
+  });
+
+  it("rejects empty captures", () => {
+    expect(recordingSizeError(0)).toContain("no frames");
+  });
+
+  it("rejects recordings beyond the 2 GiB cap", () => {
+    expect(recordingSizeError(2 * 1024 * 1024 * 1024 + 1)).toContain("2 GiB limit");
   });
 });

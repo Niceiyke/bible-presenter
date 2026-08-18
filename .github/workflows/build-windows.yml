@@ -64,6 +64,29 @@ jobs:
         shell: pwsh
         run: ./scripts/fetch-ffmpeg.ps1
 
+      - name: verify release prerequisites (pins + bundled resources)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # ffmpeg must be pinned to a specific autobuild tag, never `latest`.
+          if grep -qE '^\$ReleaseTag = "latest"' scripts/fetch-ffmpeg.ps1; then
+            echo "::error::fetch-ffmpeg.ps1 must pin a specific autobuild tag, not 'latest'."
+            exit 1
+          fi
+          # The Bible data ZIP must have a pinned SHA-256 before a release ships.
+          if grep -qE 'BIBLE_DATA_ZIP_SHA256: Option<&str> = None' src-tauri/src/commands/assets.rs; then
+            echo "::error::BIBLE_DATA_ZIP_SHA256 is not pinned in src-tauri/src/commands/assets.rs. Compute it and set it before releasing."
+            exit 1
+          fi
+          # Required bundled resources must exist before packaging.
+          for f in src-tauri/binaries/ffmpeg.exe src-tauri/binaries/ffprobe.exe src-tauri/bible_data/hymns.json dist/remote.html; do
+            if [ ! -f "$f" ]; then
+              echo "::error::Required bundled resource is missing: $f (run npm run build / fetch-ffmpeg.ps1 first)."
+              exit 1
+            fi
+          done
+          echo "Release prerequisites OK (ffmpeg pinned, bible ZIP hash pinned, resources present)."
+
       - name: build and publish release
         uses: tauri-apps/tauri-action@v0.5
         env:
@@ -78,3 +101,9 @@ jobs:
           releaseBody: "See the assets below to download this version. Note: Core Bible assets and AI models are now downloaded within the app after installation."
           releaseDraft: false
           prerelease: false
+
+      # The packaged NSIS installer must be smoke-tested on a clean Windows
+      # machine before broad beta: install, launch, license gate, output/stage
+      # windows, remote bundle, hymns, ffmpeg discovery, and recording/streaming
+      # gates. This is a manual release-qualification step (a GUI smoke test
+      # cannot run in this CI runner); record the result in the release notes.

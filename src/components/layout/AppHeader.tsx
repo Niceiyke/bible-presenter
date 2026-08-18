@@ -17,7 +17,16 @@ export function AppHeader() {
     services, activeServiceId,
     backendAvailable,
     setActiveTab,
+    outputs, outputStates,
   } = useAppStore();
+
+  // Authoritative visibility comes from the OutputManager state the backend
+  // broadcasts (output-config-changed / output-state-changed). The legacy
+  // `outputVisible` store flag is only a pre-hydration fallback.
+  const outputOn =
+    outputStates["output"]?.visible ??
+    outputs.find((o) => o.window_label === "output")?.visible ??
+    outputVisible;
 
   const [remoteCount, setRemoteCount] = React.useState<number | null>(null);
 
@@ -48,8 +57,10 @@ export function AppHeader() {
     if (outputBusy) return;
     setBusyAction("output", true);
     try {
+      // The backend is the single source of truth for visibility: it toggles
+      // the window, persists outputs.json, and broadcasts the authoritative
+      // output config/state, which the store mirrors into `outputStates`.
       await invoke("toggle_output_window");
-      setOutputVisible((v: boolean) => !v);
     } catch (e: any) {
       setBackendError(`Output window: ${e?.message ?? e}`);
     } finally {
@@ -81,9 +92,9 @@ export function AppHeader() {
       {/* Live status cluster — text + icon, never color alone. */}
       <div className="flex items-center gap-1.5 min-w-0">
         <StatusBadge
-          tone={outputVisible ? "success" : "neutral"}
+          tone={outputOn ? "success" : "neutral"}
           icon={<Monitor size={10} />}
-          label={outputVisible ? "Output On" : "Output Off"}
+          label={outputOn ? "Output On" : "Output Off"}
           className="max-w-[110px]"
         />
         <StatusBadge
@@ -144,7 +155,7 @@ export function AppHeader() {
         <IconButton
           label="Toggle Output Window (Ctrl+O)"
           tone="success"
-          active={outputVisible}
+          active={outputOn}
           loading={outputBusy}
           onClick={toggleOutput}
           disabled={outputBusy}

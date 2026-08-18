@@ -1,6 +1,6 @@
 use crate::state::AppState;
 use crate::store;
-use crate::events::emit_checked;
+use crate::remote::commands::{op_hide_lower_third, op_show_lower_third};
 use tauri::{AppHandle, State};
 
 #[tauri::command]
@@ -10,16 +10,15 @@ pub async fn show_lower_third(
     data: store::LowerThirdData,
     template: serde_json::Value,
 ) -> Result<(), String> {
-    let payload = serde_json::json!({ "data": data, "template": template });
-    *state.presentation.lower_third.lock() = Some(payload.clone());
-    emit_checked(&app, "lower-third-update", &Some(payload));
+    // Route through the same authoritative helper the remote path uses so the
+    // presentation revision bumps and connected phones receive LowerThirdChanged.
+    op_show_lower_third(&app, &state, data, Some(template), None);
     Ok(())
 }
 
 #[tauri::command]
 pub async fn hide_lower_third(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    *state.presentation.lower_third.lock() = None;
-    emit_checked(&app, "lower-third-update", &Option::<serde_json::Value>::None);
+    op_hide_lower_third(&app, &state, None);
     Ok(())
 }
 
@@ -78,8 +77,6 @@ pub async fn show_lt_preset(
         }
     }
 
-    let payload = serde_json::json!({ "data": preset.data, "template": tpl });
-    *state.presentation.lower_third.lock() = Some(payload.clone());
-    emit_checked(&app, "lower-third-update", &Some(payload));
+    op_show_lower_third(&app, &state, preset.data, Some(tpl), None);
     Ok(())
 }

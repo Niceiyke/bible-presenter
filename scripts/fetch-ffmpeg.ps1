@@ -22,7 +22,14 @@
 $ErrorActionPreference = "Stop"
 
 $BinDir = Join-Path $PSScriptRoot "..\src-tauri\binaries"
-$ReleaseTag = "latest"   # Pin to a specific autobuild tag for a locked release.
+# PINNED autobuild tag (NOT `latest`): a moving tag makes release builds
+# non-reproducible, so the tag must be a specific BtbN autobuild. Update both
+# the tag and `$ExpectedSha256` together when deliberately upgrading ffmpeg.
+$ReleaseTag = "autobuild-2026-08-17-13-29"
+# Committed SHA-256 of ffmpeg-master-latest-win64-lgpl.zip for the pinned tag.
+# This is independent of the (moving) checksums.sha256 and makes the fetch
+# tamper-proof even if the release's own checksum file were replaced.
+$ExpectedSha256 = "f62a01a3c8b28303dad536ef7cf65f0d6cd36106d5e3867d90af73afd5b20950"
 $AssetName = "ffmpeg-master-latest-win64-lgpl.zip"
 $BaseUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$ReleaseTag"
 $Url = "$BaseUrl/$AssetName"
@@ -30,6 +37,11 @@ $ChecksumsUrl = "$BaseUrl/checksums.sha256"
 $Zip = Join-Path $env:TEMP "ffmpeg-lgpl.zip"
 $Checksums = Join-Path $env:TEMP "ffmpeg-checksums.sha256"
 $Extract = Join-Path $env:TEMP "ffmpeg-lgpl"
+
+# Reproducibility gate: a release build must never use the moving `latest` tag.
+if ($ReleaseTag -eq "latest" -or $ReleaseTag -match "latest") {
+    throw "ReleaseTag must be pinned to a specific autobuild tag (e.g. autobuild-YYYY-MM-DD-HH-MM), not 'latest', for reproducible releases."
+}
 
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 
@@ -47,7 +59,10 @@ if (-not $expected) {
 }
 $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Zip).Hash.ToLower()
 if ($actual -ne $expected) {
-    throw "SHA-256 mismatch for $AssetName (expected $expected, got $actual) — aborting."
+    throw "SHA-256 mismatch for $AssetName vs published checksums (expected $expected, got $actual) — aborting."
+}
+if ($actual -ne $ExpectedSha256) {
+    throw "SHA-256 mismatch for $AssetName vs the committed pinned hash (expected $ExpectedSha256, got $actual) — the pinned tag/hash are out of date; update both together."
 }
 Write-Host "  SHA-256 verified: $actual"
 

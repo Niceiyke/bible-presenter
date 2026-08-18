@@ -6,6 +6,65 @@ pub struct DataDb {
     conn: Mutex<Connection>,
 }
 
+/// Why opening the data database failed. Only an explicitly corrupt file is
+/// quarantined and recreated; permission, transient-lock, IO, or migration
+/// errors must surface so a valid installation is never hidden behind an empty
+/// workspace (audit: quarantine only on corruption evidence).
+#[derive(Debug)]
+pub enum OpenError {
+    /// Demonstrable corruption (SQLITE_CORRUPT / SQLITE_NOTADB). Safe to
+    /// quarantine and recreate.
+    Corrupt(String),
+    /// Everything else (permission, lock, IO, migration bug). The existing
+    /// database must NOT be touched.
+    Other(String),
+}
+
+impl std::fmt::Display for OpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpenError::Corrupt(e) => write!(f, "corrupt database: {e}"),
+            OpenError::Other(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// Classifies a rusqlite error as demonstrable corruption vs everything else.
+///
+/// The SQLite primary code is authoritative: a specific non-corrupt code
+/// (CANTOPEN, BUSY, LOCKED, READONLY, PERM, IOERR, ...) is never treated as
+/// corruption — even if a path in the message happens to contain the word
+/// "corrupt". The free-text message heuristic only applies to the generic
+/// `Error`(1)/`Unknown` codes, where SQLite has no finer-grained code.
+fn is_corruption(err: &rusqlite::Error) -> bool {
+    if let Some(ferr) = err.sqlite_error() {
+        use rusqlite::ffi::ErrorCode as C;
+        if matches!(ferr.code, C::DatabaseCorrupt | C::NotADatabase) {
+            return true;
+        }
+        if !matches!(ferr.code, C::Unknown) {
+            // A specific, non-corrupt result code — never corruption.
+            return false;
+        }
+    }
+    if let rusqlite::Error::SqliteFailure(_, Some(m)) = err {
+        let m = m.to_ascii_lowercase();
+        return m.contains("not a database")
+            || m.contains("malformed")
+            || m.contains("database disk image")
+            || m.contains("database schema is not");
+    }
+    false
+}
+
+fn classify_open_err(e: rusqlite::Error) -> OpenError {
+    if is_corruption(&e) {
+        OpenError::Corrupt(e.to_string())
+    } else {
+        OpenError::Other(e.to_string())
+    }
+}
+
 /// Row shape for `list_media`: (id, filename, path, media_type, fit_mode,
 /// description, tags, category, thumbnail_path, duration, width, height,
 /// content_hash, loop_playback, playback_rate, volume).
@@ -15,15 +74,18 @@ pub type MediaRow = (
 );
 
 impl DataDb {
-    pub fn open(db_path: &PathBuf) -> Result<Self, String> {
+    pub fn open(db_path: &PathBuf) -> Result<Self, OpenError> {
         match Self::try_open(db_path) {
             Ok(db) => Ok(db),
-            Err(first_err) => {
-                // The database may have been left corrupt/empty by a crash
-                // mid-migration. NEVER delete user data blindly — quarantine
-                // the damaged file (and any WAL/SHM sidecars) by renaming it
-                // aside so it can be inspected later, then recreate fresh
-                // (audit #4).
+            // Permission, transient lock, IO, or migration error: NEVER
+            // quarantine or replace the database — a valid installation must
+            // not be made to look empty. Surface the error to the caller.
+            Err(e @ OpenError::Other(_)) => Err(e),
+            Err(OpenError::Corrupt(first_err)) => {
+                // The database is demonstrably corrupt (crash mid-migration,
+                // disk fault). NEVER delete user data blindly — quarantine the
+                // damaged file (and any WAL/SHM sidecars) by renaming it aside
+                // so it can be inspected later, then recreate fresh (audit #4).
                 let stamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
@@ -37,20 +99,23 @@ impl DataDb {
                     db_path.with_extension("db-shm"),
                     db_path.with_extension(format!("corrupt-{}.db-shm", stamp)),
                 );
-                Self::try_open(db_path).map_err(|e| format!("{}; recovery failed: {}", first_err, e))
+                Self::try_open(db_path).map_err(|e| match e {
+                    OpenError::Other(msg) => OpenError::Other(format!("{}; recovery failed: {}", first_err, msg)),
+                    OpenError::Corrupt(msg) => OpenError::Corrupt(format!("{}; recovery failed: {}", first_err, msg)),
+                })
             }
         }
     }
 
-    fn try_open(db_path: &PathBuf) -> Result<Self, String> {
-        let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    fn try_open(db_path: &PathBuf) -> Result<Self, OpenError> {
+        let conn = Connection::open(db_path).map_err(classify_open_err)?;
         // Avoid WAL mode: on some Windows setups it is flaky (AV locking -wal/-shm
         // files). All access is serialised behind a mutex, so the default journal
         // mode is fine and more reliable here.
         conn.execute_batch("PRAGMA foreign_keys=ON;")
-            .map_err(|e| e.to_string())?;
+            .map_err(classify_open_err)?;
         let db = Self { conn: Mutex::new(conn) };
-        db.migrate()?;
+        db.migrate().map_err(classify_open_err)?;
         Ok(db)
     }
 
@@ -59,15 +124,14 @@ impl DataDb {
         conn.execute_batch("PRAGMA foreign_keys=ON;")
             .map_err(|e| e.to_string())?;
         let db = Self { conn: Mutex::new(conn) };
-        db.migrate()?;
+        db.migrate().map_err(|e| e.to_string())?;
         Ok(db)
     }
 
-    fn migrate(&self) -> Result<(), String> {
+    fn migrate(&self) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock();
         let current_version: i64 = conn
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .map_err(|e| e.to_string())?;
+            .query_row("PRAGMA user_version", [], |row| row.get(0))?;
         // Every step is idempotent (`CREATE TABLE IF NOT EXISTS` / additive
         // columns), so running an older DB through all steps is safe. The
         // `user_version` pragma records the schema for future versioned
@@ -117,16 +181,16 @@ impl DataDb {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
-        ").map_err(|e| e.to_string())?;
+        ")?;
 
         // Forward-migrate older DBs that predate the P4.8 media columns.
         // `PRAGMA table_info` is the portable existence check (there is no
         // `ADD COLUMN IF NOT EXISTS` in SQLite).
         let cols: Vec<String> = {
-            let mut stmt = conn.prepare("PRAGMA table_info(media)").map_err(|e| e.to_string())?;
-            let rows = stmt.query_map([], |row| row.get::<_, String>(1)).map_err(|e| e.to_string())?;
+            let mut stmt = conn.prepare("PRAGMA table_info(media)")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
             let mut v = Vec::new();
-            for r in rows { v.push(r.map_err(|e| e.to_string())?); }
+            for r in rows { v.push(r?); }
             v
         };
         for (col, ddl) in [
@@ -140,14 +204,14 @@ impl DataDb {
             ("volume", "ALTER TABLE media ADD COLUMN volume REAL DEFAULT 1.0"),
         ] {
             if !cols.iter().any(|c| c == col) {
-                conn.execute_batch(ddl).map_err(|e| e.to_string())?;
+                conn.execute_batch(ddl)?;
             }
         }
 
         // Record the schema version (currently 1). Future migrations gate on
         // `current_version` and bump it here.
         if current_version < 1 {
-            conn.execute_batch("PRAGMA user_version = 1;").map_err(|e| e.to_string())?;
+            conn.execute_batch("PRAGMA user_version = 1;")?;
         }
         Ok(())
     }
@@ -363,5 +427,100 @@ impl DataDb {
         let sql = format!("DELETE FROM {} WHERE id = ?1", table);
         conn.execute(&sql, params![id]).map_err(|e| e.to_string())?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "wordlyte-datadb-test-{}-{}",
+            std::process::id(),
+            name
+        ));
+        // Clear leftovers from a previously-interrupted run so quarantine
+        // rename targets can never collide across test invocations.
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn cleanup(dir: &std::path::Path) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn corrupt_files_in(dir: &std::path::Path) -> bool {
+        std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .any(|e| e.file_name().to_string_lossy().contains("corrupt-"))
+            })
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn corrupt_file_is_quarantined_and_recreated() {
+        let dir = test_dir("c1");
+        let path = dir.join("corrupt.db");
+        // Write clearly-not-sqlite bytes so SQLite reports NOTADB / CORRUPT.
+        std::fs::write(&path, b"this is definitely not a sqlite database file......").unwrap();
+        let db = DataDb::open(&path).expect("corrupt DB should be quarantined and recreated");
+        // The fresh database is usable.
+        assert!(db.kv_set("k", "v").is_ok());
+        assert_eq!(db.kv_get("k").unwrap().as_deref(), Some("v"));
+        // The damaged file was preserved aside, never deleted.
+        assert!(corrupt_files_in(&dir), "damaged database must be quarantined, not deleted");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn non_corrupt_error_never_quarantines_the_file() {
+        let dir = test_dir("c2");
+        // A parent path that is a regular file forces SQLITE_CANTOPEN when we
+        // try to open `<file>/nested.db` — a permission/IO problem, NOT corruption.
+        let blocker = dir.join("not-a-directory");
+        std::fs::write(&blocker, b"file").unwrap();
+        let path = blocker.join("nested.db");
+        let err = match DataDb::open(&path) {
+            Ok(_) => panic!("opening a path inside a regular file must fail"),
+            Err(e) => e,
+        };
+        assert!(
+            matches!(err, OpenError::Other(_)),
+            "a non-corrupt open failure must be Other, got {err:?}"
+        );
+        assert!(!corrupt_files_in(&dir), "a non-corrupt error must not quarantine the database");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn classification_identifies_corruption_codes() {
+        // SQLITE_NOTADB (26) = "file is not a database" → corruption.
+        let notadb = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(26),
+            Some("file is not a database".to_string()),
+        );
+        assert!(is_corruption(&notadb));
+        // SQLITE_CORRUPT (11) → corruption.
+        let corrupt = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(11),
+            Some("database disk image is malformed".to_string()),
+        );
+        assert!(is_corruption(&corrupt));
+        // SQLITE_CANTOPEN (14) is a permission/IO problem → NOT corruption.
+        let cantopen = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(14),
+            Some("unable to open database file".to_string()),
+        );
+        assert!(!is_corruption(&cantopen));
+        // SQLITE_BUSY (5, transient lock) → NOT corruption.
+        let busy = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(5),
+            Some("database is locked".to_string()),
+        );
+        assert!(!is_corruption(&busy));
     }
 }

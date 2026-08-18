@@ -27,6 +27,11 @@ fn recordings_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// Documented maximum accepted recording size. The frontend refuses to convert
+/// larger blobs to base64, and the backend rejects them before decoding — an
+/// unbounded IPC payload could spike memory or stall the runtime workers.
+const MAX_RECORDING_BYTES: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
+
 fn safe_name(name: &str) -> Result<String, String> {
     let name = name.trim();
     if name.is_empty() {
@@ -71,7 +76,8 @@ pub async fn recordings_list(app: AppHandle) -> Result<Vec<RecordingFile>, Strin
 /// Persist a completed recording's bytes to the recordings dir. The frontend
 /// sends the assembled WebM blob as a base64 string (same transport as
 /// `save_camera_snapshot`) — large files over the IPC channel are decoded
-/// here and written straight to disk.
+/// off the runtime worker thread and written atomically (temp + rename), so a
+/// save can never stall the command pipeline or leave a truncated file behind.
 #[tauri::command]
 pub async fn recording_save(
     app: AppHandle,
@@ -81,27 +87,52 @@ pub async fn recording_save(
 ) -> Result<RecordingFile, String> {
     // Recording is a paid feature — enforce on the backend, not just the UI.
     ensure_active_tier(&state, LicenseTier::Pro)?;
-    use base64::Engine as _;
-    let data = base64::engine::general_purpose::STANDARD
-        .decode(data_base64)
-        .map_err(|e| format!("Invalid recording data: {}", e))?;
+
+    // Reject oversized payloads BEFORE decoding: base64 of N bytes is ~4N/3
+    // characters, so an oversized string cannot possibly hold a valid recording.
+    let max_b64 = MAX_RECORDING_BYTES.div_ceil(3) * 4;
+    if data_base64.len() > max_b64 {
+        return Err(format!(
+            "Recording exceeds the {} GiB limit.",
+            MAX_RECORDING_BYTES / (1024 * 1024 * 1024)
+        ));
+    }
+
     let name = safe_name(&file_name)?;
     let dir = recordings_dir(&app)?;
-    let path = dir.join(name);
-    // Replace a same-named file (operator re-record) rather than erroring.
-    std::fs::write(&path, &data).map_err(|e| e.to_string())?;
-    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
-    let modified = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    Ok(RecordingFile {
-        name: path.file_name().unwrap_or_default().to_string_lossy().to_string(),
-        size: meta.len(),
-        modified,
+
+    tauri::async_runtime::spawn_blocking(move || {
+        use base64::Engine as _;
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(data_base64)
+            .map_err(|e| format!("Invalid recording data: {}", e))?;
+        if data.len() > MAX_RECORDING_BYTES {
+            return Err(format!(
+                "Recording exceeds the {} GiB limit.",
+                MAX_RECORDING_BYTES / (1024 * 1024 * 1024)
+            ));
+        }
+        let path = dir.join(&name);
+        // Atomic write: temp file in the same directory, then rename over the
+        // target so a crash mid-write can never leave a truncated recording.
+        let tmp = dir.join(format!(".{}.part", name));
+        std::fs::write(&tmp, &data).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+        let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        Ok(RecordingFile {
+            name: path.file_name().unwrap_or_default().to_string_lossy().to_string(),
+            size: meta.len(),
+            modified,
+        })
     })
+    .await
+    .map_err(|e| format!("recording_save join error: {e}"))?
 }
 
 /// Delete a saved recording.

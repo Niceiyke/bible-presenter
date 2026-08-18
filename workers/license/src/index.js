@@ -190,11 +190,12 @@ export default {
         return json({ status: "error", message: "Bad request" }, 400);
       }
       const key = String(body.license_key || "").trim().toUpperCase();
-      const rec = await env.LICENSES.get(key, "json");
-      if (!rec) return json({ status: "error", message: "Unknown license key" }, 404);
-      rec.revoked = body.revoked !== false;
-      await env.LICENSES.put(key, JSON.stringify(rec));
-      return json({ status: "ok", ...rec });
+      if (!key) return json({ status: "error", message: "Missing license key" }, 400);
+      // Route through the per-key Durable Object so a warm instance's in-memory
+      // cache can never write stale tier/expiry/machine data back over an admin
+      // change (audit: admin mutations must be serialized with registration).
+      const res = await mutateViaRegistry(env, key, { revoked: body.revoked !== false });
+      return res;
     }
 
     if (path === "/extend" && request.method === "POST") {
@@ -206,19 +207,14 @@ export default {
         return json({ status: "error", message: "Bad request" }, 400);
       }
       const key = String(body.license_key || "").trim().toUpperCase();
+      if (!key) return json({ status: "error", message: "Missing license key" }, 400);
       const days = Math.max(0, Math.min(3650, parseInt(body.days, 10) || 0));
       const tier = body.tier !== undefined ? normalizeTier(body.tier) : null;
-      const rec = await env.LICENSES.get(key, "json");
-      if (!rec) return json({ status: "error", message: "Unknown license key" }, 404);
       if (days <= 0 && !tier)
         return json({ status: "error", message: "Provide days and/or a tier" }, 400);
-      if (days > 0) rec.expires_at = Math.max(now(), rec.expires_at) + days * 86400;
-      if (tier) {
-        rec.tier = tier;
-        rec.max_machines = clampMachines(tier, rec.max_machines);
-      }
-      await env.LICENSES.put(key, JSON.stringify(rec));
-      return json({ status: "ok", ...rec });
+      // Route through the per-key Durable Object (same reason as /revoke).
+      const res = await mutateViaRegistry(env, key, { days, tier });
+      return res;
     }
 
     if (path === "/licenses" && request.method === "GET") {
@@ -297,15 +293,27 @@ async function collectLicenses(env) {
   return licenses;
 }
 
-const json = (data, status = 200) =>
-  new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "content-type": "application/json",
-      "cache-control": "no-store",
-      "access-control-allow-origin": "*",
-    },
+/// Applies an admin mutation (revoke / extend) through the per-key Durable
+/// Object so the mutation is serialized with registration and the DO's
+/// in-memory cache cannot later overwrite the change. Returns the worker-style
+/// JSON response.
+async function mutateViaRegistry(env, key, ops) {
+  const stub = env.LICENSE_REGISTRY.get(env.LICENSE_REGISTRY.idFromName(key));
+  const res = await stub.fetch("https://registry/mutate", {
+    method: "POST",
+    body: JSON.stringify({ key, ops }),
   });
+  return new Response(res.body, { status: res.status, headers: jsonHeaders });
+}
+
+const jsonHeaders = {
+  "content-type": "application/json",
+  "cache-control": "no-store",
+  "access-control-allow-origin": "*",
+};
+
+const json = (data, status = 200) =>
+  new Response(JSON.stringify(data), { status, headers: jsonHeaders });
 
 /**
  * Per-key serialization point for license record mutations (audit #11).
@@ -327,9 +335,23 @@ export class LicenseRegistry {
 
   async fetch(request) {
     const url = new URL(request.url);
-    const { key } = await request.json().catch(() => ({}));
-    if (url.pathname === "/register" && key) {
-      return this.register(key, (await request.json().catch(() => ({}))).machineId);
+    // A request body is consumable — parse it ONCE and reuse both fields
+    // (audit: parsing twice made the second call return `{}`, so `machineId`
+    // was `undefined` and the registry stored a phantom machine entry).
+    const body = await request.json().catch(() => ({}));
+    const key = String(body.key || "").trim().toUpperCase();
+    if (url.pathname === "/register") {
+      if (!key) return json({ status: "invalid", message: "Missing license key" }, 400);
+      const machineId = String(body.machineId || "").trim();
+      // Defense in depth: the outer /validate checks the shape, but the DO is
+      // the last line of defense before a slot is consumed.
+      if (!/^[0-9a-f]{64}$/i.test(machineId))
+        return json({ status: "invalid", message: "Missing or malformed machine id" }, 400);
+      return this.register(key, machineId);
+    }
+    if (url.pathname === "/mutate") {
+      if (!key) return json({ status: "error", message: "Missing license key" }, 400);
+      return this.mutate(key, body.ops || {});
     }
     return json({ status: "error", message: "Not found" }, 404);
   }
@@ -364,6 +386,27 @@ export class LicenseRegistry {
     rec.machines = machines;
     await this.save(key, rec);
     return json({ status: "active", message: "ok", rec });
+  }
+
+  /// Admin mutation (revoke / extend) applied through the same per-key instance
+  /// so the in-memory cache stays authoritative and a subsequent registration
+  /// can never write stale tier/expiry/revoke data back over it (audit #9).
+  async mutate(key, ops) {
+    const rec = await this.load(key);
+    if (!rec) return json({ status: "error", message: "Unknown license key" }, 404);
+    if (ops.revoked !== undefined) {
+      rec.revoked = ops.revoked === true;
+    }
+    const days = Math.max(0, Math.min(3650, parseInt(ops.days, 10) || 0));
+    if (days > 0) {
+      rec.expires_at = Math.max(Math.floor(Date.now() / 1000), rec.expires_at) + days * 86400;
+    }
+    if (ops.tier) {
+      rec.tier = normalizeTier(ops.tier);
+      rec.max_machines = clampMachines(rec.tier, rec.max_machines);
+    }
+    await this.save(key, rec);
+    return json({ status: "ok", ...rec });
   }
 }
 

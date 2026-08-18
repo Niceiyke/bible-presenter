@@ -296,36 +296,45 @@ export function OutputWindow() {
       setMonitorTest(!!event.payload?.active);
     });
 
-    // Hydrate from the authoritative presentation snapshot instead of racing
-    // per-field invokes against the event stream (audit #7).
-    invoke<PresentationSnapshot | null>("presentation_snapshot")
-      .then((snap) => {
-        if (snap) {
-          setLiveItem(snap.live ?? null);
-          setStagedItem(snap.staged ?? null);
-          setSettings(snap.settings);
-          setPropItems(snap.props ?? []);
-          setLowerThird((snap.lower_third as any) ?? null);
-        }
-        // Replay anything buffered while the snapshot was in flight, then let
-        // new events apply directly.
-        drainPresentation();
-      })
-      .catch((e: any) => {
-        signalOperatorWarning(`Output hydrate (snapshot): ${e?.message ?? e}`);
-        drainPresentation();
-      }),
-    Promise.all([
-      invoke<string>("get_app_data_dir").then(setAppDataDir).catch((e: any) => signalOperatorWarning(`Output hydrate (appdir): ${e?.message ?? e}`)),
-      invoke<OutputConfig[]>("outputs_list").then((configs) => {
-        setOutputConfig(configs.find((c) => c.window_label === "output") ?? null);
-      }).catch((e: any) => signalOperatorWarning(`Output hydrate (config): ${e?.message ?? e}`)),
-      invoke<LicenseInfo>("license_status").then(setLicense).catch((e: any) => signalOperatorWarning(`Output hydrate (license): ${e?.message ?? e}`)),
-    ]);
-
     const unlistenLicense = listen<LicenseInfo>("license-updated", (ev) => {
       setLicense(ev.payload);
     });
+
+    // Hydrate from the authoritative presentation snapshot instead of racing
+    // per-field invokes against the event stream (audit #7). All listeners are
+    // registered (and awaited) BEFORE the snapshot request, so no event can
+    // fire into the void between snapshot application and listener install
+    // (audit #2: hydration listener-registration race).
+    (async () => {
+      await Promise.all([
+        unlistenTrans, unlistenSettings, unlistenStaged, unlistenOutputConfig,
+        unlistenLt, unlistenMedia, unlistenProps, unlistenMonitorTest, unlistenLicense,
+      ]).catch(() => {});
+      invoke<PresentationSnapshot | null>("presentation_snapshot")
+        .then((snap) => {
+          if (snap) {
+            setLiveItem(snap.live ?? null);
+            setStagedItem(snap.staged ?? null);
+            setSettings(snap.settings);
+            setPropItems(snap.props ?? []);
+            setLowerThird((snap.lower_third as any) ?? null);
+          }
+          // Replay anything buffered while the snapshot was in flight, then let
+          // new events apply directly.
+          drainPresentation();
+        })
+        .catch((e: any) => {
+          signalOperatorWarning(`Output hydrate (snapshot): ${e?.message ?? e}`);
+          drainPresentation();
+        });
+      Promise.all([
+        invoke<string>("get_app_data_dir").then(setAppDataDir).catch((e: any) => signalOperatorWarning(`Output hydrate (appdir): ${e?.message ?? e}`)),
+        invoke<OutputConfig[]>("outputs_list").then((configs) => {
+          setOutputConfig(configs.find((c) => c.window_label === "output") ?? null);
+        }).catch((e: any) => signalOperatorWarning(`Output hydrate (config): ${e?.message ?? e}`)),
+        invoke<LicenseInfo>("license_status").then(setLicense).catch((e: any) => signalOperatorWarning(`Output hydrate (license): ${e?.message ?? e}`)),
+      ]);
+    })();
 
     return () => {
       if (mediaStateTimer) clearInterval(mediaStateTimer);

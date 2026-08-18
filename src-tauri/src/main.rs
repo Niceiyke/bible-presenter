@@ -113,10 +113,32 @@ fn main() {
                 }
                 Err(e) => {
                     log_msg(app, &format!(
-                        "Warning: Media Schedule Store failed to initialize: {}. Using in-memory fallback.",
-                        e
+                        "Warning: Media Schedule Store failed to initialize: {}.", e
                     ));
-                    Arc::new(store::MediaScheduleStore::in_memory(app_data_dir.clone())?)
+                    // Distinguish corruption from permission/lock/migration
+                    // errors: `DataDb::open` already quarantined + recreated a
+                    // corrupt database, so a Corrupt error here means even the
+                    // fresh recreate failed. A non-corrupt error must never be
+                    // hidden behind an empty workspace — surface it to the
+                    // operator so they know their data is not visible and
+                    // changes will not persist.
+                    let is_corrupt = e
+                        .downcast_ref::<store::DataDbOpenError>()
+                        .map(|o| matches!(o, store::DataDbOpenError::Corrupt(_)))
+                        .unwrap_or(false);
+                    let fallback = store::MediaScheduleStore::in_memory(app_data_dir.clone())?;
+                    let issue = if is_corrupt {
+                        format!(
+                            "Your saved data database could not be recovered even after being quarantined ({e}). Using a temporary in-memory store — changes will not survive a restart."
+                        )
+                    } else {
+                        format!(
+                            "Your saved data database could not be opened ({e}). Using a temporary in-memory store — your data may be hidden and changes will not survive a restart."
+                        )
+                    };
+                    log_msg(app, &issue);
+                    fallback.startup_issues.lock().push(issue);
+                    Arc::new(fallback)
                 }
             };
 
@@ -148,6 +170,7 @@ fn main() {
                 media_schedule,
                 app_data_dir,
                 download_in_progress: Arc::new(AtomicBool::new(false)),
+                startup_issues: Arc::new(Mutex::new(Vec::new())),
                 remote: remote_control,
                 outputs,
                 rtmp: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -169,10 +192,22 @@ fn main() {
             for label in ["output", "stage", "studio"] {
                 if let Some(win) = app.get_webview_window(label) {
                     let win2 = win.clone();
+                    let app_handle = app.handle().clone();
                     win.on_window_event(move |event| {
                         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                             api.prevent_close();
                             let _ = win2.hide();
+                            // External hide/close must be mirrored into the
+                            // OutputManager runtime + persisted visibility so
+                            // UI, disk, and the actual window never diverge.
+                            if let Some(state) = app_handle.try_state::<AppState>() {
+                                let _ = wordlyte_lib::commands::outputs::set_output_visible(
+                                    &app_handle,
+                                    state.inner(),
+                                    label,
+                                    false,
+                                );
+                            }
                         }
                     });
                 }

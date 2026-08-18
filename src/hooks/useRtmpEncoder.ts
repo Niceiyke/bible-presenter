@@ -268,6 +268,16 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
     frameCountRef.current = 0;
   }, [clearStats]);
 
+  // Failure path: mark the stream failed, tear down the encoder/processors,
+  // AND stop the backend ingest so the ffmpeg child + session are never leaked
+  // (audit: every encoder/feed error must clean up the backend session).
+  const fail = useCallback((message: string) => {
+    setStatus("error");
+    setError(message);
+    teardown();
+    invoke("rtmp_stop", { sessionId }).catch(() => {});
+  }, [teardown, sessionId]);
+
   const stop = useCallback(async () => {
     for (const enc of [encoderRef.current, audioEncoderRef.current]) {
       if (enc && enc.state === "configured") {
@@ -371,8 +381,7 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
         fps
       );
       if (!codec) {
-        setStatus("error");
-        setError("No supported H.264 profile found for this encoder.");
+        fail("No supported H.264 profile found for this encoder.");
         if (audioTrackRef.current === audioTrack) audioTrack?.stop();
         return false;
       }
@@ -387,23 +396,18 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
             // Best-effort feed; the backend surfaces real ffmpeg failures.
             invoke("rtmp_send", { sessionId, dataBase64: bytesToBase64(buf) }).catch((e: any) => {
               if (runningRef.current) {
-                setStatus("error");
-                setError(`RTMP feed failed: ${e?.message ?? e}`);
-                teardown();
+                fail(`RTMP feed failed: ${e?.message ?? e}`);
               }
             });
           },
           error: (e) => {
             if (runningRef.current) {
-              setStatus("error");
-              setError(`Encoder error: ${e?.message ?? e}`);
-              teardown();
+              fail(`Encoder error: ${e?.message ?? e}`);
             }
           },
         });
       } catch (e: any) {
-        setStatus("error");
-        setError(`Failed to create encoder: ${e?.message ?? e}`);
+        fail(`Failed to create encoder: ${e?.message ?? e}`);
         if (audioTrackRef.current === audioTrack) audioTrack?.stop();
         return false;
       }
@@ -422,25 +426,19 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
                 adts = wrapAdts(buf, audioSampleRate, audioChannels);
               } catch (e: any) {
                 if (runningRef.current) {
-                  setStatus("error");
-                  setError(`AAC encode failed: ${e?.message ?? e}`);
-                  teardown();
+                  fail(`AAC encode failed: ${e?.message ?? e}`);
                 }
                 return;
               }
               invoke("rtmp_send_audio", { sessionId, dataBase64: bytesToBase64(adts) }).catch((e: any) => {
                 if (runningRef.current) {
-                  setStatus("error");
-                  setError(`RTMP audio feed failed: ${e?.message ?? e}`);
-                  teardown();
+                  fail(`RTMP audio feed failed: ${e?.message ?? e}`);
                 }
               });
             },
             error: (e) => {
               if (runningRef.current) {
-                setStatus("error");
-                setError(`Audio encoder error: ${e?.message ?? e}`);
-                teardown();
+                fail(`Audio encoder error: ${e?.message ?? e}`);
               }
             },
           });
@@ -452,10 +450,8 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
           });
           audioEncoderRef.current = audioEncoder;
         } catch (e: any) {
-          setStatus("error");
-          setError(`Failed to create the audio encoder: ${e?.message ?? e}`);
+          fail(`Failed to create the audio encoder: ${e?.message ?? e}`);
           if (audioTrackRef.current === audioTrack) audioTrack?.stop();
-          teardown();
           return false;
         }
       }
@@ -463,9 +459,7 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
       try {
         await invoke("rtmp_start", { sessionId, serverUrl, streamKey: streamKey || null, withAudio: !!audioTrack });
       } catch (e: any) {
-        setStatus("error");
-        setError(`Failed to start RTMP: ${e?.message ?? e}`);
-        teardown();
+        fail(`Failed to start RTMP: ${e?.message ?? e}`);
         return false;
       }
 
@@ -542,7 +536,7 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
 
       return true;
     },
-    [audio, audioBitrateKbps, bitrateKbps, keyframeIntervalSec, fps, teardown, startBitratePolling, sessionId]
+    [audio, audioBitrateKbps, bitrateKbps, keyframeIntervalSec, fps, teardown, fail, startBitratePolling, sessionId]
   );
 
   // Pause stats when no longer live.

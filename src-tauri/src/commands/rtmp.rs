@@ -1,11 +1,13 @@
 use crate::license::{ensure_active_tier, LicenseTier};
 use crate::state::AppState;
 use base64::Engine as _;
+use parking_lot::Mutex;
 use serde::Serialize;
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::State;
 
@@ -214,6 +216,36 @@ pub fn ffmpeg_available() -> bool {
     crate::binpaths::ffmpeg_available()
 }
 
+/// Spawns a reaper that removes a session the moment its ffmpeg child exits
+/// (crash, network failure, or user stop), so the backend never retains a dead
+/// session and `rtmp_start`/`rtmp_send` reflect reality. Dropping the session
+/// closes the writer channels (EOF to ffmpeg). Polls non-blocking, so it never
+/// blocks sends.
+fn spawn_reaper(
+    rtmp: Arc<Mutex<std::collections::HashMap<String, RtmpSession>>>,
+    session_id: String,
+) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_millis(500));
+            let mut guard = rtmp.lock();
+            let dead = match guard.get_mut(&session_id) {
+                Some(s) => match s.child.try_wait() {
+                    Ok(Some(_)) => true, // ffmpeg exited
+                    Ok(None) => false,
+                    Err(_) => true,
+                },
+                None => return, // already stopped/removed
+            };
+            if dead {
+                // Dropping the session closes stdin/audio senders -> EOF to ffmpeg.
+                guard.remove(&session_id);
+                return;
+            }
+        }
+    });
+}
+
 /// Start an RTMP ingest for one destination: spawn ffmpeg (mux-only H.264 ->
 /// FLV/RTMP) and keep it fed from the writer thread. `with_audio` adds a second
 /// loopback TCP input for ADTS AAC (WebCodecs-encoded by the frontend). Sessions
@@ -274,7 +306,7 @@ pub fn rtmp_start(
         (None, None)
     };
     guard.insert(
-        session_id,
+        session_id.clone(),
         RtmpSession {
             child,
             stdin_tx,
@@ -284,6 +316,10 @@ pub fn rtmp_start(
             url,
         },
     );
+    drop(guard);
+    // Reap the session automatically when ffmpeg exits so a crashed/stopped
+    // ingest can never linger as a dead entry that blocks a retry.
+    spawn_reaper(state.rtmp.clone(), session_id);
     Ok(())
 }
 
@@ -341,28 +377,34 @@ pub fn rtmp_send_audio(
 
 /// Stop one destination's ingest: signal EOF to ffmpeg, then wait (with a
 /// timeout and forced kill) for it to exit so the session is torn down cleanly.
+/// Idempotent — stopping an unknown/already-stopped session is a no-op. The
+/// wait loop runs off the main thread so the UI never blocks on a slow pipe.
 #[tauri::command]
-pub fn rtmp_stop(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+pub async fn rtmp_stop(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
     let session = state.rtmp.lock().remove(&session_id);
     let Some(session) = session else { return Ok(()) };
     drop(session.stdin_tx); // EOF to ffmpeg -> flush + finalize the stream
     drop(session.audio_tx); // close the audio socket -> ffmpeg finishes the AAC stream
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut child = session.child;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return Ok(()),
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err("ffmpeg did not exit in time; the session was killed.".into());
+    tauri::async_runtime::spawn_blocking(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut child = session.child;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return Ok(()),
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err("ffmpeg did not exit in time; the session was killed.".into());
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
                 }
-                std::thread::sleep(Duration::from_millis(100));
+                Err(e) => return Err(format!("Failed to reap ffmpeg: {e}")),
             }
-            Err(e) => return Err(format!("Failed to reap ffmpeg: {e}")),
         }
-    }
+    })
+    .await
+    .map_err(|e| format!("rtmp_stop join error: {e}"))?
 }
 
 /// Runtime status of every active RTMP ingest (ephemeral, not persisted).
@@ -417,5 +459,44 @@ mod tests {
         assert!(joined.contains("-f adts -i tcp://127.0.0.1:44111"));
         assert!(joined.contains("-map 0:v:0 -map 1:a:0"));
         assert!(joined.contains("-c:v copy -c:a copy"));
+    }
+
+    #[test]
+    fn reaper_removes_session_when_child_exits() {
+        use std::collections::HashMap;
+        use std::sync::mpsc;
+        let map: Arc<Mutex<HashMap<String, RtmpSession>>> = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, _rx) = mpsc::channel::<Vec<u8>>();
+        let child = {
+            #[cfg(windows)]
+            {
+                Command::new("cmd").arg("/C").arg("exit 0").spawn().unwrap()
+            }
+            #[cfg(not(windows))]
+            {
+                Command::new("true").spawn().unwrap()
+            }
+        };
+        map.lock().insert(
+            "s1".to_string(),
+            RtmpSession {
+                child,
+                stdin_tx: tx,
+                audio_tx: None,
+                queued: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                audio_queued: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                url: "rtmp://host/live".to_string(),
+            },
+        );
+        spawn_reaper(map.clone(), "s1".to_string());
+        // The reaper should observe the child exit and remove the dead session.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if !map.lock().contains_key("s1") {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("reaper did not remove the dead session");
     }
 }

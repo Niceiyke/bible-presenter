@@ -299,6 +299,41 @@ describe("useRtmpEncoder", () => {
     expect(mockInvoke).toHaveBeenCalledWith("rtmp_stop", { sessionId: "dest-test" });
     expect(FakeVideoEncoder.instances[0]?.state).toBe("closed");
   });
+
+  it("calls rtmp_stop when the encoder errors mid-stream (no leaked session)", async () => {
+    const { result } = renderHook(() => useRtmpEncoder({ sessionId: "dest-test" }));
+    await act(async () => {
+      await result.current.start(fakeStream(), "rtmp://host/live", "k");
+    });
+    expect(result.current.status).toBe("live");
+
+    mockInvoke.mockClear();
+    const enc = FakeVideoEncoder.instances[0];
+    await act(async () => {
+      enc?.errorCb?.(new DOMException("boom", "EncodingError"));
+    });
+    expect(result.current.status).toBe("error");
+    expect(result.current.error).toContain("boom");
+    expect(mockInvoke).toHaveBeenCalledWith("rtmp_stop", { sessionId: "dest-test" });
+  });
+
+  it("calls rtmp_stop when feeding packets fails (no leaked session)", async () => {
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "rtmp_send") throw new Error("writer closed (ffmpeg exited)");
+      return undefined;
+    });
+    const { result } = renderHook(() => useRtmpEncoder({ sessionId: "dest-test" }));
+    await act(async () => {
+      await result.current.start(fakeStream(), "rtmp://host/live", "k");
+    });
+    // Let the async reader loop encode a frame and hit the send failure.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    expect(result.current.status).toBe("error");
+    expect(result.current.error).toContain("writer closed");
+    expect(mockInvoke).toHaveBeenCalledWith("rtmp_stop", { sessionId: "dest-test" });
+  });
 });
 
 describe("useRtmpEncoder audio", () => {

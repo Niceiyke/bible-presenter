@@ -142,15 +142,73 @@ pub async fn get_hymn_library(app: AppHandle) -> Result<Vec<store::Song>, String
     Ok(Vec::new())
 }
 
+/// Validate a user file path produced by the frontend's save/open dialogs. The
+/// file commands are ONLY used for presentation import/export, so the path must
+/// be an absolute `.json` file with a sane file name — a compromised renderer
+/// or a future caller cannot read/write arbitrary non-JSON user files or
+/// traverse (audit #13).
+fn validate_user_file_path(path: &str) -> Result<std::path::PathBuf, String> {
+    if path.contains('\0') {
+        return Err("Invalid path".into());
+    }
+    let p = std::path::PathBuf::from(path);
+    if !p.is_absolute() {
+        return Err("Path must be absolute".into());
+    }
+    if path.split(['/', '\\']).any(|c| c == "..") {
+        return Err("Path must not contain traversal components".into());
+    }
+    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']) {
+        return Err("Invalid file name".into());
+    }
+    if !name.to_lowercase().ends_with(".json") {
+        return Err("Only .json files are supported for import/export".into());
+    }
+    Ok(p)
+}
+
 #[tauri::command]
 pub async fn write_text_file(path: String, content: String) -> Result<(), String> {
-    std::fs::write(&path, &content).map_err(|e| e.to_string())
+    let p = validate_user_file_path(&path)?;
+    std::fs::write(&p, &content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn read_text_file(path: String) -> Result<String, String> {
-    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+    let p = validate_user_file_path(&path)?;
+    std::fs::read_to_string(&p).map_err(|e| e.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_relative_paths() {
+        assert!(validate_user_file_path("export.json").is_err());
+        assert!(validate_user_file_path("./export.json").is_err());
+    }
+
+    #[test]
+    fn rejects_non_json_extensions() {
+        assert!(validate_user_file_path("C:/Users/x/export.txt").is_err());
+        assert!(validate_user_file_path("C:/Users/x/authorized_keys").is_err());
+    }
+
+    #[test]
+    fn rejects_traversal_or_bad_names() {
+        assert!(validate_user_file_path("C:/Users/x/../y.json").is_err());
+        assert!(validate_user_file_path("C:/Users/x/.config").is_err());
+    }
+
+    #[test]
+    fn accepts_absolute_json_export_paths() {
+        assert!(validate_user_file_path("C:/Users/x/Desktop/pres.json").is_ok());
+        assert!(validate_user_file_path("C:/Users/x/Desktop/pres.biblepresenter.json").is_ok());
+    }
+}
+
 
 /// Persist an arbitrary JSON blob (operator workspace: recents, schedule
 /// undo/redo stacks) under a named key in the data DB.

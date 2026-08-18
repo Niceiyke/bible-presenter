@@ -37,6 +37,21 @@ export interface UseRecorderResult {
   cancel: () => void;
 }
 
+/// Documented maximum recording size — must match the backend `recording_save`
+/// cap. Refusing here (before the base64 conversion) avoids an out-of-memory
+/// spike on an oversized blob that would be rejected anyway.
+const MAX_RECORDING_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
+
+/// Pure validation shared by `stop()` and unit tests: returns a user-facing
+/// error when a blob should not be saved, else null.
+export function recordingSizeError(blobSize: number): string | null {
+  if (blobSize === 0) return "Recorder captured no frames (empty stream?).";
+  if (blobSize > MAX_RECORDING_BYTES) {
+    return "Recording exceeds the 2 GiB limit — split the recording into shorter segments.";
+  }
+  return null;
+}
+
 function defaultFileName(now = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `recording-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.webm`;
@@ -164,8 +179,9 @@ export function useRecorder(options: UseRecorderOptions = {}): UseRecorderResult
     setRecording(false);
     setElapsed(0);
 
-    if (blob.size === 0) {
-      setError("Recorder captured no frames (empty stream?).");
+    const sizeError = recordingSizeError(blob.size);
+    if (sizeError) {
+      setError(sizeError);
       return null;
     }
 

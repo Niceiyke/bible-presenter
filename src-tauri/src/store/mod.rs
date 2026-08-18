@@ -12,6 +12,9 @@ use tauri::{Emitter, Manager};
 pub mod media_schedule;
 pub mod data_db;
 pub use media_schedule::*;
+/// Classified data-database open failure (corrupt vs everything else), re-exported
+/// so `main.rs` can decide whether quarantine/recovery is appropriate.
+pub use data_db::OpenError as DataDbOpenError;
 
 #[derive(Clone, Serialize)]
 pub struct SystemLog {

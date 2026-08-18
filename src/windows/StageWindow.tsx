@@ -97,26 +97,32 @@ export function StageWindow() {
     });
 
     // Hydrate from the authoritative snapshot (single consistent read) instead
-    // of racing per-field invokes against the event stream.
-    invoke<PresentationSnapshot | null>("presentation_snapshot")
-      .then((snap) => {
-        if (snap) {
-          setLiveItem(snap.live ?? null);
-          setStagedItem(snap.staged ?? null);
-          setSettings(snap.settings);
-          setLtPayload((snap.lower_third as any) ?? null);
-        }
-        drainPresentation();
-      })
-      .catch((e: any) => {
-        signalOperatorWarning(`Stage hydrate (snapshot): ${e?.message ?? e}`);
-        drainPresentation();
-      });
+    // of racing per-field invokes against the event stream. All listeners are
+    // awaited BEFORE the snapshot so a late-registered listener can never drop
+    // an event that fires between snapshot application and registration
+    // (audit #2: hydration listener-registration race).
+    (async () => {
+      await Promise.all([unlisten1, unlisten2, unlisten3, unlisten4, unlisten5]).catch(() => {});
+      invoke<PresentationSnapshot | null>("presentation_snapshot")
+        .then((snap) => {
+          if (snap) {
+            setLiveItem(snap.live ?? null);
+            setStagedItem(snap.staged ?? null);
+            setSettings(snap.settings);
+            setLtPayload((snap.lower_third as any) ?? null);
+          }
+          drainPresentation();
+        })
+        .catch((e: any) => {
+          signalOperatorWarning(`Stage hydrate (snapshot): ${e?.message ?? e}`);
+          drainPresentation();
+        });
 
-    invoke<string>("get_app_data_dir").then(setAppDataDir).catch(() => {});
-    invoke<OutputConfig[]>("outputs_list").then((configs) => {
-      setOutputConfig(configs.find((c) => c.window_label === "stage") ?? null);
-    }).catch(() => {});
+      invoke<string>("get_app_data_dir").then(setAppDataDir).catch(() => {});
+      invoke<OutputConfig[]>("outputs_list").then((configs) => {
+        setOutputConfig(configs.find((c) => c.window_label === "stage") ?? null);
+      }).catch(() => {});
+    })();
 
     const tick = () => {
       setClock(formatClock(new Date()));
