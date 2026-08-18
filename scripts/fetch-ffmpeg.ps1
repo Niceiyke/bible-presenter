@@ -3,7 +3,7 @@
 #
 # Source: BtbN FFmpeg-Builds LGPL Windows build. LGPL is required so the
 # bundled ffmpeg carries no GPL obligations (mux-only RTMP work + media
-# probing — see docs/OUTPUT_MANAGER_DESIGN.md). The binaries are NOT committed
+# probing - see docs/OUTPUT_MANAGER_DESIGN.md). The binaries are NOT committed
 # to git; run this script once (and after each deliberate upgrade) so
 # `tauri build` can bundle them.
 #
@@ -12,12 +12,15 @@
 # Runtime resolution order is: {resource_dir}/bin/ffmpeg.exe -> PATH.
 #
 # Reproducibility: BtbN publishes rolling auto-builds under a moving `latest`
-# tag. To keep release builds deterministic, pin `$ReleaseTag` to a specific
-# autobuild tag (e.g. `autobuild-2026-08-17-13-29`, see
-# https://github.com/BtbN/FFmpeg-Builds/releases) rather than `latest`, and the
-# zip's SHA-256 is verified against the `checksums.sha256` published in the
-# SAME release — a mismatch fails the fetch instead of silently bundling an
-# unexpected binary.
+# tag (whose assets are also re-uploaded later the same day). To keep release
+# builds deterministic, pin `$ReleaseTag` to a specific immutable autobuild tag
+# (e.g. `autobuild-2026-08-17-13-05`, see
+# https://github.com/BtbN/FFmpeg-Builds/releases) rather than `latest`. The
+# archive name varies per build (it embeds the ffmpeg revision), so it is
+# resolved from that release's own `checksums.sha256`, and the downloaded zip
+# must match BOTH that published checksum AND the committed `$ExpectedSha256`
+# below - a mismatch fails the fetch instead of silently bundling an unexpected
+# binary.
 
 $ErrorActionPreference = "Stop"
 
@@ -25,14 +28,12 @@ $BinDir = Join-Path $PSScriptRoot "..\src-tauri\binaries"
 # PINNED autobuild tag (NOT `latest`): a moving tag makes release builds
 # non-reproducible, so the tag must be a specific BtbN autobuild. Update both
 # the tag and `$ExpectedSha256` together when deliberately upgrading ffmpeg.
-$ReleaseTag = "autobuild-2026-08-17-13-29"
-# Committed SHA-256 of ffmpeg-master-latest-win64-lgpl.zip for the pinned tag.
-# This is independent of the (moving) checksums.sha256 and makes the fetch
-# tamper-proof even if the release's own checksum file were replaced.
-$ExpectedSha256 = "f62a01a3c8b28303dad536ef7cf65f0d6cd36106d5e3867d90af73afd5b20950"
-$AssetName = "ffmpeg-master-latest-win64-lgpl.zip"
+$ReleaseTag = "autobuild-2026-08-17-13-05"
+# Committed SHA-256 of the NON-shared LGPL win64 zip for the pinned tag. This is
+# independent of the (moving) checksums.sha256 and makes the fetch tamper-proof
+# even if the release's own checksum file were replaced.
+$ExpectedSha256 = "fdf4fcb4797762e8b4cc3eccdedfedad1e4a345fe9bd8f6a44a20ebf57718c7a"
 $BaseUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$ReleaseTag"
-$Url = "$BaseUrl/$AssetName"
 $ChecksumsUrl = "$BaseUrl/checksums.sha256"
 $Zip = Join-Path $env:TEMP "ffmpeg-lgpl.zip"
 $Checksums = Join-Path $env:TEMP "ffmpeg-checksums.sha256"
@@ -45,24 +46,31 @@ if ($ReleaseTag -eq "latest" -or $ReleaseTag -match "latest") {
 
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 
-Write-Host "Downloading LGPL ffmpeg build ($ReleaseTag, ~150 MB)..."
+Write-Host "Resolving ffmpeg asset for $ReleaseTag..."
 Invoke-WebRequest -Uri $ChecksumsUrl -OutFile $Checksums
-Invoke-WebRequest -Uri $Url -OutFile $Zip
 
-# Verify the zip against the release's published SHA-256 so a corrupted or
-# unexpected download can never be bundled silently.
-$expected = Get-Content $Checksums | Where-Object { $_ -match $AssetName } | ForEach-Object {
-    ($_ -split '\s+')[0].Trim().ToLower()
+# The archive name embeds the ffmpeg revision, so resolve it from the release's
+# own checksums file: pick the non-shared win64 LGPL zip line.
+$AssetLine = Get-Content $Checksums | Where-Object { $_ -match 'win64-lgpl\.zip$' } | Select-Object -First 1
+if (-not $AssetLine) {
+    throw "checksums.sha256 did not list a non-shared win64-lgpl.zip - refusing to bundle an unverified binary."
 }
-if (-not $expected) {
-    throw "checksums.sha256 did not list $AssetName — refusing to bundle an unverified binary."
+$AssetName = ($AssetLine -split '\s+') | Where-Object { $_ -match '\.zip$' } | Select-Object -First 1
+$published = ($AssetLine -split '\s+')[0].Trim().ToLower()
+if (-not $AssetName) {
+    throw "Could not determine the win64-lgpl.zip asset name from checksums.sha256."
 }
+
+Write-Host "  asset: $AssetName"
+Write-Host "Downloading LGPL ffmpeg build ($ReleaseTag, ~150 MB)..."
+Invoke-WebRequest -Uri "$BaseUrl/$AssetName" -OutFile $Zip
+
 $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Zip).Hash.ToLower()
-if ($actual -ne $expected) {
-    throw "SHA-256 mismatch for $AssetName vs published checksums (expected $expected, got $actual) — aborting."
+if ($actual -ne $published) {
+    throw "SHA-256 mismatch for $AssetName vs published checksums (expected $published, got $actual) - aborting."
 }
 if ($actual -ne $ExpectedSha256) {
-    throw "SHA-256 mismatch for $AssetName vs the committed pinned hash (expected $ExpectedSha256, got $actual) — the pinned tag/hash are out of date; update both together."
+    throw "SHA-256 mismatch for $AssetName vs the committed pinned hash (expected $ExpectedSha256, got $actual) - the pinned tag/hash are out of date; update both together."
 }
 Write-Host "  SHA-256 verified: $actual"
 
