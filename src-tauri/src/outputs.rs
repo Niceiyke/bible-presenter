@@ -4,11 +4,20 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use parking_lot::RwLock;
 
+/// Schema version of a persisted `OutputConfig` document. Bumped when the
+/// on-wire config shape changes. `#[serde(default)]` keeps older `outputs.json`
+/// files readable: a legacy file loads as schema version 1 with the new field
+/// defaulted, and any follow-up migration keyed on `schema_version` can run
+/// from that baseline (Phase 0 contract freeze).
+pub const OUTPUT_SCHEMA_VERSION: u32 = 1;
+
 /// A configurable output surface subscribing to a program source. Outputs never
 /// mutate engine state — they only subscribe. Persisted to `outputs.json`
 /// under the app data dir (operator hardware/preference state, not content).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputConfig {
+    #[serde(default = "default_output_schema_version")]
+    pub schema_version: u32,
     pub id: String,
     pub kind: OutputKind,
     pub label: String,
@@ -117,6 +126,10 @@ pub struct StreamDestination {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_output_schema_version() -> u32 {
+    OUTPUT_SCHEMA_VERSION
 }
 
 /// Ephemeral runtime status of an output (not persisted).
@@ -261,6 +274,7 @@ impl OutputManager {
 pub fn default_outputs() -> Vec<OutputConfig> {
     vec![
         OutputConfig {
+            schema_version: OUTPUT_SCHEMA_VERSION,
             id: "output".into(),
             kind: OutputKind::Window,
             label: "Projection".into(),
@@ -277,6 +291,7 @@ pub fn default_outputs() -> Vec<OutputConfig> {
             stream_destinations: None,
         },
         OutputConfig {
+            schema_version: OUTPUT_SCHEMA_VERSION,
             id: "stage".into(),
             kind: OutputKind::Window,
             label: "Stage Monitor".into(),
@@ -293,6 +308,7 @@ pub fn default_outputs() -> Vec<OutputConfig> {
             stream_destinations: None,
         },
         OutputConfig {
+            schema_version: OUTPUT_SCHEMA_VERSION,
             id: "overflow".into(),
             kind: OutputKind::Window,
             label: "Overflow".into(),
@@ -309,6 +325,7 @@ pub fn default_outputs() -> Vec<OutputConfig> {
             stream_destinations: None,
         },
         OutputConfig {
+            schema_version: OUTPUT_SCHEMA_VERSION,
             id: "record-main".into(),
             kind: OutputKind::Recorder,
             label: "Record Program".into(),
@@ -325,6 +342,7 @@ pub fn default_outputs() -> Vec<OutputConfig> {
             stream_destinations: None,
         },
         OutputConfig {
+            schema_version: OUTPUT_SCHEMA_VERSION,
             id: "stream-main".into(),
             kind: OutputKind::Streamer,
             label: "Stream Program".into(),
@@ -406,6 +424,43 @@ mod tests {
         let after_list = manager.list();
         let after = after_list.iter().find(|c| c.id == "output").unwrap();
         assert_eq!(after.visible, first.visible);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_outputs_json_defaults_schema_version_to_1() {
+        // A pre-schema_version `outputs.json` (Phase 0 freeze) must still load:
+        // the new field defaults to the current version so migration logic can
+        // key on it without guessing.
+        let dir = temp_app_data("legacy-schema");
+        let legacy = r#"[{
+            "id": "output",
+            "kind": "window",
+            "label": "Projection",
+            "enabled": true,
+            "visible": false,
+            "source": { "type": "live" },
+            "geometry": { "width": 1920, "height": 1080 },
+            "overlays": { "props": true, "lower_third": true, "logo": true },
+            "window_label": "output"
+        }]"#;
+        std::fs::write(dir.join("outputs.json"), legacy).unwrap();
+
+        let manager = OutputManager::new(&dir);
+        let output = manager.get("output").expect("legacy output loads");
+        assert_eq!(output.schema_version, OUTPUT_SCHEMA_VERSION);
+        assert_eq!(output.kind, OutputKind::Window);
+        assert!(matches!(output.source, OutputSource::Live));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_outputs_carry_schema_version() {
+        let dir = temp_app_data("default-schema");
+        let manager = OutputManager::new(&dir);
+        for c in manager.list() {
+            assert_eq!(c.schema_version, OUTPUT_SCHEMA_VERSION);
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -77,7 +77,16 @@ export interface StreamDestination {
   audio: boolean;
 }
 
+/**
+ * Schema version of a persisted `OutputConfig` document. Matches
+ * `OUTPUT_SCHEMA_VERSION` in `src-tauri/src/outputs.rs`. Present on every
+ * config the backend emits; the backend defaults legacy `outputs.json` files
+ * to version 1 on load.
+ */
+export const OUTPUT_SCHEMA_VERSION = 1;
+
 export interface OutputConfig {
+  schema_version: number;
   id: string;
   kind: OutputKind;
   label: string;

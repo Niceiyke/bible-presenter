@@ -17,12 +17,21 @@ export type DisplayItem =
   | { type: "SceneComposition"; data: SceneCompositionData };
 
 /**
+ * Schema version of the presentation snapshot document. Consumers must reject a
+ * snapshot whose `schema_version` they do not understand instead of guessing at
+ * fields (Phase 0 contract freeze). Matches
+ * `PRESENTATION_SCHEMA_VERSION` in `src-tauri/src/commands/display.rs`.
+ */
+export const PRESENTATION_SCHEMA_VERSION = 1;
+
+/**
  * Authoritative presentation snapshot returned by the `presentation_snapshot`
  * backend command. Windows register their listeners first, fetch this, then
  * replay any buffered events on top so hydration converges to current state
  * and a racing backend update is never lost or overwritten.
  */
 export interface PresentationSnapshot {
+  schema_version: number;
   live: DisplayItem | null;
   staged: DisplayItem | null;
   settings: PresentationSettings;

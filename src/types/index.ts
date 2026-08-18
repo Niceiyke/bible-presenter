@@ -1,6 +1,7 @@
 export type { Verse } from "./verse";
 export type { MediaItem, MediaItemType, MediaFitMode } from "./media";
 export type { DisplayItem, ScheduleEntry, Schedule, ServiceMeta, PresentationSnapshot } from "./display";
+export { PRESENTATION_SCHEMA_VERSION } from "./display";
 export type { SlideZone, TextZone, SlideElement, SlideElementKind, TextElement, ImageElement, VideoElement, ShapeElement, CustomSlide, CustomPresentation, CustomSlideDisplayData, PresentationSummary, SlideTemplate, PresentationExport, SlideBackground, ProseMirrorJSON, SlideTheme, SlideMaster, TextStyle } from "./slides";
 export { DEFAULT_SLIDE_BACKGROUND } from "./slides";
 export type { TimerData } from "./timer";
@@ -19,5 +20,6 @@ export type {
   StreamPlatform, StreamDestination,
 } from "./output";
 export { CAPTURE_RESOLUTIONS, CAPTURE_FPS_OPTIONS } from "./output";
+export { OUTPUT_SCHEMA_VERSION } from "./output";
 export { FONTS, DEFAULT_SETTINGS, THEMES } from "./settings";
 export { DEFAULT_LT_TEMPLATE } from "./lowerThird";

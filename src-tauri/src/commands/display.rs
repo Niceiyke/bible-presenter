@@ -11,12 +11,18 @@ use serde::Serialize;
 use serde_json::json;
 use tauri::{AppHandle, State};
 
+/// Schema version of the `PresentationSnapshot` document. Bumped when the
+/// snapshot's on-wire shape changes; consumers must reject a snapshot whose
+/// `schema_version` they do not understand instead of guessing at fields.
+pub const PRESENTATION_SCHEMA_VERSION: u32 = 1;
+
 /// Authoritative presentation snapshot for window hydration. Windows call
 /// `presentation_snapshot` after registering their event listeners and replay
 /// their buffered events on top of it, so a reopening window converges to the
 /// same state as the operator console.
 #[derive(Serialize)]
 pub struct PresentationSnapshot {
+    pub schema_version: u32,
     pub live: Option<store::DisplayItem>,
     pub staged: Option<store::DisplayItem>,
     pub settings: store::PresentationSettings,
@@ -31,6 +37,7 @@ pub async fn presentation_snapshot(state: State<'_, AppState>) -> Result<Present
     // consistent: no event can be half-way applied when we capture it.
     let _guard = state.presentation.lock.lock();
     Ok(PresentationSnapshot {
+        schema_version: PRESENTATION_SCHEMA_VERSION,
         live: state.presentation.live_item.lock().clone(),
         staged: state.presentation.staged_item.lock().clone(),
         settings: state.presentation.settings.lock().clone(),

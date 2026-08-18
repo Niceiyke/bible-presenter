@@ -357,6 +357,73 @@ describe("song overlay go-live failures (Phase 6)", () => {
     });
   });
 
+  describe("scene application", () => {
+    it("applies a scene's settings, props, camera, and lower third on success", async () => {
+      const scenePayload = {
+        id: "scn-1",
+        name: "Camera + Verse",
+        settings: { ...useAppStore.getState().settings, font_size: 120 },
+        props: [propItem()],
+        lower_third_data: { kind: "Nameplate", data: { name: "Test" } },
+        lower_third_template: { ...DEFAULT_LT_TEMPLATE },
+        camera: { type: "Camera", data: { deviceId: "cam-1", opacity: 1, objectFit: "cover", mirrored: false } },
+      };
+      mockInvoke.mockResolvedValueOnce(scenePayload); // apply_scene
+      const { result } = renderHook(() => useItemActions());
+
+      await act(async () => { await result.current.applyScene("scn-1"); });
+
+      expect(mockInvoke).toHaveBeenCalledWith("apply_scene", { id: "scn-1" });
+      expect(useAppStore.getState().settings.font_size).toBe(120);
+      expect(useAppStore.getState().propItems).toEqual([propItem()]);
+      expect(useAppStore.getState().liveItem).toEqual(scenePayload.camera);
+      expect(useAppStore.getState().ltVisible).toBe(true);
+      expect(useAppStore.getState().toast).toContain("Scene \"Camera + Verse\" applied");
+    });
+
+    it("applies a multi-zone scene layout as a SceneComposition live item", async () => {
+      const scenePayload = {
+        id: "scn-2",
+        name: "Split",
+        settings: { ...useAppStore.getState().settings },
+        props: [],
+        lower_third_data: null,
+        layout: {
+          zones: [
+            { id: "z1", item: makeVerse(), x: 0, y: 0, w: 0.5, h: 1, fit: "cover", opacity: 1, z: 1 },
+            { id: "z2", item: makeVerse(1), x: 0.5, y: 0, w: 0.5, h: 1, fit: "cover", opacity: 1, z: 2 },
+          ],
+        },
+      };
+      mockInvoke.mockResolvedValueOnce(scenePayload);
+      const { result } = renderHook(() => useItemActions());
+
+      await act(async () => { await result.current.applyScene("scn-2"); });
+
+      const live = useAppStore.getState().liveItem;
+      expect(live?.type).toBe("SceneComposition");
+      if (live?.type === "SceneComposition") {
+        expect(live.data.scene_id).toBe("scn-2");
+        expect(live.data.zones).toHaveLength(2);
+      }
+    });
+
+    it("keeps prior state and reports the error when apply_scene fails", async () => {
+      const before = useAppStore.getState().settings;
+      const beforeProps = [propItem()];
+      useAppStore.setState({ propItems: beforeProps, liveItem: makeVerse() });
+      mockInvoke.mockRejectedValueOnce(new Error("scene boom"));
+      const { result } = renderHook(() => useItemActions());
+
+      await act(async () => { await result.current.applyScene("scn-3"); });
+
+      expect(useAppStore.getState().settings).toEqual(before);
+      expect(useAppStore.getState().propItems).toEqual(beforeProps);
+      expect(useAppStore.getState().liveItem).toEqual(makeVerse());
+      expect(useAppStore.getState().backendError).toContain("Apply scene failed");
+    });
+  });
+
   describe("service persistence", () => {
     it("saves the active service with its schedule entries", async () => {
       const item = makeVerse();
