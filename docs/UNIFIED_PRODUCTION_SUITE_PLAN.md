@@ -806,25 +806,45 @@ Acceptance criteria:
 
 Tasks:
 
-- Add `AudioGraphProvider` at application scope.
-- Enumerate and select input devices.
-- Create shared audio source tracks.
-- Add volume, mute, and bus routing.
-- Add program audio and monitor audio policies.
-- Attach the selected program audio track to recording and streaming outputs.
-- Migrate the existing IPC-fed RTMP AAC loopback (`rtmp_send_audio`) onto the
-  shared audio graph so the app does not keep two audio pipelines.
-- Gate shared audio input behind the premium tier capability, matching the
-  existing StreamerTab gate.
-- Surface device permission and device-loss errors.
-- Add timestamps and an A/V synchronization policy.
+- [x] Add `AudioGraphProvider` at application scope. (`src/hooks/useAudioGraphProvider.tsx`,
+  mounted in `App.tsx` beside the recording/streaming providers; a thin React
+  shell over the module-level `audioGraph` external store in
+  `src/system/audioGraph.ts`.)
+- [x] Enumerate and select input devices. (`refreshAudioDevices` + `setAudioDeviceId`.)
+- [x] Create shared audio source tracks. (One `getUserMedia` input track opened
+  once at app scope, shared by every consumer.)
+- [x] Add volume, mute, and bus routing. (Program bus through a `GainNode` —
+  `setAudioVolume`/`setAudioMuted`; muting never touches visual output.)
+- [x] Add program audio and monitor audio policies. (The graph exposes a single
+  post-gain `programTrack` used by recording + streaming; monitor audio is the
+  same live program bus — one shared policy.)
+- [x] Attach the selected program audio track to recording and streaming outputs.
+  (`RecordingProvider` combines the graph `programTrack` into the recorded
+  stream; `StreamingProvider`'s `getSourceTracks().audio` returns it, cloned per
+  destination.)
+- [x] Migrate the existing IPC-fed RTMP AAC loopback (`rtmp_send_audio`) onto the
+  shared audio graph so the app does not keep two audio pipelines. (The hub now
+  feeds the graph's program track into each destination, so `useRtmpEncoder`
+  encodes that shared track through `rtmp_send_audio`; the providers' own
+  per-tab `getUserMedia` audio captures were removed — one capture total.)
+- [x] Gate shared audio input behind the premium tier capability, matching the
+  existing StreamerTab gate. (`AudioGraphProvider.setEnabled` refuses to enable
+  for a non-Premium license and toasts; `blocked` is surfaced to the tab.)
+- [x] Surface device permission and device-loss errors. (Unified `status`
+  idle/opening/connected/error/reconnecting/disconnected + `describeAudioError`;
+  device-loss auto-reconnects once; `retryAudio` re-opens.)
+- [x] Add timestamps and an A/V synchronization policy. (The graph stamps
+  `startedAt` on going live; the documented policy is that the program track and
+  the compositor video track are both real-time live captures aligned at capture
+  time, cloned together at start — per-sample timestamping is Phase 7's packet
+  metadata.)
 
 Acceptance criteria:
 
-- The same selected audio policy is used by recording and streaming.
-- Enabling a destination does not create duplicate audio captures.
-- Audio can be muted without altering visual output.
-- Audio device loss is visible and recoverable.
+- [x] The same selected audio policy is used by recording and streaming.
+- [x] Enabling a destination does not create duplicate audio captures.
+- [x] Audio can be muted without altering visual output.
+- [x] Audio device loss is visible and recoverable.
 
 ### Phase 7: One encoder and transport packet bus
 

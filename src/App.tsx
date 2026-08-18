@@ -15,6 +15,7 @@ import { PhoneCameraProvider } from "./hooks/usePhoneCameraHost";
 import { SystemDiagnosticsProvider } from "./system/SystemDiagnosticsContext";
 import { RecordingProvider } from "./hooks/useRecordingProvider";
 import { StreamingProvider } from "./hooks/useStreamingProvider";
+import { AudioGraphProvider } from "./hooks/useAudioGraphProvider";
 import { LicenseGate, OfflineLicenseBanner } from "./components/LicenseGate";
 import { isLicenseBlocked } from "./types/license";
 
@@ -213,6 +214,7 @@ export default function App() {
   return (
     <PhoneCameraProvider>
       <SystemDiagnosticsProvider>
+      <AudioGraphProvider>
       <RecordingProvider>
       <StreamingProvider>
       <div className="h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden select-none">
@@ -351,6 +353,7 @@ export default function App() {
       </div>
       </StreamingProvider>
       </RecordingProvider>
+      </AudioGraphProvider>
       </SystemDiagnosticsProvider>
     </PhoneCameraProvider>
   );

@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store";
 import { useRecorder } from "./useRecorder";
 import { reportOutputState, setOutputVisible } from "./outputRuntime";
+import { useAudioGraph } from "./useAudioGraphProvider";
 import { tierCapabilities } from "../system/tiers";
 import { ProgramFeedPreview } from "../components/outputs/ProgramFeedPreview";
 import type { OutputPhase } from "../types";
@@ -84,59 +85,18 @@ export function RecordingProvider({ children }: { children: ReactNode }) {
   );
 
   const [stream, setStream] = useState<MediaStream | null>(null);
-  const audioTrackRef = useRef<MediaStreamTrack | null>(null);
-  const [audioEnabled, setAudioEnabled] = useState(false);
-  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
-  const [audioDeviceId, setAudioDeviceId] = useState("");
-  const [audioError, setAudioError] = useState<string | null>(null);
 
-  // Capture the shared audio input (processing off) while enabled. The track
-  // is combined into the recorded stream on start and kept alive so a
-  // recording survives tab navigation.
-  useEffect(() => {
-    if (!audioEnabled) {
-      audioTrackRef.current?.stop();
-      audioTrackRef.current = null;
-      setAudioError(null);
-      return;
-    }
-    let cancelled = false;
-    navigator.mediaDevices
-      .enumerateDevices()
-      .then((devices) => {
-        if (cancelled) return;
-        const inputs = devices.filter((d) => d.kind === "audioinput");
-        setAudioDevices(inputs);
-        setAudioDeviceId((prev) => prev || inputs[0]?.deviceId || "");
-      })
-      .catch(() => {});
-    navigator.mediaDevices
-      .getUserMedia({
-        audio: {
-          deviceId: audioDeviceId ? { exact: audioDeviceId } : undefined,
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        },
-      })
-      .then((ms) => {
-        if (cancelled) {
-          ms.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        const t = ms.getAudioTracks()[0] ?? null;
-        audioTrackRef.current = t;
-        setAudioError(t ? null : "No audio input device was found.");
-      })
-      .catch((e: any) => {
-        if (!cancelled) setAudioError(`Failed to open the audio input: ${e?.message ?? e}`);
-      });
-    return () => {
-      cancelled = true;
-      audioTrackRef.current?.stop();
-      audioTrackRef.current = null;
-    };
-  }, [audioEnabled, audioDeviceId]);
+  // Shared audio graph (Phase 6): recording and streaming draw their program
+  // audio from ONE app-level capture, so we never hold two input pipelines and
+  // mute/volume is a single shared policy. The graph's post-gain program track
+  // is combined into the recorded stream on start.
+  const audio = useAudioGraph();
+  const audioEnabled = audio.enabled;
+  const setAudioEnabled = audio.setEnabled;
+  const audioDevices = audio.devices;
+  const audioDeviceId = audio.deviceId;
+  const setAudioDeviceId = audio.setDeviceId;
+  const audioError = audio.error;
 
   const streamReady = !!stream && stream.getVideoTracks().length > 0;
 
@@ -179,7 +139,7 @@ export function RecordingProvider({ children }: { children: ReactNode }) {
     }
     report("starting");
     const tracks: MediaStreamTrack[] = [...stream.getVideoTracks()];
-    if (audioTrackRef.current) tracks.push(audioTrackRef.current);
+    if (audio.programTrack) tracks.push(audio.programTrack);
     const recStream = new MediaStream(tracks);
     surfaceStarted.current = true;
     await recorder.start(recStream);

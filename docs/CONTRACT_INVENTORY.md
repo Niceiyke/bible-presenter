@@ -1,4 +1,4 @@
-# Contract Inventory (Phase 0 freeze, updated for Phase 1/2/3/4/5)
+# Contract Inventory (Phase 0 freeze, updated for Phase 1/2/3/4/5/6)
 
 Status: living inventory — Phases 0-3 of `docs/UNIFIED_PRODUCTION_SUITE_PLAN.md`
 requires recording the current event names, command names, persisted files, and
@@ -280,6 +280,32 @@ tests). Contract:
 - **Safe fallback:** `ZoneCamera` and `CameraFeed` render a fallback panel when
   a source is `error`/`disconnected` and a "Reconnecting…" state while
   `reconnecting`.
+
+## 2f. Audio graph (`src/system/audioGraph.ts`, Phase 6)
+
+- **Shared program audio bus** at application scope: one `getUserMedia` input
+  track (processing off) opened once, routed through a `GainNode` program bus,
+  and exposed as a single post-gain `programTrack` that recording AND streaming
+  both draw from — so the app never holds two input captures and mute/volume is
+  one shared policy. `AudioGraphProvider` (`src/hooks/useAudioGraphProvider.tsx`)
+  is the app-scoped React shell over the module-level external store.
+- **State:** `enabled`, `deviceId`, `devices`, `status`
+  (idle/opening/connected/error/reconnecting/disconnected), `error`+`errorKind`,
+  `programTrack`, `volume` (0..1), `muted`, `startedAt`.
+- **Ops:** `refreshAudioDevices`, `setAudioDeviceId` (re-opens), `setAudioEnabled`,
+  `setAudioVolume`/`setAudioMuted` (via the gain node), `retryAudio`. Device-loss
+  auto-reconnects once (`raw track ended` → `reconnecting` → re-open).
+- **Tier gating:** `AudioGraphProvider.setEnabled` refuses to enable shared audio
+  for a non-Premium license and exposes `blocked` for UI messaging (matches the
+  StreamerTab gate).
+- **Wiring:** `RecordingProvider` combines `programTrack` into the recorded
+  stream; `StreamingProvider.getSourceTracks().audio` returns it (cloned per
+  destination), so the RTMP AAC loopback (`rtmp_send_audio` in
+  `useRtmpEncoder`) now encodes the shared graph track — no per-tab audio
+  captures remain.
+- **A/V sync policy:** the program track and the compositor video track are both
+  real-time live captures aligned at capture time and cloned together at start;
+  per-sample packet timestamping is Phase 7.
 
 ## 3. Persisted files under the app data dir
 

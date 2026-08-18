@@ -5,6 +5,7 @@ import { useAppStore } from "../store";
 import { useSystemDiagnostics } from "../system/SystemDiagnosticsContext";
 import { tierCapabilities } from "../system/tiers";
 import { reportOutputState, setOutputVisible, STREAM_OUTPUT_ID } from "./outputRuntime";
+import { useAudioGraph } from "./useAudioGraphProvider";
 import { suggestedBitrateKbps } from "./useRtmpEncoder";
 import { ProgramFeedPreview } from "../components/outputs/ProgramFeedPreview";
 import { makeDestination, newDestinationId } from "../components/streaming/presets";
@@ -99,7 +100,6 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
   // Tier gating: streaming is Pro+, NDI is Pro+, shared audio is Premium.
   const streamCaps = tierCapabilities(license?.tier);
   const streamingBlocked = !!license && license.status === "active" && !streamCaps.streaming;
-  const sharedAudioBlocked = !!license && license.status === "active" && !streamCaps.sharedAudioInput;
 
   const output = outputs.find((o) => o.id === STREAM_OUTPUT_ID);
 
@@ -114,15 +114,23 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
   const [statuses, setStatuses] = useState<Record<string, CardStatus>>({});
   const cardHandles = useRef<Map<string, DestinationCardHandle>>(new Map());
   const [stream, setStream] = useState<MediaStream | null>(null);
-  const audioTrackRef = useRef<MediaStreamTrack | null>(null);
   const [saving, setSaving] = useState(false);
   const [masterActive, setMasterActive] = useState(false);
 
-  // Shared audio input (one source for every destination).
-  const [audioEnabled, setAudioEnabled] = useState(false);
-  const [audioDeviceId, setAudioDeviceId] = useState("");
-  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
-  const [audioError, setAudioError] = useState<string | null>(null);
+  // Shared audio graph (Phase 6): recording and streaming draw their program
+  // audio from ONE app-level capture, so every destination shares a single
+  // input track (cloned per transport) and mute/volume is one shared policy.
+  const audio = useAudioGraph();
+  const audioEnabled = audio.enabled;
+  const setAudioEnabled = audio.setEnabled;
+  const audioDevices = audio.devices;
+  const audioDeviceId = audio.deviceId;
+  const setAudioDeviceId = audio.setDeviceId;
+  const audioError = audio.error;
+  const programAudioTrack = audio.programTrack;
+  // Shared audio gating lives in the audio graph provider (Premium); expose the
+  // same flag for the tab's messaging.
+  const sharedAudioBlocked = audio.blocked;
 
   const persistCapture = useCallback(
     async (width: number, height: number, fps: number) => {
@@ -253,55 +261,9 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
   const streamReady = !!stream && stream.getVideoTracks().length > 0;
 
   const getSourceTracks = useCallback(
-    () => ({ video: stream?.getVideoTracks()[0] ?? null, audio: audioTrackRef.current }),
-    [stream]
+    () => ({ video: stream?.getVideoTracks()[0] ?? null, audio: programAudioTrack }),
+    [stream, programAudioTrack]
   );
-
-  // Capture / release the shared audio input.
-  useEffect(() => {
-    if (!audioEnabled) {
-      audioTrackRef.current?.stop();
-      audioTrackRef.current = null;
-      setAudioError(null);
-      return;
-    }
-    let cancelled = false;
-    navigator.mediaDevices
-      .enumerateDevices()
-      .then((devices) => {
-        if (cancelled) return;
-        const inputs = devices.filter((d) => d.kind === "audioinput");
-        setAudioDevices(inputs);
-        setAudioDeviceId((prev) => prev || inputs[0]?.deviceId || "");
-      })
-      .catch(() => {});
-    navigator.mediaDevices
-      .getUserMedia({
-        audio: {
-          deviceId: audioDeviceId ? { exact: audioDeviceId } : undefined,
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        },
-      })
-      .then((ms) => {
-        if (cancelled) {
-          ms.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        const t = ms.getAudioTracks()[0] ?? null;
-        audioTrackRef.current = t;
-        setAudioError(t ? null : "No audio input device was found.");
-      })
-      .catch((e: any) => {
-        if (!cancelled) setAudioError(`Failed to open the audio input: ${e?.message ?? e}`);
-      });
-    return () => {
-      cancelled = true;
-      audioTrackRef.current?.stop();
-      audioTrackRef.current = null;
-    };
-  }, [audioEnabled, audioDeviceId]);
 
   const handleStatus = useCallback((id: string, status: DestTransportStatus, bitrateKbps: number) => {
     setStatuses((prev) => ({ ...prev, [id]: { status, bitrateKbps } }));
