@@ -16,7 +16,9 @@ class_name = "LicenseRegistry"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["LicenseRegistry"]
+# Cloudflare free-plan Durable Objects must use SQLite-backed storage; the
+# `new_classes` migration is rejected (code 10097).
+new_sqlite_classes = ["LicenseRegistry"]
 
 # Create the admin secret before the first deploy:
 #   npx wrangler secret put ADMIN_TOKEN

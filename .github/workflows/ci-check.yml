@@ -26,7 +26,10 @@ jobs:
         run: npm run test
 
   backend:
-    runs-on: ubuntu-latest
+    # The app ships only for Windows (NSIS/WebView2); Tauri's glib/gtk -sys
+    # crates also fail to pkg-config on bare ubuntu runners. Build/check on the
+    # actual target platform instead of installing the whole Linux GTK stack.
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
