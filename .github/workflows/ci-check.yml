@@ -13,7 +13,9 @@ jobs:
       - name: setup node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # undici 8.10 (via jsdom/vitest) requires node:worker_threads
+          # markAsUncloneable, which only exists on Node >= 24.
+          node-version: 24
           cache: npm
 
       - name: install frontend dependencies
