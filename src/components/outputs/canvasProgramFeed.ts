@@ -3,27 +3,34 @@ import type {
   PresentationSettings,
   ThemeColors,
   PropItem,
-  LowerThirdData,
-  LowerThirdTemplate,
   SceneCompositionData,
   BackgroundSetting,
+  LowerThirdPayload,
 } from "../../types";
-import { THEMES } from "../../types";
 import { resolvePath } from "../../utils";
+import type { ProgramFrame, LogoState } from "../../compositor/ProgramFrame";
+import { getEffectiveBg } from "../../compositor/ProgramFrameResolver";
 
 /**
- * Canvas 2D program-feed renderer (Phase 2 of the output manager).
+ * Canvas 2D program-feed renderer (Phase 2/3 of the output manager).
  *
- * Pure drawing helpers that rasterize the same program the DOM renderers
- * paint — backgrounds, verses, media, cameras, timers, songs, custom
- * slides, scene compositions, props, logos, and lower thirds — onto a
- * `CanvasRenderingContext2D`. The window outputs keep their DOM path
- * (which is authoritative for rich text + animations); this module powers
- * the offscreen compositor that recorder/streamer surfaces capture from.
+ * Pure drawing helpers that rasterize a resolved `ProgramFrame` — backgrounds,
+ * verses, media, cameras, timers, songs, custom slides, scene compositions,
+ * props, logos, and lower thirds — onto a `CanvasRenderingContext2D`. The
+ * window outputs keep their DOM path (which is authoritative for rich text +
+ * animations); this module powers the offscreen compositor that recorder/
+ * streamer surfaces capture from.
+ *
+ * The frame is produced by `ProgramFrameResolver.resolveProgramFrame`, so
+ * every surface paints the same composition. Missing media (paths in
+ * `CanvasResources.failedPaths`) paints a safe placeholder instead of a black
+ * hole.
  *
  * Everything here is a pure function of the context + input data so it can
  * be unit-tested with a stub `CanvasRenderingContext2D`.
  */
+
+export { getEffectiveBg };
 
 /** A drawable media source: loaded image/video element or live stream. */
 export type DrawableSource =
@@ -42,6 +49,9 @@ export interface CanvasResources {
   cameraVideos?: Record<string, HTMLVideoElement>;
   /** app data dir for relative media path resolution */
   appDataDir?: string | null;
+  /** resolved paths whose load failed; those media paint the safe missing
+   *  placeholder instead of silently disappearing. */
+  failedPaths?: string[];
 }
 
 export interface CanvasGeometry {
@@ -56,6 +66,43 @@ export interface CanvasGeometry {
  *  too or they miss the loaded element and paint only the fallback. */
 export function resolveResPath(res: CanvasResources, path: string): string {
   return resolvePath(path, res.appDataDir ?? null);
+}
+
+/** True when a media path is known-failed and should paint the safe missing
+ *  placeholder instead of a black hole. */
+export function isMissingRes(res: CanvasResources, path?: string): boolean {
+  if (!path || !res.failedPaths || res.failedPaths.length === 0) return false;
+  return res.failedPaths.includes(resolveResPath(res, path));
+}
+
+/** Safe placeholder for missing/unloadable media: dark panel, diagonal
+ *  stripes, and a "not available" glyph. Keeps the program clearly broken
+ *  instead of silently showing nothing. */
+export function drawMissingPanel(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number
+): void {
+  ctx.save();
+  ctx.fillStyle = "#0b0b0f";
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.lineWidth = Math.max(2, Math.min(w, h) / 96);
+  const step = Math.max(24, Math.min(w, h) / 5);
+  ctx.beginPath();
+  for (let sx = x - h; sx < x + w + h; sx += step) {
+    ctx.moveTo(sx, y + h);
+    ctx.lineTo(sx + h, y);
+  }
+  ctx.stroke();
+  ctx.fillStyle = "rgba(255,255,255,0.45)";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = `${Math.max(16, Math.min(w, h) / 6)}px sans-serif`;
+  ctx.fillText("✕", x + w / 2, y + h / 2);
+  ctx.restore();
 }
 
 // ─── Color helpers ───────────────────────────────────────────────────────────
@@ -301,23 +348,6 @@ export function findOrCreateVideo(stream: MediaStream): HTMLVideoElement | undef
   return vid;
 }
 
-export function getEffectiveBg(
-  settings: PresentationSettings,
-  item: DisplayItem | null
-): BackgroundSetting {
-  if (item?.type === "Verse" && settings.bible_background?.type !== "None" && settings.bible_background) {
-    return settings.bible_background;
-  }
-  if (item?.type === "Media" && settings.media_background?.type !== "None" && settings.media_background) {
-    return settings.media_background;
-  }
-  if (item?.type === "Song") {
-    if (item.data.background?.type !== "None" && item.data.background) return item.data.background;
-    if (settings.song_background?.type !== "None" && settings.song_background) return settings.song_background;
-  }
-  return settings.background;
-}
-
 /** Collect every camera device id the current program frame draws — the
  *  effective background (which may be a camera), a live Camera item, or
  *  cameras pinned inside scene-composition zones. The compositor uses this
@@ -464,7 +494,9 @@ function drawMedia(ctx: CanvasRenderingContext2D, item: Extract<DisplayItem, { t
   const mediaFit = (fit ?? data.fit_mode ?? "contain") as "cover" | "contain" | "fill";
   if (data.media_type === "Image") {
     const img = rctx.res.images?.[resolveResPath(rctx.res, data.path)];
-    if (img) {
+    if (isMissingRes(rctx.res, data.path)) {
+      drawMissingPanel(ctx, 0, 0, g.width, g.height);
+    } else if (img) {
       drawMediaFit(ctx, img, 0, 0, g.width, g.height, mediaFit);
     } else {
       ctx.fillStyle = rctx.colors.background;
@@ -472,7 +504,9 @@ function drawMedia(ctx: CanvasRenderingContext2D, item: Extract<DisplayItem, { t
     }
   } else if (data.media_type === "Video") {
     const vid = rctx.res.videos?.[resolveResPath(rctx.res, data.path)];
-    if (vid && vid.readyState >= 2) {
+    if (isMissingRes(rctx.res, data.path)) {
+      drawMissingPanel(ctx, 0, 0, g.width, g.height);
+    } else if (vid && vid.readyState >= 2) {
       drawMediaFit(ctx, vid, 0, 0, g.width, g.height, mediaFit);
     } else {
       ctx.fillStyle = rctx.colors.background;
@@ -636,7 +670,9 @@ function drawCustomSlide(ctx: CanvasRenderingContext2D, item: Extract<DisplayIte
     ctx.fillRect(0, 0, g.width, g.height);
   } else if (bg.type === "image") {
     const img = rctx.res.images?.[resolveResPath(rctx.res, bg.value)];
-    if (img) {
+    if (isMissingRes(rctx.res, bg.value)) {
+      drawMissingPanel(ctx, 0, 0, g.width, g.height);
+    } else if (img) {
       ctx.save();
       ctx.globalAlpha = bg.opacity ?? 1;
       drawMediaFit(ctx, img, 0, 0, g.width, g.height, bg.objectFit ?? "cover");
@@ -647,7 +683,9 @@ function drawCustomSlide(ctx: CanvasRenderingContext2D, item: Extract<DisplayIte
     }
   } else if (bg.type === "video") {
     const vid = rctx.res.videos?.[resolveResPath(rctx.res, bg.value)];
-    if (vid && vid.readyState >= 2) {
+    if (isMissingRes(rctx.res, bg.value)) {
+      drawMissingPanel(ctx, 0, 0, g.width, g.height);
+    } else if (vid && vid.readyState >= 2) {
       ctx.save();
       ctx.globalAlpha = bg.opacity ?? 1;
       drawMediaFit(ctx, vid, 0, 0, g.width, g.height, bg.objectFit ?? "cover");
@@ -718,12 +756,16 @@ function drawCustomSlide(ctx: CanvasRenderingContext2D, item: Extract<DisplayIte
       });
     } else if (el.kind === "image") {
       const img = rctx.res.images?.[resolveResPath(rctx.res, el.content)];
-      if (img) {
+      if (isMissingRes(rctx.res, el.content)) {
+        drawMissingPanel(ctx, x, y, w, h);
+      } else if (img) {
         drawMediaFit(ctx, img, x, y, w, h, el.objectFit ?? "contain");
       }
     } else if (el.kind === "video") {
       const vid = rctx.res.videos?.[resolveResPath(rctx.res, el.content)];
-      if (vid && vid.readyState >= 2) {
+      if (isMissingRes(rctx.res, el.content)) {
+        drawMissingPanel(ctx, x, y, w, h);
+      } else if (vid && vid.readyState >= 2) {
         drawMediaFit(ctx, vid, x, y, w, h, el.objectFit ?? "contain");
       }
     } else if (el.kind === "shape") {
@@ -880,8 +922,12 @@ export function drawProps(ctx: CanvasRenderingContext2D, items: PropItem[], g: C
     ctx.save();
     ctx.globalAlpha = p.opacity;
     if (p.kind === "image" && p.path) {
-      const img = res.images?.[resolveResPath(res, p.path)];
-      if (img) drawImageContain(ctx, img, x, y, w, h);
+      if (isMissingRes(res, p.path)) {
+        drawMissingPanel(ctx, x, y, w, h);
+      } else {
+        const img = res.images?.[resolveResPath(res, p.path)];
+        if (img) drawImageContain(ctx, img, x, y, w, h);
+      }
     } else if (p.kind === "clock") {
       const now = new Date();
       const fmt = p.text ?? "HH:mm:ss";
@@ -907,39 +953,37 @@ export function drawProps(ctx: CanvasRenderingContext2D, items: PropItem[], g: C
   }
 }
 
-export function drawLogo(ctx: CanvasRenderingContext2D, settings: PresentationSettings, g: CanvasGeometry, res: CanvasResources): void {
-  if (settings.logo_text) {
+export function drawLogo(ctx: CanvasRenderingContext2D, state: LogoState, g: CanvasGeometry, res: CanvasResources): void {
+  if (state.text) {
     ctx.save();
-    ctx.fillStyle = settings.logo_text_color ?? "#ffffff";
-    ctx.globalAlpha = 0.6;
+    ctx.fillStyle = state.textColor ?? "#ffffff";
+    ctx.globalAlpha = state.opacity;
     ctx.font = `900 ${ptToPx(24, 1)}px sans-serif`;
     ctx.textAlign = "right";
     ctx.textBaseline = "alphabetic";
-    ctx.fillText(settings.logo_text, g.width - 32, g.height - 32);
+    ctx.fillText(state.text, g.width - 32, g.height - 32);
     ctx.restore();
-  } else if (settings.logo_path) {
-    const logoPath = resolveResPath(res, settings.logo_path);
+  } else if (state.path) {
+    const logoPath = resolveResPath(res, state.path);
     const img = res.images?.[logoPath];
     const vid = res.videos?.[logoPath];
-    if (img) {
+    if (isMissingRes(res, state.path)) {
+      const size = Math.min(g.width, g.height) * 0.12;
+      drawMissingPanel(ctx, g.width - 32 - size, g.height - 32 - size, size, size);
+    } else if (img) {
       ctx.save();
-      ctx.globalAlpha = 0.5;
+      ctx.globalAlpha = state.opacity;
       const size = Math.min(g.width, g.height) * 0.12;
       drawImageContain(ctx, img, g.width - 32 - size, g.height - 32 - size, size, size);
       ctx.restore();
     } else if (vid && vid.readyState >= 2) {
       ctx.save();
-      ctx.globalAlpha = 0.5;
+      ctx.globalAlpha = state.opacity;
       const size = Math.min(g.width, g.height) * 0.12;
       drawImageContain(ctx, vid, g.width - 32 - size, g.height - 32 - size, size, size);
       ctx.restore();
     }
   }
-}
-
-export interface LowerThirdPayload {
-  data: LowerThirdData;
-  template: LowerThirdTemplate;
 }
 
 export function drawLowerThird(ctx: CanvasRenderingContext2D, lt: LowerThirdPayload, g: CanvasGeometry, scale: number): void {
@@ -1038,45 +1082,38 @@ export function drawLowerThird(ctx: CanvasRenderingContext2D, lt: LowerThirdPayl
 
 // ─── Main entry ──────────────────────────────────────────────────────────────
 
-export interface ProgramFeedFrame {
-  /** The authoritative content item on the bus (live). */
-  item: DisplayItem | null;
-  settings: PresentationSettings;
-  colors: ThemeColors;
-  res: CanvasResources;
-  /** Overlay mask: which layers render. */
-  overlays?: { props: boolean; lower_third: boolean; logo: boolean };
-  propItems?: PropItem[];
-  lowerThird?: LowerThirdPayload | null;
-  now?: number;
-}
-
-/** Draw one full program frame onto a context sized `g`. */
+/** Draw one fully-resolved program frame onto a context sized `frame.canvas`.
+ *  The frame is produced by `resolveProgramFrame`, so every output paints the
+ *  same composition. The canvas geometry passed by the capture loop may differ
+ *  from the frame's nominal canvas (surface rescale); painting scales by
+ *  `height / reference_output_height` as the DOM renderers do. */
 export function drawProgramFrame(
   ctx: CanvasRenderingContext2D,
-  g: CanvasGeometry,
-  frame: ProgramFeedFrame
+  frame: ProgramFrame,
+  res: CanvasResources = {}
 ): void {
+  const g: CanvasGeometry = { width: frame.canvas.width, height: frame.canvas.height };
   const settings = frame.settings;
   const colors = frame.colors;
-  const now = frame.now ?? Date.now();
-  const scale = g.height / (settings.reference_output_height ?? 1080);
-  const rctx: ItemRenderContext = { settings, colors, res: frame.res, scale, now };
+  const now = frame.now;
+  const scale = g.height / (frame.reference_output_height ?? 1080);
+  const rctx: ItemRenderContext = { settings, colors, res, scale, now };
 
-  // Blanked — pure black, nothing else.
-  if (settings.is_blanked) {
+  // Blackout / blank source — pure black, nothing else.
+  if (frame.blackout) {
     ctx.fillStyle = "#000000";
     ctx.fillRect(0, 0, g.width, g.height);
     return;
   }
 
-  // Background (settings base layer, or content override for the live item).
-  const bg = getEffectiveBg(settings, frame.item);
-  drawBackgroundSetting(ctx, bg, g, frame.res, colors.background);
+  // Background (already resolved: output override or content-type effective
+  // setting for the source item).
+  drawBackgroundSetting(ctx, frame.background.setting, g, res, frame.background.fallback);
 
   // Content
-  if (frame.item) {
-    drawItemCanvas(ctx, frame.item, g, rctx);
+  const item = frame.source.kind === "blank" ? null : frame.source.item;
+  if (item) {
+    drawItemCanvas(ctx, item, g, rctx);
   } else {
     ctx.save();
     ctx.fillStyle = colors.waitingText;
@@ -1086,9 +1123,8 @@ export function drawProgramFrame(
     ctx.restore();
   }
 
-  // Overlays
-  const overlays = frame.overlays ?? { props: true, lower_third: true, logo: true };
-  if (overlays.logo) drawLogo(ctx, settings, g, frame.res);
-  if (overlays.props) drawProps(ctx, frame.propItems ?? [], g, frame.res);
-  if (overlays.lower_third && frame.lowerThird) drawLowerThird(ctx, frame.lowerThird, g, scale);
+  // Overlays (already masked by the output config in the resolver)
+  if (frame.overlays.logo) drawLogo(ctx, frame.overlays.logo, g, res);
+  if (frame.overlays.props.length) drawProps(ctx, frame.overlays.props, g, res);
+  if (frame.overlays.lower_third) drawLowerThird(ctx, frame.overlays.lower_third, g, scale);
 }

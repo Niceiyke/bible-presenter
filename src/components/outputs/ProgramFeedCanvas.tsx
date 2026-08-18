@@ -2,10 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   drawProgramFrame,
-  getEffectiveBg,
-  ProgramFeedFrame,
   CanvasResources,
 } from "./canvasProgramFeed";
+import { collectFrameMediaPaths } from "../../compositor/ProgramFrameResolver";
+import type { ProgramFrame } from "../../compositor/ProgramFrame";
 import { useCanvasCapture } from "../../hooks/useCanvasCapture";
 import { resolvePath } from "../../utils";
 import type { CanvasGeometry } from "./canvasProgramFeed";
@@ -26,10 +26,10 @@ import type { CanvasGeometry } from "./canvasProgramFeed";
  */
 export interface ProgramFeedCanvasProps {
   geometry: CanvasGeometry;
-  /** The program frame to composite each tick. Callers re-render this
-   *  object with fresh state (e.g. from `useAppStore`); the compositor
+  /** The resolved program frame to composite each tick. Callers produce it
+   *  via `resolveProgramFrame` (or re-resolve store state); the compositor
    *  reads it through a ref so the rAF loop always paints the newest. */
-  frame: ProgramFeedFrame;
+  frame: ProgramFrame;
   /** Pre-warmed camera streams (native getUserMedia or relayed phone
    *  feeds), keyed by device id. Optional — the compositor also lazily
    *  opens native streams via `getUserMedia` when the frame references
@@ -46,6 +46,9 @@ export interface ProgramFeedCanvasProps {
    *  always-mounted hidden canvas that must not waste CPU while idle.
    *  Defaults to true. */
   active?: boolean;
+  /** Called with the set of media paths that failed to load for the current
+   *  frame (rendered as safe missing panels). Empty array when all clear. */
+  onMissingMedia?: (failedPaths: string[]) => void;
 }
 
 export function ProgramFeedCanvas({
@@ -56,6 +59,7 @@ export function ProgramFeedCanvas({
   fps = 30,
   className,
   active = true,
+  onMissingMedia,
 }: ProgramFeedCanvasProps) {
   const { canvasRef, stream, running, start, stop, setDraw } = useCanvasCapture({ fps, autoStart: false });
 
@@ -86,81 +90,30 @@ export function ProgramFeedCanvas({
   const [images, setImages] = useState<Record<string, HTMLImageElement>>({});
   const [videos, setVideos] = useState<Record<string, HTMLVideoElement>>({});
   const [cameraVideos, setCameraVideos] = useState<Record<string, HTMLVideoElement>>({});
+  const [failedPaths, setFailedPaths] = useState<string[]>([]);
   const frameRef = useRef(frame);
   frameRef.current = frame;
 
-  const appDataDir = frame.res.appDataDir ?? null;
+  const appDataDir = frame.appDataDir ?? null;
 
   // Collect every media path the current frame draws, so we only load what's
-  // needed and drop references that are gone.
+  // needed and drop references that are gone. The walk is shared with the
+  // resolver (`collectFrameMediaPaths`) so a loading gap can never diverge
+  // from what the frame actually paints.
   const collectPaths = useCallback((): { images: string[]; videos: string[] } => {
-    const imgs = new Set<string>();
-    const vids = new Set<string>();
-    const f = frameRef.current;
-    const addResolved = (path?: string, isVideo = false) => {
-      if (!path) return;
-      const resolved = resolvePath(path, appDataDir);
-      if (isVideo) vids.add(resolved);
-      else imgs.add(resolved);
+    const { images, videos } = collectFrameMediaPaths(frameRef.current);
+    return {
+      images: images.map((p) => resolvePath(p, appDataDir)),
+      videos: videos.map((p) => resolvePath(p, appDataDir)),
     };
-
-    // Backgrounds — the effective one depends on the live item type, so
-    // resolve it the same way the draw pass does.
-    const bg = getEffectiveBg(f.settings, f.item);
-    if (bg.type === "Image") addResolved(bg.value.path);
-    else if (bg.type === "Video") addResolved(bg.value.path, true);
-
-    const item = f.item;
-    if (item) {
-      switch (item.type) {
-        case "Media":
-          if (item.data.media_type === "Image") addResolved(item.data.path);
-          else if (item.data.media_type === "Video") addResolved(item.data.path, true);
-          break;
-        case "CustomSlide": {
-          const sb = item.data.background;
-          if (sb.type === "image") addResolved(sb.value);
-          else if (sb.type === "video") addResolved(sb.value, true);
-          for (const el of item.data.elements ?? []) {
-            if (el.kind === "image") addResolved(el.content);
-            else if (el.kind === "video") addResolved(el.content, true);
-          }
-          break;
-        }
-        case "SceneComposition": {
-          for (const zone of item.data.zones) {
-            // The zone's effective background (bible/song/media override) is
-            // drawn behind the zone content, so load it like the draw pass.
-            const zbg = getEffectiveBg(f.settings, zone.item);
-            if (zbg.type === "Image") addResolved(zbg.value.path);
-            else if (zbg.type === "Video") addResolved(zbg.value.path, true);
-            if (zone.item.type === "Media") {
-              if (zone.item.data.media_type === "Image") addResolved(zone.item.data.path);
-              else if (zone.item.data.media_type === "Video") addResolved(zone.item.data.path, true);
-            } else if (zone.item.type === "CustomSlide") {
-              const sb = zone.item.data.background;
-              if (sb.type === "image") addResolved(sb.value);
-              else if (sb.type === "video") addResolved(sb.value, true);
-              for (const el of zone.item.data.elements ?? []) {
-                if (el.kind === "image") addResolved(el.content);
-                else if (el.kind === "video") addResolved(el.content, true);
-              }
-            }
-          }
-          break;
-        }
-      }
-    }
-
-    // Props
-    for (const p of f.propItems ?? []) {
-      if (p.visible && p.kind === "image" && p.path) addResolved(p.path);
-    }
-    // Logo
-    if (f.settings.logo_path) addResolved(f.settings.logo_path);
-
-    return { images: [...imgs], videos: [...vids] };
   }, [appDataDir]);
+
+  // Prune failed paths that are no longer referenced by the frame.
+  useEffect(() => {
+    const { images, videos } = collectPaths();
+    setFailedPaths((prev) => prev.filter((p) => images.includes(p) || videos.includes(p)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(collectPaths())]);
 
   // Load images referenced by the frame.
   useEffect(() => {
@@ -174,6 +127,10 @@ export function ProgramFeedCanvas({
       img.onload = () => {
         if (cancelled) return;
         setImages((prev) => ({ ...prev, [path]: img }));
+      };
+      img.onerror = () => {
+        if (cancelled) return;
+        setFailedPaths((prev) => (prev.includes(path) ? prev : [...prev, path]));
       };
       img.src = convertFileSrc(path);
     };
@@ -204,6 +161,10 @@ export function ProgramFeedCanvas({
       vid.addEventListener("loadeddata", () => {
         if (cancelled) return;
         setVideos((prev) => ({ ...prev, [path]: vid }));
+      });
+      vid.addEventListener("error", () => {
+        if (cancelled) return;
+        setFailedPaths((prev) => (prev.includes(path) ? prev : [...prev, path]));
       });
       vid.src = convertFileSrc(path);
       vid.play().catch(() => {});
@@ -249,6 +210,13 @@ export function ProgramFeedCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraStreams]);
 
+  // Report runtime load failures (safe panels are painted for these).
+  const missingKey = JSON.stringify(failedPaths);
+  useEffect(() => {
+    onMissingMedia?.(failedPaths);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [missingKey, onMissingMedia]);
+
   // Deliver the stream to the caller whenever it (re)starts.
   useEffect(() => {
     onStream?.(stream);
@@ -264,11 +232,11 @@ export function ProgramFeedCanvas({
         cameraStreams,
         cameraVideos,
         appDataDir,
+        failedPaths,
       };
-      const g: CanvasGeometry = { width, height };
-      drawProgramFrame(ctx, g, { ...f, res, now: Date.now() });
+      drawProgramFrame(ctx, { ...f, canvas: { width, height, fps: f.canvas.fps } }, res);
     });
-  }, [setDraw, images, videos, cameraStreams, cameraVideos, appDataDir]);
+  }, [setDraw, images, videos, cameraStreams, cameraVideos, appDataDir, failedPaths]);
 
   return (
     <canvas

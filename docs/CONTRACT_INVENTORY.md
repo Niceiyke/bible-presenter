@@ -1,6 +1,6 @@
-# Contract Inventory (Phase 0 freeze, updated for Phase 1 engine)
+# Contract Inventory (Phase 0 freeze, updated for Phase 1/2/3)
 
-Status: living inventory — Phase 0 of `docs/UNIFIED_PRODUCTION_SUITE_PLAN.md`
+Status: living inventory — Phases 0-3 of `docs/UNIFIED_PRODUCTION_SUITE_PLAN.md`
 requires recording the current event names, command names, persisted files, and
 schema versions BEFORE moving code. This document is that record. Keep it
 updated whenever a contract changes.
@@ -181,6 +181,43 @@ tests). Contract:
   emits all five events wrapped with the CURRENT revision **without a bump** so
   a freshly-revealed window (via `set_output_visible`) hydrates and a stale
   reveal can never overwrite newer state.
+
+## 2c. Program-frame model (`src/compositor/`, Phase 3)
+
+- **`src/compositor/ProgramFrame.ts`** — the resolved program-frame types every
+  output surface shares: `ProgramFrame` (revision, timestamp, canvas, `source`,
+  declarative `layers`, `background`, masked `overlays`, `blackout`, `missing`,
+  `audio`, plus render material `settings`/`colors`/`reference_output_height`/
+  `now`/`appDataDir`), `ResolvedOutputSource` (`live`/`staged`/`item`/`scene`/
+  `blank`), `ResolvedBackground`, `LogoState`, `AudioProgramDescriptor`
+  (`none` | `media muted`), and the `ProgramLayer` union
+  (`blank`/`background`/`item`/`zone`/`props`/`lower_third`/`logo`/`waiting`).
+  Frontend-only today (not persisted, not on the wire).
+- **`src/compositor/ProgramFrameResolver.ts`** — pure `resolveProgramFrame({config,
+  snapshot, scenes?, colors?, timestamp?, fps?})`: resolves the output source,
+  presentation overrides (theme / `reference_output_height` / `background` /
+  `blanked`), the effective background (output override > content-type
+  override > settings, scene sources fall back to the scene's saved settings),
+  overlay masks (props / lower_third / logo), blackout, a declarative ordered
+  layer list, structural `missing` problems (empty media/prop paths,
+  `scene:<id>` for unknown scenes), and the audio descriptor. Also hosts the
+  shared `getEffectiveBg` (moved out of `canvasProgramFeed.ts`, re-exported
+  there for back-compat), `resolveThemeColors`, `deriveLogoState`, and
+  `collectFrameMediaPaths` — the one walk every surface uses to load exactly
+  what a frame paints.
+- **Canvas compositor** (`drawProgramFrame(ctx, frame, res)` in
+  `canvasProgramFeed.ts`) now consumes the resolved `ProgramFrame` instead of
+  its own `ProgramFeedFrame`; `drawLogo` takes the resolved `LogoState`.
+  Missing media (paths in `CanvasResources.failedPaths`) paints the safe
+  `drawMissingPanel` placeholder instead of a black hole. `ProgramFeedCanvas`
+  tracks load failures (`onMissingMedia`) and reports them; `ProgramFeedPreview`
+  resolves its frame through `resolveProgramFrame` (live source, all overlays
+  unmasked) and patches `appDataDir` onto it.
+- **Contract:** every output (projection, stage preview, recorder, streamer)
+  resolves the same frame from its own `OutputConfig` + the same snapshot;
+  surfaces must not independently reconstruct live state. The DOM outputs
+  (`OutputWindow`/`StageWindow`) remain authoritative for rich text/animations;
+  migrating them to consume `ProgramFrame` directly is the Phase 3 follow-up.
 
 ## 3. Persisted files under the app data dir
 

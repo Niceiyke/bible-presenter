@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { drawProgramFrame } from "../../../components/outputs/canvasProgramFeed";
+import { drawProgramFrame, getEffectiveBg } from "../../../components/outputs/canvasProgramFeed";
 import {
   allItems,
   allProps,
@@ -31,6 +31,8 @@ function makeCtx() {
     fillText: (t: string, x: number, y: number) => calls.push(`fillText:${t}@${x},${y}`),
     beginPath: () => calls.push("beginPath"),
     closePath: () => calls.push("closePath"),
+    moveTo: (...args: number[]) => calls.push(`moveTo:${args.join(",")}`),
+    lineTo: (...args: number[]) => calls.push(`lineTo:${args.join(",")}`),
     rect: (...args: number[]) => calls.push(`rect:${args.join(",")}`),
     arc: (...args: number[]) => calls.push(`arc:${args.join(",")}`),
     fill: () => calls.push("fill"),
@@ -55,14 +57,24 @@ function makeCtx() {
   return { ctx, calls };
 }
 
+/** Build a resolved `ProgramFrame` around a fixture item. `extra` overrides
+ *  fields (e.g. pre-masked overlay payloads) as the resolver would emit. */
 function frameFor(item: unknown, extra: Record<string, unknown> = {}) {
   return {
-    item,
+    revision: 0,
+    timestamp: 0,
+    canvas: { width: 1920, height: 1080, fps: 30 },
+    source: { kind: "live", item },
+    layers: [],
+    background: { setting: getEffectiveBg(baseSettings, item as any), fallback: baseTheme.colors.background },
+    overlays: { props: allProps, lower_third: lowerThirdFixture, logo: null },
+    blackout: false,
+    missing: [],
+    audio: { kind: "none" },
     settings: baseSettings,
     colors: baseTheme.colors,
-    res: {},
-    propItems: allProps,
-    overlays: { props: true, lower_third: true, logo: true },
+    reference_output_height: 1080,
+    now: 0,
     ...extra,
   } as any;
 }
@@ -82,28 +94,28 @@ describe("presentation fixtures (Phase 0)", () => {
   it("renders every representative item through the compositor without throwing", () => {
     for (const item of allItems) {
       const { ctx } = makeCtx();
-      expect(() => drawProgramFrame(ctx, { width: 1920, height: 1080 }, frameFor(item))).not.toThrow();
+      expect(() => drawProgramFrame(ctx, frameFor(item))).not.toThrow();
     }
   });
 
   it("paints expected content per item kind", () => {
     const verse = makeCtx();
-    drawProgramFrame(verse.ctx, { width: 1920, height: 1080 }, frameFor(verseItem));
+    drawProgramFrame(verse.ctx, frameFor(verseItem));
     expect(verse.calls.some((c) => c.startsWith("fillText:For God so loved"))).toBe(true);
     expect(verse.calls.some((c) => c.startsWith("fillText:JOHN 3:16"))).toBe(true);
 
     const scene = makeCtx();
-    drawProgramFrame(scene.ctx, { width: 1920, height: 1080 }, frameFor(sceneCompositionItem));
+    drawProgramFrame(scene.ctx, frameFor(sceneCompositionItem));
     // one clip per zone
     expect(scene.calls.filter((c) => c === "clip").length).toBe(2);
     // verse zone content present
     expect(scene.calls.some((c) => c.startsWith("fillText:For God so loved"))).toBe(true);
   });
 
-  it("drops props when the overlay mask disables them", () => {
+  it("skips overlays when the frame carries none (masked off)", () => {
     const { ctx, calls } = makeCtx();
-    drawProgramFrame(ctx, { width: 1920, height: 1080 }, frameFor(null, {
-      overlays: { props: false, lower_third: false, logo: false },
+    drawProgramFrame(ctx, frameFor(null, {
+      overlays: { props: [], lower_third: null, logo: null },
     }));
     // Only the waiting message may be text; props must not paint.
     const texts = calls.filter((c) => c.startsWith("fillText:"));

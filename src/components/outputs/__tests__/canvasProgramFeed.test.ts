@@ -33,6 +33,8 @@ function makeCtx() {
     strokeRect: (...args: number[]) => calls.push(`strokeRect:${args.join(",")}`),
     beginPath: () => calls.push("beginPath"),
     closePath: () => calls.push("closePath"),
+    moveTo: (...args: number[]) => calls.push(`moveTo:${args.join(",")}`),
+    lineTo: (...args: number[]) => calls.push(`lineTo:${args.join(",")}`),
     rect: (...args: number[]) => calls.push(`rect:${args.join(",")}`),
     arc: (...args: number[]) => calls.push(`arc:${args.join(",")}`),
     fill: () => calls.push("fill"),
@@ -73,13 +75,34 @@ const baseSettings: PresentationSettings = {
 
 const darkColors = THEMES.dark.colors;
 
-function frameFor(item: DisplayItem | null, overrides: Partial<PresentationSettings> = {}, props = {}) {
+/** Build a resolved `ProgramFrame` for the draw helper tests. `extra` carries
+ *  pre-masked overlay payloads exactly as `ProgramFrameResolver` would
+ *  produce them. */
+function frameFor(
+  item: DisplayItem | null,
+  overrides: Partial<PresentationSettings> = {},
+  extra: { propItems?: any[]; lowerThird?: any; logo?: any } = {}
+) {
+  const settings = { ...baseSettings, ...overrides };
   return {
-    item,
-    settings: { ...baseSettings, ...overrides },
+    revision: 0,
+    timestamp: 0,
+    canvas: { width: 1920, height: 1080, fps: 30 },
+    source: { kind: "live", item },
+    layers: [],
+    background: { setting: getEffectiveBg(settings, item), fallback: darkColors.background },
+    overlays: {
+      props: extra.propItems ?? [],
+      lower_third: extra.lowerThird ?? null,
+      logo: extra.logo ?? null,
+    },
+    blackout: settings.is_blanked,
+    missing: [],
+    audio: { kind: "none" },
+    settings,
     colors: darkColors,
-    res: {},
-    ...props,
+    reference_output_height: settings.reference_output_height ?? 1080,
+    now: Date.now(),
   } as any;
 }
 
@@ -198,7 +221,7 @@ describe("canvasProgramFeed", () => {
   describe("drawProgramFrame", () => {
     it("paints black when blanked", () => {
       const { ctx, calls } = makeCtx();
-      drawProgramFrame(ctx, { width: 1920, height: 1080 }, frameFor(null, { is_blanked: true }));
+      drawProgramFrame(ctx, frameFor(null, { is_blanked: true }));
       expect(calls.some((c) => c === "fillRect:0,0,1920,1080")).toBe(true);
     });
 
@@ -208,7 +231,7 @@ describe("canvasProgramFeed", () => {
         type: "Verse",
         data: { book: "JHN", chapter: 3, verse: 16, text: "For God so loved the world", version: "KJV" },
       } as DisplayItem;
-      drawProgramFrame(ctx, { width: 1920, height: 1080 }, frameFor(verse));
+      drawProgramFrame(ctx, frameFor(verse));
       // background painted
       expect(calls.some((c) => c === "fillRect:0,0,1920,1080")).toBe(true);
       // verse text painted
@@ -219,7 +242,7 @@ describe("canvasProgramFeed", () => {
 
     it("shows the waiting message when no item", () => {
       const { ctx, calls } = makeCtx();
-      drawProgramFrame(ctx, { width: 1920, height: 1080 }, frameFor(null));
+      drawProgramFrame(ctx, frameFor(null));
       expect(calls.some((c) => c.startsWith("fillText:Waiting for projection"))).toBe(true);
     });
 
@@ -244,7 +267,7 @@ describe("canvasProgramFeed", () => {
           ],
         },
       } as DisplayItem;
-      drawProgramFrame(ctx, { width: 1920, height: 1080 }, frameFor(slide));
+      drawProgramFrame(ctx, frameFor(slide));
       expect(calls.some((c) => c === "fillRect:0,0,1920,1080")).toBe(true);
       expect(calls.some((c) => c.startsWith("fillText:Slide title"))).toBe(true);
     });
@@ -265,7 +288,7 @@ describe("canvasProgramFeed", () => {
           ],
         },
       } as DisplayItem;
-      drawProgramFrame(ctx, { width: 1920, height: 1080 }, frameFor(scene));
+      drawProgramFrame(ctx, frameFor(scene));
       expect(calls.some((c) => c === "clip")).toBe(true);
       // timer glyph painted within the zone
       expect(calls.some((c) => c.startsWith("fillText:00:00"))).toBe(true);
@@ -305,7 +328,7 @@ describe("canvasProgramFeed", () => {
           ],
         },
       } as DisplayItem;
-      drawProgramFrame(ctx, { width: 1920, height: 1080 }, frameFor(scene));
+      drawProgramFrame(ctx, frameFor(scene));
       // One clip per zone
       expect(calls.filter((c) => c === "clip").length).toBe(3);
       // Each zone's origin is translated to its top-left corner so content
@@ -334,11 +357,7 @@ describe("canvasProgramFeed", () => {
         },
       } as DisplayItem;
       // A bible background override on settings should paint inside the zone.
-      drawProgramFrame(
-        ctx,
-        { width: 1920, height: 1080 },
-        frameFor(scene, { bible_background: { type: "Color", value: "#123456" } })
-      );
+      drawProgramFrame(ctx, frameFor(scene, { bible_background: { type: "Color", value: "#123456" } }));
       // The zone's effective background fills the zone rect (0,0,960,1080).
       const zoneBgs = calls.filter((c) => c === "fillRect:0,0,960,1080");
       expect(zoneBgs.length).toBe(1);
@@ -361,7 +380,7 @@ describe("canvasProgramFeed", () => {
           ],
         },
       } as any;
-      drawProgramFrame(ctx, { width: 1920, height: 1080 }, frameFor(scene));
+      drawProgramFrame(ctx, frameFor(scene));
       const fonts = calls.filter((c) => c.startsWith("font:")).map((c) => c.slice(5));
       // ptToPx(96, scale=1) = 96 * 96/72 = 128px, family = override
       expect(fonts.some((f) => f.includes("Verdana") && f.includes("128px"))).toBe(true);
@@ -384,7 +403,7 @@ describe("canvasProgramFeed", () => {
           ],
         },
       } as any;
-      drawProgramFrame(ctx, { width: 1920, height: 1080 }, frameFor(scene));
+      drawProgramFrame(ctx, frameFor(scene));
       const fonts = calls.filter((c) => c.startsWith("font:")).map((c) => c.slice(5));
       // ptToPx(48 * 0.85, scale=1) = 40.8 * 96/72 = 54.4px, family = override
       expect(fonts.some((f) => f.includes("Arial") && f.includes("54"))).toBe(true);
@@ -421,7 +440,7 @@ describe("canvasProgramFeed", () => {
         },
       } as any;
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      drawProgramFrame(ctx, { width: 1920, height: 1080 }, frameFor(scene));
+      drawProgramFrame(ctx, frameFor(scene));
       // The verse in the second zone was still painted despite z1 throwing
       expect(calls.some((c) => c.startsWith("fillText:Still here"))).toBe(true);
       expect(warn).toHaveBeenCalled();
@@ -429,7 +448,7 @@ describe("canvasProgramFeed", () => {
       ctx.arc = original;
     });
 
-    it("honors the overlay mask (props drawn when enabled)", () => {
+    it("draws props present in the frame overlays", () => {
       const { ctx, calls } = makeCtx();
       const prop = {
         id: "p1",
@@ -438,23 +457,28 @@ describe("canvasProgramFeed", () => {
         text: "HH:mm:ss",
         color: "#ffffff",
       } as any;
-      drawProgramFrame(ctx, { width: 1920, height: 1080 }, frameFor(null, {}, { propItems: [prop], overlays: { props: true, lower_third: false, logo: false } }));
+      drawProgramFrame(ctx, frameFor(null, {}, { propItems: [prop] }));
       expect(calls.some((c) => c.startsWith("fillText:"))).toBe(true);
     });
 
-    it("skips props when the overlay mask disables them", () => {
+    it("skips props when the frame overlays are empty", () => {
       const { ctx, calls } = makeCtx();
-      const prop = {
-        id: "p1",
-        kind: "clock",
-        x: 50, y: 50, w: 10, h: 10, opacity: 1, visible: true,
-        text: "HH:mm:ss",
-        color: "#ffffff",
-      } as any;
       const before = calls.filter((c) => c.startsWith("fillText:")).length;
-      drawProgramFrame(ctx, { width: 1920, height: 1080 }, frameFor(null, {}, { propItems: [prop], overlays: { props: false, lower_third: false, logo: false } }));
+      drawProgramFrame(ctx, frameFor(null, {}, {}));
       const after = calls.filter((c) => c.startsWith("fillText:")).length;
       expect(after).toBe(before + 1); // only the waiting message
+    });
+
+    it("paints the safe missing panel for a media whose load failed", () => {
+      const { ctx, calls } = makeCtx();
+      const media = {
+        type: "Media",
+        data: { id: "m1", media_type: "Image", name: "Banner", path: "assets/banner.png", fit_mode: "contain" },
+      } as DisplayItem;
+      drawProgramFrame(ctx, frameFor(media), { failedPaths: ["assets/banner.png"] });
+      // the dark missing panel fills the canvas; the media drawImage is NOT called
+      expect(calls.some((c) => c === "fillRect:0,0,1920,1080")).toBe(true);
+      expect(calls.some((c) => c.startsWith("drawImage"))).toBe(false);
     });
   });
 });

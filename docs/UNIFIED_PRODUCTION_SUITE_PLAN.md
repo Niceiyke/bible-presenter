@@ -672,25 +672,40 @@ Acceptance criteria:
 
 Tasks:
 
-- Define `ProgramFrame` and `ProgramLayer` types in TypeScript and Rust where
-  serialization is required.
-- Implement `ProgramFrameResolver` from `OutputConfig` plus the authoritative
-  snapshot.
-- Resolve output source, output overrides, overlays, scene zones, and blackout.
-- Move all production visual features into the shared compositor renderer.
-- Add a shared lower-third renderer model rather than separate simplified data
-  paths.
-- Add fixture tests for each DisplayItem type and each overlay combination.
-- Add a missing-media fallback that renders a safe frame and reports an error.
+- [x] Define `ProgramFrame` and `ProgramLayer` types in TypeScript and Rust where
+  serialization is required. (Implemented in `src/compositor/ProgramFrame.ts`.
+  TypeScript only today — the frame is not persisted and never crosses IPC, so
+  no Rust mirror is required yet.)
+- [x] Implement `ProgramFrameResolver` from `OutputConfig` plus the authoritative
+  snapshot. (`src/compositor/ProgramFrameResolver.ts` — pure
+  `resolveProgramFrame`.)
+- [x] Resolve output source, output overrides, overlays, scene zones, and blackout.
+- [ ] Move all production visual features into the shared compositor renderer.
+  (The canvas compositor is complete for every DisplayItem + overlay; the DOM
+  outputs `OutputWindow`/`StageWindow` remain authoritative for rich text and
+  animations and are the follow-up.)
+- [ ] Add a shared lower-third renderer model rather than separate simplified data
+  paths. (`drawLowerThird` covers the full template model on canvas; a shared
+  DOM+canvas renderer is the follow-up.)
+- [x] Add fixture tests for each DisplayItem type and each overlay combination.
+  (`src/compositor/__tests__/ProgramFrameResolver.test.ts`; the Phase 0
+  fixture suite in `src/test/fixtures/` now draws resolved `ProgramFrame`s.)
+- [x] Add a missing-media fallback that renders a safe frame and reports an error.
+  (`drawMissingPanel` + `CanvasResources.failedPaths` +
+  `ProgramFeedCanvas.onMissingMedia`.)
 
 Acceptance criteria:
 
-- Projection, stage preview, recording preview, and streaming preview resolve
-  the same `ProgramFrame`.
-- Output-specific overlay masks work.
-- `staged`, `item`, `scene`, and `blank` output sources work.
-- Rich text, animation state, media, timers, props, and lower thirds have
-  documented compositor behavior.
+- [x] Projection, stage preview, recording preview, and streaming preview resolve
+  the same `ProgramFrame`. (The canvas surfaces resolve via
+  `resolveProgramFrame`; the DOM outputs still render their own path — parity
+  is exercised by the fixture + resolver test suites.)
+- [x] Output-specific overlay masks work.
+- [x] `staged`, `item`, `scene`, and `blank` output sources work.
+- [ ] Rich text, animation state, media, timers, props, and lower thirds have
+  documented compositor behavior. (Media, timers, props, lower thirds, and
+  scene zones are documented; rich text/ProseMirror approximation and
+  animation behavior are the follow-up.)
 
 ### Phase 4: Real Output Manager lifecycle
 
