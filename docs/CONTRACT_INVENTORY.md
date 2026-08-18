@@ -216,8 +216,10 @@ tests). Contract:
 - **Contract:** every output (projection, stage preview, recorder, streamer)
   resolves the same frame from its own `OutputConfig` + the same snapshot;
   surfaces must not independently reconstruct live state. The DOM outputs
-  (`OutputWindow`/`StageWindow`) remain authoritative for rich text/animations;
-  migrating them to consume `ProgramFrame` directly is the Phase 3 follow-up.
+  (`OutputWindow`/`StageWindow`) resolve through `resolveProgramFrame` like the
+  canvas surfaces — consuming the frame's colors, effective background,
+  blackout, masked overlays, and resolved source — and remain authoritative only
+  for rich text/animations.
 
 ## 3. Persisted files under the app data dir
 

@@ -3,7 +3,7 @@ import { useSlideFit } from "../hooks/useSlideFit";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { DisplayItem, PresentationSettings, TimerData, LowerThirdData, LowerThirdTemplate, LowerThirdPayload, OutputConfig, PresentationSnapshot } from "../types";
-import { THEMES } from "../types";
+import { OUTPUT_SCHEMA_VERSION, DEFAULT_SETTINGS } from "../types";
 import { displayItemLabel } from "../utils";
 import { stageDetail as stageDetailFor } from "../items/registry";
 import { CustomSlideRenderer, LowerThirdOverlay } from "../components/shared/Renderers";
@@ -12,6 +12,7 @@ import { useT } from "../i18n";
 import { signalOperatorWarning } from "../hooks/useAppInitialization";
 import { useFonts } from "../hooks/useFonts";
 import { PresentationSync } from "../system/presentationSync";
+import { resolveProgramFrame } from "../compositor/ProgramFrameResolver";
 
 function formatClock(d: Date) {
   const h = d.getHours().toString().padStart(2, "0");
@@ -136,15 +137,41 @@ export function StageWindow() {
     };
   }, [setAppDataDir]);
 
-  // Apply the stage output's presentation override (theme) on top of the
-  // broadcast settings. Optional; with the default config this is a no-op.
-  const effSettings: PresentationSettings | null = outputConfig?.presentation
-    ? { ...settings!, theme: outputConfig.presentation.theme ?? settings!.theme }
-    : settings;
+  // Resolve the stage output's program frame through the SAME pure resolver the
+  // projection window, canvas compositor, recorder, and streamer use. `colors`
+  // come from the frame (theme resolved with the stage config's presentation
+  // override) and the "Now Live" panel below shows the frame's resolved live
+  // source — so the confidence monitor can never disagree with the program.
+  const frame = useMemo(() => {
+    const config: OutputConfig = outputConfig ?? {
+      schema_version: OUTPUT_SCHEMA_VERSION,
+      id: "stage",
+      kind: "window",
+      label: "Stage",
+      enabled: true,
+      visible: true,
+      source: { type: "live" },
+      geometry: { width: window.innerWidth, height: window.innerHeight },
+      overlays: { props: true, lower_third: true, logo: true },
+    };
+    return resolveProgramFrame({
+      config,
+      snapshot: {
+        live: liveItem,
+        staged: stagedItem,
+        settings: settings ?? DEFAULT_SETTINGS,
+        props: [],
+        lower_third: ltPayload,
+        revision: 0,
+      },
+    });
+  }, [outputConfig, liveItem, stagedItem, settings, ltPayload]);
+
+  const effSettings = frame.settings;
+  const liveSource = frame.source.kind === "blank" ? null : frame.source.item;
 
   const useTheme = effSettings?.stage_uses_theme ?? false;
-  const theme = effSettings ? (THEMES[effSettings.theme] ?? THEMES.dark) : THEMES.dark;
-  const colors = theme.colors;
+  const colors = frame.colors;
   const bg = useTheme ? colors.background : "#020617";
   const textCol = useTheme ? colors.verseText : "#ffffff";
   const accent = useTheme ? colors.referenceText : "#f59e0b";
@@ -162,9 +189,9 @@ export function StageWindow() {
   }
 
   const liveTimerDisplay = useMemo(() => {
-    if (liveItem?.type === "Timer") return computeTimerDisplay(liveItem.data, Date.now());
+    if (liveSource?.type === "Timer") return computeTimerDisplay(liveSource.data, Date.now());
     return null;
-  }, [liveItem, clock]);
+  }, [liveSource, clock]);
 
   return (
     <div
@@ -197,22 +224,22 @@ export function StageWindow() {
             <div className="w-3 h-3 rounded-full animate-pulse" style={{ backgroundColor: "#ef4444" }} />
             <span className="text-xs font-black uppercase tracking-widest" style={{ color: "#ef4444" }}>{t("stage.nowLive")}</span>
           </div>
-          <p className="text-xl font-bold mb-3 shrink-0 truncate" style={{ color: useTheme ? "rgba(255,255,255,0.8)" : "#cbd5e1" }}>{itemSummary(liveItem)}</p>
+          <p className="text-xl font-bold mb-3 shrink-0 truncate" style={{ color: useTheme ? "rgba(255,255,255,0.8)" : "#cbd5e1" }}>{itemSummary(liveSource)}</p>
           <div ref={ltHostRef} className="text-4xl font-serif leading-snug flex-1 overflow-hidden relative">
-            {liveItem?.type === "CustomSlide" ? (
+            {liveSource?.type === "CustomSlide" ? (
               <div ref={liveSlideBoxRef} className="w-full h-full relative border rounded-lg overflow-hidden flex items-center justify-center" style={{ borderColor: useTheme ? "rgba(255,255,255,0.08)" : "#1e293b" }}>
                 {liveSlideFit.width > 0 && liveSlideFit.height > 0 && (
                   <div style={{ width: liveSlideFit.width, height: liveSlideFit.height }}>
-                    <CustomSlideRenderer slide={liveItem.data} scale={liveSlideFit.scale} appDataDir={appDataDir} theme={liveItem.data.theme} />
+                    <CustomSlideRenderer slide={liveSource.data} scale={liveSlideFit.scale} appDataDir={appDataDir} theme={liveSource.data.theme} />
                   </div>
                 )}
               </div>
-            ) : liveItem?.type === "Timer" ? (
+            ) : liveSource?.type === "Timer" ? (
               <div className="flex items-center justify-center h-full">
                 <span className="font-mono text-8xl font-black tabular-nums" style={{ color: textCol }}>{liveTimerDisplay}</span>
               </div>
             ) : (
-              <p className="line-clamp-[8] whitespace-pre-wrap">{itemDetail(liveItem)}</p>
+              <p className="line-clamp-[8] whitespace-pre-wrap">{itemDetail(liveSource)}</p>
             )}
             {ltPayload && ltFit.width > 0 && (
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">

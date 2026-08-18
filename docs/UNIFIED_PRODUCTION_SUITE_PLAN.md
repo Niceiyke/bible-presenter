@@ -680,10 +680,13 @@ Tasks:
   snapshot. (`src/compositor/ProgramFrameResolver.ts` — pure
   `resolveProgramFrame`.)
 - [x] Resolve output source, output overrides, overlays, scene zones, and blackout.
-- [ ] Move all production visual features into the shared compositor renderer.
-  (The canvas compositor is complete for every DisplayItem + overlay; the DOM
-  outputs `OutputWindow`/`StageWindow` remain authoritative for rich text and
-  animations and are the follow-up.)
+- [x] Move all production visual features into the shared compositor renderer.
+  (The canvas compositor is complete for every DisplayItem + overlay. The DOM
+  outputs `OutputWindow`/`StageWindow` now resolve the SAME `ProgramFrame` via
+  `resolveProgramFrame` — consuming its colors, effective background, blackout,
+  masked overlays, and resolved source — so the DOM renderers draw from the
+  frame instead of re-deriving presentation state. The DOM renderers themselves
+  remain authoritative for rich text and animations.)
 - [ ] Add a shared lower-third renderer model rather than separate simplified data
   paths. (`drawLowerThird` covers the full template model on canvas; a shared
   DOM+canvas renderer is the follow-up.)
@@ -697,9 +700,9 @@ Tasks:
 Acceptance criteria:
 
 - [x] Projection, stage preview, recording preview, and streaming preview resolve
-  the same `ProgramFrame`. (The canvas surfaces resolve via
-  `resolveProgramFrame`; the DOM outputs still render their own path — parity
-  is exercised by the fixture + resolver test suites.)
+  the same `ProgramFrame`. (`OutputWindow` and `StageWindow` resolve through
+  `resolveProgramFrame` exactly like `ProgramFeedPreview`/`ProgramFeedCanvas`;
+  fixture + resolver test suites cover the resolution logic.)
 - [x] Output-specific overlay masks work.
 - [x] `staged`, `item`, `scene`, and `blank` output sources work.
 - [ ] Rich text, animation state, media, timers, props, and lower thirds have

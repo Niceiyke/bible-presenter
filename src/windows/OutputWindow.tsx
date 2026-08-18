@@ -1,19 +1,16 @@
-import React, { useEffect, useState, useRef, useCallback, useLayoutEffect } from "react";
+import React, { useEffect, useState, useRef, useCallback, useLayoutEffect, useMemo } from "react";
 import { listen, emit } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import type { DisplayItem, PropItem, PresentationSettings, LowerThirdData, LowerThirdTemplate, LowerThirdPayload, OutputConfig } from "../types";
-import { THEMES } from "../types";
+import { OUTPUT_SCHEMA_VERSION } from "../types";
 import type { PresentationSnapshot } from "../types";
 import {
-  getEffectiveBackground,
-  getVideoBackground,
-  getCameraBackground,
-  getAudioBackground,
-  getImageBackground,
+  computeOutputBackground,
   getTransitionVariants,
   getItemUid,
   resolvePath,
 } from "../utils";
+import { resolveProgramFrame } from "../compositor/ProgramFrameResolver";
 import {
   CustomSlideRenderer,
   TimerRenderer,
@@ -85,6 +82,38 @@ export function OutputWindow() {
   // Locally-opened background camera stream (owned by this effect, unlike the
   // relayed phone streams which belong to the phone's peer connections).
   const localBgCameraRef = useRef<MediaStream | null>(null);
+
+  // The resolved program frame for this window. Built through the SAME pure
+  // resolver the canvas compositor, recorder, and streamer use
+  // (`resolveProgramFrame`), so projection, stage preview, recording preview,
+  // and streaming preview resolve one consistent frame. Backgrounds, colors,
+  // presentation overrides, blackout, and the overlay payloads here are all
+  // already resolved + masked for this output — the DOM renderers below draw
+  // from the frame instead of re-deriving them.
+  const frame = useMemo(() => {
+    const config: OutputConfig = outputConfig ?? {
+      schema_version: OUTPUT_SCHEMA_VERSION,
+      id: "output",
+      kind: "window",
+      label: "Output",
+      enabled: true,
+      visible: true,
+      source: { type: "live" },
+      geometry: { width: window.innerWidth, height: window.innerHeight },
+      overlays: { props: true, lower_third: true, logo: true },
+    };
+    return resolveProgramFrame({
+      config,
+      snapshot: {
+        live: liveItem,
+        staged: stagedItem,
+        settings,
+        props: propItems,
+        lower_third: lowerThird,
+        revision: 0,
+      },
+    });
+  }, [outputConfig, liveItem, stagedItem, settings, propItems, lowerThird]);
 
   // Phone WebRTC relay. The operator window hosts the *answering* peer for each
   // phone camera; the backend relays offer/ICE from the phone here and carries
@@ -390,10 +419,11 @@ export function OutputWindow() {
     }
   }, []);
 
-  const videoBg = getVideoBackground(settings, liveItem);
-  const cameraBg = getCameraBackground(settings, liveItem);
-  const audioBg = getAudioBackground(settings, liveItem);
-  const bgImage = getImageBackground(settings, liveItem);
+  const bgSetting = frame.background.setting;
+  const videoBg = bgSetting.type === "Video" ? bgSetting.value : null;
+  const cameraBg = bgSetting.type === "Camera" ? bgSetting.value : null;
+  const audioBg = bgSetting.type === "Audio" ? bgSetting.value : null;
+  const bgImage = bgSetting.type === "Image" ? bgSetting.value : null;
 
   const bgCameraLook = usePhoneCameraLook(cameraBg?.deviceId ?? null);
   const bgCameraChroma = useCameraChroma(cameraBg?.deviceId ?? null);
@@ -618,27 +648,27 @@ export function OutputWindow() {
     }
   }, [audioBg?.path, audioBg?.volume, audioBg?.loopAudio, liveItem?.type, appDataDir]);
 
-  // Apply this output's presentation overrides (theme / scale / background /
-  // blanked) on top of the broadcast settings. All fields are optional, so
-  // with the default config this is a no-op and behavior is unchanged.
-  const effSettings: PresentationSettings = outputConfig?.presentation
-    ? {
-        ...settings,
-        theme: outputConfig.presentation.theme ?? settings.theme,
-        reference_output_height: outputConfig.presentation.reference_output_height ?? settings.reference_output_height,
-        background: outputConfig.presentation.background ?? settings.background,
-        is_blanked: outputConfig.presentation.blanked ?? settings.is_blanked,
-      }
-    : settings;
-  const overlays = outputConfig?.overlays ?? { props: true, lower_third: true, logo: true };
+  // This output's resolved presentation state comes from the frame: the
+  // broadcast settings plus the individually-resolved override fields — theme
+  // colors, the effective background, the (masked) overlay payloads, and
+  // blackout (config.presentation blanked / settings.is_blanked / blank source).
+  const effSettings = frame.settings;
+  const overlays = frame.overlays;
 
-  if (effSettings.is_blanked) {
+  if (frame.blackout) {
     return <div className="fixed inset-0 bg-black cursor-none pointer-events-none select-none" />;
   }
 
-  const { colors } = THEMES[effSettings.theme] ?? THEMES.dark;
+  const colors = frame.colors;
   const isTop = effSettings.reference_position === "top";
-  const bgStyle = getEffectiveBackground(effSettings, liveItem, colors, appDataDir);
+  const bgStyle = computeOutputBackground({ ...effSettings, background: bgSetting }, colors, appDataDir);
+
+  // The content this output is subscribed to (the resolved source). With the
+  // default live config this is exactly the broadcast live item; an output
+  // configured to `staged`/`item`/`scene`/`blank` resolves those here too.
+  // Camera/media element lifecycle below still keys on the broadcast live
+  // item (Phase 4 wires per-source runtimes for non-live sources).
+  const item = frame.source.kind === "blank" ? null : frame.source.item;
 
   const refColor = settings.reference_color && settings.reference_color !== ""
     ? settings.reference_color
@@ -652,16 +682,16 @@ export function OutputWindow() {
     ? settings.chapter_verse_color
     : refColor;
 
-  const ReferenceTag = liveItem?.type === "Verse" ? (
+  const ReferenceTag = item?.type === "Verse" ? (
     <p
       className="uppercase tracking-widest font-bold shrink-0"
       style={{ color: refColor, fontSize: `${refFontSize * windowScale}pt`, fontFamily: refFontFamily }}
     >
-      {liveItem.data.book}{" "}
+      {item.data.book}{" "}
       <span style={{ fontSize: `${cvFontSize}pt`, fontFamily: cvFontFamily, color: cvColor }}>
-        {liveItem.data.chapter}:{liveItem.data.verse}
+        {item.data.chapter}:{item.data.verse}
       </span>
-      {liveItem.data.version && (
+      {item.data.version && (
         <span 
           className="font-normal ml-2" 
           style={{ 
@@ -671,7 +701,7 @@ export function OutputWindow() {
             opacity: (settings.version_color && settings.version_color !== "") ? 1 : 0.6,
           }}
         >
-          ({liveItem.data.version})
+          ({item.data.version})
         </span>
       )}
     </p>
@@ -792,33 +822,33 @@ export function OutputWindow() {
         />
       )}
 
-      {overlays.logo && (settings.logo_text ? (
+      {overlays.logo && (overlays.logo.text ? (
         <p
           className="absolute bottom-8 right-8 z-60 font-black leading-tight opacity-60 text-right"
-          style={{ color: settings.logo_text_color ?? "#ffffff", fontSize: "1.5rem" }}
+          style={{ color: overlays.logo.textColor ?? "#ffffff", fontSize: "1.5rem" }}
         >
-          {settings.logo_text}
+          {overlays.logo.text}
         </p>
-      ) : settings.logo_path?.toLowerCase().match(/\.(mp4|webm|mov|mkv|avi)$/) ? (
+      ) : overlays.logo.path?.match(/\.(mp4|webm|mov|mkv|avi)$/) ? (
         <video
-          src={convertFileSrc(resolvePath(settings.logo_path, appDataDir))}
+          src={convertFileSrc(resolvePath(overlays.logo.path, appDataDir))}
           className="absolute bottom-8 right-8 w-24 h-24 object-contain opacity-50 z-60"
           autoPlay
           loop
           muted
         />
-      ) : settings.logo_path ? (
+      ) : overlays.logo.path ? (
         <img
-          src={convertFileSrc(resolvePath(settings.logo_path, appDataDir))}
+          src={convertFileSrc(resolvePath(overlays.logo.path, appDataDir))}
           className="absolute bottom-8 right-8 w-24 h-24 object-contain opacity-50 z-60"
           alt="Logo"
         />
       ) : null)}
 
       <AnimatePresence mode="wait">
-        {liveItem ? (
+        {item ? (
           <motion.div
-            key={getItemUid(liveItem)}
+            key={getItemUid(item)}
             className="absolute inset-0 z-10"
             {...getTransitionVariants(
               settings.slide_transition ?? "fade",
@@ -826,7 +856,7 @@ export function OutputWindow() {
             )}
           >
             <ErrorBoundary fallback={<ProjectionErrorFallback />}>
-            {liveItem.type === "Verse" ? (
+            {item.type === "Verse" ? (
               <div ref={verseContainerRef} className="absolute inset-0 flex flex-col items-center justify-center p-16 text-center">
                 <motion.div
                   className="w-full flex flex-col items-center gap-8"
@@ -844,56 +874,56 @@ export function OutputWindow() {
                         fontFamily: settings.verse_font_family ?? "Georgia, serif",
                       }}
                     >
-                      {liveItem.data.text}
+                      {item.data.text}
                     </h1>
-                    {liveItem.data.split_index !== undefined && liveItem.data.total_splits !== undefined && (
+                    {item.data.split_index !== undefined && item.data.total_splits !== undefined && (
                       <p 
                         className="absolute -bottom-10 right-0 font-black opacity-30 text-xs tracking-widest"
                         style={{ color: colors.verseText, fontSize: `${12 * windowScale}pt` }}
                       >
-                        PART {liveItem.data.split_index + 1} / {liveItem.data.total_splits}
+                        PART {item.data.split_index + 1} / {item.data.total_splits}
                       </p>
                     )}
                   </div>
                   {!isTop && ReferenceTag}
                 </motion.div>
               </div>
-            ) : liveItem.type === "Camera" ? (
+            ) : item.type === "Camera" ? (
               <div className="absolute inset-0">
-                {liveItem.data.backdropColor ? (
+                {item.data.backdropColor ? (
                   <div
                     className="absolute inset-0"
-                    style={{ background: liveItem.data.backdropColor }}
+                    style={{ background: item.data.backdropColor }}
                   />
                 ) : null}
                 <PhoneCameraVideo
                   stream={mainCameraStream}
                   orientation={livePhoneOrientation}
                   look={liveCameraLook}
-                  mirrored={liveItem.data.mirrored}
-                  objectFit={(liveItem.data.objectFit as any) ?? "cover"}
-                  style={{ opacity: liveItem.data.opacity ?? 1 }}
+                  mirrored={item.data.mirrored}
+                  objectFit={(item.data.objectFit as any) ?? "cover"}
+                  style={{ opacity: item.data.opacity ?? 1 }}
                   chromaKey={liveCameraChroma}
                   videoRef={(el) => { mainCameraRef.current = el; }}
                 />
               </div>
-            ) : liveItem.type === "CustomSlide" ? (
+            ) : item.type === "CustomSlide" ? (
               <div className="absolute inset-0">
-                <CustomSlideRenderer slide={liveItem.data} scale={windowScale} appDataDir={appDataDir} theme={liveItem.data.theme} entranceEnabled />
+                <CustomSlideRenderer slide={item.data} scale={windowScale} appDataDir={appDataDir} theme={item.data.theme} entranceEnabled />
               </div>
-            ) : liveItem.type === "Media" ? (
+            ) : item.type === "Media" ? (
               <div className="absolute inset-0">
-                {liveItem.data.media_type === "Image" ? (
+                {item.data.media_type === "Image" ? (
                   <img
-                    src={convertFileSrc(liveItem.data.path)}
+                    src={convertFileSrc(item.data.path)}
                     className={`w-full h-full ${
-                      liveItem.data.fit_mode === "cover" ? "object-cover"
-                      : liveItem.data.fit_mode === "fill" ? "object-fill"
+                      item.data.fit_mode === "cover" ? "object-cover"
+                      : item.data.fit_mode === "fill" ? "object-fill"
                       : "object-contain"
                     }`}
-                    alt={liveItem.data.name}
+                    alt={item.data.name}
                   />
-                ) : liveItem.data.media_type === "Audio" ? (
+                ) : item.data.media_type === "Audio" ? (
                   // Audio items have no visible frame — show a tasteful full-
                   // screen audio card and play the file through the hidden
                   // audio element below. Transparent background so the
@@ -911,7 +941,7 @@ export function OutputWindow() {
                     >
                       <Music size={48} style={{ color: colors.referenceText }} className="animate-pulse" />
                     </div>
-                    <p className="text-3xl font-bold drop-shadow-lg" style={{ color: colors.verseText }}>{liveItem.data.name}</p>
+                    <p className="text-3xl font-bold drop-shadow-lg" style={{ color: colors.verseText }}>{item.data.name}</p>
                     <p className="text-sm uppercase tracking-widest" style={{ color: colors.referenceText }}>
                       Now Playing
                     </p>
@@ -921,35 +951,35 @@ export function OutputWindow() {
                     ref={(el) => {
                       videoRef.current = el;
                       if (el) {
-                        el.playbackRate = liveItem.data.playback_rate ?? 1;
-                        el.volume = liveItem.data.volume ?? 1;
+                        el.playbackRate = item.data.playback_rate ?? 1;
+                        el.volume = item.data.volume ?? 1;
                       }
                     }}
-                    src={convertFileSrc(liveItem.data.path)}
+                    src={convertFileSrc(item.data.path)}
                     className={`w-full h-full ${
-                      liveItem.data.fit_mode === "cover" ? "object-cover"
-                      : liveItem.data.fit_mode === "fill" ? "object-fill"
+                      item.data.fit_mode === "cover" ? "object-cover"
+                      : item.data.fit_mode === "fill" ? "object-fill"
                       : "object-contain"
                     }`}
                     autoPlay
-                    loop={liveItem.data.loop_playback ?? true}
+                    loop={item.data.loop_playback ?? true}
                   />
                 )}
-                {liveItem.data.media_type === "Audio" && (
+                {item.data.media_type === "Audio" && (
                   <audio
-                    src={convertFileSrc(liveItem.data.path)}
-                    ref={(el) => { (window as any).__liveAudio = el; if (el) el.volume = liveItem.data.volume ?? 1; }}
+                    src={convertFileSrc(item.data.path)}
+                    ref={(el) => { (window as any).__liveAudio = el; if (el) el.volume = item.data.volume ?? 1; }}
                     autoPlay
-                    loop={liveItem.data.loop_playback ?? true}
+                    loop={item.data.loop_playback ?? true}
                   />
                 )}
               </div>
-            ) : liveItem.type === "Timer" ? (
-              <TimerRenderer data={liveItem.data} />
-            ) : liveItem.type === "Song" ? (
-              liveItem.data.style === "FullSlide" ? (
+            ) : item.type === "Timer" ? (
+              <TimerRenderer data={item.data} />
+            ) : item.type === "Song" ? (
+              item.data.style === "FullSlide" ? (
                 <SongSlideRenderer 
-                  data={liveItem.data} 
+                  data={item.data} 
                   scale={windowScale} 
                   fontSize={settings.font_size}
                   fontFamily={settings.verse_font_family}
@@ -957,9 +987,9 @@ export function OutputWindow() {
                   showSectionLabel={!!settings.show_song_section_labels}
                 />
               ) : null
-            ) : liveItem.type === "SceneComposition" ? (
+            ) : item.type === "SceneComposition" ? (
               <CompositionRenderer
-                data={liveItem.data}
+                data={item.data}
                 settings={settings}
                 appDataDir={appDataDir}
                 windowScale={windowScale}
@@ -984,14 +1014,14 @@ export function OutputWindow() {
         )}
       </AnimatePresence>
 
-      {overlays.props && <PropsRenderer items={propItems} appDataDir={appDataDir} />}
+      {overlays.props.length > 0 && <PropsRenderer items={overlays.props} appDataDir={appDataDir} />}
 
       <AnimatePresence>
-        {overlays.lower_third && lowerThird && (
+        {overlays.lower_third && (
           <LowerThirdOverlay
-            key={lowerThird.data.kind === "Lyrics" ? `lt-${JSON.stringify(lowerThird.data)}` : "lt-static"}
-            data={lowerThird.data}
-            template={lowerThird.template}
+            key={overlays.lower_third.data.kind === "Lyrics" ? `lt-${JSON.stringify(overlays.lower_third.data)}` : "lt-static"}
+            data={overlays.lower_third.data}
+            template={overlays.lower_third.template}
             onCycleComplete={handleLtCycleComplete}
             scale={windowScale}
           />
