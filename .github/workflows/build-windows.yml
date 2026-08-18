@@ -1,16 +1,33 @@
 name: Build Windows Exe
 on:
-  push:
+  # Build only after the CI Check workflow completes successfully (or when
+  # triggered manually). This gates the release build on frontend + backend
+  # tests passing.
+  workflow_run:
+    workflows: ["CI Check"]
+    types:
+      - completed
     branches: [ main ]
   workflow_dispatch:
 
+concurrency:
+  group: build-windows
+  cancel-in-progress: false
+
 jobs:
   check-version:
+    # Gate: a release build only runs when CI Check passed. Manual dispatch
+    # bypasses the gate (explicit operator action).
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     outputs:
       tag_exists: ${{ steps.tag_check.outputs.exists }}
     steps:
+      # workflow_run does not automatically check out the CI-tested commit;
+      # pin the ref so the build matches exactly what passed CI.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: check if version tag already exists
         id: tag_check
@@ -33,6 +50,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: verify license server endpoint is configured
         shell: bash
