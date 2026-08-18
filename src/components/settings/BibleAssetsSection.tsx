@@ -82,7 +82,7 @@ export function BibleAssetsSection() {
               onClick={handleDownloadBibleDb}
               className="mt-auto w-full py-2 bg-amber-600 hover:bg-amber-500 text-black text-[10px] font-black uppercase rounded-lg transition-all"
             >
-              Download Bible Database (~380MB)
+              Download Bible Database (~20MB)
             </button>
           )}
         </div>

@@ -17,6 +17,7 @@ import { OperatorSection } from "./settings/sections/OperatorSection";
 import { LicenseSection } from "./settings/sections/LicenseSection";
 
 const CATEGORIES: SettingsCategory[] = [
+  { id: "assets", labelKey: "settings.category.assets", keywords: ["asset", "bible", "database", "download", "install", "core", "scriptures", "required"] },
   { id: "output", labelKey: "settings.category.output", keywords: ["font", "size", "transition", "blank", "fade", "slide", "verse font", "timing", "song label", "section label", "verse 1", "chorus"] },
   { id: "scripture", labelKey: "settings.category.scripture", keywords: ["reference", "position", "chapter", "verse", "split", "divine", "highlight", "auto split"] },
   { id: "theme", labelKey: "settings.category.theme", keywords: ["color", "dark", "light", "navy", "maroon", "forest", "overrides", "background color"] },
@@ -86,6 +87,7 @@ export function SettingsTab({ onUpdateSettings, onUploadMedia }: SettingsTabProp
   }, [query, matches, category]);
 
   const renderSection = () => {
+    if (category === "assets") return <BibleAssetsSection />;
     if (category === "output") return <OutputSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
     if (category === "scripture") return <ScriptureSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
     if (category === "theme") return <ThemeSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
