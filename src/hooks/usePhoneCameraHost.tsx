@@ -2,6 +2,12 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store";
+import {
+  getSourceSnapshot,
+  phoneStatusFromConnection,
+  removePhoneSource,
+  setPhoneSource,
+} from "../system/sourceRegistry";
 import type { PhoneCameraInfo as StoredPhoneCameraInfo } from "../store/slices/cameraSlice";
 
 // The phone opens two WebRTC peers: one targeted at the operator main window
@@ -120,6 +126,7 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
         pcsRef.current.delete(deviceId);
       }
       setPeerState(deviceId, null);
+      removePhoneSource(deviceId);
       setStreams((prev) => {
         if (!(deviceId in prev)) return prev;
         const next = { ...prev };
@@ -152,7 +159,15 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
         };
 
         pc.onconnectionstatechange = () => {
-          setPeerState(deviceId, pc.connectionState);
+          const s = pc.connectionState;
+          setPeerState(deviceId, s);
+          // Keep the registry's unified source status in sync with the peer
+          // while preserving the live stream reference across state changes.
+          setPhoneSource(
+            deviceId,
+            getSourceSnapshot(deviceId)?.stream ?? null,
+            phoneStatusFromConnection(s)
+          );
         };
 
         pc.ontrack = (ev) => {
@@ -160,6 +175,7 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
           ev.streams[0]?.getTracks().forEach((t) => stream.addTrack(t));
           ev.track && stream.addTrack(ev.track);
           setStreams((prev) => ({ ...prev, [deviceId]: stream }));
+          setPhoneSource(deviceId, stream, "connected");
           const storeState = useAppStore.getState();
           if (!storeState.phoneCameras.some((c) => c.deviceId === deviceId)) {
             storeState.addPhoneCamera({ deviceId, label: "Phone Camera" });
@@ -208,6 +224,7 @@ export function PhoneCameraProvider({ children }: { children: React.ReactNode })
       unlistenIce?.();
       unlistenStop?.();
       pcsRef.current.forEach((pc) => pc.close());
+      pcsRef.current.forEach((_pc, deviceId) => removePhoneSource(deviceId));
       pcsRef.current.clear();
     };
   }, []);

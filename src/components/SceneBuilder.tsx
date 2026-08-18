@@ -15,6 +15,7 @@ import {
 import { stableId, resolvePath, buildCustomSlideItem, FONTS } from "../utils";
 import { buildSongDisplayItem } from "../utils/song";
 import { ZoneContent } from "./shared/CompositionRenderer";
+import { SourcePicker } from "./sources/SourcePicker";
 
 export interface SceneBuilderProps {
   scene: Scene;
@@ -119,8 +120,6 @@ function MediaSource({ onPick }: { onPick: (item: DisplayItem) => void }) {
 }
 
 function CameraSource({ onPick }: { onPick: (item: DisplayItem) => void }) {
-  const availableCameras = useAppStore((s) => s.availableCameras);
-  const phoneCameras = useAppStore((s) => s.phoneCameras);
   const pick = (deviceId: string) => {
     const cam: CameraBackground = {
       deviceId,
@@ -130,38 +129,7 @@ function CameraSource({ onPick }: { onPick: (item: DisplayItem) => void }) {
     };
     onPick({ type: "Camera", data: cam });
   };
-  return (
-    <div className="flex flex-col gap-1 max-h-64 overflow-y-auto">
-      <p className="text-[9px] font-bold uppercase tracking-widest text-console-text-subtle">Phone cameras</p>
-      {phoneCameras.length === 0 && (
-        <p className="text-xs text-console-text-subtle">No connected phones streaming a camera.</p>
-      )}
-      {phoneCameras.map((c) => (
-        <button
-          key={c.deviceId}
-          onClick={() => pick(c.deviceId)}
-          className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-console-surface-raised border border-console-border hover:border-action-primary text-left transition-all"
-        >
-          <CameraIcon size={13} className="text-red-400" />
-          <span className="text-xs text-console-text truncate">{c.label || "Phone Camera"}</span>
-        </button>
-      ))}
-      <p className="text-[9px] font-bold uppercase tracking-widest text-console-text-subtle mt-2">Local cameras</p>
-      {availableCameras.length === 0 && (
-        <p className="text-xs text-console-text-subtle">No local cameras detected.</p>
-      )}
-      {availableCameras.map((c) => (
-        <button
-          key={c.deviceId}
-          onClick={() => pick(c.deviceId)}
-          className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-console-surface-raised border border-console-border hover:border-action-primary text-left transition-all"
-        >
-          <CameraIcon size={13} className="text-slate-400" />
-          <span className="text-xs text-console-text truncate">{c.label || "Local Camera"}</span>
-        </button>
-      ))}
-    </div>
-  );
+  return <SourcePicker onPick={(deviceId) => pick(deviceId)} />;
 }
 
 function VerseSource({ onPick }: { onPick: (item: DisplayItem) => void }) {

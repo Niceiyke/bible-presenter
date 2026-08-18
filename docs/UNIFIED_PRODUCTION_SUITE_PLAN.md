@@ -763,26 +763,44 @@ Acceptance criteria:
 
 Tasks:
 
-- Absorb the existing shared camera plumbing (`useSharedLocalCameraStream`
+- [x] Absorb the existing shared camera plumbing (`useSharedLocalCameraStream`
   ref-counted cache, `usePhoneCameraHost`/`usePhoneCameraStreams`) as the
-  baseline instead of starting greenfield.
-- Add a source registry and source status model.
-- Move local camera acquisition into a shared source manager.
-- Keep phone camera signaling separate from source registration.
-- Make camera feeds reusable by preview, scene zones, projection, recording,
-  and streaming.
-- Add source permission, unavailable, reconnecting, and disconnected states.
-- Add a source picker that works with synthetic phone-camera IDs without calling
-  `getUserMedia` for them.
-- Add a future-compatible capture-device interface, even if the first backend
-  implementation supports browser cameras only.
+  baseline instead of starting greenfield. (The ref-counted local cache and the
+  phone WebRTC relay are the substrate; both now feed one registry.)
+- [x] Add a source registry and source status model. (`src/system/sourceRegistry.ts`
+  — per-device `SourceState` with a unified `SourceStatus` ∈ idle/opening/
+  connected/error/reconnecting/disconnected + `SourceKind` local/phone/native/
+  ndi + classified `errorKind`. External store consumed via
+  `useSyncExternalStore`.)
+- [x] Move local camera acquisition into a shared source manager. (The registry
+  opens each local device once via `getUserMedia`, ref-counted across every
+  consumer, and auto-reconnects once on device loss. Scene zones no longer open
+  their own `getUserMedia` — `ZoneCamera` shares the registry stream.)
+- [x] Keep phone camera signaling separate from source registration. (The WebRTC
+  relay stays in `usePhoneCameraHost`; it only *registers* phone sources/status
+  into the registry via `setPhoneSource`/`removePhoneSource`.)
+- [x] Make camera feeds reusable by preview, scene zones, projection, recording,
+  and streaming. (All consumers resolve through the registry; the compositor
+  bulk path and DOM previews share one opened camera.)
+- [x] Add source permission, unavailable, reconnecting, and disconnected states.
+  (Unified `SourceStatus` + `describeSourceError`; safe fallbacks in
+  `ZoneCamera` and `CameraFeed`.)
+- [x] Add a source picker that works with synthetic phone-camera IDs without calling
+  `getUserMedia` for them. (`src/components/sources/SourcePicker.tsx` + the
+  non-acquiring `useSourceStatus` hook; wired into the SceneBuilder camera
+  source. `phone-camera-`/`native:`/`ndi:` ids are never sent to
+  `getUserMedia`.)
+- [x] Add a future-compatible capture-device interface, even if the first backend
+  implementation supports browser cameras only. (`SourceKind` reserves
+  `native:`/`ndi:` ids; `resolveSourceKind` classifies them and acquisition
+  refuses to open non-local sources.)
 
 Acceptance criteria:
 
-- A camera is opened once and shared by all consumers.
-- Removing or losing a camera produces a safe visual fallback.
-- Multiple camera sources can exist without replacing each other.
-- A camera source can be placed into a scene zone and taken live.
+- [x] A camera is opened once and shared by all consumers.
+- [x] Removing or losing a camera produces a safe visual fallback.
+- [x] Multiple camera sources can exist without replacing each other.
+- [x] A camera source can be placed into a scene zone and taken live.
 
 ### Phase 6: Basic audio graph
 

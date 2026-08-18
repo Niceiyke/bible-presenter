@@ -67,6 +67,21 @@ export function CameraFeed({
           chromaKey={chroma}
         />
       </div>
+      {!connected && (
+        <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80">
+          <span className="text-[10px] uppercase tracking-widest text-slate-400">
+            {isPhone
+              ? "Connecting…"
+              : local.status === "reconnecting"
+                ? "Reconnecting…"
+                : local.status === "error"
+                  ? local.error === "permission"
+                    ? "Camera permission denied"
+                    : "Camera unavailable"
+                  : "Opening…"}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type {
   DisplayItem,
@@ -20,43 +20,11 @@ import PhoneCameraVideo, {
   usePhoneCameraLook,
   useCameraChroma,
 } from "./PhoneCameraVideo";
+import { useCameraSource } from "../../hooks/useCameraSource";
 import { Music } from "lucide-react";
-
 /**
- * Opens a native (non-phone) camera stream for a zone. Each camera zone owns
- * its own stream so multiple cameras can be composited at once; the stream is
- * stopped when the zone unmounts. Phone cameras are relayed separately over
- * WebRTC and pulled from `phoneStreams` by the zone content renderer.
+ * Full-frame Verse block used inside a zone (compact reference + text).
  */
-function useNativeCameraStream(deviceId: string | null): MediaStream | null {
-  const [stream, setStream] = useState<MediaStream | null>(null);
-  useEffect(() => {
-    let active: MediaStream | null = null;
-    let cancelled = false;
-    if (!deviceId) {
-      setStream(null);
-      return;
-    }
-    navigator.mediaDevices
-      .getUserMedia({ video: { deviceId: { exact: deviceId } } })
-      .then((s) => {
-        if (cancelled) {
-          s.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        active = s;
-        setStream(s);
-      })
-      .catch((e) => console.error("Zone camera stream failed:", e));
-    return () => {
-      cancelled = true;
-      if (active) active.getTracks().forEach((t) => t.stop());
-    };
-  }, [deviceId]);
-  return stream;
-}
-
-/** Full-frame Verse block used inside a zone (compact reference + text). */
 function ZoneVerse({
   item,
   settings,
@@ -144,9 +112,11 @@ function ZoneMedia({
 
 /**
  * Camera zone content. Hooks must run unconditionally, so this is a separate
- * component: native camera zones open their own getUserMedia stream (stopped
- * on unmount), phone camera zones pull the relayed WebRTC stream from
- * `phoneStreams` and apply the phone's live orientation/look/chroma.
+ * component. Local camera zones share the ref-counted source-registry stream
+ * (opened once across every surface) and render a safe fallback when the camera
+ * is unavailable/lost; phone camera zones pull the relayed WebRTC stream from
+ * `phoneStreams` and apply the phone's live orientation/look/chroma. Synthetic
+ * phone/native/ndi ids are never sent to `getUserMedia`.
  */
 function ZoneCamera({
   item,
@@ -157,8 +127,9 @@ function ZoneCamera({
 }) {
   const deviceId = item.data.deviceId;
   const isPhone = deviceId.startsWith("phone-camera-");
-  const nativeStream = useNativeCameraStream(isPhone ? null : deviceId);
-  const stream = isPhone ? (phoneStreams?.[deviceId] ?? null) : nativeStream;
+  const uid = useId();
+  const local = useCameraSource(isPhone ? null : deviceId, `zone:${uid}`);
+  const stream = isPhone ? (phoneStreams?.[deviceId] ?? null) : local.stream;
   const orientation = isPhone ? usePhoneCameraOrientation(deviceId) : null;
   const look = isPhone ? usePhoneCameraLook(deviceId) : null;
   const chroma = isPhone ? useCameraChroma(deviceId) : null;
@@ -170,15 +141,29 @@ function ZoneCamera({
     );
   }
   return (
-    <PhoneCameraVideo
-      stream={stream}
-      orientation={orientation}
-      look={look}
-      mirrored={item.data.mirrored}
-      objectFit={item.data.objectFit as any}
-      style={{ opacity: item.data.opacity ?? 1 }}
-      chromaKey={chroma}
-    />
+    <div className="relative w-full h-full">
+      <PhoneCameraVideo
+        stream={stream}
+        orientation={orientation}
+        look={look}
+        mirrored={item.data.mirrored}
+        objectFit={item.data.objectFit as any}
+        style={{ opacity: item.data.opacity ?? 1 }}
+        chromaKey={chroma}
+      />
+      {!isPhone && (local.status === "error" || local.status === "disconnected") && (
+        <div className="absolute inset-0 flex items-center justify-center bg-[#0b1220]">
+          <span className="text-[10px] uppercase tracking-widest text-white/40">
+            {local.error ?? "Camera unavailable"}
+          </span>
+        </div>
+      )}
+      {!isPhone && local.status === "reconnecting" && (
+        <div className="absolute inset-0 flex items-center justify-center bg-[#0b1220]/60">
+          <span className="text-[10px] uppercase tracking-widest text-amber-300/80">Reconnecting…</span>
+        </div>
+      )}
+    </div>
   );
 }
 

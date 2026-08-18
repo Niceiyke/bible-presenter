@@ -1,4 +1,4 @@
-# Contract Inventory (Phase 0 freeze, updated for Phase 1/2/3/4)
+# Contract Inventory (Phase 0 freeze, updated for Phase 1/2/3/4/5)
 
 Status: living inventory — Phases 0-3 of `docs/UNIFIED_PRODUCTION_SUITE_PLAN.md`
 requires recording the current event names, command names, persisted files, and
@@ -253,6 +253,33 @@ tests). Contract:
   via `outputs_set_visible` (persist-then-swap), then report phases; a failed
   write aborts the transition. The streaming pipeline is app-scoped
   (`StreamingProvider`), so navigating workspaces cannot stop a broadcast.
+
+## 2e. Source registry (`src/system/sourceRegistry.ts`, Phase 5)
+
+- **`SourceState`** per device: `stream`, `status` (`idle`/`opening`/`connected`/
+  `error`/`reconnecting`/`disconnected`), `kind` (`local`/`phone`/`native`/`ndi`),
+  and `errorKind` (`permission`/`device`/`unknown`). `SourceKind` is the
+  future-compatible capture-device interface: `local` is the only kind the
+  registry opens via `getUserMedia`; `phone-camera-`/`native:`/`ndi:` ids are
+  never sent to `getUserMedia` (`resolveSourceKind`).
+- **Local acquisition** is ref-counted and opened once per device
+  (`acquireSource`/`releaseSource`); the stream closes when the last consumer
+  releases it. A live video track's `ended` triggers one auto-reconnect
+  (`reconnecting` → re-open); `retrySource` re-opens after a permission denial
+  or device loss.
+- **Phone sources** are *registered* by the WebRTC host
+  (`usePhoneCameraHost.tsx` → `setPhoneSource`/`removePhoneSource`,
+  `phoneStatusFromConnection`), keeping phone signaling separate from local
+  acquisition while giving every consumer a unified status.
+- **React surface:** `useCameraSource(deviceId, consumerId)` is the unified
+  hook (`{ stream, status, error, isPhone, retry }`) used by previews, scene
+  zones, and the compositor; `useSourceStatus` is the non-acquiring variant for
+  pickers. `useSharedLocalCameraStream(s)` remain as back-compat wrappers over
+  the registry. `SourcePicker` (`src/components/sources/SourcePicker.tsx`) lists
+  local + phone sources with live status.
+- **Safe fallback:** `ZoneCamera` and `CameraFeed` render a fallback panel when
+  a source is `error`/`disconnected` and a "Reconnecting…" state while
+  `reconnecting`.
 
 ## 3. Persisted files under the app data dir
 
