@@ -185,4 +185,23 @@ describe("programEncoder", () => {
     expect(await startProgramEncoder(fakeTrack(), profile)).toBe(false);
     expect(getProgramEncoderSnapshot().status).toBe("error");
   });
+
+  it("returns a STABLE snapshot reference while nothing changed (no React #185 loop)", async () => {
+    // useSyncExternalStore compares snapshots with Object.is on every render. A
+    // freshly-allocated object every call would look "changed" forever and loop
+    // (React error #185). The cached snapshot must be reference-stable.
+    const a = getProgramEncoderSnapshot();
+    const b = getProgramEncoderSnapshot();
+    const c = getProgramEncoderSnapshot();
+    expect(a).toBe(b);
+    expect(b).toBe(c);
+
+    // After a real change (status -> live) the snapshot is a new object once,
+    // then stable again.
+    await startProgramEncoder(fakeTrack(), profile);
+    expect(a).not.toBe(getProgramEncoderSnapshot());
+    const d = getProgramEncoderSnapshot();
+    expect(getProgramEncoderSnapshot()).toBe(d);
+    expect(getProgramEncoderSnapshot()).toBe(d);
+  });
 });

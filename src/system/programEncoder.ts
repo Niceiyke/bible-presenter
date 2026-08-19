@@ -84,8 +84,39 @@ export function subscribeProgramEncoder(cb: () => void): () => void {
 }
 
 /** Stable snapshot (the module keeps primitives; rebuild a small object). */
+let cachedSnapshot: ProgramEncoderSnapshot | null = null;
+let cachedStatus: ProgramEncoderStatus = "idle";
+let cachedError: string | null = null;
+let cachedConsumers = 0;
+let cachedEncoded = 0;
+let cachedDropped = 0;
+let cachedProfile: ProgramEncoderProfile | null = null;
+
 export function getProgramEncoderSnapshot(): ProgramEncoderSnapshot {
-  return { status, error, activeConsumers: consumers.size, packetsEncoded, packetsDropped, profile };
+  const consumersN = consumers.size;
+  // Return a STABLE object reference while nothing changed. `useSyncExternalStore`
+  // re-reads the snapshot on every render and compares with Object.is — a freshly
+  // allocated object would appear "changed" every time and loop forever (React
+  // error #185, maximum update depth exceeded).
+  if (
+    cachedSnapshot &&
+    cachedStatus === status &&
+    cachedError === error &&
+    cachedConsumers === consumersN &&
+    cachedEncoded === packetsEncoded &&
+    cachedDropped === packetsDropped &&
+    cachedProfile === profile
+  ) {
+    return cachedSnapshot;
+  }
+  cachedStatus = status;
+  cachedError = error;
+  cachedConsumers = consumersN;
+  cachedEncoded = packetsEncoded;
+  cachedDropped = packetsDropped;
+  cachedProfile = profile;
+  cachedSnapshot = { status, error, activeConsumers: consumersN, packetsEncoded, packetsDropped, profile };
+  return cachedSnapshot;
 }
 
 export function programEncoderIsLive(): boolean {
