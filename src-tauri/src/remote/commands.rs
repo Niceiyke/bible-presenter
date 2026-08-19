@@ -583,6 +583,9 @@ pub async fn dispatch(
             result_from(&command.command_id, control.hub.current_revision(), resp.and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())))
         }
         RemoteCommandType::BibleSearch => {
+            if !control.allow_read_query(&device.id) {
+                return err_result(&command.command_id, control.hub.current_revision(), "rate_limited", "Too many search queries — please slow down");
+            }
             let req = command_payload::<crate::remote::protocol::RemoteBibleSearch>(command).ok();
             let resp = match req {
                 Some(r) => search_bible(state, &r.query, &r.version),
@@ -788,6 +791,9 @@ pub async fn dispatch(
             }
         }
         RemoteCommandType::SongsSearch => {
+            if !control.allow_read_query(&device.id) {
+                return err_result(&command.command_id, control.hub.current_revision(), "rate_limited", "Too many search queries — please slow down");
+            }
             let req = command_payload::<RemoteSongSearch>(command).ok();
             if let Some(req) = req {
                 let mut all: Vec<Song> = state.media_schedule.list_songs().unwrap_or_default();

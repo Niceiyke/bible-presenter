@@ -102,6 +102,7 @@ pub fn build_snapshot(
 
     RemoteSnapshot {
         protocol_version: crate::remote::protocol::REMOTE_PROTOCOL_VERSION,
+        capabilities: crate::remote::protocol::REMOTE_CAPABILITIES.iter().map(|s| s.to_string()).collect(),
         revision: state.remote.hub.current_revision(),
         connected: true,
         role,

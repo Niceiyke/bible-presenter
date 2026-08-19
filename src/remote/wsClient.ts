@@ -4,6 +4,8 @@ import type {
   RemoteCommandType,
   RemoteControllerState,
   RemoteEvent,
+  RemotePermissions,
+  RemoteRole,
   RemoteSnapshot,
 } from "../types/remote";
 import type { DisplayItem, ServiceMeta } from "../types/display";
@@ -144,6 +146,14 @@ function applyEvent(snapshot: RemoteSnapshot, event: RemoteEvent): RemoteSnapsho
       return next;
     case "controller.changed":
       next.controller_state = p.controller_state as RemoteControllerState;
+      return next;
+    case "permissions.changed":
+      // A revoked / permission-reduced client updates its role + permissions
+      // immediately without reconnecting (Phase 10).
+      if (typeof p.role === "string") next.role = p.role as RemoteRole;
+      if (p.permissions && typeof p.permissions === "object") {
+        next.permissions = p.permissions as RemotePermissions;
+      }
       return next;
     default:
       return next;

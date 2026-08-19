@@ -44,6 +44,9 @@ pub struct RemoteControl {
     pub sessions: ConnectedDevices,
     /// Sliding-window mutating-command history per device (rate limiting).
     pub mutation_history: Mutex<HashMap<String, Vec<u64>>>,
+    /// Sliding-window expensive read-query history per device (search rate
+    /// limiting — Phase 10).
+    pub read_query_history: Mutex<HashMap<String, Vec<u64>>>,
     /// Device-token persistence file.
     pub devices_file: PathBuf,
     /// File holding the last-bound remote port so restarts reuse it instead of
@@ -129,6 +132,7 @@ impl RemoteControl {
             lease: ControllerLease::new(),
             sessions: ConnectedDevices::new(),
             mutation_history: Mutex::new(HashMap::new()),
+            read_query_history: Mutex::new(HashMap::new()),
             devices_file: devices_file.clone(),
             port_file: app_data_dir.join("remote_port.txt"),
             prefs_file: prefs_file.clone(),
@@ -284,6 +288,39 @@ impl RemoteControl {
         }
         list.push(now);
         true
+    }
+
+    /// Sliding-window budget for expensive READ queries (bible/song search) per
+    /// connected device. These are cheap enough to allow but expensive enough
+    /// that an abusive client should not be able to hammer them; when exceeded
+    /// the query is rejected (Phase 10).
+    pub fn allow_read_query(&self, device_id: &str) -> bool {
+        use crate::remote::auth::now_unix;
+        const READ_QUERY_RATE_LIMIT: usize = 15;
+        const READ_QUERY_WINDOW_SECS: u64 = 10;
+        let now = now_unix();
+        let mut map = self.read_query_history.lock();
+        let list = map.entry(device_id.to_string()).or_default();
+        list.retain(|t| *t >= now.saturating_sub(READ_QUERY_WINDOW_SECS));
+        if list.len() >= READ_QUERY_RATE_LIMIT {
+            return false;
+        }
+        list.push(now);
+        true
+    }
+
+    /// Push the device's current role + permissions to it immediately, so a
+    /// revoked or permission-reduced client updates its UI WITHOUT reconnecting
+    /// (Phase 10). Targeted (does not advance the global revision).
+    pub fn publish_permissions_changed(&self, device_id: &str) {
+        if let Some(dev) = self.tokens.device(device_id) {
+            self.hub.publish_to(
+                RemoteEventKind::PermissionsChanged,
+                json!({ "role": dev.role, "permissions": dev.permissions }),
+                None,
+                Some(device_id.to_string()),
+            );
+        }
     }
 
     /// Register a phone camera device. Called when a remote client sends

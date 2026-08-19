@@ -979,21 +979,39 @@ Acceptance criteria:
 
 Tasks:
 
-- Make remote commands call engine commands only.
-- Generate or centrally define remote protocol schemas where practical.
-- Broadcast permission changes immediately.
-- Add read-query rate limits for expensive search operations.
-- Add source, scene, output, and transport events to the remote snapshot only
-  when needed by the remote UI.
-- Add capability negotiation for future clients.
-- Add extension registries for source kinds, output kinds, and transport kinds.
-- Keep unknown future enum values safely ignorable on the frontend.
+- [x] Make remote commands call engine commands only. (Content commands already
+  route through the shared `Engine` (`op_*`) in `remote/commands.rs`; the only
+  content-adjacent exception is `bible.add_to_service`, a service-list op that
+  does not mutate presentation state.)
+- [ ] Generate or centrally define remote protocol schemas where practical.
+  (Follow-up: the Rust enums + TS mirrors stay hand-synced via
+  `REMOTE_PROTOCOL_VERSION`.)
+- [x] Broadcast permission changes immediately. (`permissions.changed` targeted
+  event pushed by `remote_set_role`/`remote_set_permissions` so a revoked or
+  permission-reduced client updates its UI without reconnecting.)
+- [x] Add read-query rate limits for expensive search operations.
+  (`RemoteControl::allow_read_query` — a per-device sliding-window budget
+  enforced on `bible.search` and `songs.search`, rejecting excess with a clear
+  `rate_limited` error.)
+- [ ] Add source, scene, output, and transport events to the remote snapshot only
+  when needed by the remote UI. (The snapshot already omits paths/settings/media;
+  richer live tool events are a follow-up.)
+- [x] Add capability negotiation for future clients. (`snapshot.capabilities`
+  carries a fixed `REMOTE_CAPABILITIES` feature list a future client can gate UI
+  on; old clients ignore it.)
+- [ ] Add extension registries for source kinds, output kinds, and transport kinds.
+  (Follow-up.)
+- [x] Keep unknown future enum values safely ignorable on the frontend. (TS type
+  guards are structural so unknown event kinds hit the `default` branch;
+  `RemoteCommandType` gained `#[serde(other)] Unknown` so a NEW client talking
+  to an OLD server gets a clear "unsupported" response instead of a hard parse
+  failure.)
 
 Acceptance criteria:
 
-- An old remote client can receive a clear unsupported-feature response.
-- A revoked or permission-reduced client updates without reconnecting.
-- New source or output types can be added without editing the broadcast engine.
+- [x] An old remote client can receive a clear unsupported-feature response.
+- [x] A revoked or permission-reduced client updates without reconnecting.
+- [ ] New source or output types can be added without editing the broadcast engine.
 
 ## 7. Persistence Migration Rules
 

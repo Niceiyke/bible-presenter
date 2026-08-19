@@ -100,7 +100,8 @@ export type RemoteEventKind =
   | "controller.changed"
   | "operator.notice"
   | "camera.answer"
-  | "camera.ice";
+  | "camera.ice"
+  | "permissions.changed";
 
 export interface RemoteEvent {
   kind: RemoteEventKind;
@@ -186,6 +187,8 @@ export interface RemoteLowerThirdPayload {
 
 export interface RemoteSnapshot {
   protocol_version: number;
+  /** Server feature capabilities for negotiation (Phase 10). */
+  capabilities?: string[];
   revision: number;
   connected: boolean;
   role: RemoteRole;

@@ -294,6 +294,10 @@ pub async fn remote_set_role(app: AppHandle, state: State<'_, AppState>, device_
         control.hub_publish_controller_changed();
     }
 
+    // Push the new role/permissions to the connected device immediately so its
+    // UI reflects the change without reconnecting (Phase 10).
+    control.publish_permissions_changed(&device_id);
+
     crate::store::log_msg(&app, &format!("Remote device role updated: {} -> {:?}", device_id, role));
     Ok(status_info(&control, control.is_enabled().then(|| control.token_for_display())))
 }
@@ -308,6 +312,9 @@ pub async fn remote_set_permissions(app: AppHandle, state: State<'_, AppState>, 
         return Err(format!("No paired device with id {}", device_id));
     }
     control.persist_devices();
+    // Push the updated permissions to the connected device immediately so its
+    // UI hides/shows controls without reconnecting (Phase 10).
+    control.publish_permissions_changed(&device_id);
     crate::store::log_msg(&app, &format!("Remote device permissions updated: {}", device_id));
     Ok(status_info(&control, control.is_enabled().then(|| control.token_for_display())))
 }

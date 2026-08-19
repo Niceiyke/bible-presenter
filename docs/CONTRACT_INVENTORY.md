@@ -1,4 +1,4 @@
-# Contract Inventory (Phase 0 freeze, updated for Phase 1/2/3/4/5/6/7/8/9)
+# Contract Inventory (Phase 0 freeze, updated for Phase 1/2/3/4/5/6/7/8/9/10)
 
 Status: living inventory — Phases 0-3 of `docs/UNIFIED_PRODUCTION_SUITE_PLAN.md`
 requires recording the current event names, command names, persisted files, and
@@ -374,6 +374,25 @@ tests). Contract:
   files so the backup location is operator-visible.
 - **Open follow-up:** separating searchable metadata from the opaque JSON
   presentation payloads (songs/presentations/scenes/services remain JSON rows).
+
+## 2j. Remote extensibility contracts (Phase 10)
+
+- **Permission push:** `permissions.changed` event (targeted via `publish_to`,
+  does not bump the revision) is published by `remote_set_role` /
+  `remote_set_permissions` with the device's new `role` + `permissions`; the
+  remote client applies it in `applyEvent` so a revoked/permission-reduced
+  device updates without reconnecting.
+- **Search rate limit:** `RemoteControl::allow_read_query` is a per-device
+  sliding-window budget enforced on `bible.search` / `songs.search`, rejecting
+  excess with a `rate_limited` error (mutations keep the existing
+  `allow_mutating` limiter).
+- **Unknown command tolerance:** `RemoteCommandType` gained `#[serde(other)]
+  Unknown`, so a newer client's unknown command deserializes and returns a clear
+  "unsupported" error instead of a hard parse failure; the TS client's
+  structural guards already route unknown event kinds to the `default` branch.
+- **Capability negotiation:** `RemoteSnapshot.capabilities` carries the fixed
+  `REMOTE_CAPABILITIES` feature list (`src-tauri/src/remote/protocol.rs`),
+  mirrored as optional `capabilities?: string[]` in `src/types/remote.ts`.
 
 ## 3. Persisted files under the app data dir
 

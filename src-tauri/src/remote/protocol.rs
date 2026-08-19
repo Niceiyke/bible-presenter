@@ -5,6 +5,20 @@ use serde::{Deserialize, Serialize};
 /// in `src/types/remote.ts`. Bump on any incompatible wire change.
 pub const REMOTE_PROTOCOL_VERSION: u32 = 1;
 
+/// Server feature capabilities for negotiation (Phase 10). Future clients read
+/// `snapshot.capabilities` to decide which UI to offer; old clients ignore it.
+pub const REMOTE_CAPABILITIES: &[&str] = &[
+    "scripture",
+    "songs",
+    "camera",
+    "lower_third",
+    "presentation",
+    "timer",
+    "service",
+    "studio",
+    "permissions_realtime",
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteRole {
@@ -179,6 +193,11 @@ pub enum RemoteCommandType {
     CameraAnswer,
     #[serde(rename = "camera.ice")]
     CameraIce,
+    /// An unknown/future command type from a newer client. Kept so a NEW client
+    /// talking to an OLD server gets a clear "unsupported" response instead of
+    /// a hard parse failure (Phase 10).
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -255,6 +274,11 @@ pub enum RemoteEventKind {
     CameraAnswer,
     #[serde(rename = "camera.ice")]
     CameraIce,
+    /// Pushed to a device immediately after its role/permissions change, so a
+    /// revoked or permission-reduced client updates its UI without reconnecting
+    /// (Phase 10). Payload is the device's new `RemotePermissions`.
+    #[serde(rename = "permissions.changed")]
+    PermissionsChanged,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -476,6 +500,10 @@ fn default_camera_target() -> String {
 #[derive(Debug, Clone, Serialize)]
 pub struct RemoteSnapshot {
     pub protocol_version: u32,
+    /// Server feature capability negotiation (Phase 10): a fixed list of
+    /// feature strings a future client can check before offering UI. New
+    /// features are added here without breaking old clients (which ignore it).
+    pub capabilities: Vec<String>,
     pub revision: u64,
     pub connected: bool,
     pub role: RemoteRole,
@@ -520,6 +548,7 @@ mod tests {
     fn snapshot_serializes_without_panic() {
         let s = RemoteSnapshot {
             protocol_version: REMOTE_PROTOCOL_VERSION,
+            capabilities: REMOTE_CAPABILITIES.iter().map(|s| s.to_string()).collect(),
             revision: 1,
             connected: true,
             role: RemoteRole::Operator,
