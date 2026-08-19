@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import {
   acquireSource,
   describeSourceError,
@@ -45,10 +45,18 @@ export function useCameraSource(
   const isPhone = key ? resolveSourceKind(key) === "phone" : false;
 
   const subscribeCb = useCallback((cb: () => void) => subscribeSource(key ?? "", cb), [key]);
-  const getSnapshotCb = useCallback(
-    () => getSourceSnapshot(key ?? "") ?? { ...IDLE, deviceId: key ?? "" },
-    [key]
-  );
+  // STABLE fallback snapshot while a source is unregistered. `useSyncExternalStore`
+  // re-reads this on every render and compares with Object.is — a freshly
+  // allocated object would appear "changed" forever and loop (React error #185).
+  const fallbackRef = useRef<SourceState | null>(null);
+  const getSnapshotCb = useCallback(() => {
+    const s = getSourceSnapshot(key ?? "");
+    if (s) return s;
+    if (!fallbackRef.current || fallbackRef.current.deviceId !== (key ?? "")) {
+      fallbackRef.current = { ...IDLE, deviceId: key ?? "" };
+    }
+    return fallbackRef.current;
+  }, [key]);
   const snapshot = useSyncExternalStore(subscribeCb, getSnapshotCb);
 
   // Local cameras are acquired (ref-counted) by this consumer. Phone sources
