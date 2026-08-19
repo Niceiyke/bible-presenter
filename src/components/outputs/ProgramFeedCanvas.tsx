@@ -187,11 +187,14 @@ export function ProgramFeedCanvas({
   useEffect(() => {
     if (!cameraStreams) return;
     const entries = Object.entries(cameraStreams);
-    if (entries.length === 0) return;
     let cancelled = false;
-    const next = { ...cameraVideos };
+    const next: Record<string, HTMLVideoElement> = {};
     for (const [deviceId, stream] of entries) {
-      if (next[deviceId]) continue;
+      const existing = cameraVideos[deviceId];
+      if (existing) {
+        next[deviceId] = existing;
+        continue;
+      }
       const vid = document.createElement("video");
       vid.muted = true;
       vid.playsInline = true;
@@ -202,6 +205,18 @@ export function ProgramFeedCanvas({
       vid.srcObject = stream;
       vid.play().catch(() => {});
       next[deviceId] = vid;
+    }
+    // Drop pre-warmed videos whose device left the frame so a camera that is
+    // turned off is fully released (element + stream references) instead of
+    // leaking a playing hidden <video> for every camera ever shown.
+    for (const deviceId of Object.keys(cameraVideos)) {
+      if (!(deviceId in next)) {
+        const stale = cameraVideos[deviceId];
+        stale.pause();
+        stale.removeAttribute("src");
+        stale.srcObject = null;
+        stale.load();
+      }
     }
     setCameraVideos(next);
     return () => {

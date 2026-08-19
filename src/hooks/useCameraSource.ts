@@ -7,6 +7,9 @@ import {
   retrySource,
   subscribeSource,
   resolveSourceKind,
+  CAPTURE_1080P,
+  entryKey,
+  type CaptureQuality,
   type SourceState,
   type SourceStatus,
 } from "../system/sourceRegistry";
@@ -17,6 +20,7 @@ const IDLE: SourceState = {
   stream: null,
   status: "idle",
   errorKind: null,
+  quality: CAPTURE_1080P,
 };
 
 /**
@@ -33,7 +37,8 @@ const IDLE: SourceState = {
  */
 export function useCameraSource(
   deviceId: string | null | undefined,
-  consumerId: string
+  consumerId: string,
+  quality: CaptureQuality = CAPTURE_1080P
 ): {
   stream: MediaStream | null;
   status: SourceStatus;
@@ -41,8 +46,10 @@ export function useCameraSource(
   isPhone: boolean;
   retry: () => void;
 } {
-  const key = deviceId ?? null;
-  const isPhone = key ? resolveSourceKind(key) === "phone" : false;
+  const isPhone = deviceId ? resolveSourceKind(deviceId) === "phone" : false;
+  // Local sources are keyed by deviceId + quality (a device can be open at
+  // 1080p and 720p at once); phone/native/ndi sources stay keyed by the bare id.
+  const key = deviceId ? (resolveSourceKind(deviceId) === "local" ? entryKey(deviceId, quality) : deviceId) : null;
 
   const subscribeCb = useCallback((cb: () => void) => subscribeSource(key ?? "", cb), [key]);
   // STABLE fallback snapshot while a source is unregistered. `useSyncExternalStore`
@@ -52,24 +59,28 @@ export function useCameraSource(
   const getSnapshotCb = useCallback(() => {
     const s = getSourceSnapshot(key ?? "");
     if (s) return s;
-    if (!fallbackRef.current || fallbackRef.current.deviceId !== (key ?? "")) {
-      fallbackRef.current = { ...IDLE, deviceId: key ?? "" };
+    if (
+      !fallbackRef.current ||
+      fallbackRef.current.deviceId !== (deviceId ?? "") ||
+      fallbackRef.current.quality !== quality
+    ) {
+      fallbackRef.current = { ...IDLE, deviceId: deviceId ?? "", quality };
     }
     return fallbackRef.current;
-  }, [key]);
+  }, [key, deviceId, quality]);
   const snapshot = useSyncExternalStore(subscribeCb, getSnapshotCb);
 
   // Local cameras are acquired (ref-counted) by this consumer. Phone sources
   // are registered by the WebRTC host; native/ndi are reserved.
   useEffect(() => {
-    if (!key || isPhone || resolveSourceKind(key) !== "local") return;
-    acquireSource(key, consumerId);
-    return () => releaseSource(key, consumerId);
-  }, [key, isPhone, consumerId]);
+    if (!key || isPhone || resolveSourceKind(deviceId!) !== "local") return;
+    acquireSource(deviceId!, consumerId, quality);
+    return () => releaseSource(deviceId!, consumerId, quality);
+  }, [key, isPhone, consumerId, quality, deviceId]);
 
   const retry = useCallback(() => {
-    if (key && !isPhone && resolveSourceKind(key) === "local") retrySource(key);
-  }, [key, isPhone]);
+    if (deviceId && !isPhone && resolveSourceKind(deviceId) === "local") retrySource(deviceId, quality);
+  }, [deviceId, isPhone, quality]);
 
   return {
     stream: snapshot.stream,

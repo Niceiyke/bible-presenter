@@ -8,6 +8,10 @@ import {
   subscribeAllSources,
   subscribeSource,
   resolveSourceKind,
+  CAPTURE_1080P,
+  PREVIEW_720P,
+  entryKey,
+  type CaptureQuality,
   type SourceState,
   type SourceStatus,
 } from "../system/sourceRegistry";
@@ -20,6 +24,7 @@ const EMPTY: SourceState = {
   stream: null,
   status: "idle",
   errorKind: null,
+  quality: PREVIEW_720P,
 };
 
 /**
@@ -36,7 +41,8 @@ const EMPTY: SourceState = {
  */
 export function useSharedLocalCameraStream(
   deviceId: string | null | undefined,
-  consumerId: string
+  consumerId: string,
+  quality: CaptureQuality = PREVIEW_720P
 ): {
   stream: MediaStream | null;
   error: CameraStreamError;
@@ -44,7 +50,7 @@ export function useSharedLocalCameraStream(
   status: SourceStatus;
   retry: () => void;
 } {
-  const key = deviceId && resolveSourceKind(deviceId) === "local" ? deviceId : null;
+  const key = deviceId && resolveSourceKind(deviceId) === "local" ? entryKey(deviceId, quality) : null;
 
   const subscribeCb = useCallback(
     (cb: () => void) => subscribeSource(key ?? "", cb),
@@ -57,14 +63,14 @@ export function useSharedLocalCameraStream(
   const snapshot = useSyncExternalStore(subscribeCb, getSnapshotCb);
 
   useEffect(() => {
-    if (!key) return;
-    acquireSource(key, consumerId);
-    return () => releaseSource(key, consumerId);
-  }, [key, consumerId]);
+    if (!key || !deviceId) return;
+    acquireSource(deviceId, consumerId, quality);
+    return () => releaseSource(deviceId, consumerId, quality);
+  }, [key, deviceId, consumerId, quality]);
 
   const retry = useCallback(() => {
-    if (key) retrySource(key);
-  }, [key]);
+    if (deviceId) retrySource(deviceId, quality);
+  }, [deviceId, quality]);
 
   return {
     stream: snapshot.stream,
@@ -84,25 +90,26 @@ export function useSharedLocalCameraStream(
  */
 export function useSharedLocalCameraStreams(
   deviceIds: string[],
-  consumerId: string
+  consumerId: string,
+  quality: CaptureQuality = CAPTURE_1080P
 ): Record<string, MediaStream> {
   const ids = [...new Set(deviceIds.filter((id) => id && resolveSourceKind(id) === "local"))];
   const key = ids.join("|");
 
   const subscribeCb = useCallback((cb: () => void) => subscribeAllSources(cb), []);
-  const snapshot = useSyncExternalStore(subscribeCb, getAllSourceStreams, getAllSourceStreams);
+  const snapshot = useSyncExternalStore(subscribeAllSources, getAllSourceStreams, getAllSourceStreams);
 
   useEffect(() => {
     for (const id of ids) {
-      acquireSource(id, consumerId);
+      acquireSource(id, consumerId, quality);
     }
     return () => {
       for (const id of ids) {
-        releaseSource(id, consumerId);
+        releaseSource(id, consumerId, quality);
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, consumerId]);
+  }, [key, consumerId, quality]);
 
   return snapshot;
 }

@@ -46,7 +46,28 @@ export interface SourceState {
   stream: MediaStream | null;
   status: SourceStatus;
   errorKind: SourceErrorKind | null;
+  /** Capture resolution/fps this entry was opened at (local sources only). */
+  quality: CaptureQuality;
 }
+
+/** Capture resolution/fps for a local source. `getUserMedia` honors these as
+ *  ideal-with-max so a camera that cannot reach the target degrades gracefully
+ *  instead of erroring. */
+export interface CaptureQuality {
+  width: number;
+  height: number;
+  fps: number;
+}
+
+/** Full-res capture bus: the projected/on-air output, the compositor
+ *  (recording/streaming), and anything that must match broadcast fidelity. */
+export const CAPTURE_1080P: CaptureQuality = { width: 1920, height: 1080, fps: 30 };
+
+/** Lightweight preview tier: operator cockpit, Camera tab, feed tiles, A/B
+ *  switcher, and stage monitors. A 720p stream costs a fraction of the 1080p
+ *  decode while every surface below still renders at full quality (decode, not
+ *  display resolution, is the expensive part). */
+export const PREVIEW_720P: CaptureQuality = { width: 1280, height: 720, fps: 30 };
 
 export function describeSourceError(kind: SourceErrorKind | null): string | null {
   if (kind === "permission") return "Camera permission denied.";
@@ -90,21 +111,45 @@ interface InternalEntry {
   reconnectTimer?: ReturnType<typeof setTimeout>;
 }
 
+/** Registry key for a local source: deviceId + capture quality, so one device
+ *  can be open at 1080p (broadcast/compositor) and 720p (previews) at once.
+ *  Phone/native/ndi sources stay keyed by the bare device id. */
+export const entryKey = (deviceId: string, q: CaptureQuality): string =>
+  `${deviceId}@${q.width}x${q.height}@${q.fps}`;
+
+const hasQuality = (key: string): boolean => key.includes("@");
+const deviceIdOf = (key: string): string => key.split("@")[0];
+
+/** Area comparison for "best entry" resolution arbitration. */
+function better(a: InternalEntry, b: InternalEntry): boolean {
+  const aq = a.state.quality;
+  const bq = b.state.quality;
+  return aq.width * aq.height > bq.width * bq.height;
+}
+
 const entries = new Map<string, InternalEntry>();
 const listeners = new Map<string, Set<() => void>>();
 const allListeners = new Set<() => void>();
 let allSnapshot: Record<string, MediaStream> = {};
 
-function notify(deviceId: string) {
-  listeners.get(deviceId)?.forEach((cb) => cb());
+function notify(key: string) {
+  listeners.get(key)?.forEach((cb) => cb());
+  // Device-wide listeners (bare deviceId subscriptions) fire for ANY quality
+  // change of that device, so `useSourceStatus` stays simple.
+  listeners.get(deviceIdOf(key))?.forEach((cb) => cb());
   notifyAll();
 }
 
 function notifyAll() {
-  const next: Record<string, MediaStream> = {};
+  const bestPerDevice = new Map<string, { entry: InternalEntry; stream: MediaStream }>();
   for (const entry of entries.values()) {
-    if (entry.state.stream) next[entry.state.deviceId] = entry.state.stream;
+    if (!entry.state.stream) continue;
+    const id = entry.state.deviceId;
+    const cur = bestPerDevice.get(id);
+    if (!cur || better(entry, cur.entry)) bestPerDevice.set(id, { entry, stream: entry.state.stream });
   }
+  const next: Record<string, MediaStream> = {};
+  for (const [id, best] of bestPerDevice) next[id] = best.stream;
   allSnapshot = next;
   allListeners.forEach((cb) => cb());
 }
@@ -129,9 +174,18 @@ export function subscribeAllSources(cb: () => void): () => void {
   };
 }
 
-/** Stable snapshot reference for a device (unchanged until its state changes). */
-export function getSourceSnapshot(deviceId: string): SourceState | null {
-  return entries.get(deviceId)?.state ?? null;
+/** Stable snapshot reference for a source. Pass a full entry key (deviceId +
+ *  quality) for an exact entry, or a bare device id to get the highest-quality
+ *  entry currently open for that device. */
+export function getSourceSnapshot(deviceIdOrKey: string): SourceState | null {
+  if (hasQuality(deviceIdOrKey)) return entries.get(deviceIdOrKey)?.state ?? null;
+  let best: InternalEntry | null = null;
+  for (const entry of entries.values()) {
+    if (entry.state.deviceId === deviceIdOrKey && (!best || better(entry, best))) {
+      best = entry;
+    }
+  }
+  return best?.state ?? null;
 }
 
 /** Map of currently-connected streams (used by the bulk compositor path). */
@@ -162,15 +216,25 @@ function clearEntry(deviceId: string): void {
   notify(deviceId);
 }
 
-/** Open a local camera once; the track's `ended` fires a bounded reconnect. */
-function openLocal(deviceId: string): void {
-  const entry = entries.get(deviceId);
+/** Open a local camera once at a specific quality; the track's `ended` fires a
+ *  bounded reconnect. The device is keyed by deviceId + quality so a camera can
+ *  be open at 1080p (broadcast/compositor) and 720p (previews) simultaneously
+ *  without duplicating either stream. */
+function openLocal(key: string, deviceId: string, q: CaptureQuality): void {
+  const entry = entries.get(key);
   if (!entry) return;
-  setState(deviceId, { status: "opening", stream: null, errorKind: null });
+  setState(key, { status: "opening", stream: null, errorKind: null });
   navigator.mediaDevices
-    .getUserMedia({ video: { deviceId: { exact: deviceId } } })
+    .getUserMedia({
+      video: {
+        deviceId: { exact: deviceId },
+        width: { ideal: q.width, max: q.width },
+        height: { ideal: q.height, max: q.height },
+        frameRate: { ideal: q.fps, max: q.fps },
+      },
+    })
     .then((stream) => {
-      const current = entries.get(deviceId);
+      const current = entries.get(key);
       // Drop the stream if every consumer vanished while it was opening.
       if (!current || current.consumers.size === 0) {
         stream.getTracks().forEach((t) => t.stop());
@@ -179,77 +243,93 @@ function openLocal(deviceId: string): void {
       // React to a device being unplugged / track ending with one auto-retry.
       stream.getVideoTracks().forEach((track) => {
         track.onended = () => {
-          const live = entries.get(deviceId);
+          const live = entries.get(key);
           if (!live || live.consumers.size === 0) return;
           stopStream(live.state);
-          setState(deviceId, { stream: null, status: "reconnecting", errorKind: null });
-          live.reconnectTimer = setTimeout(() => openLocal(deviceId), 750);
+          setState(key, { stream: null, status: "reconnecting", errorKind: null });
+          live.reconnectTimer = setTimeout(() => openLocal(key, deviceId, q), 750);
         };
       });
-      setState(deviceId, { stream, status: "connected", errorKind: null });
+      setState(key, { stream, status: "connected", errorKind: null });
       notifyAll();
     })
     .catch((err) => {
-      const current = entries.get(deviceId);
+      const current = entries.get(key);
       if (!current || current.consumers.size === 0) return;
-      setState(deviceId, { stream: null, status: "error", errorKind: mapSourceError(err) });
+      setState(key, { stream: null, status: "error", errorKind: mapSourceError(err) });
     });
 }
 
 /**
- * Acquire a local camera for a consumer. The device is opened once (ref-counted);
- * when the last consumer releases it the stream is closed. Phone/native/ndi ids
- * are ignored for acquisition.
+ * Acquire a local camera for a consumer at the requested quality. The device is
+ * opened once per (device, quality) — ref-counted — so a camera can feed the
+ * 1080p capture bus and the 720p preview tier at the same time without
+ * duplication; when the last consumer releases its hold the stream closes.
+ * Phone/native/ndi ids are ignored for acquisition.
  */
-export function acquireSource(deviceId: string, consumerId: string): void {
+export function acquireSource(
+  deviceId: string,
+  consumerId: string,
+  quality: CaptureQuality = CAPTURE_1080P
+): void {
   const kind = resolveSourceKind(deviceId);
   if (kind !== "local") return;
-  let entry = entries.get(deviceId);
+  const key = entryKey(deviceId, quality);
+  let entry = entries.get(key);
   if (!entry) {
     entry = {
-      state: { deviceId, kind, stream: null, status: "idle", errorKind: null },
+      state: { deviceId, kind, stream: null, status: "idle", errorKind: null, quality },
       consumers: new Set(),
     };
-    entries.set(deviceId, entry);
+    entries.set(key, entry);
   }
   entry.consumers.add(consumerId);
   if (entry.state.status === "idle") {
-    openLocal(deviceId);
+    openLocal(key, deviceId, quality);
   }
-  notify(deviceId);
+  notify(key);
 }
 
 /** Release a consumer's hold on a local camera; closes it when the last one
  *  leaves, so a camera is never left open when nothing is watching it. */
-export function releaseSource(deviceId: string, consumerId: string): void {
+export function releaseSource(
+  deviceId: string,
+  consumerId: string,
+  quality: CaptureQuality = CAPTURE_1080P
+): void {
   const kind = resolveSourceKind(deviceId);
   if (kind !== "local") return;
-  const entry = entries.get(deviceId);
+  const key = entryKey(deviceId, quality);
+  const entry = entries.get(key);
   if (!entry) return;
   entry.consumers.delete(consumerId);
   if (entry.consumers.size === 0) {
-    clearEntry(deviceId);
+    clearEntry(key);
   } else {
-    notify(deviceId);
+    notify(key);
   }
 }
 
 /** Explicit re-open after a permission denial / device loss. */
-export function retrySource(deviceId: string): void {
+export function retrySource(
+  deviceId: string,
+  quality: CaptureQuality = CAPTURE_1080P
+): void {
   if (resolveSourceKind(deviceId) !== "local") return;
-  let entry = entries.get(deviceId);
+  const key = entryKey(deviceId, quality);
+  let entry = entries.get(key);
   if (!entry) {
     entry = {
-      state: { deviceId, kind: "local", stream: null, status: "idle", errorKind: null },
+      state: { deviceId, kind: "local", stream: null, status: "idle", errorKind: null, quality },
       consumers: new Set(),
     };
-    entries.set(deviceId, entry);
+    entries.set(key, entry);
   }
   if (entry.reconnectTimer) {
     clearTimeout(entry.reconnectTimer);
     entry.reconnectTimer = undefined;
   }
-  openLocal(deviceId);
+  openLocal(key, deviceId, quality);
 }
 
 /**
@@ -267,7 +347,7 @@ export function setPhoneSource(
   let entry = entries.get(deviceId);
   if (!entry) {
     entry = {
-      state: { deviceId, kind: "phone", stream: null, status: "idle", errorKind: null },
+      state: { deviceId, kind: "phone", stream: null, status: "idle", errorKind: null, quality: CAPTURE_1080P },
       consumers: new Set(),
     };
     entries.set(deviceId, entry);
@@ -345,7 +425,9 @@ export async function primeCameraPermission(): Promise<void> {
     return;
   }
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: PREVIEW_720P.width }, height: { ideal: PREVIEW_720P.height } },
+    });
     stream.getTracks().forEach((t) => t.stop());
   } catch {
     // Denied / no device — mark primed so we don't re-prompt every render.
