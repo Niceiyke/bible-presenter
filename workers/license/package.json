@@ -10,7 +10,8 @@
     "test": "node scripts/test.mjs",
     "issue": "node scripts/issue.mjs",
     "revoke": "node scripts/revoke.mjs",
-    "extend": "node scripts/extend.mjs"
+    "extend": "node scripts/extend.mjs",
+    "generate-keypair": "node scripts/generate-keypair.mjs"
   },
   "devDependencies": {
     "wrangler": "^3.80.0"

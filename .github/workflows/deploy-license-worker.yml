@@ -38,7 +38,10 @@ jobs:
         shell: bash
         working-directory: workers/license
         run: |
-          echo "ADMIN_TOKEN=local-test-token" > .dev.vars
+          cat > .dev.vars <<'EOF'
+          ADMIN_TOKEN=local-test-token
+          LICENSE_SIGNING_KEY={"kty":"EC","x":"rW_z3rsY47WpzfBryb_TPlpd0bZhFFkJ8um-PDLimLU","y":"_Jenx-iVyufDt3Bu0elqAQXgqMeUQsr2W4FrO9RojGU","crv":"P-256","d":"EmqmIxuc3Kqyj4vGlykDoRjK0tOX1AsyzQIk9R6q-ng"}
+          EOF
           npm test
           rm -f .dev.vars
 
@@ -52,6 +55,18 @@ jobs:
             echo "$ADMIN_TOKEN" | npx wrangler secret put ADMIN_TOKEN
           else
             echo "::warning::ADMIN_TOKEN secret not set in GitHub; skipping secret write."
+          fi
+
+      - name: set LICENSE_SIGNING_KEY secret (from GitHub secret)
+        shell: bash
+        working-directory: workers/license
+        env:
+          LICENSE_SIGNING_KEY: ${{ secrets.LICENSE_SIGNING_KEY }}
+        run: |
+          if [ -n "$LICENSE_SIGNING_KEY" ]; then
+            echo "$LICENSE_SIGNING_KEY" | npx wrangler secret put LICENSE_SIGNING_KEY
+          else
+            echo "::warning::LICENSE_SIGNING_KEY secret not set in GitHub; deployed worker cannot sign /validate responses."
           fi
 
       - name: deploy worker

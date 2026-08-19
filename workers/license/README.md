@@ -127,12 +127,37 @@ reaches the page still needs the token to do anything.
 
 | Method | Path        | Auth               | Body / notes                                         |
 | ------ | ----------- | ------------------ | ---------------------------------------------------- |
-| POST   | `/validate` | none (app)         | `{ license_key, machine_id, app_name, app_version }` → includes `tier` |
+| POST   | `/validate` | none (app)         | `{ license_key, machine_id, app_name, app_version }` → includes `tier` **and `signature`** (ECDSA P-256 over `license_key\nexpires_at\nissued_at\nchurch_name\nemail\ntier\nmax_machines`) |
 | POST   | `/issue`    | Bearer `ADMIN_TOKEN` | `{ church_name, email, duration_days, max_machines, tier, note }` → returns the key (machines clamped by tier) |
 | POST   | `/revoke`   | Bearer `ADMIN_TOKEN` | `{ license_key, revoked?: bool }`                    |
 | POST   | `/extend`   | Bearer `ADMIN_TOKEN` | `{ license_key, days?, tier? }` — add days and/or change plan (at least one required) |
 | GET    | `/licenses` | Bearer `ADMIN_TOKEN` | Lists every key + registered machines + tier        |
 | GET    | `/expiring?days=30` | Bearer `ADMIN_TOKEN` | Lists non-revoked keys expiring within `days`     |
+
+## Generating / rotating the signing key
+
+Every `/validate` response is signed with the `LICENSE_SIGNING_KEY` (an ECDSA
+P-256 private JWK) so the desktop app can detect hand-edited licenses. The
+app embeds the matching **public** key in `src-tauri/src/license_crypto.rs`
+(`LICENSE_PUB_KEY_POINT_HEX`). Generate a pair and wire it up with:
+
+```bash
+npm run generate-keypair        # prints the private JWK + public point hex
+```
+
+1. Add the **private JWK** as a GitHub Actions secret `LICENSE_SIGNING_KEY`
+   (Settings → Secrets → Actions → New repository secret).
+2. Add the **public point hex** into `src-tauri/src/license_crypto.rs`
+   (`LICENSE_PUB_KEY_POINT_HEX`) and bump `rs`/`s` tests only if you regenerate
+   test vectors.
+3. Push to `main` — `.github/workflows/deploy-license-worker.yml` runs the
+   tests, pushes the secret to the deployed Worker via
+   `wrangler secret put LICENSE_SIGNING_KEY`, and deploys.
+4. On rotation: update the GitHub secret AND the embedded public point together
+   — the app rejects signatures that don't match its embedded key.
+
+The local `.dev.vars` (gitignored) and the CI test step carry the same keypair
+as the tests' embedded `PUB_JWK`, so `npm test` verifies end-to-end.
 
 ## Extending / revoking
 
