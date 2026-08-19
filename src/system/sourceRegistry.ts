@@ -317,4 +317,37 @@ export function resetSourceRegistry(): void {
   listeners.clear();
   allListeners.clear();
   allSnapshot = {};
+  permissionPrimed = false;
+}
+
+let permissionPrimed = false;
+
+/**
+ * Request camera permission ONCE, routed through the registry policy (WP4).
+ *
+ * Browsers only reveal camera device labels (and, on some platforms, the
+ * device list at all) after the user grants `getUserMedia`. The operator shell
+ * must therefore warm permission before enumerating, or a first-run user sees
+ * no webcam. This is a deliberate, tracked permission warm-up — it opens the
+ * default camera and immediately stops the track — NOT a second acquisition
+ * path (the per-device `acquireSource` remains the only thing that keeps a
+ * stream open). Idempotent: it primes once per session and never fights the
+ * registry's real acquisitions.
+ */
+export async function primeCameraPermission(): Promise<void> {
+  if (permissionPrimed) return;
+  permissionPrimed = true;
+  if (
+    typeof navigator === "undefined" ||
+    !navigator.mediaDevices ||
+    typeof navigator.mediaDevices.getUserMedia !== "function"
+  ) {
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    stream.getTracks().forEach((t) => t.stop());
+  } catch {
+    // Denied / no device — mark primed so we don't re-prompt every render.
+  }
 }

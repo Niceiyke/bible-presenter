@@ -1,5 +1,6 @@
 import { StateCreator } from "zustand";
 import { AppStore } from "../index";
+import { primeCameraPermission } from "../../system/sourceRegistry";
 
 export interface CameraDeviceInfo {
   deviceId: string;
@@ -44,10 +45,12 @@ export const createCameraSlice: StateCreator<AppStore, [], [], CameraSlice> = (s
   })),
   refreshCameras: async () => {
     try {
-      // Enumerate devices only (WP4 P1-2): do NOT open a temporary capture here.
-      // The source registry opens the device once per webview (which also grants
-      // label access), so opening a throwaway getUserMedia here would be a
-      // second, unref-counted acquisition path that fights the registry.
+      // WP4 P1-2: enumerate devices without opening a throwaway, unref-counted
+      // capture. But browsers only reveal camera labels (and sometimes the list
+      // itself) after the user grants permission — so route ONE permission
+      // request through the source-registry policy first, then enumerate. This
+      // warms the webcam list without becoming a second acquisition path.
+      await primeCameraPermission();
       const devices = await navigator.mediaDevices.enumerateDevices();
       const cameras = devices
         .filter(device => device.kind === "videoinput")
