@@ -1032,8 +1032,15 @@ impl MediaScheduleStore {
 
         let db_path = app_data_dir.join("wordlyte_data.db");
         let data_db = Arc::new(DataDb::open(&db_path).map_err(|e| anyhow::anyhow!(e))?);
+        // Phase 9 startup validation: a database that opened but cannot answer
+        // a sanity query is reported as a startup issue (never silently making
+        // the workspace appear empty).
+        let startup_issues = parking_lot::Mutex::new(Vec::new());
+        if let Err(e) = data_db.validate() {
+            startup_issues.lock().push(format!("Data store check failed: {e}"));
+        }
 
-        let store = Self { app_data_dir, media_dir, thumbnails_dir, data_db, startup_issues: parking_lot::Mutex::new(Vec::new()) };
+        let store = Self { app_data_dir, media_dir, thumbnails_dir, data_db, startup_issues };
         store.try_migrate_from_json()?;
         Ok(store)
     }
@@ -1620,16 +1627,22 @@ impl MediaScheduleStore {
     }
 
     pub fn bulk_update_media(&self, ids: Vec<String>, tags_to_add: Vec<String>, tags_to_remove: Vec<String>, category: Option<String>) -> Result<()> {
+        // Compute each id's merged tags/category first (read-only), then apply
+        // all rows in a single transaction so a bulk tag change is
+        // all-or-nothing (Phase 9).
+        let mut updates: Vec<(String, String, Option<String>)> = Vec::with_capacity(ids.len());
         for id in &ids {
             if let Ok(existing_tags) = self.data_db.get_media_tags(id) {
                 let mut tags: Vec<String> = serde_json::from_str(&existing_tags).unwrap_or_default();
                 for tag in &tags_to_add { if !tags.contains(tag) { tags.push(tag.clone()); } }
                 tags.retain(|t| !tags_to_remove.contains(t));
                 let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
-                let _ = self.data_db.update_media_metadata(id, &None, &tags_json, &category);
+                updates.push((id.clone(), tags_json, category.clone()));
             }
         }
-        Ok(())
+        self.data_db
+            .bulk_set_media_metadata(&updates)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     // ---- Settings ----

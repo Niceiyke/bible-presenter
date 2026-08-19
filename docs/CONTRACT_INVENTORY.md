@@ -1,4 +1,4 @@
-# Contract Inventory (Phase 0 freeze, updated for Phase 1/2/3/4/5/6/7/8)
+# Contract Inventory (Phase 0 freeze, updated for Phase 1/2/3/4/5/6/7/8/9)
 
 Status: living inventory — Phases 0-3 of `docs/UNIFIED_PRODUCTION_SUITE_PLAN.md`
 requires recording the current event names, command names, persisted files, and
@@ -343,6 +343,30 @@ tests). Contract:
 - **`FirstRunWizard`** (`src/components/FirstRunWizard.tsx`): one-time,
   non-blocking onboarding shown after init when `pref_firstRunDismissed` is
   unset; its primary action creates a service and opens the Service Plan.
+
+## 2i. Persistence, migration, and recovery (Phase 9)
+
+- **Versioned migration:** the data DB uses `PRAGMA user_version` (currently 1),
+  the Bible DB version 2. `DataDb::migrate` runs the whole schema setup +
+  additive `ALTER TABLE` + version bump inside a **single transaction**, so a
+  failed migration rolls back and preserves the previous database.
+- **Automatic backup:** before any schema migration `DataDb` copies the on-disk
+  DB to a timestamped `wordlyte_data.db.pre-migrate-<ts>.bak` sibling
+  (best-effort; fresh empty files are skipped). Backups land in the app data
+  dir beside the database.
+- **Transactions:** `DataDb::with_tx(f)` runs a closure in one SQLite
+  transaction (commit on Ok, rollback on Err). `delete_media_bulk` and
+  `bulk_update_media` (via `bulk_set_media_metadata`) are all-or-nothing.
+- **Startup validation:** `DataDb::validate` runs a sanity query after open and
+  `MediaScheduleStore::new` records a startup issue if it fails, so a broken
+  store is reported instead of silently showing an empty workspace.
+- **Atomic files:** `outputs.json` is written temp+rename (`write_json_atomic`).
+- **Recovery:** corruption is quarantined (renamed aside, never deleted) and
+  recreated; `startup_issues` + the crash `RecoveryModal` surface problems.
+- **Open follow-ups:** separating searchable metadata from opaque JSON payloads,
+  a formal durable-settings repository, live Bible re-open after download
+  (FTS rebuild already runs in the background without restart), and surfacing
+  the backup location to the operator.
 
 ## 3. Persisted files under the app data dir
 

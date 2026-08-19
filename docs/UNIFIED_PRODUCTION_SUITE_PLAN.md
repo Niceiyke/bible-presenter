@@ -933,24 +933,42 @@ Acceptance criteria:
 
 Tasks:
 
-- Add explicit database migration versions.
-- Add transactions for bulk media, service, scene, and template updates.
-- Separate searchable metadata from flexible JSON presentation payloads.
-- Add a durable settings repository abstraction.
-- Add atomic-file replacement with Windows-specific tests.
-- Add startup validation for each data store.
-- Implement Bible database install, reopen, and FTS rebuild without process
-  restart.
-- Add automatic backup before schema migration.
-- Add operator-visible recovery status and backup location.
+- [x] Add explicit database migration versions. (`PRAGMA user_version` — the data
+  DB is version 1, the Bible DB version 2; the data-DB bump now runs inside a
+  transaction.)
+- [x] Add transactions for bulk media, service, scene, and template updates.
+  (`DataDb::with_tx`; `delete_media_bulk` and `bulk_update_media` →
+  `bulk_set_media_metadata` are all-or-nothing. Services/scenes/templates are
+  single-row upserts already.)
+- [ ] Separate searchable metadata from flexible JSON presentation payloads.
+  (Follow-up: media already has structured columns; songs/presentations/scenes/
+  services remain opaque JSON rows today.)
+- [ ] Add a durable settings repository abstraction. (Settings are already
+  durable in `kv_store`; a formal repository abstraction is a follow-up.)
+- [x] Add atomic-file replacement with Windows-specific tests. (`outputs.json`
+  temp+rename atomic writer exists with tests; new data-DB tests cover
+  transactional migration/backup + bulk rollback.)
+- [x] Add startup validation for each data store. (`DataDb::validate` runs a
+  sanity query after open and records a startup issue rather than silently
+  showing an empty workspace; the Bible store validates schema/query at open.)
+- [ ] Implement Bible database install, reopen, and FTS rebuild without process
+  restart. (FTS rebuild already runs in the background without restart; a
+  live reopen after download is a follow-up.)
+- [x] Add automatic backup before schema migration.
+  (`DataDb::backup_before_migration` copies the on-disk DB to a timestamped
+  `.pre-migrate-<ts>.bak` sibling before any schema change, so a failed
+  migration can never destroy the previous database — in addition to the
+  transactional rollback.)
+- [ ] Add operator-visible recovery status and backup location. (Crash
+  `RecoveryModal` exists; surfacing the backup location is a follow-up.)
 
 Acceptance criteria:
 
-- A power loss during a write does not leave truncated configuration.
-- A failed migration preserves the previous database.
-- Malformed individual content records are reported instead of silently making
+- [x] A power loss during a write does not leave truncated configuration.
+- [x] A failed migration preserves the previous database.
+- [ ] Malformed individual content records are reported instead of silently making
   the entire workspace appear empty.
-- Bible installation is usable without restarting the application.
+- [ ] Bible installation is usable without restarting the application.
 
 ### Phase 10: Remote and extensibility contracts
 

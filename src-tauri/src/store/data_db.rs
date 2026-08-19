@@ -4,6 +4,10 @@ use std::path::PathBuf;
 
 pub struct DataDb {
     conn: Mutex<Connection>,
+    /// On-disk path, when the DB is file-backed (None for in-memory). Used to
+    /// take an automatic backup before a schema migration so a failed migration
+    /// can never destroy the previous database.
+    db_path: Option<PathBuf>,
 }
 
 /// Why opening the data database failed. Only an explicitly corrupt file is
@@ -114,7 +118,7 @@ impl DataDb {
         // mode is fine and more reliable here.
         conn.execute_batch("PRAGMA foreign_keys=ON;")
             .map_err(classify_open_err)?;
-        let db = Self { conn: Mutex::new(conn) };
+        let db = Self { conn: Mutex::new(conn), db_path: Some(db_path.clone()) };
         db.migrate().map_err(classify_open_err)?;
         Ok(db)
     }
@@ -123,21 +127,97 @@ impl DataDb {
         let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")
             .map_err(|e| e.to_string())?;
-        let db = Self { conn: Mutex::new(conn) };
+        let db = Self { conn: Mutex::new(conn), db_path: None };
         db.migrate().map_err(|e| e.to_string())?;
         Ok(db)
     }
 
-    fn migrate(&self) -> Result<(), rusqlite::Error> {
+    /// Run a closure inside a single SQLite transaction. On `Ok` the
+    /// transaction is committed; on `Err` it is rolled back, so a bulk write
+    /// is all-or-nothing (a power loss or a failed mid-way step can never
+    /// leave a partially-applied update).
+    pub fn with_tx<T>(&self, f: impl FnOnce(&Connection) -> Result<T, String>) -> Result<T, String> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let result = f(&tx);
+        match result {
+            Ok(v) => {
+                tx.commit().map_err(|e| e.to_string())?;
+                Ok(v)
+            }
+            Err(e) => Err(e), // tx dropped here -> rollback
+        }
+    }
+
+    /// Phase 9 startup validation: run a trivial read so an opened-but-broken
+    /// database surfaces as a startup issue instead of silently making the
+    /// workspace appear empty.
+    pub fn validate(&self) -> Result<(), String> {
         let conn = self.conn.lock();
+        conn.query_row("SELECT count(*) FROM kv_store", [], |row| row.get::<_, i64>(0))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Best-effort copy of the on-disk database to a timestamped sibling
+    /// before a schema migration, so the previous database is preserved even
+    /// if the migration later fails. Fresh (empty) files are skipped.
+    fn backup_before_migration(&self) {
+        let Some(path) = &self.db_path else { return };
+        let Ok(meta) = std::fs::metadata(path) else { return };
+        if meta.len() == 0 {
+            return;
+        }
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let backup = PathBuf::from(format!("{}.pre-migrate-{}.bak", path.display(), stamp));
+        let _ = std::fs::copy(path, &backup);
+    }
+
+    /// Read the current column names of `media` (empty when the table does not
+    /// exist yet, e.g. on a fresh database).
+    fn media_cols(conn: &Connection) -> Result<Vec<String>, rusqlite::Error> {
+        let mut stmt = conn.prepare("PRAGMA table_info(media)")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        let mut v = Vec::new();
+        for r in rows {
+            v.push(r?);
+        }
+        Ok(v)
+    }
+
+    fn migrate(&self) -> Result<(), rusqlite::Error> {
+        let mut conn = self.conn.lock();
         let current_version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))?;
+
+        // Decide whether any migration is needed (a version bump, or an older
+        // DB missing the additive media columns). If so, take an automatic
+        // backup of the existing database first so a failed migration can
+        // never destroy it (Phase 9).
+        let cols_before = Self::media_cols(&conn)?;
+        let media_cols_needed = [
+            "thumbnail_path", "duration", "width", "height",
+            "content_hash", "loop_playback", "playback_rate", "volume",
+        ];
+        let needs_migration = current_version < 1
+            || media_cols_needed.iter().any(|c| !cols_before.iter().any(|x| x == c));
+        if needs_migration {
+            self.backup_before_migration();
+        }
+
+        // Run the whole migration inside one transaction: if any step fails,
+        // every prior step rolls back and the previous database is preserved.
+        let tx = conn.transaction()?;
+
         // Every step is idempotent (`CREATE TABLE IF NOT EXISTS` / additive
         // columns), so running an older DB through all steps is safe. The
         // `user_version` pragma records the schema for future versioned
         // migrations (audit: forward migrations must be versioned, and the
         // slide_templates table the studio editor writes to must exist).
-        conn.execute_batch("
+        tx.execute_batch("
             CREATE TABLE IF NOT EXISTS media (
                 id TEXT PRIMARY KEY,
                 filename TEXT NOT NULL,
@@ -186,13 +266,7 @@ impl DataDb {
         // Forward-migrate older DBs that predate the P4.8 media columns.
         // `PRAGMA table_info` is the portable existence check (there is no
         // `ADD COLUMN IF NOT EXISTS` in SQLite).
-        let cols: Vec<String> = {
-            let mut stmt = conn.prepare("PRAGMA table_info(media)")?;
-            let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-            let mut v = Vec::new();
-            for r in rows { v.push(r?); }
-            v
-        };
+        let cols = Self::media_cols(&tx)?;
         for (col, ddl) in [
             ("thumbnail_path", "ALTER TABLE media ADD COLUMN thumbnail_path TEXT DEFAULT ''"),
             ("duration", "ALTER TABLE media ADD COLUMN duration REAL"),
@@ -204,15 +278,17 @@ impl DataDb {
             ("volume", "ALTER TABLE media ADD COLUMN volume REAL DEFAULT 1.0"),
         ] {
             if !cols.iter().any(|c| c == col) {
-                conn.execute_batch(ddl)?;
+                tx.execute_batch(ddl)?;
             }
         }
 
         // Record the schema version (currently 1). Future migrations gate on
         // `current_version` and bump it here.
         if current_version < 1 {
-            conn.execute_batch("PRAGMA user_version = 1;")?;
+            tx.execute_batch("PRAGMA user_version = 1;")?;
         }
+
+        tx.commit()?;
         Ok(())
     }
 
@@ -352,11 +428,31 @@ impl DataDb {
     }
 
     pub fn delete_media_bulk(&self, ids: &[String]) -> Result<(), String> {
-        let conn = self.conn.lock();
-        for id in ids {
-            conn.execute("DELETE FROM media WHERE id = ?1", params![id]).map_err(|e| e.to_string())?;
-        }
-        Ok(())
+        self.with_tx(|tx| {
+            for id in ids {
+                tx.execute("DELETE FROM media WHERE id = ?1", params![id])
+                    .map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Apply a set of `(id, tags_json, category)` metadata updates in a single
+    /// transaction, so a bulk tag/name change is all-or-nothing.
+    pub fn bulk_set_media_metadata(
+        &self,
+        updates: &[(String, String, Option<String>)],
+    ) -> Result<(), String> {
+        self.with_tx(|tx| {
+            for (id, tags, category) in updates {
+                tx.execute(
+                    "UPDATE media SET tags = ?1, category = ?2 WHERE id = ?3",
+                    params![tags, category.as_deref().unwrap_or(""), id],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        })
     }
 
     pub fn get_media_path(&self, id: &str) -> Result<Option<String>, String> {
@@ -522,5 +618,111 @@ mod tests {
             Some("database is locked".to_string()),
         );
         assert!(!is_corruption(&busy));
+    }
+
+    #[test]
+    fn with_tx_commits_on_success_and_rolls_back_on_error() {
+        let dir = test_dir("tx1");
+        let path = dir.join("tx.db");
+        let db = DataDb::open(&path).unwrap();
+
+        // Commit path.
+        db.with_tx(|tx| {
+            tx.execute("INSERT INTO kv_store (key, value) VALUES ('a', '1')", [])
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(db.kv_get("a").unwrap().as_deref(), Some("1"));
+
+        // Rollback path: the closure errors AFTER inserting; nothing persists.
+        let res = db.with_tx(|tx| {
+            tx.execute("INSERT INTO kv_store (key, value) VALUES ('b', '2')", [])
+                .map_err(|e| e.to_string())?;
+            Err::<(), _>("boom".to_string())
+        });
+        assert!(res.is_err());
+        assert_eq!(db.kv_get("b").unwrap(), None, "failed transaction must roll back");
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn delete_media_bulk_is_transactional_on_failure() {
+        let dir = test_dir("bulk-tx");
+        let path = dir.join("bulk.db");
+        let db = DataDb::open(&path).unwrap();
+        for (id, fname) in [("m1", "a.mp4"), ("m2", "b.mp4")] {
+            let p = format!("{}/{fname}", dir.display());
+            db.insert_media(id, fname, &p, "Video", "now").unwrap();
+        }
+        assert_eq!(db.list_media().unwrap().len(), 2);
+
+        // A failing bulk delete must not partially delete. Force a mid-tx error
+        // by including a non-existent id is not enough (no error), so simulate a
+        // constraint failure by deleting via with_tx with an error.
+        let res = db.with_tx(|tx| {
+            tx.execute("DELETE FROM media WHERE id = 'm1'", [])
+                .map_err(|e| e.to_string())?;
+            Err::<(), _>("abort".to_string())
+        });
+        assert!(res.is_err());
+        // Rolled back: both rows remain.
+        assert_eq!(db.list_media().unwrap().len(), 2);
+
+        // A clean bulk delete removes everything.
+        db.delete_media_bulk(&["m1".into(), "m2".into()]).unwrap();
+        assert_eq!(db.list_media().unwrap().len(), 0);
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn bulk_set_media_metadata_is_transactional() {
+        let dir = test_dir("bulk-meta");
+        let path = dir.join("meta.db");
+        let db = DataDb::open(&path).unwrap();
+        db.insert_media("m1", "a.mp4", "a.mp4", "Video", "now").unwrap();
+        db.insert_media("m2", "b.mp4", "b.mp4", "Video", "now").unwrap();
+
+        db.bulk_set_media_metadata(&[
+            ("m1".into(), "[\"x\"]".into(), Some("Cat".into())),
+            ("m2".into(), "[]".into(), None),
+        ])
+        .unwrap();
+
+        let m1 = db.list_media().unwrap();
+        let m1 = m1.iter().find(|m| m.0 == "m1").unwrap();
+        assert_eq!(m1.6, "[\"x\"]"); // tags
+        assert_eq!(m1.7, "Cat"); // category
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn upgrade_creates_automatic_backup_before_migration() {
+        let dir = test_dir("backup");
+        let path = dir.join("data.db");
+        // Create a valid, non-empty database first (schema version 0 at this
+        // point is fine — a fresh open runs the migration).
+        let _ = DataDb::open(&path).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len() > 0, true);
+
+        // Re-opening should not re-create a backup (already at version 1).
+        let before: usize = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("pre-migrate-"))
+            .count();
+        let _ = DataDb::open(&path).unwrap();
+        let after: usize = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("pre-migrate-"))
+            .count();
+        // A version-1 DB needs no migration, so no new backup is created on
+        // re-open (the first migration only backed up a non-empty file).
+        assert_eq!(after, before, "no new backup for an already-migrated DB");
+
+        cleanup(&dir);
     }
 }

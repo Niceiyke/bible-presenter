@@ -205,6 +205,8 @@ The startup path searches for `bible_data/wordlyte_bible.db`. If it is unavailab
 
 `DataDb::open` only quarantines (renames aside with timestamped `corrupt-*` sidecars) and recreates the data database on *demonstrable* corruption (`SQLITE_CORRUPT`/`SQLITE_NOTADB`). Permission, transient-lock, IO, or migration errors are surfaced (`OpenError::Other`), never quarantined. If the data database cannot be opened, `main.rs` falls back to an in-memory store and records a `startup_issues` entry (on `AppState` and `MediaScheduleStore`) that `get_startup_status` returns to the operator banner — a valid installation is never silently hidden behind an empty workspace.
 
+Persistence hardening (Phase 9): the schema migration (`PRAGMA user_version`, data DB = 1) runs inside a **single transaction**, so a failed migration rolls back; before any schema change `DataDb` copies the DB to a timestamped `.pre-migrate-<ts>.bak` sibling (automatic backup). `DataDb::with_tx(f)` is the all-or-nothing transaction helper used by the bulk media operations (`delete_media_bulk`, `bulk_update_media` → `bulk_set_media_metadata`). `DataDb::validate` runs a sanity query after open and `MediaScheduleStore::new` records a startup issue if it fails. `outputs.json` is written temp+rename (atomic).
+
 User data is stored under the Tauri app-local data directory. The backend logs to the app data logs directory, and panic logs use the `io.wordlyte.app` local-app path.
 
 ## License / beta gating
