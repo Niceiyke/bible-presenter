@@ -10,6 +10,8 @@ import {
   setAudioEnabled,
   setAudioMuted,
   setAudioVolume,
+  setMonitorMuted,
+  setMonitorVolume,
 } from "../audioGraph";
 
 function makeAudioTrack() {
@@ -177,6 +179,38 @@ describe("volume / mute", () => {
 
     setAudioMuted(false);
     expect(fakeContext._gain.gain.value).toBe(0.4);
+  });
+
+  it("keeps the monitor policy independent from the program bus (P2-2)", async () => {
+    const { stream, track } = makeAudioStream();
+    gumMock.mockResolvedValue(stream);
+    setAudioEnabled(true);
+    await flushMicrotasks();
+
+    // The monitor track is the RAW pre-gain input, so it exists and is not the
+    // post-gain program track.
+    const snap = getAudioGraphSnapshot();
+    expect(snap.monitorTrack).toBe(track);
+    expect(snap.programTrack).not.toBe(track);
+
+    // Muting the PROGRAM bus must not mute monitoring.
+    setAudioMuted(true);
+    expect(getAudioGraphSnapshot().muted).toBe(true);
+    expect(getAudioGraphSnapshot().monitorMuted).toBe(false);
+    expect(fakeContext._gain.gain.value).toBe(0);
+
+    // Muting MONITORING must not affect the program gain/bus.
+    setMonitorMuted(true);
+    setMonitorVolume(0.25);
+    expect(getAudioGraphSnapshot().monitorMuted).toBe(true);
+    expect(getAudioGraphSnapshot().monitorVolume).toBe(0.25);
+    // Program gain unchanged (still muted from the program mute above).
+    expect(fakeContext._gain.gain.value).toBe(0);
+
+    // Unmuting the program restores its gain; monitor stays muted.
+    setAudioMuted(false);
+    expect(fakeContext._gain.gain.value).toBe(1);
+    expect(getAudioGraphSnapshot().monitorMuted).toBe(true);
   });
 });
 

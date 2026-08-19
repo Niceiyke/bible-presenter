@@ -726,7 +726,6 @@ function drawCustomSlide(ctx: CanvasRenderingContext2D, item: Extract<DisplayIte
 
     if (el.kind === "text") {
       const content = el.content;
-      const text = flattenTextContent(content);
       const fontSize = el.font_size === "inherit" || !el.font_size
         ? (data.theme?.defaultFontSize ?? 48)
         : el.font_size;
@@ -737,25 +736,53 @@ function drawCustomSlide(ctx: CanvasRenderingContext2D, item: Extract<DisplayIte
         ? (data.theme?.textColor ?? "#ffffff")
         : el.color;
       const fontPx = ptToPx(fontSize, scale);
-      ctx.font = `${el.bold ? "700" : "400"} ${el.italic ? "italic" : "normal"} ${fontPx}px ${fontFamily}`;
-      ctx.fillStyle = color;
-      ctx.textAlign = (el.align ?? "left") === "center" ? "center" : (el.align ?? "left") === "right" ? "right" : "left";
-      if (el.shadow !== false) {
-        ctx.shadowColor = el.shadow_color || "rgba(0,0,0,0.6)";
-        ctx.shadowBlur = 8;
-        ctx.shadowOffsetY = 2;
-      }
+      const fontBase = `${fontPx}px ${fontFamily}`;
       const maxWidth = w;
       const lineHeight = fontPx * 1.3;
-      const lines = wrapText(ctx, text, maxWidth);
-      const vAlign = el.v_align ?? "top";
-      let ty = y;
-      if (vAlign === "middle") ty = y + h / 2 - (lines.length * lineHeight) / 2;
-      else if (vAlign === "bottom") ty = y + h - lines.length * lineHeight;
       const tx = el.align === "center" ? x + w / 2 : el.align === "right" ? x + w : x;
-      lines.forEach((line, i) => {
-        ctx.fillText(line, tx, ty + fontPx + i * lineHeight);
-      });
+
+      // WP7 (P2-1): when the text carries inline styling (bold/italic/underline/
+      // per-run color), render the supported rich-text subset; otherwise keep
+      // the deterministic plain-text approximation.
+      const richGroups = proseToRuns(content);
+      const hasRich = !!richGroups?.some((g) => g.some((r) => r.bold || r.italic || r.underline || r.color));
+      if (hasRich && richGroups) {
+        const totalLines = richGroups.reduce((acc, g) => acc + wrapCount(ctx, g, maxWidth, fontBase), 0);
+        let ty = y;
+        const vAlign = el.v_align ?? "top";
+        if (vAlign === "middle") ty = y + h / 2 - (totalLines * lineHeight) / 2;
+        else if (vAlign === "bottom") ty = y + h - totalLines * lineHeight;
+        ctx.save();
+        if (el.shadow !== false) {
+          ctx.shadowColor = el.shadow_color || "rgba(0,0,0,0.6)";
+          ctx.shadowBlur = 8;
+          ctx.shadowOffsetY = 2;
+        }
+        ctx.textBaseline = "alphabetic";
+        for (const group of richGroups) {
+          const n = drawRichParagraph(ctx, group, tx, ty + fontPx, maxWidth, lineHeight, fontBase, el.align === "center" ? "center" : el.align === "right" ? "right" : "left", tx);
+          ty += n * lineHeight;
+        }
+        ctx.restore();
+      } else {
+        const text = flattenTextContent(content);
+        ctx.font = `${el.bold ? "700" : "400"} ${el.italic ? "italic" : "normal"} ${fontBase}`;
+        ctx.fillStyle = color;
+        ctx.textAlign = (el.align ?? "left") === "center" ? "center" : (el.align ?? "left") === "right" ? "right" : "left";
+        if (el.shadow !== false) {
+          ctx.shadowColor = el.shadow_color || "rgba(0,0,0,0.6)";
+          ctx.shadowBlur = 8;
+          ctx.shadowOffsetY = 2;
+        }
+        const lines = wrapText(ctx, text, maxWidth);
+        const vAlign = el.v_align ?? "top";
+        let ty = y;
+        if (vAlign === "middle") ty = y + h / 2 - (lines.length * lineHeight) / 2;
+        else if (vAlign === "bottom") ty = y + h - lines.length * lineHeight;
+        lines.forEach((line, i) => {
+          ctx.fillText(line, tx, ty + fontPx + i * lineHeight);
+        });
+      }
     } else if (el.kind === "image") {
       const img = rctx.res.images?.[resolveResPath(rctx.res, el.content)];
       if (isMissingRes(rctx.res, el.content)) {
@@ -911,6 +938,211 @@ export function flattenTextContent(content: unknown): string {
   };
   walk(content);
   return lines.join("\n").replace(/\n{2,}/g, "\n").trim();
+}
+
+// ─── WP7 (P2-1): supported rich-text subset ──────────────────────────────────
+//
+// The canvas compositor intentionally approximates rich text. To keep projection
+// (DOM, authoritative) and recording/streaming (canvas) from disagreeing for
+// normal church slides, we support a small, deterministic subset and fall back
+// to plain text for anything else:
+//   - alignment, font family/weight, italic, underline, color (per run),
+//   - paragraph-aware wrapping, vertical alignment,
+//   - explicit plain-text fallback for unsupported nodes (links, highlights,
+//     embedded media, unknown marks). We never silently render a different
+//     animation/style in the canvas than the DOM shows.
+
+/** One styled text run (a ProseMirror text node + its marks). */
+export interface RichTextRun {
+  text: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  color?: string;
+}
+
+/**
+ * Parse ProseMirror JSON into paragraph groups of styled runs. Any node/mark we
+ * do not model (embedded media, links, highlights, unknown marks) degrades to
+ * its plain text so a recording never silently omits or restyles content the
+ * projection shows. Returns null for non-ProseMirror input (legacy HTML string
+ * or empty) so callers fall back to the plain-text path.
+ */
+export function proseToRuns(content: unknown): RichTextRun[][] | null {
+  if (typeof content === "string" || !content || typeof content !== "object") return null;
+  const root = content as any;
+  if (!Array.isArray(root.content)) return null;
+
+  const paragraphs: RichTextRun[][] = [];
+  let current: RichTextRun[] = [];
+
+  const marksOf = (node: any): { bold?: boolean; italic?: boolean; underline?: boolean; color?: string } => {
+    const out: { bold?: boolean; italic?: boolean; underline?: boolean; color?: string } = {};
+    for (const m of node.marks ?? []) {
+      if (m?.type === "bold") out.bold = true;
+      else if (m?.type === "italic") out.italic = true;
+      else if (m?.type === "underline") out.underline = true;
+      else if (m?.type === "textStyle" && m?.attrs?.color) out.color = m.attrs.color;
+      // Unsupported marks (link/highlight/unknown) are ignored — text still renders.
+    }
+    return out;
+  };
+
+  const walk = (node: any) => {
+    if (!node || typeof node !== "object") return;
+    if (typeof node.text === "string") {
+      const marks = marksOf(node);
+      const t = node.text;
+      // Preserve leading/trailing spaces within a run so wrapping stays exact.
+      const existing = current[current.length - 1];
+      const sameStyle =
+        existing &&
+        !!existing.bold === !!marks.bold &&
+        !!existing.italic === !!marks.italic &&
+        !!existing.underline === !!marks.underline &&
+        existing.color === marks.color;
+      if (sameStyle) {
+        existing.text += t;
+      } else {
+        current.push({ text: t, ...marks });
+      }
+      return;
+    }
+    if (node.type === "hardBreak") {
+      current.push({ text: " " });
+      return;
+    }
+    if (Array.isArray(node.content)) {
+      node.content.forEach(walk);
+    }
+    if (node.type === "paragraph") {
+      paragraphs.push(current);
+      current = [];
+    }
+  };
+  walk(root);
+  if (current.length) paragraphs.push(current);
+
+  const normalized = paragraphs.filter((p) => p.some((r) => r.text.length > 0));
+  return normalized.length ? normalized : null;
+}
+
+/**
+ * Wrap runs into visual lines (word-aware) and draw them with per-run styling.
+ * Returns the number of lines drawn. Honors underline (the subset the DOM
+ * projection also renders); unsupported styling falls back to the run's plain
+ * weight/color.
+ */
+export function drawRichParagraph(
+  ctx: CanvasRenderingContext2D,
+  runs: RichTextRun[],
+  x: number,
+  y: number,
+  maxWidth: number,
+  lineHeight: number,
+  fontBase: string,
+  align: "left" | "center" | "right",
+  textAlignX: number
+): number {
+  const applyFont = (run: RichTextRun) => {
+    ctx.font = `${run.bold ? "700" : "400"} ${run.italic ? "italic" : "normal"} ${fontBase}`;
+  };
+  const measure = (run: RichTextRun) => {
+    applyFont(run);
+    return ctx.measureText(run.text).width;
+  };
+
+  // Tokenize into words, keeping each word's run (and the following space) so
+  // wrapping and inter-run styling survive line breaks.
+  const tokens: { run: RichTextRun; word: string }[] = [];
+  for (const run of runs) {
+    const parts = run.text.split(/(\s+)/).filter((p) => p.length > 0);
+    for (const part of parts) {
+      if (/\s+/.test(part)) {
+        const prev = tokens[tokens.length - 1];
+        if (prev && prev.run === run) prev.word += part;
+        else tokens.push({ run, word: part });
+      } else {
+        tokens.push({ run, word: part });
+      }
+    }
+  }
+  if (tokens.length === 0) return 0;
+
+  const lines: { run: RichTextRun; word: string }[][] = [];
+  let line: { run: RichTextRun; word: string }[] = [];
+  let lineWidth = 0;
+  for (const tok of tokens) {
+    const w = measure(tok.run) * (tok.word.trim().length / Math.max(1, tok.word.length));
+    const sep = lineWidth > 0 ? measure({ text: " " } as RichTextRun) : 0;
+    if (lineWidth > 0 && lineWidth + sep + w > maxWidth) {
+      lines.push(line);
+      line = [];
+      lineWidth = 0;
+    }
+    line.push(tok);
+    lineWidth += (lineWidth > 0 ? sep : 0) + w;
+  }
+  if (line.length) lines.push(line);
+
+  lines.forEach((ln, i) => {
+    const baseline = y + i * lineHeight;
+    let lx = x;
+    if (align !== "left") {
+      const total = ln.reduce((acc, t) => acc + measure(t.run), 0);
+      lx = align === "center" ? textAlignX - total / 2 : textAlignX - total;
+    }
+    for (const t of ln) {
+      applyFont(t.run);
+      ctx.fillStyle = t.run.color ?? ctx.fillStyle;
+      ctx.fillText(t.word, lx, baseline);
+      if (t.run.underline) {
+        const uw = measure(t.run);
+        const th = Math.max(1, (parseFloat(fontBase) || 16) / 16);
+        ctx.fillRect(lx, baseline + th * 0.8, uw, th * 0.12);
+      }
+      lx += measure(t.run);
+    }
+  });
+  return lines.length;
+}
+
+/**
+ * Count how many wrapped lines a run group occupies at a maxWidth — used to
+ * compute vertical centering before drawing. Mirrors the tokenization in
+ * `drawRichParagraph` so the count matches the draw.
+ */
+export function wrapCount(
+  ctx: CanvasRenderingContext2D,
+  runs: RichTextRun[],
+  maxWidth: number,
+  fontBase: string
+): number {
+  const applyFont = (run: RichTextRun) => {
+    ctx.font = `${run.bold ? "700" : "400"} ${run.italic ? "italic" : "normal"} ${fontBase}`;
+  };
+  const measure = (run: RichTextRun) => {
+    applyFont(run);
+    return ctx.measureText(run.text).width;
+  };
+  const tokens: { run: RichTextRun; word: string }[] = [];
+  for (const run of runs) {
+    for (const part of run.text.split(/(\s+)/).filter((p) => p.length > 0)) {
+      tokens.push({ run, word: part });
+    }
+  }
+  let lines = 1;
+  let width = 0;
+  for (const tok of tokens) {
+    const w = measure(tok.run) * (tok.word.trim().length / Math.max(1, tok.word.length));
+    const sep = width > 0 ? measure({ text: " " } as RichTextRun) : 0;
+    if (width > 0 && width + sep + w > maxWidth) {
+      lines += 1;
+      width = 0;
+    }
+    width += (width > 0 ? sep : 0) + w;
+  }
+  return lines;
 }
 
 // ─── Overlays ─────────────────────────────────────────────────────────────────

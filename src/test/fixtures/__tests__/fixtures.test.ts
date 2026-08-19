@@ -131,7 +131,7 @@ describe("presentation fixtures (Phase 0)", () => {
 
 describe("schema version contract (Phase 0)", () => {
   it("freezes the presentation snapshot schema version", () => {
-    expect(PRESENTATION_SCHEMA_VERSION).toBe(1);
+    expect(PRESENTATION_SCHEMA_VERSION).toBe(2);
   });
 
   it("freezes the output config schema version", () => {

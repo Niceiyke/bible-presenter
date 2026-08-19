@@ -378,6 +378,85 @@ describe("ProgramFrameResolver", () => {
     });
   });
 
+  describe("configured output parity (WP1)", () => {
+    it("resolves projection and record configs against the SAME snapshot to different frames", () => {
+      const snapshot = {
+        live: verseItem,
+        staged: mediaImage,
+        settings: baseSettings,
+        props: [propClock],
+        lower_third: lowerThird,
+        revision: 3,
+      };
+      const projection = makeConfig({
+        id: "output",
+        source: { type: "live" },
+        overlays: { props: true, lower_third: true, logo: true },
+      });
+      const record = makeConfig({
+        id: "record-main",
+        kind: "recorder",
+        source: { type: "staged" },
+        geometry: { width: 1280, height: 720 },
+        capture_fps: 24,
+        overlays: { props: false, lower_third: false, logo: false },
+      });
+      const projFrame = resolveProgramFrame({ config: projection, snapshot, fps: 30 });
+      const recFrame = resolveProgramFrame({ config: record, snapshot, fps: 24 });
+
+      expect(recFrame.source).toEqual({ kind: "staged", item: mediaImage });
+      expect(projFrame.source).toEqual({ kind: "live", item: verseItem });
+      // The recorder config's masks hide every overlay the projection shows.
+      expect(recFrame.overlays.props).toEqual([]);
+      expect(recFrame.overlays.lower_third).toBeNull();
+      expect(recFrame.overlays.logo).toBeNull();
+      expect(projFrame.overlays.props).toEqual([propClock]);
+      expect(projFrame.overlays.lower_third).toEqual(lowerThird);
+      // Geometry + capture cadence come from the config, not a fixed 1080p/30.
+      expect(recFrame.canvas).toEqual({ width: 1280, height: 720, fps: 24 });
+      expect(projFrame.canvas).toEqual({ width: 1920, height: 1080, fps: 30 });
+    });
+
+    it("resolves every configured source type for a canvas record config", () => {
+      const snapshot = {
+        live: verseItem,
+        staged: mediaImage,
+        settings: baseSettings,
+        props: [],
+        lower_third: null,
+        revision: 1,
+      };
+      const sceneZone = { id: "z1", item: verseItem, x: 0, y: 0, w: 0.5, h: 1, fit: "cover" as const, opacity: 1, z: 1 };
+      const scenes: Scene[] = [
+        { id: "sc1", name: "Cam+Bible", settings: baseSettings, props: [], camera: cameraItem, layout: { zones: [sceneZone] }, created_at: 0 },
+      ];
+      const sourceFrames: Array<[OutputConfig["source"], string]> = [
+        [{ type: "live" }, "live"],
+        [{ type: "staged" }, "staged"],
+        [{ type: "item", item: timerItem }, "item"],
+        [{ type: "scene", scene_id: "sc1" }, "scene"],
+        [{ type: "blank" }, "blank"],
+      ];
+      for (const [source, kind] of sourceFrames) {
+        const frame = resolveProgramFrame({
+          config: makeConfig({ id: "record-main", kind: "recorder", source, overlays: { props: true, lower_third: true, logo: true } }),
+          snapshot,
+          scenes,
+        });
+        expect(frame.source.kind).toBe(kind);
+      }
+    });
+
+    it("applies a blanked presentation override on the canvas path", () => {
+      const frame = resolveProgramFrame({
+        config: makeConfig({ id: "stream-main", kind: "streamer", presentation: { blanked: true } }),
+        snapshot: { live: verseItem, staged: null, settings: baseSettings, props: [], lower_third: null, revision: 0 },
+      });
+      expect(frame.blackout).toBe(true);
+      expect(frame.layers).toEqual([{ kind: "blank" }]);
+    });
+  });
+
   describe("collectFrameMediaPaths", () => {
     it("collects the effective background, item media, slide elements, props, logo, and zone paths", () => {
       const zoneMedia = {

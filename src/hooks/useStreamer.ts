@@ -15,7 +15,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * are the only globals, both stubbed in tests.
  */
 
-export type StreamerStatus = "idle" | "connecting" | "live" | "error";
+export type StreamerStatus = "idle" | "connecting" | "live" | "error" | "reconnecting";
+
+/// Bounded reconnect policy for transient WHIP failures (WP3 P1-1): up to
+/// three attempts with exponential backoff (1s, 2s, 4s) before the destination
+/// settles on `error`. A reconnect reuses the SAME destination id and stream.
+export const MAX_RECONNECT_ATTEMPTS = 3;
+export const RECONNECT_BASE_DELAY_MS = 1000;
 
 export interface StreamerConfig {
   /** WHIP endpoint URL, e.g. https://example.com/whip/stream. */
@@ -38,6 +44,8 @@ export interface UseStreamerResult {
   resourceUrl: string | null;
   /** Approximate upload bitrate in kbps (0 until connected). */
   bitrateKbps: number;
+  /** 1-based reconnect attempt in progress (0 = not reconnecting). */
+  reconnectAttempt: number;
   /** Start streaming. Resolves true when the peer reaches `connected`. */
   start: (stream: MediaStream, config: StreamerConfig) => Promise<boolean>;
   /** Stop streaming (best-effort DELETE of the WHIP resource) and tear down. */
@@ -74,6 +82,13 @@ export function useStreamer(options: UseStreamerOptions = {}): UseStreamerResult
   const [error, setError] = useState<string | null>(null);
   const [resourceUrl, setResourceUrl] = useState<string | null>(null);
   const [bitrateKbps, setBitrateKbps] = useState(0);
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
+  /** Last successful start config/stream so a bounded reconnect can replay them
+   *  with the SAME destination (never a duplicate peer/session). */
+  const lastStartRef = useRef<{ stream: MediaStream; config: StreamerConfig } | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wantsActiveRef = useRef(false);
 
   const clearStats = useCallback(() => {
     if (statsTimerRef.current) {
@@ -108,6 +123,10 @@ export function useStreamer(options: UseStreamerOptions = {}): UseStreamerResult
 
   const teardown = useCallback(() => {
     clearStats();
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
     const pc = pcRef.current;
     if (pc) {
       pc.onconnectionstatechange = null;
@@ -123,7 +142,47 @@ export function useStreamer(options: UseStreamerOptions = {}): UseStreamerResult
     setResourceUrl(null);
   }, [clearStats]);
 
+  // Failure path: bounded reconnect for transient WHIP failures (three attempts
+  // with exponential backoff). A reconnect re-negotiates against the same
+  // destination; after the cap the destination settles on `error`. `fail` and
+  // `start` are mutually recursive, so each resolves the other through a ref.
+  const failRef = useRef<(message: string) => void>(() => {});
+  const startRef = useRef<(stream: MediaStream, config: StreamerConfig) => Promise<boolean>>(
+    () => Promise.resolve(false)
+  );
+
+  const fail = useCallback(
+    (message: string) => {
+      if (!wantsActiveRef.current) return; // already stopping
+      if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+        wantsActiveRef.current = false;
+        setStatus("error");
+        setError(message);
+        teardown();
+        return;
+      }
+      reconnectAttemptsRef.current += 1;
+      const attempt = reconnectAttemptsRef.current;
+      setStatus("reconnecting");
+      setError(message);
+      setReconnectAttempt(attempt);
+      // Clear the peer so a reconnect can create a fresh RTCPeerConnection.
+      teardown();
+      const delay = RECONNECT_BASE_DELAY_MS * 2 ** (attempt - 1);
+      reconnectTimerRef.current = setTimeout(() => {
+        const args = lastStartRef.current;
+        if (!args || !wantsActiveRef.current) return;
+        void startRef.current?.(args.stream, args.config);
+      }, delay);
+    },
+    [teardown]
+  );
+  failRef.current = fail;
+
   const stop = useCallback(async () => {
+    wantsActiveRef.current = false;
+    reconnectAttemptsRef.current = 0;
+    setReconnectAttempt(0);
     const resource = resourceUrlRef.current;
     teardown();
     setStatus("idle");
@@ -158,12 +217,16 @@ export function useStreamer(options: UseStreamerOptions = {}): UseStreamerResult
         return false;
       }
 
+      // Store the start args so a bounded reconnect can replay them with the
+      // SAME destination (never a duplicate session/peer).
+      lastStartRef.current = { stream, config };
+      wantsActiveRef.current = true;
+
       let pc: RTCPeerConnection;
       try {
         pc = new RTCPeerConnection({ iceServers });
       } catch (e: any) {
-        setStatus("error");
-        setError(`Failed to create peer connection: ${e?.message ?? e}`);
+        failRef.current(`Failed to create peer connection: ${e?.message ?? e}`);
         return false;
       }
       pcRef.current = pc;
@@ -177,14 +240,15 @@ export function useStreamer(options: UseStreamerOptions = {}): UseStreamerResult
         pc.onconnectionstatechange = () => {
           const cs = pc.connectionState;
           if (cs === "connected") {
+            // A successful (re)connect clears the reconnect budget.
+            reconnectAttemptsRef.current = 0;
+            setReconnectAttempt(0);
             setStatus("live");
             setError(null);
             startBitratePolling();
           } else if (cs === "failed" || cs === "closed") {
             const msg = cs === "failed" ? "Peer connection failed." : "Peer connection closed.";
-            setStatus("error");
-            setError(msg);
-            teardown();
+            failRef.current(msg);
           }
           // "disconnected" is transient (renegotiation); stay live until failed.
         };
@@ -222,22 +286,26 @@ export function useStreamer(options: UseStreamerOptions = {}): UseStreamerResult
         await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
         return true;
       } catch (e: any) {
-        setStatus("error");
-        setError(e?.message ?? String(e));
-        teardown();
+        failRef.current(e?.message ?? String(e));
         return false;
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [iceServers, gatherTimeoutMs, teardown]
   );
+  startRef.current = start;
 
   // Pause stats when no longer live.
   useEffect(() => {
     if (status !== "live") clearStats();
   }, [status, clearStats]);
 
-  useEffect(() => teardown, [teardown]);
+  useEffect(() => {
+    return () => {
+      wantsActiveRef.current = false;
+      teardown();
+    };
+  }, [teardown]);
 
-  return { status, error, resourceUrl, bitrateKbps, start, stop };
+  return { status, error, resourceUrl, bitrateKbps, reconnectAttempt, start, stop };
 }

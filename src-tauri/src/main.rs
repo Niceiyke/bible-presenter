@@ -158,7 +158,11 @@ fn main() {
 
             let remote_control = Arc::new(remote::RemoteControl::new(remote_files_dir, &app_data_dir));
 
-            let outputs = Arc::new(wordlyte_lib::outputs::OutputManager::new(&app_data_dir));
+            let mut startup_issues: Vec<String> = Vec::new();
+            let outputs = Arc::new(wordlyte_lib::outputs::OutputManager::new_with_issues(
+                &app_data_dir,
+                &mut startup_issues,
+            ));
 
             let license = Arc::new(wordlyte_lib::license::LicenseManager::new(&app_data_dir));
             let license_info = license.status();
@@ -170,7 +174,7 @@ fn main() {
                 media_schedule,
                 app_data_dir,
                 download_in_progress: Arc::new(AtomicBool::new(false)),
-                startup_issues: Arc::new(Mutex::new(Vec::new())),
+                startup_issues: Arc::new(Mutex::new(startup_issues)),
                 remote: remote_control,
                 outputs,
                 rtmp: Arc::new(Mutex::new(std::collections::HashMap::new())),

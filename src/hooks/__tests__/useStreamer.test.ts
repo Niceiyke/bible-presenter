@@ -123,7 +123,8 @@ describe("useStreamer", () => {
     });
 
     expect(ok).toBe(false);
-    expect(result.current.status).toBe("error");
+    expect(result.current.status).toBe("reconnecting");
+    expect(result.current.reconnectAttempt).toBe(1);
     expect(result.current.error).toContain("401");
   });
 
@@ -199,5 +200,51 @@ describe("useStreamer", () => {
     );
     expect(deletes.length).toBe(1);
     expect(deletes[0][0]).toBe("https://whip.example/res/abc");
+  });
+
+  it("reconnects on a peer failure and settles on error after the cap", async () => {
+    vi.useFakeTimers();
+    try {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+        mockFetchResponse("answer-sdp", { location: "https://whip.example/res/abc" })
+      );
+      const { result } = renderHook(() => useStreamer());
+      await act(async () => {
+        await result.current.start(fakeStream(), { url: "https://whip.example/stream" });
+        // Let ICE gathering + the answer negotiation complete under fake timers.
+        await vi.advanceTimersByTimeAsync(100);
+      });
+      const firstPc = FakeRTCPeerConnection.instances[0];
+      await act(async () => {
+        firstPc!.connectionState = "connected";
+        firstPc!.onconnectionstatechange?.();
+      });
+      expect(result.current.status).toBe("live");
+
+      // The peer fails mid-stream.
+      await act(async () => {
+        firstPc!.connectionState = "failed";
+        firstPc!.onconnectionstatechange?.();
+      });
+      expect(result.current.status).toBe("reconnecting");
+      expect(result.current.reconnectAttempt).toBe(1);
+
+      // Every reconnect now fails (fetch rejects), so the cap is reached after
+      // three exponential backoff steps (1s, 2s, 4s).
+      (global.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("network down"));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000);
+      });
+      expect(result.current.status).toBe("error");
+      expect(result.current.error).toContain("network down");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -22,7 +22,7 @@ export type DisplayItem =
  * fields (Phase 0 contract freeze). Matches
  * `PRESENTATION_SCHEMA_VERSION` in `src-tauri/src/engine/presentation.rs`.
  */
-export const PRESENTATION_SCHEMA_VERSION = 1;
+export const PRESENTATION_SCHEMA_VERSION = 2;
 
 /**
  * Authoritative presentation snapshot returned by the `presentation_snapshot`
@@ -33,11 +33,17 @@ export const PRESENTATION_SCHEMA_VERSION = 1;
 export interface PresentationSnapshot {
   schema_version: number;
   live: DisplayItem | null;
+  /** The item that was live immediately before `live` (P1-6). */
+  previous: DisplayItem | null;
   staged: DisplayItem | null;
   settings: PresentationSettings;
   lower_third: unknown | null;
   props: PropItem[];
+  /** The id of the live scene composition, if the live item is one (P1-6). */
+  active_scene_id?: string | null;
   revision: number;
+  /** Unix ms of the last presentation mutation (0 before any mutation). */
+  updated_at?: number;
 }
 
 export interface ScheduleEntry {

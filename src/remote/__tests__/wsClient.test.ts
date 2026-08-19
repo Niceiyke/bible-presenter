@@ -254,6 +254,39 @@ describe("useRemote handshake", () => {
     }
   });
 
+  it("ignores non-snapshot events with a stale revision (P1-6)", async () => {
+    localStorage.setItem("wordlyte.remote.token", "tok-1");
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const { result } = renderHook(() => useRemote());
+    act(() => lastWs().open());
+    // Hydrate at revision 5.
+    act(() => recvSnapshot(lastWs(), 5));
+    expect(result.current.conn).toBe("connected");
+
+    // A newer lower-third change bumps to 6 and is applied.
+    act(() =>
+      lastWs().recv({
+        kind: "lower_third.changed",
+        revision: 6,
+        timestamp: 1,
+        payload: { lower_third: { data: { kind: "Nameplate", data: { name: "Jane" } } } },
+      })
+    );
+    expect(result.current.snapshot?.lower_third).toBeTruthy();
+
+    // A stale lower-third event at revision 4 (older than 6) must be ignored —
+    // it must not overwrite the newer lower-third applied above.
+    act(() =>
+      lastWs().recv({
+        kind: "lower_third.changed",
+        revision: 4,
+        timestamp: 1,
+        payload: { lower_third: null },
+      })
+    );
+    expect((result.current.snapshot as any)?.lower_third).toBeTruthy();
+  });
+
   it("reconnects automatically after an unexpected drop and resumes connecting", async () => {
     vi.useFakeTimers();
     try {

@@ -44,11 +44,10 @@ export const createCameraSlice: StateCreator<AppStore, [], [], CameraSlice> = (s
   })),
   refreshCameras: async () => {
     try {
-      // First request permission to get labels
-      await navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
-        stream.getTracks().forEach(track => track.stop());
-      }).catch(() => {});
-
+      // Enumerate devices only (WP4 P1-2): do NOT open a temporary capture here.
+      // The source registry opens the device once per webview (which also grants
+      // label access), so opening a throwaway getUserMedia here would be a
+      // second, unref-counted acquisition path that fights the registry.
       const devices = await navigator.mediaDevices.enumerateDevices();
       const cameras = devices
         .filter(device => device.kind === "videoinput")
@@ -56,9 +55,9 @@ export const createCameraSlice: StateCreator<AppStore, [], [], CameraSlice> = (s
           deviceId: device.deviceId,
           label: device.label || `Camera ${device.deviceId.slice(0, 5)}...`
         }));
-      
+
       set({ availableCameras: cameras });
-      
+
       // Auto-select first camera if none selected
       set((state) => {
         if (!state.selectedCameraId && cameras.length > 0) {

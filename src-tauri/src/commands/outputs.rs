@@ -123,10 +123,15 @@ pub fn set_output_visible(app: &AppHandle, state: &AppState, id: &str, visible: 
     }
 
     // 1) Toggle the bound window first. A failure here must NOT persist state.
+    let mut prior_window_visible: Option<bool> = None;
     if let Some(label) = &cfg.window_label {
         let window = app
             .get_webview_window(label)
             .ok_or_else(|| format!("No window bound to output '{}'", id))?;
+        // Capture the PRIOR native visibility so a failed persist below can roll
+        // the actual window back (P1-5 / WP6) — disk, runtime, UI, and window
+        // must never diverge.
+        prior_window_visible = window.is_visible().ok();
         if visible {
             enforce_free_window_cap(app, state, label)?;
             if label == "output" {
@@ -147,7 +152,21 @@ pub fn set_output_visible(app: &AppHandle, state: &AppState, id: &str, visible: 
     //    persisted config; windows go live/stopped with visibility, while
     //    recorders/streamers enter `starting`/`stopped` and the frontend
     //    adapter reports the real phase once the pipeline is actually up.
-    state.outputs.set_visible(id, visible)?;
+    if let Err(e) = state.outputs.set_visible(id, visible) {
+        // Roll the native window back to its prior visibility so a persistence
+        // failure can never leave the actual window shown/hidden while disk and
+        // runtime retain the previous state.
+        if let (Some(label), Some(prior)) = (&cfg.window_label, prior_window_visible) {
+            if let Some(window) = app.get_webview_window(label) {
+                if prior {
+                    let _ = window.show();
+                } else {
+                    let _ = window.hide();
+                }
+            }
+        }
+        return Err(e);
+    }
     publish_configs(app);
     if let Some(s) = state.outputs.state(id) {
         publish_state(app, &s);

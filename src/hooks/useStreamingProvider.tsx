@@ -15,6 +15,7 @@ import {
   type ProgramEncoderSnapshot,
 } from "../system/programEncoder";
 import { ProgramFeedPreview } from "../components/outputs/ProgramFeedPreview";
+import { DestinationRuntime } from "../components/streaming/DestinationRuntime";
 import { makeDestination, newDestinationId } from "../components/streaming/presets";
 import type {
   DestinationCardHandle,
@@ -42,6 +43,18 @@ import type { OutputPhase, StreamDestination, StreamPlatform } from "../types";
 export interface CardStatus {
   status: DestTransportStatus;
   bitrateKbps: number;
+  /** Transport error message (RTMP/WHIP/NDI failure causes). */
+  error?: string | null;
+  /** WHIP resource URL once a session is established. */
+  resourceUrl?: string | null;
+  /** Packets written to the backend since the destination started. */
+  sentPackets?: number;
+  /** Packets dropped by the bounded queue since the destination started. */
+  droppedPackets?: number;
+  /** Packets currently buffered awaiting the backend writer thread. */
+  queuedPackets?: number;
+  /** 1-based reconnect attempt in progress (0 = not reconnecting). */
+  reconnectAttempt?: number;
 }
 
 interface StreamingContextValue {
@@ -61,8 +74,8 @@ interface StreamingContextValue {
   updateDestination: (next: StreamDestination) => void;
   removeDestination: (id: string) => void;
   addDestination: (platform: StreamPlatform) => void;
-  registerHandle: (id: string, handle: DestinationCardHandle | null) => void;
-  reportStatus: (id: string, status: DestTransportStatus, bitrateKbps: number) => void;
+  startDestination: (id: string) => Promise<boolean>;
+  stopDestination: (id: string) => Promise<void>;
   goLive: () => Promise<void>;
   stopAll: () => Promise<void>;
   getSourceTracks: () => { video: MediaStreamTrack | null; audio: MediaStreamTrack | null };
@@ -203,9 +216,13 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
   );
 
   const removeDestination = useCallback(
-    (id: string) => {
+    async (id: string) => {
+      // Stop the transport runtime BEFORE persisting the removal, so an active
+      // session/process is never left orphaned by a config delete.
       const handle = cardHandles.current.get(id);
-      if (handle) void handle.stop();
+      if (handle) {
+        await handle.stop();
+      }
       setStatuses((prev) => {
         const next = { ...prev };
         delete next[id];
@@ -277,13 +294,52 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
     [stream, programAudioTrack]
   );
 
-  const handleStatus = useCallback((id: string, status: DestTransportStatus, bitrateKbps: number) => {
-    setStatuses((prev) => ({ ...prev, [id]: { status, bitrateKbps } }));
-  }, []);
+  const handleStatus = useCallback(
+    (
+      id: string,
+      status: DestTransportStatus,
+      bitrateKbps: number,
+      extra?: {
+        error?: string | null;
+        resourceUrl?: string | null;
+        sentPackets?: number;
+        droppedPackets?: number;
+        queuedPackets?: number;
+        reconnectAttempt?: number;
+      }
+    ) => {
+      setStatuses((prev) => ({
+        ...prev,
+        [id]: {
+          status,
+          bitrateKbps,
+          error: extra?.error ?? null,
+          resourceUrl: extra?.resourceUrl ?? null,
+          sentPackets: extra?.sentPackets ?? 0,
+          droppedPackets: extra?.droppedPackets ?? 0,
+          queuedPackets: extra?.queuedPackets ?? 0,
+          reconnectAttempt: extra?.reconnectAttempt ?? 0,
+        },
+      }));
+    },
+    []
+  );
 
   const registerHandle = useCallback((id: string, handle: DestinationCardHandle | null) => {
     if (handle) cardHandles.current.set(id, handle);
     else cardHandles.current.delete(id);
+  }, []);
+
+  /** Drive a destination's transport through its registered app-scoped runtime. */
+  const startDestination = useCallback(async (id: string): Promise<boolean> => {
+    const handle = cardHandles.current.get(id);
+    if (!handle) return false;
+    return handle.start();
+  }, []);
+
+  const stopDestination = useCallback(async (id: string): Promise<void> => {
+    const handle = cardHandles.current.get(id);
+    if (handle) await handle.stop();
   }, []);
 
   const goLive = useCallback(async () => {
@@ -407,8 +463,8 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
       updateDestination,
       removeDestination,
       addDestination,
-      registerHandle,
-      reportStatus: handleStatus,
+      startDestination,
+      stopDestination,
       goLive,
       stopAll,
       getSourceTracks,
@@ -427,17 +483,31 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
       destCapReached,
       enabledCount,
     }),
-    [destinations, statuses, saving, stream, streamReady, anyBusy, liveCount, captureWidth, captureHeight, captureFps, streamBitrateKbps, persistCapture, updateDestination, removeDestination, addDestination, registerHandle, handleStatus, goLive, stopAll, getSourceTracks, audioEnabled, setAudioEnabled, audioDevices, audioDeviceId, setAudioDeviceId, audioError, audioUnavailableReason, encoder, streamingBlocked, sharedAudioBlocked, rtmpBlockedReason, ndiBlockedReason, destCapReached, enabledCount]
+    [destinations, statuses, saving, stream, streamReady, anyBusy, liveCount, captureWidth, captureHeight, captureFps, streamBitrateKbps, persistCapture, updateDestination, removeDestination, addDestination, startDestination, stopDestination, goLive, stopAll, getSourceTracks, audioEnabled, setAudioEnabled, audioDevices, audioDeviceId, setAudioDeviceId, audioError, audioUnavailableReason, encoder, streamingBlocked, sharedAudioBlocked, rtmpBlockedReason, ndiBlockedReason, destCapReached, enabledCount]
   );
 
   return (
     <StreamingContext.Provider value={value}>
       {children}
+      {/* App-scoped destination runtimes — transports stay mounted while the
+          app runs, so a workspace switch can never stop an active stream. */}
+      {destinations.map((d) => (
+        <DestinationRuntime
+          key={d.id}
+          destination={d}
+          getSourceTracks={getSourceTracks}
+          fps={captureFps}
+          bitrateKbps={streamBitrateKbps}
+          onStatus={handleStatus}
+          onRegister={registerHandle}
+        />
+      ))}
       <div
         style={{ position: "fixed", left: -100000, top: 0, width: 1, height: 1, overflow: "hidden", pointerEvents: "none" }}
         aria-hidden
       >
         <ProgramFeedPreview
+          config={output ?? undefined}
           geometry={{ width: captureWidth, height: captureHeight }}
           fps={captureFps}
           active={active}

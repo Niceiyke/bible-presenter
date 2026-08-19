@@ -37,6 +37,14 @@ pub struct RtmpStatus {
     pub id: String,
     pub active: bool,
     pub url: Option<String>,
+    /// Capture frame rate this session's ffmpeg was started with.
+    pub fps: u32,
+    /// Packets currently buffered awaiting the writer thread.
+    pub queued: usize,
+    /// Packets written to ffmpeg since the session started.
+    pub sent: usize,
+    /// Packets dropped by the bounded queue (queue full) since the session started.
+    pub dropped: usize,
 }
 
 /// An active ffmpeg ingest: the child plus mpsc senders drained by writer
@@ -50,7 +58,25 @@ pub struct RtmpSession {
     /// encoder outpaces ffmpeg instead of growing without bound).
     pub queued: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub audio_queued: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Lifetime packet counters for operator-visible runtime status.
+    pub sent: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    pub dropped: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub url: String,
+    /// Capture frame rate the encoder was configured with (drives ffmpeg's
+    /// `-framerate` so packet timing matches the selected capture cadence).
+    pub fps: u32,
+}
+
+/// Result of a bounded enqueue: the packet was queued, dropped (queue full —
+/// real-time streams self-heal, and blocking the operator UI on pipe
+/// backpressure is worse than dropping a stale frame), or the writer closed
+/// (ffmpeg exited and the session is gone).
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum EnqueueResult {
+    Queued,
+    Dropped,
+    Closed,
 }
 
 /// Max packets buffered per destination before the newest frame is dropped.
@@ -61,6 +87,16 @@ const MAX_QUEUED_PACKETS: usize = 120;
 /// ADTS AAC frames are far smaller; this only guards against runaway/malformed
 /// input).
 const MAX_PACKET_BYTES: usize = 8 * 1024 * 1024;
+
+/// Validate a capture frame rate for RTMP ingest. The frontend offers 24/25/30/
+/// 50/60 fps, but any sane 1..=120 value is accepted so future presets need no
+/// backend change; the ffmpeg `-framerate` is derived from it.
+pub fn validate_fps(fps: u32) -> Result<(), String> {
+    if !(1..=120).contains(&fps) {
+        return Err("RTMP capture frame rate must be between 1 and 120 fps.".into());
+    }
+    Ok(())
+}
 
 /// Build the full RTMP ingest URL from a server URL + optional stream key,
 /// e.g. `rtmp://host/live` + `mykey` -> `rtmp://host/live/mykey`.
@@ -74,11 +110,11 @@ pub fn build_rtmp_url(server_url: &str, stream_key: Option<&str>) -> String {
     }
 }
 
-/// Mux-only ffmpeg arguments. Video is H.264 Annex-B read from stdin; optional
-/// audio is ADTS AAC read from a loopback TCP socket (ffmpeg connects, the
-/// backend accepts). Nothing is re-encoded — packets are copied straight into
-/// the FLV output for the RTMP ingest.
-fn ffmpeg_args(url: &str, audio_port: Option<u16>) -> Vec<String> {
+/// Mux-only ffmpeg arguments. Video is H.264 Annex-B read from stdin at the
+/// capture frame rate the encoder was configured with; optional audio is ADTS
+/// AAC read from a loopback TCP socket (ffmpeg connects, the backend accepts).
+/// Nothing is re-encoded — packets are copied straight into the FLV output.
+fn ffmpeg_args(url: &str, audio_port: Option<u16>, fps: u32) -> Vec<String> {
     let mut args = vec![
         "-y".to_string(),
         "-hide_banner".to_string(),
@@ -89,7 +125,7 @@ fn ffmpeg_args(url: &str, audio_port: Option<u16>) -> Vec<String> {
         "-f".to_string(),
         "h264".to_string(),
         "-framerate".to_string(),
-        "30".to_string(),
+        fps.to_string(),
         "-i".to_string(),
         "pipe:0".to_string(),
     ];
@@ -127,12 +163,20 @@ fn ffmpeg_args(url: &str, audio_port: Option<u16>) -> Vec<String> {
 }
 
 /// Spawn the writer thread that drains the channel into ffmpeg's stdin.
-/// Returns the sender plus a live packet counter the caller bumps before send
-/// so `rtmp_send` can apply bounded (drop-newest) backpressure.
-fn spawn_writer(mut stdin: ChildStdin) -> (mpsc::Sender<Vec<u8>>, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+/// Returns the sender plus the live queued-packet counter and a lifetime
+/// sent-packet counter the writer bumps after each successful write.
+fn spawn_writer(
+    mut stdin: ChildStdin,
+) -> (
+    mpsc::Sender<Vec<u8>>,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
     let queued = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let sent = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counter = queued.clone();
+    let sent_counter = sent.clone();
     std::thread::spawn(move || {
         use std::sync::atomic::Ordering;
         while let Ok(data) = rx.recv() {
@@ -140,19 +184,28 @@ fn spawn_writer(mut stdin: ChildStdin) -> (mpsc::Sender<Vec<u8>>, std::sync::Arc
             if stdin.write_all(&data).is_err() {
                 break; // ffmpeg closed the pipe (crash / user stop)
             }
+            sent_counter.fetch_add(1, Ordering::SeqCst);
             let _ = stdin.flush();
         }
     });
-    (tx, queued)
+    (tx, queued, sent)
 }
 
 /// Spawn the audio writer thread: accept ffmpeg's loopback TCP connection (non
 /// blocking, up to ~5s, buffering anything that arrives before the handshake)
 /// then drain the channel into the socket. Closing the channel tears it down.
-fn spawn_audio_writer(listener: TcpListener) -> (mpsc::Sender<Vec<u8>>, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+fn spawn_audio_writer(
+    listener: TcpListener,
+) -> (
+    mpsc::Sender<Vec<u8>>,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
     let queued = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let sent = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counter = queued.clone();
+    let sent_counter = sent.clone();
     std::thread::spawn(move || {
         use std::sync::atomic::Ordering;
         let _ = listener.set_nonblocking(true);
@@ -177,37 +230,41 @@ fn spawn_audio_writer(listener: TcpListener) -> (mpsc::Sender<Vec<u8>>, std::syn
             if stream.write_all(&data).is_err() {
                 return;
             }
+            sent_counter.fetch_add(1, Ordering::SeqCst);
         }
         while let Ok(data) = rx.recv() {
             counter.fetch_sub(1, Ordering::SeqCst);
             if stream.write_all(&data).is_err() {
                 break; // ffmpeg closed the socket
             }
+            sent_counter.fetch_add(1, Ordering::SeqCst);
             let _ = stream.flush();
         }
     });
-    (tx, queued)
+    (tx, queued, sent)
 }
 
-/// Enqueue a packet with bounded drop-newest backpressure. Ok(true) = queued,
-/// Ok(false) = dropped because the queue was full (a stale frame — real-time
-/// streams self-heal, and blocking the operator UI on pipe backpressure is
-/// worse than dropping). Err = the writer thread already exited.
+/// Enqueue a packet with bounded drop-newest backpressure. `Queued` = accepted,
+/// `Dropped` = queue full (a stale frame — real-time streams self-heal, and
+/// blocking the operator UI on pipe backpressure is worse than dropping),
+/// `Closed` = the writer thread already exited (ffmpeg is gone).
 fn enqueue_bounded(
     tx: &mpsc::Sender<Vec<u8>>,
     queued: &std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    dropped: &std::sync::Arc<std::sync::atomic::AtomicUsize>,
     data: Vec<u8>,
-) -> Result<bool, mpsc::SendError<Vec<u8>>> {
+) -> EnqueueResult {
     use std::sync::atomic::Ordering;
     if queued.load(Ordering::SeqCst) >= MAX_QUEUED_PACKETS {
-        return Ok(false);
+        dropped.fetch_add(1, Ordering::SeqCst);
+        return EnqueueResult::Dropped;
     }
     queued.fetch_add(1, Ordering::SeqCst);
     match tx.send(data) {
-        Ok(()) => Ok(true),
-        Err(e) => {
+        Ok(()) => EnqueueResult::Queued,
+        Err(_) => {
             queued.fetch_sub(1, Ordering::SeqCst);
-            Err(e)
+            EnqueueResult::Closed
         }
     }
 }
@@ -258,10 +315,13 @@ pub fn rtmp_start(
     server_url: String,
     stream_key: Option<String>,
     with_audio: bool,
+    fps: Option<u32>,
 ) -> Result<(), String> {
     // Streaming is a paid feature (audit: tier enforcement must live on the
     // backend, not just in the UI).
     ensure_active_tier(&state, LicenseTier::Pro)?;
+    let fps = fps.unwrap_or(30);
+    validate_fps(fps)?;
     let mut guard = state.rtmp.lock();
     if guard.contains_key(&session_id) {
         return Err("This RTMP destination is already live — stop it first.".into());
@@ -287,7 +347,7 @@ pub fn rtmp_start(
         .transpose()?;
 
     let mut child = Command::new(crate::binpaths::ffmpeg_path())
-        .args(ffmpeg_args(&url, audio_port))
+        .args(ffmpeg_args(&url, audio_port, fps))
         .stdin(Stdio::piped())
         .stderr(Stdio::null())
         .stdout(Stdio::null())
@@ -298,12 +358,12 @@ pub fn rtmp_start(
         .stdin
         .take()
         .ok_or_else(|| "ffmpeg stdin was not available.".to_string())?;
-    let (stdin_tx, queued) = spawn_writer(stdin);
-    let (audio_tx, audio_queued) = if let Some(listener) = audio_listener {
-        let (tx, counter) = spawn_audio_writer(listener);
-        (Some(tx), Some(counter))
+    let (stdin_tx, queued, sent) = spawn_writer(stdin);
+    let (audio_tx, audio_queued, _audio_sent) = if let Some(listener) = audio_listener {
+        let (tx, counter, sent_counter) = spawn_audio_writer(listener);
+        (Some(tx), Some(counter), Some(sent_counter))
     } else {
-        (None, None)
+        (None, None, None)
     };
     guard.insert(
         session_id.clone(),
@@ -313,7 +373,10 @@ pub fn rtmp_start(
             audio_tx,
             queued,
             audio_queued: audio_queued.unwrap_or_default(),
+            sent,
+            dropped: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             url,
+            fps,
         },
     );
     drop(guard);
@@ -324,13 +387,14 @@ pub fn rtmp_start(
 }
 
 /// Feed one encoded H.264 packet (Annex-B, base64 over IPC) to a destination's
-/// ffmpeg stdin.
+/// ffmpeg stdin. Returns whether the packet was queued or dropped (queue full);
+/// errors when the writer closed (ffmpeg exited).
 #[tauri::command]
 pub fn rtmp_send(
     state: State<'_, AppState>,
     session_id: String,
     data_base64: String,
-) -> Result<(), String> {
+) -> Result<EnqueueResult, String> {
     let mut guard = state.rtmp.lock();
     let session = guard
         .get_mut(&session_id)
@@ -341,9 +405,10 @@ pub fn rtmp_send(
     if data.len() > MAX_PACKET_BYTES {
         return Err("RTMP packet exceeds the size limit.".into());
     }
-    enqueue_bounded(&session.stdin_tx, &session.queued, data)
-        .map(|_| ())
-        .map_err(|_| "RTMP writer closed (ffmpeg exited).".to_string())
+    match enqueue_bounded(&session.stdin_tx, &session.queued, &session.dropped, data) {
+        EnqueueResult::Closed => Err("RTMP writer closed (ffmpeg exited).".into()),
+        other => Ok(other),
+    }
 }
 
 /// Feed one encoded AAC frame (ADTS, base64 over IPC) to a destination's
@@ -353,7 +418,7 @@ pub fn rtmp_send_audio(
     state: State<'_, AppState>,
     session_id: String,
     data_base64: String,
-) -> Result<(), String> {
+) -> Result<EnqueueResult, String> {
     // Shared audio input is a Premium feature.
     ensure_active_tier(&state, LicenseTier::Premium)?;
     let mut guard = state.rtmp.lock();
@@ -370,9 +435,10 @@ pub fn rtmp_send_audio(
     if data.len() > MAX_PACKET_BYTES {
         return Err("RTMP audio packet exceeds the size limit.".into());
     }
-    enqueue_bounded(tx, &session.audio_queued, data)
-        .map(|_| ())
-        .map_err(|_| "RTMP audio writer closed (ffmpeg exited).".to_string())
+    match enqueue_bounded(tx, &session.audio_queued, &session.dropped, data) {
+        EnqueueResult::Closed => Err("RTMP audio writer closed (ffmpeg exited).".into()),
+        other => Ok(other),
+    }
 }
 
 /// Stop one destination's ingest: signal EOF to ffmpeg, then wait (with a
@@ -411,12 +477,17 @@ pub async fn rtmp_stop(state: State<'_, AppState>, session_id: String) -> Result
 #[tauri::command]
 pub fn rtmp_status(state: State<'_, AppState>) -> Vec<RtmpStatus> {
     let guard = state.rtmp.lock();
+    use std::sync::atomic::Ordering;
     guard
         .iter()
         .map(|(id, s)| RtmpStatus {
             id: id.clone(),
             active: true,
             url: Some(s.url.clone()),
+            fps: s.fps,
+            queued: s.queued.load(Ordering::SeqCst),
+            sent: s.sent.load(Ordering::SeqCst),
+            dropped: s.dropped.load(Ordering::SeqCst),
         })
         .collect()
 }
@@ -444,7 +515,7 @@ mod tests {
 
     #[test]
     fn ffmpeg_args_video_only_has_no_audio_input() {
-        let args = ffmpeg_args("rtmp://host/live/key", None);
+        let args = ffmpeg_args("rtmp://host/live/key", None, 30);
         let joined = args.join(" ");
         assert!(joined.contains("-f h264") && joined.contains("-i pipe:0"));
         assert!(joined.contains("-map 0:v:0") && joined.contains("-c:v copy"));
@@ -454,11 +525,53 @@ mod tests {
 
     #[test]
     fn ffmpeg_args_with_audio_adds_loopback_aac_input() {
-        let args = ffmpeg_args("rtmp://host/live/key", Some(44111));
+        let args = ffmpeg_args("rtmp://host/live/key", Some(44111), 30);
         let joined = args.join(" ");
         assert!(joined.contains("-f adts -i tcp://127.0.0.1:44111"));
         assert!(joined.contains("-map 0:v:0 -map 1:a:0"));
         assert!(joined.contains("-c:v copy -c:a copy"));
+    }
+
+    #[test]
+    fn ffmpeg_args_uses_the_selected_capture_fps() {
+        for fps in [24u32, 25, 30, 50, 60] {
+            let args = ffmpeg_args("rtmp://host/live/key", None, fps);
+            let joined = args.join(" ");
+            assert!(
+                joined.contains(&format!("-framerate {fps}")),
+                "expected -framerate {fps} in {joined}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_fps_rejects_unsupported_values() {
+        assert!(validate_fps(0).is_err());
+        assert!(validate_fps(121).is_err());
+        assert!(validate_fps(30).is_ok());
+        assert!(validate_fps(60).is_ok());
+        assert!(validate_fps(24).is_ok());
+    }
+
+    #[test]
+    fn enqueue_bounded_reports_queued_dropped_and_closed() {
+        use std::sync::atomic::AtomicUsize;
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let queued = std::sync::Arc::new(AtomicUsize::new(0));
+        let dropped = std::sync::Arc::new(AtomicUsize::new(0));
+        // Queue has room -> queued.
+        assert_eq!(enqueue_bounded(&tx, &queued, &dropped, vec![1]), EnqueueResult::Queued);
+        assert_eq!(queued.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // Fill the queue beyond the cap -> dropped (and the drop counter bumps).
+        for _ in 0..MAX_QUEUED_PACKETS {
+            queued.store(MAX_QUEUED_PACKETS, std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(enqueue_bounded(&tx, &queued, &dropped, vec![2]), EnqueueResult::Dropped);
+        }
+        assert_eq!(dropped.load(std::sync::atomic::Ordering::SeqCst), MAX_QUEUED_PACKETS);
+        // Close the receiver -> closed.
+        drop(rx);
+        queued.store(0, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(enqueue_bounded(&tx, &queued, &dropped, vec![3]), EnqueueResult::Closed);
     }
 
     #[test]
@@ -485,7 +598,10 @@ mod tests {
                 audio_tx: None,
                 queued: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 audio_queued: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                sent: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                dropped: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 url: "rtmp://host/live".to_string(),
+                fps: 30,
             },
         );
         spawn_reaper(map.clone(), "s1".to_string());

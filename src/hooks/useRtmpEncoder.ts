@@ -29,7 +29,14 @@ import { programEncoderIsLive, subscribeProgramPackets } from "../system/program
  * globals, all stubbed in tests.
  */
 
-export type RtmpStreamerStatus = "idle" | "connecting" | "live" | "error";
+export type RtmpStreamerStatus = "idle" | "connecting" | "live" | "error" | "reconnecting";
+
+/// Bounded reconnect policy for transient RTMP failures (WP3 P1-1): up to
+/// three attempts with exponential backoff (1s, 2s, 4s) before the destination
+/// settles on `error`. A reconnect reuses the SAME destination id and stream —
+/// `rtmp_start` rejects duplicate sessions, so it can never double-start.
+export const MAX_RECONNECT_ATTEMPTS = 3;
+export const RECONNECT_BASE_DELAY_MS = 1000;
 
 export interface UseRtmpEncoderAudioOptions {
   /** Capture and encode an input device's audio. */
@@ -58,6 +65,14 @@ export interface UseRtmpEncoderResult {
   error: string | null;
   /** Approximate encoded bitrate in kbps (0 until live). */
   bitrateKbps: number;
+  /** Packets written to the backend since the session started. */
+  sentPackets: number;
+  /** Packets dropped by the bounded queue (queue full) since the session started. */
+  droppedPackets: number;
+  /** Packets currently buffered awaiting the backend writer thread. */
+  queuedPackets: number;
+  /** 1-based reconnect attempt in progress (0 = not reconnecting). */
+  reconnectAttempt: number;
   /** Start encoding the given stream to this destination's RTMP session.
    *  Resolves when ffmpeg accepts the session. Pass `audioTrack` to use the
    *  hub's shared input instead of capturing one. */
@@ -209,10 +224,28 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
   const sharedVideoUnsubRef = useRef<(() => void) | null>(null);
   const bytesRef = useRef(0);
   const runningRef = useRef(false);
+  /** Operator intent: whether this destination is supposed to be live. The
+   *  transport can be temporarily down (reconnecting) while this stays true, so
+   *  a failed teardown can't cancel a scheduled reconnect. */
+  const wantsActiveRef = useRef(false);
   const frameCountRef = useRef(0);
   const [status, setStatus] = useState<RtmpStreamerStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [bitrate, setBitrate] = useState(0);
+  const [sentPackets, setSentPackets] = useState(0);
+  const [droppedPackets, setDroppedPackets] = useState(0);
+  const [queuedPackets, setQueuedPackets] = useState(0);
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
+  /** Last successful start arguments so a bounded reconnect can replay them with
+   *  the SAME destination id and stream (never a duplicate session). */
+  const lastStartArgsRef = useRef<{
+    stream: MediaStream;
+    serverUrl: string;
+    streamKey?: string;
+    sharedAudioTrack?: MediaStreamTrack | null;
+  } | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const statsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -237,6 +270,10 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
   const teardown = useCallback(() => {
     runningRef.current = false;
     clearStats();
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
     if (sharedVideoUnsubRef.current) {
       sharedVideoUnsubRef.current();
       sharedVideoUnsubRef.current = null;
@@ -275,17 +312,52 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
     frameCountRef.current = 0;
   }, [clearStats]);
 
-  // Failure path: mark the stream failed, tear down the encoder/processors,
-  // AND stop the backend ingest so the ffmpeg child + session are never leaked
-  // (audit: every encoder/feed error must clean up the backend session).
-  const fail = useCallback((message: string) => {
-    setStatus("error");
-    setError(message);
-    teardown();
-    invoke("rtmp_stop", { sessionId }).catch(() => {});
-  }, [teardown, sessionId]);
+  // Failure path: on a transient failure (encoder error, feed error, ffmpeg
+  // exit) run a bounded reconnect — up to three attempts with exponential
+  // backoff (1s, 2s, 4s). A reconnect replays the last start with the SAME
+  // destination id and stream, so it can never duplicate a session (`rtmp_start`
+  // rejects duplicates). After the cap, the destination settles on `error` and
+  // the backend session is stopped so nothing is leaked. `start` and `fail` are
+  // mutually recursive, so each resolves the other through a ref.
+  const failRef = useRef<(message: string) => void>(() => {});
+  const startRef = useRef<
+    (stream: MediaStream, serverUrl: string, streamKey?: string, audioTrack?: MediaStreamTrack | null) => Promise<boolean>
+  >(() => Promise.resolve(false));
+
+  const fail = useCallback(
+    (message: string) => {
+      if (!wantsActiveRef.current) return; // already stopping / fully stopped
+      if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+        wantsActiveRef.current = false;
+        setStatus("error");
+        setError(message);
+        teardown();
+        invoke("rtmp_stop", { sessionId }).catch(() => {});
+        return;
+      }
+      reconnectAttemptsRef.current += 1;
+      const attempt = reconnectAttemptsRef.current;
+      setStatus("reconnecting");
+      setError(message);
+      setReconnectAttempt(attempt);
+      // Clear the encoder/processors so a reconnect can re-create them (the
+      // first line of `start` guards on `encoderRef.current`).
+      teardown();
+      const delay = RECONNECT_BASE_DELAY_MS * 2 ** (attempt - 1);
+      reconnectTimerRef.current = setTimeout(() => {
+        const args = lastStartArgsRef.current;
+        if (!args || !wantsActiveRef.current) return;
+        void startRef.current?.(args.stream, args.serverUrl, args.streamKey, args.sharedAudioTrack);
+      }, delay);
+    },
+    [teardown, sessionId]
+  );
+  failRef.current = fail;
 
   const stop = useCallback(async () => {
+    wantsActiveRef.current = false;
+    reconnectAttemptsRef.current = 0;
+    setReconnectAttempt(0);
     for (const enc of [encoderRef.current, audioEncoderRef.current]) {
       if (enc && enc.state === "configured") {
         try {
@@ -302,6 +374,9 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
       setError(`Failed to stop RTMP: ${e?.message ?? e}`);
     }
     setStatus("idle");
+    setSentPackets(0);
+    setDroppedPackets(0);
+    setQueuedPackets(0);
   }, [teardown, sessionId]);
 
   const start = useCallback(
@@ -322,6 +397,12 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
       const settings = track.getSettings();
       const width = settings?.width ?? 1920;
       const height = settings?.height ?? 1080;
+
+      // Store the start args so a bounded reconnect can replay them with the
+      // SAME destination id and stream (never a duplicate session).
+      lastStartArgsRef.current = { stream, serverUrl, streamKey, sharedAudioTrack };
+      runningRef.current = true;
+      wantsActiveRef.current = true;
 
       if (typeof VideoEncoder === "undefined") {
         setStatus("error");
@@ -394,20 +475,22 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
                 adts = wrapAdts(buf, audioSampleRate, audioChannels);
               } catch (e: any) {
                 if (runningRef.current) {
-                  fail(`AAC encode failed: ${e?.message ?? e}`);
+                  failRef.current(`AAC encode failed: ${e?.message ?? e}`);
                 }
                 return;
               }
-              invoke("rtmp_send_audio", { sessionId, dataBase64: bytesToBase64(adts) }).catch((e: any) => {
-                if (runningRef.current) {
-                  fail(`RTMP audio feed failed: ${e?.message ?? e}`);
+              invoke("rtmp_send_audio", { sessionId, dataBase64: bytesToBase64(adts) }).then(
+                (res) => {
+                  if (res === "dropped") setDroppedPackets((n) => n + 1);
+                  else if (res === "queued") setSentPackets((n) => n + 1);
+                },
+                (e: any) => {
+                  if (runningRef.current) failRef.current(`RTMP audio feed failed: ${e?.message ?? e}`);
                 }
-              });
+              );
             },
             error: (e) => {
-              if (runningRef.current) {
-                fail(`Audio encoder error: ${e?.message ?? e}`);
-              }
+              if (runningRef.current) failRef.current(`Audio encoder error: ${e?.message ?? e}`);
             },
           });
           audioEncoder.configure({
@@ -418,18 +501,28 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
           });
           audioEncoderRef.current = audioEncoder;
         } catch (e: any) {
-          fail(`Failed to create the audio encoder: ${e?.message ?? e}`);
+          failRef.current(`Failed to create the audio encoder: ${e?.message ?? e}`);
           if (audioTrackRef.current === audioTrack) audioTrack?.stop();
           return false;
         }
       }
 
       try {
-        await invoke("rtmp_start", { sessionId, serverUrl, streamKey: streamKey || null, withAudio: !!audioTrack });
+        await invoke("rtmp_start", {
+          sessionId,
+          serverUrl,
+          streamKey: streamKey ?? null,
+          withAudio: !!audioTrack,
+          fps,
+        });
       } catch (e: any) {
-        fail(`Failed to start RTMP: ${e?.message ?? e}`);
+        failRef.current(`Failed to start RTMP: ${e?.message ?? e}`);
         return false;
       }
+
+      // A successful (re)start clears the reconnect budget.
+      reconnectAttemptsRef.current = 0;
+      setReconnectAttempt(0);
 
       if (useSharedVideo) {
         // Subscribe to the shared program encoder's packets and forward each to
@@ -441,11 +534,15 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
         startBitratePolling();
         sharedVideoUnsubRef.current = subscribeProgramPackets((packet) => {
           bytesRef.current += packet.size;
-          invoke("rtmp_send", { sessionId, dataBase64: bytesToBase64(packet.bytes) }).catch((e: any) => {
-            if (runningRef.current) {
-              fail(`RTMP feed failed: ${e?.message ?? e}`);
+          invoke("rtmp_send", { sessionId, dataBase64: bytesToBase64(packet.bytes) }).then(
+            (res) => {
+              if (res === "dropped") setDroppedPackets((n) => n + 1);
+              else if (res === "queued") setSentPackets((n) => n + 1);
+            },
+            (e: any) => {
+              if (runningRef.current) failRef.current(`RTMP feed failed: ${e?.message ?? e}`);
             }
-          });
+          );
           return true;
         });
       } else {
@@ -462,7 +559,7 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
           fps
         );
         if (!codec) {
-          fail("No supported H.264 profile found for this encoder.");
+          failRef.current("No supported H.264 profile found for this encoder.");
           if (audioTrackRef.current === audioTrack) audioTrack?.stop();
           return false;
         }
@@ -475,20 +572,22 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
               const buf = new Uint8Array(chunk.byteLength);
               chunk.copyTo(buf);
               // Best-effort feed; the backend surfaces real ffmpeg failures.
-              invoke("rtmp_send", { sessionId, dataBase64: bytesToBase64(buf) }).catch((e: any) => {
-                if (runningRef.current) {
-                  fail(`RTMP feed failed: ${e?.message ?? e}`);
+              invoke("rtmp_send", { sessionId, dataBase64: bytesToBase64(buf) }).then(
+                (res) => {
+                  if (res === "dropped") setDroppedPackets((n) => n + 1);
+                  else if (res === "queued") setSentPackets((n) => n + 1);
+                },
+                (e: any) => {
+                  if (runningRef.current) failRef.current(`RTMP feed failed: ${e?.message ?? e}`);
                 }
-              });
+              );
             },
             error: (e) => {
-              if (runningRef.current) {
-                fail(`Encoder error: ${e?.message ?? e}`);
-              }
+              if (runningRef.current) failRef.current(`Encoder error: ${e?.message ?? e}`);
             },
           });
         } catch (e: any) {
-          fail(`Failed to create encoder: ${e?.message ?? e}`);
+          failRef.current(`Failed to create encoder: ${e?.message ?? e}`);
           if (audioTrackRef.current === audioTrack) audioTrack?.stop();
           return false;
         }
@@ -568,8 +667,9 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
 
       return true;
     },
-    [audio, audioBitrateKbps, bitrateKbps, keyframeIntervalSec, fps, teardown, fail, startBitratePolling, sessionId]
+    [audio, audioBitrateKbps, bitrateKbps, keyframeIntervalSec, fps, teardown, failRef, startBitratePolling, sessionId]
   );
+  startRef.current = start;
 
   // Pause stats when no longer live.
   useEffect(() => {
@@ -581,7 +681,8 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
   // leaks a child process (or a writer thread blocked on a dead pipe).
   useEffect(() => {
     return () => {
-      const wasLive = runningRef.current;
+      const wasLive = wantsActiveRef.current;
+      wantsActiveRef.current = false;
       teardown();
       if (wasLive) {
         invoke("rtmp_stop", { sessionId }).catch(() => {});
@@ -589,7 +690,7 @@ export function useRtmpEncoder(options: UseRtmpEncoderOptions): UseRtmpEncoderRe
     };
   }, [teardown, sessionId]);
 
-  return { status, error, bitrateKbps: bitrate, start, stop };
+  return { status, error, bitrateKbps: bitrate, sentPackets, droppedPackets, queuedPackets, reconnectAttempt, start, stop };
 }
 
 /** Base64-encode bytes without a Blob/FileReader hop. */

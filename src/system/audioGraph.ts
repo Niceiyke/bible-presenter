@@ -42,6 +42,14 @@ export interface AudioGraphState {
   volume: number;
   /** Mute the program bus without touching any visual output. */
   muted: boolean;
+  /** Independent monitor policy (P2-2 / WP8): the RAW pre-gain input track for
+   *  local operator monitoring. It is taken BEFORE the program gain node, so
+   *  program mute/volume can never affect operator monitoring. */
+  monitorTrack: MediaStreamTrack | null;
+  /** 0..1 monitor gain — only affects local operator playback. */
+  monitorVolume: number;
+  /** Mute local operator monitoring only — never recording/stream audio. */
+  monitorMuted: boolean;
   /** Unix ms when the graph last went live. */
   startedAt: number | null;
 }
@@ -113,6 +121,9 @@ let state: AudioGraphState = {
   programTrack: null,
   volume: 1,
   muted: false,
+  monitorTrack: null,
+  monitorVolume: 1,
+  monitorMuted: false,
   startedAt: null,
 };
 
@@ -175,7 +186,6 @@ function closeInternal(): void {
   }
   nodes = { programTrack: null, gain: null, ctx: null };
 }
-
 function applyGain(): void {
   if (nodes.gain) {
     nodes.gain.gain.value = state.muted ? 0 : state.volume;
@@ -206,6 +216,8 @@ function open(deviceId: string): void {
       }
       rawTrack = track;
       nodes = buildProgramTrack(track, state.volume, state.muted);
+      // The monitor track is the RAW pre-gain input, so program mute/volume
+      // never affects local operator monitoring (P2-2 / WP8).
       track.onended = () => {
         if (!state.enabled) return;
         closeInternal();
@@ -215,6 +227,7 @@ function open(deviceId: string): void {
       setState({
         status: "connected",
         programTrack: nodes.programTrack,
+        monitorTrack: track,
         error: null,
         errorKind: null,
         startedAt: Date.now(),
@@ -223,7 +236,7 @@ function open(deviceId: string): void {
     .catch((err) => {
       if (!state.enabled) return;
       const kind = mapAudioError(err);
-      setState({ status: "error", errorKind: kind, error: describeAudioError(kind), programTrack: null });
+      setState({ status: "error", errorKind: kind, error: describeAudioError(kind), programTrack: null, monitorTrack: null });
     });
 }
 
@@ -232,7 +245,7 @@ export function setAudioEnabled(enabled: boolean): void {
   if (enabled === state.enabled) return;
   if (!enabled) {
     closeInternal();
-    setState({ enabled: false, status: "idle", programTrack: null, error: null, errorKind: null, startedAt: null });
+    setState({ enabled: false, status: "idle", programTrack: null, monitorTrack: null, error: null, errorKind: null, startedAt: null });
     return;
   }
   setState({ enabled: true });
@@ -246,7 +259,7 @@ export function setAudioDeviceId(deviceId: string): void {
   if (deviceId === state.deviceId) return;
   const wasEnabled = state.enabled;
   closeInternal();
-  setState({ deviceId, status: wasEnabled ? "opening" : "idle", programTrack: null });
+  setState({ deviceId, status: wasEnabled ? "opening" : "idle", programTrack: null, monitorTrack: null });
   if (wasEnabled) open(deviceId);
 }
 
@@ -261,6 +274,19 @@ export function setAudioVolume(volume: number): void {
 export function setAudioMuted(muted: boolean): void {
   setState({ muted });
   applyGain();
+}
+
+/** Set local operator-monitor gain (0..1). Only affects monitor playback —
+ *  never recording or streaming program audio (P2-2 / WP8). */
+export function setMonitorVolume(volume: number): void {
+  const clamped = Math.max(0, Math.min(1, volume));
+  setState({ monitorVolume: clamped });
+}
+
+/** Mute/unmute local operator monitoring only. Never touches the program bus,
+ *  so it cannot alter recorded or streamed audio (P2-2 / WP8). */
+export function setMonitorMuted(muted: boolean): void {
+  setState({ monitorMuted: muted });
 }
 
 /** Explicit re-open after a permission denial / device loss. */
@@ -286,6 +312,9 @@ export function resetAudioGraph(): void {
     programTrack: null,
     volume: 1,
     muted: false,
+    monitorTrack: null,
+    monitorVolume: 1,
+    monitorMuted: false,
     startedAt: null,
   };
   notify();

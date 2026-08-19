@@ -9,6 +9,8 @@ import {
   setAudioEnabled,
   setAudioMuted,
   setAudioVolume,
+  setMonitorVolume as graphSetMonitorVolume,
+  setMonitorMuted as graphSetMonitorMuted,
   subscribeAudioGraph,
   type AudioGraphStatus,
 } from "../system/audioGraph";
@@ -40,6 +42,13 @@ export interface AudioGraphContextValue {
   setMuted: (v: boolean) => void;
   /** The shared post-gain program audio track (recording + streaming). */
   programTrack: MediaStreamTrack | null;
+  /** Independent monitor policy (P2-2 / WP8): the raw pre-gain input track for
+   *  local operator monitoring. Program mute/volume never affects it. */
+  monitorTrack: MediaStreamTrack | null;
+  monitorVolume: number;
+  setMonitorVolume: (v: number) => void;
+  monitorMuted: boolean;
+  setMonitorMuted: (v: boolean) => void;
   status: AudioGraphStatus;
   error: string | null;
   retry: () => void;
@@ -77,6 +86,8 @@ export function AudioGraphProvider({ children }: { children: ReactNode }) {
   const setDeviceId = useCallback((id: string) => setAudioDeviceId(id), []);
   const setVolume = useCallback((v: number) => setAudioVolume(v), []);
   const setMuted = useCallback((m: boolean) => setAudioMuted(m), []);
+  const setMonitorVolume = useCallback((v: number) => graphSetMonitorVolume(v), []);
+  const setMonitorMuted = useCallback((m: boolean) => graphSetMonitorMuted(m), []);
   const retry = useCallback(() => retryAudio(), []);
 
   const value = useMemo<AudioGraphContextValue>(
@@ -91,12 +102,17 @@ export function AudioGraphProvider({ children }: { children: ReactNode }) {
       muted: snapshot.muted,
       setMuted,
       programTrack: snapshot.programTrack,
+      monitorTrack: snapshot.monitorTrack,
+      monitorVolume: snapshot.monitorVolume,
+      setMonitorVolume,
+      monitorMuted: snapshot.monitorMuted,
+      setMonitorMuted,
       status: snapshot.status,
       error: snapshot.error,
       retry,
       blocked,
     }),
-    [snapshot, setDeviceId, setEnabled, setVolume, setMuted, retry, blocked]
+    [snapshot, setDeviceId, setEnabled, setVolume, setMuted, setMonitorVolume, setMonitorMuted, retry, blocked]
   );
 
   return <AudioGraphContext.Provider value={value}>{children}</AudioGraphContext.Provider>;

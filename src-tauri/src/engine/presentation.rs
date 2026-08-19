@@ -12,7 +12,7 @@ use tauri::AppHandle;
 /// Schema version of the `PresentationSnapshot` document. Bumped when the
 /// snapshot's on-wire shape changes; consumers must reject a snapshot whose
 /// `schema_version` they do not understand instead of guessing at fields.
-pub const PRESENTATION_SCHEMA_VERSION: u32 = 1;
+pub const PRESENTATION_SCHEMA_VERSION: u32 = 2;
 
 /// Authoritative presentation snapshot for window hydration. Windows call
 /// `presentation_snapshot` after registering their event listeners and replay
@@ -22,11 +22,17 @@ pub const PRESENTATION_SCHEMA_VERSION: u32 = 1;
 pub struct PresentationSnapshot {
     pub schema_version: u32,
     pub live: Option<DisplayItem>,
+    /// The item that was live immediately before `live` (P1-6 / WP6).
+    pub previous: Option<DisplayItem>,
     pub staged: Option<DisplayItem>,
     pub settings: PresentationSettings,
     pub lower_third: Option<serde_json::Value>,
     pub props: Vec<PropItem>,
+    /// The id of the live scene composition, if the live item is one (P1-6).
+    pub active_scene_id: Option<String>,
     pub revision: u64,
+    /// Unix ms of the last presentation mutation (0 before any mutation).
+    pub updated_at: u64,
 }
 
 /// Result of one engine mutation. Every `op_*` returns this so command
@@ -50,14 +56,22 @@ pub struct MutationResult {
 /// presentation mutation lock (every `op_*` does) so the snapshot is
 /// consistent — no event can be half-applied when it is captured.
 pub fn snapshot(state: &AppState) -> PresentationSnapshot {
+    let live = state.presentation.live_item.lock().clone();
+    let active_scene_id = match &live {
+        Some(DisplayItem::SceneComposition(data)) => Some(data.scene_id.clone()),
+        _ => None,
+    };
     PresentationSnapshot {
         schema_version: PRESENTATION_SCHEMA_VERSION,
-        live: state.presentation.live_item.lock().clone(),
+        live: live.clone(),
+        previous: state.presentation.previous_item.lock().clone(),
         staged: state.presentation.staged_item.lock().clone(),
         settings: state.presentation.settings.lock().clone(),
         lower_third: state.presentation.lower_third.lock().clone(),
         props: state.presentation.props_layer.lock().clone(),
+        active_scene_id,
         revision: state.presentation.current_revision(),
+        updated_at: *state.presentation.last_updated.lock(),
     }
 }
 
@@ -74,6 +88,14 @@ pub fn now_ms() -> u64 {
 /// mid-transaction (audit: concurrent stage/send-live atomicity).
 fn lock_presentation(state: &AppState) -> parking_lot::MutexGuard<'_, ()> {
     state.presentation.lock.lock()
+}
+
+/// Copies the current live item into `previous_item` (P1-6). Callers that
+/// change the live slot must do this BEFORE replacing it so the snapshot's
+/// `previous` reflects the item that was live immediately before.
+fn capture_previous(state: &AppState) {
+    let prev = state.presentation.live_item.lock().clone();
+    *state.presentation.previous_item.lock() = prev;
 }
 
 // ---------------------------------------------------------------------------
@@ -257,6 +279,7 @@ impl<'a> Engine<'a> {
 
     /// `op_commit_staged` with the presentation lock already held.
     fn op_commit_staged_locked(&self, source: Option<String>) -> MutationResult {
+        capture_previous(self.state);
         let mut live = self.state.presentation.live_item.lock();
         let staged = self.state.presentation.staged_item.lock().clone();
         let committed = match (&*live, &staged) {
@@ -292,6 +315,7 @@ impl<'a> Engine<'a> {
     pub fn op_clear_live(&self, source: Option<String>) -> Result<MutationResult, String> {
         let _guard = lock_presentation(self.state);
         self.state.presentation.bump_revision();
+        capture_previous(self.state);
         *self.state.presentation.live_item.lock() = None;
         self.emit_live_update(None);
         let staged = self.state.presentation.staged_item.lock().clone();
@@ -307,6 +331,7 @@ impl<'a> Engine<'a> {
 
     pub fn op_go_live_item(&self, item: DisplayItem, source: Option<String>) -> Result<MutationResult, String> {
         let _guard = lock_presentation(self.state);
+        capture_previous(self.state);
         let mut live = self.state.presentation.live_item.lock();
         let committed = match &*live {
             // Phase 5: when a scene composition is live and the sent item
@@ -336,6 +361,7 @@ impl<'a> Engine<'a> {
     pub fn op_send_live(&self, item: DisplayItem, source: Option<String>) -> Result<MutationResult, String> {
         let _guard = lock_presentation(self.state);
 
+        capture_previous(self.state);
         let mut live = self.state.presentation.live_item.lock();
         let committed = match &*live {
             Some(live_item) => patch_scene_zones(live_item, &item).unwrap_or(item.clone()),
@@ -369,6 +395,7 @@ impl<'a> Engine<'a> {
         self.state.media_schedule.save_props(&[]).map_err(|e| e.to_string())?;
 
         self.state.presentation.bump_revision();
+        capture_previous(self.state);
         *self.state.presentation.live_item.lock() = None;
         *self.state.presentation.staged_item.lock() = None;
         *self.state.presentation.lower_third.lock() = None;
@@ -583,6 +610,12 @@ impl<'a> Engine<'a> {
     /// a persistence failure compensates the earlier writes and aborts before
     /// any in-memory state or event is touched.
     pub fn op_apply_scene(&self, id: String) -> Result<MutationResult, String> {
+        // Acquire the presentation mutation lock FIRST (P1-3) so no concurrent
+        // settings/props mutation can interleave with the scene's read →
+        // persist → apply sequence or its compensation. One lock, one revision,
+        // one consistent state.
+        let _guard = lock_presentation(self.state);
+
         let scene = self
             .state
             .media_schedule
@@ -612,7 +645,6 @@ impl<'a> Engine<'a> {
         //    layer applied together. The composition (layout) or legacy camera
         //    is staged/committed inside the same transaction; a layout scene
         //    also populates the staged slot like the old op_send_live did.
-        let _guard = lock_presentation(self.state);
         self.state.presentation.bump_revision();
 
         let mut staged_out: Option<DisplayItem> = None;
@@ -624,6 +656,7 @@ impl<'a> Engine<'a> {
                 name: scene.name.clone(),
                 zones: layout.zones.clone(),
             });
+            capture_previous(self.state);
             let mut live = self.state.presentation.live_item.lock();
             let merged = match &*live {
                 Some(live_item) => patch_scene_zones(live_item, &item).unwrap_or(item.clone()),
@@ -637,6 +670,7 @@ impl<'a> Engine<'a> {
         } else if let Some(cam) = &scene.camera {
             // Legacy single-camera scene: restore the camera feed that was
             // live at capture time.
+            capture_previous(self.state);
             let mut live = self.state.presentation.live_item.lock();
             let merged = match &*live {
                 Some(live_item) => patch_scene_zones(live_item, cam).unwrap_or(cam.clone()),
@@ -1346,7 +1380,6 @@ mod tests {
         let rec = EventRecorder::new();
         let eng = rec.engine(&state);
         let mut settings = PresentationSettings::default();
-        settings.is_blanked = false;
         // First save flips nothing -> no BlackoutChanged/LogoChanged publishes.
         let rev = state.presentation.current_revision();
         eng.op_save_settings(settings.clone()).unwrap();

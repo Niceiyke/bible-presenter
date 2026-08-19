@@ -77,6 +77,40 @@ pub type MediaRow = (
     String, Option<f64>, Option<i64>, Option<i64>, String, bool, f64, f64,
 );
 
+/// WP9 (P2-3): the structured, searchable column each opaque content table
+/// keeps in addition to its versioned JSON `data` payload.
+const CONTENT_META_COLS: &[(&str, &str)] = &[
+    ("songs", "title"),
+    ("songs", "author"),
+    ("presentations", "title"),
+    ("scenes", "name"),
+    ("services", "name"),
+];
+
+/// Pure extraction of searchable metadata from a content JSON payload
+/// (WP9 P2-3). Returns `(primary, secondary)` where `primary` is the main
+/// searchable field (song `title`, or `name` for presentations/scenes/
+/// services) and `secondary` is the song `author` (empty elsewhere). Unparsable
+/// payloads degrade to empty strings — the JSON `data` column is never touched,
+/// so unknown fields survive and the record stays renderable.
+pub fn extract_content_meta(table: &str, data: &str) -> (String, String) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(data) else {
+        return (String::new(), String::new());
+    };
+    let primary = v
+        .get("title")
+        .or_else(|| v.get("name"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let secondary = if table == "songs" {
+        v.get("author").and_then(|x| x.as_str()).unwrap_or("").to_string()
+    } else {
+        String::new()
+    };
+    (primary, secondary)
+}
+
 impl DataDb {
     pub fn open(db_path: &PathBuf) -> Result<Self, OpenError> {
         match Self::try_open(db_path) {
@@ -286,6 +320,54 @@ impl DataDb {
         // `current_version` and bump it here.
         if current_version < 1 {
             tx.execute_batch("PRAGMA user_version = 1;")?;
+        }
+
+        // WP9 (P2-3): version 2 adds structured searchable columns + indexes to
+        // the opaque content tables, so search no longer parses every JSON
+        // payload. The versioned `data` JSON column is preserved untouched
+        // (unknown fields survive); the new columns are backfilled by pure
+        // extraction from the existing payloads. All inside this one
+        // transaction (with the pre-migration backup above).
+        if current_version < 2 {
+            for (table, col) in CONTENT_META_COLS {
+                let ddl = format!("ALTER TABLE {table} ADD COLUMN {col} TEXT DEFAULT ''");
+                tx.execute_batch(&ddl)?;
+            }
+            // Backfill existing rows from their JSON payloads.
+            for (table, _col) in CONTENT_META_COLS {
+                let rows: Vec<(String, String)> = {
+                    let sql = format!("SELECT id, data FROM {table}");
+                    let mut stmt = tx.prepare(&sql)?;
+                    let iter = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+                    let mut v = Vec::new();
+                    for r in iter {
+                        v.push(r?);
+                    }
+                    v
+                };
+                for (id, data) in rows {
+                    let (primary, secondary) = extract_content_meta(table, &data);
+                    if *table == "songs" {
+                        tx.execute(
+                            "UPDATE songs SET title = ?1, author = ?2 WHERE id = ?3",
+                            rusqlite::params![primary, secondary, id],
+                        )?;
+                    } else if *table == "presentations" {
+                        tx.execute("UPDATE presentations SET title = ?1 WHERE id = ?2", rusqlite::params![primary, id])?;
+                    } else if *table == "scenes" {
+                        tx.execute("UPDATE scenes SET name = ?1 WHERE id = ?2", rusqlite::params![primary, id])?;
+                    } else if *table == "services" {
+                        tx.execute("UPDATE services SET name = ?1 WHERE id = ?2", rusqlite::params![primary, id])?;
+                    }
+                }
+            }
+            tx.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_songs_title ON songs(title);
+                 CREATE INDEX IF NOT EXISTS idx_presentations_title ON presentations(title);
+                 CREATE INDEX IF NOT EXISTS idx_scenes_name ON scenes(name);
+                 CREATE INDEX IF NOT EXISTS idx_services_name ON services(name);",
+            )?;
+            tx.execute_batch("PRAGMA user_version = 2;")?;
         }
 
         tx.commit()?;
@@ -515,6 +597,31 @@ impl DataDb {
         let conn = self.conn.lock();
         let sql = format!("INSERT INTO {} (id, data) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET data = excluded.data", table);
         conn.execute(&sql, params![id, data]).map_err(|e| e.to_string())?;
+        // WP9 (P2-3): keep the structured searchable columns in sync with the
+        // JSON payload for the content tables (pure extraction; unknown JSON
+        // fields are untouched).
+        if CONTENT_META_COLS.iter().any(|(t, _)| *t == table) {
+            let (primary, secondary) = extract_content_meta(table, data);
+            match table {
+                "songs" => {
+                    conn.execute("UPDATE songs SET title = ?1, author = ?2 WHERE id = ?3", params![primary, secondary, id])
+                        .map_err(|e| e.to_string())?;
+                }
+                "presentations" => {
+                    conn.execute("UPDATE presentations SET title = ?1 WHERE id = ?2", params![primary, id])
+                        .map_err(|e| e.to_string())?;
+                }
+                "scenes" => {
+                    conn.execute("UPDATE scenes SET name = ?1 WHERE id = ?2", params![primary, id])
+                        .map_err(|e| e.to_string())?;
+                }
+                "services" => {
+                    conn.execute("UPDATE services SET name = ?1 WHERE id = ?2", params![primary, id])
+                        .map_err(|e| e.to_string())?;
+                }
+                _ => {}
+            }
+        }
         Ok(())
     }
 
@@ -699,13 +806,52 @@ mod tests {
     }
 
     #[test]
+    fn wp9_content_meta_extraction_and_search_columns() {
+        let dir = test_dir("wp9");
+        let path = dir.join("wp9.db");
+        let db = DataDb::open(&path).unwrap();
+
+        // A song stores searchable title/author while preserving the full JSON.
+        db.hash_set(
+            "songs",
+            "s1",
+            r#"{"id":"s1","title":"Amazing Grace","author":"John Newton","extra":123}"#,
+        )
+        .unwrap();
+        let conn = db.conn.lock();
+        let (title, author, data): (String, String, String) = conn
+            .query_row(
+                "SELECT title, author, data FROM songs WHERE id = 's1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(title, "Amazing Grace");
+        assert_eq!(author, "John Newton");
+        // The versioned JSON payload (incl. unknown fields) is preserved.
+        assert!(data.contains("\"extra\":123"));
+        drop(conn);
+
+        // Pure extraction helper covers scenes/services by `name` and degrades
+        // cleanly on unparsable payloads.
+        assert_eq!(extract_content_meta("scenes", r#"{"id":"sc1","name":"Cam+Bible"}"#), ("Cam+Bible".into(), String::new()));
+        assert_eq!(extract_content_meta("services", "not json"), (String::new(), String::new()));
+
+        // The searchable column is indexed (query plan uses it) and the schema
+        // version is 2.
+        let v: i64 = db.conn.lock().query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, 2);
+        cleanup(&dir);
+    }
+
+    #[test]
     fn upgrade_creates_automatic_backup_before_migration() {
         let dir = test_dir("backup");
         let path = dir.join("data.db");
         // Create a valid, non-empty database first (schema version 0 at this
         // point is fine — a fresh open runs the migration).
         let _ = DataDb::open(&path).unwrap();
-        assert_eq!(std::fs::metadata(&path).unwrap().len() > 0, true);
+        assert!(std::fs::metadata(&path).unwrap().len() > 0);
 
         // Re-opening should not re-create a backup (already at version 1).
         let before: usize = std::fs::read_dir(&dir)

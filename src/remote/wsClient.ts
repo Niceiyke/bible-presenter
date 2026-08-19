@@ -300,7 +300,15 @@ export function useRemote(): UseRemote {
 
     if (isRemoteEvent(msg)) {
       const event: RemoteEvent = msg;
-      revisionRef.current = event.revision;
+      // P1-6 / WP6: reject stale events. A snapshot is always authoritative
+      // (re-hydrate). Any other event whose revision is STRICTLY older than the
+      // revision we already hold is out-of-order/duplicate and must never
+      // overwrite newer remote state. Equal-revision events are applied — they
+      // belong to the same logical mutation or are idempotent replay.
+      if (event.kind !== "snapshot" && revisionRef.current != null && revisionRef.current > event.revision) {
+        return;
+      }
+      revisionRef.current = revisionRef.current == null ? event.revision : Math.max(revisionRef.current, event.revision);
       if (event.kind === "snapshot") {
         const snap = event.payload as unknown;
         if (isSnapshot(snap)) {

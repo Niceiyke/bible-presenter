@@ -167,17 +167,20 @@ export function useItemActions() {
           section_label: settings.show_song_section_labels ? staged.data.section_label : undefined
         }
       };
-      // Phase 6: only claim the overlay is visible when the backend accepts
-      // the show command — a silent fire-and-forget would let the operator
-      // believe an overlay is on air when it is not.
-      invoke("show_lower_third", { data: payload, template: resolveSongLtTemplate(staged.data.song_id, songs, ltSavedTemplates, ltTemplate) })
-        .then(() => {
-          setLtVisible(true);
-          useAppStore.getState().setLtSongId(staged.data.song_id);
-          useAppStore.getState().setLtLineIndex(staged.data.slide_index);
-          useAppStore.getState().setLtMode("lyrics");
-        })
-        .catch((e: any) => setBackendError(`Lower-third failed: ${e?.message ?? e}`));
+      // Phase 6 / P1-4: AWAIT the overlay show so this combined audience-visible
+      // operation returns a complete result — the caller only proceeds (and the
+      // overlay is only claimed visible) when the backend accepted the show. A
+      // failed show surfaces as a definitive error rather than a silent
+      // fire-and-forget.
+      try {
+        await invoke("show_lower_third", { data: payload, template: resolveSongLtTemplate(staged.data.song_id, songs, ltSavedTemplates, ltTemplate) });
+        setLtVisible(true);
+        useAppStore.getState().setLtSongId(staged.data.song_id);
+        useAppStore.getState().setLtLineIndex(staged.data.slide_index);
+        useAppStore.getState().setLtMode("lyrics");
+      } catch (e: any) {
+        setBackendError(`Lower-third failed: ${e?.message ?? e}`);
+      }
     }
 
     if (settings.auto_clear_background_logo && settings.show_background_logo) {
@@ -249,15 +252,17 @@ export function useItemActions() {
           section_label: settings.show_song_section_labels ? item.data.section_label : undefined
         }
       };
-      // Phase 6: see goLive — only flip the visible state on a successful show.
-      invoke("show_lower_third", { data: payload, template: resolveSongLtTemplate(item.data.song_id, songs, ltSavedTemplates, ltTemplate) })
-        .then(() => {
-          setLtVisible(true);
-          useAppStore.getState().setLtSongId(item.data.song_id);
-          useAppStore.getState().setLtLineIndex(item.data.slide_index);
-          useAppStore.getState().setLtMode("lyrics");
-        })
-        .catch((e: any) => setBackendError(`Lower-third failed: ${e?.message ?? e}`));
+      // Phase 6 / P1-4: AWAIT the overlay show so this combined operation
+      // returns a complete result — only flip visible on a successful show.
+      try {
+        await invoke("show_lower_third", { data: payload, template: resolveSongLtTemplate(item.data.song_id, songs, ltSavedTemplates, ltTemplate) });
+        setLtVisible(true);
+        useAppStore.getState().setLtSongId(item.data.song_id);
+        useAppStore.getState().setLtLineIndex(item.data.slide_index);
+        useAppStore.getState().setLtMode("lyrics");
+      } catch (e: any) {
+        setBackendError(`Lower-third failed: ${e?.message ?? e}`);
+      }
     }
 
     if (settings.auto_clear_background_logo && settings.show_background_logo) {

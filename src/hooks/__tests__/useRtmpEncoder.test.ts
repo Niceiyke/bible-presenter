@@ -215,6 +215,7 @@ describe("useRtmpEncoder", () => {
       serverUrl: "rtmp://host/live",
       streamKey: "key123",
       withAudio: false,
+      fps: 30,
     });
     // The encoder was configured for H.264 Annex-B at 6 Mbps.
     const enc = FakeVideoEncoder.instances[0];
@@ -236,10 +237,11 @@ describe("useRtmpEncoder", () => {
       serverUrl: "rtmp://host/live",
       streamKey: null,
       withAudio: false,
+      fps: 30,
     });
   });
 
-  it("surfaces backend start failures", async () => {
+  it("enters bounded reconnect on a backend start failure", async () => {
     mockInvoke.mockRejectedValueOnce(new Error("ffmpeg not found on PATH"));
     const { result } = renderHook(() => useRtmpEncoder({ sessionId: "dest-test" }));
 
@@ -248,7 +250,8 @@ describe("useRtmpEncoder", () => {
       ok = await result.current.start(fakeStream(), "rtmp://host/live", "k");
     });
     expect(ok).toBe(false);
-    expect(result.current.status).toBe("error");
+    expect(result.current.status).toBe("reconnecting");
+    expect(result.current.reconnectAttempt).toBe(1);
     expect(result.current.error).toContain("ffmpeg not found");
   });
 
@@ -301,7 +304,7 @@ describe("useRtmpEncoder", () => {
     expect(FakeVideoEncoder.instances[0]?.state).toBe("closed");
   });
 
-  it("calls rtmp_stop when the encoder errors mid-stream (no leaked session)", async () => {
+  it("enters bounded reconnect when the encoder errors mid-stream", async () => {
     const { result } = renderHook(() => useRtmpEncoder({ sessionId: "dest-test" }));
     await act(async () => {
       await result.current.start(fakeStream(), "rtmp://host/live", "k");
@@ -313,12 +316,82 @@ describe("useRtmpEncoder", () => {
     await act(async () => {
       enc?.errorCb?.(new DOMException("boom", "EncodingError"));
     });
-    expect(result.current.status).toBe("error");
+    expect(result.current.status).toBe("reconnecting");
     expect(result.current.error).toContain("boom");
-    expect(mockInvoke).toHaveBeenCalledWith("rtmp_stop", { sessionId: "dest-test" });
+    // The reconnect budget is bounded — the backend session is NOT stopped yet.
+    expect(mockInvoke).not.toHaveBeenCalledWith("rtmp_stop", { sessionId: "dest-test" });
   });
 
-  it("calls rtmp_stop when feeding packets fails (no leaked session)", async () => {
+  it("exhausts the reconnect budget then settles on error and stops the backend", async () => {
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(() => useRtmpEncoder({ sessionId: "dest-test" }));
+      await act(async () => {
+        await result.current.start(fakeStream(), "rtmp://host/live", "k");
+      });
+      expect(result.current.status).toBe("live");
+
+      // From here every start/feed fails so each reconnect attempt fails too.
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        if (cmd === "rtmp_start") throw new Error("ffmpeg exit");
+        if (cmd === "rtmp_send") throw new Error("writer closed");
+        return undefined;
+      });
+      const enc = FakeVideoEncoder.instances[0];
+      await act(async () => {
+        enc?.errorCb?.(new DOMException("boom", "EncodingError"));
+      });
+      expect(result.current.status).toBe("reconnecting");
+      expect(result.current.reconnectAttempt).toBe(1);
+
+      // Advance through the exponential backoff (1s, 2s, 4s) — each fires a
+      // reconnect that fails and schedules the next.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000);
+      });
+
+      expect(result.current.status).toBe("error");
+      expect(mockInvoke).toHaveBeenCalledWith("rtmp_stop", { sessionId: "dest-test" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("passes the selected capture fps through to rtmp_start", async () => {
+    for (const fps of [24, 30, 60]) {
+      const { result } = renderHook(() => useRtmpEncoder({ sessionId: "dest-test", fps }));
+      await act(async () => {
+        await result.current.start(fakeStream(), "rtmp://host/live", "k");
+      });
+      const call = mockInvoke.mock.calls.find((c: any[]) => c[0] === "rtmp_start");
+      expect(call?.[1]).toMatchObject({ fps });
+      mockInvoke.mockClear();
+    }
+  });
+
+  it("counts dropped packets reported by the bounded queue", async () => {
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "rtmp_send") return "dropped";
+      return undefined;
+    });
+    const { result } = renderHook(() => useRtmpEncoder({ sessionId: "dest-test" }));
+    await act(async () => {
+      await result.current.start(fakeStream(), "rtmp://host/live", "k");
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    expect(result.current.droppedPackets).toBeGreaterThan(0);
+    expect(result.current.sentPackets).toBe(0);
+  });
+
+  it("enters bounded reconnect when feeding packets fails", async () => {
     mockInvoke.mockImplementation(async (cmd: string) => {
       if (cmd === "rtmp_send") throw new Error("writer closed (ffmpeg exited)");
       return undefined;
@@ -331,9 +404,8 @@ describe("useRtmpEncoder", () => {
     await act(async () => {
       await new Promise((r) => setTimeout(r, 10));
     });
-    expect(result.current.status).toBe("error");
+    expect(result.current.status).toBe("reconnecting");
     expect(result.current.error).toContain("writer closed");
-    expect(mockInvoke).toHaveBeenCalledWith("rtmp_stop", { sessionId: "dest-test" });
   });
 });
 
@@ -428,6 +500,7 @@ describe("useRtmpEncoder audio", () => {
       serverUrl: "rtmp://host/live",
       streamKey: "k",
       withAudio: true,
+      fps: 30,
     });
     // The audio encoder is configured for AAC-LC stereo at 160 kbps.
     const enc = FakeAudioEncoder.instances[0];

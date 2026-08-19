@@ -1,12 +1,9 @@
-import React, { useCallback, useEffect, useRef } from "react";
+import React from "react";
 import { Play, Square, Mic, Trash2, Globe, KeyRound, Radio, MonitorPlay } from "lucide-react";
-import { useStreamer } from "../../hooks/useStreamer";
-import { useRtmpEncoder } from "../../hooks/useRtmpEncoder";
-import { useNdiSender } from "../../hooks/useNdiSender";
-import { PLATFORM_PRESETS, presetFor, applyPreset } from "./presets";
+import { presetFor, applyPreset, PLATFORM_PRESETS } from "./presets";
 import type { StreamDestination, StreamPlatform } from "../../types";
 
-export type DestTransportStatus = "idle" | "connecting" | "live" | "error";
+export type DestTransportStatus = "idle" | "connecting" | "live" | "error" | "reconnecting";
 
 export interface DestinationCardHandle {
   start: () => Promise<boolean>;
@@ -15,16 +12,22 @@ export interface DestinationCardHandle {
 
 interface DestinationCardProps {
   destination: StreamDestination;
-  /** Resolved at start time so edits don't invalidate running transports. */
-  getSourceTracks: () => { video: MediaStreamTrack | null; audio: MediaStreamTrack | null };
+  /** Transport status reported by the app-scoped `DestinationRuntime`. */
+  status: DestTransportStatus;
+  bitrateKbps: number;
+  error: string | null;
+  /** WHIP resource URL (reported by the WHIP transport runtime). */
+  resourceUrl: string | null;
+  /** Packets written to the backend since the destination started. */
+  sentPackets?: number;
+  /** Packets dropped by the bounded queue since the destination started. */
+  droppedPackets?: number;
+  /** Packets currently buffered awaiting the backend writer thread. */
+  queuedPackets?: number;
   onChange: (next: StreamDestination) => void;
   onRemove: () => void;
-  onStatus: (id: string, status: DestTransportStatus, bitrateKbps: number) => void;
-  onRegister: (id: string, handle: DestinationCardHandle | null) => void;
-  /** Master capture fps — fed to the RTMP/NDI encoder config. */
-  fps?: number;
-  /** Master capture bitrate (auto-derived from resolution/fps). */
-  bitrateKbps?: number;
+  onStart: () => void;
+  onStop: () => void;
   /** Capability gate: when set, the transport is unavailable (e.g. RTMP
    *  needs ffmpeg + WebCodecs H.264) — the Go Live button is disabled and the
    *  reason is surfaced on the card. */
@@ -37,80 +40,46 @@ function formatBitrate(kbps: number): string {
   return `${(kbps / 1000).toFixed(2)} Mbps`;
 }
 
+/**
+ * `DestinationCard` — UI-only editor for one streaming destination (WP2 P0-1).
+ *
+ * The transport hooks that used to live here are owned by the app-scoped
+ * `DestinationRuntime` (rendered inside `StreamingProvider`), so this card can
+ * unmount when the operator navigates away without stopping an active stream.
+ * The card only consumes the runtime's reported status and drives its
+ * start/stop through the provider's registered handle.
+ */
 export function DestinationCard({
   destination: dest,
-  getSourceTracks,
+  status,
+  bitrateKbps,
+  error,
+  resourceUrl,
+  sentPackets = 0,
+  droppedPackets = 0,
+  queuedPackets = 0,
   onChange,
   onRemove,
-  onStatus,
-  onRegister,
-  fps = 30,
-  bitrateKbps,
+  onStart,
+  onStop,
   blockedReason,
 }: DestinationCardProps) {
-  const rtmp = useRtmpEncoder({ sessionId: dest.id, fps, bitrateKbps });
-  const streamer = useStreamer();
-  const ndi = useNdiSender({ sessionId: dest.id, fps, bitrateKbps });
-  const streamRef = useRef<MediaStream | null>(null);
-
-  const live = dest.mode === "rtmp" ? rtmp : dest.mode === "ndi" ? ndi : streamer;
-  const active = live.status === "live" || live.status === "connecting";
-
-  const start = useCallback(async (): Promise<boolean> => {
-    if (active) return false;
-    const { video, audio } = getSourceTracks();
-    if (!video) return false;
-    const v = video.clone();
-    const a = dest.audio ? (audio ? audio.clone() : null) : null;
-    const tracks: MediaStreamTrack[] = [v];
-    if (a) tracks.push(a);
-    const stream = new MediaStream(tracks);
-    streamRef.current = stream;
-    if (dest.mode === "rtmp") {
-      return rtmp.start(stream, dest.url, dest.stream_key || undefined, a);
-    }
-    if (dest.mode === "ndi") {
-      return ndi.start(stream, dest.label);
-    }
-    return streamer.start(stream, { url: dest.url, token: dest.stream_key });
-  }, [active, dest, getSourceTracks, rtmp, ndi, streamer]);
-
-  const stop = useCallback(async () => {
-    if (dest.mode === "rtmp") {
-      await rtmp.stop();
-    } else if (dest.mode === "ndi") {
-      await ndi.stop();
-    } else {
-      await streamer.stop();
-    }
-    const s = streamRef.current;
-    if (s) {
-      s.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
-  }, [dest.mode, rtmp, ndi, streamer]);
-
-  useEffect(() => {
-    onRegister(dest.id, { start, stop });
-    return () => onRegister(dest.id, null);
-  }, [onRegister, dest.id, start, stop]);
-
-  useEffect(() => {
-    onStatus(dest.id, live.status, live.bitrateKbps);
-  }, [dest.id, live.status, live.bitrateKbps, onStatus]);
+  const active = status === "live" || status === "connecting" || status === "reconnecting";
 
   const preset = presetFor(dest.platform);
   const statusLabel =
-    live.status === "live"
+    status === "live"
       ? "Live"
-      : live.status === "connecting"
-        ? "Connecting…"
-        : live.status === "error"
-          ? "Error"
-          : "Offline";
+      : status === "reconnecting"
+        ? "Reconnecting…"
+        : status === "connecting"
+          ? "Connecting…"
+          : status === "error"
+            ? "Error"
+            : "Offline";
 
   return (
-    <div className={`rounded-lg border p-3 flex flex-col gap-2 ${live.status === "live" ? "border-red-700/60 bg-red-950/10" : "border-slate-700 bg-slate-900/40"}`}>
+    <div className={`rounded-lg border p-3 flex flex-col gap-2 ${status === "live" ? "border-red-700/60 bg-red-950/10" : "border-slate-700 bg-slate-900/40"}`}>
       <div className="flex items-center gap-2">
         <Radio size={11} className="text-slate-500" />
         <select
@@ -134,19 +103,21 @@ export function DestinationCard({
         />
         <span
           className={`ml-auto px-2 py-0.5 rounded-full border text-[10px] font-bold uppercase tracking-wider ${
-            live.status === "live"
+            status === "live"
               ? "bg-red-600/20 border-red-600 text-red-400"
-              : live.status === "connecting"
+              : status === "reconnecting"
                 ? "bg-amber-500/20 border-amber-500 text-amber-400"
-                : live.status === "error"
-                  ? "bg-red-900/40 border-red-800 text-red-500"
-                  : "bg-slate-800 border-slate-700 text-slate-400"
+                : status === "connecting"
+                  ? "bg-amber-500/20 border-amber-500 text-amber-400"
+                  : status === "error"
+                    ? "bg-red-900/40 border-red-800 text-red-500"
+                    : "bg-slate-800 border-slate-700 text-slate-400"
           }`}
         >
           {statusLabel}
         </span>
-        {live.status === "live" && (
-          <span className="text-slate-500 font-mono text-[10px]">{formatBitrate(live.bitrateKbps)}</span>
+        {status === "live" && (
+          <span className="text-slate-500 font-mono text-[10px]">{formatBitrate(bitrateKbps)}</span>
         )}
       </div>
 
@@ -216,14 +187,14 @@ export function DestinationCard({
         <div className="ml-auto flex items-center gap-2">
           {active ? (
             <button
-              onClick={stop}
+              onClick={onStop}
               className="px-3 py-1 rounded bg-red-600 hover:bg-red-500 text-white text-[10px] font-bold uppercase tracking-wider transition-all flex items-center gap-1.5"
             >
               <Square size={9} fill="currentColor" /> Stop
             </button>
           ) : (
             <button
-              onClick={() => start()}
+              onClick={onStart}
               disabled={(dest.mode !== "ndi" && !dest.url.trim()) || !!blockedReason}
               title={
                 blockedReason
@@ -248,17 +219,29 @@ export function DestinationCard({
         </div>
       </div>
 
+      {status === "live" && (
+        <div className="flex items-center gap-3 text-[9px] text-slate-500 font-mono">
+          <span>sent {sentPackets}</span>
+          <span>queued {queuedPackets}</span>
+          {droppedPackets > 0 && <span className="text-amber-400">dropped {droppedPackets}</span>}
+        </div>
+      )}
+      {status === "reconnecting" && (
+        <p className="text-[10px] text-amber-400 bg-amber-900/20 border border-amber-800/60 rounded px-2 py-1">
+          Reconnecting… {error ?? ""}
+        </p>
+      )}
       {blockedReason && (
         <p className="text-[10px] text-amber-400 bg-amber-900/20 border border-amber-800/60 rounded px-2 py-1">
           {blockedReason}
         </p>
       )}
-      {live.status === "error" && live.error && (
-        <p className="text-[10px] text-red-400 bg-red-900/30 border border-red-900 rounded px-2 py-1">{live.error}</p>
+      {status === "error" && error && (
+        <p className="text-[10px] text-red-400 bg-red-900/30 border border-red-900 rounded px-2 py-1">{error}</p>
       )}
-      {live.status === "live" && dest.mode === "whip" && streamer.resourceUrl && (
+      {status === "live" && dest.mode === "whip" && resourceUrl && (
         <p className="text-[10px] text-emerald-500 bg-emerald-900/20 border border-emerald-900/50 rounded px-2 py-1 break-all">
-          WHIP resource: {streamer.resourceUrl}
+          WHIP resource: {resourceUrl}
         </p>
       )}
       {!active && <p className="text-[10px] text-slate-600">{preset.hint}</p>}

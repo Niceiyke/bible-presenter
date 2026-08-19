@@ -8,6 +8,10 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct PresentationState {
     pub live_item: Arc<Mutex<Option<store::DisplayItem>>>,
+    /// The item that occupied the live slot immediately before the current one
+    /// (captured when a new item takes live). Mirrors the operator console's
+    /// `previousItem` so a reopened window hydrates it too.
+    pub previous_item: Arc<Mutex<Option<store::DisplayItem>>>,
     pub staged_item: Arc<Mutex<Option<store::DisplayItem>>>,
     pub settings: Arc<Mutex<store::PresentationSettings>>,
     pub lower_third: Arc<Mutex<Option<serde_json::Value>>>,
@@ -21,24 +25,32 @@ pub struct PresentationState {
     /// use it to order a hydration snapshot against live events so stale state
     /// can never overwrite a newer transition.
     pub revision: Arc<AtomicU64>,
+    /// Unix ms of the last presentation mutation (for `updated_at` on the
+    /// snapshot). Written under the presentation lock alongside `revision`.
+    pub last_updated: Arc<Mutex<u64>>,
 }
 
 impl PresentationState {
     pub fn new(settings: store::PresentationSettings) -> Self {
         Self {
             live_item: Arc::new(Mutex::new(None)),
+            previous_item: Arc::new(Mutex::new(None)),
             staged_item: Arc::new(Mutex::new(None)),
             settings: Arc::new(Mutex::new(settings)),
             lower_third: Arc::new(Mutex::new(None)),
             props_layer: Arc::new(Mutex::new(Vec::new())),
             lock: Arc::new(Mutex::new(())),
             revision: Arc::new(AtomicU64::new(0)),
+            last_updated: Arc::new(Mutex::new(0)),
         }
     }
 
-    /// Increments and returns the next presentation revision.
+    /// Increments and returns the next presentation revision and stamps the
+    /// mutation time (called by every `op_*` under the presentation lock).
     pub fn bump_revision(&self) -> u64 {
-        self.revision.fetch_add(1, Ordering::SeqCst) + 1
+        let rev = self.revision.fetch_add(1, Ordering::SeqCst) + 1;
+        *self.last_updated.lock() = crate::engine::now_ms();
+        rev
     }
 
     pub fn current_revision(&self) -> u64 {

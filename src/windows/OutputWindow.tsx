@@ -28,6 +28,7 @@ import type { LicenseInfo } from "../types/license";
 import { tierCapabilities } from "../system/tiers";
 import { PresentationSync } from "../system/presentationSync";
 import PhoneCameraVideo, { usePhoneCameraOrientation, usePhoneCameraLook, useCameraChroma } from "../components/shared/PhoneCameraVideo";
+import { useCameraSource } from "../hooks/useCameraSource";
 
 function ProjectionErrorFallback() {
   return (
@@ -79,9 +80,6 @@ export function OutputWindow() {
   );
   const liveCameraLook = usePhoneCameraLook(liveCameraDeviceId);
   const liveCameraChroma = useCameraChroma(liveCameraDeviceId);
-  // Locally-opened background camera stream (owned by this effect, unlike the
-  // relayed phone streams which belong to the phone's peer connections).
-  const localBgCameraRef = useRef<MediaStream | null>(null);
 
   // The resolved program frame for this window. Built through the SAME pure
   // resolver the canvas compositor, recorder, and streamer use
@@ -431,82 +429,41 @@ export function OutputWindow() {
     cameraBg?.deviceId?.startsWith("phone-camera-") ? cameraBg.deviceId : null
   );
 
-  // Browser-only camera stream lifecycle. Phone cameras stream over the WebRTC
-  // relay hosted by this window's "output" peer (their ids are synthetic and
-  // can never be opened with getUserMedia here).
+  // Camera lifecycle (Phase 5 source registry). Local cameras are opened ONCE
+  // per device via the ref-counted registry (never one getUserMedia per
+  // consumer); phone cameras are relayed over WebRTC by this window's "output"
+  // peer and their synthetic ids are never sent to getUserMedia.
+  const bgLocalCam = useCameraSource(
+    cameraBg?.deviceId && !cameraBg.deviceId.startsWith("phone-camera-") ? cameraBg.deviceId : null,
+    "output-window-bg"
+  );
+  const bgPhoneStream =
+    cameraBg?.deviceId?.startsWith("phone-camera-") ? (phoneStreams[cameraBg.deviceId] ?? null) : null;
+  const effectiveBgStream = bgPhoneStream ?? bgLocalCam.stream;
+
   useEffect(() => {
-    const deviceId = cameraBg?.deviceId;
+    setCameraStream(effectiveBgStream);
+  }, [effectiveBgStream]);
 
-    const stopLocal = () => {
-      if (localBgCameraRef.current) {
-        localBgCameraRef.current.getTracks().forEach(track => track.stop());
-        localBgCameraRef.current = null;
-      }
-    };
-
-    if (deviceId?.startsWith("phone-camera-")) {
-      stopLocal();
-      setCameraStream(phoneStreams[deviceId] ?? null);
+  // Main camera stream. Local cameras are opened ONCE per device via the shared
+  // source registry (never one getUserMedia per consumer); phone cameras are
+  // handled by the WebRTC relay effect below.
+  const mainCamDeviceId =
+    liveItem?.type === "Camera" && !liveItem.data.deviceId.startsWith("phone-camera-")
+      ? liveItem.data.deviceId
+      : null;
+  const mainLocalCam = useCameraSource(mainCamDeviceId, "output-window-main");
+  useEffect(() => {
+    if (liveItem?.type !== "Camera") {
+      setMainCameraStream(null);
       return;
     }
-
-    if (deviceId && !deviceId.startsWith("native:") && !deviceId.startsWith("ndi:")) {
-      stopLocal();
-      navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } })
-        .then(stream => {
-          localBgCameraRef.current = stream;
-          setCameraStream(stream);
-        })
-        .catch(err => console.error("Failed to get camera stream:", err));
+    if (liveItem.data.deviceId.startsWith("phone-camera-")) {
+      // Phone stream is set by the WebRTC relay effect; do not touch it here.
       return;
     }
-
-    stopLocal();
-    setCameraStream(null);
-  }, [cameraBg?.deviceId, phoneStreams]);
-
-  useEffect(() => () => {
-    if (localBgCameraRef.current) {
-      localBgCameraRef.current.getTracks().forEach(track => track.stop());
-      localBgCameraRef.current = null;
-    }
-  }, []);
-
-  // Main camera stream
-  useEffect(() => {
-    let activeStream: MediaStream | null = null;
-    
-    const startBrowserCamera = async (deviceId: string) => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-          video: { deviceId: { exact: deviceId } } 
-        });
-        activeStream = stream;
-        setMainCameraStream(stream);
-      } catch (err) {
-        console.error("Failed to get main camera stream:", err);
-      }
-    };
-
-    // Phone cameras are handled by the WebRTC relay effect; skip them here so
-    // this effect never opens a bogus getUserMedia or clears the relayed stream.
-    const isPhoneCamera = liveItem?.type === "Camera" && liveItem?.data?.deviceId?.startsWith("phone-camera-");
-    if (isPhoneCamera) return () => {};
-    if (liveItem?.type === "Camera" && liveItem.data.deviceId && !liveItem.data.deviceId.startsWith("native:") && !liveItem.data.deviceId.startsWith("ndi:")) {
-      startBrowserCamera(liveItem.data.deviceId);
-    } else {
-      if (mainCameraStream) {
-        mainCameraStream.getTracks().forEach(track => track.stop());
-        setMainCameraStream(null);
-      }
-    }
-
-    return () => {
-      if (activeStream) {
-        activeStream.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, [liveItem?.type === "Camera" ? liveItem.data.deviceId : null]);
+    setMainCameraStream(mainLocalCam.stream);
+  }, [liveItem?.type, liveItem?.type === "Camera" ? liveItem.data.deviceId : null, mainLocalCam.stream]);
 
   // Phone camera WebRTC relay: host the answering peer for each phone.
   useEffect(() => {

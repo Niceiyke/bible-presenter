@@ -217,8 +217,27 @@ pub struct OutputManager {
 
 impl OutputManager {
     pub fn new(app_data_dir: &Path) -> Self {
+        let mut issues = Vec::new();
+        Self::new_with_issues(app_data_dir, &mut issues)
+    }
+
+    /// Construct the output manager, recording any load problem (e.g. a
+    /// malformed `outputs.json`) into `startup_issues` instead of silently
+    /// appearing default (P1-5 / WP6). The malformed file is left in place for
+    /// diagnosis; a safe fallback is loaded so the app still runs, but the
+    /// operator-visible banner explains that the persisted config was invalid.
+    pub fn new_with_issues(app_data_dir: &Path, startup_issues: &mut Vec<String>) -> Self {
         let configs_file = app_data_dir.join("outputs.json");
-        let configs = Self::load(&configs_file).unwrap_or_else(|_| default_outputs());
+        let configs = match Self::load(&configs_file) {
+            Ok(c) => c,
+            Err(e) => {
+                startup_issues.push(format!(
+                    "Output configuration could not be read from {} — using defaults. Original error: {e}",
+                    configs_file.display()
+                ));
+                default_outputs()
+            }
+        };
         let mut runtime = std::collections::HashMap::new();
         for c in &configs {
             runtime.insert(c.id.clone(), OutputState::seed(c));
@@ -458,6 +477,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn malformed_outputs_json_is_reported_as_startup_issue_and_falls_back_to_defaults() {
+        let dir = temp_app_data("malformed");
+        std::fs::write(dir.join("outputs.json"), "{ not valid json").unwrap();
+
+        let mut issues = Vec::new();
+        let manager = OutputManager::new_with_issues(&dir, &mut issues);
+
+        // A safe fallback is loaded so the app still runs...
+        assert!(!manager.list().is_empty());
+        // ...but the malformed persisted config is surfaced as a startup issue
+        // instead of silently appearing default, and the file is retained.
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].contains("outputs.json"));
+        assert!(std::fs::metadata(dir.join("outputs.json")).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

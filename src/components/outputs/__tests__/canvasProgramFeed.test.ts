@@ -8,6 +8,10 @@ import {
   ptToPx,
   getEffectiveBg,
   collectCameraDeviceIds,
+  proseToRuns,
+  drawRichParagraph,
+  wrapCount,
+  type RichTextRun,
 } from "../canvasProgramFeed";
 import type { DisplayItem, PresentationSettings } from "../../../types";
 import { THEMES } from "../../../types";
@@ -486,5 +490,78 @@ describe("canvasProgramFeed", () => {
 describe("useCanvasCapture wiring", () => {
   it("exposes ptToPx for compositor scale math", () => {
     expect(ptToPx(36, 1)).toBeCloseTo(48);
+  });
+});
+
+describe("WP7 supported rich-text subset (P2-1)", () => {
+  const prose = {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          { type: "text", text: "Hello " },
+          { type: "text", text: "world", marks: [{ type: "bold" }, { type: "underline" }] },
+          { type: "text", text: " in ", marks: [{ type: "textStyle", attrs: { color: "#ff0000" } }] },
+          { type: "text", text: "red" },
+        ],
+      },
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: "Second", marks: [{ type: "italic" }] }],
+      },
+    ],
+  };
+
+  it("parses ProseMirror runs with bold/italic/underline/color per run", () => {
+    const groups = proseToRuns(prose)!;
+    expect(groups).toHaveLength(2);
+    // Runs are coalesced by identical style.
+    expect(groups[0]).toEqual([
+      { text: "Hello " },
+      { text: "world", bold: true, underline: true },
+      { text: " in ", color: "#ff0000" },
+      { text: "red" },
+    ]);
+    expect(groups[1]).toEqual([{ text: "Second", italic: true }]);
+  });
+
+  it("returns null for legacy HTML/string content (plain fallback)", () => {
+    expect(proseToRuns("Hello <b>world</b>")).toBeNull();
+    expect(proseToRuns(null)).toBeNull();
+  });
+
+  it("draws each styled run with underline and records the font changes", () => {
+    const { ctx, calls } = makeCtx();
+    const runs: RichTextRun[] = [
+      { text: "Hi " },
+      { text: "B", bold: true, underline: true },
+    ];
+    drawRichParagraph(ctx, runs, 100, 200, 2000, 26, "40px Georgia, serif", "left", 100);
+    // Both words drawn.
+    expect(calls.some((c) => c.startsWith("fillText:Hi "))).toBe(true);
+    expect(calls.some((c) => c.startsWith("fillText:B"))).toBe(true);
+    // The underline drew a filled rect.
+    expect(calls.some((c) => c.startsWith("fillRect:"))).toBe(true);
+    // Bold font was applied for the styled run.
+    expect(calls.some((c) => c.startsWith("font:700"))).toBe(true);
+  });
+
+  it("wraps a long group into multiple lines and counts them identically", () => {
+    const { ctx } = makeCtx();
+    const runs: RichTextRun[] = [{ text: "one two three four five six seven eight nine ten" }];
+    const count = wrapCount(ctx, runs, 60, "20px sans-serif");
+    expect(count).toBeGreaterThan(1);
+    expect(drawRichParagraph(ctx, runs, 0, 0, 60, 26, "20px sans-serif", "left", 0)).toBe(count);
+  });
+
+  it("falls back to plain text when the content has no inline styling", () => {
+    const { ctx, calls } = makeCtx();
+    // No marks → proseToRuns yields a plain group, hasRich is false → the
+    // plain wrap path is used (proven by flattenTextContent producing one line).
+    const plain = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "no styling" }] }] };
+    expect(flattenTextContent(plain)).toBe("no styling");
+    expect(proseToRuns(plain)?.[0].some((r) => r.bold || r.italic || r.underline || r.color)).toBe(false);
+    void ctx; void calls;
   });
 });

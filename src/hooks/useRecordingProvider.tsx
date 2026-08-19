@@ -229,6 +229,7 @@ export function RecordingProvider({ children }: { children: ReactNode }) {
         aria-hidden
       >
         <ProgramFeedPreview
+          config={recordOutput ?? undefined}
           geometry={{ width: captureWidth, height: captureHeight }}
           fps={captureFps}
           active={active}

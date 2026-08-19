@@ -24,8 +24,34 @@ jobs:
       - name: typecheck + build
         run: npm run build
 
+      # WP11 (P2-5): the packaged installer maps `dist` into the bundle, and the
+      # remote Control browser bundle is a separate entry. Verify it is actually
+      # produced so a release can never ship without the remote surface.
+      - name: verify remote bundle is built
+        run: test -f dist/remote.html
+
       - name: run frontend tests
         run: npm run test
+
+  license-worker:
+    # WP11 (P2-5): the license worker validates keys/device-slots server-side;
+    # its tests gate the release just like the frontend/backend suites.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: install worker dependencies
+        working-directory: workers/license
+        run: npm ci
+
+      - name: run license worker tests
+        working-directory: workers/license
+        run: npm test
 
   backend:
     # The app ships only for Windows (NSIS/WebView2); Tauri's glib/gtk -sys

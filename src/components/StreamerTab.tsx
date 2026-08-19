@@ -33,7 +33,7 @@ export function StreamerTab() {
     stream, streamReady, anyBusy, liveCount,
     captureWidth, captureHeight, captureFps, streamBitrateKbps, setCapture,
     updateDestination, removeDestination, addDestination,
-    registerHandle, reportStatus, goLive, stopAll, getSourceTracks,
+    startDestination, stopDestination, goLive, stopAll,
     audioEnabled, setAudioEnabled, audioDevices, audioDeviceId, setAudioDeviceId, audioError, audioUnavailableReason,
     encoder,
     streamingBlocked, sharedAudioBlocked, rtmpBlockedReason, ndiBlockedReason, destCapReached, enabledCount,
@@ -263,22 +263,29 @@ export function StreamerTab() {
             </p>
           )}
 
-          {destinations.map((d) => (
-            <DestinationCard
-              key={d.id}
-              destination={d}
-              getSourceTracks={getSourceTracks}
-              onChange={updateDestination}
-              onRemove={() => removeDestination(d.id)}
-              onStatus={reportStatus}
-              onRegister={registerHandle}
-              fps={captureFps}
-              bitrateKbps={streamBitrateKbps}
-              blockedReason={
-                d.mode === "rtmp" ? rtmpBlockedReason : d.mode === "ndi" ? ndiBlockedReason : null
-              }
-            />
-          ))}
+          {destinations.map((d) => {
+            const s = statuses[d.id];
+            return (
+              <DestinationCard
+                key={d.id}
+                destination={d}
+                status={s?.status ?? "idle"}
+                bitrateKbps={s?.bitrateKbps ?? 0}
+                error={s?.error ?? null}
+                resourceUrl={s?.resourceUrl ?? null}
+                sentPackets={s?.sentPackets ?? 0}
+                droppedPackets={s?.droppedPackets ?? 0}
+                queuedPackets={s?.queuedPackets ?? 0}
+                onChange={updateDestination}
+                onRemove={() => void removeDestination(d.id)}
+                onStart={() => void startDestination(d.id)}
+                onStop={() => void stopDestination(d.id)}
+                blockedReason={
+                  d.mode === "rtmp" ? rtmpBlockedReason : d.mode === "ndi" ? ndiBlockedReason : null
+                }
+              />
+            );
+          })}
 
           <div className="flex items-center gap-1.5 pt-1">
             {PLATFORM_PRESETS.map((p) => (
