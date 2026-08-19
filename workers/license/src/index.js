@@ -67,6 +67,50 @@ export default {
 
     const tierOf = (rec) => TIERS.includes(rec.tier) ? rec.tier : "free";
 
+    // ── License signing (asymmetric, ECDSA P-256) ─────────────────────────────
+    // The desktop app embeds the matching PUBLIC key and verifies the signature
+    // locally, so a user who hand-edits `tier`/`expires_at` in the persisted
+    // record invalidates it (the whole license is treated as tampered, never
+    // upgraded). The private key is `LICENSE_SIGNING_KEY` (a P-256 JWK secret).
+    let signingKeyPromise = null;
+    const getSigningKey = (env) => {
+      if (!signingKeyPromise) {
+        if (!env.LICENSE_SIGNING_KEY) {
+          signingKeyPromise = Promise.resolve(null);
+        } else {
+          signingKeyPromise = crypto.subtle.importKey(
+            "jwk",
+            JSON.parse(env.LICENSE_SIGNING_KEY),
+            { name: "ECDSA", namedCurve: "P-256" },
+            false,
+            ["sign"]
+          );
+        }
+      }
+      return signingKeyPromise;
+    };
+
+    // MUST match `license_canonical` in `src-tauri/src/license_crypto.rs`:
+    // license_key, expires_at, issued_at, church_name, email, tier, max_machines
+    // joined by "\n" (tier is lowercase).
+    const canonicalClaims = (p) =>
+      [p.license_key, p.expires_at, p.issued_at, p.church_name, p.email, p.tier, p.max_machines].join("\n");
+
+    const signClaims = async (env, payload) => {
+      const key = await getSigningKey(env);
+      if (!key) return null;
+      const data = new TextEncoder().encode(canonicalClaims(payload));
+      const sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, data);
+      return btoa(String.fromCharCode(...new Uint8Array(sig)));
+    };
+
+    const signedValidate = async (env, key, status, message, common) => {
+      const payload = { license_key: key, ...common };
+      const body = { status, message, ...common };
+      body.signature = await signClaims(env, payload);
+      return json(body);
+    };
+
     // ── /validate ─────────────────────────────────────────────────────────
     if (path === "/validate" && request.method === "POST") {
       let body;
@@ -105,18 +149,16 @@ export default {
       });
 
       if (rec.revoked)
-        return json({
-          status: "revoked",
-          message: "This license has been revoked by the administrator.",
-          ...common(),
-        });
+        return signedValidate(
+          env,
+          key,
+          "revoked",
+          "This license has been revoked by the administrator.",
+          common()
+        );
 
       if (serverTime >= rec.expires_at)
-        return json({
-          status: "expired",
-          message: "This license has expired.",
-          ...common(),
-        });
+        return signedValidate(env, key, "expired", "This license has expired.", common());
 
       let machines = rec.machines || [];
       if (!machines.includes(machineId)) {
@@ -137,7 +179,7 @@ export default {
         machines = rec.machines || [];
       }
 
-      return json({ status: "active", message: "ok", ...common() });
+      return signedValidate(env, key, "active", "ok", common());
     }
 
     // ── Admin (Authorization: Bearer <ADMIN_TOKEN>) ────────────────────────

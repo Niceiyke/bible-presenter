@@ -41,6 +41,13 @@ tracing = "0.1"
 log = "0.4"
 sysinfo = "0.33"
 machine-uid = "0.4"
+# ECDSA P-256 signature verification for the signed license token (WP: license
+# hardening) — the app embeds only the public key; the Cloudflare Worker signs
+# with the private key.
+p256 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
+# Windows DPAPI (CryptProtectData) to encrypt the license record at rest.
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["dpapi", "wincrypt", "winbase", "winnt", "minwindef"] }
 
 [lib]
 name = "wordlyte_lib"

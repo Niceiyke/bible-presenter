@@ -13,6 +13,37 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createPublicKey, verify } from "node:crypto";
+
+// License server PUBLIC key (must match LICENSE_SIGNING_KEY private in .dev.vars
+// and LICENSE_PUB_KEY_POINT_HEX in src-tauri/src/license_crypto.rs).
+const PUB_JWK = {
+  kty: "EC",
+  crv: "P-256",
+  x: "rW_z3rsY47WpzfBryb_TPlpd0bZhFFkJ8um-PDLimLU",
+  y: "_Jenx-iVyufDt3Bu0elqAQXgqMeUQsr2W4FrO9RojGU",
+};
+const pubKey = createPublicKey({ key: PUB_JWK, format: "jwk" });
+
+function verifyLicenseSignature(payload, sigB64) {
+  if (!sigB64) return false;
+  const canonical = [
+    payload.license_key,
+    payload.expires_at,
+    payload.issued_at,
+    payload.church_name,
+    payload.email,
+    payload.tier,
+    payload.max_machines,
+  ].join("\n");
+  const sig = Buffer.from(sigB64, "base64");
+  try {
+    return verify(null, Buffer.from(canonical, "utf8"), { key: pubKey, dsaEncoding: "ieee-p1363" }, sig);
+  } catch {
+    return false;
+  }
+}
+
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url)).replace(/[\\/]$/, "");
 const PORT = 8797;
@@ -144,6 +175,8 @@ try {
   // validate: activate machines up to cap
   r = await call("/validate", { method: "POST", body: { license_key: key, machine_id: M1 } });
   check("validate machine 1 → active, machines_used 1", r.status === 200 && r.data.status === "active" && r.data.machines_used === 1);
+  check("active validate carries a verifiable ECDSA signature", verifyLicenseSignature({ ...r.data, license_key: key }, r.data.signature));
+  check("tampering with the tier breaks the signature", !verifyLicenseSignature({ ...r.data, license_key: key, tier: "premium" }, r.data.signature));
   r = await call("/validate", { method: "POST", body: { license_key: key, machine_id: M2 } });
   check("validate machine 2 → active, machines_used 2", r.status === 200 && r.data.status === "active" && r.data.machines_used === 2);
   r = await call("/validate", { method: "POST", body: { license_key: key, machine_id: M3 } });

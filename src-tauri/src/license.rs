@@ -58,6 +58,17 @@ pub enum LicenseTier {
     Premium,
 }
 
+impl LicenseTier {
+    /// Wire/signature slug (lowercase) — must match the Worker's tier string.
+    pub fn slug(&self) -> &'static str {
+        match self {
+            LicenseTier::Free => "free",
+            LicenseTier::Pro => "pro",
+            LicenseTier::Premium => "premium",
+        }
+    }
+}
+
 pub fn tier_label(tier: LicenseTier) -> &'static str {
     match tier {
         LicenseTier::Free => "Free",
@@ -86,6 +97,9 @@ fn grace_days(tier: LicenseTier) -> u64 {
 /// The persisted license record (`license.json` in the app data dir).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct License {
+    /// Record schema version. Version 2 records carry a server signature over
+    /// the authoritative claims and are re-verified on load; version 1 records
+    /// are legacy (honored, then re-signed on the next online refresh).
     pub version: u32,
     pub license_key: String,
     /// SHA-256 hex of the machine fingerprint this license is bound to.
@@ -106,6 +120,41 @@ pub struct License {
     /// (used to detect clock rollback).
     pub last_seen_at: u64,
     pub revoked: bool,
+    /// ECDSA P-256 signature (base64) over the authoritative claims
+    /// (`license_key`/`expires_at`/`issued_at`/`church_name`/`email`/`tier`/
+    /// `max_machines`). Present on version-2 records; the app verifies it on
+    /// load so a tampered `tier`/`expires_at` invalidates the license instead
+    /// of upgrading it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+}
+
+impl License {
+    /// The canonical claims string this record's signature covers.
+    fn signed_canonical(&self) -> String {
+        crate::license_crypto::license_canonical(
+            &self.license_key,
+            self.expires_at,
+            self.issued_at,
+            &self.church_name,
+            &self.email,
+            self.tier.slug(),
+            self.max_machines,
+        )
+    }
+
+    /// True when this record is a signed (version >= 2) license whose signature
+    /// verifies against the server public key. A signed record that fails
+    /// verification (or is missing its signature) is treated as tampered.
+    fn signature_ok(&self) -> bool {
+        match &self.signature {
+            Some(sig) => crate::license_crypto::verify_license_signature(
+                self.signed_canonical().as_bytes(),
+                sig,
+            ),
+            None => false,
+        }
+    }
 }
 
 /// Snapshot sent to the frontend. Safe to display; never contains the full key.
@@ -161,6 +210,34 @@ struct ServerValidation {
     tier: Option<String>,
     #[serde(default)]
     server_time: Option<u64>,
+    /// ECDSA P-256 signature (base64) over the server-authoritative claims.
+    #[serde(default)]
+    signature: Option<String>,
+}
+
+impl ServerValidation {
+    /// Rebuild the canonical claims the server signed, from this response.
+    fn canonical(&self, key: &str) -> String {
+        crate::license_crypto::license_canonical(
+            key,
+            self.expires_at.unwrap_or(0),
+            self.issued_at.unwrap_or(0),
+            self.church_name.as_deref().unwrap_or(""),
+            self.email.as_deref().unwrap_or(""),
+            self.tier.as_deref().unwrap_or(""),
+            self.max_machines.unwrap_or(0),
+        )
+    }
+
+    /// True when the server's signature verifies against these claims.
+    fn signature_valid(&self, key: &str) -> bool {
+        match &self.signature {
+            Some(sig) => {
+                crate::license_crypto::verify_license_signature(self.canonical(key).as_bytes(), sig)
+            }
+            None => false,
+        }
+    }
 }
 
 /// Shared, Arc-managed license state. Persisted to `license.json` under the
@@ -312,16 +389,33 @@ impl LicenseManager {
     }
 
     fn load(path: &Path) -> Option<License> {
-        let raw = std::fs::read_to_string(path).ok()?;
-        serde_json::from_str(&raw).ok()
+        let raw = std::fs::read(path).ok()?;
+        // Legacy (pre-DPAPI) records were written as plaintext JSON beginning
+        // with '{'. Newer records are DPAPI-encrypted bytes.
+        let text = if raw.first() == Some(&b'{') {
+            String::from_utf8_lossy(&raw).into_owned()
+        } else {
+            String::from_utf8(crate::license_crypto::unprotect_at_rest(&raw).ok()?).ok()?
+        };
+        let lic: License = serde_json::from_str(&text).ok()?;
+        // A signed (version >= 2) record whose signature does not verify (a
+        // hand-edited `tier`/`expires_at`) is treated as NO license — it can
+        // never be honored as an upgrade. Legacy v1 records are honored and
+        // re-signed on the next online refresh.
+        if lic.version >= 2 && !lic.signature_ok() {
+            return None;
+        }
+        Some(lic)
     }
 
     fn persist(&self, lic: &License) -> Result<(), String> {
         let json = serde_json::to_string_pretty(lic).map_err(|e| e.to_string())?;
+        // Encrypt at rest (Windows DPAPI) so the record cannot be hand-edited.
+        let protected = crate::license_crypto::protect_at_rest(json.as_bytes())?;
         if let Some(dir) = self.file.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        std::fs::write(&self.file, json).map_err(|e| e.to_string())
+        std::fs::write(&self.file, protected).map_err(|e| e.to_string())
     }
 
     fn set_license(&self, lic: License) -> Result<(), String> {
@@ -409,6 +503,11 @@ impl LicenseManager {
                 .message
                 .unwrap_or_else(|| "This license key is not valid.".to_owned()));
         }
+        // The server must sign the active claims; refuse to trust an unsigned
+        // or tampered response (defense against a spoofed/edited server reply).
+        if !sv.signature_valid(&key) {
+            return Err("The license server response could not be verified. Try again.".to_owned());
+        }
         let now = now_secs();
         // A server response far from the wall clock means the clock was
         // tampered with; refuse to activate against a wrong clock.
@@ -422,7 +521,7 @@ impl LicenseManager {
         }
         let server_now = sv.server_time.unwrap_or(now);
         let lic = License {
-            version: 1,
+            version: 2,
             license_key: key,
             machine_id: self.machine_id.clone(),
             church_name: sv.church_name.unwrap_or_default(),
@@ -435,6 +534,7 @@ impl LicenseManager {
             last_validated_at: server_now,
             last_seen_at: server_now,
             revoked: false,
+            signature: sv.signature,
         };
         self.set_license(lic)?;
         Ok(self.status())
@@ -459,6 +559,14 @@ impl LicenseManager {
         match self.validate_with_server(&lic.license_key).await {
             Ok(sv) => match sv.status.as_str() {
                 "active" => {
+                    // Only trust a server-signed active response.
+                    if !sv.signature_valid(&lic.license_key) {
+                        let mut info = self.evaluate(Some(lic.clone()), false);
+                        info.status = LicenseStatus::Invalid;
+                        info.message =
+                            "The license server response could not be verified. Try again later.".to_owned();
+                        return Ok(info);
+                    }
                     let mut updated = lic.clone();
                     if let Some(st) = sv.server_time {
                         if now.abs_diff(st) > CLOCK_TOLERANCE_SECS {
@@ -487,6 +595,8 @@ impl LicenseManager {
                     if let Some(m) = sv.machines_used {
                         updated.machines_used = m;
                     }
+                    updated.version = 2;
+                    updated.signature = sv.signature.clone();
                     self.set_license(updated)?;
                     Ok(self.status())
                 }
@@ -499,6 +609,8 @@ impl LicenseManager {
                     if let Some(st) = sv.server_time {
                         updated.last_validated_at = st;
                     }
+                    updated.version = 2;
+                    updated.signature = sv.signature.clone();
                     let final_lic = updated.clone();
                     self.set_license(updated)?;
                     Ok(self.evaluate(Some(final_lic), false))
@@ -506,6 +618,8 @@ impl LicenseManager {
                 "revoked" => {
                     let mut updated = lic.clone();
                     updated.revoked = true;
+                    updated.version = 2;
+                    updated.signature = sv.signature.clone();
                     let final_lic = updated.clone();
                     self.set_license(updated)?;
                     Ok(self.evaluate(Some(final_lic), false))
@@ -610,6 +724,7 @@ mod tests {
             last_validated_at: 500,
             last_seen_at: 500,
             revoked: false,
+            signature: None,
         };
         mutate(&mut l);
         l
@@ -732,5 +847,35 @@ mod tests {
         assert!(m.contains("WORD"));
         assert!(m.contains("5678"));
         assert!(!m.contains("EFGH-1234"));
+    }
+
+    #[test]
+    fn signed_license_tampered_tier_fails_verification() {
+        // A real server-signed record (see license_crypto::tests). Changing any
+        // signed claim (e.g. tier → premium, or extending expiry) must make
+        // signature_ok() false so `load` treats it as tampered, never upgraded.
+        let base = lic(|_| {});
+        let mut l = License {
+            version: 2,
+            license_key: "WORDLYTE-TEST-KEY".to_owned(),
+            church_name: "Church".to_owned(),
+            email: "email@x.com".to_owned(),
+            issued_at: 500,
+            expires_at: 1000,
+            tier: LicenseTier::Pro,
+            max_machines: 3,
+            signature: Some(
+                "KLzHJQkDjYFFktjFC16IDTo6430lSUYPzeJBoU5uzbwzMJsXLpKL/JNFr6qZ1IcH5CKwIXwBRsmFlhHJp7bKaQ==".to_owned(),
+            ),
+            ..base
+        };
+        assert!(l.signature_ok(), "a genuine signed record must verify");
+
+        l.tier = LicenseTier::Premium;
+        assert!(!l.signature_ok(), "editing tier to premium must break the signature");
+
+        let mut e = License { tier: LicenseTier::Pro, ..l };
+        e.expires_at = 9_999_999;
+        assert!(!e.signature_ok(), "extending expiry must break the signature");
     }
 }

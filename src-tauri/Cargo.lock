@@ -7484,6 +7484,7 @@ dependencies = [
  "log",
  "machine-uid",
  "once_cell",
+ "p256",
  "parking_lot",
  "rcgen",
  "regex",
@@ -7506,6 +7507,7 @@ dependencies = [
  "tracing",
  "uuid",
  "webrtc",
+ "winapi",
  "zip",
 ]
 

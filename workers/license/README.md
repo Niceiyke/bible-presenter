@@ -45,7 +45,17 @@ npx wrangler kv namespace create LICENSES
 # 2. Admin secret (guards /issue, /revoke, /licenses)
 npx wrangler secret put ADMIN_TOKEN
 
-# 3. Deploy
+# 3. License signing secret (ECDSA P-256 private JWK)
+#    The worker signs every /validate response so the desktop app can detect
+#    hand-edited licenses. This MUST match the PUBLIC key embedded in
+#    `src-tauri/src/license_crypto.rs` (LICENSE_PUB_KEY_POINT_HEX). Generate a
+#    matching pair once and keep both halves in sync. In local dev / tests this
+#    is set in `.dev.vars`.
+npx wrangler secret put LICENSE_SIGNING_KEY
+#   → paste the P-256 private JWK, e.g.
+#     {"kty":"EC","x":"...","y":"...","crv":"P-256","d":"..."}
+
+# 4. Deploy
 npm run deploy
 #   → note the workers.dev URL, e.g. https://wordlyte-license.<subdomain>.workers.dev
 
