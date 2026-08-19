@@ -363,10 +363,17 @@ tests). Contract:
 - **Atomic files:** `outputs.json` is written temp+rename (`write_json_atomic`).
 - **Recovery:** corruption is quarantined (renamed aside, never deleted) and
   recreated; `startup_issues` + the crash `RecoveryModal` surface problems.
-- **Open follow-ups:** separating searchable metadata from opaque JSON payloads,
-  a formal durable-settings repository, live Bible re-open after download
-  (FTS rebuild already runs in the background without restart), and surfacing
-  the backup location to the operator.
+- **Bible live reopen:** `BibleStore::reload` swaps the shared connection and
+  caches (`books`/`available_versions`/`active_version`/`db_path` are now
+  `Mutex`-wrapped for interior mutability) and re-queues the background FTS
+  rebuild; `download_bible_db_cmd` calls it on success so a fresh Bible DB is
+  usable without a restart.
+- **Malformed records:** `MediaScheduleStore::validate_content_records` reports
+  any unparseable songs/presentations/scenes/services/templates row or kv blob
+  as a startup issue; `note_backup_location` surfaces `.pre-migrate-*.bak`
+  files so the backup location is operator-visible.
+- **Open follow-up:** separating searchable metadata from the opaque JSON
+  presentation payloads (songs/presentations/scenes/services remain JSON rows).
 
 ## 3. Persisted files under the app data dir
 

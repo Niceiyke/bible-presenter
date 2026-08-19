@@ -375,6 +375,18 @@ pub async fn download_bible_db_cmd(app: AppHandle, state: State<'_, AppState>) -
             Ok(_) => {
                 log_msg(&app_handle, "Bible data ZIP downloaded and extracted successfully.");
                 let path = user_data_dir(&app_data).join(BIBLE_DB_FILENAME);
+                // Phase 9: load the freshly-downloaded Bible DB in place so the
+                // app is usable without a process restart. Fails gracefully (the
+                // store keeps working on the previous database) if the new file
+                // cannot be opened.
+                let reload_result = app_handle
+                    .state::<AppState>()
+                    .store
+                    .reload(&app_handle, &path.to_string_lossy());
+                match reload_result {
+                    Ok(_) => log_msg(&app_handle, "BibleStore: reloaded after download (no restart required)."),
+                    Err(e) => log_msg(&app_handle, &format!("BibleStore: reload after download failed: {e}")),
+                }
                 let _ = app_handle.emit("bible-db-ready", path.to_string_lossy());
             }
             Err(e) => {

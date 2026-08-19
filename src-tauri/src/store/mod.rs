@@ -100,13 +100,16 @@ pub struct BibleStore {
     conn: Arc<Mutex<Connection>>,
     _patterns: RegexSet,
     book_map: HashMap<String, String>,
-    books: Vec<String>,
-    available_versions: Vec<String>,
+    /// Cached book titles / available versions. Mutex-wrapped so a live reload
+    /// (after a Bible download) can swap them on the shared `Arc<BibleStore>`.
+    books: Mutex<Vec<String>>,
+    available_versions: Mutex<Vec<String>>,
     active_version: Mutex<String>,
     /// Path of the Bible database file. Empty for the in-memory placeholder.
-    /// Used to open a SEPARATE connection for the background FTS rebuild so the
-    /// shared connection stays available for reads while the index builds.
-    db_path: String,
+    /// Mutex-wrapped so a live reload can swap it. Used to open a SEPARATE
+    /// connection for the background FTS rebuild so the shared connection stays
+    /// available for reads while the index builds.
+    db_path: Mutex<String>,
     /// Set once the FTS5 search index is built and in sync with the source
     /// table. The rebuild is deliberately performed OFF the UI thread at
     /// startup so a fresh install never freezes while the index is built
@@ -133,10 +136,10 @@ impl BibleStore {
             conn: Arc::new(Mutex::new(conn)),
             _patterns: patterns,
             book_map: HashMap::new(),
-            books: Vec::new(),
-            available_versions: Vec::new(),
+            books: Mutex::new(Vec::new()),
+            available_versions: Mutex::new(Vec::new()),
             active_version: Mutex::new("KJV".to_string()),
-            db_path: String::new(),
+            db_path: Mutex::new(String::new()),
             search_index_ready: AtomicBool::new(true), // nothing to index
         }
     }
@@ -279,10 +282,10 @@ impl BibleStore {
             conn: Arc::new(Mutex::new(conn)),
             _patterns: patterns,
             book_map,
-            books,
-            available_versions,
+            books: Mutex::new(books),
+            available_versions: Mutex::new(available_versions),
             active_version: Mutex::new(default_version),
-            db_path: db_path.to_string(),
+            db_path: Mutex::new(db_path.to_string()),
             search_index_ready: AtomicBool::new(false),
         })
     }
@@ -293,6 +296,72 @@ impl BibleStore {
         self.search_index_ready.load(Ordering::SeqCst)
     }
 
+    /// Reload the Bible database from `db_path` (used after a fresh download so
+    /// the app becomes usable WITHOUT a process restart — Phase 9). Swaps the
+    /// shared connection and rebuilds the cached books/versions in place, keeps
+    /// the previous active version when it is still available, and re-queues
+    /// the background FTS rebuild against the new database.
+    pub fn reload(&self, app: &tauri::AppHandle, db_path: &str) -> anyhow::Result<()> {
+        if !std::path::Path::new(db_path).exists() {
+            return Err(anyhow::anyhow!("Bible database not found at {}", db_path));
+        }
+        let conn = Connection::open(db_path)?;
+        if let Err(e) = conn.execute("PRAGMA journal_mode=WAL", []) {
+            log_msg(app, &format!("Warning: Could not set WAL mode: {}", e));
+        }
+        const CURRENT_SCHEMA_VERSION: u32 = 2;
+        let schema_version: u32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap_or(0);
+        if schema_version < CURRENT_SCHEMA_VERSION {
+            if schema_version < 2 {
+                let _ = conn.execute_batch("DROP TABLE IF EXISTS wordlyte_bible_fts;");
+            }
+            conn.execute_batch(&format!("PRAGMA user_version = {}", CURRENT_SCHEMA_VERSION))?;
+        }
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS wordlyte_bible_fts USING fts5(
+                title,
+                text,
+                version,
+                content='wordlyte_bible',
+                content_rowid='rowid',
+                tokenize='unicode61 remove_diacritics 2 porter'
+            )",
+            [],
+        )?;
+
+        let books: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT DISTINCT title FROM wordlyte_bible ORDER BY title")?;
+            let rows = stmt.query_map([], |row| row.get(0))?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+        let available_versions: Vec<String> = {
+            let mut stmt =
+                conn.prepare("SELECT DISTINCT version FROM wordlyte_bible WHERE language = 'EN' ORDER BY version")?;
+            let rows = stmt.query_map([], |row| row.get(0))?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+
+        let previous = self.active_version.lock().clone();
+        let next_version = if available_versions.contains(&previous) {
+            previous
+        } else {
+            available_versions.first().cloned().unwrap_or_else(|| "KJV".to_string())
+        };
+
+        *self.conn.lock() = conn;
+        *self.books.lock() = books;
+        *self.available_versions.lock() = available_versions;
+        *self.active_version.lock() = next_version;
+        *self.db_path.lock() = db_path.to_string();
+        self.search_index_ready.store(false, Ordering::SeqCst);
+
+        log_msg(app, &format!("BibleStore: reloaded from {}", db_path));
+        self.rebuild_fts_if_needed(app);
+        Ok(())
+    }
+
     /// (Re)builds the full-text index when it is missing or stale relative to
     /// the source table. Runs on a background thread (see main.rs); the
     /// `search-index-status` event reports `indexing` / `ready`. It opens a
@@ -301,7 +370,7 @@ impl BibleStore {
     /// Afterwards the WAL is checkpointed (TRUNCATE) so the `-wal`/`-shm`
     /// sidecars shrink instead of lingering after the large build write.
     pub fn rebuild_fts_if_needed(&self, app: &tauri::AppHandle) {
-        if self.db_path.is_empty() {
+        if self.db_path.lock().is_empty() {
             // In-memory placeholder (no Bible DB yet) — nothing to index.
             self.search_index_ready.store(true, Ordering::SeqCst);
             return;
@@ -332,7 +401,7 @@ impl BibleStore {
 
         // Dedicated connection: the shared `self.conn` stays available to
         // search readers while the (potentially slow) build holds this one.
-        let rebuild_result = Connection::open(&self.db_path)
+        let rebuild_result = Connection::open(&*self.db_path.lock())
             .map_err(|e| e.to_string())
             .and_then(|conn| {
                 conn.execute("INSERT INTO wordlyte_bible_fts(wordlyte_bible_fts) VALUES('rebuild')", [])
@@ -356,7 +425,7 @@ impl BibleStore {
     }
 
     pub fn get_available_versions(&self) -> Vec<String> {
-        self.available_versions.clone()
+        self.available_versions.lock().clone()
     }
 
     pub fn get_active_version(&self) -> String {
@@ -380,7 +449,7 @@ impl BibleStore {
         // since RE_FULL would otherwise capture it and return only verse 16.
         if let Some(caps) = RE_RANGE.captures(&text_lower) {
             let book = self.normalize_book(caps.get(1).map(|m| m.as_str()).unwrap_or(""));
-            if self.books.contains(&book) {
+            if self.books.lock().contains(&book) {
                 if let Ok(chapter) = caps.get(2).map(|m| m.as_str()).unwrap_or("").parse::<i32>() {
                     if let (Ok(from), Ok(to)) = (
                         caps.get(3).map(|m| m.as_str()).unwrap_or("").parse::<i32>(),
@@ -404,7 +473,7 @@ impl BibleStore {
 
         if let Some(caps) = RE_FULL.captures(&text_lower) {
             let book = self.normalize_book(caps.get(1).map(|m| m.as_str()).unwrap_or(""));
-            if self.books.contains(&book) {
+            if self.books.lock().contains(&book) {
                 if let Ok(chapter) = caps.get(2).map(|m| m.as_str()).unwrap_or("").parse::<i32>() {
                     if let Ok(verse) = caps.get(3).map(|m| m.as_str()).unwrap_or("").parse::<i32>() {
                         if let Ok(Some(v)) = self.get_verse(&book, chapter, verse, version) {
@@ -417,7 +486,7 @@ impl BibleStore {
 
         if let Some(caps) = RE_CHAP.captures(&text_lower) {
             let book = self.normalize_book(caps.get(1).map(|m| m.as_str()).unwrap_or(""));
-            if self.books.contains(&book) {
+            if self.books.lock().contains(&book) {
                 if let Ok(chapter) = caps.get(2).map(|m| m.as_str()).unwrap_or("").parse::<i32>() {
                     if let Ok(verses) = self.get_chapter_verses(&book, chapter, version) {
                         return verses.into_iter().take(20).collect();

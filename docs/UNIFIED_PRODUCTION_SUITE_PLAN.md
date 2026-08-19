@@ -943,32 +943,37 @@ Tasks:
 - [ ] Separate searchable metadata from flexible JSON presentation payloads.
   (Follow-up: media already has structured columns; songs/presentations/scenes/
   services remain opaque JSON rows today.)
-- [ ] Add a durable settings repository abstraction. (Settings are already
-  durable in `kv_store`; a formal repository abstraction is a follow-up.)
+- [x] Add a durable settings repository abstraction. (Settings are durable in
+  `kv_store`; `load_settings`/`save_settings` are the typed repository on top of
+  it, and a malformed stored payload is now reported as a startup issue.)
 - [x] Add atomic-file replacement with Windows-specific tests. (`outputs.json`
   temp+rename atomic writer exists with tests; new data-DB tests cover
   transactional migration/backup + bulk rollback.)
 - [x] Add startup validation for each data store. (`DataDb::validate` runs a
   sanity query after open and records a startup issue rather than silently
-  showing an empty workspace; the Bible store validates schema/query at open.)
-- [ ] Implement Bible database install, reopen, and FTS rebuild without process
-  restart. (FTS rebuild already runs in the background without restart; a
-  live reopen after download is a follow-up.)
+  showing an empty workspace; `validate_content_records` reports malformed
+  individual records; the Bible store validates schema/query at open.)
+- [x] Implement Bible database install, reopen, and FTS rebuild without process
+  restart. (`BibleStore::reload` swaps the shared connection and caches in place
+  after a download — `download_bible_db_cmd` reloads on success — and re-queues
+  the background FTS rebuild. The FTS rebuild itself already ran in the
+  background without restart.)
 - [x] Add automatic backup before schema migration.
   (`DataDb::backup_before_migration` copies the on-disk DB to a timestamped
   `.pre-migrate-<ts>.bak` sibling before any schema change, so a failed
   migration can never destroy the previous database — in addition to the
   transactional rollback.)
-- [ ] Add operator-visible recovery status and backup location. (Crash
-  `RecoveryModal` exists; surfacing the backup location is a follow-up.)
+- [x] Add operator-visible recovery status and backup location. (Crash
+  `RecoveryModal` exists; `note_backup_location` surfaces any `.pre-migrate-*.bak`
+  files as startup issues so the backup location is operator-visible.)
 
 Acceptance criteria:
 
 - [x] A power loss during a write does not leave truncated configuration.
 - [x] A failed migration preserves the previous database.
-- [ ] Malformed individual content records are reported instead of silently making
+- [x] Malformed individual content records are reported instead of silently making
   the entire workspace appear empty.
-- [ ] Bible installation is usable without restarting the application.
+- [x] Bible installation is usable without restarting the application.
 
 ### Phase 10: Remote and extensibility contracts
 

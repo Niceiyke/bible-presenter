@@ -1042,7 +1042,52 @@ impl MediaScheduleStore {
 
         let store = Self { app_data_dir, media_dir, thumbnails_dir, data_db, startup_issues };
         store.try_migrate_from_json()?;
+        store.validate_content_records();
+        // Report any pre-migration backups that exist so the operator knows where
+        // automatic recovery copies live (Phase 9).
+        store.note_backup_location();
         Ok(store)
+    }
+
+    /// Scan every JSON-backed store for records that fail to parse and record a
+    /// startup issue for each, so a malformed individual record is REPORTED
+    /// instead of silently making part of a workspace appear empty.
+    fn validate_content_records(&self) {
+        let mut issues = self.startup_issues.lock();
+        for table in ["songs", "presentations", "scenes", "services", "slide_templates"] {
+            if let Ok(rows) = self.data_db.hash_list(table) {
+                for (id, data) in rows {
+                    if serde_json::from_str::<serde_json::Value>(&data).is_err() {
+                        issues.push(format!("Malformed record in '{table}' (id={id}) was skipped."));
+                    }
+                }
+            }
+        }
+        for key in ["settings", "schedule", "props", "lt_templates", "lt_presets"] {
+            if let Ok(Some(json)) = self.data_db.kv_get(key) {
+                if serde_json::from_str::<serde_json::Value>(&json).is_err() {
+                    issues.push(format!("Malformed stored '{key}' payload was skipped."));
+                }
+            }
+        }
+    }
+
+    /// Surface the location of any pre-migration backup files so recovery copies
+    /// are operator-visible (Phase 9).
+    fn note_backup_location(&self) {
+        if let Ok(entries) = std::fs::read_dir(&self.app_data_dir) {
+            let backups: Vec<String> = entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.contains(".pre-migrate-") && n.ends_with(".bak"))
+                .collect();
+            if !backups.is_empty() {
+                self.startup_issues.lock().push(format!(
+                    "Automatic pre-migration backup(s): {}",
+                    backups.join(", ")
+                ));
+            }
+        }
     }
 
     pub fn in_memory(app_data_dir: PathBuf) -> Result<Self> {
@@ -1979,6 +2024,40 @@ mod media_delete_tests {
         let f = media.join("b.jpg");
         std::fs::write(&f, b"x").unwrap();
         assert!(store.app_owned_file(&f.to_string_lossy()).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod content_validation_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_content_records_are_reported_as_startup_issues() {
+        let dir = std::env::temp_dir().join(format!(
+            "wordlyte-content-validate-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = MediaScheduleStore::in_memory(dir.clone()).unwrap();
+        // Valid records are fine.
+        store.data_db.hash_set("songs", "ok", r#"{"id":"ok"}"#).unwrap();
+        // A malformed record must be reported, not silently dropped.
+        store.data_db.hash_set("songs", "bad-id", "{not valid json").unwrap();
+        store.data_db.kv_set("settings", "{broken").unwrap();
+
+        store.validate_content_records();
+        let issues = store.startup_issues.lock();
+        assert!(
+            issues.iter().any(|i| i.contains("bad-id") && i.contains("songs")),
+            "malformed song record must be reported, got {:?}",
+            *issues
+        );
+        assert!(
+            issues.iter().any(|i| i.contains("settings")),
+            "malformed settings payload must be reported, got {:?}",
+            *issues
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
