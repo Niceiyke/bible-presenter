@@ -3,9 +3,15 @@
   "version": "2.0.2",
   "identifier": "io.wordlyte.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": {
+      "cwd": "../",
+      "script": "node scripts/copy-engine-binary.mjs --bootstrap && npm run dev"
+    },
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": {
+      "cwd": "../",
+      "script": "node scripts/copy-engine-binary.mjs --bootstrap && npm run build"
+    },
     "beforeBundleCommand": {
       "cwd": "../",
       "script": "node scripts/copy-engine-binary.mjs"

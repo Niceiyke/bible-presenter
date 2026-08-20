@@ -74,7 +74,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p src-tauri/binaries dist
-          touch src-tauri/binaries/ffmpeg.exe src-tauri/binaries/ffprobe.exe dist/.keep
+          touch src-tauri/binaries/ffmpeg.exe src-tauri/binaries/ffprobe.exe src-tauri/binaries/wordlyte-engine.exe dist/.keep
 
       - name: cargo check
         working-directory: src-tauri
