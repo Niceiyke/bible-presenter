@@ -248,7 +248,10 @@ fn main() {
                 tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?.build()?;
             }
 
-            for label in ["output", "stage", "studio"] {
+            // Output/stage windows are engine-owned since Phase C4 (the engine
+            // re-syncs their visibility on close); only the studio webview still
+            // mirrors an external close back into the OutputManager.
+            for label in ["studio"] {
                 if let Some(win) = app.get_webview_window(label) {
                     let win2 = win.clone();
                     let app_handle = app.handle().clone();

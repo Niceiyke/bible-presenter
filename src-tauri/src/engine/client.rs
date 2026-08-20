@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn protocol_version_constant_matches() {
-        assert_eq!(crate::engine::ipc::ENGINE_PROTOCOL_VERSION, 3);
+        assert_eq!(crate::engine::ipc::ENGINE_PROTOCOL_VERSION, 4);
     }
 
     #[test]

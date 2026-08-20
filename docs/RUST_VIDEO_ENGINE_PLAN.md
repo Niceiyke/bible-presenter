@@ -301,9 +301,28 @@ Status (feat/rust-video-engine):
   polls a cheap `ping` while the header preview popover is open and decodes the
   base64 JPEGs into object URLs; `EnginePreviewPanel` shows the latest output +
   stage frames with engine connection state. 216 lib + 459 frontend tests pass.
-- **C4 (pending):** delete the `OutputWindow`/`StageWindow` webview branches and
-  reroute `set_output_visible`/`toggle_output_window` through the engine's window
-  host, then run the acceptance monitor/scaling matrix.
+- **C4 (this commit):** engine-only output/stage windows. The console's
+  `set_output_visible` drives the engine window host FIRST (config via
+  `OutputWindowSetConfig`, then `OutputWindowShow`/`Hide` with the settings
+  `preferred_monitor` and geometry from `outputs.json`), then persists through
+  `OutputManager` and rolls the engine window back to its prior visibility on
+  persist failure; `publish_output_visible` and the legacy
+  `toggle_output_window`/`toggle_stage_window` read visibility from the
+  `OutputManager` (never Tauri webview windows). Presentation sync: every
+  mutation's event emission (`app_emit_sink`) now calls `sync_engine_presentation`
+  to push the full `PresentationSnapshot` to the sidecar via the new
+  `EngineCommand::SyncPresentation` (protocol v4, `PRESENTATION_SCHEMA_VERSION`
+  validated by `EngineRuntime::apply_sync`), so engine windows render live
+  state; toggles/close handling cover all windows. Deleted the
+  `OutputWindow`/`StageWindow` webview branches (`src/windows/`) and the
+  Tauri output/stage window definitions (`tauri.conf.json`); the main/design/
+  studio Tauri windows stay. 219 lib + 459 frontend tests pass; clippy clean.
+  Smoke-tested end-to-end against the sidecar: sync → show → 10 rendered
+  preview frames at 480x270 → hide → clean shutdown. The DOM renderers in
+  `src/components/shared/Renderers.tsx` remain the parity oracle; the engine
+  stage window renders the live item only (Now Live/Up Next confidence view is
+  not carried over yet), and `show_output_test_pattern` reveals the window but
+  has no pattern listener. Acceptance monitor/scaling matrix still to run.
 
 ### Phase D: Transport — encode, RTMP, recording
 

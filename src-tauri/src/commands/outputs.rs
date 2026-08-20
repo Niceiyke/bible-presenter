@@ -17,11 +17,16 @@ pub fn publish_state(app: &AppHandle, state: &OutputState) {
 }
 
 /// Broadcasts the current output-window visibility state to every connected
-/// remote so `output.changed` mirrors the actual window state.
-pub fn publish_output_visible(app: &AppHandle, state: &AppState) {
-    let visible = app
-        .get_webview_window("output")
-        .and_then(|w| w.is_visible().ok())
+/// remote so `output.changed` mirrors the actual window state. With Phase C4 the
+/// output/stage windows are engine-owned, so visibility comes from the
+/// OutputManager's persisted runtime entry rather than a Tauri webview.
+pub fn publish_output_visible(state: &AppState) {
+    let visible = state
+        .outputs
+        .all_states()
+        .into_iter()
+        .find(|s| s.id == "output")
+        .map(|s| s.visible)
         .unwrap_or(false);
     state.remote.hub.publish(
         RemoteEventKind::OutputChanged,
@@ -30,45 +35,50 @@ pub fn publish_output_visible(app: &AppHandle, state: &AppState) {
     );
 }
 
-/// Position the output window on the operator's preferred monitor (used when a
-/// multi-monitor layout is detected).
-fn position_output_on_preferred(app: &AppHandle, state: &AppState) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("output") {
-        let preferred = state.presentation.settings.lock().preferred_monitor.clone();
-        let monitors = window.available_monitors().map_err(|e: tauri::Error| e.to_string())?;
-        if monitors.len() > 1 {
-            if let Some(primary) = window.primary_monitor().map_err(|e: tauri::Error| e.to_string())? {
-                let target = monitors.iter().find(|m| {
-                    preferred.as_deref().is_some_and(|p| m.name().is_some_and(|n| n == p))
-                }).or_else(|| monitors.iter().find(|m| m.name() != primary.name()));
-                if let Some(mon) = target {
-                    let pos = mon.position();
-                    window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos.x, y: pos.y }))
-                        .map_err(|e: tauri::Error| e.to_string())?;
-                    window.set_fullscreen(true).map_err(|e: tauri::Error| e.to_string())?;
-                }
-            }
+/// Window style for a host window label. The projection window is borderless,
+/// transparent and always-on-top; the stage confidence monitor is a normal
+/// decorated window.
+fn engine_window_style(label: &str) -> crate::engine::windows::WindowStyle {
+    if label == "output" {
+        crate::engine::windows::WindowStyle {
+            decorations: false,
+            transparent: true,
+            always_on_top: true,
+            resizable: false,
         }
+    } else {
+        crate::engine::windows::WindowStyle::default()
     }
-    Ok(())
 }
 
-/// Free plan: only one on-air window at a time. Called before revealing.
+/// Free plan: only one on-air window at a time. Window outputs are read from the
+/// OutputManager (the engine owns the actual windows since Phase C4); the
+/// still-Tauri auxiliary windows (`design`/`studio`) are read directly.
 fn enforce_free_window_cap(app: &AppHandle, state: &AppState, this_label: &str) -> Result<(), String> {
     let info = state.license.status();
     if info.status == crate::license::LicenseStatus::Active
         && info.tier == crate::license::LicenseTier::Free
     {
-        let other_visible = ["output", "stage", "design", "studio"]
+        let output_visible = state
+            .outputs
+            .list()
             .iter()
-            .filter(|l| **l != this_label)
-            .filter(|l| {
-                app.get_webview_window(l)
-                    .and_then(|w| w.is_visible().ok())
-                    .unwrap_or(false)
-            })
-            .count();
-        if other_visible >= 1 {
+            .find(|o| o.window_label.as_deref() == Some(this_label))
+            .map(|o| o.visible)
+            .unwrap_or(false);
+        let other_window_output_visible = state
+            .outputs
+            .list()
+            .iter()
+            .filter(|o| o.window_label.is_some() && o.window_label.as_deref() != Some(this_label) && o.visible)
+            .count()
+            >= 1;
+        let aux_window_visible = ["design", "studio"]
+            .iter()
+            .filter(|l| app.get_webview_window(l).and_then(|w| w.is_visible().ok()).unwrap_or(false))
+            .count()
+            >= 1;
+        if output_visible || other_window_output_visible || aux_window_visible {
             return Err(
                 "The Free plan supports one on-air window at a time. See Settings → License to upgrade."
                     .to_owned(),
@@ -78,20 +88,55 @@ fn enforce_free_window_cap(app: &AppHandle, state: &AppState, this_label: &str) 
     Ok(())
 }
 
-/// Re-broadcast authoritative presentation state so a freshly-revealed window
-/// can hydrate even if it missed events while hidden. Every presentation event
-/// is wrapped with the current revision by the engine (no bump), so a stale
-/// reveal can never overwrite newer state.
-fn rebroadcast_presentation(app: &AppHandle, state: &AppState) {
-    crate::engine::rebroadcast_presentation(app, state);
+/// Drives an engine-owned winit window (Phase C4): registers the output's
+/// config, syncs the console's authoritative presentation, then shows/hides the
+/// window. The engine is the ONLY projection path for output/stage now; a
+/// missing/busy sidecar is an error that aborts before any state is persisted.
+fn drive_engine_window(
+    state: &AppState,
+    cfg: &OutputConfig,
+    label: &str,
+    visible: bool,
+) -> Result<(), String> {
+    use crate::engine::ipc::EngineCommand;
+    let client = state
+        .engine
+        .lock()
+        .clone()
+        .ok_or_else(|| "engine_unavailable: the video engine is not running. The output/stage windows cannot be shown without it.".to_owned())?;
+    if !client.is_running() {
+        return Err("engine_unavailable: the video engine is not running. The output/stage windows cannot be shown without it.".to_owned());
+    }
+    if visible {
+        let _ = client.invoke(EngineCommand::OutputWindowSetConfig {
+            label: label.to_owned(),
+            config: Box::new(cfg.clone()),
+        });
+        crate::engine::sync_engine_presentation(state);
+        let preferred = state.presentation.settings.lock().preferred_monitor.clone();
+        client
+            .invoke(EngineCommand::OutputWindowShow {
+                label: label.to_owned(),
+                style: engine_window_style(label),
+                preferred_monitor: preferred,
+                width: cfg.geometry.width,
+                height: cfg.geometry.height,
+            })
+            .map_err(|e| format!("engine output window: {e}"))?;
+    } else {
+        client
+            .invoke(EngineCommand::OutputWindowHide { label: label.to_owned() })
+            .map_err(|e| format!("engine output window: {e}"))?;
+    }
+    Ok(())
 }
 
 /// THE single authoritative visibility path for window outputs (and the toggle
 /// used by the header / keyboard shortcut / stage section / output manager).
 ///
-/// Order matters: the bound window is toggled FIRST so a show/focus failure is
-/// surfaced before any state is persisted, then the OutputManager config +
-/// runtime are updated, and finally the authoritative config/state is
+/// Order matters: the engine's winit window is driven FIRST so a show/hide
+/// failure is surfaced before any state is persisted, then the OutputManager
+/// config + runtime are updated, and finally the authoritative config/state is
 /// broadcast. This guarantees the UI, the runtime `OutputState`, the persisted
 /// `outputs.json`, and the actual window can never disagree.
 pub fn set_output_visible(app: &AppHandle, state: &AppState, id: &str, visible: bool) -> Result<(), String> {
@@ -106,14 +151,17 @@ pub fn set_output_visible(app: &AppHandle, state: &AppState, id: &str, visible: 
     // software surfaces and are gated in the frontend).
     if visible && cfg.window_label.is_some() {
         let info = state.license.status();
-        if info.tier == crate::license::LicenseTier::Free {
-            let visible_windows = state
+        if info.status == crate::license::LicenseStatus::Active
+            && info.tier == crate::license::LicenseTier::Free
+        {
+            let other_window_visible = state
                 .outputs
                 .list()
                 .iter()
                 .filter(|o| o.window_label.is_some() && o.id != id && o.visible)
-                .count();
-            if visible_windows >= 1 {
+                .count()
+                >= 1;
+            if other_window_visible {
                 return Err(
                     "The Free plan supports one on-air window at a time. See Settings → License to upgrade."
                         .to_owned(),
@@ -122,28 +170,13 @@ pub fn set_output_visible(app: &AppHandle, state: &AppState, id: &str, visible: 
         }
     }
 
-    // 1) Toggle the bound window first. A failure here must NOT persist state.
-    let mut prior_window_visible: Option<bool> = None;
+    // 1) Drive the engine window first. A failure here must NOT persist state,
+    //    so disk, runtime, UI, and the actual window never diverge.
     if let Some(label) = &cfg.window_label {
-        let window = app
-            .get_webview_window(label)
-            .ok_or_else(|| format!("No window bound to output '{}'", id))?;
-        // Capture the PRIOR native visibility so a failed persist below can roll
-        // the actual window back (P1-5 / WP6) — disk, runtime, UI, and window
-        // must never diverge.
-        prior_window_visible = window.is_visible().ok();
         if visible {
             enforce_free_window_cap(app, state, label)?;
-            if label == "output" {
-                position_output_on_preferred(app, state)?;
-            }
-            let _ = window.set_ignore_cursor_events(true);
-            window.show().map_err(|e: tauri::Error| e.to_string())?;
-            window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
-            rebroadcast_presentation(app, state);
-        } else {
-            window.hide().map_err(|e: tauri::Error| e.to_string())?;
         }
+        drive_engine_window(state, &cfg, label, visible)?;
     }
 
     // 2) Persist + mutate the in-memory config ONLY after the window op
@@ -153,17 +186,11 @@ pub fn set_output_visible(app: &AppHandle, state: &AppState, id: &str, visible: 
     //    recorders/streamers enter `starting`/`stopped` and the frontend
     //    adapter reports the real phase once the pipeline is actually up.
     if let Err(e) = state.outputs.set_visible(id, visible) {
-        // Roll the native window back to its prior visibility so a persistence
+        // Roll the engine window back to its prior visibility so a persistence
         // failure can never leave the actual window shown/hidden while disk and
         // runtime retain the previous state.
-        if let (Some(label), Some(prior)) = (&cfg.window_label, prior_window_visible) {
-            if let Some(window) = app.get_webview_window(label) {
-                if prior {
-                    let _ = window.show();
-                } else {
-                    let _ = window.hide();
-                }
-            }
+        if let Some(label) = &cfg.window_label {
+            let _ = drive_engine_window(state, &cfg, label, !visible);
         }
         return Err(e);
     }
@@ -171,7 +198,7 @@ pub fn set_output_visible(app: &AppHandle, state: &AppState, id: &str, visible: 
     if let Some(s) = state.outputs.state(id) {
         publish_state(app, &s);
     }
-    publish_output_visible(app, state);
+    publish_output_visible(state);
     Ok(())
 }
 

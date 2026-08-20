@@ -119,16 +119,12 @@ The current content workspaces are:
 Window definitions are in `src-tauri/tauri.conf.json` and are created after `AppState` is managed in `src-tauri/src/main.rs`.
 
 - `main`: operator window, 1200x800.
-- `output`: transparent, always-on-top audience output, 1920x1080, hidden by default.
-- `stage`: performer confidence monitor, 1280x720, hidden by default.
 - `design`: configured Design Hub window, 1440x900, hidden by default.
 - `studio`: configured Audio Studio window, 1440x900, hidden by default.
 
-`App.tsx` currently renders dedicated React branches for `output` and `stage`. Any work involving `design` or `studio` must first verify whether those windows are intended to load the same operator app or need their own renderer branch.
+Since Phase C4, the `output` and `stage` windows are **not** Tauri webviews — they are winit windows owned by the `wordlyte-engine` sidecar process (`src-tauri/src/engine/windows.rs`), created and shown by the engine window host. `App.tsx` no longer renders output/stage branches and `src/windows/` is deleted; the console shows low-res MJPEG previews of both via `engine_invoke` (`useEnginePreview`). Any work involving `design` or `studio` must first verify whether those windows are intended to load the same operator app or need their own renderer branch.
 
-`src/windows/OutputWindow.tsx` renders projected content, backgrounds, media, cameras, timers, songs, custom slides, props, logos, transitions, lower thirds, and safe projection error fallback.
-
-`src/windows/StageWindow.tsx` renders Now Live and Up Next confidence views, timer/clock information, custom slide previews, settings, lower-third state, and stage theme behavior.
+Engine window rendering: the sidecar resolves the shared `ProgramFrame` for each window from its config + the `PresentationSnapshot` that the console pushes after every presentation mutation (`EngineCommand::SyncPresentation`, protocol v4, driven from `app_emit_sink` via `sync_engine_presentation` in `src-tauri/src/engine/presentation.rs`), and paints it with the wgpu compositor at the capture rate. The DOM renderers in `src/components/shared/Renderers.tsx` remain the parity oracle. Known C4 gaps: the engine stage window renders the live item only (the webview's Now Live/Up Next confidence view was not carried over), and `show_output_test_pattern` reveals the window but has no pattern listener.
 
 ## Output manager (Phase 1)
 

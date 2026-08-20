@@ -33,7 +33,6 @@ import { RecoveryModal } from "./components/RecoveryModal";
 import { FirstRunWizard, FIRST_RUN_KEY } from "./components/FirstRunWizard";
 import { MusicPlayer } from "./components/MusicPlayer";
 
-import { OutputWindow, StageWindow } from "./windows";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
 import type { CustomPresentation, ScheduleEntry } from "./types";
@@ -160,9 +159,6 @@ export default function App() {
   useEffect(() => {
     if (isInitialized) loadScenes();
   }, [isInitialized, loadScenes]);
-
-  if (label === "output") return <ErrorBoundary windowLabel="output"><OutputWindow /></ErrorBoundary>;
-  if (label === "stage") return <ErrorBoundary windowLabel="stage"><StageWindow /></ErrorBoundary>;
 
   // Neutral startup surface until the window role is known AND while the
   // backend is booting — never render operator controls into a window whose

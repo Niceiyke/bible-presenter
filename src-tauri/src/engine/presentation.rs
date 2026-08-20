@@ -5,9 +5,9 @@ use crate::store::{
     DisplayItem, LowerThirdData, PresentationSettings, PropItem, SceneCompositionData, SceneZone,
     SceneZoneSource,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use super::backend::EngineBackend;
 use crate::state::PresentationState;
@@ -20,8 +20,9 @@ pub const PRESENTATION_SCHEMA_VERSION: u32 = 2;
 /// Authoritative presentation snapshot for window hydration. Windows call
 /// `presentation_snapshot` after registering their event listeners and replay
 /// their buffered events on top of it, so a reopening window converges to the
-/// same state as the operator console.
-#[derive(Serialize)]
+/// same state as the operator console. `Deserialize` lets the engine sidecar
+/// adopt the console's authoritative state via `SyncPresentation` (Phase C4).
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PresentationSnapshot {
     pub schema_version: u32,
     pub live: Option<DisplayItem>,
@@ -795,9 +796,34 @@ fn validate_prop_path(path: &str, app_data_dir: &std::path::Path) -> Result<(), 
 
 /// Builds the standard desktop emit sink for a Tauri `AppHandle`. Desktop
 /// command adapters construct an `Engine` with this sink so engine events
-/// reach `emit_checked_value` exactly like the historical direct emits.
+/// reach `emit_checked_value` exactly like the historical direct emits. It
+/// ALSO forwards the authoritative snapshot to the engine sidecar after every
+/// event (Phase C4) so the engine's winit windows render the console's live
+/// program; a missing/unresponsive sidecar is silently skipped.
 pub fn app_emit_sink(app: &AppHandle) -> impl Fn(&str, serde_json::Value) + '_ {
-    move |event, payload| crate::events::emit_checked_value(app, event, &payload)
+    move |event, payload| {
+        crate::events::emit_checked_value(app, event, &payload);
+        if let Some(state) = app.try_state::<AppState>() {
+            sync_engine_presentation(state.inner());
+        }
+    }
+}
+
+/// Forwards the console's authoritative presentation snapshot to the engine
+/// sidecar (`SyncPresentation`), so the engine's winit windows resolve and
+/// render the real live/staged/settings/lower-third/props state. Called after
+/// every presentation event (via `app_emit_sink`) and when a window is
+/// revealed (`set_output_visible`). Non-fatal: a missing or busy sidecar is
+/// skipped so the console's local operations never depend on the engine.
+pub fn sync_engine_presentation(state: &AppState) {
+    let Some(client) = state.engine.lock().clone() else { return };
+    if !client.is_running() {
+        return;
+    }
+    let snapshot = crate::engine::snapshot(state);
+    let _ = client.invoke(crate::engine::ipc::EngineCommand::SyncPresentation {
+        snapshot: Box::new(snapshot),
+    });
 }
 
 /// Re-broadcast authoritative presentation state (wrapped with the current

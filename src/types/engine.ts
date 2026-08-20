@@ -17,7 +17,7 @@ import type { OutputConfig } from "./output";
  */
 
 /** Must equal `ENGINE_PROTOCOL_VERSION` in `src-tauri/src/engine/ipc.rs`. */
-export const ENGINE_PROTOCOL_VERSION = 3;
+export const ENGINE_PROTOCOL_VERSION = 4;
 
 /** Additive capability negotiation — matches `ENGINE_CAPABILITIES` (ipc.rs). */
 export const ENGINE_CAPABILITIES = [
@@ -62,6 +62,13 @@ export type EngineCommand =
   | { cmd: "output_window_resize"; label: string; width: number; height: number }
   | { cmd: "output_window_set_config"; label: string; config: OutputConfig }
   | { cmd: "list_monitors" }
+  // ---- Console→engine state adoption (Phase C4) ----
+  // The engine's own presentation store starts empty and only tracks the
+  // mutations it performs; the console owns the authoritative `AppState`
+  // during Phase C and pushes its snapshot after every presentation event
+  // and whenever a window is revealed so the engine's winit windows render
+  // the real program.
+  | { cmd: "sync_presentation"; snapshot: PresentationSnapshot }
   | { cmd: string };
 
 /** One request frame on the stdio channel. */

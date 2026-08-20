@@ -4,7 +4,7 @@ use crate::remote::protocol::{
 };
 use crate::state::AppState;
 use crate::store::Song;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 /// Ordered section labels for a song, following the canonical arrangement when
 /// present and falling back to legacy `arrangement` then section order.
@@ -40,7 +40,7 @@ pub fn song_section_labels(song: &Song) -> Vec<String> {
 /// Private filesystem paths, full media library and editable settings are
 /// deliberately excluded.
 pub fn build_snapshot(
-    app: &AppHandle,
+    _app: &AppHandle,
     state: &AppState,
     role: RemoteRole,
     permissions: RemotePermissions,
@@ -95,9 +95,12 @@ pub fn build_snapshot(
 
     let (active_service, schedule_entries) = active_service_snapshot(state);
 
-    let output_visible = app
-        .get_webview_window("output")
-        .and_then(|w| w.is_visible().ok())
+    // The output window is engine-owned since Phase C4, so visibility comes
+    // from the OutputManager's persisted entry rather than a Tauri webview.
+    let output_visible = state
+        .outputs
+        .get("output")
+        .map(|o| o.visible)
         .unwrap_or(false);
 
     RemoteSnapshot {

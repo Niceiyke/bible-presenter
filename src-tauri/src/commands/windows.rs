@@ -5,11 +5,14 @@ use tauri::{AppHandle, Manager, State};
 /// Toggle the output window. This is the SAME authoritative path the Output
 /// Manager uses (`outputs_set_visible` → `set_output_visible`), so the header /
 /// keyboard shortcut can never diverge from the persisted/runtime output state.
+/// Since Phase C4 the output window is engine-owned, so visibility comes from
+/// the OutputManager's persisted entry rather than a Tauri webview.
 #[tauri::command]
 pub async fn toggle_output_window(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    let visible = app
-        .get_webview_window("output")
-        .and_then(|w| w.is_visible().ok())
+    let visible = state
+        .outputs
+        .get("output")
+        .map(|o| o.visible)
         .unwrap_or(false);
     crate::commands::outputs::set_output_visible(&app, state.inner(), "output", !visible)
 }
@@ -31,11 +34,14 @@ pub async fn hide_output_test_pattern(app: AppHandle, state: State<'_, AppState>
 }
 
 /// Toggle the stage confidence monitor through the same authoritative path.
+/// Since Phase C4 the stage window is engine-owned, so visibility comes from
+/// the OutputManager's persisted entry rather than a Tauri webview.
 #[tauri::command]
 pub async fn toggle_stage_window(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    let visible = app
-        .get_webview_window("stage")
-        .and_then(|w| w.is_visible().ok())
+    let visible = state
+        .outputs
+        .get("stage")
+        .map(|o| o.visible)
         .unwrap_or(false);
     crate::commands::outputs::set_output_visible(&app, state.inner(), "stage", !visible)
 }

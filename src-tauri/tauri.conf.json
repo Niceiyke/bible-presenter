@@ -18,30 +18,6 @@
         "create": false
       },
       {
-        "title": "Wordlyte - Output",
-        "label": "output",
-        "width": 1920,
-        "height": 1080,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "fullscreen": false,
-        "visible": false,
-        "create": false
-      },
-      {
-        "title": "Wordlyte - Stage",
-        "label": "stage",
-        "width": 1280,
-        "height": 720,
-        "decorations": true,
-        "transparent": false,
-        "alwaysOnTop": true,
-        "visible": false,
-        "resizable": true,
-        "create": false
-      },
-      {
         "title": "Wordlyte - Design Hub",
         "label": "design",
         "width": 1440,

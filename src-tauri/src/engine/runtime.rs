@@ -90,6 +90,33 @@ impl EngineRuntime {
         self.presentation.current_revision()
     }
 
+    /// Adopts a console-provided `PresentationSnapshot` wholesale (Phase C4).
+    /// The engine's own presentation store starts empty and only tracks the
+    /// mutations it performs, so the console — which owns the authoritative
+    /// `AppState` during Phase C — pushes its snapshot after every presentation
+    /// event and whenever a window is revealed. Validates `schema_version` and
+    /// adopts the revision verbatim so both hosts agree on event ordering.
+    pub fn apply_sync(&self, snapshot: crate::engine::presentation::PresentationSnapshot) -> Result<(), String> {
+        use std::sync::atomic::Ordering;
+        if snapshot.schema_version != crate::engine::presentation::PRESENTATION_SCHEMA_VERSION {
+            return Err(format!(
+                "presentation schema mismatch: console is v{}, engine is v{}",
+                snapshot.schema_version,
+                crate::engine::presentation::PRESENTATION_SCHEMA_VERSION
+            ));
+        }
+        let p = &self.presentation;
+        *p.live_item.lock() = snapshot.live;
+        *p.previous_item.lock() = snapshot.previous;
+        *p.staged_item.lock() = snapshot.staged;
+        *p.settings.lock() = snapshot.settings;
+        *p.lower_third.lock() = snapshot.lower_third;
+        *p.props_layer.lock() = snapshot.props;
+        *p.last_updated.lock() = snapshot.updated_at;
+        p.revision.store(snapshot.revision, Ordering::SeqCst);
+        Ok(())
+    }
+
     /// Translates the engine's Tauri-style window event into an `EngineEvent`
     /// frame, or returns `None` for events that are not part of the IPC surface.
     fn translate_event(name: &str, payload: Value) -> Option<EngineEventFrame> {
@@ -436,6 +463,12 @@ fn dispatch_command<B: EngineBackend>(
             },
             None => err(id, revision(), "window_host_unavailable", "The engine window host is not running."),
         },
+        EngineCommand::SyncPresentation { snapshot } => {
+            match runtime.apply_sync(*snapshot) {
+                Ok(()) => ok(id, revision()),
+                Err(msg) => err(id, revision(), "sync_error", &msg),
+            }
+        }
         EngineCommand::Unknown => EngineResponse::unsupported(id),
     }
 }
@@ -615,5 +648,53 @@ mod tests {
             }
             other => panic!("expected PreviewFrame, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn sync_presentation_adopts_state_and_revision() {
+        let rt = runtime();
+        // Drive the engine's own state to revision 1 via a mutation, then
+        // overwrite it with a console-provided snapshot at a higher revision.
+        dispatch(&rt, 20, EngineCommand::SendLiveItem { item: Box::new(verse_item()), source: None });
+        let snap = crate::engine::presentation::PresentationSnapshot {
+            schema_version: crate::engine::presentation::PRESENTATION_SCHEMA_VERSION,
+            live: None,
+            previous: None,
+            staged: None,
+            settings: rt.presentation.settings.lock().clone(),
+            lower_third: None,
+            props: vec![],
+            active_scene_id: None,
+            revision: 42,
+            updated_at: 123456789,
+        };
+        let (res, _) = dispatch(&rt, 21, EngineCommand::SyncPresentation { snapshot: Box::new(snap) });
+        assert!(res.ok);
+        assert_eq!(res.revision.unwrap(), 42);
+        assert!(rt.presentation.live_item.lock().is_none());
+        assert_eq!(rt.presentation.current_revision(), 42);
+        assert_eq!(*rt.presentation.last_updated.lock(), 123456789);
+    }
+
+    #[test]
+    fn sync_presentation_rejects_schema_mismatch() {
+        let rt = runtime();
+        let snap = crate::engine::presentation::PresentationSnapshot {
+            schema_version: crate::engine::presentation::PRESENTATION_SCHEMA_VERSION + 1,
+            live: None,
+            previous: None,
+            staged: None,
+            settings: rt.presentation.settings.lock().clone(),
+            lower_third: None,
+            props: vec![],
+            active_scene_id: None,
+            revision: 1,
+            updated_at: 0,
+        };
+        let (res, _) = dispatch(&rt, 22, EngineCommand::SyncPresentation { snapshot: Box::new(snap) });
+        assert!(!res.ok);
+        assert_eq!(res.error.unwrap().code, "sync_error");
+        // The engine keeps its own state untouched.
+        assert_eq!(rt.presentation.current_revision(), 0);
     }
 }

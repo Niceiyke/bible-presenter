@@ -58,6 +58,13 @@ impl PresentationState {
     pub fn current_revision(&self) -> u64 {
         self.revision.load(Ordering::SeqCst)
     }
+
+    /// Overwrites the presentation revision without bumping (used by the engine
+    /// sidecar's `SyncPresentation` to adopt the console's revision so the two
+    /// hosts agree on event ordering after a full-state sync).
+    pub fn set_revision(&self, rev: u64) {
+        self.revision.store(rev, Ordering::SeqCst);
+    }
 }
 
 #[derive(Clone)]

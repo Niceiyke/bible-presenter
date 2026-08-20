@@ -15,7 +15,7 @@ import { ENGINE_PROTOCOL_VERSION, type EngineCommand, type EngineEvent } from ".
 describe("engine IPC contract (Phase A1)", () => {
   it("pins the wire protocol version in lockstep with ipc.rs", () => {
     // MUST equal `ENGINE_PROTOCOL_VERSION` in `src-tauri/src/engine/ipc.rs`.
-    expect(ENGINE_PROTOCOL_VERSION).toBe(3);
+    expect(ENGINE_PROTOCOL_VERSION).toBe(4);
   });
 
   it("covers the core presentation command names the engine dispatch relies on", () => {
@@ -40,6 +40,7 @@ describe("engine IPC contract (Phase A1)", () => {
       { cmd: "output_window_resize", label: "output", width: 1280, height: 720 },
       { cmd: "output_window_set_config", label: "output", config: {} as never },
       { cmd: "list_monitors" },
+      { cmd: "sync_presentation", snapshot: {} as never },
     ];
     for (const c of cmds) expect(typeof c).toBe("object");
   });

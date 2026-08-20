@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 /// Wire protocol version for the engine IPC. Must stay in sync with
 /// `ENGINE_PROTOCOL_VERSION` in `src/types/engine.ts`.
-pub const ENGINE_PROTOCOL_VERSION: u32 = 3;
+pub const ENGINE_PROTOCOL_VERSION: u32 = 4;
 
 /// Capabilities the engine offers for future negotiation (additive). A console
 /// can gate UI/commands on these without breaking older engines.
@@ -118,6 +118,14 @@ pub enum EngineCommand {
     OutputWindowSetConfig { label: String, config: Box<crate::outputs::OutputConfig> },
     /// Enumerate the monitors the engine's winit host sees.
     ListMonitors,
+    /// Adopt the console's authoritative presentation state wholesale. The
+    /// engine's own presentation store starts empty and only tracks the
+    /// mutations it performs, so the console (which owns the authoritative
+    /// `AppState` during Phase C) pushes its snapshot after every presentation
+    /// event and whenever a window is revealed (Phase C4). The engine validates
+    /// `schema_version` and adopts the revision verbatim so both hosts agree on
+    /// event ordering.
+    SyncPresentation { snapshot: Box<crate::engine::presentation::PresentationSnapshot> },
     /// An unknown/future command from a newer console. The engine replies
     /// `unsupported` instead of failing to parse the frame.
     #[serde(other)]
@@ -342,6 +350,39 @@ mod tests {
                 assert!(style.transparent);
                 assert_eq!(preferred_monitor.as_deref(), Some("DELL U2720Q"));
                 assert_eq!((width, height), (1920, 1080));
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sync_presentation_round_trips_through_json() {
+        let req = EngineRequest {
+            id: 12,
+            command: EngineCommand::SyncPresentation {
+                snapshot: Box::new(crate::engine::presentation::PresentationSnapshot {
+                    schema_version: crate::engine::presentation::PRESENTATION_SCHEMA_VERSION,
+                    live: None,
+                    previous: None,
+                    staged: None,
+                    settings: crate::store::PresentationSettings::default(),
+                    lower_third: None,
+                    props: vec![],
+                    active_scene_id: None,
+                    revision: 42,
+                    updated_at: 123,
+                }),
+            },
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: EngineRequest = serde_json::from_str(&json).unwrap();
+        match back.command {
+            EngineCommand::SyncPresentation { snapshot } => {
+                assert_eq!(snapshot.revision, 42);
+                assert_eq!(
+                    snapshot.schema_version,
+                    crate::engine::presentation::PRESENTATION_SCHEMA_VERSION
+                );
             }
             other => panic!("wrong variant: {other:?}"),
         }
