@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 /// Wire protocol version for the engine IPC. Must stay in sync with
 /// `ENGINE_PROTOCOL_VERSION` in `src/types/engine.ts`.
-pub const ENGINE_PROTOCOL_VERSION: u32 = 2;
+pub const ENGINE_PROTOCOL_VERSION: u32 = 3;
 
 /// Capabilities the engine offers for future negotiation (additive). A console
 /// can gate UI/commands on these without breaking older engines.
@@ -144,8 +144,16 @@ pub enum EngineEvent {
     PropsUpdate { props: Vec<store::PropItem>, revision: u64 },
     /// Output/transport lifecycle transition (phase, reason, started_at).
     OutputStateChanged { output_id: String, state: serde_json::Value },
-    /// A preview frame is ready (MJPEG bytes over the binary channel).
-    PreviewFrame { output_id: String, frame_index: u64 },
+    /// A preview frame is ready. The MJPEG bytes are base64-encoded inline so the
+    /// frame rides the same JSON event channel (no separate binary pipe); the
+    /// console decodes and renders it. `frame_index` is per-window and monotonic.
+    PreviewFrame {
+        output_id: String,
+        frame_index: u64,
+        width: u32,
+        height: u32,
+        image_base64: String,
+    },
     /// An NDI source appeared/disappeared on the LAN.
     NdiSourceChanged { payload: serde_json::Value },
     /// Unknown/future event from a newer engine. The console ignores it
@@ -276,6 +284,36 @@ mod tests {
         let json = serde_json::to_value(ev).unwrap();
         assert_eq!(json["event"], "live_item_update");
         assert_eq!(json["revision"], 42);
+    }
+
+    #[test]
+    fn preview_frame_event_round_trips_through_json() {
+        let ev = EngineEvent::PreviewFrame {
+            output_id: "output".into(),
+            frame_index: 9,
+            width: 480,
+            height: 270,
+            image_base64: "aGVsbG8=".into(),
+        };
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["event"], "preview_frame");
+        assert_eq!(json["output_id"], "output");
+        assert_eq!(json["frame_index"], 9);
+        assert_eq!(json["width"], 480);
+        assert_eq!(json["height"], 270);
+        assert_eq!(json["image_base64"], "aGVsbG8=");
+
+        let back: EngineEvent = serde_json::from_value(json).unwrap();
+        match back {
+            EngineEvent::PreviewFrame { output_id, frame_index, width, height, image_base64 } => {
+                assert_eq!(output_id.as_str(), "output");
+                assert_eq!(frame_index, 9);
+                assert_eq!(width, 480);
+                assert_eq!(height, 270);
+                assert_eq!(image_base64.as_str(), "aGVsbG8=");
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
     }
 
     #[test]

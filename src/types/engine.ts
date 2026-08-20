@@ -17,7 +17,7 @@ import type { OutputConfig } from "./output";
  */
 
 /** Must equal `ENGINE_PROTOCOL_VERSION` in `src-tauri/src/engine/ipc.rs`. */
-export const ENGINE_PROTOCOL_VERSION = 2;
+export const ENGINE_PROTOCOL_VERSION = 3;
 
 /** Additive capability negotiation — matches `ENGINE_CAPABILITIES` (ipc.rs). */
 export const ENGINE_CAPABILITIES = [
@@ -89,6 +89,16 @@ export interface EngineResponse {
 
 /** An event the engine pushes to the console. Presentation events carry the
  *  presentation revision so `PresentationSync` drops stale broadcasts. */
+/** A preview frame ready for console display (Phase C3). MJPEG bytes are
+ *  base64-encoded inline so the frame rides the JSON event channel. */
+export interface EnginePreviewFrame {
+  output_id: string;
+  frame_index: number;
+  width: number;
+  height: number;
+  image_base64: string;
+}
+
 export type EngineEvent =
   | { event: "live_item_update"; detected_item: DisplayItem | null; revision: number }
   | { event: "item_staged"; item: DisplayItem | null; revision: number }
@@ -96,7 +106,7 @@ export type EngineEvent =
   | { event: "lower_third_update"; lower_third: unknown | null; revision: number }
   | { event: "props_update"; props: PropItem[]; revision: number }
   | { event: "output_state_changed"; output_id: string; state: unknown }
-  | { event: "preview_frame"; output_id: string; frame_index: number }
+  | { event: "preview_frame"; output_id: string; frame_index: number } & EnginePreviewFrame
   | { event: "ndi_source_changed"; payload: unknown }
   | { event: string };
 

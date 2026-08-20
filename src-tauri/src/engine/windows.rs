@@ -150,8 +150,13 @@ impl MediaResolver for DiskMediaResolver {
     }
 }
 
+/// A preview-frame sink: the host pushes a downscaled, JPEG-encoded frame for a
+/// window after rendering it. The engine runtime wraps this to emit
+/// `EngineEvent::PreviewFrame` with the bytes base64-encoded.
+pub type PreviewSink = Arc<dyn Fn(String, u64, u32, u32, Vec<u8>) + Send + Sync>;
+
 /// Spawn the window host on a background thread and return a handle.
-pub fn spawn(app_data_dir: PathBuf) -> anyhow::Result<WindowHostHandle> {
+pub fn spawn(app_data_dir: PathBuf, preview_sink: PreviewSink) -> anyhow::Result<WindowHostHandle> {
     let frames = Arc::new(RwLock::new(HashMap::<String, SharedFrame>::new()));
     let frames_for_thread = Arc::clone(&frames);
     let (proxy_tx, proxy_rx) = mpsc::channel();
@@ -176,7 +181,12 @@ pub fn spawn(app_data_dir: PathBuf) -> anyhow::Result<WindowHostHandle> {
             };
             let proxy = event_loop.create_proxy();
             let _ = proxy_tx.send(proxy);
-            let mut app = WindowHostApp { windows: HashMap::new(), frames: frames_for_thread, app_data_dir };
+            let mut app = WindowHostApp {
+                windows: HashMap::new(),
+                frames: frames_for_thread,
+                app_data_dir,
+                preview_sink,
+            };
             let _ = event_loop.run_app(&mut app);
         })?;
 
@@ -199,7 +209,18 @@ struct HostedWindow {
     compositor: Option<Compositor>,
     media: DiskMediaResolver,
     last_revision: Option<u64>,
+    /// Per-window monotonic preview frame counter.
+    preview_index: u64,
+    /// Throttle for MJPEG preview emission (see `PREVIEW_INTERVAL`).
+    preview_last: std::time::Instant,
 }
+
+/// Preview emission cadence: 10 fps keeps the stdio JSON event channel cheap
+/// while staying smooth enough to verify the engine's windows.
+const PREVIEW_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+/// Preview target width; the captured frame is downscaled to it (aspect
+/// preserving) before JPEG encoding.
+const PREVIEW_WIDTH: u32 = 480;
 
 impl HostedWindow {
     fn show(&mut self, event_loop: &ActiveEventLoop) {
@@ -237,25 +258,75 @@ impl HostedWindow {
     /// none has been published yet. Frames are re-rendered on every redraw so
     /// timer/clock content advances even when the presentation revision is
     /// unchanged; the swapchain present itself is skipped while occluded.
-    fn draw(&mut self, frames: &RwLock<HashMap<String, SharedFrame>>) {
+    fn draw(&mut self, frames: &RwLock<HashMap<String, SharedFrame>>, preview_sink: &PreviewSink) {
         let frame = frames.read().unwrap().get(&self.label).cloned();
+        if let Some(compositor) = &mut self.compositor {
+            match frame {
+                Some(shared) => {
+                    self.last_revision = Some(shared.revision);
+                    let _ = compositor.present(&shared.frame, &mut self.media);
+                }
+                None => {
+                    compositor.clear([0.0, 0.0, 0.0, 1.0]);
+                }
+            }
+        } else {
+            return;
+        }
+        self.emit_preview(preview_sink);
+    }
+
+    /// Downscale + JPEG-encode the just-rendered frame and push it through the
+    /// preview sink, throttled to `PREVIEW_INTERVAL` and only while visible.
+    fn emit_preview(&mut self, preview_sink: &PreviewSink) {
+        if !self.visible || self.preview_last.elapsed() < PREVIEW_INTERVAL {
+            return;
+        }
         let Some(compositor) = &mut self.compositor else { return };
-        match frame {
-            Some(shared) => {
-                self.last_revision = Some(shared.revision);
-                let _ = compositor.present(&shared.frame, &mut self.media);
-            }
-            None => {
-                compositor.clear([0.0, 0.0, 0.0, 1.0]);
-            }
+        let (w, h, rgba) = compositor.read_pixels();
+        let Some((pw, ph, jpeg)) = encode_preview(&rgba, w, h, PREVIEW_WIDTH) else { return };
+        self.preview_last = std::time::Instant::now();
+        self.preview_index += 1;
+        preview_sink(self.label.clone(), self.preview_index, pw, ph, jpeg);
+    }
+}
+
+/// Downscale RGBA pixels to `target_width` (aspect preserving) and JPEG-encode
+/// them. Returns `(width, height, jpeg_bytes)` or `None` when the input is
+/// empty / the encode fails. Uses nearest-neighbor sampling — plenty for a low-res
+/// console preview.
+fn encode_preview(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    target_width: u32,
+) -> Option<(u32, u32, Vec<u8>)> {
+    if width == 0 || height == 0 || target_width == 0 || rgba.len() < (width * height * 4) as usize {
+        return None;
+    }
+    let pw = target_width.min(width);
+    let ph = ((height as u64 * pw as u64) / width as u64).max(1) as u32;
+    let mut out = Vec::with_capacity((pw * ph * 4) as usize);
+    for y in 0..ph {
+        let sy = ((y as u64 * height as u64) / ph as u64) as u32;
+        for x in 0..pw {
+            let sx = ((x as u64 * width as u64) / pw as u64) as u32;
+            let si = ((sy * width + sx) * 4) as usize;
+            out.extend_from_slice(&rgba[si..si + 4]);
         }
     }
+    let mut jpeg = Vec::new();
+    jpeg_encoder::Encoder::new(&mut jpeg, 65)
+        .encode(&out, pw as u16, ph as u16, jpeg_encoder::ColorType::Rgba)
+        .ok()?;
+    Some((pw, ph, jpeg))
 }
 
 struct WindowHostApp {
     windows: HashMap<String, HostedWindow>,
     frames: Arc<RwLock<HashMap<String, SharedFrame>>>,
     app_data_dir: PathBuf,
+    preview_sink: PreviewSink,
 }
 
 impl WindowHostApp {
@@ -316,6 +387,8 @@ impl WindowHostApp {
             compositor,
             media: DiskMediaResolver { app_data_dir: self.app_data_dir.clone() },
             last_revision: None,
+            preview_index: 0,
+            preview_last: std::time::Instant::now(),
         };
         win.show(event_loop);
         self.windows.insert(label.to_string(), win);
@@ -433,7 +506,7 @@ impl ApplicationHandler<WindowCommand> for WindowHostApp {
             }
             WindowEvent::RedrawRequested => {
                 let frames = Arc::clone(&self.frames);
-                win.draw(&frames);
+                win.draw(&frames, &self.preview_sink);
             }
             WindowEvent::CloseRequested => {
                 // Closing an output/stage window hides it; the engine re-syncs
@@ -492,5 +565,37 @@ mod tests {
         let b = a.clone();
         assert_eq!(a, b);
         assert!(a.primary);
+    }
+
+    #[test]
+    fn encode_preview_downscales_and_produces_jpeg() {
+        // 64x32 solid red frame.
+        let (w, h) = (64u32, 32u32);
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for _ in 0..w * h {
+            rgba.extend_from_slice(&[255, 0, 0, 255]);
+        }
+        let (pw, ph, jpeg) = encode_preview(&rgba, w, h, 480).unwrap();
+        // Target width caps at source width.
+        assert_eq!((pw, ph), (64, 32));
+        // JPEG SOI marker (FFD8) — a real encode, not an empty vec.
+        assert!(jpeg.starts_with(&[0xFF, 0xD8]));
+
+        // Downscaling a 128x64 frame to 480-wide keeps the 2:1 aspect.
+        let (w2, h2) = (128u32, 64u32);
+        let mut rgba2 = Vec::with_capacity((w2 * h2 * 4) as usize);
+        for _ in 0..w2 * h2 {
+            rgba2.extend_from_slice(&[0, 255, 0, 255]);
+        }
+        let (pw2, ph2, jpeg2) = encode_preview(&rgba2, w2, h2, 480).unwrap();
+        assert_eq!((pw2, ph2), (128, 64));
+        assert!(jpeg2.starts_with(&[0xFF, 0xD8]));
+    }
+
+    #[test]
+    fn encode_preview_rejects_bad_inputs() {
+        assert!(encode_preview(&[], 0, 0, 480).is_none());
+        assert!(encode_preview(&[1, 2, 3], 1, 1, 480).is_none());
+        assert!(encode_preview(&[0; 4], 1, 1, 0).is_none());
     }
 }

@@ -299,6 +299,16 @@ Status (feat/rust-video-engine):
   every successful mutation, and publishes it to the host; TS mirror updated.
   Smoke-tested against the sidecar: `list_monitors` returns the display set and
   `output_window_show`/`hide` round-trip.
+- **C3a (this commit):** engine-side MJPEG preview frames — the window host
+  captures its just-rendered frame (synchronous `read_pixels`), downscales to
+  480-wide, JPEG-encodes (jpeg-encoder 0.6, base64 inline so the frame rides the
+  existing JSON event channel), and pushes `PreviewFrame` events (protocol v3)
+  into the runtime's event buffer at ~10fps; the console drains them on the next
+  polled command. Smoke-tested: 14 preview frames over 3s at 480x270, base64
+  decoded correctly. TS mirror + contract tests updated.
+- **C3b (pending):** console previews — `engine_invoke` Tauri command bridge +
+  `usePreviewFrames` hook that polls `ping` and renders the decoded frames for
+  the output and stage windows in the operator shell.
 
 ### Phase D: Transport — encode, RTMP, recording
 

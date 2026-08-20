@@ -23,6 +23,7 @@ use crate::engine::windows::{SharedFrame, WindowCommand, WindowHostHandle};
 use crate::remote::protocol::RemoteEventKind;
 use crate::state::PresentationState;
 use crate::store::{self, MediaScheduleStore};
+use base64::Engine as _;
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -50,22 +51,27 @@ impl EngineRuntime {
     /// any future disk persistence; the store itself is in-memory during Phase
     /// A2 (see module docs). No window host is spawned.
     pub fn new(app_data_dir: PathBuf) -> Result<Self, String> {
-        Self::with_windows(app_data_dir, None)
+        Self::with_windows_and_pending(app_data_dir, None, Arc::new(Mutex::new(Vec::new())))
     }
 
     /// Creates the runtime and spawns the engine-owned winit window host (the
     /// sidecar process path). The host thread idles until a window command
-    /// arrives; it is joined on drop.
+    /// arrives; it is joined on drop. The preview sink it pushes frames through
+    /// feeds the same event buffer `dispatch` drains, so `PreviewFrame` events
+    /// ride along with the next reply the console polls.
     pub fn new_with_windows(app_data_dir: PathBuf) -> Result<Self, String> {
-        let windows = crate::engine::windows::spawn(app_data_dir.clone())
+        let pending = Arc::new(Mutex::new(Vec::<EngineEventFrame>::new()));
+        let preview_sink = preview_sink(Arc::clone(&pending));
+        let windows = crate::engine::windows::spawn(app_data_dir.clone(), preview_sink)
             .map(Some)
             .map_err(|e| format!("could not start window host: {e}"))?;
-        Self::with_windows(app_data_dir, windows)
+        Self::with_windows_and_pending(app_data_dir, windows, pending)
     }
 
-    fn with_windows(
+    fn with_windows_and_pending(
         app_data_dir: PathBuf,
         windows: Option<WindowHostHandle>,
+        pending_events: Arc<Mutex<Vec<EngineEventFrame>>>,
     ) -> Result<Self, String> {
         let store = MediaScheduleStore::in_memory(app_data_dir.clone()).map_err(|e| e.to_string())?;
         let initial_settings = store.load_settings().unwrap_or_default();
@@ -73,7 +79,7 @@ impl EngineRuntime {
             presentation: PresentationState::new(initial_settings),
             store,
             app_data_dir,
-            pending_events: Arc::new(Mutex::new(Vec::new())),
+            pending_events,
             windows,
             window_configs: Mutex::new(HashMap::new()),
         })
@@ -229,6 +235,23 @@ impl EngineBackend for EngineRuntime {
         // commands into engine commands and owns hub publication. The remote
         // events are intentionally dropped here (Phase A2).
     }
+}
+
+/// Builds the window-host preview sink: wraps each pushed (JPEG) preview frame
+/// as a base64 `EngineEvent::PreviewFrame` buffered into `pending`, so previews
+/// drain with the next dispatched command's reply.
+fn preview_sink(pending: Arc<Mutex<Vec<EngineEventFrame>>>) -> crate::engine::windows::PreviewSink {
+    Arc::new(move |output_id, frame_index, width, height, jpeg| {
+        pending.lock().push(EngineEventFrame {
+            event: EngineEvent::PreviewFrame {
+                output_id,
+                frame_index,
+                width,
+                height,
+                image_base64: base64::engine::general_purpose::STANDARD.encode(jpeg),
+            },
+        });
+    })
 }
 
 /// Dispatches one engine command and returns the response plus every event the
@@ -570,5 +593,27 @@ mod tests {
     fn resolve_window_frame_without_configs_is_empty() {
         let rt = runtime();
         assert!(rt.resolve_window_frames().is_empty());
+    }
+
+    #[test]
+    fn preview_sink_emits_base64_preview_frame_event() {
+        let pending = Arc::new(Mutex::new(Vec::new()));
+        let sink = preview_sink(Arc::clone(&pending));
+        sink("output".into(), 7, 480, 270, vec![0xFF, 0xD8, 0x42]);
+        let frames = pending.lock().clone();
+        assert_eq!(frames.len(), 1);
+        match &frames[0].event {
+            EngineEvent::PreviewFrame { output_id, frame_index, width, height, image_base64 } => {
+                assert_eq!(output_id, "output");
+                assert_eq!(*frame_index, 7);
+                assert_eq!((*width, *height), (480, 270));
+                // Base64 of the 3 JPEG bytes round-trips.
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(image_base64)
+                    .unwrap();
+                assert_eq!(decoded, vec![0xFF, 0xD8, 0x42]);
+            }
+            other => panic!("expected PreviewFrame, got {other:?}"),
+        }
     }
 }
