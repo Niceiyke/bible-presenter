@@ -5,7 +5,7 @@ use tauri::{AppHandle, State};
 
 #[tauri::command]
 pub async fn get_props(state: State<'_, AppState>) -> Result<Vec<store::PropItem>, String> {
-    engine::op_get_props(&state)
+    engine::op_get_props(&*state)
 }
 
 #[tauri::command]
@@ -14,6 +14,6 @@ pub async fn set_props(app: AppHandle, state: State<'_, AppState>, props: Vec<st
     // write failure never leaves the in-memory and on-disk layers diverging),
     // then bumps revision once and broadcasts `props-update`.
     let sink = engine::app_emit_sink(&app);
-    let engine = Engine { state: &state, emit: &sink };
+    let engine = Engine { state: &*state, emit: &sink };
     engine.op_set_props(props).map(|_| ())
 }

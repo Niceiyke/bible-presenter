@@ -62,7 +62,7 @@ pub async fn apply_scene(app: AppHandle, state: State<'_, AppState>, id: String)
     // recalled onto the projection while the license is not active.
     crate::license::ensure_allowed(&state)?;
     let sink = engine::app_emit_sink(&app);
-    let engine = Engine { state: &state, emit: &sink };
+    let engine = Engine { state: &*state, emit: &sink };
     engine
         .op_apply_scene(id)
         .map(|r| r.scene.expect("apply_scene always returns the applied scene"))

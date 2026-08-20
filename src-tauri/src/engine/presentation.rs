@@ -9,6 +9,9 @@ use serde::Serialize;
 use serde_json::json;
 use tauri::AppHandle;
 
+use super::backend::EngineBackend;
+use crate::state::PresentationState;
+
 /// Schema version of the `PresentationSnapshot` document. Bumped when the
 /// snapshot's on-wire shape changes; consumers must reject a snapshot whose
 /// `schema_version` they do not understand instead of guessing at fields.
@@ -55,8 +58,9 @@ pub struct MutationResult {
 /// Reads the full presentation state without locking. Callers must hold the
 /// presentation mutation lock (every `op_*` does) so the snapshot is
 /// consistent — no event can be half-applied when it is captured.
-pub fn snapshot(state: &AppState) -> PresentationSnapshot {
-    let live = state.presentation.live_item.lock().clone();
+pub fn snapshot<B: EngineBackend>(backend: &B) -> PresentationSnapshot {
+    let presentation = backend.presentation();
+    let live = presentation.live_item.lock().clone();
     let active_scene_id = match &live {
         Some(DisplayItem::SceneComposition(data)) => Some(data.scene_id.clone()),
         _ => None,
@@ -64,14 +68,14 @@ pub fn snapshot(state: &AppState) -> PresentationSnapshot {
     PresentationSnapshot {
         schema_version: PRESENTATION_SCHEMA_VERSION,
         live: live.clone(),
-        previous: state.presentation.previous_item.lock().clone(),
-        staged: state.presentation.staged_item.lock().clone(),
-        settings: state.presentation.settings.lock().clone(),
-        lower_third: state.presentation.lower_third.lock().clone(),
-        props: state.presentation.props_layer.lock().clone(),
+        previous: presentation.previous_item.lock().clone(),
+        staged: presentation.staged_item.lock().clone(),
+        settings: presentation.settings.lock().clone(),
+        lower_third: presentation.lower_third.lock().clone(),
+        props: presentation.props_layer.lock().clone(),
         active_scene_id,
-        revision: state.presentation.current_revision(),
-        updated_at: *state.presentation.last_updated.lock(),
+        revision: presentation.current_revision(),
+        updated_at: *presentation.last_updated.lock(),
     }
 }
 
@@ -86,16 +90,16 @@ pub fn now_ms() -> u64 {
 /// Acquires the presentation mutation lock. Every mutation takes this first so
 /// desktop and remote callers can never interleave two operations
 /// mid-transaction (audit: concurrent stage/send-live atomicity).
-fn lock_presentation(state: &AppState) -> parking_lot::MutexGuard<'_, ()> {
-    state.presentation.lock.lock()
+fn lock_presentation(presentation: &PresentationState) -> parking_lot::MutexGuard<'_, ()> {
+    presentation.lock.lock()
 }
 
 /// Copies the current live item into `previous_item` (P1-6). Callers that
 /// change the live slot must do this BEFORE replacing it so the snapshot's
 /// `previous` reflects the item that was live immediately before.
-fn capture_previous(state: &AppState) {
-    let prev = state.presentation.live_item.lock().clone();
-    *state.presentation.previous_item.lock() = prev;
+fn capture_previous(presentation: &PresentationState) {
+    let prev = presentation.live_item.lock().clone();
+    *presentation.previous_item.lock() = prev;
 }
 
 // ---------------------------------------------------------------------------
@@ -176,16 +180,23 @@ pub type EmitFn<'a> = dyn Fn(&str, serde_json::Value) + Sync + 'a;
 /// - Mutations that persist first are transactional: a persistence failure
 ///   aborts before any in-memory state or event is touched, and multi-write
 ///   operations compensate the earlier writes.
-pub struct Engine<'a> {
-    pub state: &'a AppState,
+pub struct Engine<'a, B: EngineBackend> {
+    /// The authoritative state + persistence/remote-sink seam. In the desktop
+    /// shell this is `AppState`; in the standalone engine process it is the
+    /// engine's own runtime.
+    pub state: &'a B,
     /// Broadcast sink for window events produced by engine mutations. Desktop
     /// adapters route it through `crate::events::emit_checked_value`.
     pub emit: &'a EmitFn<'a>,
 }
 
-impl<'a> Engine<'a> {
+impl<'a, B: EngineBackend> Engine<'a, B> {
     fn emit_event(&self, event: &str, payload: serde_json::Value) {
         (self.emit)(event, payload);
+    }
+
+    fn presentation(&self) -> &PresentationState {
+        self.state.presentation()
     }
 
     /// Emits `live-item-update` carrying the current presentation revision so
@@ -193,7 +204,7 @@ impl<'a> Engine<'a> {
     fn emit_live_update(&self, detected_item: Option<DisplayItem>) {
         let update = LiveItemUpdate {
             detected_item,
-            revision: Some(self.state.presentation.current_revision()),
+            revision: Some(self.presentation().current_revision()),
         };
         self.emit_event("live-item-update", serde_json::to_value(&update).expect("LiveItemUpdate serializes"));
     }
@@ -202,13 +213,13 @@ impl<'a> Engine<'a> {
     /// windows can order it against a hydration snapshot. `None` clears the
     /// staged slot.
     fn emit_staged(&self, item: Option<&DisplayItem>) {
-        let revision = self.state.presentation.current_revision();
+        let revision = self.presentation().current_revision();
         self.emit_event("item-staged", json!({ "item": item, "revision": revision }));
     }
 
     /// Emits `settings-changed` wrapped with the current presentation revision.
     fn emit_settings(&self, settings: &PresentationSettings) {
-        let revision = self.state.presentation.current_revision();
+        let revision = self.presentation().current_revision();
         self.emit_event("settings-changed", json!({ "settings": settings, "revision": revision }));
     }
 
@@ -216,13 +227,13 @@ impl<'a> Engine<'a> {
     /// revision. The payload's `lower_third` field carries the
     /// `{ data, template }` document or `null` when cleared.
     fn emit_lower_third(&self, payload: Option<&serde_json::Value>) {
-        let revision = self.state.presentation.current_revision();
+        let revision = self.presentation().current_revision();
         self.emit_event("lower-third-update", json!({ "lower_third": payload, "revision": revision }));
     }
 
     /// Emits `props-update` wrapped with the current presentation revision.
     fn emit_props(&self, props: &[PropItem]) {
-        let revision = self.state.presentation.current_revision();
+        let revision = self.presentation().current_revision();
         self.emit_event("props-update", json!({ "props": props, "revision": revision }));
     }
 
@@ -234,16 +245,16 @@ impl<'a> Engine<'a> {
         source: Option<String>,
         _revision: u64,
     ) -> Result<MutationResult, String> {
-        let _guard = lock_presentation(self.state);
+        let _guard = lock_presentation(self.presentation());
         Ok(self.op_stage_locked(item, source, _revision))
     }
 
     /// `op_stage` with the presentation lock already held.
     fn op_stage_locked(&self, item: DisplayItem, source: Option<String>, _revision: u64) -> MutationResult {
-        self.state.presentation.bump_revision();
-        *self.state.presentation.staged_item.lock() = Some(item.clone());
+        self.presentation().bump_revision();
+        *self.presentation().staged_item.lock() = Some(item.clone());
         self.emit_staged(Some(&item));
-        self.state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": item }), source);
+        self.state.publish_remote(RemoteEventKind::StagedChanged, json!({ "staged_item": item }), source);
         MutationResult {
             snapshot: snapshot(self.state),
             committed: None,
@@ -256,11 +267,11 @@ impl<'a> Engine<'a> {
     /// drops the staged item. Replaces the frontend-only "clear staged" that
     /// left the backend slot populated.
     pub fn op_clear_staged(&self, source: Option<String>) -> Result<MutationResult, String> {
-        let _guard = lock_presentation(self.state);
-        self.state.presentation.bump_revision();
-        *self.state.presentation.staged_item.lock() = None;
+        let _guard = lock_presentation(self.presentation());
+        self.presentation().bump_revision();
+        *self.presentation().staged_item.lock() = None;
         self.emit_staged(None);
-        self.state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": null }), source);
+        self.state.publish_remote(RemoteEventKind::StagedChanged, json!({ "staged_item": null }), source);
         Ok(MutationResult {
             snapshot: snapshot(self.state),
             committed: None,
@@ -273,15 +284,15 @@ impl<'a> Engine<'a> {
     /// class. `committed` is `None` when nothing was staged (a no-op, never a
     /// mutation).
     pub fn op_commit_staged(&self, source: Option<String>) -> Result<MutationResult, String> {
-        let _guard = lock_presentation(self.state);
+        let _guard = lock_presentation(self.presentation());
         Ok(self.op_commit_staged_locked(source))
     }
 
     /// `op_commit_staged` with the presentation lock already held.
     fn op_commit_staged_locked(&self, source: Option<String>) -> MutationResult {
-        capture_previous(self.state);
-        let mut live = self.state.presentation.live_item.lock();
-        let staged = self.state.presentation.staged_item.lock().clone();
+        capture_previous(self.presentation());
+        let mut live = self.presentation().live_item.lock();
+        let staged = self.presentation().staged_item.lock().clone();
         let committed = match (&*live, &staged) {
             (Some(live_item), Some(staged_item)) => {
                 Some(patch_scene_zones(live_item, staged_item).unwrap_or_else(|| staged_item.clone()))
@@ -300,11 +311,11 @@ impl<'a> Engine<'a> {
                 };
             }
         };
-        self.state.presentation.bump_revision();
+        self.presentation().bump_revision();
         *live = Some(committed.clone());
         drop(live);
         self.emit_live_update(Some(committed.clone()));
-        self.state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": committed.clone() }), source);
+        self.state.publish_remote(RemoteEventKind::LiveChanged, json!({ "live_item": committed.clone() }), source);
         MutationResult {
             snapshot: snapshot(self.state),
             committed: Some(committed),
@@ -313,15 +324,15 @@ impl<'a> Engine<'a> {
     }
 
     pub fn op_clear_live(&self, source: Option<String>) -> Result<MutationResult, String> {
-        let _guard = lock_presentation(self.state);
-        self.state.presentation.bump_revision();
-        capture_previous(self.state);
-        *self.state.presentation.live_item.lock() = None;
+        let _guard = lock_presentation(self.presentation());
+        self.presentation().bump_revision();
+        capture_previous(self.presentation());
+        *self.presentation().live_item.lock() = None;
         self.emit_live_update(None);
-        let staged = self.state.presentation.staged_item.lock().clone();
+        let staged = self.presentation().staged_item.lock().clone();
         self.emit_staged(staged.as_ref());
-        self.state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": null }), source.clone());
-        self.state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": staged }), source);
+        self.state.publish_remote(RemoteEventKind::LiveChanged, json!({ "live_item": null }), source.clone());
+        self.state.publish_remote(RemoteEventKind::StagedChanged, json!({ "staged_item": staged }), source);
         Ok(MutationResult {
             snapshot: snapshot(self.state),
             committed: None,
@@ -330,9 +341,9 @@ impl<'a> Engine<'a> {
     }
 
     pub fn op_go_live_item(&self, item: DisplayItem, source: Option<String>) -> Result<MutationResult, String> {
-        let _guard = lock_presentation(self.state);
-        capture_previous(self.state);
-        let mut live = self.state.presentation.live_item.lock();
+        let _guard = lock_presentation(self.presentation());
+        capture_previous(self.presentation());
+        let mut live = self.presentation().live_item.lock();
         let committed = match &*live {
             // Phase 5: when a scene composition is live and the sent item
             // matches a pinned zone bus, refresh that zone in place instead of
@@ -341,11 +352,11 @@ impl<'a> Engine<'a> {
             Some(live_item) => patch_scene_zones(live_item, &item).unwrap_or(item.clone()),
             None => item.clone(),
         };
-        self.state.presentation.bump_revision();
+        self.presentation().bump_revision();
         *live = Some(committed.clone());
         drop(live);
         self.emit_live_update(Some(committed.clone()));
-        self.state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": committed.clone() }), source);
+        self.state.publish_remote(RemoteEventKind::LiveChanged, json!({ "live_item": committed.clone() }), source);
         Ok(MutationResult {
             snapshot: snapshot(self.state),
             committed: Some(committed),
@@ -359,23 +370,23 @@ impl<'a> Engine<'a> {
     /// (audit: concurrent stage/send-live atomicity). `committed` is always
     /// `Some` on success.
     pub fn op_send_live(&self, item: DisplayItem, source: Option<String>) -> Result<MutationResult, String> {
-        let _guard = lock_presentation(self.state);
+        let _guard = lock_presentation(self.presentation());
 
-        capture_previous(self.state);
-        let mut live = self.state.presentation.live_item.lock();
+        capture_previous(self.presentation());
+        let mut live = self.presentation().live_item.lock();
         let committed = match &*live {
             Some(live_item) => patch_scene_zones(live_item, &item).unwrap_or(item.clone()),
             None => item.clone(),
         };
-        self.state.presentation.bump_revision();
+        self.presentation().bump_revision();
         *live = Some(committed.clone());
         drop(live);
-        *self.state.presentation.staged_item.lock() = Some(item.clone());
+        *self.presentation().staged_item.lock() = Some(item.clone());
 
         self.emit_staged(Some(&item));
         self.emit_live_update(Some(committed.clone()));
-        self.state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": item }), source.clone());
-        self.state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": committed.clone() }), source);
+        self.state.publish_remote(RemoteEventKind::StagedChanged, json!({ "staged_item": item }), source.clone());
+        self.state.publish_remote(RemoteEventKind::LiveChanged, json!({ "live_item": committed.clone() }), source);
 
         Ok(MutationResult {
             snapshot: snapshot(self.state),
@@ -390,25 +401,25 @@ impl<'a> Engine<'a> {
     /// Persist-before-mutate keeps the operation transactional: on persistence
     /// failure nothing is cleared and the error is surfaced to the operator.
     pub fn op_clear_all(&self, source: Option<String>) -> Result<MutationResult, String> {
-        let _guard = lock_presentation(self.state);
+        let _guard = lock_presentation(self.presentation());
 
-        self.state.media_schedule.save_props(&[]).map_err(|e| e.to_string())?;
+        self.state.save_props(&[]).map_err(|e| e.to_string())?;
 
-        self.state.presentation.bump_revision();
-        capture_previous(self.state);
-        *self.state.presentation.live_item.lock() = None;
-        *self.state.presentation.staged_item.lock() = None;
-        *self.state.presentation.lower_third.lock() = None;
-        self.state.presentation.props_layer.lock().clear();
+        self.presentation().bump_revision();
+        capture_previous(self.presentation());
+        *self.presentation().live_item.lock() = None;
+        *self.presentation().staged_item.lock() = None;
+        *self.presentation().lower_third.lock() = None;
+        self.presentation().props_layer.lock().clear();
 
         self.emit_live_update(None);
         self.emit_staged(None);
         self.emit_lower_third(None);
         self.emit_props(&[]);
 
-        self.state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": null }), source.clone());
-        self.state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": null }), source.clone());
-        self.state.remote.hub.publish(RemoteEventKind::LowerThirdChanged, json!({ "lower_third": null }), source);
+        self.state.publish_remote(RemoteEventKind::LiveChanged, json!({ "live_item": null }), source.clone());
+        self.state.publish_remote(RemoteEventKind::StagedChanged, json!({ "staged_item": null }), source.clone());
+        self.state.publish_remote(RemoteEventKind::LowerThirdChanged, json!({ "lower_third": null }), source);
         Ok(MutationResult {
             snapshot: snapshot(self.state),
             committed: None,
@@ -419,14 +430,14 @@ impl<'a> Engine<'a> {
     // -- Settings / blackout / logo -------------------------------------------
 
     pub fn op_set_blackout(&self, on: bool, source: Option<String>) -> Result<MutationResult, String> {
-        let _guard = lock_presentation(self.state);
-        let mut settings = self.state.presentation.settings.lock().clone();
+        let _guard = lock_presentation(self.presentation());
+        let mut settings = self.presentation().settings.lock().clone();
         settings.is_blanked = on;
-        self.state.media_schedule.save_settings(&settings).map_err(|e| e.to_string())?;
-        self.state.presentation.bump_revision();
-        *self.state.presentation.settings.lock() = settings.clone();
+        self.state.save_settings(&settings).map_err(|e| e.to_string())?;
+        self.presentation().bump_revision();
+        *self.presentation().settings.lock() = settings.clone();
         self.emit_settings(&settings);
-        self.state.remote.hub.publish(RemoteEventKind::BlackoutChanged, json!({ "blackout": on }), source);
+        self.state.publish_remote(RemoteEventKind::BlackoutChanged, json!({ "blackout": on }), source);
         Ok(MutationResult {
             snapshot: snapshot(self.state),
             committed: None,
@@ -438,24 +449,24 @@ impl<'a> Engine<'a> {
     /// and background-logo changes are published to remotes only when the flag
     /// actually flipped).
     pub fn op_save_settings(&self, settings: PresentationSettings) -> Result<MutationResult, String> {
-        let _guard = lock_presentation(self.state);
+        let _guard = lock_presentation(self.presentation());
         let (prev_blanked, prev_logo) = {
-            let guard = self.state.presentation.settings.lock();
+            let guard = self.presentation().settings.lock();
             (guard.is_blanked, guard.show_background_logo)
         };
-        self.state.media_schedule.save_settings(&settings).map_err(|e| e.to_string())?;
-        self.state.presentation.bump_revision();
-        *self.state.presentation.settings.lock() = settings.clone();
+        self.state.save_settings(&settings).map_err(|e| e.to_string())?;
+        self.presentation().bump_revision();
+        *self.presentation().settings.lock() = settings.clone();
         self.emit_settings(&settings);
         if prev_blanked != settings.is_blanked {
-            self.state.remote.hub.publish(
+            self.state.publish_remote(
                 RemoteEventKind::BlackoutChanged,
                 json!({ "blackout": settings.is_blanked }),
                 None,
             );
         }
         if prev_logo != settings.show_background_logo {
-            self.state.remote.hub.publish(
+            self.state.publish_remote(
                 RemoteEventKind::LogoChanged,
                 json!({ "logo": settings.show_background_logo }),
                 None,
@@ -471,14 +482,14 @@ impl<'a> Engine<'a> {
     /// Sets the background-logo overlay flag (persisted) and broadcasts the
     /// change to connected remotes.
     pub fn op_set_logo(&self, on: bool, source: Option<String>) -> Result<MutationResult, String> {
-        let _guard = lock_presentation(self.state);
-        let mut settings = self.state.presentation.settings.lock().clone();
+        let _guard = lock_presentation(self.presentation());
+        let mut settings = self.presentation().settings.lock().clone();
         settings.show_background_logo = on;
-        self.state.media_schedule.save_settings(&settings).map_err(|e| e.to_string())?;
-        self.state.presentation.bump_revision();
-        *self.state.presentation.settings.lock() = settings.clone();
+        self.state.save_settings(&settings).map_err(|e| e.to_string())?;
+        self.presentation().bump_revision();
+        *self.presentation().settings.lock() = settings.clone();
         self.emit_settings(&settings);
-        self.state.remote.hub.publish(RemoteEventKind::LogoChanged, json!({ "logo": on }), source);
+        self.state.publish_remote(RemoteEventKind::LogoChanged, json!({ "logo": on }), source);
         Ok(MutationResult {
             snapshot: snapshot(self.state),
             committed: None,
@@ -495,12 +506,12 @@ impl<'a> Engine<'a> {
         template: Option<serde_json::Value>,
         source: Option<String>,
     ) -> Result<MutationResult, String> {
-        let _guard = lock_presentation(self.state);
-        self.state.presentation.bump_revision();
+        let _guard = lock_presentation(self.presentation());
+        self.presentation().bump_revision();
         let payload = json!({ "data": data, "template": template.unwrap_or_else(|| json!({})) });
-        *self.state.presentation.lower_third.lock() = Some(payload.clone());
+        *self.presentation().lower_third.lock() = Some(payload.clone());
         self.emit_lower_third(Some(&payload));
-        self.state.remote.hub.publish(RemoteEventKind::LowerThirdChanged, json!({ "lower_third": payload }), source);
+        self.state.publish_remote(RemoteEventKind::LowerThirdChanged, json!({ "lower_third": payload }), source);
         Ok(MutationResult {
             snapshot: snapshot(self.state),
             committed: None,
@@ -510,11 +521,11 @@ impl<'a> Engine<'a> {
 
     /// Hides any lower-third overlay and propagates the null change.
     pub fn op_hide_lower_third(&self, source: Option<String>) -> Result<MutationResult, String> {
-        let _guard = lock_presentation(self.state);
-        self.state.presentation.bump_revision();
-        *self.state.presentation.lower_third.lock() = None;
+        let _guard = lock_presentation(self.presentation());
+        self.presentation().bump_revision();
+        *self.presentation().lower_third.lock() = None;
         self.emit_lower_third(None);
-        self.state.remote.hub.publish(RemoteEventKind::LowerThirdChanged, json!({ "lower_third": null }), source);
+        self.state.publish_remote(RemoteEventKind::LowerThirdChanged, json!({ "lower_third": null }), source);
         Ok(MutationResult {
             snapshot: snapshot(self.state),
             committed: None,
@@ -528,15 +539,15 @@ impl<'a> Engine<'a> {
     /// countdown). The revision is bumped per the historical behavior even
     /// when no timer is live — callers treat the response as authoritative.
     pub fn op_update_timer(&self, started_at: Option<u64>) -> Result<MutationResult, String> {
-        let _guard = lock_presentation(self.state);
-        self.state.presentation.bump_revision();
-        let mut live = self.state.presentation.live_item.lock();
+        let _guard = lock_presentation(self.presentation());
+        self.presentation().bump_revision();
+        let mut live = self.presentation().live_item.lock();
         if let Some(DisplayItem::Timer(ref mut t)) = *live {
             t.started_at = started_at;
             let item = live.clone();
             drop(live);
             self.emit_live_update(item.clone());
-            self.state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": item }), None);
+            self.state.publish_remote(RemoteEventKind::LiveChanged, json!({ "live_item": item }), None);
         }
         Ok(MutationResult {
             snapshot: snapshot(self.state),
@@ -548,10 +559,10 @@ impl<'a> Engine<'a> {
     /// Start/stop the live timer (flip its `started_at`). Returns whether a
     /// timer was actually toggled so callers can distinguish the no-op.
     pub fn op_toggle_timer(&self, source: Option<String>) -> Result<(MutationResult, bool), String> {
-        let _guard = lock_presentation(self.state);
+        let _guard = lock_presentation(self.presentation());
         let toggled = {
-            self.state.presentation.bump_revision();
-            let mut live = self.state.presentation.live_item.lock();
+            self.presentation().bump_revision();
+            let mut live = self.presentation().live_item.lock();
             if let Some(DisplayItem::Timer(ref mut t)) = *live {
                 t.started_at = if t.started_at.is_some() { None } else { Some(now_ms()) };
                 true
@@ -560,9 +571,9 @@ impl<'a> Engine<'a> {
             }
         };
         if toggled {
-            let item = self.state.presentation.live_item.lock().clone();
+            let item = self.presentation().live_item.lock().clone();
             self.emit_live_update(item.clone());
-            self.state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": item }), source);
+            self.state.publish_remote(RemoteEventKind::LiveChanged, json!({ "live_item": item }), source);
         }
         Ok((MutationResult {
             snapshot: snapshot(self.state),
@@ -577,21 +588,21 @@ impl<'a> Engine<'a> {
     /// BEFORE mutating so a write failure never leaves the in-memory and
     /// on-disk layers diverging.
     pub fn op_set_props(&self, props: Vec<PropItem>) -> Result<MutationResult, String> {
-        let _guard = lock_presentation(self.state);
+        let _guard = lock_presentation(self.presentation());
         // Validate any image prop paths before accepting the batch.
         for p in &props {
             if let Some(path) = &p.path {
                 if p.kind == "image" && !path.is_empty() {
-                    validate_prop_path(path, &self.state.app_data_dir)?;
+                    validate_prop_path(path, self.state.app_data_dir())?;
                 }
             }
         }
         // Persist BEFORE mutating so a write failure never leaves the
         // in-memory and on-disk layers diverging, and the caller can roll back
         // cleanly.
-        self.state.media_schedule.save_props(&props).map_err(|e| e.to_string())?;
-        self.state.presentation.bump_revision();
-        *self.state.presentation.props_layer.lock() = props.clone();
+        self.state.save_props(&props).map_err(|e| e.to_string())?;
+        self.presentation().bump_revision();
+        *self.presentation().props_layer.lock() = props.clone();
         self.emit_props(&props);
         Ok(MutationResult {
             snapshot: snapshot(self.state),
@@ -614,11 +625,10 @@ impl<'a> Engine<'a> {
         // settings/props mutation can interleave with the scene's read →
         // persist → apply sequence or its compensation. One lock, one revision,
         // one consistent state.
-        let _guard = lock_presentation(self.state);
+        let _guard = lock_presentation(self.presentation());
 
         let scene = self
             .state
-            .media_schedule
             .list_scenes()
             .map_err(|e| e.to_string())?
             .into_iter()
@@ -634,10 +644,10 @@ impl<'a> Engine<'a> {
         //    presentation state. If any write fails, compensate the others so
         //    the disk never holds half a scene (audit: partial application on
         //    props failure).
-        let previous_settings = self.state.media_schedule.load_settings().map_err(|e| e.to_string())?;
-        self.state.media_schedule.save_settings(&scene.settings).map_err(|e| e.to_string())?;
-        if let Err(e) = self.state.media_schedule.save_props(&scene.props).map_err(|e| e.to_string()) {
-            let _ = self.state.media_schedule.save_settings(&previous_settings);
+        let previous_settings = self.state.load_settings().map_err(|e| e.to_string())?;
+        self.state.save_settings(&scene.settings).map_err(|e| e.to_string())?;
+        if let Err(e) = self.state.save_props(&scene.props).map_err(|e| e.to_string()) {
+            let _ = self.state.save_settings(&previous_settings);
             return Err(e);
         }
 
@@ -645,7 +655,7 @@ impl<'a> Engine<'a> {
         //    layer applied together. The composition (layout) or legacy camera
         //    is staged/committed inside the same transaction; a layout scene
         //    also populates the staged slot like the old op_send_live did.
-        self.state.presentation.bump_revision();
+        self.presentation().bump_revision();
 
         let mut staged_out: Option<DisplayItem> = None;
         let mut live_out: Option<DisplayItem> = None;
@@ -656,22 +666,22 @@ impl<'a> Engine<'a> {
                 name: scene.name.clone(),
                 zones: layout.zones.clone(),
             });
-            capture_previous(self.state);
-            let mut live = self.state.presentation.live_item.lock();
+            capture_previous(self.presentation());
+            let mut live = self.presentation().live_item.lock();
             let merged = match &*live {
                 Some(live_item) => patch_scene_zones(live_item, &item).unwrap_or(item.clone()),
                 None => item.clone(),
             };
             *live = Some(merged.clone());
             drop(live);
-            *self.state.presentation.staged_item.lock() = Some(item.clone());
+            *self.presentation().staged_item.lock() = Some(item.clone());
             staged_out = Some(item);
             live_out = Some(merged);
         } else if let Some(cam) = &scene.camera {
             // Legacy single-camera scene: restore the camera feed that was
             // live at capture time.
-            capture_previous(self.state);
-            let mut live = self.state.presentation.live_item.lock();
+            capture_previous(self.presentation());
+            let mut live = self.presentation().live_item.lock();
             let merged = match &*live {
                 Some(live_item) => patch_scene_zones(live_item, cam).unwrap_or(cam.clone()),
                 None => cam.clone(),
@@ -681,9 +691,9 @@ impl<'a> Engine<'a> {
             live_out = Some(merged);
         }
 
-        *self.state.presentation.settings.lock() = scene.settings.clone();
-        *self.state.presentation.props_layer.lock() = scene.props.clone();
-        *self.state.presentation.lower_third.lock() = lt_payload.clone();
+        *self.presentation().settings.lock() = scene.settings.clone();
+        *self.presentation().props_layer.lock() = scene.props.clone();
+        *self.presentation().lower_third.lock() = lt_payload.clone();
 
         if let Some(staged) = &staged_out {
             self.emit_staged(Some(staged));
@@ -696,10 +706,10 @@ impl<'a> Engine<'a> {
         self.emit_lower_third(lt_payload.as_ref());
 
         if let Some(staged) = &staged_out {
-            self.state.remote.hub.publish(RemoteEventKind::StagedChanged, json!({ "staged_item": staged }), None);
+            self.state.publish_remote(RemoteEventKind::StagedChanged, json!({ "staged_item": staged }), None);
         }
         if let Some(live) = &live_out {
-            self.state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": live }), None);
+            self.state.publish_remote(RemoteEventKind::LiveChanged, json!({ "live_item": live }), None);
         }
 
         Ok(MutationResult {
@@ -725,20 +735,20 @@ impl<'a> Engine<'a> {
     /// equal-revision events idempotently, so a stale reveal can never
     /// overwrite newer state that arrived while the window was hidden.
     pub fn rebroadcast(&self) {
-        let revision = self.state.presentation.current_revision();
-        let settings = self.state.presentation.settings.lock().clone();
+        let revision = self.presentation().current_revision();
+        let settings = self.presentation().settings.lock().clone();
         self.emit_event("settings-changed", json!({ "settings": settings, "revision": revision }));
-        let live = self.state.presentation.live_item.lock().clone();
+        let live = self.presentation().live_item.lock().clone();
         self.emit_event(
             "live-item-update",
             serde_json::to_value(LiveItemUpdate { detected_item: live, revision: Some(revision) })
                 .expect("LiveItemUpdate serializes"),
         );
-        let lt = self.state.presentation.lower_third.lock().clone();
+        let lt = self.presentation().lower_third.lock().clone();
         self.emit_event("lower-third-update", json!({ "lower_third": lt, "revision": revision }));
-        let props = self.state.presentation.props_layer.lock().clone();
+        let props = self.presentation().props_layer.lock().clone();
         self.emit_event("props-update", json!({ "props": props, "revision": revision }));
-        let staged = self.state.presentation.staged_item.lock().clone();
+        let staged = self.presentation().staged_item.lock().clone();
         self.emit_event("item-staged", json!({ "item": staged, "revision": revision }));
     }
 }
@@ -746,12 +756,12 @@ impl<'a> Engine<'a> {
 /// Reads the current props layer, lazily hydrating it from disk when it has
 /// not been touched yet (first `get_props` after startup). A pure read — it
 /// does not take the mutation lock or emit.
-pub fn op_get_props(state: &AppState) -> Result<Vec<PropItem>, String> {
-    let current = state.presentation.props_layer.lock().clone();
+pub fn op_get_props<B: EngineBackend>(backend: &B) -> Result<Vec<PropItem>, String> {
+    let current = backend.presentation().props_layer.lock().clone();
     if current.is_empty() {
-        if let Ok(loaded) = state.media_schedule.load_props() {
+        if let Ok(loaded) = backend.load_props() {
             if !loaded.is_empty() {
-                *state.presentation.props_layer.lock() = loaded.clone();
+                *backend.presentation().props_layer.lock() = loaded.clone();
                 return Ok(loaded);
             }
         }
@@ -906,7 +916,7 @@ mod tests {
         /// Builds an `Engine` whose emit sink records every broadcast. The
         /// sink is leaked (test-only) so it can satisfy the engine's `&'a dyn
         /// Fn` borrow; the recorder's `Arc` keeps the buffer alive.
-        fn engine<'a>(&'a self, state: &'a AppState) -> Engine<'a> {
+        fn engine<'a>(&'a self, state: &'a AppState) -> Engine<'a, AppState> {
             let events = Arc::clone(&self.0);
             let sink: &'static (dyn Fn(&str, serde_json::Value) + Sync) = Box::leak(Box::new(
                 move |event: &str, payload: serde_json::Value| events.lock().push((event.to_string(), payload)),

@@ -13,14 +13,14 @@ pub async fn show_lower_third(
     // Route through the shared broadcast engine so the presentation revision
     // bumps once and connected phones receive LowerThirdChanged.
     let sink = engine::app_emit_sink(&app);
-    let engine = Engine { state: &state, emit: &sink };
+    let engine = Engine { state: &*state, emit: &sink };
     engine.op_show_lower_third(data, Some(template), None).map(|_| ())
 }
 
 #[tauri::command]
 pub async fn hide_lower_third(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let sink = engine::app_emit_sink(&app);
-    let engine = Engine { state: &state, emit: &sink };
+    let engine = Engine { state: &*state, emit: &sink };
     engine.op_hide_lower_third(None).map(|_| ())
 }
 
@@ -80,6 +80,6 @@ pub async fn show_lt_preset(
     }
 
     let sink = engine::app_emit_sink(&app);
-    let engine = Engine { state: &state, emit: &sink };
+    let engine = Engine { state: &*state, emit: &sink };
     engine.op_show_lower_third(preset.data, Some(tpl), None).map(|_| ())
 }

@@ -23,6 +23,7 @@
 //! `apply_scene`, …) are preserved as thin adapters in `commands/` so the
 //! frontend contract is unchanged.
 
+pub mod backend;
 pub mod ipc;
 pub mod presentation;
 

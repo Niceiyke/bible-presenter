@@ -1,7 +1,9 @@
+use crate::engine::backend::EngineBackend;
+use crate::remote::protocol::RemoteEventKind;
 use crate::remote::RemoteControl;
 use crate::store;
 use parking_lot::Mutex;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -85,4 +87,38 @@ pub struct AppState {
     /// License manager: machine fingerprint, persisted license record, and
     /// online validation against the Cloudflare Worker.
     pub license: Arc<crate::license::LicenseManager>,
+}
+
+impl EngineBackend for AppState {
+    fn presentation(&self) -> &PresentationState {
+        &self.presentation
+    }
+
+    fn app_data_dir(&self) -> &Path {
+        &self.app_data_dir
+    }
+
+    fn load_settings(&self) -> Result<store::PresentationSettings, String> {
+        self.media_schedule.load_settings().map_err(|e| e.to_string())
+    }
+
+    fn save_settings(&self, settings: &store::PresentationSettings) -> Result<(), String> {
+        self.media_schedule.save_settings(settings).map_err(|e| e.to_string())
+    }
+
+    fn save_props(&self, props: &[store::PropItem]) -> Result<(), String> {
+        self.media_schedule.save_props(props).map_err(|e| e.to_string())
+    }
+
+    fn load_props(&self) -> Result<Vec<store::PropItem>, String> {
+        self.media_schedule.load_props().map_err(|e| e.to_string())
+    }
+
+    fn list_scenes(&self) -> Result<Vec<store::Scene>, String> {
+        self.media_schedule.list_scenes().map_err(|e| e.to_string())
+    }
+
+    fn publish_remote(&self, kind: RemoteEventKind, payload: serde_json::Value, source: Option<String>) {
+        self.remote.hub.publish(kind, payload, source);
+    }
 }

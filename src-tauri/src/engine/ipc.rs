@@ -52,15 +52,15 @@ pub enum EngineCommand {
     PresentationSnapshot,
     /// Stage an item. `source` identifies the caller (desktop vs a remote
     /// device id) for attribution on remote hub events.
-    StageItem { item: store::DisplayItem, source: Option<String> },
+    StageItem { item: Box<store::DisplayItem>, source: Option<String> },
     /// Atomically commit the staged item to live (no-op when nothing staged).
     CommitStaged { source: Option<String> },
     /// Legacy `go_live` — commit staged.
     GoLive { source: Option<String> },
     /// Transactional stage-and-commit in one single-bump mutation.
-    SendLiveItem { item: store::DisplayItem, source: Option<String> },
+    SendLiveItem { item: Box<store::DisplayItem>, source: Option<String> },
     /// Take a specific item live immediately (bypassing the staged slot).
-    GoLiveItem { item: store::DisplayItem, source: Option<String> },
+    GoLiveItem { item: Box<store::DisplayItem>, source: Option<String> },
     /// Clear the live slot only (staged preserved).
     ClearLive { source: Option<String> },
     /// Clear the staged slot only.
@@ -70,7 +70,7 @@ pub enum EngineCommand {
     /// Update the live timer's started timestamp (start/stop a countdown).
     UpdateTimer { started_at: Option<u64> },
     /// Persist a full settings document and broadcast deltas.
-    SaveSettings { settings: store::PresentationSettings },
+    SaveSettings { settings: Box<store::PresentationSettings> },
     /// Toggle blackout on/off (persisted).
     SetBlackout { on: bool, source: Option<String> },
     /// Toggle the background-logo overlay (persisted).
@@ -110,11 +110,11 @@ pub enum EngineCommand {
 pub enum EngineEvent {
     /// Live item changed (item or null clear). Payload mirrors the current
     /// `live-item-update` Tauri event.
-    LiveItemUpdate { detected_item: Option<store::DisplayItem>, revision: u64 },
+    LiveItemUpdate { detected_item: Option<Box<store::DisplayItem>>, revision: u64 },
     /// Staged item changed (item or null clear).
-    ItemStaged { item: Option<store::DisplayItem>, revision: u64 },
+    ItemStaged { item: Option<Box<store::DisplayItem>>, revision: u64 },
     /// Settings document changed.
-    SettingsChanged { settings: store::PresentationSettings, revision: u64 },
+    SettingsChanged { settings: Box<store::PresentationSettings>, revision: u64 },
     /// Lower-third overlay changed (payload `{ data, template }` or null).
     LowerThirdUpdate { lower_third: Option<serde_json::Value>, revision: u64 },
     /// Props layer replaced.
@@ -201,12 +201,12 @@ mod tests {
         let req = EngineRequest {
             id: 7,
             command: EngineCommand::SendLiveItem {
-                item: store::DisplayItem::Timer(store::TimerData {
+                item: Box::new(store::DisplayItem::Timer(store::TimerData {
                     timer_type: "countdown".into(),
                     duration_secs: Some(60),
                     label: None,
                     started_at: None,
-                }),
+                })),
                 source: None,
             },
         };
@@ -214,7 +214,10 @@ mod tests {
         let back: EngineRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(back.id, 7);
         match back.command {
-            EngineCommand::SendLiveItem { item: store::DisplayItem::Timer(t), source } => {
+            EngineCommand::SendLiveItem { item, source } => {
+                let store::DisplayItem::Timer(t) = *item else {
+                    panic!("wrong item variant");
+                };
                 assert_eq!(t.timer_type, "countdown");
                 assert_eq!(source, None);
             }

@@ -14,14 +14,14 @@ pub async fn presentation_snapshot(state: State<'_, AppState>) -> Result<engine:
     // Read the whole presentation under the mutation lock so the snapshot is
     // consistent: no event can be half-way applied when we capture it.
     let _guard = state.presentation.lock.lock();
-    Ok(engine::snapshot(&state))
+    Ok(engine::snapshot(&*state))
 }
 
 #[tauri::command]
 pub async fn stage_item(app: AppHandle, state: State<'_, AppState>, item: store::DisplayItem) -> Result<(), String> {
     crate::license::ensure_allowed(&state)?;
     let sink = engine::app_emit_sink(&app);
-    let engine = Engine { state: &state, emit: &sink };
+    let engine = Engine { state: &*state, emit: &sink };
     engine.op_stage(item, None, 0).map(|_| ())
 }
 
@@ -32,7 +32,7 @@ pub async fn stage_item(app: AppHandle, state: State<'_, AppState>, item: store:
 pub async fn commit_staged(app: AppHandle, state: State<'_, AppState>) -> Result<Option<store::DisplayItem>, String> {
     crate::license::ensure_allowed(&state)?;
     let sink = engine::app_emit_sink(&app);
-    let engine = Engine { state: &state, emit: &sink };
+    let engine = Engine { state: &*state, emit: &sink };
     Ok(engine.op_commit_staged(None)?.committed)
 }
 
@@ -43,7 +43,7 @@ pub async fn commit_staged(app: AppHandle, state: State<'_, AppState>) -> Result
 pub async fn go_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     crate::license::ensure_allowed(&state)?;
     let sink = engine::app_emit_sink(&app);
-    let engine = Engine { state: &state, emit: &sink };
+    let engine = Engine { state: &*state, emit: &sink };
     engine.op_commit_staged(None).map(|_| ())
 }
 
@@ -55,7 +55,7 @@ pub async fn go_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), S
 pub async fn send_live_item(app: AppHandle, state: State<'_, AppState>, item: store::DisplayItem) -> Result<store::DisplayItem, String> {
     crate::license::ensure_allowed(&state)?;
     let sink = engine::app_emit_sink(&app);
-    let engine = Engine { state: &state, emit: &sink };
+    let engine = Engine { state: &*state, emit: &sink };
     engine
         .op_send_live(item, None)
         .map(|r| r.committed.expect("send_live always commits"))
@@ -65,7 +65,7 @@ pub async fn send_live_item(app: AppHandle, state: State<'_, AppState>, item: st
 pub async fn go_live_item(app: AppHandle, state: State<'_, AppState>, item: store::DisplayItem) -> Result<(), String> {
     crate::license::ensure_allowed(&state)?;
     let sink = engine::app_emit_sink(&app);
-    let engine = Engine { state: &state, emit: &sink };
+    let engine = Engine { state: &*state, emit: &sink };
     engine.op_go_live_item(item, None).map(|_| ())
 }
 
@@ -75,7 +75,7 @@ pub async fn go_live_item(app: AppHandle, state: State<'_, AppState>, item: stor
 #[tauri::command]
 pub async fn clear_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let sink = engine::app_emit_sink(&app);
-    let engine = Engine { state: &state, emit: &sink };
+    let engine = Engine { state: &*state, emit: &sink };
     engine.op_clear_live(None).map(|_| ())
 }
 
@@ -85,7 +85,7 @@ pub async fn clear_live(app: AppHandle, state: State<'_, AppState>) -> Result<()
 #[tauri::command]
 pub async fn clear_staged(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let sink = engine::app_emit_sink(&app);
-    let engine = Engine { state: &state, emit: &sink };
+    let engine = Engine { state: &*state, emit: &sink };
     engine.op_clear_staged(None).map(|_| ())
 }
 
@@ -97,14 +97,14 @@ pub async fn clear_staged(app: AppHandle, state: State<'_, AppState>) -> Result<
 #[tauri::command]
 pub async fn clear_all(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let sink = engine::app_emit_sink(&app);
-    let engine = Engine { state: &state, emit: &sink };
+    let engine = Engine { state: &*state, emit: &sink };
     engine.op_clear_all(None).map(|_| ())
 }
 
 #[tauri::command]
 pub async fn update_timer(app: AppHandle, state: State<'_, AppState>, started_at: Option<u64>) -> Result<(), String> {
     let sink = engine::app_emit_sink(&app);
-    let engine = Engine { state: &state, emit: &sink };
+    let engine = Engine { state: &*state, emit: &sink };
     engine.op_update_timer(started_at).map(|_| ())
 }
 
@@ -126,7 +126,7 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<store::Presentat
 #[tauri::command]
 pub async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: store::PresentationSettings) -> Result<(), String> {
     let sink = engine::app_emit_sink(&app);
-    let engine = Engine { state: &state, emit: &sink };
+    let engine = Engine { state: &*state, emit: &sink };
     engine.op_save_settings(settings).map(|_| ())
 }
 
