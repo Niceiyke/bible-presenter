@@ -14,8 +14,8 @@ pub struct RecordingFile {
 }
 
 /// Resolve the recordings directory (app-data/recordings), creating it if
-/// needed. MediaRecorder files live outside the SQLite data DB — they are
-/// large binary assets, like the media library's files.
+/// needed. The engine's MP4 files land here (Phase D); listing/delete/open
+/// operate on whatever is in the folder, engine- or legacy-written.
 fn recordings_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let base = app
         .path()
@@ -27,17 +27,13 @@ fn recordings_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// Documented maximum accepted recording size. The frontend refuses to convert
-/// larger blobs to base64, and the backend rejects them before decoding — an
-/// unbounded IPC payload could spike memory or stall the runtime workers.
-const MAX_RECORDING_BYTES: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
-
+/// Sanitize a user-supplied file name: keep the bare file name (stripping any
+/// path traversal) and reject empty names.
 fn safe_name(name: &str) -> Result<String, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("Recording name is empty".into());
     }
-    // Keep the extension (should be .webm) but strip any path traversal.
     let file = Path::new(name)
         .file_name()
         .and_then(|f| f.to_str())
@@ -73,66 +69,81 @@ pub async fn recordings_list(app: AppHandle) -> Result<Vec<RecordingFile>, Strin
     Ok(out)
 }
 
-/// Persist a completed recording's bytes to the recordings dir. The frontend
-/// sends the assembled WebM blob as a base64 string (same transport as
-/// `save_camera_snapshot`) — large files over the IPC channel are decoded
-/// off the runtime worker thread and written atomically (temp + rename), so a
-/// save can never stall the command pipeline or leave a truncated file behind.
+/// Start recording the engine's program feed to `{recordings dir}/{file_name}`.
+/// The engine boots the shared encoder (or reuses a running one) and muxes a
+/// fragmented MP4 with `-c copy`. The `file_name` is sanitized so the resolved
+/// path stays inside the recordings dir.
 #[tauri::command]
-pub async fn recording_save(
+pub async fn recording_start(
     app: AppHandle,
     state: State<'_, AppState>,
     file_name: String,
-    data_base64: String,
-) -> Result<RecordingFile, String> {
+    fps: Option<u32>,
+) -> Result<(), String> {
     // Recording is a paid feature — enforce on the backend, not just the UI.
     ensure_active_tier(&state, LicenseTier::Pro)?;
-
-    // Reject oversized payloads BEFORE decoding: base64 of N bytes is ~4N/3
-    // characters, so an oversized string cannot possibly hold a valid recording.
-    let max_b64 = MAX_RECORDING_BYTES.div_ceil(3) * 4;
-    if data_base64.len() > max_b64 {
-        return Err(format!(
-            "Recording exceeds the {} GiB limit.",
-            MAX_RECORDING_BYTES / (1024 * 1024 * 1024)
-        ));
-    }
-
+    let fps = fps.unwrap_or(30);
+    crate::commands::rtmp::validate_fps(fps)?;
     let name = safe_name(&file_name)?;
     let dir = recordings_dir(&app)?;
+    let path = dir.join(name);
+    let (width, height) = crate::commands::engine::transport_geometry(&state, (1920, 1080));
+    let reply = crate::commands::engine::invoke(
+        &state,
+        crate::engine::ipc::EngineCommand::RecordingStart {
+            session_id: format!("recording-{}", path.display()),
+            path: path.to_string_lossy().to_string(),
+            fps,
+            width,
+            height,
+        },
+    )
+    .await?;
+    crate::commands::engine::response_err(&reply).map_or(Ok(()), Err)
+}
 
-    tauri::async_runtime::spawn_blocking(move || {
-        use base64::Engine as _;
-        let data = base64::engine::general_purpose::STANDARD
-            .decode(data_base64)
-            .map_err(|e| format!("Invalid recording data: {}", e))?;
-        if data.len() > MAX_RECORDING_BYTES {
-            return Err(format!(
-                "Recording exceeds the {} GiB limit.",
-                MAX_RECORDING_BYTES / (1024 * 1024 * 1024)
-            ));
-        }
-        let path = dir.join(&name);
-        // Atomic write: temp file in the same directory, then rename over the
-        // target so a crash mid-write can never leave a truncated recording.
-        let tmp = dir.join(format!(".{}.part", name));
-        std::fs::write(&tmp, &data).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
-        let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
-        let modified = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        Ok(RecordingFile {
-            name: path.file_name().unwrap_or_default().to_string_lossy().to_string(),
-            size: meta.len(),
-            modified,
-        })
-    })
+/// Stop the active recording. Idempotent — stopping an unknown recording is a
+/// no-op. The engine drops the session's feed (EOF to ffmpeg -> finalize the
+/// MP4) and reaps the muxer.
+#[tauri::command]
+pub async fn recording_stop(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    file_name: String,
+) -> Result<(), String> {
+    let name = safe_name(&file_name)?;
+    let dir = recordings_dir(&app)?;
+    let path = dir.join(name);
+    let reply = crate::commands::engine::invoke(
+        &state,
+        crate::engine::ipc::EngineCommand::RecordingStop {
+            session_id: format!("recording-{}", path.display()),
+        },
+    )
+    .await?;
+    crate::commands::engine::response_err(&reply).map_or(Ok(()), Err)
+}
+
+/// Runtime status of the engine's recording session (ephemeral, not
+/// persisted). Never throws — an unreachable sidecar simply reports no
+/// sessions, mirroring `rtmp_status`.
+#[tauri::command]
+pub async fn recording_status(state: State<'_, AppState>) -> Result<Vec<crate::commands::rtmp::RtmpStatus>, String> {
+    let Ok(reply) = crate::commands::engine::invoke(
+        &state,
+        crate::engine::ipc::EngineCommand::RecordingStatus,
+    )
     .await
-    .map_err(|e| format!("recording_save join error: {e}"))?
+    else {
+        return Ok(Vec::new());
+    };
+    let sessions = reply
+        .response
+        .result
+        .and_then(|r| r.get("sessions").cloned())
+        .and_then(|s| serde_json::from_value::<Vec<crate::commands::rtmp::RtmpStatus>>(s).ok())
+        .unwrap_or_default();
+    Ok(sessions)
 }
 
 /// Delete a saved recording.

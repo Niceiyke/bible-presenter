@@ -19,14 +19,15 @@ function inputs(overrides: Partial<CapabilityInputs> = {}): CapabilityInputs {
 }
 
 describe("computeCapabilities", () => {
-  it("flags RTMP as available only when both H.264 and ffmpeg are present", () => {
+  it("flags RTMP as available when ffmpeg is present (the engine encodes, Phase D)", () => {
     expect(computeCapabilities(inputs()).rtmpAvailable).toBe(true);
     expect(
       computeCapabilities(inputs({ ffmpegAvailable: false })).rtmpAvailable,
     ).toBe(false);
+    // WebCodecs support no longer gates RTMP — the engine's ffmpeg encodes.
     expect(
       computeCapabilities(inputs({ h264Supported: false })).rtmpAvailable,
-    ).toBe(false);
+    ).toBe(true);
     expect(
       computeCapabilities(inputs({ h264Supported: false, ffmpegAvailable: false }))
         .rtmpAvailable,
@@ -36,8 +37,8 @@ describe("computeCapabilities", () => {
   it("explains WHY a service is disabled, not just that it is", () => {
     const noFfmpeg = computeCapabilities(inputs({ ffmpegAvailable: false }));
     expect(noFfmpeg.rtmpReason).toContain("ffmpeg");
-    const noH264 = computeCapabilities(inputs({ h264Supported: false }));
-    expect(noH264.rtmpReason).toContain("WebCodecs");
+    // No WebCodecs message: RTMP availability is ffmpeg-only in Phase D.
+    expect(computeCapabilities(inputs()).rtmpReason).not.toContain("WebCodecs");
   });
 
   it("gates WHIP on WebRTC availability", () => {

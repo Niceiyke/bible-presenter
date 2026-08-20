@@ -47,9 +47,25 @@ pub fn system_info() -> SystemInfo {
     }
 }
 
-/// Cheap polled metric for the live performance monitor.
+/// Cheap polled metric for the live performance monitor. Polls the engine for
+/// the active RTMP session count (0 when the sidecar is unavailable).
 #[tauri::command]
-pub fn system_metrics(state: State<'_, AppState>) -> SystemMetrics {
+pub async fn system_metrics(state: State<'_, AppState>) -> Result<SystemMetrics, String> {
+    let active_rtmp_sessions = match crate::commands::engine::invoke(
+        &state,
+        crate::engine::ipc::EngineCommand::RtmpStatus,
+    )
+    .await
+    {
+        Ok(reply) => reply
+            .response
+            .result
+            .and_then(|r| r.get("sessions").cloned())
+            .and_then(|s| serde_json::from_value::<Vec<serde_json::Value>>(s).ok())
+            .map(|s| s.len())
+            .unwrap_or(0),
+        Err(_) => 0,
+    };
     // Reuse one `System` across polls: sysinfo needs a previous snapshot to
     // compute CPU usage, so a fresh System per call reports the cumulative
     // since-boot usage (busy ≈ total → stuck at 100%). The first poll seeds
@@ -73,12 +89,12 @@ pub fn system_metrics(state: State<'_, AppState>) -> SystemMetrics {
     let total_disk: u64 = disks.iter().map(|d| d.total_space()).sum();
     let available_disk: u64 = disks.iter().map(|d| d.available_space()).sum();
     let used_disk = total_disk.saturating_sub(available_disk);
-    SystemMetrics {
+    Ok(SystemMetrics {
         cpu_usage_percent,
         used_ram_percent: ram_percent(total_ram, used_ram),
         used_disk_percent: percent(used_disk, total_disk),
-        active_rtmp_sessions: state.rtmp.lock().len(),
-    }
+        active_rtmp_sessions,
+    })
 }
 
 fn ram_percent(total: u64, used: u64) -> f32 {

@@ -17,7 +17,7 @@ import type { OutputConfig } from "./output";
  */
 
 /** Must equal `ENGINE_PROTOCOL_VERSION` in `src-tauri/src/engine/ipc.rs`. */
-export const ENGINE_PROTOCOL_VERSION = 4;
+export const ENGINE_PROTOCOL_VERSION = 5;
 
 /** Additive capability negotiation — matches `ENGINE_CAPABILITIES` (ipc.rs). */
 export const ENGINE_CAPABILITIES = [
@@ -69,6 +69,16 @@ export type EngineCommand =
   // and whenever a window is revealed so the engine's winit windows render
   // the real program.
   | { cmd: "sync_presentation"; snapshot: PresentationSnapshot }
+  // ---- Engine-owned transport: encode + RTMP/recording mux (Phase D) ----
+  // The engine owns ONE shared H.264 encoder (an ffmpeg subprocess) fanned to
+  // every active session's mux-only ffmpeg; the console's `rtmp_start` /
+  // `recording_start` commands are thin proxies over these.
+  | { cmd: "rtmp_start"; session_id: string; url: string; fps: number; width: number; height: number }
+  | { cmd: "rtmp_stop"; session_id: string }
+  | { cmd: "rtmp_status" }
+  | { cmd: "recording_start"; session_id: string; path: string; fps: number; width: number; height: number }
+  | { cmd: "recording_stop"; session_id: string }
+  | { cmd: "recording_status" }
   | { cmd: string };
 
 /** One request frame on the stdio channel. */
@@ -149,3 +159,16 @@ export interface EngineMonitorInfo {
 }
 
 export type { PresentationSnapshot };
+
+/** One runtime transport status entry (mirrors `engine::transport::TransportStatus`). */
+export interface TransportStatus {
+  id: string;
+  /** `"rtmp"` or `"recording"` — which surface owns the session. */
+  kind: string;
+  active: boolean;
+  url: string | null;
+  fps: number;
+  queued: number;
+  sent: number;
+  dropped: number;
+}

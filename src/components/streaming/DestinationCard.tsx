@@ -1,5 +1,5 @@
 import React from "react";
-import { Play, Square, Mic, Trash2, Globe, KeyRound, Radio, MonitorPlay } from "lucide-react";
+import { Play, Square, Trash2, Globe, KeyRound, Radio, MonitorPlay } from "lucide-react";
 import { presetFor, applyPreset, PLATFORM_PRESETS } from "./presets";
 import type { StreamDestination, StreamPlatform } from "../../types";
 
@@ -12,25 +12,23 @@ export interface DestinationCardHandle {
 
 interface DestinationCardProps {
   destination: StreamDestination;
-  /** Transport status reported by the app-scoped `DestinationRuntime`. */
+  /** Transport status reported by the app-scoped provider (engine sessions). */
   status: DestTransportStatus;
   bitrateKbps: number;
   error: string | null;
-  /** WHIP resource URL (reported by the WHIP transport runtime). */
-  resourceUrl: string | null;
-  /** Packets written to the backend since the destination started. */
+  /** Bytes written to the session's muxer since the destination started. */
   sentPackets?: number;
-  /** Packets dropped by the bounded queue since the destination started. */
+  /** Bytes dropped by the bounded queue since the destination started. */
   droppedPackets?: number;
-  /** Packets currently buffered awaiting the backend writer thread. */
+  /** Bytes currently buffered awaiting the session's writer thread. */
   queuedPackets?: number;
   onChange: (next: StreamDestination) => void;
   onRemove: () => void;
   onStart: () => void;
   onStop: () => void;
   /** Capability gate: when set, the transport is unavailable (e.g. RTMP
-   *  needs ffmpeg + WebCodecs H.264) — the Go Live button is disabled and the
-   *  reason is surfaced on the card. */
+   *  needs ffmpeg) — the Go Live button is disabled and the reason is
+   *  surfaced on the card. */
   blockedReason?: string | null;
 }
 
@@ -43,18 +41,16 @@ function formatBitrate(kbps: number): string {
 /**
  * `DestinationCard` — UI-only editor for one streaming destination (WP2 P0-1).
  *
- * The transport hooks that used to live here are owned by the app-scoped
- * `DestinationRuntime` (rendered inside `StreamingProvider`), so this card can
- * unmount when the operator navigates away without stopping an active stream.
- * The card only consumes the runtime's reported status and drives its
- * start/stop through the provider's registered handle.
+ * The transport lives in the engine sidecar (Phase D) and the app-scoped
+ * `StreamingProvider` owns its sessions, so this card can unmount when the
+ * operator navigates away without stopping an active stream. The card only
+ * consumes the provider's reported status and drives its start/stop.
  */
 export function DestinationCard({
   destination: dest,
   status,
   bitrateKbps,
   error,
-  resourceUrl,
   sentPackets = 0,
   droppedPackets = 0,
   queuedPackets = 0,
@@ -173,17 +169,6 @@ export function DestinationCard({
           />
           Master Go Live
         </label>
-        <label className="flex items-center gap-1.5 text-[10px] text-slate-400 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={dest.audio}
-            onChange={(e) => onChange({ ...dest, audio: e.target.checked })}
-            disabled={active || dest.mode === "ndi"}
-            title={dest.mode === "ndi" ? "NDI audio (AAC in the NDI|HX payload) lands with the SDK phase." : undefined}
-            className="accent-cyan-500"
-          />
-          <Mic size={10} /> Audio
-        </label>
         <div className="ml-auto flex items-center gap-2">
           {active ? (
             <button
@@ -238,11 +223,6 @@ export function DestinationCard({
       )}
       {status === "error" && error && (
         <p className="text-[10px] text-red-400 bg-red-900/30 border border-red-900 rounded px-2 py-1">{error}</p>
-      )}
-      {status === "live" && dest.mode === "whip" && resourceUrl && (
-        <p className="text-[10px] text-emerald-500 bg-emerald-900/20 border border-emerald-900/50 rounded px-2 py-1 break-all">
-          WHIP resource: {resourceUrl}
-        </p>
       )}
       {!active && <p className="text-[10px] text-slate-600">{preset.hint}</p>}
     </div>

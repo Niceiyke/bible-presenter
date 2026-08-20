@@ -923,7 +923,6 @@ mod tests {
             startup_issues: Arc::new(PLMutex::new(Vec::new())),
             remote: Arc::new(RemoteControl::new(dir.clone(), &dir)),
             outputs: Arc::new(OutputManager::new(&dir)),
-            rtmp: Arc::new(PLMutex::new(std::collections::HashMap::new())),
             cpu_sampler: Arc::new(PLMutex::new(None::<sysinfo::System>)),
             license: Arc::new(LicenseManager::new(&dir)),
             engine: Arc::new(PLMutex::new(None)),

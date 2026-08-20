@@ -60,16 +60,22 @@ pub struct EngineClient {
 }
 
 impl EngineClient {
-    /// Spawns `wordlyte-engine` with the given app data dir (argv[1]).
+    /// Spawns `wordlyte-engine` with the given app data dir (argv[1]) and
+    /// resource path (argv[2], used to resolve the bundled `bin/ffmpeg.exe`).
     /// `bin_path` is the path to the sidecar executable; callers resolve it via
     /// the resource dir / `current_exe` dir.
-    pub fn spawn(bin_path: &std::path::Path, app_data_dir: &std::path::Path) -> Result<Self, String> {
+    pub fn spawn(
+        bin_path: &std::path::Path,
+        app_data_dir: &std::path::Path,
+        resource_path: &std::path::Path,
+    ) -> Result<Self, String> {
         if !bin_path.exists() {
             return Err(format!("Engine sidecar not found at {:?}", bin_path));
         }
 
         let mut child = Command::new(bin_path)
             .arg(app_data_dir)
+            .arg(resource_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -211,7 +217,7 @@ mod tests {
 
     #[test]
     fn protocol_version_constant_matches() {
-        assert_eq!(crate::engine::ipc::ENGINE_PROTOCOL_VERSION, 4);
+        assert_eq!(crate::engine::ipc::ENGINE_PROTOCOL_VERSION, 5);
     }
 
     #[test]

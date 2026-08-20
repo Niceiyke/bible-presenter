@@ -1,57 +1,47 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store";
 import { useSystemDiagnostics } from "../system/SystemDiagnosticsContext";
 import { tierCapabilities } from "../system/tiers";
 import { reportOutputState, setOutputVisible, STREAM_OUTPUT_ID } from "./outputRuntime";
-import { useAudioGraph } from "./useAudioGraphProvider";
-import { suggestedBitrateKbps } from "./useRtmpEncoder";
-import {
-  getProgramEncoderSnapshot,
-  startProgramEncoder,
-  stopProgramEncoder,
-  subscribeProgramEncoder,
-  type ProgramEncoderSnapshot,
-} from "../system/programEncoder";
-import { ProgramFeedPreview } from "../components/outputs/ProgramFeedPreview";
-import { DestinationRuntime } from "../components/streaming/DestinationRuntime";
+import { useEngineTransport } from "./useEngineTransport";
 import { makeDestination, newDestinationId } from "../components/streaming/presets";
-import type {
-  DestinationCardHandle,
-  DestTransportStatus,
-} from "../components/streaming/DestinationCard";
+import type { DestTransportStatus } from "../components/streaming/DestinationCard";
 import type { OutputPhase, StreamDestination, StreamPlatform } from "../types";
+import type { TransportStatus } from "../types/engine";
 
 /**
- * `StreamingProvider` — App-level owner of the streaming hub pipeline (Phase 4).
+ * `StreamingProvider` — App-level owner of the streaming hub (Phase D).
  *
- * Mirrors `RecordingProvider`: the Streaming workspace unmounts when the
- * operator navigates away, which used to kill the in-tab compositor and any
- * in-flight stream. Lifting the hidden `ProgramFeedPreview` compositor, the
- * destination set, the shared audio input, and the master transport here keeps
- * the stream alive for the whole broadcast even after the operator leaves the
- * page — a workspace switch can never stop an active stream.
+ * The pipeline moved into the `wordlyte-engine` sidecar: one shared H.264
+ * ffmpeg encoder, fanned to a mux-only ffmpeg publish per RTMP destination.
+ * The provider is a thin app-scoped owner that persists the destination set
+ * and capture settings on the `stream-main` output, persists operator intent
+ * through the OutputManager (`starting`/`live`/`failed`/`stopping`/`stopped`),
+ * drives the engine's `rtmp_start`/`rtmp_stop`, and reconciles per-destination
+ * status from the engine's `rtmp_status` poll — so a broadcast survives
+ * navigating away from the Streaming workspace and a dead ffmpeg surfaces as
+ * `failed` instead of a silent ghost session.
  *
- * The provider also owns the surface's lifecycle through the OutputManager:
- * Go Live persists the operator intent first (`outputs_set_visible`), then
- * reports `starting` → `live` (or `failed`) via `report_output_state`, and Stop
- * All reports `stopping` → `stopped`. It never touches the presentation engine,
- * so a failed stream can never change live program state.
+ * It never touches the presentation engine, so a failed stream can never
+ * change live program state. Webview audio into the transport moves to the
+ * engine in a later phase; WHIP/NDI destinations move too (their Go Live is
+ * blocked with a forward-looking reason).
  */
 
 export interface CardStatus {
   status: DestTransportStatus;
   bitrateKbps: number;
-  /** Transport error message (RTMP/WHIP/NDI failure causes). */
+  /** Transport error message (engine session failure causes). */
   error?: string | null;
-  /** WHIP resource URL once a session is established. */
+  /** WHIP resource URL — unused in Phase D (WHIP moves to the engine). */
   resourceUrl?: string | null;
-  /** Packets written to the backend since the destination started. */
+  /** Bytes written to the session's muxer since it started. */
   sentPackets?: number;
-  /** Packets dropped by the bounded queue since the destination started. */
+  /** Bytes dropped by the bounded queue since it started. */
   droppedPackets?: number;
-  /** Packets currently buffered awaiting the backend writer thread. */
+  /** Bytes currently buffered awaiting the session's writer thread. */
   queuedPackets?: number;
   /** 1-based reconnect attempt in progress (0 = not reconnecting). */
   reconnectAttempt?: number;
@@ -61,9 +51,6 @@ interface StreamingContextValue {
   destinations: StreamDestination[];
   statuses: Record<string, CardStatus>;
   saving: boolean;
-  /** The live composited program stream (video +, when enabled, audio). */
-  stream: MediaStream | null;
-  streamReady: boolean;
   anyBusy: boolean;
   liveCount: number;
   captureWidth: number;
@@ -78,20 +65,13 @@ interface StreamingContextValue {
   stopDestination: (id: string) => Promise<void>;
   goLive: () => Promise<void>;
   stopAll: () => Promise<void>;
-  getSourceTracks: () => { video: MediaStreamTrack | null; audio: MediaStreamTrack | null };
-  audioEnabled: boolean;
-  setAudioEnabled: (v: boolean) => void;
-  audioDevices: MediaDeviceInfo[];
-  audioDeviceId: string;
-  setAudioDeviceId: (id: string) => void;
-  audioError: string | null;
-  audioUnavailableReason: string | null;
-  /** Shared program encoder status (Phase 7) — operator-visible lifecycle. */
-  encoder: ProgramEncoderSnapshot;
   streamingBlocked: boolean;
-  sharedAudioBlocked: boolean;
+  /** ffmpeg missing (bundled or PATH) — RTMP destinations are disabled. */
   rtmpBlockedReason: string | null;
-  ndiBlockedReason: string | null;
+  /** Engine transport unreachable (sidecar down) — no destination can start. */
+  transportUnavailable: boolean;
+  /** WHIP/NDI destinations can't start in Phase D. */
+  enginePhaseBlockedReason: string | null;
   destCapReached: boolean;
   enabledCount: number;
 }
@@ -104,6 +84,8 @@ export function useStreaming(): StreamingContextValue {
   return ctx;
 }
 
+const PHASE_BLOCKED_REASON = "WHIP and NDI move to the engine in a later phase — RTMP destinations work now.";
+
 export function StreamingProvider({ children }: { children: ReactNode }) {
   const tabActive = useAppStore((s) => s.activeTab === "streaming");
   const license = useAppStore((s) => s.license);
@@ -111,15 +93,12 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
   const outputs = useAppStore((s) => s.outputs);
   const setOutputs = useAppStore((s) => s.setOutputs);
 
-  // Capability gating (Phase 7): RTMP needs WebCodecs H.264 + ffmpeg; shared
-  // audio needs at least one input device.
+  // Capability gating (Phase 7): RTMP needs ffmpeg (the engine encodes).
   const { checks } = useSystemDiagnostics();
   const capabilities = checks?.capabilities;
   const rtmpBlockedReason = capabilities && !capabilities.rtmpAvailable ? capabilities.rtmpReason : null;
-  const ndiBlockedReason = capabilities && !capabilities.ndiAvailable ? capabilities.ndiReason : null;
-  const audioUnavailableReason = capabilities && !capabilities.audioAvailable ? capabilities.audioReason : null;
 
-  // Tier gating: streaming is Pro+, NDI is Pro+, shared audio is Premium.
+  // Tier gating: streaming is Pro+.
   const streamCaps = tierCapabilities(license?.tier);
   const streamingBlocked = !!license && license.status === "active" && !streamCaps.streaming;
 
@@ -128,34 +107,22 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
   const captureWidth = output?.geometry.width ?? 1920;
   const captureHeight = output?.geometry.height ?? 1080;
   const captureFps = output?.capture_fps ?? 30;
-  // RTMP/NDI encode the compositor feed once at the master capture settings;
-  // derive a sensible bitrate from the chosen resolution/fps.
-  const streamBitrateKbps = suggestedBitrateKbps(captureWidth, captureHeight, captureFps);
+  // The engine encodes at ~0.1 bpp; derive a sensible bitrate reference from
+  // the chosen resolution/fps (shown as an informational number only — the
+  // engine's libx264 uses its own rate control).
+  const streamBitrateKbps = Math.max(1000, Math.min(40000, Math.round((captureWidth * captureHeight * captureFps * 0.1) / 1000 / 500) * 500));
 
   const [destinations, setDestinations] = useState<StreamDestination[]>([]);
   const [statuses, setStatuses] = useState<Record<string, CardStatus>>({});
-  const cardHandles = useRef<Map<string, DestinationCardHandle>>(new Map());
-  const [stream, setStream] = useState<MediaStream | null>(null);
   const [saving, setSaving] = useState(false);
   const [masterActive, setMasterActive] = useState(false);
+  const liveIdsRef = useRef<Set<string>>(new Set());
 
-  // Shared audio graph (Phase 6): recording and streaming draw their program
-  // audio from ONE app-level capture, so every destination shares a single
-  // input track (cloned per transport) and mute/volume is one shared policy.
-  const audio = useAudioGraph();
-  const audioEnabled = audio.enabled;
-  const setAudioEnabled = audio.setEnabled;
-  const audioDevices = audio.devices;
-  const audioDeviceId = audio.deviceId;
-  const setAudioDeviceId = audio.setDeviceId;
-  const audioError = audio.error;
-  const programAudioTrack = audio.programTrack;
-  // Shared audio gating lives in the audio graph provider (Premium); expose the
-  // same flag for the tab's messaging.
-  const sharedAudioBlocked = audio.blocked;
-
-  // Shared program encoder status (Phase 7) for operator visibility.
-  const encoder = useSyncExternalStore(subscribeProgramEncoder, getProgramEncoderSnapshot, getProgramEncoderSnapshot);
+  // Poll the engine's RTMP sessions while the tab is open OR a broadcast is
+  // active (so an unexpected engine-side stop is caught even away).
+  const transport = useEngineTransport(tabActive || masterActive);
+  const { rtmp: rtmpSessions, connected: transportConnected } = transport;
+  const transportUnavailable = !transportConnected;
 
   const persistCapture = useCallback(
     async (width: number, height: number, fps: number) => {
@@ -204,6 +171,31 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
     });
   }, [captureFps]);
 
+  // Derive per-destination status from the engine's session table.
+  useEffect(() => {
+    const next: Record<string, CardStatus> = {};
+    for (const d of destinations) {
+      if (d.mode !== "rtmp") continue;
+      const session: TransportStatus | undefined = rtmpSessions[d.id];
+      if (session && session.active) {
+        next[d.id] = {
+          status: "live",
+          bitrateKbps: streamBitrateKbps,
+          sentPackets: session.sent,
+          droppedPackets: session.dropped,
+          queuedPackets: session.queued,
+        };
+      } else if (liveIdsRef.current.has(d.id)) {
+        // A previously-live destination lost its session — the engine's muxer
+        // exited (crash / network failure / stop).
+        next[d.id] = { status: "error", bitrateKbps: 0, error: "Stream ended (the engine's ffmpeg exited)." };
+      } else {
+        next[d.id] = { status: "idle", bitrateKbps: 0 };
+      }
+    }
+    setStatuses(next);
+  }, [destinations, rtmpSessions, streamBitrateKbps]);
+
   const updateDestination = useCallback(
     (next: StreamDestination) => {
       setDestinations((prev) => {
@@ -217,12 +209,9 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
 
   const removeDestination = useCallback(
     async (id: string) => {
-      // Stop the transport runtime BEFORE persisting the removal, so an active
-      // session/process is never left orphaned by a config delete.
-      const handle = cardHandles.current.get(id);
-      if (handle) {
-        await handle.stop();
-      }
+      // Stop the engine session BEFORE persisting the removal, so an active
+      // transport is never left orphaned by a config delete.
+      await stopDestination(id);
       setStatuses((prev) => {
         const next = { ...prev };
         delete next[id];
@@ -234,6 +223,7 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
         return updated;
       });
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [persistDestinations]
   );
 
@@ -285,74 +275,69 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
     }
   }, [output, persistDestinations]);
 
-  const handleStream = useCallback((s: MediaStream | null) => setStream(s), []);
-
-  const streamReady = !!stream && stream.getVideoTracks().length > 0;
-
-  const getSourceTracks = useCallback(
-    () => ({ video: stream?.getVideoTracks()[0] ?? null, audio: programAudioTrack }),
-    [stream, programAudioTrack]
-  );
-
-  const handleStatus = useCallback(
-    (
-      id: string,
-      status: DestTransportStatus,
-      bitrateKbps: number,
-      extra?: {
-        error?: string | null;
-        resourceUrl?: string | null;
-        sentPackets?: number;
-        droppedPackets?: number;
-        queuedPackets?: number;
-        reconnectAttempt?: number;
+  /** Start one destination's engine session (RTMP only this phase). */
+  const startDestination = useCallback(
+    async (id: string): Promise<boolean> => {
+      const d = destinations.find((x) => x.id === id);
+      if (!d) return false;
+      if (d.mode !== "rtmp") {
+        setToast(PHASE_BLOCKED_REASON);
+        return false;
       }
-    ) => {
-      setStatuses((prev) => ({
-        ...prev,
-        [id]: {
-          status,
-          bitrateKbps,
-          error: extra?.error ?? null,
-          resourceUrl: extra?.resourceUrl ?? null,
-          sentPackets: extra?.sentPackets ?? 0,
-          droppedPackets: extra?.droppedPackets ?? 0,
-          queuedPackets: extra?.queuedPackets ?? 0,
-          reconnectAttempt: extra?.reconnectAttempt ?? 0,
-        },
-      }));
+      if (d.url.trim() === "") return false;
+      try {
+        await invoke("rtmp_start", {
+          sessionId: d.id,
+          serverUrl: d.url,
+          streamKey: d.stream_key ?? null,
+          withAudio: false,
+          fps: captureFps,
+        });
+        liveIdsRef.current.add(d.id);
+        setStatuses((prev) => ({
+          ...prev,
+          [id]: { status: "live", bitrateKbps: streamBitrateKbps, error: null },
+        }));
+        return true;
+      } catch (e: any) {
+        setStatuses((prev) => ({
+          ...prev,
+          [id]: { status: "error", bitrateKbps: 0, error: e?.message ?? String(e) },
+        }));
+        return false;
+      }
     },
-    []
+    [destinations, captureFps, streamBitrateKbps, setToast]
   );
-
-  const registerHandle = useCallback((id: string, handle: DestinationCardHandle | null) => {
-    if (handle) cardHandles.current.set(id, handle);
-    else cardHandles.current.delete(id);
-  }, []);
-
-  /** Drive a destination's transport through its registered app-scoped runtime. */
-  const startDestination = useCallback(async (id: string): Promise<boolean> => {
-    const handle = cardHandles.current.get(id);
-    if (!handle) return false;
-    return handle.start();
-  }, []);
 
   const stopDestination = useCallback(async (id: string): Promise<void> => {
-    const handle = cardHandles.current.get(id);
-    if (handle) await handle.stop();
+    liveIdsRef.current.delete(id);
+    try {
+      await invoke("rtmp_stop", { sessionId: id });
+    } catch (e: any) {
+      console.error("rtmp_stop failed:", e);
+    }
   }, []);
 
   const goLive = useCallback(async () => {
-    if (!streamReady) return;
     if (streamingBlocked) {
       setToast("Streaming is a Pro feature. Upgrade in Settings → License.");
       return;
     }
+    if (transportUnavailable) {
+      setToast("The engine sidecar is not running — streaming is unavailable.");
+      return;
+    }
     const enabled = destinations.filter((d) => d.enabled);
-    // Enforce the plan's destination cap on the shared-encoder path too (defense
-    // in depth beyond the Add button).
+    // Enforce the plan's destination cap (defense in depth beyond the Add
+    // button).
     if (enabled.length > streamCaps.streamingDestinations) {
       report("failed", `Your plan supports ${streamCaps.streamingDestinations} simultaneous destination${streamCaps.streamingDestinations === 1 ? "" : "s"}.`);
+      return;
+    }
+    const rtmpDests = enabled.filter((d) => d.mode === "rtmp");
+    if (rtmpDests.length === 0) {
+      setToast(PHASE_BLOCKED_REASON);
       return;
     }
     await persistDestinations(destinations);
@@ -367,92 +352,53 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
     }
     report("starting");
     setMasterActive(true);
-
-    // Phase 7: start ONE shared program encoder for the master visual profile
-    // (RTMP/NDI destinations subscribe to its packets) before starting any
-    // transport, so N destinations share one video encoder.
-    const needsEncoder = enabled.some((d) => d.mode === "rtmp" || d.mode === "ndi");
-    if (needsEncoder && stream) {
-      const track = stream.getVideoTracks()[0];
-      if (track) {
-        const ok = await startProgramEncoder(track, {
-          width: captureWidth,
-          height: captureHeight,
-          fps: captureFps,
-          bitrateKbps: streamBitrateKbps,
-        });
-        if (!ok) {
-          report("failed", `Encoder failed to start: ${getProgramEncoderSnapshot().error ?? "unknown"}`);
-          setMasterActive(false);
-          await setOutputVisible(STREAM_OUTPUT_ID, false).catch((e: any) => {
-            console.error("outputs_set_visible failed after encoder error:", e);
-          });
-          return;
-        }
-      }
+    let started = 0;
+    for (const d of rtmpDests) {
+      if (await startDestination(d.id)) started += 1;
     }
-
-    for (const d of enabled) {
-      if (d.mode === "rtmp" && rtmpBlockedReason) continue;
-      if (d.mode === "ndi" && ndiBlockedReason) continue;
-      const handle = cardHandles.current.get(d.id);
-      if (handle) void handle.start();
-    }
-  }, [streamReady, streamingBlocked, setToast, persistDestinations, destinations, rtmpBlockedReason, ndiBlockedReason, report, streamCaps, stream, captureWidth, captureHeight, captureFps, streamBitrateKbps]);
+    if (started > 0) report("live");
+    else report("failed", "No destination could connect.");
+  }, [streamingBlocked, transportUnavailable, setToast, persistDestinations, destinations, streamCaps, report, startDestination]);
 
   const stopAll = useCallback(async () => {
     if (!masterActive) return;
     report("stopping");
     for (const d of destinations) {
-      const handle = cardHandles.current.get(d.id);
-      if (handle) await handle.stop();
+      if (d.mode === "rtmp") await stopDestination(d.id);
     }
-    stopProgramEncoder();
     setMasterActive(false);
     await setOutputVisible(STREAM_OUTPUT_ID, false).catch((e: any) => {
       console.error("outputs_set_visible failed after stop:", e);
     });
     report("stopped");
-  }, [masterActive, destinations, report]);
+  }, [masterActive, destinations, report, stopDestination]);
 
-  // Derive the live/failed phase from per-destination transport statuses once
-  // the master transport is active (all-error => failed, otherwise live).
-  const enabledIds = destinations.filter((d) => d.enabled).map((d) => d.id);
+  // Reconcile the master phase: while active, if every enabled RTMP
+  // destination errored, the surface is `failed`.
+  const enabledRtmpIds = destinations.filter((d) => d.enabled && d.mode === "rtmp").map((d) => d.id);
   useEffect(() => {
     if (!masterActive) return;
-    if (enabledIds.length === 0) return;
-    const anyUp = enabledIds.some((id) => {
-      const s = statuses[id];
-      return s && (s.status === "live" || s.status === "connecting");
-    });
-    const allError = enabledIds.every((id) => {
-      const s = statuses[id];
-      return s && s.status === "error";
-    });
+    if (enabledRtmpIds.length === 0) return;
+    const allError = enabledRtmpIds.every((id) => statuses[id]?.status === "error");
+    const anyUp = enabledRtmpIds.some((id) => statuses[id]?.status === "live");
     if (allError) {
       report("failed", "All enabled destinations failed to connect.");
     } else if (anyUp) {
       report("live");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [masterActive, statuses, enabledIds.join(",")]);
+  }, [masterActive, statuses, enabledRtmpIds.join(",")]);
 
   const liveCount = Object.values(statuses).filter((s) => s.status === "live").length;
   const anyBusy = Object.values(statuses).some((s) => s.status === "live" || s.status === "connecting");
   const enabledCount = destinations.filter((d) => d.enabled).length;
   const destCapReached = destinations.length >= streamCaps.streamingDestinations;
 
-  // Keep the compositor running while the tab is visible OR a stream is active,
-  // so leaving the page mid-broadcast does not end the capture.
-  const active = tabActive || masterActive;
-
   const value = useMemo<StreamingContextValue>(
     () => ({
       destinations,
       statuses,
       saving,
-      stream,
-      streamReady,
       anyBusy,
       liveCount,
       captureWidth,
@@ -467,53 +413,15 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
       stopDestination,
       goLive,
       stopAll,
-      getSourceTracks,
-      audioEnabled,
-      setAudioEnabled,
-      audioDevices,
-      audioDeviceId,
-      setAudioDeviceId,
-      audioError,
-      audioUnavailableReason,
-      encoder,
       streamingBlocked,
-      sharedAudioBlocked,
       rtmpBlockedReason,
-      ndiBlockedReason,
+      transportUnavailable,
+      enginePhaseBlockedReason: PHASE_BLOCKED_REASON,
       destCapReached,
       enabledCount,
     }),
-    [destinations, statuses, saving, stream, streamReady, anyBusy, liveCount, captureWidth, captureHeight, captureFps, streamBitrateKbps, persistCapture, updateDestination, removeDestination, addDestination, startDestination, stopDestination, goLive, stopAll, getSourceTracks, audioEnabled, setAudioEnabled, audioDevices, audioDeviceId, setAudioDeviceId, audioError, audioUnavailableReason, encoder, streamingBlocked, sharedAudioBlocked, rtmpBlockedReason, ndiBlockedReason, destCapReached, enabledCount]
+    [destinations, statuses, saving, anyBusy, liveCount, captureWidth, captureHeight, captureFps, streamBitrateKbps, persistCapture, updateDestination, removeDestination, addDestination, startDestination, stopDestination, goLive, stopAll, streamingBlocked, rtmpBlockedReason, transportUnavailable, destCapReached, enabledCount]
   );
 
-  return (
-    <StreamingContext.Provider value={value}>
-      {children}
-      {/* App-scoped destination runtimes — transports stay mounted while the
-          app runs, so a workspace switch can never stop an active stream. */}
-      {destinations.map((d) => (
-        <DestinationRuntime
-          key={d.id}
-          destination={d}
-          getSourceTracks={getSourceTracks}
-          fps={captureFps}
-          bitrateKbps={streamBitrateKbps}
-          onStatus={handleStatus}
-          onRegister={registerHandle}
-        />
-      ))}
-      <div
-        style={{ position: "fixed", left: -100000, top: 0, width: 1, height: 1, overflow: "hidden", pointerEvents: "none" }}
-        aria-hidden
-      >
-        <ProgramFeedPreview
-          config={output ?? undefined}
-          geometry={{ width: captureWidth, height: captureHeight }}
-          fps={captureFps}
-          active={active}
-          onStream={handleStream}
-        />
-      </div>
-    </StreamingContext.Provider>
-  );
+  return <StreamingContext.Provider value={value}>{children}</StreamingContext.Provider>;
 }

@@ -15,7 +15,7 @@ import { ENGINE_PROTOCOL_VERSION, type EngineCommand, type EngineEvent } from ".
 describe("engine IPC contract (Phase A1)", () => {
   it("pins the wire protocol version in lockstep with ipc.rs", () => {
     // MUST equal `ENGINE_PROTOCOL_VERSION` in `src-tauri/src/engine/ipc.rs`.
-    expect(ENGINE_PROTOCOL_VERSION).toBe(4);
+    expect(ENGINE_PROTOCOL_VERSION).toBe(5);
   });
 
   it("covers the core presentation command names the engine dispatch relies on", () => {

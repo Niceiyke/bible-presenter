@@ -2,8 +2,8 @@
  * Ambient WebCodecs stream-processing types missing from TS's lib.dom for the
  * TypeScript version used here. `MediaStreamTrackProcessor` lets WebCodecs
  * consume `VideoFrame`s / `AudioData` directly from a `MediaStream` track
- * without a `<video>`/`<audio>` round-trip — used by the RTMP encoder
- * (`useRtmpEncoder`).
+ * without a `<video>`/`<audio>` round-trip — still used by the system
+ * diagnostics H.264 capability probe (`src/system/SystemDiagnosticsContext.tsx`).
  */
 
 interface MediaStreamTrackProcessorInit {

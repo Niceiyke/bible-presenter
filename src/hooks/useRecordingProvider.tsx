@@ -2,50 +2,42 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store";
-import { useRecorder } from "./useRecorder";
 import { reportOutputState, setOutputVisible } from "./outputRuntime";
-import { useAudioGraph } from "./useAudioGraphProvider";
 import { tierCapabilities } from "../system/tiers";
-import { ProgramFeedPreview } from "../components/outputs/ProgramFeedPreview";
+import { useEngineTransport } from "./useEngineTransport";
 import type { OutputPhase } from "../types";
 
 /**
- * `RecordingProvider` — App-level owner of the recorder + compositor pipeline
- * (Phase 3 fix). The Recordings tab unmounts when the operator navigates to
- * another workspace, which used to kill the canvas capture loop and end any
- * in-flight recording. Lifting both the hidden `ProgramFeedPreview` compositor
- * and the recorder here keeps the capture stream alive for the whole
- * recording even after the operator leaves the page (the tab only stops the
- * compositor when neither it is visible nor a recording is running).
+ * `RecordingProvider` — App-level owner of the recorder surface (Phase D).
  *
- * The provider also owns the shared audio-input capture (mic / line-in /
- * mixer feed, audio processing off — mirroring the streamer). Its track is
- * combined with the compositor's video track before the recording starts, so
- * recordings include sound.
+ * Since Phase D the engine sidecar owns the whole capture → encode → mux
+ * pipeline: the recorder is a single mux-only ffmpeg (MP4, `-c copy`) fed from
+ * the engine's shared H.264 encoder. This provider is a thin app-scoped owner
+ * that persists the operator intent through the OutputManager, starts/stops the
+ * engine's recording session, and reconciles the surface's runtime phase from
+ * the engine's `recording_status` — so a recording survives navigating away
+ * from the Recordings workspace and an unexpected engine failure surfaces as a
+ * `failed` phase instead of a silent dead session.
+ *
+ * The webview no longer captures audio into the recording (audio moves to the
+ * engine in a later phase); the shared audio graph stays mounted for operator
+ * monitoring only.
  */
 interface RecordingContextValue {
   recording: boolean;
   elapsed: number;
   lastSaved: string | null;
   error: string | null;
-  /** The live composited program stream (video +, when enabled, audio). */
-  stream: MediaStream | null;
-  streamReady: boolean;
-  start: () => void;
-  stop: () => Promise<string | null>;
-  cancel: () => void;
-  audioEnabled: boolean;
-  setAudioEnabled: (v: boolean) => void;
-  audioDevices: MediaDeviceInfo[];
-  audioDeviceId: string;
-  setAudioDeviceId: (id: string) => void;
-  audioError: string | null;
+  /** Whether the engine transport is reachable (sidecar running). */
+  transportConnected: boolean;
   /** Capture resolution/fps for the recording compositor. */
   captureWidth: number;
   captureHeight: number;
   captureFps: number;
   /** Persist a new capture resolution/fps to the `record-main` output. */
   setCapture: (width: number, height: number, fps: number) => Promise<void>;
+  start: () => Promise<void>;
+  stop: () => Promise<string | null>;
 }
 
 const RecordingContext = createContext<RecordingContextValue | null>(null);
@@ -56,8 +48,12 @@ export function useRecording(): RecordingContextValue {
   return ctx;
 }
 
+function defaultFileName(now = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `recording-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.mp4`;
+}
+
 export function RecordingProvider({ children }: { children: ReactNode }) {
-  const recorder = useRecorder();
   const tabActive = useAppStore((s) => s.activeTab === "recordings");
   const license = useAppStore((s) => s.license);
   const setToast = useAppStore((s) => s.setToast);
@@ -84,21 +80,20 @@ export function RecordingProvider({ children }: { children: ReactNode }) {
     [outputs, setOutputs]
   );
 
-  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [lastSaved, setLastSaved] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const fileNameRef = useRef<string>("");
+  const startedAtRef = useRef<number>(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const surfaceStarted = useRef(false);
+  const stopping = useRef(false);
 
-  // Shared audio graph (Phase 6): recording and streaming draw their program
-  // audio from ONE app-level capture, so we never hold two input pipelines and
-  // mute/volume is a single shared policy. The graph's post-gain program track
-  // is combined into the recorded stream on start.
-  const audio = useAudioGraph();
-  const audioEnabled = audio.enabled;
-  const setAudioEnabled = audio.setEnabled;
-  const audioDevices = audio.devices;
-  const audioDeviceId = audio.deviceId;
-  const setAudioDeviceId = audio.setDeviceId;
-  const audioError = audio.error;
-
-  const streamReady = !!stream && stream.getVideoTracks().length > 0;
+  // Poll the engine's recording sessions while the tab is open OR a recording
+  // is running (so an unexpected engine-side stop is caught even away).
+  const transport = useEngineTransport(tabActive || recording);
+  const { recording: recordingSessions, connected: transportConnected } = transport;
 
   // Report the recorder surface's lifecycle phase to the OutputManager (Phase
   // 4). The backend owns `started_at` and broadcasts `output-state-changed`,
@@ -116,14 +111,15 @@ export function RecordingProvider({ children }: { children: ReactNode }) {
     });
   }, [captureFps]);
 
-  // The surface's phase is reconciled from the ACTUAL recorder state (via the
-  // effect below) rather than from closures, so a MediaRecorder start failure
-  // or a save-time error is never masked by a stale `recorder.error` read.
-  const surfaceStarted = useRef(false);
-  const stopping = useRef(false);
+  const clearTimer = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
 
   const start = useCallback(async () => {
-    if (recorder.recording || !stream) return;
+    if (recording) return;
     if (license && license.status === "active" && !tierCapabilities(license.tier).recording) {
       setToast("Recording is a Pro feature. Upgrade in Settings → License.");
       return;
@@ -138,104 +134,94 @@ export function RecordingProvider({ children }: { children: ReactNode }) {
       return;
     }
     report("starting");
-    const tracks: MediaStreamTrack[] = [...stream.getVideoTracks()];
-    if (audio.programTrack) tracks.push(audio.programTrack);
-    const recStream = new MediaStream(tracks);
-    surfaceStarted.current = true;
-    await recorder.start(recStream);
-  }, [recorder, stream, license, setToast, report]);
-
-  const stop = useCallback(async (): Promise<string | null> => {
-    if (!recorder.recording) return null;
-    stopping.current = true;
-    report("stopping");
-    const name = await recorder.stop();
-    return name;
-  }, [recorder, report]);
-
-  const cancel = useCallback(() => {
-    surfaceStarted.current = false;
-    stopping.current = false;
-    recorder.cancel();
-    void setOutputVisible("record-main", false).catch((e: any) => {
-      console.error("outputs_set_visible failed after cancel:", e);
-    });
-    report("stopped");
-  }, [recorder, report]);
-
-  // Reconcile the runtime phase with the actual recorder state once the
-  // surface has been started: error → failed, recording → live, clean stop →
-  // stopped. This is the single writer of the recorder phase after start, so
-  // start/save failures always surface as `failed` with the reason.
-  useEffect(() => {
-    if (!surfaceStarted.current) return;
-    if (recorder.error) {
+    const fileName = defaultFileName();
+    fileNameRef.current = fileName;
+    try {
+      await invoke("recording_start", { fileName, fps: captureFps });
+    } catch (e: any) {
       surfaceStarted.current = false;
-      stopping.current = false;
-      report("failed", recorder.error);
-      void setOutputVisible("record-main", false).catch((e: any) => {
-        console.error("outputs_set_visible failed after recorder error:", e);
+      report("failed", `Could not start the engine recorder: ${e?.message ?? e}`);
+      setError(`Failed to start recording: ${e?.message ?? e}`);
+      await setOutputVisible("record-main", false).catch((err: any) => {
+        console.error("outputs_set_visible failed after start error:", err);
       });
       return;
     }
-    if (recorder.recording) {
-      report("live");
-      return;
-    }
-    if (stopping.current) {
+    surfaceStarted.current = true;
+    setRecording(true);
+    setError(null);
+    startedAtRef.current = Date.now();
+    setElapsed(0);
+    clearTimer();
+    timerRef.current = setInterval(() => {
+      setElapsed((Date.now() - startedAtRef.current) / 1000);
+    }, 500);
+    report("live");
+  }, [recording, license, setToast, report, captureFps, clearTimer]);
+
+  const stop = useCallback(async (): Promise<string | null> => {
+    if (!recording) return null;
+    stopping.current = true;
+    report("stopping");
+    const fileName = fileNameRef.current;
+    try {
+      await invoke("recording_stop", { fileName });
+      setLastSaved(fileName);
+      setError(null);
+    } catch (e: any) {
+      setError(`Failed to stop recording: ${e?.message ?? e}`);
+      return null;
+    } finally {
+      clearTimer();
+      setElapsed(0);
+      setRecording(false);
       surfaceStarted.current = false;
       stopping.current = false;
-      void setOutputVisible("record-main", false).catch((e: any) => {
-        console.error("outputs_set_visible failed after stop:", e);
+      await setOutputVisible("record-main", false).catch((err: any) => {
+        console.error("outputs_set_visible failed after stop:", err);
       });
       report("stopped");
     }
-  }, [recorder.error, recorder.recording, report]);
+    return fileName;
+  }, [recording, report, clearTimer]);
 
-  // Keep the compositor running while the tab is visible OR a recording is in
-  // progress, so leaving the page mid-recording does not end the capture.
-  const active = tabActive || recorder.recording;
+  // Reconcile the runtime phase with the engine's session table: if the
+  // engine's recording session disappears while we believe we are recording,
+  // the muxer/encoder died — surface it as `failed` and reset local state.
+  useEffect(() => {
+    if (!surfaceStarted.current) return;
+    const anyRecording = Object.keys(recordingSessions).length > 0;
+    if (!anyRecording && !stopping.current) {
+      surfaceStarted.current = false;
+      clearTimer();
+      setElapsed(0);
+      setRecording(false);
+      setError("Recording ended unexpectedly (the engine's muxer exited).");
+      report("failed", "Recording ended unexpectedly (the engine's muxer exited).");
+      void setOutputVisible("record-main", false).catch((e: any) => {
+        console.error("outputs_set_visible failed after engine stop:", e);
+      });
+    }
+  }, [recordingSessions, report, clearTimer]);
+
+  useEffect(() => clearTimer, [clearTimer]);
 
   const value = useMemo<RecordingContextValue>(
     () => ({
-      recording: recorder.recording,
-      elapsed: recorder.elapsed,
-      lastSaved: recorder.lastSaved,
-      error: recorder.error,
-      stream,
-      streamReady,
-      start,
-      stop,
-      cancel,
-      audioEnabled,
-      setAudioEnabled,
-      audioDevices,
-      audioDeviceId,
-      setAudioDeviceId,
-      audioError,
+      recording,
+      elapsed,
+      lastSaved,
+      error,
+      transportConnected,
       captureWidth,
       captureHeight,
       captureFps,
       setCapture,
+      start,
+      stop,
     }),
-    [recorder, stream, streamReady, start, stop, cancel, audioEnabled, audioDevices, audioDeviceId, audioError, captureWidth, captureHeight, captureFps, setCapture]
+    [recording, elapsed, lastSaved, error, transportConnected, captureWidth, captureHeight, captureFps, setCapture, start, stop]
   );
 
-  return (
-    <RecordingContext.Provider value={value}>
-      {children}
-      <div
-        style={{ position: "fixed", left: -100000, top: 0, width: 1, height: 1, overflow: "hidden", pointerEvents: "none" }}
-        aria-hidden
-      >
-        <ProgramFeedPreview
-          config={recordOutput ?? undefined}
-          geometry={{ width: captureWidth, height: captureHeight }}
-          fps={captureFps}
-          active={active}
-          onStream={setStream}
-        />
-      </div>
-    </RecordingContext.Provider>
-  );
+  return <RecordingContext.Provider value={value}>{children}</RecordingContext.Provider>;
 }

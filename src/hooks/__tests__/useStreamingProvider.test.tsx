@@ -5,7 +5,6 @@ import { StreamingProvider, useStreaming } from "../useStreamingProvider";
 import { OUTPUT_SCHEMA_VERSION } from "../../types";
 import type { OutputConfig, PresentationSettings, StreamDestination } from "../../types";
 import type { LicenseInfo } from "../../types/license";
-import type { DestinationCardHandle } from "../../components/streaming/DestinationCard";
 import React from "react";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -15,38 +14,16 @@ vi.mock("@tauri-apps/api/core", () => ({
 import { invoke } from "@tauri-apps/api/core";
 const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
 
-// The runtime is mocked to a controllable fake so we can observe handle
-// registration and lifecycle ordering. The real transport hooks have their own
-// unit tests; this file proves the PROVIDER owns the runtimes and their
-// stop-before-persist contract (WP2 P0-1).
-const registeredHandles = new Map<string, DestinationCardHandle>();
-const runtimeStarts = vi.fn();
-const runtimeStops = vi.fn();
+// Status commands return an empty session table so the poll never throws.
+const defaultInvoke = vi.fn(async (cmd: string) => {
+  if (cmd === "rtmp_status" || cmd === "recording_status") return [];
+  return undefined;
+});
 
-vi.mock("../../components/streaming/DestinationRuntime", () => ({
-  DestinationRuntime: (props: any) => {
-    // Register a controllable handle keyed by the destination id.
-    React.useEffect(() => {
-      const handle: DestinationCardHandle = {
-        start: async () => {
-          runtimeStarts(props.destination.id);
-          return true;
-        },
-        stop: async () => {
-          runtimeStops(props.destination.id);
-        },
-      };
-      registeredHandles.set(props.destination.id, handle);
-      props.onRegister(props.destination.id, handle);
-      return () => {
-        registeredHandles.delete(props.destination.id);
-        props.onRegister(props.destination.id, null);
-      };
-    }, [props.destination.id]);
-    return null;
-  },
-}));
-
+// The transport lives in the engine sidecar (Phase D); the provider owns the
+// sessions and drives them through the rtmp_* commands. This file proves the
+// PROVIDER's intent-first + stop-before-persist contract (WP2 P0-1) and the
+// engine-phase blocking of WHIP/NDI destinations.
 vi.mock("../../components/outputs/ProgramFeedPreview", () => ({
   ProgramFeedPreview: () => null,
 }));
@@ -56,35 +33,6 @@ vi.mock("../../system/SystemDiagnosticsContext", () => ({
     checks: { capabilities: { rtmpAvailable: true, ndiAvailable: true, audioAvailable: true } },
   }),
 }));
-
-vi.mock("../useAudioGraphProvider", () => ({
-  useAudioGraph: () => ({
-    enabled: false,
-    devices: [],
-    deviceId: "",
-    setDeviceId: vi.fn(),
-    setEnabled: vi.fn(),
-    volume: 1,
-    setVolume: vi.fn(),
-    muted: false,
-    setMuted: vi.fn(),
-    programTrack: null,
-    status: "idle",
-    error: null,
-    retry: vi.fn(),
-    blocked: false,
-  }),
-}));
-
-vi.mock("../../system/programEncoder", () => {
-  const snapshot = { live: false };
-  return {
-    startProgramEncoder: vi.fn(async () => true),
-    stopProgramEncoder: vi.fn(),
-    getProgramEncoderSnapshot: () => snapshot,
-    subscribeProgramEncoder: () => () => {},
-  };
-});
 
 const baseSettings = {
   theme: "dark",
@@ -131,13 +79,10 @@ function Probe({ onReady }: { onReady: (ctx: any) => void }) {
   return null;
 }
 
-describe("StreamingProvider destination runtime ownership (WP2)", () => {
+describe("StreamingProvider engine session ownership (Phase D)", () => {
   beforeEach(() => {
-    registeredHandles.clear();
-    runtimeStarts.mockClear();
-    runtimeStops.mockClear();
     mockInvoke.mockReset();
-    mockInvoke.mockImplementation(async () => undefined);
+    mockInvoke.mockImplementation(defaultInvoke);
     useAppStore.setState({
       license: {
         status: "active",
@@ -158,7 +103,7 @@ describe("StreamingProvider destination runtime ownership (WP2)", () => {
     });
   });
 
-  it("renders one runtime per destination and registers stable handles", async () => {
+  it("addDestination persists the destination to the stream-main output", async () => {
     const ctx: any = {};
     render(
       <StreamingProvider>
@@ -169,24 +114,77 @@ describe("StreamingProvider destination runtime ownership (WP2)", () => {
     await act(async () => {
       ctx.addDestination("custom-rtmp");
     });
+
+    await waitFor(() => {
+      expect(ctx.destinations.length).toBe(1);
+    });
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "outputs_update",
+      expect.objectContaining({
+        configs: expect.arrayContaining([
+          expect.objectContaining({
+            id: "stream-main",
+            stream_destinations: expect.arrayContaining([expect.objectContaining({ mode: "rtmp" })]),
+          }),
+        ]),
+      })
+    );
+  });
+
+  it("startDestination starts an RTMP engine session for the destination", async () => {
+    const ctx: any = {};
+    render(
+      <StreamingProvider>
+        <Probe onReady={(c) => Object.assign(ctx, c)} />
+      </StreamingProvider>
+    );
+
+    await act(async () => {
+      ctx.addDestination("custom-rtmp");
+    });
+    const id = ctx.destinations[0].id;
+    await act(async () => {
+      ctx.updateDestination({ ...ctx.destinations[0], url: "rtmp://ingest.test/live", stream_key: "key" });
+    });
+
+    await act(async () => {
+      await ctx.startDestination(id);
+    });
+
+    expect(mockInvoke).toHaveBeenCalledWith("rtmp_start", {
+      sessionId: id,
+      serverUrl: "rtmp://ingest.test/live",
+      streamKey: "key",
+      withAudio: false,
+      fps: 30,
+    });
+    expect(ctx.statuses[id]?.status).toBe("live");
+  });
+
+  it("startDestination blocks WHIP/NDI destinations until the engine phase", async () => {
+    const ctx: any = {};
+    render(
+      <StreamingProvider>
+        <Probe onReady={(c) => Object.assign(ctx, c)} />
+      </StreamingProvider>
+    );
+
     await act(async () => {
       ctx.addDestination("custom-whip");
     });
+    const id = ctx.destinations[0].id;
 
-    await waitFor(() => {
-      expect(ctx.destinations.length).toBe(2);
-      expect(registeredHandles.size).toBe(2);
-    });
-
-    // Each destination's handle is startable through the provider.
-    const firstId = ctx.destinations[0].id;
+    let ok: boolean | null = null;
     await act(async () => {
-      await ctx.startDestination(firstId);
+      ok = await ctx.startDestination(id);
     });
-    expect(runtimeStarts).toHaveBeenCalledWith(firstId);
+
+    expect(ok).toBe(false);
+    expect(mockInvoke).not.toHaveBeenCalledWith("rtmp_start", expect.anything());
+    expect(useAppStore.getState().toast).toContain("RTMP");
   });
 
-  it("stops the runtime BEFORE persisting a removal", async () => {
+  it("removes the engine session BEFORE persisting a removal", async () => {
     const ctx: any = {};
     render(
       <StreamingProvider>
@@ -200,12 +198,9 @@ describe("StreamingProvider destination runtime ownership (WP2)", () => {
     const id = ctx.destinations[0].id;
 
     const events: string[] = [];
-    runtimeStops.mockImplementation((id: string) => {
-      events.push("stop");
-      return Promise.resolve();
-    });
     mockInvoke.mockImplementation(async (cmd: string) => {
-      events.push(`persist:${cmd}`);
+      events.push(cmd);
+      if (cmd === "rtmp_status" || cmd === "recording_status") return [];
       return undefined;
     });
 
@@ -213,12 +208,16 @@ describe("StreamingProvider destination runtime ownership (WP2)", () => {
       await ctx.removeDestination(id);
     });
 
-    expect(events).toEqual(["stop", "persist:outputs_update"]);
+    expect(events[0]).toBe("rtmp_stop");
+    expect(events).toContain("outputs_update");
+    const stopIdx = events.indexOf("rtmp_stop");
+    const persistIdx = events.indexOf("outputs_update");
+    expect(stopIdx).toBeGreaterThan(-1);
+    expect(stopIdx).toBeLessThan(persistIdx);
     expect(ctx.destinations).toHaveLength(0);
-    expect(registeredHandles.has(id)).toBe(false);
   });
 
-  it("stopAll is idempotent after a destination has disappeared", async () => {
+  it("stopAll stops every enabled RTMP session and is idempotent after a disappearance", async () => {
     const ctx: any = {};
     render(
       <StreamingProvider>
@@ -229,44 +228,83 @@ describe("StreamingProvider destination runtime ownership (WP2)", () => {
     await act(async () => {
       ctx.addDestination("custom-rtmp");
     });
-    const id = ctx.destinations[0].id;
+    await act(async () => {
+      ctx.addDestination("custom-rtmp");
+    });
+    const [a, b] = ctx.destinations.map((d: StreamDestination) => d.id);
 
-    // Simulate a destination whose runtime vanished (e.g. a removal that
-    // already happened): no handle registered.
-    registeredHandles.delete(id);
+    // Go live (this sets masterActive and starts both enabled RTMP sessions).
+    await act(async () => {
+      await ctx.goLive();
+    });
 
+    mockInvoke.mockClear();
     await act(async () => {
       await ctx.stopAll();
     });
-    // No throw, no leftover handles.
-    expect(registeredHandles.size).toBe(0);
+    expect(mockInvoke).toHaveBeenCalledWith("rtmp_stop", { sessionId: a });
+    expect(mockInvoke).toHaveBeenCalledWith("rtmp_stop", { sessionId: b });
+
+    // A second stopAll (master now inactive) must not throw or re-stop.
+    mockInvoke.mockClear();
+    await act(async () => {
+      await ctx.stopAll();
+    });
+    expect(mockInvoke).not.toHaveBeenCalledWith("rtmp_stop", expect.anything());
   });
 
-  it("unmounting only the tab view leaves runtimes mounted", async () => {
+  it("goLive reports the surface phase through the OutputManager", async () => {
     const ctx: any = {};
-    const ProbeToggle = ({ show, onReady }: { show: boolean; onReady: (c: any) => void }) =>
-      show ? <Probe onReady={onReady} /> : null;
-    const { rerender } = render(
+    render(
       <StreamingProvider>
-        <ProbeToggle show onReady={(c) => Object.assign(ctx, c)} />
+        <Probe onReady={(c) => Object.assign(ctx, c)} />
       </StreamingProvider>
     );
 
     await act(async () => {
       ctx.addDestination("custom-rtmp");
     });
-    const id = ctx.destinations[0].id;
-    expect(registeredHandles.has(id)).toBe(true);
+    await act(async () => {
+      ctx.updateDestination({ ...ctx.destinations[0], url: "rtmp://ingest.test/live", stream_key: "key" });
+    });
 
-    // Simulate navigating away: unmount the tab (Probe) while the provider (and
-    // its app-scoped runtimes) stays mounted. The transport must not be stopped
-    // or deregistered.
-    rerender(
-      <StreamingProvider>
-        <ProbeToggle show={false} onReady={() => {}} />
-      </StreamingProvider>
-    );
-    expect(registeredHandles.has(id)).toBe(true);
-    expect(runtimeStops).not.toHaveBeenCalled();
+    // Stateful engine mock: rtmp_start registers the session (as the real
+    // engine does before the invoke resolves), rtmp_status returns it, so the
+    // provider's poll reflects an active session instead of a stale empty table.
+    const engineSessions = new Map<string, boolean>();
+    const events: string[] = [];
+    mockInvoke.mockImplementation(async (cmd: string, args?: any) => {
+      if (cmd === "rtmp_start") {
+        engineSessions.set(args.sessionId, true);
+        events.push("start");
+      }
+      if (cmd === "rtmp_stop") {
+        engineSessions.delete(args.sessionId);
+        events.push("stop");
+      }
+      if (cmd === "outputs_set_visible") events.push("visible");
+      if (cmd === "report_output_state") events.push("report");
+      if (cmd === "rtmp_status")
+        return [...engineSessions.entries()]
+          .filter(([, active]) => active)
+          .map(([id]) => ({ id, active: true, url: null, fps: 30, queued: 0, sent: 0, dropped: 0 }));
+      if (cmd === "recording_status") return [];
+      return undefined;
+    });
+
+    await act(async () => {
+      await ctx.goLive();
+    });
+
+    expect(events).toContain("visible");
+    expect(events).toContain("start");
+    // The intent (output visible) is persisted BEFORE the engine session starts.
+    expect(events.indexOf("visible")).toBeLessThan(events.indexOf("start"));
+    expect(events.filter((e) => e === "report").length).toBeGreaterThanOrEqual(2);
+    // The engine poll confirms the session as live.
+    await waitFor(() => {
+      expect(ctx.liveCount).toBe(1);
+    });
+    expect(ctx.statuses[ctx.destinations[0].id]?.status).toBe("live");
   });
 });

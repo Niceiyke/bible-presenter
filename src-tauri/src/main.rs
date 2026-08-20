@@ -31,7 +31,7 @@ fn spawn_engine_sidecar(resource_path: &std::path::Path, app_data_dir: &std::pat
         if !candidate.exists() {
             continue;
         }
-        match wordlyte_lib::engine::client::EngineClient::spawn(candidate, app_data_dir) {
+        match wordlyte_lib::engine::client::EngineClient::spawn(candidate, app_data_dir, resource_path) {
             Ok(client) => {
                 log_msg(app, &format!("Engine sidecar spawned: {:?}", candidate));
                 spawned = Some(client);
@@ -220,7 +220,6 @@ fn main() {
                 startup_issues: Arc::new(Mutex::new(startup_issues)),
                 remote: remote_control,
                 outputs,
-                rtmp: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 cpu_sampler: Arc::new(Mutex::new(None)),
                 license,
                 engine: engine_client,
@@ -383,12 +382,12 @@ fn main() {
             wordlyte_lib::commands::outputs::outputs_set_visible,
             wordlyte_lib::commands::outputs::report_output_state_cmd,
             wordlyte_lib::commands::recordings::recordings_list,
-            wordlyte_lib::commands::recordings::recording_save,
+            wordlyte_lib::commands::recordings::recording_start,
+            wordlyte_lib::commands::recordings::recording_stop,
+            wordlyte_lib::commands::recordings::recording_status,
             wordlyte_lib::commands::recordings::recording_delete,
             wordlyte_lib::commands::recordings::recordings_open_folder,
             wordlyte_lib::commands::rtmp::rtmp_start,
-            wordlyte_lib::commands::rtmp::rtmp_send,
-            wordlyte_lib::commands::rtmp::rtmp_send_audio,
             wordlyte_lib::commands::rtmp::rtmp_stop,
             wordlyte_lib::commands::rtmp::rtmp_status,
             wordlyte_lib::commands::ndi::ndi_status,

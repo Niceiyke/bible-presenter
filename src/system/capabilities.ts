@@ -27,7 +27,7 @@ export function computeCapabilities(inputs: CapabilityInputs): SystemCapabilitie
     deviceMemory,
   } = inputs;
 
-  const rtmpAvailable = h264Supported && ffmpegAvailable;
+  const rtmpAvailable = ffmpegAvailable;
   const whipAvailable = webrtcAvailable;
   const audioAvailable = audioInputPresent;
   const cameraAvailable = cameraPresent;
@@ -42,13 +42,14 @@ export function computeCapabilities(inputs: CapabilityInputs): SystemCapabilitie
   const streamingCapacityTier = score >= 4 ? "high" : score >= 2 ? "medium" : "low";
   const recommendedMaxStreams = score >= 4 ? 4 : score >= 2 ? 2 : 1;
 
-  const rtmpReason = !h264Supported
-    ? "WebCodecs H.264 encoding is unavailable in this WebView2 build; RTMP destinations are disabled."
-    : !ffmpegAvailable
-      ? "ffmpeg was not found (bundled or on PATH); RTMP destinations are disabled. Reinstall or restore the bundled binaries."
-      : hardwareConcurrency < 4
-        ? "H.264 encoding is supported but CPU is limited — keep simultaneous RTMP streams low."
-        : "RTMP destinations are available.";
+  // Phase D: the engine's ffmpeg does the H.264 encode (raw RGBA in, Annex-B
+  // out), so RTMP no longer depends on WebCodecs — only on ffmpeg being present
+  // (bundled-first via `binpaths`, PATH fallback).
+  const rtmpReason = !ffmpegAvailable
+    ? "ffmpeg was not found (bundled or on PATH); RTMP destinations are disabled. Reinstall or restore the bundled binaries."
+    : hardwareConcurrency < 4
+      ? "ffmpeg is available but CPU is limited — keep simultaneous RTMP streams low."
+      : "RTMP destinations are available.";
 
   const audioReason = !audioInputPresent
     ? "No audio input device detected — shared audio in the Streaming workspace is disabled."

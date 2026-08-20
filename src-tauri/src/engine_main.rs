@@ -25,12 +25,18 @@ fn main() {
     eprintln!("[engine] wordlyte-engine starting (protocol v{})", wordlyte_lib::engine::ipc::ENGINE_PROTOCOL_VERSION);
 
     // The console passes the app data dir as argv[1] so prop-path validation
-    // matches the console's. Fall back to LOCALAPPDATA for standalone runs.
+    // matches the console's, and the resource path as argv[2] so the bundled
+    // `bin/ffmpeg.exe` resolves (falls back to PATH when absent). Standalone
+    // runs fall back to LOCALAPPDATA / the current dir.
     let app_data_dir = std::env::args()
         .nth(1)
         .map(PathBuf::from)
         .or_else(|| std::env::var("LOCALAPPDATA").map(PathBuf::from).ok())
         .unwrap_or_else(std::env::temp_dir);
+    let resource_path = std::env::args().nth(2).map(PathBuf::from);
+    if let Some(resource) = &resource_path {
+        wordlyte_lib::binpaths::init(resource);
+    }
     let runtime = match EngineRuntime::new_with_windows(app_data_dir.clone()) {
         Ok(rt) => rt,
         Err(e) => {

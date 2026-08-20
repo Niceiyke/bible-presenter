@@ -19,6 +19,7 @@ use crate::engine::backend::EngineBackend;
 use crate::engine::compositor::{resolve_program_frame, ProgramFrameInput, ResolverSnapshot};
 use crate::engine::ipc::{EngineCommand, EngineEvent, EngineEventFrame, EngineResponse};
 use crate::engine::presentation::Engine;
+use crate::engine::transport::TransportManager;
 use crate::engine::windows::{SharedFrame, WindowCommand, WindowHostHandle};
 use crate::remote::protocol::RemoteEventKind;
 use crate::state::PresentationState;
@@ -44,6 +45,9 @@ pub struct EngineRuntime {
     /// Registered window output configs keyed by host window label, used to
     /// resolve each window's program frame after presentation mutations.
     window_configs: Mutex<HashMap<String, crate::outputs::OutputConfig>>,
+    /// The shared encode → fan-out → mux transport pipeline (Phase D): one
+    /// ffmpeg encoder feeding every RTMP/recording session.
+    pub transport: TransportManager,
 }
 
 impl EngineRuntime {
@@ -78,10 +82,11 @@ impl EngineRuntime {
         Ok(Self {
             presentation: PresentationState::new(initial_settings),
             store,
-            app_data_dir,
+            app_data_dir: app_data_dir.clone(),
             pending_events,
             windows,
             window_configs: Mutex::new(HashMap::new()),
+            transport: TransportManager::new(app_data_dir),
         })
     }
 
@@ -222,6 +227,15 @@ impl EngineRuntime {
         }
     }
 
+    /// Pushes the current resolver snapshot + scenes to the transport manager
+    /// so its capture thread renders the live program (Phase D). Called after
+    /// every presentation mutation and state adoption.
+    fn sync_transport_state(&self) {
+        let snapshot = self.resolver_snapshot();
+        let scenes = self.store.list_scenes().ok();
+        self.transport.sync_state(snapshot, scenes);
+    }
+
     /// The window host, if present (for window-control dispatch).
     fn window_host(&self) -> Option<&WindowHostHandle> {
         self.windows.as_ref()
@@ -295,10 +309,12 @@ pub fn dispatch(runtime: &EngineRuntime, id: u64, command: EngineCommand) -> (En
     let response = dispatch_command(&engine, runtime, id, command);
 
     // After a successful mutation, republish the window program frames so the
-    // engine's winit windows re-render the updated program. No-op when no
-    // windows are configured or hosted.
+    // engine's winit windows re-render the updated program, and push the same
+    // state to the transport capture thread. No-ops when no windows/transports
+    // are active.
     if response.ok {
         runtime.publish_window_frames();
+        runtime.sync_transport_state();
     }
 
     // Drain events AFTER computing the response so the console applies the
@@ -468,6 +484,49 @@ fn dispatch_command<B: EngineBackend>(
                 Ok(()) => ok(id, revision()),
                 Err(msg) => err(id, revision(), "sync_error", &msg),
             }
+        }
+        EngineCommand::RtmpStart { session_id, url, fps, width, height } => {
+            match runtime.transport.start_rtmp(&session_id, &url, fps, width, height) {
+                Ok(()) => ok(id, revision()),
+                Err(e) => err(id, revision(), "rtmp_error", &e),
+            }
+        }
+        EngineCommand::RtmpStop { session_id } => {
+            match runtime.transport.stop(&session_id) {
+                Ok(()) => ok(id, revision()),
+                Err(e) => err(id, revision(), "rtmp_error", &e),
+            }
+        }
+        EngineCommand::RtmpStatus => {
+            let sessions = runtime.transport.status();
+            let statuses: Vec<Value> = sessions
+                .iter()
+                .filter(|s| s.kind == "rtmp")
+                .map(|s| serde_json::to_value(s).unwrap_or_else(|_| json!({})))
+                .collect();
+            ok_with(id, revision(), json!({ "sessions": statuses }))
+        }
+        EngineCommand::RecordingStart { session_id, path, fps, width, height } => {
+            let path = std::path::PathBuf::from(&path);
+            match runtime.transport.start_recording(&session_id, &path, fps, width, height) {
+                Ok(()) => ok(id, revision()),
+                Err(e) => err(id, revision(), "recording_error", &e),
+            }
+        }
+        EngineCommand::RecordingStop { session_id } => {
+            match runtime.transport.stop(&session_id) {
+                Ok(()) => ok(id, revision()),
+                Err(e) => err(id, revision(), "recording_error", &e),
+            }
+        }
+        EngineCommand::RecordingStatus => {
+            let sessions = runtime.transport.status();
+            let statuses: Vec<Value> = sessions
+                .iter()
+                .filter(|s| s.kind == "recording")
+                .map(|s| serde_json::to_value(s).unwrap_or_else(|_| json!({})))
+                .collect();
+            ok_with(id, revision(), json!({ "sessions": statuses }))
         }
         EngineCommand::Unknown => EngineResponse::unsupported(id),
     }

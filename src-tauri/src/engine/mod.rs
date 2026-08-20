@@ -29,6 +29,7 @@ pub mod compositor;
 pub mod ipc;
 pub mod presentation;
 pub mod runtime;
+pub mod transport;
 pub mod windows;
 
 pub use presentation::*;

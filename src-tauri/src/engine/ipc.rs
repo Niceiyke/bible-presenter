@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 /// Wire protocol version for the engine IPC. Must stay in sync with
 /// `ENGINE_PROTOCOL_VERSION` in `src/types/engine.ts`.
-pub const ENGINE_PROTOCOL_VERSION: u32 = 4;
+pub const ENGINE_PROTOCOL_VERSION: u32 = 5;
 
 /// Capabilities the engine offers for future negotiation (additive). A console
 /// can gate UI/commands on these without breaking older engines.
@@ -126,6 +126,34 @@ pub enum EngineCommand {
     /// `schema_version` and adopts the revision verbatim so both hosts agree on
     /// event ordering.
     SyncPresentation { snapshot: Box<crate::engine::presentation::PresentationSnapshot> },
+    // ---- Engine-owned transports (Phase D) ----
+    /// Start an RTMP publish session for one destination on the shared encoder.
+    /// `url` is the full `rtmp://host/app/key` ingest URL; `width`/`height`/
+    /// `fps` are the capture geometry the shared encoder renders at (the first
+    /// session to start the encoder fixes the geometry for its lifetime).
+    RtmpStart {
+        session_id: String,
+        url: String,
+        fps: u32,
+        width: u32,
+        height: u32,
+    },
+    /// Stop one RTMP session (idempotent for unknown ids).
+    RtmpStop { session_id: String },
+    /// Runtime status of every active RTMP session.
+    RtmpStatus,
+    /// Start a recording session (mux-only MP4) writing to `path`.
+    RecordingStart {
+        session_id: String,
+        path: String,
+        fps: u32,
+        width: u32,
+        height: u32,
+    },
+    /// Stop one recording session (idempotent for unknown ids).
+    RecordingStop { session_id: String },
+    /// Runtime status of every active recording session.
+    RecordingStatus,
     /// An unknown/future command from a newer console. The engine replies
     /// `unsupported` instead of failing to parse the frame.
     #[serde(other)]

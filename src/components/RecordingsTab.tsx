@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  FolderOpen, Play, RotateCcw, Square, Trash2, Video, Clock, HardDrive, Mic, MonitorPlay,
+  FolderOpen, Play, Square, Trash2, Video, Clock, HardDrive, MonitorPlay,
 } from "lucide-react";
 import { useRecording } from "../hooks/useRecordingProvider";
 import { useAppStore } from "../store";
 import { tierCapabilities } from "../system/tiers";
 import { CAPTURE_RESOLUTIONS, CAPTURE_FPS_OPTIONS } from "../types";
+import { ProgramFeedPreview } from "./outputs/ProgramFeedPreview";
 
 export interface RecordingFile {
   name: string;
@@ -35,23 +36,21 @@ function formatDate(ms: number): string {
 }
 
 /**
- * `RecordingsTab` — Phase 3 recorder workspace.
+ * `RecordingsTab` — Phase D recorder workspace.
  *
- * The live program-feed compositor and the recorder are owned by the
- * App-level `RecordingProvider`, so a recording survives navigating away and
- * can capture the shared audio input. This tab previews the composited stream
- * live (a `<video>` bound to the provider's stream), shows a REC/STOP
- * transport, audio-input controls, and the saved recordings list. Recorder
- * output goes to the app-data `recordings/` dir as WebM.
+ * The capture → encode → mux pipeline lives in the `wordlyte-engine` sidecar;
+ * the App-level `RecordingProvider` owns the recorder surface, so a recording
+ * survives navigating away. This tab previews the composited program feed (a
+ * canvas verification surface), shows a REC/STOP transport, and lists the saved
+ * recordings. Output goes to the app-data `recordings/` dir as MP4 (mux-only
+ * ffmpeg, `-c copy`). Audio moves to the engine in a later phase.
  */
 export function RecordingsTab() {
   const {
-    recording, elapsed, lastSaved, error, stream, streamReady,
-    start, stop, cancel,
-    audioEnabled, setAudioEnabled, audioDevices, audioDeviceId, setAudioDeviceId, audioError,
+    recording, elapsed, lastSaved, error, transportConnected,
     captureWidth, captureHeight, captureFps, setCapture,
+    start, stop,
   } = useRecording();
-  const videoRef = useRef<HTMLVideoElement | null>(null);
   const [recordings, setRecordings] = useState<RecordingFile[]>([]);
   const [loading, setLoading] = useState(false);
   const license = useAppStore((s) => s.license);
@@ -73,10 +72,6 @@ export function RecordingsTab() {
     refreshList();
   }, [refreshList]);
 
-  useEffect(() => {
-    if (videoRef.current && stream) videoRef.current.srcObject = stream;
-  }, [stream]);
-
   const handleRecordStop = async () => {
     const name = await stop();
     if (name) {
@@ -95,7 +90,7 @@ export function RecordingsTab() {
 
   const handlePlay = () => {
     // Reveal in the OS file manager — a full media player is out of scope
-    // for the recorder surface (WebM may not preview in the webview).
+    // for the recorder surface (MP4 may not preview in the webview).
     void invoke("recordings_open_folder");
   };
 
@@ -114,22 +109,15 @@ export function RecordingsTab() {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        {/* Composer preview + transport */}
+        {/* Program preview + transport */}
         <div className="flex flex-col gap-2">
           <div className="relative rounded-lg overflow-hidden border border-slate-700 bg-black" style={{ aspectRatio: "16/9" }}>
-            {streamReady ? (
-              <video
-                ref={videoRef}
-                autoPlay
-                muted
-                playsInline
-                className="absolute inset-0 w-full h-full object-contain"
-              />
-            ) : (
-              <div className="absolute inset-0 flex items-center justify-center text-slate-600 text-xs">
-                Program feed idle — open a live item to preview.
-              </div>
-            )}
+            <ProgramFeedPreview
+              className="absolute inset-0 w-full h-full"
+              config={undefined}
+              geometry={{ width: captureWidth, height: captureHeight }}
+              fps={captureFps}
+            />
             {recording && (
               <div className="absolute top-2 left-2 z-10 flex items-center gap-1.5 px-2 py-1 rounded bg-red-600 text-white text-[10px] font-black uppercase tracking-widest">
                 <span className="w-2 h-2 rounded-full bg-white animate-pulse" /> REC
@@ -141,7 +129,7 @@ export function RecordingsTab() {
           <div className="flex items-center gap-2">
             {recording ? (
               <button
-                onClick={handleRecordStop}
+                onClick={() => void handleRecordStop()}
                 disabled={!recording}
                 className="flex-1 py-2.5 rounded-md bg-red-600 hover:bg-red-500 text-white text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 disabled:opacity-50"
               >
@@ -149,21 +137,18 @@ export function RecordingsTab() {
               </button>
             ) : (
               <button
-                onClick={start}
-                disabled={!streamReady || recordingBlocked}
-                title={recordingBlocked ? "Recording is a Pro feature" : streamReady ? "Record the program feed" : "Program feed not ready"}
+                onClick={() => void start()}
+                disabled={recordingBlocked || !transportConnected}
+                title={
+                  recordingBlocked
+                    ? "Recording is a Pro feature"
+                    : !transportConnected
+                      ? "The engine sidecar is not running"
+                      : "Record the program feed"
+                }
                 className="flex-1 py-2.5 rounded-md bg-red-700 hover:bg-red-600 disabled:bg-slate-800 disabled:text-slate-500 text-white text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
               >
                 <span className="w-2.5 h-2.5 rounded-full bg-white" /> Record
-              </button>
-            )}
-            {recording && (
-              <button
-                onClick={cancel}
-                title="Abort without saving"
-                className="px-3 py-2.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded border border-slate-700 transition-all flex items-center gap-1"
-              >
-                <RotateCcw size={11} /> Abort
               </button>
             )}
           </div>
@@ -171,6 +156,12 @@ export function RecordingsTab() {
           {recordingBlocked && (
             <p className="text-[10px] text-amber-500 font-medium">
               Recording is a Pro feature. Upgrade in Settings → License to record the program feed.
+            </p>
+          )}
+
+          {!transportConnected && (
+            <p className="text-[10px] text-amber-400 bg-amber-900/20 border border-amber-800/60 rounded px-2 py-1.5">
+              The engine sidecar is not running — recording is unavailable.
             </p>
           )}
 
@@ -208,40 +199,7 @@ export function RecordingsTab() {
                 </option>
               ))}
             </select>
-            <span className="text-[10px] text-slate-600">WebM — the compositor rescales the program feed.</span>
-          </div>
-
-          {/* Audio input for the recording */}
-          <div className="flex flex-wrap items-center gap-2 p-2 rounded-lg border border-slate-800 bg-slate-900/30">
-            <label className="flex items-center gap-2 text-[11px] text-slate-400 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={audioEnabled}
-                onChange={(e) => setAudioEnabled(e.target.checked)}
-                disabled={recording}
-                className="accent-cyan-500"
-              />
-              <Mic size={11} className="text-slate-500" /> Record audio input
-            </label>
-            {audioEnabled && (
-              <>
-                <select
-                  value={audioDeviceId}
-                  onChange={(e) => setAudioDeviceId(e.target.value)}
-                  disabled={recording}
-                  className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-[11px] text-slate-300"
-                >
-                  {audioDevices.length === 0 && <option value="">Default input…</option>}
-                  {audioDevices.map((d, i) => (
-                    <option key={d.deviceId} value={d.deviceId}>
-                      {d.label || `Input ${i + 1}`}
-                    </option>
-                  ))}
-                </select>
-                <span className="text-[10px] text-slate-600">Mic / line-in / mixer feed — processing off.</span>
-              </>
-            )}
-            {audioError && <span className="text-[10px] text-red-400">{audioError}</span>}
+            <span className="text-[10px] text-slate-600">MP4 — the engine's compositor rescales the program feed.</span>
           </div>
 
           {error && (
