@@ -254,6 +254,12 @@ Every phase must leave `npm run build` and `cargo check` green.
   tolerance. Rich text is the acceptance gate.
 - Acceptance: rendered frame matches the DOM oracle for every fixture.
 
+**B1 (DONE, `59b82cf`):** the pure Rust mirror lives in
+`src-tauri/src/engine/compositor/` (`frame.rs`, `lower_third.rs`,
+`resolver.rs`) with the resolver/lower-third TS suites ported as Rust unit
+tests (197 lib tests passing, clippy clean). B2 adds the wgpu renderer against
+the hidden window; B3 adds the fixture-parity harness against the DOM oracle.
+
 ### Phase C: Move output + stage windows to the engine
 
 - Engine owns winit output/stage windows (monitor handling moves too).
