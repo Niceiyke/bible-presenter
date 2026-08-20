@@ -28,6 +28,12 @@ Vitest (jsdom) covers the transactional `useItemActions` core (stage failure, li
 The UI/UX roadmap is documented in `docs/UI_UX_MODERNIZATION_PLAN.md`.
 The unified production-suite architecture and implementation roadmap is
 documented in `docs/UNIFIED_PRODUCTION_SUITE_PLAN.md`.
+The plan to move the video pipeline out of the webview into a separate Rust
+engine process (wgpu compositor + ffmpeg-next + NDI SDK) is documented in
+`docs/RUST_VIDEO_ENGINE_PLAN.md`. While that plan is being implemented, do not
+add new WebView2 media APIs (getUserMedia, VideoEncoder, MediaRecorder, canvas
+capture) to the video path — route new video work through the engine contract
+instead.
 
 ## Stack
 
