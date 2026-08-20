@@ -45,9 +45,19 @@ machine-uid = "0.4"
 # hardening) — the app embeds only the public key; the Cloudflare Worker signs
 # with the private key.
 p256 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
+wgpu = "30.0.0"
+glyphon = "0.12.0"
+bytemuck = "1.25.2"
+pollster = "1.0.1"
 # Windows DPAPI (CryptProtectData) to encrypt the license record at rest.
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["dpapi", "wincrypt", "winbase", "winnt", "minwindef"] }
+# wgpu 30's DX12 backend (wgpu-hal) depends on windows 0.62, but `tao` pins 0.61
+# and gpu-allocator's range (>=0.53, <=0.62) caps at 0.62.0, so the resolver
+# split gpu-allocator onto 0.61.3 while wgpu-hal took 0.62.2 — two incompatible
+# ID3D12Device types. Pinning windows to exactly 0.62.0 satisfies both ranges
+# (gpu-allocator `<=0.62.0`, wgpu-hal `>=0.62.0, <0.63.0`) and unifies the types.
+windows = { version = "=0.62.0", features = [], default-features = false }
 
 [lib]
 name = "wordlyte_lib"

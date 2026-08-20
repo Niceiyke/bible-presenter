@@ -7,6 +7,7 @@
 
 pub mod frame;
 pub mod lower_third;
+pub mod renderer;
 pub mod resolver;
 
 pub use frame::{
@@ -22,3 +23,4 @@ pub use resolver::{
     collect_frame_media_paths, derive_logo_state, get_effective_bg, resolve_program_frame,
     resolve_theme_colors, FrameMediaPaths, ProgramFrameInput, ResolverSnapshot,
 };
+pub use renderer::{render_frame_to_pixels, Compositor, ImageData, MediaResolver, MemoryMedia, parse_color};
