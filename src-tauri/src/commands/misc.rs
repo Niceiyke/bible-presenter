@@ -30,6 +30,37 @@ pub struct EngineStatus {
     pub protocol_version: u32,
 }
 
+/// Sends one engine command to the `wordlyte-engine` sidecar and returns its
+/// response with every event frame that preceded it (drained in order). The
+/// request arrives as `{ id, command }` mirroring [`crate::engine::ipc::EngineRequest`].
+///
+/// This is the console's first live bridge over the Phase A2 contract: it
+/// powers the Phase C3 MJPEG previews (the console polls a cheap `ping` and
+/// the engine's window-host preview frames ride along in the reply). The rest
+/// of the display commands still run locally until the Phase A rewiring.
+#[tauri::command]
+pub async fn engine_invoke(
+    state: State<'_, AppState>,
+    request: serde_json::Value,
+) -> Result<crate::engine::client::EngineReply, String> {
+    let client = state
+        .engine
+        .lock()
+        .clone()
+        .ok_or_else(|| "engine_unavailable: the engine sidecar is not running".to_string())?;
+    if !client.is_running() {
+        return Err("engine_unavailable: the engine sidecar is not running".to_string());
+    }
+    let command: crate::engine::ipc::EngineCommand = serde_json::from_value(
+        request.get("command").cloned().unwrap_or(serde_json::Value::Null),
+    )
+    .map_err(|e| format!("invalid engine command: {e}"))?;
+    // `invoke` blocks on the stdio round-trip; run it off the async runtime.
+    tauri::async_runtime::spawn_blocking(move || client.invoke(command))
+        .await
+        .map_err(|e| format!("engine invoke task failed: {e}"))?
+}
+
 /// P2.5: a single user-installed font variant returned by `list_fonts`.
 ///
 /// `family_name` is the `font-family` value the frontend injects into

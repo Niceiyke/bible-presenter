@@ -283,18 +283,7 @@ Status (feat/rust-video-engine):
 
 - **C0 (done, b56abe6):** `Compositor::new_surface(window, w, h)` window-surface
   path — DX12-on-Windows instance, surface from a winit 0.30 window
-  (`Arc<Window>` yields a `'static` surface), adapter requested with
-  `compatible_surface`, blit pipeline copying the offscreen target into the
-  swapchain; `present()`/`resize()`; `SolidUniform` padded to 48 bytes.
-- **C1 (done, e130644):** `engine/windows.rs` — `WindowHost` runs the winit
-  event loop on a background thread (`EventLoopBuilderExtWindows::with_any_thread`,
-  required off the main thread), one `HostedWindow` per engine window backed by
-  its own surface compositor, `DiskMediaResolver` for disk images, monitor
-  enumeration + preferred-monitor centering, per-label `SharedFrame` slot pulled
-  on redraw at the capture rate; commands flow through the `EventLoopProxy`.
-- **C2 (this commit):** engine IPC wiring — protocol v2 with
-  `OutputWindowShow`/`OutputWindowHide`/`OutputWindowSetMonitor`/
-  `OutputWindowResize`/`OutputWindowSetConfig`/`ListMonitors` commands; the
+  (`Arc<Window>` yields a/`OutputWindowSetConfig`/`ListMonitors` commands; the
   runtime registers window configs, resolves each window's `ProgramFrame` after
   every successful mutation, and publishes it to the host; TS mirror updated.
   Smoke-tested against the sidecar: `list_monitors` returns the display set and
@@ -306,9 +295,15 @@ Status (feat/rust-video-engine):
   into the runtime's event buffer at ~10fps; the console drains them on the next
   polled command. Smoke-tested: 14 preview frames over 3s at 480x270, base64
   decoded correctly. TS mirror + contract tests updated.
-- **C3b (pending):** console previews — `engine_invoke` Tauri command bridge +
-  `usePreviewFrames` hook that polls `ping` and renders the decoded frames for
-  the output and stage windows in the operator shell.
+- **C3b (this commit):** console previews — a `engine_invoke` Tauri command
+  bridge (`commands/misc.rs`, registered in `main.rs`) relays one engine command
+  to the sidecar and returns its response + drained event frames; `useEnginePreview`
+  polls a cheap `ping` while the header preview popover is open and decodes the
+  base64 JPEGs into object URLs; `EnginePreviewPanel` shows the latest output +
+  stage frames with engine connection state. 216 lib + 459 frontend tests pass.
+- **C4 (pending):** delete the `OutputWindow`/`StageWindow` webview branches and
+  reroute `set_output_visible`/`toggle_output_window` through the engine's window
+  host, then run the acceptance monitor/scaling matrix.
 
 ### Phase D: Transport — encode, RTMP, recording
 
@@ -324,7 +319,18 @@ Status (feat/rust-video-engine):
 - `ndi` feature + `grafton-ndi`; send NDI|HX from the shared encoder; receive
   loop registers NDI sources into the source registry (usable in scene zones /
   live).
-- Keep the SDK-gated scaffold behavior until the SDK is present.
+- Keep the SDK-gated scaffold be `'static` surface), adapter requested with
+  `compatible_surface`, blit pipeline copying the offscreen target into the
+  swapchain; `present()`/`resize()`; `SolidUniform` padded to 48 bytes.
+- **C1 (done, e130644):** `engine/windows.rs` — `WindowHost` runs the winit
+  event loop on a background thread (`EventLoopBuilderExtWindows::with_any_thread`,
+  required off the main thread), one `HostedWindow` per engine window backed by
+  its own surface compositor, `DiskMediaResolver` for disk images, monitor
+  enumeration + preferred-monitor centering, per-label `SharedFrame` slot pulled
+  on redraw at the capture rate; commands flow through the `EventLoopProxy`.
+- **C2 (this commit):** engine IPC wiring — protocol v2 with
+  `OutputWindowShow`/`OutputWindowHide`/`OutputWindowSetMonitor`/
+  `OutputWindowResize`havior until the SDK is present.
 - Acceptance: OBS/vMix/ProPresenter can take the Wordlyte source; a received
   NDI camera feeds a scene zone and can go live.
 

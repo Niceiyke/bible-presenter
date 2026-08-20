@@ -114,6 +114,13 @@ export interface EngineEventFrame {
   event: EngineEvent;
 }
 
+/** A relayed engine reply: the command response plus every event frame the
+ *  engine drained before it (mirrors `engine::client::EngineReply`). */
+export interface EngineReply {
+  response: EngineResponse;
+  events: EngineEventFrame[];
+}
+
 /** Window presentation attributes (mirrors `windows::WindowStyle` in the
  *  engine: decorations / transparent / always-on-top / resizable). */
 export interface EngineWindowStyle {

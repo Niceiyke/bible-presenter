@@ -368,6 +368,7 @@ fn main() {
             wordlyte_lib::commands::misc::save_workspace,
             wordlyte_lib::commands::misc::load_workspace,
             wordlyte_lib::commands::misc::engine_status,
+            wordlyte_lib::commands::misc::engine_invoke,
             wordlyte_lib::commands::scenes::list_scenes,
             wordlyte_lib::commands::scenes::save_scene,
             wordlyte_lib::commands::scenes::delete_scene,

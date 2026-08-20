@@ -1,9 +1,10 @@
 import React from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, Monitor, Repeat, Keyboard, X, Signal, Video, User, EyeOff, MonitorSmartphone } from "lucide-react";
+import { AlertTriangle, Monitor, Repeat, Keyboard, X, Signal, Video, User, EyeOff, MonitorSmartphone, ScanEye } from "lucide-react";
 import { useAppStore } from "../../store";
 import { IconButton, StatusBadge } from "../ui";
 import { displayItemLabel } from "../../utils";
+import { EnginePreviewPanel } from "../outputs/EnginePreviewPanel";
 
 export function AppHeader() {
   const {
@@ -29,6 +30,7 @@ export function AppHeader() {
     outputVisible;
 
   const [remoteCount, setRemoteCount] = React.useState<number | null>(null);
+  const [enginePreviewOpen, setEnginePreviewOpen] = React.useState(false);
 
   React.useEffect(() => {
     let alive = true;
@@ -163,6 +165,21 @@ export function AppHeader() {
         >
           <Monitor size={15} />
         </IconButton>
+        <div className="relative">
+          <IconButton
+            label="Engine window preview (Phase C)"
+            active={enginePreviewOpen}
+            onClick={() => setEnginePreviewOpen((v) => !v)}
+            size={15}
+          >
+            <ScanEye size={15} />
+          </IconButton>
+          {enginePreviewOpen && (
+            <div className="absolute right-0 top-9 z-50">
+              <EnginePreviewPanel enabled={enginePreviewOpen} />
+            </div>
+          )}
+        </div>
         <div className="w-px h-4 bg-console-border mx-0.5" />
         <IconButton
           label="System Logs"
