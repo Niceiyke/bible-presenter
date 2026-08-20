@@ -165,6 +165,18 @@ pub struct Compositor {
     viewport: Viewport,
     // Loaded textures keyed by path (rendered only; lifecycle owned here).
     image_cache: HashMap<String, std::rc::Rc<wgpu::Texture>>,
+    // Window-surface present path (Phase C). Present for a compositor created
+    // via [`Compositor::new_surface`]: the instance keeps the display/backend
+    // connection alive for the surface's lifetime, and the blit pipeline copies
+    // the offscreen target into the swapchain texture.
+    // Retained for the window-surface path: the instance keeps the display
+    // connection and backend alive for the surface's lifetime.
+    #[allow(dead_code)]
+    instance: Option<wgpu::Instance>,
+    surface: Option<wgpu::Surface<'static>>,
+    surface_config: Option<wgpu::SurfaceConfiguration>,
+    blit_pipeline: Option<wgpu::RenderPipeline>,
+    blit_sampler: Option<wgpu::Sampler>,
 }
 
 /// Convenience `MediaResolver` backed by an in-memory path → image map (tests).
@@ -286,6 +298,313 @@ fn rgba_to_uniform(c: [u8; 4]) -> [f32; 4] {
     ]
 }
 
+const BLIT_SHADER: &str = r#"
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+struct VSOut {
+    @builtin(position) pos: vec4f,
+    @location(0) uv: vec2f,
+}
+
+@vertex
+fn vs_main(@location(0) pos: vec2f, @location(1) uv: vec2f) -> VSOut {
+    let ndc = vec2f(pos.x * 2.0 - 1.0, 1.0 - pos.y * 2.0);
+    return VSOut(vec4f(ndc, 0.0, 1.0), uv);
+}
+
+@fragment
+fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+    return textureSample(tex, samp, uv);
+}
+"#;
+
+/// Shared device/pipeline/glyph setup for both the offscreen and window-surface
+/// compositors. `surface` is optional: the window path additionally builds a
+/// blit pipeline targeting the surface format (see [`Compositor::new_surface`]).
+#[allow(clippy::type_complexity)]
+fn build_common(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    width: u32,
+    height: u32,
+    surface: Option<(&wgpu::Surface<'_>, wgpu::TextureFormat)>,
+) -> anyhow::Result<(
+    wgpu::Texture,
+    wgpu::TextureView,
+    wgpu::RenderPipeline,
+    wgpu::RenderPipeline,
+    wgpu::BindGroup,
+    wgpu::Buffer,
+    wgpu::Buffer,
+    wgpu::Buffer,
+    wgpu::Sampler,
+    wgpu::Buffer,
+    FontSystem,
+    SwashCache,
+    TextAtlas,
+    TextRenderer,
+    Viewport,
+    Option<wgpu::RenderPipeline>,
+    Option<wgpu::Sampler>,
+)> {
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("compositor target"),
+        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let quad_verts = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("quad verts"),
+        contents: bytemuck::cast_slice(SOLID_VERTICES),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    let quad_indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("quad indices"),
+        contents: bytemuck::cast_slice(SOLID_INDICES),
+        usage: wgpu::BufferUsages::INDEX,
+    });
+    let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("solid uniform"),
+        size: std::mem::size_of::<SolidUniform>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let solid_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("solid uniform layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    });
+    let solid_pipeline = {
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("solid pipeline layout"),
+            bind_group_layouts: &[Some(&solid_layout)],
+            immediate_size: 0,
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("solid shader"),
+            source: wgpu::ShaderSource::Wgsl(SOLID_SHADER.into()),
+        });
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("solid pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(make_vertex_layout())],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    let solid_bind_group = solid_bind_group(device, &uniform_buf);
+
+    let tex_bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("tex bind layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    });
+    let tex_pipeline = {
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("tex pipeline layout"),
+            bind_group_layouts: &[Some(&solid_layout), Some(&tex_bind_layout)],
+            immediate_size: 0,
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("tex shader"),
+            source: wgpu::ShaderSource::Wgsl(TEX_SHADER.into()),
+        });
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("tex pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(make_vertex_layout())],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("compositor sampler"),
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        ..Default::default()
+    });
+
+    let readback_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("compositor readback"),
+        size: (width as u64) * (height as u64) * 4,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    let font_system = FontSystem::new();
+    let swash_cache = SwashCache::new();
+    let cache = Cache::new(device);
+    let mut atlas = TextAtlas::new(device, queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let text_renderer = TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+    let mut viewport = Viewport::new(device, &cache);
+    viewport.update(queue, Resolution { width, height });
+
+    // Window-surface path: a blit pipeline that copies the offscreen target
+    // into the swapchain texture. It samples the offscreen texture with its own
+    // bind group layout (texture + sampler) and targets the surface format.
+    let (blit_pipeline, blit_sampler) = match surface {
+        Some((surface, surface_format)) => {
+            let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("blit bind layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+            let blit_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("blit sampler"),
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                ..Default::default()
+            });
+            let pipeline = {
+                let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("blit pipeline layout"),
+                    bind_group_layouts: &[Some(&blit_layout)],
+                    immediate_size: 0,
+                });
+                let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("blit shader"),
+                    source: wgpu::ShaderSource::Wgsl(BLIT_SHADER.into()),
+                });
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("blit pipeline"),
+                    layout: Some(&layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("vs_main"),
+                        compilation_options: Default::default(),
+                        buffers: &[Some(make_vertex_layout())],
+                    },
+                    primitive: wgpu::PrimitiveState::default(),
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some("fs_main"),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: surface_format,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
+            let _ = surface;
+            (Some(pipeline), Some(blit_sampler))
+        }
+        None => (None, None),
+    };
+
+    Ok((
+        target,
+        target_view,
+        solid_pipeline,
+        tex_pipeline,
+        solid_bind_group,
+        uniform_buf,
+        quad_verts,
+        quad_indices,
+        sampler,
+        readback_buf,
+        font_system,
+        swash_cache,
+        atlas,
+        text_renderer,
+        viewport,
+        blit_pipeline,
+        blit_sampler,
+    ))
+}
+
 impl Compositor {
     /// Create a headless compositor rendering into an offscreen texture of the
     /// given size. Falls back to a software adapter if no GPU is available.
@@ -327,166 +646,25 @@ impl Compositor {
             },
         ))?;
 
-        let target = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("compositor target"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let quad_verts = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("quad verts"),
-            contents: bytemuck::cast_slice(SOLID_VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let quad_indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("quad indices"),
-            contents: bytemuck::cast_slice(SOLID_INDICES),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("solid uniform"),
-            size: std::mem::size_of::<SolidUniform>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let solid_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("solid uniform layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let solid_pipeline = {
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("solid pipeline layout"),
-                bind_group_layouts: &[Some(&solid_layout)],
-                immediate_size: 0,
-            });
-            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("solid shader"),
-                source: wgpu::ShaderSource::Wgsl(SOLID_SHADER.into()),
-            });
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("solid pipeline"),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    compilation_options: Default::default(),
-                    buffers: &[Some(make_vertex_layout())],
-                },
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let solid_bind_group = solid_bind_group(&device, &uniform_buf);
-
-        let tex_bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("tex bind layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let tex_pipeline = {
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("tex pipeline layout"),
-                bind_group_layouts: &[Some(&solid_layout), Some(&tex_bind_layout)],
-                immediate_size: 0,
-            });
-            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("tex shader"),
-                source: wgpu::ShaderSource::Wgsl(TEX_SHADER.into()),
-            });
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("tex pipeline"),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    compilation_options: Default::default(),
-                    buffers: &[Some(make_vertex_layout())],
-                },
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("compositor sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
-
-        let readback_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("compositor readback"),
-            size: (width as u64) * (height as u64) * 4,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        let font_system = FontSystem::new();
-        let swash_cache = SwashCache::new();
-        let cache = Cache::new(&device);
-        let mut atlas = TextAtlas::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
-        let text_renderer = TextRenderer::new(&mut atlas, &device, wgpu::MultisampleState::default(), None);
-        let mut viewport = Viewport::new(&device, &cache);
-        viewport.update(&queue, Resolution { width, height });
+        let (
+            target,
+            target_view,
+            solid_pipeline,
+            tex_pipeline,
+            solid_bind_group,
+            uniform_buf,
+            quad_verts,
+            quad_indices,
+            sampler,
+            readback_buf,
+            font_system,
+            swash_cache,
+            atlas,
+            text_renderer,
+            viewport,
+            blit_pipeline,
+            blit_sampler,
+        ) = build_common(&device, &queue, width, height, None)?;
 
         let mut this = Self {
             device,
@@ -509,9 +687,239 @@ impl Compositor {
             text_renderer,
             viewport,
             image_cache: HashMap::new(),
+            instance: Some(instance),
+            surface: None,
+            surface_config: None,
+            blit_pipeline,
+            blit_sampler,
         };
         this.render_clear([0.0, 0.0, 0.0, 1.0]);
         Ok(this)
+    }
+
+    /// Create a compositor that renders into a winit window's surface (Phase C).
+    ///
+    /// The program is still drawn into the offscreen target first (so all
+    /// drawing code and the pixel readback stay identical), then copied into
+    /// the window's swapchain texture by a blit pass in [`Compositor::present`].
+    ///
+    /// The adapter is requested against the window surface so the GPU/compositor
+    /// pair can present (falling back to the software adapter if the hardware
+    /// adapter cannot present to it).
+    pub fn new_surface(window: std::sync::Arc<winit::window::Window>, width: u32, height: u32) -> anyhow::Result<Self> {
+        // Same DX12-on-Windows restriction as [`Compositor::new`].
+        #[cfg(target_os = "windows")]
+        let backends = wgpu::Backends::DX12;
+        #[cfg(not(target_os = "windows"))]
+        let backends = wgpu::Backends::PRIMARY;
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        // The surface takes ownership of the window handle source, keeping the
+        // window alive and yielding a `'static` surface.
+        let surface = instance.create_surface(window)?;
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: Some(&surface),
+            force_fallback_adapter: false,
+            apply_limit_buckets: false,
+        }))
+        .or_else(|_| {
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::None,
+                compatible_surface: None,
+                force_fallback_adapter: true,
+                apply_limit_buckets: false,
+            }))
+        })?;
+        let (device, queue) = pollster::block_on(adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                label: Some("wordlyte compositor"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::downlevel_defaults().using_resolution(wgpu::Limits::default()),
+                experimental_features: wgpu::ExperimentalFeatures::default(),
+                memory_hints: wgpu::MemoryHints::Performance,
+                trace: wgpu::Trace::Off,
+            },
+        ))?;
+
+        // Pick a surface format: prefer sRGB when available (matches the
+        // offscreen target's encoding), otherwise take the first capability.
+        let caps = surface.get_capabilities(&adapter);
+        let surface_format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| matches!(f, wgpu::TextureFormat::Rgba8UnormSrgb | wgpu::TextureFormat::Bgra8UnormSrgb))
+            .unwrap_or(caps.formats[0]);
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: surface_format,
+            width,
+            height,
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+            color_space: wgpu::SurfaceColorSpace::Auto,
+        };
+        surface.configure(&device, &config);
+
+        let (
+            target,
+            target_view,
+            solid_pipeline,
+            tex_pipeline,
+            solid_bind_group,
+            uniform_buf,
+            quad_verts,
+            quad_indices,
+            sampler,
+            readback_buf,
+            font_system,
+            swash_cache,
+            atlas,
+            text_renderer,
+            viewport,
+            blit_pipeline,
+            blit_sampler,
+        ) = build_common(&device, &queue, width, height, Some((&surface, surface_format)))?;
+
+        let mut this = Self {
+            device,
+            queue,
+            width,
+            height,
+            target,
+            target_view,
+            solid_pipeline,
+            tex_pipeline,
+            solid_bind_group,
+            uniform_buf,
+            quad_verts,
+            quad_indices,
+            sampler,
+            readback_buf,
+            font_system,
+            swash_cache,
+            atlas,
+            text_renderer,
+            viewport,
+            image_cache: HashMap::new(),
+            instance: Some(instance),
+            surface: Some(surface),
+            surface_config: Some(config),
+            blit_pipeline,
+            blit_sampler,
+        };
+        this.render_clear([0.0, 0.0, 0.0, 1.0]);
+        Ok(this)
+    }
+
+    /// Present the current frame to the window surface: renders `frame` into the
+    /// offscreen target, copies it into the swapchain texture, and presents.
+    /// Returns `true` when a frame was presented, `false` when the surface was
+    /// temporarily unavailable (hidden/minimized) and the frame was skipped.
+    pub fn present(
+        &mut self,
+        frame: &ProgramFrame,
+        media: &mut dyn MediaResolver,
+    ) -> anyhow::Result<bool> {
+        self.render(frame, media)?;
+        let Some(surface) = &self.surface else {
+            return Err(anyhow::anyhow!("compositor has no window surface"));
+        };
+        let Some(blit_pipeline) = &self.blit_pipeline else {
+            return Err(anyhow::anyhow!("compositor has no blit pipeline"));
+        };
+        let Some(blit_sampler) = &self.blit_sampler else {
+            return Err(anyhow::anyhow!("compositor has no blit sampler"));
+        };
+        let current = surface.get_current_texture();
+        let frame = match current {
+            wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+            wgpu::CurrentSurfaceTexture::Timeout
+            | wgpu::CurrentSurfaceTexture::Outdated
+            | wgpu::CurrentSurfaceTexture::Lost
+            | wgpu::CurrentSurfaceTexture::Occluded
+            | wgpu::CurrentSurfaceTexture::Validation => {
+                // Surface not ready this frame — skip the present.
+                return Ok(false);
+            }
+        };
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let blit_bind_group = tex_bind_group(&self.device, &blit_pipeline.get_bind_group_layout(0), &self.target, blit_sampler);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compositor present") });
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("blit pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(blit_pipeline);
+        pass.set_bind_group(0, &blit_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.quad_verts.slice(..));
+        pass.set_index_buffer(self.quad_indices.slice(..), wgpu::IndexFormat::Uint16);
+        pass.draw_indexed(0..SOLID_INDICES.len() as u32, 0, 0..1);
+        drop(pass);
+        self.queue.submit([encoder.finish()]);
+        self.queue.present(frame);
+        Ok(true)
+    }
+
+    /// Resize the render target (and the window surface when present) to the
+    /// given size. Recreates the offscreen target, readback buffer, and glyph
+    /// viewport, and reconfigures the swapchain so `width`/`height` match the
+    /// window. No-op when the size is unchanged.
+    pub fn resize(&mut self, width: u32, height: u32) -> anyhow::Result<()> {
+        if width == self.width && height == self.height {
+            return Ok(());
+        }
+        self.width = width;
+        self.height = height;
+        self.rebuild_target();
+        if let (Some(surface), Some(config)) = (&self.surface, &mut self.surface_config) {
+            config.width = width;
+            config.height = height;
+            surface.configure(&self.device, config);
+        }
+        self.render_clear([0.0, 0.0, 0.0, 1.0]);
+        Ok(())
+    }
+
+    fn rebuild_target(&mut self) {
+        self.target = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("compositor target"),
+            size: wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        self.target_view = self.target.create_view(&wgpu::TextureViewDescriptor::default());
+        self.readback_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("compositor readback"),
+            size: (self.width as u64) * (self.height as u64) * 4,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        self.viewport
+            .update(&self.queue, Resolution { width: self.width, height: self.height });
     }
 
     fn render_clear(&mut self, color: [f32; 4]) {
