@@ -260,6 +260,17 @@ Every phase must leave `npm run build` and `cargo check` green.
 tests (197 lib tests passing, clippy clean). B2 adds the wgpu renderer against
 the hidden window; B3 adds the fixture-parity harness against the DOM oracle.
 
+**B2 (DONE, `3676e30`):** the wgpu offscreen compositor (`renderer.rs`)
+renders a resolved `ProgramFrame` to an offscreen texture and reads pixels
+back (solid/color/image backgrounds, waiting layer, images, props, logo,
+lower third, verse/song/lyrics text, camera/slide zones, theme colors). It is
+restricted to DX12 on Windows — wgpu 30's Vulkan backend crashes in
+`request_device` on some Intel iGPU drivers (observed UHD 620) — and pins
+`windows =0.62.0` to unify the gpu-allocator/wgpu-hal crate split. 203 lib
+tests pass (6 pixel tests), clippy clean, `npm run build` + 456 frontend
+tests green. B3 adds the fixture-parity harness comparing against the DOM
+oracle.
+
 ### Phase C: Move output + stage windows to the engine
 
 - Engine owns winit output/stage windows (monitor handling moves too).

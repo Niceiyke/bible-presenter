@@ -63,6 +63,16 @@ renderers stay the parity oracle until then.
   zone layers, source resolution, blackout/blank, background/theme/height
   presentation overrides, overlay masks, `missing` structural problems, audio
   descriptor, waiting layer).
+- `renderer.rs` — Phase B2: the wgpu 30 offscreen compositor
+  (`Compositor::new(width, height)` + `render(&frame, &mut media)` +
+  `read_pixels()`), restricted to DX12 on Windows (wgpu 30's Vulkan
+  `request_device` crashes on some Intel iGPU drivers, observed UHD 620),
+  lazy texture upload via an `Rc` image cache, `SolidUniform` padded to the
+  WGSL 48-byte uniform struct size, cosmic-text 0.19 / glyphon 0.12 text,
+  and the `render_frame_to_pixels` helper + `MemoryMedia`/`MediaResolver` used
+  by the B3 fixture-parity harness. Requires `windows =0.62.0` in
+  `[target.'cfg(windows)'.dependencies]` to unify the gpu-allocator/wgpu-hal
+  window-crate split that broke the DX12 build.
 
 `BackgroundSetting` and its payload structs derive `PartialEq` (test-only
 comparison). No new WebView2 media APIs were added to the video path.
