@@ -900,6 +900,7 @@ mod tests {
             rtmp: Arc::new(PLMutex::new(std::collections::HashMap::new())),
             cpu_sampler: Arc::new(PLMutex::new(None::<sysinfo::System>)),
             license: Arc::new(LicenseManager::new(&dir)),
+            engine: Arc::new(PLMutex::new(None)),
         }
     }
 

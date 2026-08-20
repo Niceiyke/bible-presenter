@@ -12,6 +12,43 @@ use tauri::Manager;
 use state::{AppState, PresentationState};
 use wordlyte_lib::commands::assets;
 
+/// Locates and spawns the `wordlyte-engine` sidecar. Resolves the binary next
+/// to the console exe (dev: `target/debug/wordlyte-engine.exe`; packaged: the
+/// `externalBin`-bundled copy in the resource dir). Failure is non-fatal — the
+/// console runs fully locally until the Phase A rewiring — but it is logged so
+/// the operator knows the engine process is not serving.
+fn spawn_engine_sidecar(resource_path: &std::path::Path, app_data_dir: &std::path::Path, app: &tauri::App) -> Arc<Mutex<Option<wordlyte_lib::engine::client::EngineClient>>> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("wordlyte-engine.exe"));
+        }
+    }
+    candidates.push(resource_path.join("wordlyte-engine.exe"));
+
+    let mut spawned = None;
+    for candidate in &candidates {
+        if !candidate.exists() {
+            continue;
+        }
+        match wordlyte_lib::engine::client::EngineClient::spawn(candidate, app_data_dir) {
+            Ok(client) => {
+                log_msg(app, &format!("Engine sidecar spawned: {:?}", candidate));
+                spawned = Some(client);
+                break;
+            }
+            Err(e) => {
+                log_msg(app, &format!("Engine sidecar failed to start from {:?}: {}", candidate, e));
+            }
+        }
+    }
+
+    if spawned.is_none() {
+        log_msg(app, "Engine sidecar unavailable (binary not found) — running locally.");
+    }
+    Arc::new(Mutex::new(spawned))
+}
+
 fn main() {
     std::panic::set_hook(Box::new(|info| {
         use std::io::Write;
@@ -168,6 +205,12 @@ fn main() {
             let license_info = license.status();
             log_msg(app, &format!("License status: {:?} (machine {})", license_info.status, &license_info.machine_id_hash[..16.min(license_info.machine_id_hash.len())]));
 
+            // Spawn the Rust video engine sidecar (Phase A2). The binary ships
+            // beside the console exe (dev builds in target/debug, packaged via
+            // externalBin in production). The console's display commands still
+            // run locally until the Phase A rewiring flips them over IPC.
+            let engine_client = spawn_engine_sidecar(&resource_path, &app_data_dir, app);
+
             let state = AppState {
                 presentation: PresentationState::new(initial_settings.clone()),
                 store,
@@ -180,6 +223,7 @@ fn main() {
                 rtmp: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 cpu_sampler: Arc::new(Mutex::new(None)),
                 license,
+                engine: engine_client,
             };
 
             app.manage(state);
@@ -323,6 +367,7 @@ fn main() {
             wordlyte_lib::commands::misc::read_text_file,
             wordlyte_lib::commands::misc::save_workspace,
             wordlyte_lib::commands::misc::load_workspace,
+            wordlyte_lib::commands::misc::engine_status,
             wordlyte_lib::commands::scenes::list_scenes,
             wordlyte_lib::commands::scenes::save_scene,
             wordlyte_lib::commands::scenes::delete_scene,
@@ -369,6 +414,17 @@ fn main() {
             wordlyte_lib::commands::license::license_refresh,
             wordlyte_lib::commands::license::license_deactivate,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // Teardown the engine sidecar on exit so no orphan process is left
+            // holding presentation state.
+            if let tauri::RunEvent::Exit = event {
+                if let Some(state) = app_handle.try_state::<AppState>() {
+                    if let Some(client) = state.engine.lock().take() {
+                        client.shutdown();
+                    }
+                }
+            }
+        });
 }

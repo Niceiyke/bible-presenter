@@ -87,6 +87,10 @@ pub struct AppState {
     /// License manager: machine fingerprint, persisted license record, and
     /// online validation against the Cloudflare Worker.
     pub license: Arc<crate::license::LicenseManager>,
+    /// Spawned engine sidecar client (Phase A2). `None` when the sidecar is
+    /// unavailable (missing binary) or during startup. The console's display
+    /// commands still run locally until the Phase A rewiring.
+    pub engine: Arc<Mutex<Option<crate::engine::client::EngineClient>>>,
 }
 
 impl EngineBackend for AppState {

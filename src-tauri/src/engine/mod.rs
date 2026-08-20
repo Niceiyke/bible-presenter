@@ -24,7 +24,9 @@
 //! frontend contract is unchanged.
 
 pub mod backend;
+pub mod client;
 pub mod ipc;
 pub mod presentation;
+pub mod runtime;
 
 pub use presentation::*;

@@ -12,6 +12,24 @@ pub async fn get_app_data_dir(app: AppHandle) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Engine sidecar status (Phase A2). Reports whether the `wordlyte-engine`
+/// process is running and its protocol version, so the operator console can
+/// show readiness before the Phase A command rewiring flips commands over IPC.
+#[tauri::command]
+pub async fn engine_status(state: State<'_, AppState>) -> Result<EngineStatus, String> {
+    let client = state.engine.lock().clone();
+    Ok(EngineStatus {
+        running: client.as_ref().map(|c| c.is_running()).unwrap_or(false),
+        protocol_version: crate::engine::ipc::ENGINE_PROTOCOL_VERSION,
+    })
+}
+
+#[derive(serde::Serialize)]
+pub struct EngineStatus {
+    pub running: bool,
+    pub protocol_version: u32,
+}
+
 /// P2.5: a single user-installed font variant returned by `list_fonts`.
 ///
 /// `family_name` is the `font-family` value the frontend injects into

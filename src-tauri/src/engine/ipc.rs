@@ -143,7 +143,7 @@ pub struct EngineRequest {
 /// One response frame. `ok` + `result` on success, `ok: false` + `error` on
 /// failure; `revision` rides along so the console can advance its sync guard
 /// even when the mutation's events were also delivered.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineResponse {
     pub id: u64,
     pub ok: bool,

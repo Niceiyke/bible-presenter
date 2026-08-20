@@ -66,6 +66,13 @@ ndi = []
 name = "wordlyte"
 path = "src/main.rs"
 
+# Rust video engine sidecar (Phase A2): spawned by the Tauri shell at startup,
+# owns authoritative presentation state + (eventually) all video. Speaks the
+# newline-delimited JSON-RPC contract in `engine/ipc.rs` over stdio.
+[[bin]]
+name = "wordlyte-engine"
+path = "src/engine_main.rs"
+
 [profile.release]
 lto = true
 codegen-units = 1
