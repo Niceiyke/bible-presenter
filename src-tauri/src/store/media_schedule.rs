@@ -274,7 +274,7 @@ pub struct SongSlideData {
     pub lt_template_id: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct CameraBackground {
     pub device_id: String,
@@ -323,7 +323,7 @@ pub struct ScheduleEntry {
 // Presentation settings
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoBackground {
     pub path: String,
@@ -343,7 +343,7 @@ fn vbg_default_true() -> bool { true }
 fn vbg_default_cover() -> String { "cover".to_string() }
 fn vbg_default_one() -> f32 { 1.0 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioBackground {
     pub path: String,
@@ -353,7 +353,7 @@ pub struct AudioBackground {
     pub volume: f32,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, PartialEq, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageBackground {
     pub path: String,
@@ -390,7 +390,7 @@ impl<'de> serde::Deserialize<'de> for ImageBackground {
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", content = "value")]
 pub enum BackgroundSetting {
     #[default]

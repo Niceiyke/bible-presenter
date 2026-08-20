@@ -35,6 +35,38 @@ add new WebView2 media APIs (getUserMedia, VideoEncoder, MediaRecorder, canvas
 capture) to the video path — route new video work through the engine contract
 instead.
 
+## Rust compositor (Phase B1)
+
+The engine's compositor domain lives in `src-tauri/src/engine/compositor/`
+and is a pure, unit-tested Rust mirror of `src/compositor/`. It is where the
+wgpu renderer (Phase B2) and fixture-parity harness (Phase B3) build; the DOM
+renderers stay the parity oracle until then.
+
+- `frame.rs` — the `ProgramFrame` model: `ResolvedOutputSource` (tag `kind`,
+  lowercase), `ResolvedBackground`, `LogoState` (camelCase, skips `None`),
+  `AudioProgramDescriptor` (tag `kind`), `CanvasGeometry`, `ProgramOverlays`,
+  `ProgramLayer` (tag `kind`, explicit lowercase renames incl. `lower_third`;
+  large payloads boxed for clippy), `ThemeColors` (background/verseText/
+  referenceText/waitingText — NOT the `store::ThemeColors` primary/secondary/
+  accent/text shape) + `theme_colors()` table (dark/light/navy/maroon/forest/
+  slate) + `dark_theme_colors()`.
+- `lower_third.rs` — `LowerThirdTemplate`/`LowerThirdPayload` (camelCase
+  serde), `default_lt_template()` (mirrors `DEFAULT_LT_TEMPLATE`),
+  `normalize_lt_template`, `substitute_tokens` (chrono `%I:%M %p`, `%-m/%-d/%Y`),
+  all `Lt*` resolved types, `resolve_lower_third` (ticker mode, name/title/label
+  style slots, badge text, bg-image→transparent fallback, is-full-width
+  geometry, entry/exit animation fallback).
+- `resolver.rs` — `ResolverSnapshot` (live/staged/settings/props/lower_third/
+  revision), `ProgramFrameInput` (config + snapshot + scenes + colors +
+  timestamp + fps), `FrameMediaPaths { images, videos }`, `get_effective_bg`,
+  `resolve_theme_colors`, `derive_logo_state`, `resolve_program_frame` (z-sorted
+  zone layers, source resolution, blackout/blank, background/theme/height
+  presentation overrides, overlay masks, `missing` structural problems, audio
+  descriptor, waiting layer).
+
+`BackgroundSetting` and its payload structs derive `PartialEq` (test-only
+comparison). No new WebView2 media APIs were added to the video path.
+
 ## Stack
 
 - React 19 and TypeScript.

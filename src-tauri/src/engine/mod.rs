@@ -25,6 +25,7 @@
 
 pub mod backend;
 pub mod client;
+pub mod compositor;
 pub mod ipc;
 pub mod presentation;
 pub mod runtime;
