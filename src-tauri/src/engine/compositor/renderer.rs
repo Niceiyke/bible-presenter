@@ -922,6 +922,12 @@ impl Compositor {
             .update(&self.queue, Resolution { width: self.width, height: self.height });
     }
 
+    /// Clear the offscreen target to a solid color (used before the first frame
+    /// or when no frame has been published yet).
+    pub fn clear(&mut self, color: [f32; 4]) {
+        self.render_clear(color);
+    }
+
     fn render_clear(&mut self, color: [f32; 4]) {
         let mut encoder = self
             .device
