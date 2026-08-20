@@ -31,7 +31,7 @@ fn main() {
         .map(PathBuf::from)
         .or_else(|| std::env::var("LOCALAPPDATA").map(PathBuf::from).ok())
         .unwrap_or_else(std::env::temp_dir);
-    let runtime = match EngineRuntime::new(app_data_dir.clone()) {
+    let runtime = match EngineRuntime::new_with_windows(app_data_dir.clone()) {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("[engine] FATAL: could not initialize runtime: {e}");

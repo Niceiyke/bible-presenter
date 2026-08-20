@@ -15,7 +15,7 @@ import { ENGINE_PROTOCOL_VERSION, type EngineCommand, type EngineEvent } from ".
 describe("engine IPC contract (Phase A1)", () => {
   it("pins the wire protocol version in lockstep with ipc.rs", () => {
     // MUST equal `ENGINE_PROTOCOL_VERSION` in `src-tauri/src/engine/ipc.rs`.
-    expect(ENGINE_PROTOCOL_VERSION).toBe(1);
+    expect(ENGINE_PROTOCOL_VERSION).toBe(2);
   });
 
   it("covers the core presentation command names the engine dispatch relies on", () => {
@@ -34,6 +34,12 @@ describe("engine IPC contract (Phase A1)", () => {
       { cmd: "show_lower_third", data: {} as never },
       { cmd: "set_props", props: [] },
       { cmd: "apply_scene", id: "s1" },
+      { cmd: "output_window_show", label: "output", style: { decorations: false, transparent: true, always_on_top: true, resizable: false }, width: 1920, height: 1080 },
+      { cmd: "output_window_hide", label: "output" },
+      { cmd: "output_window_set_monitor", label: "output", monitor: "DELL" },
+      { cmd: "output_window_resize", label: "output", width: 1280, height: 720 },
+      { cmd: "output_window_set_config", label: "output", config: {} as never },
+      { cmd: "list_monitors" },
     ];
     for (const c of cmds) expect(typeof c).toBe("object");
   });

@@ -20,11 +20,13 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowAttributes, WindowId};
 
+use serde::{Deserialize, Serialize};
+
 use crate::engine::compositor::renderer::{Compositor, ImageData, MediaResolver};
 use crate::engine::compositor::ProgramFrame;
 
 /// A monitor as seen by the engine (surfaced to the console via IPC).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MonitorInfo {
     pub name: String,
     pub primary: bool,
@@ -36,8 +38,9 @@ pub struct MonitorInfo {
 }
 
 /// Window presentation attributes (mirrors the persisted output config's
-/// appearance flags).
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// appearance flags). Serialized over the engine IPC so the console can create
+/// windows with the right decorations/transparency/z-order.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct WindowStyle {
     pub decorations: bool,
     pub transparent: bool,
@@ -156,7 +159,15 @@ pub fn spawn(app_data_dir: PathBuf) -> anyhow::Result<WindowHostHandle> {
     let join = std::thread::Builder::new()
         .name("wordlyte-windows".into())
         .spawn(move || {
-            let event_loop = match EventLoop::<WindowCommand>::with_user_event().build() {
+            let mut builder = EventLoop::<WindowCommand>::with_user_event();
+            // The host runs on a dedicated background thread (not the main
+            // thread). winit 0.30 panics unless this is allowed explicitly.
+            #[cfg(target_os = "windows")]
+            {
+                use winit::platform::windows::EventLoopBuilderExtWindows;
+                builder.with_any_thread(true);
+            }
+            let event_loop = match builder.build() {
                 Ok(el) => el,
                 Err(e) => {
                     eprintln!("[engine] window host: event loop error: {e}");

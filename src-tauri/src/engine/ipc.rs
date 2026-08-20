@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 /// Wire protocol version for the engine IPC. Must stay in sync with
 /// `ENGINE_PROTOCOL_VERSION` in `src/types/engine.ts`.
-pub const ENGINE_PROTOCOL_VERSION: u32 = 1;
+pub const ENGINE_PROTOCOL_VERSION: u32 = 2;
 
 /// Capabilities the engine offers for future negotiation (additive). A console
 /// can gate UI/commands on these without breaking older engines.
@@ -95,6 +95,29 @@ pub enum EngineCommand {
     GetStagedItem,
     /// Read the current settings document.
     GetSettings,
+    // ---- Engine-owned output/stage windows (Phase C2) ----
+    /// Show (or create) a window on the engine's winit host. `label` names the
+    /// window (e.g. `"output"`, `"stage"`); `preferred_monitor` names the
+    /// monitor to place it on (falls back to the primary monitor).
+    OutputWindowShow {
+        label: String,
+        style: crate::engine::windows::WindowStyle,
+        preferred_monitor: Option<String>,
+        width: u32,
+        height: u32,
+    },
+    /// Hide a window on the engine's winit host.
+    OutputWindowHide { label: String },
+    /// Move a window onto the named monitor.
+    OutputWindowSetMonitor { label: String, monitor: String },
+    /// Resize a window.
+    OutputWindowResize { label: String, width: u32, height: u32 },
+    /// Register a window output's config with the engine so it can resolve and
+    /// render that window's program frame (source, presentation overrides,
+    /// overlay masks, geometry).
+    OutputWindowSetConfig { label: String, config: Box<crate::outputs::OutputConfig> },
+    /// Enumerate the monitors the engine's winit host sees.
+    ListMonitors,
     /// An unknown/future command from a newer console. The engine replies
     /// `unsupported` instead of failing to parse the frame.
     #[serde(other)]
@@ -253,5 +276,59 @@ mod tests {
         let json = serde_json::to_value(ev).unwrap();
         assert_eq!(json["event"], "live_item_update");
         assert_eq!(json["revision"], 42);
+    }
+
+    #[test]
+    fn output_window_commands_round_trip_through_json() {
+        let req = EngineRequest {
+            id: 9,
+            command: EngineCommand::OutputWindowShow {
+                label: "output".into(),
+                style: crate::engine::windows::WindowStyle {
+                    decorations: false,
+                    transparent: true,
+                    always_on_top: true,
+                    resizable: false,
+                },
+                preferred_monitor: Some("DELL U2720Q".into()),
+                width: 1920,
+                height: 1080,
+            },
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: EngineRequest = serde_json::from_str(&json).unwrap();
+        match back.command {
+            EngineCommand::OutputWindowShow { label, style, preferred_monitor, width, height } => {
+                assert_eq!(label, "output");
+                assert!(!style.decorations);
+                assert!(style.transparent);
+                assert_eq!(preferred_monitor.as_deref(), Some("DELL U2720Q"));
+                assert_eq!((width, height), (1920, 1080));
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn list_monitors_and_set_monitor_round_trip() {
+        let req = EngineRequest { id: 10, command: EngineCommand::ListMonitors };
+        let back: EngineRequest = serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+        assert!(matches!(back.command, EngineCommand::ListMonitors));
+
+        let req = EngineRequest {
+            id: 11,
+            command: EngineCommand::OutputWindowSetMonitor {
+                label: "stage".into(),
+                monitor: "Primary".into(),
+            },
+        };
+        let back: EngineRequest = serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+        match back.command {
+            EngineCommand::OutputWindowSetMonitor { label, monitor } => {
+                assert_eq!(label, "stage");
+                assert_eq!(monitor, "Primary");
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
     }
 }

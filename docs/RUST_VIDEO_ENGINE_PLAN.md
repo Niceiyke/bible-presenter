@@ -279,6 +279,27 @@ oracle.
 - Acceptance: projection and stage render from the engine; monitor/scaling
   matrix (1/2 monitors, 125%/150% scaling) passes.
 
+Status (feat/rust-video-engine):
+
+- **C0 (done, b56abe6):** `Compositor::new_surface(window, w, h)` window-surface
+  path — DX12-on-Windows instance, surface from a winit 0.30 window
+  (`Arc<Window>` yields a `'static` surface), adapter requested with
+  `compatible_surface`, blit pipeline copying the offscreen target into the
+  swapchain; `present()`/`resize()`; `SolidUniform` padded to 48 bytes.
+- **C1 (done, e130644):** `engine/windows.rs` — `WindowHost` runs the winit
+  event loop on a background thread (`EventLoopBuilderExtWindows::with_any_thread`,
+  required off the main thread), one `HostedWindow` per engine window backed by
+  its own surface compositor, `DiskMediaResolver` for disk images, monitor
+  enumeration + preferred-monitor centering, per-label `SharedFrame` slot pulled
+  on redraw at the capture rate; commands flow through the `EventLoopProxy`.
+- **C2 (this commit):** engine IPC wiring — protocol v2 with
+  `OutputWindowShow`/`OutputWindowHide`/`OutputWindowSetMonitor`/
+  `OutputWindowResize`/`OutputWindowSetConfig`/`ListMonitors` commands; the
+  runtime registers window configs, resolves each window's `ProgramFrame` after
+  every successful mutation, and publishes it to the host; TS mirror updated.
+  Smoke-tested against the sidecar: `list_monitors` returns the display set and
+  `output_window_show`/`hide` round-trip.
+
 ### Phase D: Transport — encode, RTMP, recording
 
 - One ffmpeg-next HW encoder per profile feeding a packet bus; RTMP sessions

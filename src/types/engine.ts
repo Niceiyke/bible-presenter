@@ -2,6 +2,7 @@ import type { DisplayItem, PresentationSnapshot } from "./display";
 import type { PresentationSettings } from "./settings";
 import type { PropItem } from "./props";
 import type { LowerThirdPayload } from "./lowerThird";
+import type { OutputConfig } from "./output";
 
 /**
  * Engine IPC contract (Phase A1). Wire contract between the Tauri operator
@@ -16,7 +17,7 @@ import type { LowerThirdPayload } from "./lowerThird";
  */
 
 /** Must equal `ENGINE_PROTOCOL_VERSION` in `src-tauri/src/engine/ipc.rs`. */
-export const ENGINE_PROTOCOL_VERSION = 1;
+export const ENGINE_PROTOCOL_VERSION = 2;
 
 /** Additive capability negotiation — matches `ENGINE_CAPABILITIES` (ipc.rs). */
 export const ENGINE_CAPABILITIES = [
@@ -54,6 +55,13 @@ export type EngineCommand =
   | { cmd: "get_current_item" }
   | { cmd: "get_staged_item" }
   | { cmd: "get_settings" }
+  // ---- Engine-owned output/stage windows (Phase C2) ----
+  | { cmd: "output_window_show"; label: string; style: EngineWindowStyle; preferred_monitor?: string | null; width: number; height: number }
+  | { cmd: "output_window_hide"; label: string }
+  | { cmd: "output_window_set_monitor"; label: string; monitor: string }
+  | { cmd: "output_window_resize"; label: string; width: number; height: number }
+  | { cmd: "output_window_set_config"; label: string; config: OutputConfig }
+  | { cmd: "list_monitors" }
   | { cmd: string };
 
 /** One request frame on the stdio channel. */
@@ -94,6 +102,26 @@ export type EngineEvent =
 
 export interface EngineEventFrame {
   event: EngineEvent;
+}
+
+/** Window presentation attributes (mirrors `windows::WindowStyle` in the
+ *  engine: decorations / transparent / always-on-top / resizable). */
+export interface EngineWindowStyle {
+  decorations: boolean;
+  transparent: boolean;
+  always_on_top: boolean;
+  resizable: boolean;
+}
+
+/** A monitor as seen by the engine's winit host (mirrors `MonitorInfo`). */
+export interface EngineMonitorInfo {
+  name: string;
+  primary: boolean;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scale_factor: number;
 }
 
 export type { PresentationSnapshot };

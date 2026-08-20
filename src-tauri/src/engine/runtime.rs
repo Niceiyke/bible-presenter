@@ -16,13 +16,16 @@
 //! lifetime only; disk handoff is a Phase A follow-up.
 
 use crate::engine::backend::EngineBackend;
+use crate::engine::compositor::{resolve_program_frame, ProgramFrameInput, ResolverSnapshot};
 use crate::engine::ipc::{EngineCommand, EngineEvent, EngineEventFrame, EngineResponse};
 use crate::engine::presentation::Engine;
+use crate::engine::windows::{SharedFrame, WindowCommand, WindowHostHandle};
 use crate::remote::protocol::RemoteEventKind;
 use crate::state::PresentationState;
 use crate::store::{self, MediaScheduleStore};
 use parking_lot::Mutex;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -34,13 +37,36 @@ pub struct EngineRuntime {
     store: MediaScheduleStore,
     app_data_dir: PathBuf,
     pending_events: Arc<Mutex<Vec<EngineEventFrame>>>,
+    /// The engine-owned winit window host (Phase C). `None` in headless/unit
+    /// contexts; window commands reply with an error when it is absent.
+    windows: Option<WindowHostHandle>,
+    /// Registered window output configs keyed by host window label, used to
+    /// resolve each window's program frame after presentation mutations.
+    window_configs: Mutex<HashMap<String, crate::outputs::OutputConfig>>,
 }
 
 impl EngineRuntime {
     /// Creates the runtime. `app_data_dir` is used for prop-path validation and
     /// any future disk persistence; the store itself is in-memory during Phase
-    /// A2 (see module docs).
+    /// A2 (see module docs). No window host is spawned.
     pub fn new(app_data_dir: PathBuf) -> Result<Self, String> {
+        Self::with_windows(app_data_dir, None)
+    }
+
+    /// Creates the runtime and spawns the engine-owned winit window host (the
+    /// sidecar process path). The host thread idles until a window command
+    /// arrives; it is joined on drop.
+    pub fn new_with_windows(app_data_dir: PathBuf) -> Result<Self, String> {
+        let windows = crate::engine::windows::spawn(app_data_dir.clone())
+            .map(Some)
+            .map_err(|e| format!("could not start window host: {e}"))?;
+        Self::with_windows(app_data_dir, windows)
+    }
+
+    fn with_windows(
+        app_data_dir: PathBuf,
+        windows: Option<WindowHostHandle>,
+    ) -> Result<Self, String> {
         let store = MediaScheduleStore::in_memory(app_data_dir.clone()).map_err(|e| e.to_string())?;
         let initial_settings = store.load_settings().unwrap_or_default();
         Ok(Self {
@@ -48,6 +74,8 @@ impl EngineRuntime {
             store,
             app_data_dir,
             pending_events: Arc::new(Mutex::new(Vec::new())),
+            windows,
+            window_configs: Mutex::new(HashMap::new()),
         })
     }
 
@@ -107,6 +135,64 @@ impl EngineRuntime {
     fn drain_events(&self) -> Vec<EngineEventFrame> {
         std::mem::take(&mut *self.pending_events.lock())
     }
+
+    /// Builds the resolver snapshot from the current presentation state.
+    fn resolver_snapshot(&self) -> ResolverSnapshot {
+        let lower_third = self
+            .presentation
+            .lower_third
+            .lock()
+            .clone()
+            .and_then(|v| serde_json::from_value::<crate::engine::compositor::LowerThirdPayload>(v).ok());
+        ResolverSnapshot {
+            live: self.presentation.live_item.lock().clone(),
+            staged: self.presentation.staged_item.lock().clone(),
+            settings: self.presentation.settings.lock().clone(),
+            props: self.presentation.props_layer.lock().clone(),
+            lower_third,
+            revision: self.presentation.current_revision(),
+        }
+    }
+
+    /// Resolves the current program frame for every registered window config.
+    /// Pure and testable: returns `(host label, shared frame)` pairs without
+    /// touching the window host.
+    fn resolve_window_frames(&self) -> Vec<(String, SharedFrame)> {
+        let snapshot = self.resolver_snapshot();
+        let revision = snapshot.revision;
+        let scenes = self.store.list_scenes().ok();
+        self.window_configs
+            .lock()
+            .iter()
+            .map(|(label, config)| {
+                let input = ProgramFrameInput {
+                    config: config.clone(),
+                    snapshot: snapshot.clone(),
+                    scenes: scenes.clone(),
+                    colors: None,
+                    timestamp: None,
+                    fps: None,
+                };
+                let frame = resolve_program_frame(input);
+                (label.clone(), SharedFrame { revision, frame: Arc::new(frame) })
+            })
+            .collect()
+    }
+
+    /// Publishes the current program frame for every registered window to the
+    /// window host so the winit windows re-render. No-op without a host.
+    fn publish_window_frames(&self) {
+        if let Some(host) = &self.windows {
+            for (label, frame) in self.resolve_window_frames() {
+                host.publish_frame(&label, frame);
+            }
+        }
+    }
+
+    /// The window host, if present (for window-control dispatch).
+    fn window_host(&self) -> Option<&WindowHostHandle> {
+        self.windows.as_ref()
+    }
 }
 
 impl EngineBackend for EngineRuntime {
@@ -157,6 +243,13 @@ pub fn dispatch(runtime: &EngineRuntime, id: u64, command: EngineCommand) -> (En
     let engine = Engine { state: runtime, emit: &sink };
 
     let response = dispatch_command(&engine, runtime, id, command);
+
+    // After a successful mutation, republish the window program frames so the
+    // engine's winit windows re-render the updated program. No-op when no
+    // windows are configured or hosted.
+    if response.ok {
+        runtime.publish_window_frames();
+    }
 
     // Drain events AFTER computing the response so the console applies the
     // mutation's events before/with the revision the response reports.
@@ -279,6 +372,47 @@ fn dispatch_command<B: EngineBackend>(
             let settings = runtime.presentation.settings.lock().clone();
             ok_with(id, revision(), json!({ "settings": settings }))
         }
+        EngineCommand::OutputWindowShow { label, style, preferred_monitor, width, height } => {
+            match runtime.window_host() {
+                Some(host) => {
+                    host.send(WindowCommand::Show { label, style, preferred_monitor, width, height });
+                    ok(id, revision())
+                }
+                None => err(id, revision(), "window_host_unavailable", "The engine window host is not running."),
+            }
+        }
+        EngineCommand::OutputWindowHide { label } => match runtime.window_host() {
+            Some(host) => {
+                host.send(WindowCommand::Hide { label });
+                ok(id, revision())
+            }
+            None => err(id, revision(), "window_host_unavailable", "The engine window host is not running."),
+        },
+        EngineCommand::OutputWindowSetMonitor { label, monitor } => match runtime.window_host() {
+            Some(host) => {
+                host.send(WindowCommand::SetMonitor { label, monitor });
+                ok(id, revision())
+            }
+            None => err(id, revision(), "window_host_unavailable", "The engine window host is not running."),
+        },
+        EngineCommand::OutputWindowResize { label, width, height } => match runtime.window_host() {
+            Some(host) => {
+                host.send(WindowCommand::Resize { label, width, height });
+                ok(id, revision())
+            }
+            None => err(id, revision(), "window_host_unavailable", "The engine window host is not running."),
+        },
+        EngineCommand::OutputWindowSetConfig { label, config } => {
+            runtime.window_configs.lock().insert(label, *config);
+            ok(id, revision())
+        }
+        EngineCommand::ListMonitors => match runtime.window_host() {
+            Some(host) => match host.list_monitors() {
+                Some(monitors) => ok_with(id, revision(), json!({ "monitors": monitors })),
+                None => err(id, revision(), "window_host_timeout", "The engine window host did not respond."),
+            },
+            None => err(id, revision(), "window_host_unavailable", "The engine window host is not running."),
+        },
         EngineCommand::Unknown => EngineResponse::unsupported(id),
     }
 }
@@ -368,5 +502,73 @@ mod tests {
         let (res, _) = dispatch(&rt, 9, EngineCommand::GetSettings);
         assert!(res.ok);
         assert!(res.result.unwrap()["settings"].is_object());
+    }
+
+    #[test]
+    fn window_commands_error_without_host() {
+        let rt = runtime();
+        let (res, _) = dispatch(&rt, 10, EngineCommand::OutputWindowShow {
+            label: "output".into(),
+            style: crate::engine::windows::WindowStyle::default(),
+            preferred_monitor: None,
+            width: 1920,
+            height: 1080,
+        });
+        assert!(!res.ok);
+        assert_eq!(res.error.unwrap().code, "window_host_unavailable");
+    }
+
+    #[test]
+    fn list_monitors_errors_without_host() {
+        let rt = runtime();
+        let (res, _) = dispatch(&rt, 11, EngineCommand::ListMonitors);
+        assert!(!res.ok);
+        assert_eq!(res.error.unwrap().code, "window_host_unavailable");
+    }
+
+    #[test]
+    fn set_config_then_resolve_window_frame() {
+        let rt = runtime();
+        let config = crate::outputs::OutputConfig {
+            schema_version: crate::outputs::OUTPUT_SCHEMA_VERSION,
+            id: "output-main".into(),
+            kind: crate::outputs::OutputKind::Window,
+            label: "Output".into(),
+            enabled: true,
+            visible: true,
+            source: crate::outputs::OutputSource::Live,
+            geometry: crate::outputs::OutputGeometry { width: 1920, height: 1080 },
+            capture_fps: None,
+            presentation: None,
+            overlays: crate::outputs::OutputOverlays { props: true, lower_third: true, logo: true },
+            window_label: Some("output".into()),
+            recording: None,
+            streaming: None,
+            stream_destinations: None,
+        };
+        let (res, _) = dispatch(&rt, 12, EngineCommand::OutputWindowSetConfig {
+            label: "output".into(),
+            config: Box::new(config),
+        });
+        assert!(res.ok);
+
+        dispatch(&rt, 13, EngineCommand::SendLiveItem {
+            item: Box::new(verse_item()),
+            source: None,
+        });
+
+        let frames = rt.resolve_window_frames();
+        assert_eq!(frames.len(), 1);
+        let (label, shared) = &frames[0];
+        assert_eq!(label, "output");
+        assert_eq!(shared.revision, 1);
+        // The resolved frame reflects the live item (verse source).
+        assert!(shared.frame.layers.iter().any(|l| !matches!(l, crate::engine::compositor::ProgramLayer::Waiting)));
+    }
+
+    #[test]
+    fn resolve_window_frame_without_configs_is_empty() {
+        let rt = runtime();
+        assert!(rt.resolve_window_frames().is_empty());
     }
 }
