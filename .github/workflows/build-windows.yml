@@ -82,11 +82,11 @@ jobs:
       - name: Install pkg-config
         shell: pwsh
         run: |
-          if (-not (Get-Command pkg-config -ErrorAction SilentlyContinue)) {
-            choco install pkgconfiglite -y --no-progress
-            echo "C:\Program Files\pkgconfiglite" | Out-File -FilePath $env:GITHUB_PATH -Append
-          }
-          pkg-config --version
+          choco install pkgconfiglite -y --no-progress
+          $pkg = "C:\ProgramData\chocolatey\bin\pkg-config.exe"
+          & $pkg --version
+          echo "PKG_CONFIG=$pkg" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "C:\ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
       - name: Install ffmpeg via vcpkg
         shell: pwsh
@@ -97,16 +97,18 @@ jobs:
           }
           echo "PKG_CONFIG_PATH=C:\vcpkg\installed\x64-windows\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append
           echo "VCPKGRS_DYNAMIC=1" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Get-Command pkg-config | Select-Object Source
-          pkg-config --modversion libavutil
+          $pkg = $env:PKG_CONFIG
+          if (-not $pkg) { $pkg = "C:\ProgramData\chocolatey\bin\pkg-config.exe" }
+          & $pkg --modversion libavutil
 
       - name: Verify pkg-config can find libavutil
         shell: pwsh
         run: |
           echo "PKG_CONFIG_PATH=$env:PKG_CONFIG_PATH"
+          echo "PKG_CONFIG=$env:PKG_CONFIG"
           Get-ChildItem C:\vcpkg\installed\x64-windows\lib\pkgconfig\libav*.pc | Select-Object Name
-          pkg-config --modversion libavutil
-          pkg-config --cflags --libs libavutil
+          & $env:PKG_CONFIG --modversion libavutil
+          & $env:PKG_CONFIG --cflags --libs libavutil
 
       - name: install frontend dependencies
         run: npm ci
@@ -146,6 +148,7 @@ jobs:
           RUSTFLAGS: "-C target-feature=-crt-static"
           MSVC_RUNTIME_LIBRARY: "MultiThreadedDLL"
           PKG_CONFIG_PATH: "C:\\vcpkg\\installed\\x64-windows\\lib\\pkgconfig"
+          PKG_CONFIG: "C:\\ProgramData\\chocolatey\\bin\\pkg-config.exe"
           VCPKGRS_DYNAMIC: "1"
         with:
           tagName: ${{ github.event_name == 'workflow_dispatch' && format('v__VERSION__-manual-{0}', github.run_number) || 'v__VERSION__' }}
