@@ -20,7 +20,7 @@
 // The script must NOT build the engine itself (any `cargo build` on this
 // package hits the same validation). It resolves paths from its own location,
 // so it works regardless of the hook's working directory.
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
@@ -55,6 +55,28 @@ if (existsSync(src)) {
   for (const name of targets) {
     copyFileSync(src, join(binDir, name));
     console.log(`[copy-engine-binary] staged ${name}`);
+  }
+  // Bundle ffmpeg DLLs for in-process backend (dynamic VCPKGRS_DYNAMIC=1).
+  // vcpkg installs them to C:\vcpkg\installed\x64-windows\bin\av*.dll / sw*.dll
+  // Copy them to binDir so tauri.conf.json resources can ship them at bin/.
+  try {
+    const vcpkgBin = "C:\\vcpkg\\installed\\x64-windows\\bin";
+    if (existsSync(vcpkgBin)) {
+      for (const f of readdirSync(vcpkgBin)) {
+        if (/^(av|sw).+\.dll$/i.test(f)) {
+          const srcDll = join(vcpkgBin, f);
+          const destDll = join(binDir, f);
+          try {
+            copyFileSync(srcDll, destDll);
+            console.log(`[copy-engine-binary] staged ${f}`);
+          } catch (e) {
+            console.warn(`[copy-engine-binary] failed to stage ${f}: ${e.message}`);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn(`[copy-engine-binary] ffmpeg DLL staging skipped: ${e.message}`);
   }
 } else if (bootstrap) {
   // Pre-build bootstrap: satisfy tauri-build's layout validation only.

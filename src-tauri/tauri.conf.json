@@ -73,7 +73,14 @@
     "resources": {
       "bible_data/hymns.json": "bible_data/hymns.json",
       "../dist": "dist",
-      "binaries/wordlyte-engine.exe": "wordlyte-engine.exe"
+      "binaries/wordlyte-engine.exe": "wordlyte-engine.exe",
+      "binaries/avcodec-63.dll": "bin/avcodec-63.dll",
+      "binaries/avdevice-63.dll": "bin/avdevice-63.dll",
+      "binaries/avfilter-11.dll": "bin/avfilter-11.dll",
+      "binaries/avformat-63.dll": "bin/avformat-63.dll",
+      "binaries/avutil-61.dll": "bin/avutil-61.dll",
+      "binaries/swresample-6.dll": "bin/swresample-6.dll",
+      "binaries/swscale-9.dll": "bin/swscale-9.dll"
     },
     "windows": {
       "nsis": {
