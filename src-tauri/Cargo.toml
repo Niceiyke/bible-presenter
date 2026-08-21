@@ -54,8 +54,8 @@ pollster = "1.0.1"
 winit = { version = "0.30", features = ["rwh_06"] }
 # JPEG encode for the engine's MJPEG preview frames (Phase C).
 jpeg-encoder = "0.6"
-# In-process decode/encode/mux (Phase H/D ffmpeg-next). Pipe fallback removed.
-ffmpeg-next = { version = "7.1" }
+# In-process decode/encode/mux (Phase H/D ffmpeg-next). Pipe fallback removed — tracks ffmpeg 7.x..9.x.
+ffmpeg-next = { version = "9.0" }
 # Windows DPAPI (CryptProtectData) to encrypt the license record at rest.
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["dpapi", "wincrypt", "winbase", "winnt", "minwindef"] }

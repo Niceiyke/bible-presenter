@@ -100,8 +100,6 @@ jobs:
         shell: pwsh
         run: |
           vcpkg --version
-          # Use the preinstalled system vcpkg (C:\vcpkg) — no baseline needed.
-          # Install ffmpeg for x64-windows (dynamic, matches Tauri's MSVC DLL CRT).
           if (-not (Test-Path "C:\vcpkg\installed\x64-windows\lib\pkgconfig\libavutil.pc")) {
             vcpkg install ffmpeg[core]:x64-windows --clean-after-build
           } else {
@@ -109,12 +107,25 @@ jobs:
           }
           echo "PKG_CONFIG_PATH=C:\vcpkg\installed\x64-windows\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append
           echo "VCPKGRS_DYNAMIC=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "PKG_CONFIG=C:\Program Files\pkgconfiglite\pkg-config.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "PKG_CONFIG_PATH is $env:PKG_CONFIG_PATH"
+          & "C:\Program Files\pkgconfiglite\pkg-config.exe" --modversion libavutil
           pkg-config --modversion libavutil
+
+      - name: Verify pkg-config can find libavutil
+        shell: pwsh
+        run: |
+          echo "PKG_CONFIG_PATH=$env:PKG_CONFIG_PATH"
+          echo "PKG_CONFIG=$env:PKG_CONFIG"
+          Get-ChildItem C:\vcpkg\installed\x64-windows\lib\pkgconfig\libav*.pc | Select-Object Name
+          pkg-config --modversion libavutil
+          pkg-config --cflags --libs libavutil
 
       - name: cargo check
         working-directory: src-tauri
         env:
           PKG_CONFIG_PATH: "C:\\vcpkg\\installed\\x64-windows\\lib\\pkgconfig"
+          PKG_CONFIG: "C:\\Program Files\\pkgconfiglite\\pkg-config.exe"
           VCPKGRS_DYNAMIC: "1"
         run: cargo check
 
@@ -122,6 +133,7 @@ jobs:
         working-directory: src-tauri
         env:
           PKG_CONFIG_PATH: "C:\\vcpkg\\installed\\x64-windows\\lib\\pkgconfig"
+          PKG_CONFIG: "C:\\Program Files\\pkgconfiglite\\pkg-config.exe"
           VCPKGRS_DYNAMIC: "1"
         run: cargo clippy --all-targets -- -D warnings
 
@@ -129,5 +141,6 @@ jobs:
         working-directory: src-tauri
         env:
           PKG_CONFIG_PATH: "C:\\vcpkg\\installed\\x64-windows\\lib\\pkgconfig"
+          PKG_CONFIG: "C:\\Program Files\\pkgconfiglite\\pkg-config.exe"
           VCPKGRS_DYNAMIC: "1"
         run: cargo test
