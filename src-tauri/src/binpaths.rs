@@ -1,17 +1,10 @@
-//! Bundled media binaries (ffmpeg / ffprobe) resolver.
+//! Media backend resolver (ffmpeg-next in-process).
 //!
-//! ffmpeg is resolved **bundled-first**: when `{resource_dir}/bin/ffmpeg.exe`
-//! is present (shipped via `bundle.resources`), that exact binary is used;
-//! otherwise the bare name falls back to a PATH lookup. Bundling removes the
-//! "install ffmpeg" hard gate for RTMP streaming and keeps video/audio probing
-//! working on machines that have never installed ffmpeg. ffprobe resolves the
-//! same way.
-//!
-//! `init()` is called once at startup from `main.rs` (where the resolved
-//! resource dir is known); everything else just reads the process-wide cache.
+//! The `ffmpeg.exe` pipe fallback has been removed — `ffmpeg-next` is now
+//! required (`default = ["ffmpeg-next"]`). `ffmpeg_available()` simply proves
+//! `ffmpeg::init()` succeeded.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
 static BUNDLED_BIN_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
@@ -24,8 +17,9 @@ fn ffprobe_exe() -> &'static str {
     if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" }
 }
 
-/// Register the bundled `bin/` directory at startup. Only adopted when it
-/// actually contains ffmpeg, so a missing binary silently keeps PATH behavior.
+/// Register the bundled `bin/` directory at startup (kept for compat, not used
+/// for ffmpeg — libav is linked in). Still adopted if present so old resource
+/// checks don't spam.
 pub fn init(resource_dir: &Path) {
     let dir = resource_dir.join("bin");
     let present = dir.join(ffmpeg_exe()).exists();
@@ -36,8 +30,6 @@ fn bundled_dir() -> Option<PathBuf> {
     BUNDLED_BIN_DIR.get().and_then(|d| d.clone())
 }
 
-/// Pure resolution used by the process-wide helpers (and unit tests): return
-/// the bundled binary when present, otherwise the bare name for PATH lookup.
 fn resolve_in_dir(dir: Option<&Path>, name: &str) -> PathBuf {
     if let Some(d) = dir {
         let p = d.join(name);
@@ -49,24 +41,23 @@ fn resolve_in_dir(dir: Option<&Path>, name: &str) -> PathBuf {
 }
 
 /// Full path to ffmpeg if bundled; otherwise the bare name (PATH lookup).
+/// Kept for diagnostics only — the engine no longer spawns it.
 pub fn ffmpeg_path() -> PathBuf {
     resolve_in_dir(bundled_dir().as_deref(), ffmpeg_exe())
 }
 
-/// Full path to ffprobe if bundled; otherwise the bare name (PATH lookup).
 pub fn ffprobe_path() -> PathBuf {
     resolve_in_dir(bundled_dir().as_deref(), ffprobe_exe())
 }
 
-/// Whether ffmpeg is usable right now (bundled or on PATH).
+/// Whether the in-process ffmpeg backend is usable (always true when linked).
 pub fn ffmpeg_available() -> bool {
-    Command::new(ffmpeg_path())
-        .arg("-version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    crate::engine::ffmpeg::init().is_ok()
+}
+
+/// Which backend is active — for diagnostics / SystemTab.
+pub fn backend_label() -> &'static str {
+    crate::engine::ffmpeg::backend_label()
 }
 
 #[cfg(test)]

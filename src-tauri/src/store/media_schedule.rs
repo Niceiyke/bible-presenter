@@ -1294,66 +1294,32 @@ impl MediaScheduleStore {
         None
     }
 
-    /// Best-effort video metadata + thumbnail extraction via ffmpeg. Returns
-    /// (thumbnail_path, duration_secs, width, height) where None values mean
-    /// "could not determine". ffmpeg is resolved bundled-first (with a PATH
-    /// fallback); if it isn't available the whole probe degrades to
-    /// (None, None, None, None) instead of erroring.
+    /// Best-effort video metadata + thumbnail extraction via in-process ffmpeg-next.
     fn probe_video(thumb_dir: &Path, media_path: &str, id: &str) -> (Option<String>, Option<f64>, Option<i64>, Option<i64>) {
-        use std::process::Command;
+        use std::path::Path;
         let thumb_path = thumb_dir.join(format!("{}.jpg", id));
-
-        // 1) Frame extraction (thumbnail). -y overwrite, scale to 320w.
         if !thumb_path.exists() {
-            let ok = Command::new(crate::binpaths::ffmpeg_path())
-                .args(["-y", "-ss", "1", "-i", media_path, "-frames:v", "1", "-vf", "scale=320:-1", "-q:v", "4"])
-                .arg(&thumb_path)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
+            let ok = crate::engine::ffmpeg::probe::probe_thumbnail(
+                Path::new(media_path),
+                &thumb_path,
+                1.0,
+            );
             if !ok {
                 let _ = fs::remove_file(&thumb_path);
             }
         }
         let thumb = if thumb_path.exists() { Some(thumb_path.to_string_lossy().to_string()) } else { None };
-
-        // 2) Duration + dimensions via ffprobe (stream of first video track).
-        let mut duration: Option<f64> = None;
-        let mut width: Option<i64> = None;
-        let mut height: Option<i64> = None;
-        if let Ok(out) = Command::new(crate::binpaths::ffprobe_path())
-            .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "format=duration:stream=width,height", "-of", "json"])
-            .arg(media_path)
-            .output()
-        {
-            if out.status.success() {
-                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
-                    duration = json.pointer("/format/duration").and_then(|v| v.as_str())
-                        .and_then(|s| s.parse::<f64>().ok()).or(duration);
-                    width = json.pointer("/streams/0/width").and_then(|v| v.as_i64());
-                    height = json.pointer("/streams/0/height").and_then(|v| v.as_i64());
-                }
-            }
-        }
-        (thumb, duration, width, height)
+        let p = Path::new(media_path);
+        let duration = crate::engine::ffmpeg::probe::probe_duration_secs(p);
+        let (w, h) = crate::engine::ffmpeg::probe::probe_source_info(p)
+            .map(|i| (Some(i.width as i64), Some(i.height as i64)))
+            .unwrap_or((None, None));
+        (thumb, duration, w, h)
     }
 
-    /// Best-effort audio duration via ffprobe (None if ffmpeg is unavailable).
+    /// Best-effort audio duration via in-process ffmpeg-next.
     fn probe_audio_duration(media_path: &str) -> Option<f64> {
-        use std::process::Command;
-        if let Ok(out) = Command::new(crate::binpaths::ffprobe_path())
-            .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1"])
-            .arg(media_path)
-            .output()
-        {
-            if out.status.success() {
-                let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if let Ok(d) = s.parse::<f64>() { return Some(d); }
-            }
-        }
-        None
+        crate::engine::ffmpeg::probe::probe_duration_secs(std::path::Path::new(media_path))
     }
 
     fn media_type_str(mt: &MediaItemType) -> &'static str {

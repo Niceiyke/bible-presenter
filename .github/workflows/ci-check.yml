@@ -57,6 +57,8 @@ jobs:
     # The app ships only for Windows (NSIS/WebView2); Tauri's glib/gtk -sys
     # crates also fail to pkg-config on bare ubuntu runners. Build/check on the
     # actual target platform instead of installing the whole Linux GTK stack.
+    # ffmpeg-next is now default (pipe removed) — this job always builds the
+    # in-process libav path (needs LLVM + vcpkg ffmpeg).
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,23 +69,47 @@ jobs:
           components: clippy
 
       # tauri-build validates bundled resources at compile time, but dist/ and
-      # the ffmpeg binaries are gitignored (produced by the release build).
-      # Create placeholders so cargo check/clippy/test can run as a fast
-      # compile + lint gate; the release workflow fetches the real artifacts.
+      # the wordlyte-engine binary are gitignored (produced by the build).
+      # Create placeholder so cargo check/clippy/test can run as a fast
+      # compile gate; the release workflow produces the real artifact.
       - name: create bundled-resource placeholders for tauri-build
         shell: bash
         run: |
           mkdir -p src-tauri/binaries dist
-          touch src-tauri/binaries/ffmpeg.exe src-tauri/binaries/ffprobe.exe src-tauri/binaries/wordlyte-engine.exe dist/.keep
+          touch src-tauri/binaries/wordlyte-engine.exe dist/.keep
+
+      - name: Install LLVM (bindgen for ffmpeg-sys-next)
+        shell: pwsh
+        run: |
+          if (-not (Get-Command clang -ErrorAction SilentlyContinue)) {
+            choco install llvm -y --no-progress
+            echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+          }
+          clang --version
+
+      - name: Setup vcpkg + ffmpeg dev libs
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: 'src-tauri/vcpkg.json'
+          runVcpkgInstall: true
 
       - name: cargo check
         working-directory: src-tauri
+        env:
+          PKG_CONFIG_PATH: ${{ env.VCPKG_ROOT }}/installed/x64-windows/lib/pkgconfig
+          VCPKGRS_DYNAMIC: "1"
         run: cargo check
 
       - name: cargo clippy
         working-directory: src-tauri
+        env:
+          PKG_CONFIG_PATH: ${{ env.VCPKG_ROOT }}/installed/x64-windows/lib/pkgconfig
+          VCPKGRS_DYNAMIC: "1"
         run: cargo clippy --all-targets -- -D warnings
 
       - name: cargo test
         working-directory: src-tauri
+        env:
+          PKG_CONFIG_PATH: ${{ env.VCPKG_ROOT }}/installed/x64-windows/lib/pkgconfig
+          VCPKGRS_DYNAMIC: "1"
         run: cargo test

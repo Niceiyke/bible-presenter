@@ -19,7 +19,7 @@ use crate::engine::backend::EngineBackend;
 use crate::engine::compositor::{resolve_program_frame, ProgramFrameInput, ResolverSnapshot};
 use crate::engine::ipc::{EngineCommand, EngineEvent, EngineEventFrame, EngineResponse};
 use crate::engine::presentation::Engine;
-use crate::engine::transport::TransportManager;
+use crate::engine::ffmpeg::encode::FfmpegTransportManager as TransportManager;
 use crate::engine::windows::{SharedFrame, WindowCommand, WindowHostHandle};
 use crate::remote::protocol::RemoteEventKind;
 use crate::state::PresentationState;

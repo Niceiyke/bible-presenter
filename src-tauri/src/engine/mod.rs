@@ -27,6 +27,7 @@ pub mod backend;
 pub mod capture;
 pub mod client;
 pub mod compositor;
+pub mod ffmpeg;
 pub mod ipc;
 pub mod presentation;
 pub mod runtime;
