@@ -10,6 +10,7 @@ import { Camera, RefreshCw, Video, Play, Monitor, AlertTriangle, Smartphone, Tag
 import type { DisplayItem, CameraBackground, MediaItem } from "../types";
 import type { CameraLook, PhoneCameraOrientation } from "../types/remote";
 import { DEFAULT_CAMERA_LOOK, DEFAULT_CAMERA_CHROMA } from "../types/remote";
+import { engineNameForWebviewId } from "../system/cameraNames";
 
 interface CameraTabProps {
   onStage?: (item: DisplayItem) => void;
@@ -158,7 +159,9 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
   const getCameraDataFor = (deviceId: string): CameraBackground => {
     const d = cameraDefaults[deviceId];
     return {
-      deviceId,
+      // Broadcast items carry the ENGINE's friendly name when the bridge knows
+      // it; dshow cannot open the webview's opaque device hash.
+      deviceId: engineNameForWebviewId(deviceId) ?? deviceId,
       opacity: d?.opacity ?? 1,
       objectFit: d?.objectFit ?? "cover",
       mirrored: d?.mirrored ?? false,

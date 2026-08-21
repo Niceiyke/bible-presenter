@@ -1287,9 +1287,12 @@ impl Compositor {
             }
             DisplayItem::Verse(v) => {
                 let size = (rect[3] * 0.05).max(14.0);
-                let body = &v.text;
-                let bw = body.len() as f32 * size * 0.5;
-                self.queue_text( body, rect[0] + (rect[2] - bw) / 2.0, rect[1] + rect[3] / 2.0, size, [255, 255, 255, 255], false);
+                let max_w = rect[2] * 0.9;
+                // Reuse the same word-wrap + centering used for full-screen
+                // verses — the old `len * size * 0.5` estimate under/over-shoots
+                // and was the source of the left-margin / right-clip in zones.
+                let y = rect[1] + rect[3] * 0.5 - size * 0.65;
+                self.draw_text_centered_in(&v.text, rect[0], rect[2], y, size, [255, 255, 255, 255], false, max_w);
             }
             _ => {}
         }
@@ -1344,8 +1347,8 @@ impl Compositor {
                 .as_deref()
                 .and_then(parse_color)
                 .unwrap_or([255, 255, 255, 255]);
-            let bw = text.len() as f32 * size * 0.6;
-            self.queue_text( text, w - bw - 40.0, 40.0, size, [color[0], color[1], color[2], (color[3] as f32 * opacity) as u8], false);
+            let lw = self.measure_text(text, size, false);
+            self.queue_text( text, w - lw - 40.0, 40.0, size, [color[0], color[1], color[2], (color[3] as f32 * opacity) as u8], false);
         }
     }
 
@@ -1577,7 +1580,24 @@ impl Compositor {
         bold: bool,
         max_width: f32,
     ) -> f32 {
-        let w = self.width as f32;
+        self.draw_text_centered_in(text, 0.0, self.width as f32, y, size, color, bold, max_width)
+    }
+
+    /// Same as `draw_text_centered` but centered inside an arbitrary rect
+    /// `[rx, rw]` at vertical `y` — used for zone-local verse rendering.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_text_centered_in(
+        &mut self,
+        text: &str,
+        rx: f32,
+        rw: f32,
+        y: f32,
+        size: f32,
+        color: [u8; 4],
+        bold: bool,
+        max_width: f32,
+    ) -> f32 {
+        let max_width = max_width.min(rw * 0.98).max(10.0);
         let line_h = (size * 1.3).max(2.0);
         let mut lines: Vec<String> = Vec::new();
         for paragraph in text.split('\n') {
@@ -1594,10 +1614,17 @@ impl Compositor {
             }
             lines.push(current);
         }
+        // Center each line within the rect, not the full canvas. Using the
+        // full canvas width `w` here is the bug that left a large left gutter
+        // and clipped on the right when the zone is narrower than the canvas.
         let mut yy = y;
         for line in &lines {
+            if line.is_empty() {
+                yy += line_h;
+                continue;
+            }
             let lw = self.measure_text(line, size, bold);
-            let x = ((w - lw) / 2.0).max(0.0);
+            let x = rx + ((rw - lw) / 2.0).max(0.0);
             self.queue_text(line, x, yy, size, color, bold);
             yy += line_h;
         }
@@ -1614,7 +1641,11 @@ impl Compositor {
             &mut self.font_system,
             Metrics::new(size, (size * 1.3).max(2.0)),
         );
-        buffer.set_size(Some(self.width as f32), None);
+        // Must match `measure_text` (unbounded) — a bounded width here would
+        // re-wrap the already-wrapped line and make the measured `lw` disagree
+        // with the rendered width, shifting the text right (large left margin)
+        // and clipping on the right.
+        buffer.set_size(None, None);
         let mut attrs = Attrs::new().family(Family::SansSerif);
         if bold {
             attrs = attrs.weight(glyphon::Weight::BOLD);

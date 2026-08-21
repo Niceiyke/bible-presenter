@@ -41,8 +41,13 @@ pub const MAX_VIDEO_HEIGHT: u32 = 1080;
 /// How long an unreferenced decoder lingers before it is stopped (render
 /// surfaces re-sync every tick, so brief resolution gaps don't churn decoders).
 const DEFAULT_LINGER: Duration = Duration::from_secs(3);
-/// Cooldown before retrying a decoder whose spawn or decode failed.
+/// Base cooldown before retrying a decoder whose spawn or decode failed. Each
+/// consecutive failure doubles the wait (see [`MediaFrameHub::backoff_for`]).
 const DEFAULT_RETRY_AFTER: Duration = Duration::from_secs(5);
+/// Ceiling for the failure backoff: a persistently broken source (unplugged
+/// camera, missing file) retries at most every minute instead of hammering
+/// ffmpeg with spawn attempts.
+const DEFAULT_RETRY_CAP: Duration = Duration::from_secs(60);
 
 /// One decoded RGBA video frame. The pixel buffer is shared, so handing the
 /// newest frame to N consumers never copies it.
@@ -603,6 +608,9 @@ struct HubEntry {
     opts: VideoOpts,
     last_seen: Instant,
     failed_at: Option<Instant>,
+    /// Consecutive failures without a successful frame — drives the
+    /// exponential respawn backoff (reset on any successful spawn).
+    fail_streak: u32,
 }
 
 /// Registry of running video decoders, keyed by persisted media path or
@@ -622,6 +630,7 @@ pub struct MediaFrameHub {
     spawner: DecoderSpawner,
     linger: Duration,
     retry_after: Duration,
+    retry_cap: Duration,
 }
 
 impl std::fmt::Debug for MediaFrameHub {
@@ -645,13 +654,33 @@ impl MediaFrameHub {
 
     /// Hub with explicit lifecycle timings (tests inject short windows).
     pub fn with_timings(spawner: DecoderSpawner, linger: Duration, retry_after: Duration) -> Arc<Self> {
+        Self::with_timings_full(spawner, linger, retry_after, DEFAULT_RETRY_CAP)
+    }
+
+    /// Hub with explicit lifecycle timings including the backoff ceiling.
+    pub fn with_timings_full(
+        spawner: DecoderSpawner,
+        linger: Duration,
+        retry_after: Duration,
+        retry_cap: Duration,
+    ) -> Arc<Self> {
         Arc::new(Self {
             entries: Mutex::new(HashMap::new()),
             pinned: Mutex::new(HashMap::new()),
             spawner,
             linger,
             retry_after,
+            retry_cap,
         })
+    }
+
+    /// Respawn cooldown after `streak` consecutive failures: base wait doubled
+    /// each time, capped so a dead source retries at most once a minute.
+    fn backoff_for(&self, streak: u32) -> Duration {
+        let mult = 1u64 << streak.saturating_sub(1).min(16);
+        self.retry_after
+            .saturating_mul(mult as u32)
+            .min(self.retry_cap)
     }
 
     /// Per-tick lifecycle sync from a render surface: marks every referenced
@@ -721,7 +750,10 @@ impl MediaFrameHub {
                     if opts.differs_from(&entry.opts) {
                         self.restart_entry(path, entry, *opts, now);
                     } else if entry.decoder.is_stopped()
-                        && entry.failed_at.map(|t| now.duration_since(t) >= self.retry_after).unwrap_or(false)
+                        && entry
+                            .failed_at
+                            .map(|t| now.duration_since(t) >= self.backoff_for(entry.fail_streak))
+                            .unwrap_or(false)
                     {
                         self.respawn_entry(path, entry, *opts, now);
                     }
@@ -734,6 +766,7 @@ impl MediaFrameHub {
                         opts: *opts,
                         last_seen: now,
                         failed_at: Some(now),
+                        fail_streak: 0,
                     };
                     self.respawn_entry(path, &mut fresh, *opts, now);
                     entries.insert(path.clone(), fresh);
@@ -768,6 +801,7 @@ impl MediaFrameHub {
                 entry.events = Mutex::new(events);
                 entry.opts = opts;
                 entry.failed_at = None;
+                entry.fail_streak = 0;
             }
             Err(reason) => {
                 let (dead, dead_rx) = VideoDecoderHandle::dead();
@@ -776,6 +810,8 @@ impl MediaFrameHub {
                 entry.events = Mutex::new(dead_rx);
                 entry.opts = opts;
                 entry.failed_at = Some(now);
+                // fail_streak is incremented when poll_events drains the Failed
+                // event above — every failure counts exactly once.
             }
         }
     }
@@ -788,6 +824,7 @@ impl MediaFrameHub {
                 entry.events = Mutex::new(events);
                 entry.opts = opts;
                 entry.failed_at = None;
+                entry.fail_streak = 0;
             }
             Err(reason) => {
                 // Route the failure through the entry's own (dead-handle)
@@ -848,6 +885,9 @@ impl MediaFrameHub {
                 if let DecoderEvent::Failed(_, _) = &event {
                     entry.decoder.slot().clear();
                     entry.failed_at = Some(now);
+                    // The decoder ran and died — count it toward the backoff so
+                    // a persistently broken source stops respawning every tick.
+                    entry.fail_streak += 1;
                 }
                 // Ended: freeze on the last frame; no automatic retry.
                 out.push(event);
@@ -1230,6 +1270,48 @@ mod tests {
             !hub.capture_status().iter().any(|(k, _)| *k == key),
             "unpinned capture swept after linger"
         );
+    }
+
+    #[test]
+    fn hub_failure_backoff_doubles_and_caps() {
+        let log: SpawnLog = Arc::new((AtomicUsize::new(0), Mutex::new(Vec::new())));
+        let hub = MediaFrameHub::with_timings_full(
+            fake_spawner(Arc::clone(&log), vec![]),
+            Duration::from_secs(30),
+            Duration::from_millis(10),
+            Duration::from_millis(35),
+        );
+        assert_eq!(hub.backoff_for(0), Duration::from_millis(10));
+        assert_eq!(hub.backoff_for(1), Duration::from_millis(10), "first failure waits the base");
+        assert_eq!(hub.backoff_for(2), Duration::from_millis(20));
+        assert_eq!(hub.backoff_for(3), Duration::from_millis(35), "capped");
+        assert_eq!(hub.backoff_for(9), Duration::from_millis(35), "still capped");
+    }
+
+    #[test]
+    fn hub_does_not_respawn_a_failing_capture_before_its_backoff() {
+        let log: SpawnLog = Arc::new((AtomicUsize::new(0), Mutex::new(Vec::new())));
+        let key = camera_key_for_device("cam-x");
+        let hub = MediaFrameHub::with_timings(
+            fake_spawner(Arc::clone(&log), vec![key.clone()]),
+            Duration::from_secs(30),
+            Duration::from_millis(200),
+        );
+
+        // The first attempt fires immediately on pin and fails.
+        hub.pin(key.clone(), opts(true, 1.0));
+        assert_eq!(log.0.load(Ordering::SeqCst), 1);
+        hub.poll_events(); // drain the Failed → tombstone + fail_streak 1
+
+        // Well inside the 200 ms base backoff: no respawn churn.
+        std::thread::sleep(Duration::from_millis(50));
+        hub.sync(&[]);
+        assert_eq!(log.0.load(Ordering::SeqCst), 1, "backoff holds");
+
+        // Past the window: exactly one more attempt.
+        std::thread::sleep(Duration::from_millis(250));
+        hub.sync(&[]);
+        assert_eq!(log.0.load(Ordering::SeqCst), 2, "one respawn after backoff");
     }
 
     #[test]

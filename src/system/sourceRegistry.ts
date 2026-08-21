@@ -19,6 +19,8 @@
  * React hooks in `src/hooks/useCameraSource.ts`.
  */
 
+import { webviewDeviceIdForEngineName } from "./cameraNames";
+
 export type SourceStatus =
   /** Known (enumerated or registered) but not requested. */
   | "idle"
@@ -224,10 +226,13 @@ function openLocal(key: string, deviceId: string, q: CaptureQuality): void {
   const entry = entries.get(key);
   if (!entry) return;
   setState(key, { status: "opening", stream: null, errorKind: null });
+  // The id may be an ENGINE friendly name (broadcast items carry it); translate
+  // to the real webview device for the actual getUserMedia constraint.
+  const nativeDeviceId = webviewDeviceIdForEngineName(deviceId);
   navigator.mediaDevices
     .getUserMedia({
       video: {
-        deviceId: { exact: deviceId },
+        deviceId: { exact: nativeDeviceId },
         width: { ideal: q.width, max: q.width },
         height: { ideal: q.height, max: q.height },
         frameRate: { ideal: q.fps, max: q.fps },

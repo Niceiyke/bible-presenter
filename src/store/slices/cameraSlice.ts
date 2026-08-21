@@ -1,6 +1,7 @@
 import { StateCreator } from "zustand";
 import { AppStore } from "../index";
 import { primeCameraPermission } from "../../system/sourceRegistry";
+import { refreshCameraNameMaps } from "../../system/cameraNames";
 
 export interface CameraDeviceInfo {
   deviceId: string;
@@ -60,6 +61,10 @@ export const createCameraSlice: StateCreator<AppStore, [], [], CameraSlice> = (s
         }));
 
       set({ availableCameras: cameras });
+
+      // Phase I1: re-bridge the webview/engine ID namespaces so broadcast
+      // staging can carry engine friendly names and previews translate back.
+      void refreshCameraNameMaps();
 
       // Auto-select first camera if none selected
       set((state) => {

@@ -3,6 +3,7 @@ import { MediaPickerModal } from "./MediaPickerModal";
 import { useAppStore } from "../store";
 import { relativizePath } from "../utils";
 import type { BackgroundSetting, VideoBackground, CameraBackground, AudioBackground, ImageBackground, MediaItem } from "../types";
+import { engineNameForWebviewId } from "../system/cameraNames";
 
 const DEFAULT_IMAGE_BG: ImageBackground = {
   path: "",
@@ -273,7 +274,12 @@ export function BackgroundEditor({
               >
                 <option value="">Select Camera...</option>
                 {availableCameras.map((cam) => (
-                  <option key={cam.deviceId} value={cam.deviceId}>{cam.label}</option>
+                  <option
+                    key={cam.deviceId}
+                    value={engineNameForWebviewId(cam.deviceId) ?? cam.deviceId}
+                  >
+                    {cam.label}
+                  </option>
                 ))}
               </select>
               <button 

@@ -593,18 +593,41 @@ fn dispatch_command<B: EngineBackend>(
             }
         }
         EngineCommand::CaptureStart { key } => {
-            if crate::engine::compositor::media::parse_camera_key(&key).is_none() {
-                err(id, revision(), "capture_error", "not a camera capture key (cam:{device}@WxH@fps)")
-            } else {
-                runtime.media_hub.pin(
-                    key,
-                    crate::engine::compositor::media::VideoOpts {
-                        loop_playback: true,
-                        playback_rate: 1.0,
-                        start_ms: 0,
-                    },
-                );
-                ok(id, revision())
+            match crate::engine::compositor::media::parse_camera_key(&key) {
+                None => err(
+                    id,
+                    revision(),
+                    "capture_error",
+                    "not a camera capture key (cam:{device}@WxH@fps)",
+                ),
+                Some(parsed) => {
+                    // Fail fast with an operator-readable reason instead of
+                    // letting ffmpeg discover the missing device (and the hub
+                    // retry-spam it).
+                    #[cfg(windows)]
+                    if let Ok(devices) = crate::engine::capture::list_video_devices() {
+                        let (device, _, _, _) = parsed;
+                        if !devices.iter().any(|d| d.name == device) {
+                            return err(
+                                id,
+                                revision(),
+                                "capture_error",
+                                &format!("camera not found: {device}"),
+                            );
+                        }
+                    }
+                    #[cfg(not(windows))]
+                    let _ = parsed;
+                    runtime.media_hub.pin(
+                        key,
+                        crate::engine::compositor::media::VideoOpts {
+                            loop_playback: true,
+                            playback_rate: 1.0,
+                            start_ms: 0,
+                        },
+                    );
+                    ok(id, revision())
+                }
             }
         }
         EngineCommand::CaptureStop { key } => {

@@ -16,6 +16,7 @@ import { stableId, resolvePath, buildCustomSlideItem, FONTS } from "../utils";
 import { buildSongDisplayItem } from "../utils/song";
 import { ZoneContent } from "./shared/CompositionRenderer";
 import { SourcePicker } from "./sources/SourcePicker";
+import { engineNameForWebviewId } from "../system/cameraNames";
 
 export interface SceneBuilderProps {
   scene: Scene;
@@ -122,7 +123,8 @@ function MediaSource({ onPick }: { onPick: (item: DisplayItem) => void }) {
 function CameraSource({ onPick }: { onPick: (item: DisplayItem) => void }) {
   const pick = (deviceId: string) => {
     const cam: CameraBackground = {
-      deviceId,
+      // Engine friendly name when known — dshow can't open the webview hash.
+      deviceId: engineNameForWebviewId(deviceId) ?? deviceId,
       opacity: 1,
       objectFit: "cover",
       mirrored: false,
