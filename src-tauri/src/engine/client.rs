@@ -218,8 +218,8 @@ mod tests {
 
     #[test]
     fn protocol_version_constant_matches() {
-        // v6 (Phase H): MediaControl + media_ended/media_failed events.
-        assert_eq!(crate::engine::ipc::ENGINE_PROTOCOL_VERSION, 6);
+        // v7 (Phase I1): camera-capture commands + capture_device_lost.
+        assert_eq!(crate::engine::ipc::ENGINE_PROTOCOL_VERSION, 7);
     }
 
     #[test]

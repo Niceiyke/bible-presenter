@@ -359,6 +359,114 @@ pub fn default_spawner(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Camera capture (Phase I1) — same hub, different producer
+// ---------------------------------------------------------------------------
+
+/// Default engine-side camera profile: 720p30 (the webview registry's preview
+/// balance). Quality is encoded in the hub key so a future 1080p program
+/// profile can coexist per consumer class.
+pub const CAMERA_CAPTURE_WIDTH: u32 = 1280;
+pub const CAMERA_CAPTURE_HEIGHT: u32 = 720;
+pub const CAMERA_CAPTURE_FPS: f64 = 30.0;
+
+/// Hub key for one live capture: `cam:{device}@{w}x{h}@{fps}`. The `@WxH@fps`
+/// suffix keeps the dual-quality trick from the webview source registry.
+pub fn format_camera_key(device: &str, w: u32, h: u32, fps: f64) -> String {
+    format!("cam:{device}@{w}x{h}@{}", fps.round().max(1.0) as u32)
+}
+
+/// The I1 default profile for a device id.
+pub fn camera_key_for_device(device_id: &str) -> String {
+    format_camera_key(
+        device_id,
+        CAMERA_CAPTURE_WIDTH,
+        CAMERA_CAPTURE_HEIGHT,
+        CAMERA_CAPTURE_FPS,
+    )
+}
+
+/// Parse a camera hub key. Parsed from the RIGHT so device names may contain
+/// `@` and `x`.
+pub fn parse_camera_key(key: &str) -> Option<(String, u32, u32, f64)> {
+    let rest = key.strip_prefix("cam:")?;
+    let (head, fps) = rest.rsplit_once('@')?;
+    let fps: f64 = fps.parse().ok()?;
+    let (device, geom) = head.rsplit_once('@')?;
+    let (w, h) = geom.split_once('x')?;
+    let (w, h): (u32, u32) = (w.parse().ok()?, h.parse().ok()?);
+    if device.is_empty() || w == 0 || h == 0 || fps <= 0.0 {
+        return None;
+    }
+    Some((device.to_string(), w, h, fps))
+}
+
+/// ffmpeg argv for one dshow capture scaled to WxH RGBA rawvideo on stdout.
+/// No probe (we dictate geometry), no `-stream_loop`, no seek — live source.
+fn camera_capture_command(ffmpeg: &Path, device: &str, w: u32, h: u32, fps: f64) -> Command {
+    let mut cmd = Command::new(ffmpeg);
+    cmd.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "dshow",
+        "-video_size",
+        &format!("{w}x{h}"),
+        "-framerate",
+        &format!("{}", fps.round().max(1.0)),
+        "-rtbufsize",
+        "64M",
+        "-i",
+        &format!("video={device}"),
+        "-map",
+        "0:v:0",
+        "-an",
+        "-sn",
+        "-dn",
+        // Guard against devices that ignore -video_size.
+        "-vf",
+        &format!("scale={w}:{h}"),
+        "-pix_fmt",
+        "rgba",
+        "-f",
+        "rawvideo",
+        "-",
+    ]);
+    cmd
+}
+
+/// Spawner for `cam:` keys: one dshow ffmpeg per device profile, drained on
+/// arrival (`pace = None`) because the device paces itself.
+pub fn camera_spawner(ffmpeg: PathBuf) -> DecoderSpawner {
+    Arc::new(move |key, _opts, slot| {
+        let Some((device, w, h, fps)) = parse_camera_key(key) else {
+            return Err(format!("not a camera key: {key}"));
+        };
+        let cmd = camera_capture_command(&ffmpeg, &device, w, h, fps);
+        spawn_piped_decoder(cmd, key, w, h, None, slot)
+    })
+}
+
+/// Production source spawner (Phase I1): `cam:` keys go to dshow capture,
+/// everything else is a persisted media path decoded from disk. One hub, one
+/// lifecycle — the hub never knows which producer answered.
+pub fn default_source_spawner(
+    app_data_dir: PathBuf,
+    ffmpeg: PathBuf,
+    ffprobe: PathBuf,
+) -> DecoderSpawner {
+    let files = default_spawner(app_data_dir, ffmpeg.clone(), ffprobe);
+    let cams = camera_spawner(ffmpeg);
+    Arc::new(move |key, opts, slot| {
+        if key.starts_with("cam:") {
+            cams(key, opts, slot)
+        } else {
+            files(key, opts, slot)
+        }
+    })
+}
+
 /// Spawn one decoder child + its pacing decode thread. Returns the handle
 /// plus the decoder's private lifecycle-event receiver, which the hub adopts
 /// into its entry so [`MediaFrameHub::poll_events`] can drain it.
@@ -371,9 +479,25 @@ fn spawn_decoder(
     slot: Option<Arc<FrameSlot>>,
 ) -> Result<(VideoDecoderHandle, mpsc::Receiver<DecoderEvent>), String> {
     let (w, h) = fit_dimensions(info.width, info.height, MAX_VIDEO_WIDTH, MAX_VIDEO_HEIGHT);
-    let mut child = decoder_command(ffmpeg, input, opts, w, h)
+    let pace = Some(Duration::from_secs_f64(1.0 / (info.fps * opts.clamped_rate()).max(0.01)));
+    let cmd = decoder_command(ffmpeg, input, opts, w, h);
+    spawn_piped_decoder(cmd, raw_path, w, h, pace, slot)
+}
+
+/// Shared pipe-decoder bring-up: spawn the child, adopt its stdout into a
+/// decode thread publishing into `slot`. `pace = None` means drain on arrival
+/// (live sources pace themselves); `Some(d)` wall-clock paces publication.
+fn spawn_piped_decoder(
+    mut cmd: Command,
+    key: &str,
+    w: u32,
+    h: u32,
+    pace: Option<Duration>,
+    slot: Option<Arc<FrameSlot>>,
+) -> Result<(VideoDecoderHandle, mpsc::Receiver<DecoderEvent>), String> {
+    let mut child = cmd
         .spawn()
-        .map_err(|e| format!("ffmpeg failed to launch for {input:?}: {e}"))?;
+        .map_err(|e| format!("ffmpeg failed to launch for {key}: {e}"))?;
     let stdout = child
         .stdout
         .take()
@@ -390,12 +514,11 @@ fn spawn_decoder(
     });
 
     let thread_shared = Arc::clone(&shared);
-    let path_for_thread = raw_path.to_string();
-    let thread_opts = *opts;
+    let path_for_thread = key.to_string();
     std::thread::Builder::new()
-        .name(format!("video-decode:{raw_path}"))
+        .name(format!("video-decode:{key}"))
         .spawn(move || {
-            run_decode_loop(thread_shared, stdout, w, h, info.fps, thread_opts.clamped_rate(), path_for_thread);
+            run_decode_loop(thread_shared, stdout, w, h, pace, path_for_thread);
         })
         .map_err(|e| format!("could not spawn decode thread: {e}"))?;
 
@@ -403,17 +526,18 @@ fn spawn_decoder(
 }
 
 /// The decode loop: reads fixed-size RGBA frames from ffmpeg's stdout and
-/// publishes them into the shared slot at wall-clock pace
-/// (`frame duration = 1 / (probed fps × playback rate)`). While paused the
-/// loop stops reading, so the OS pipe backpressures ffmpeg into a cheap stall.
-/// On natural exit it reports `Ended` (frames were produced) or `Failed`.
+/// publishes them into the shared slot. `pace = Some(d)` wall-clock paces
+/// publication at the frame duration (file decoders run faster than realtime
+/// otherwise); `None` drains on arrival (live capture paces itself). While
+/// paused the loop stops reading, so the OS pipe backpressures ffmpeg into a
+/// cheap stall. On natural exit it reports `Ended` (frames were produced) or
+/// `Failed`.
 fn run_decode_loop(
     shared: Arc<DecoderShared>,
     mut stdout: impl Read,
     w: u32,
     h: u32,
-    fps: f64,
-    rate: f64,
+    pace: Option<Duration>,
     path: String,
 ) {
     let frame_len = (w as usize).saturating_mul(h as usize).saturating_mul(4);
@@ -422,7 +546,6 @@ fn run_decode_loop(
         return;
     }
     let mut buf = vec![0u8; frame_len];
-    let frame_dur = Duration::from_secs_f64(1.0 / (fps * rate).max(0.01));
     let mut next_due = Instant::now();
     let mut got_frame = false;
 
@@ -437,16 +560,18 @@ fn run_decode_loop(
             continue;
         }
         if stdout.read_exact(&mut buf).is_err() {
-            break; // EOF (end of asset / loop seam) or the child died
+            break; // EOF (end of asset / loop seam / device loss) or the child died
         }
-        let now = Instant::now();
-        if now < next_due {
-            std::thread::sleep(next_due - now);
+        if let Some(frame_dur) = pace {
+            let now = Instant::now();
+            if now < next_due {
+                std::thread::sleep(next_due - now);
+            }
+            next_due = next_due
+                .checked_add(frame_dur)
+                .unwrap_or_else(Instant::now)
+                .max(Instant::now());
         }
-        next_due = next_due
-            .checked_add(frame_dur)
-            .unwrap_or_else(Instant::now)
-            .max(Instant::now());
         shared.slot.set(VideoFrame {
             width: w,
             height: h,
@@ -480,14 +605,20 @@ struct HubEntry {
     failed_at: Option<Instant>,
 }
 
-/// Registry of running video decoders, keyed by persisted media path. Owned
-/// by the engine runtime and shared (Arc) with every render surface.
+/// Registry of running video decoders, keyed by persisted media path or
+/// camera capture key. Owned by the engine runtime and shared (Arc) with every
+/// render surface.
 ///
-/// Contract: ONE decoder per path no matter how many surfaces consume it;
-/// surfaces call [`MediaFrameHub::sync`] each rendered tick with the paths
+/// Contract: ONE decoder per key no matter how many surfaces consume it;
+/// surfaces call [`MediaFrameHub::sync`] each rendered tick with the keys
 /// their resolved frame references, and pull pixels via [`MediaFrameHub::latest`].
+/// Pinned keys ([`MediaFrameHub::pin`], Phase I1 `capture_start`) run even when
+/// no frame references them. Lock order is ALWAYS `pinned` → `entries`.
 pub struct MediaFrameHub {
     entries: Mutex<HashMap<String, HubEntry>>,
+    /// Operator-pinned captures (Phase I1): unioned into every sync so render
+    /// paths stay dumb about pre-warmed devices.
+    pinned: Mutex<HashMap<String, VideoOpts>>,
     spawner: DecoderSpawner,
     linger: Duration,
     retry_after: Duration,
@@ -516,6 +647,7 @@ impl MediaFrameHub {
     pub fn with_timings(spawner: DecoderSpawner, linger: Duration, retry_after: Duration) -> Arc<Self> {
         Arc::new(Self {
             entries: Mutex::new(HashMap::new()),
+            pinned: Mutex::new(HashMap::new()),
             spawner,
             linger,
             retry_after,
@@ -523,10 +655,62 @@ impl MediaFrameHub {
     }
 
     /// Per-tick lifecycle sync from a render surface: marks every referenced
-    /// path seen, spawns missing decoders, restarts decoders whose options
+    /// key seen, spawns missing decoders, restarts decoders whose options
     /// changed, retries tombstoned failures after the cooldown, and sweeps
     /// entries nothing has referenced for longer than the linger window.
+    /// Pinned captures count as referenced even when `refs` omits them.
     pub fn sync(&self, refs: &[(String, VideoOpts)]) {
+        let mut all: Vec<(String, VideoOpts)> = {
+            let pinned = self.pinned.lock();
+            pinned.iter().map(|(k, o)| (k.clone(), *o)).collect()
+        };
+        for (path, opts) in refs {
+            if !all.iter().any(|(p, _)| p == path) {
+                all.push((path.clone(), *opts));
+            }
+        }
+        self.sync_unioned(&all);
+    }
+
+    /// Pin one capture key so it runs even when no program frame references
+    /// it (`capture_start`). Idempotent; spawns immediately.
+    pub fn pin(&self, key: String, opts: VideoOpts) {
+        self.pinned.lock().insert(key, opts);
+        self.sync(&[]);
+    }
+
+    /// Release a pin (`capture_stop`). The decoder keeps running until the
+    /// linger window passes without a referencing sync — unless the live
+    /// program still references the key, in which case it never stops.
+    pub fn unpin(&self, key: &str) {
+        self.pinned.lock().remove(key);
+        self.sync(&[]);
+    }
+
+    /// Which camera captures exist and whether each currently has a live
+    /// decoder: pinned keys first-class, plus program-referenced `cam:` keys.
+    pub fn capture_status(&self) -> Vec<(String, bool)> {
+        let pinned = self.pinned.lock();
+        let entries = self.entries.lock();
+        let mut out: Vec<(String, bool)> = Vec::with_capacity(pinned.len());
+        for key in pinned.keys() {
+            let live = entries
+                .get(key)
+                .map(|e| e.failed_at.is_none() && !e.decoder.is_stopped())
+                .unwrap_or(false);
+            out.push((key.clone(), live));
+        }
+        for (path, entry) in entries.iter() {
+            if path.starts_with("cam:") && !pinned.contains_key(path) {
+                let live = entry.failed_at.is_none() && !entry.decoder.is_stopped();
+                out.push((path.clone(), live));
+            }
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    fn sync_unioned(&self, refs: &[(String, VideoOpts)]) {
         let now = Instant::now();
         let mut entries = self.entries.lock();
 
@@ -688,7 +872,8 @@ impl MediaFrameHub {
 
 /// Collect every video path + playback options a resolved frame references
 /// (background, live/staged/scene item, scene zones). First occurrence wins so
-/// multiple zones referencing the same asset share one decoder.
+/// multiple zones referencing the same asset share one decoder. Camera items /
+/// backgrounds / zones emit `cam:` keys so live captures ride the same hub.
 pub fn collect_video_refs(frame: &ProgramFrame) -> Vec<(String, VideoOpts)> {
     let mut refs: Vec<(String, VideoOpts)> = Vec::new();
     let mut push = |path: &str, opts: VideoOpts| {
@@ -696,43 +881,60 @@ pub fn collect_video_refs(frame: &ProgramFrame) -> Vec<(String, VideoOpts)> {
             refs.push((path.to_string(), opts));
         }
     };
+    let camera_opts = VideoOpts { loop_playback: true, playback_rate: 1.0, start_ms: 0 };
 
     for layer in &frame.layers {
         match layer {
-            ProgramLayer::Background { setting: BackgroundSetting::Video(v) } => push(
-                &v.path,
-                VideoOpts {
-                    loop_playback: v.loop_video,
-                    playback_rate: v.playback_rate as f64,
-                    start_ms: 0,
-                },
-            ),
-            ProgramLayer::Item { item: crate::store::DisplayItem::Media(m) }
-                if matches!(m.media_type, crate::store::MediaItemType::Video) =>
-            {
-                push(
-                    &m.path,
+            ProgramLayer::Background { setting } => match setting {
+                BackgroundSetting::Video(v) => push(
+                    &v.path,
                     VideoOpts {
-                        loop_playback: m.loop_playback,
-                        playback_rate: m.playback_rate,
+                        loop_playback: v.loop_video,
+                        playback_rate: v.playback_rate as f64,
                         start_ms: 0,
                     },
-                );
-            }
-            ProgramLayer::Zone { zone } => {
-                if let crate::store::DisplayItem::Media(m) = &zone.item {
-                    if matches!(m.media_type, crate::store::MediaItemType::Video) {
-                        push(
-                            &m.path,
-                            VideoOpts {
-                                loop_playback: m.loop_playback,
-                                playback_rate: m.playback_rate,
-                                start_ms: 0,
-                            },
-                        );
-                    }
+                ),
+                BackgroundSetting::Camera(cb) => {
+                    push(&camera_key_for_device(&cb.device_id), camera_opts);
                 }
-            }
+                _ => {}
+            },
+            ProgramLayer::Item { item } => match item {
+                crate::store::DisplayItem::Media(m)
+                    if matches!(m.media_type, crate::store::MediaItemType::Video) =>
+                {
+                    push(
+                        &m.path,
+                        VideoOpts {
+                            loop_playback: m.loop_playback,
+                            playback_rate: m.playback_rate,
+                            start_ms: 0,
+                        },
+                    );
+                }
+                crate::store::DisplayItem::Camera(c) => {
+                    push(&camera_key_for_device(&c.device_id), camera_opts);
+                }
+                _ => {}
+            },
+            ProgramLayer::Zone { zone } => match &zone.item {
+                crate::store::DisplayItem::Media(m)
+                    if matches!(m.media_type, crate::store::MediaItemType::Video) =>
+                {
+                    push(
+                        &m.path,
+                        VideoOpts {
+                            loop_playback: m.loop_playback,
+                            playback_rate: m.playback_rate,
+                            start_ms: 0,
+                        },
+                    );
+                }
+                crate::store::DisplayItem::Camera(c) => {
+                    push(&camera_key_for_device(&c.device_id), camera_opts);
+                }
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -809,6 +1011,129 @@ mod tests {
         );
     }
 
+    // -- camera capture keys (Phase I1) --------------------------------------
+
+    #[test]
+    fn camera_keys_round_trip_with_spaces_and_at_signs() {
+        for device in ["HD Webcam", "Elgato Cam Link 4K", "Weird @ Device x2"] {
+            let key = format_camera_key(device, 1280, 720, 30.0);
+            let (parsed_device, w, h, fps) = parse_camera_key(&key).expect("parses");
+            assert_eq!(parsed_device, device);
+            assert_eq!((w, h), (1280, 720));
+            assert_eq!(fps, 30.0);
+        }
+        // Non-integer fps rounds into the key.
+        let key = format_camera_key("cam", 640, 480, 29.97);
+        assert!(key.ends_with("@30"));
+        assert_eq!(parse_camera_key(&key).unwrap().3, 30.0);
+    }
+
+    #[test]
+    fn camera_key_parsing_rejects_garbage() {
+        assert!(parse_camera_key("clip.mp4").is_none());
+        assert!(parse_camera_key("cam:").is_none());
+        assert!(parse_camera_key("cam:dev@bogus").is_none());
+        assert!(parse_camera_key("cam:dev@0x0@30").is_none());
+        assert!(parse_camera_key("cam:dev@1280x720@0").is_none());
+    }
+
+    #[test]
+    fn camera_capture_command_builds_dshow_args() {
+        let cmd = camera_capture_command(Path::new("ffmpeg"), "HD Cam", 1280, 720, 30.0);
+        let joined = format!("{cmd:?}");
+        assert!(joined.contains("\"-f\" \"dshow\""));
+        assert!(joined.contains("\"-video_size\" \"1280x720\""));
+        assert!(joined.contains("\"-framerate\" \"30\""));
+        assert!(joined.contains("video=HD Cam"));
+        // Live source: no loop, no seek, audio excluded.
+        assert!(!joined.contains("-stream_loop"));
+        assert!(joined.contains("-an"));
+        assert!(joined.contains("scale=1280:720"));
+    }
+
+    #[test]
+    fn collect_video_refs_includes_camera_items_backgrounds_and_zones() {
+        use crate::store::{CameraBackground, DisplayItem, SceneZone};
+        let cam = |id: &str| {
+            DisplayItem::Camera(CameraBackground {
+                device_id: id.to_string(),
+                opacity: 1.0,
+                object_fit: "cover".to_string(),
+                mirrored: false,
+            })
+        };
+        let frame = ProgramFrame {
+            revision: 1,
+            timestamp: 0,
+            canvas: crate::engine::compositor::frame::CanvasGeometry { width: 320, height: 180, fps: 30 },
+            source: crate::engine::compositor::frame::ResolvedOutputSource::Live {
+                item: Some(cam("cam-a")),
+            },
+            layers: vec![
+                ProgramLayer::Background {
+                    setting: BackgroundSetting::Camera(CameraBackground {
+                        device_id: "cam-b".to_string(),
+                        opacity: 1.0,
+                        object_fit: "cover".to_string(),
+                        mirrored: true,
+                    }),
+                },
+                ProgramLayer::Item { item: cam("cam-a") },
+                ProgramLayer::Zone {
+                    zone: SceneZone {
+                        id: "z".into(),
+                        item: cam("cam-c"),
+                        source: None,
+                        x: 0.0,
+                        y: 0.0,
+                        w: 1.0,
+                        h: 1.0,
+                        fit: "contain".into(),
+                        opacity: 1.0,
+                        z: 0,
+                        muted: None,
+                        label: None,
+                        font_size: None,
+                        font_family: None,
+                    },
+                },
+            ],
+            background: crate::engine::compositor::frame::ResolvedBackground {
+                setting: BackgroundSetting::None,
+                fallback: "#000000".into(),
+            },
+            overlays: crate::engine::compositor::frame::ProgramOverlays {
+                props: vec![],
+                lower_third: None,
+                logo: None,
+            },
+            blackout: false,
+            missing: vec![],
+            audio: crate::engine::compositor::frame::AudioProgramDescriptor::None,
+            settings: crate::store::PresentationSettings::default(),
+            colors: crate::engine::compositor::frame::ThemeColors {
+                background: "#000000".into(),
+                verse_text: "#ffffff".into(),
+                reference_text: "#f59e0b".into(),
+                waiting_text: "#3f3f46".into(),
+            },
+            reference_output_height: 180,
+            now: 0,
+            app_data_dir: None,
+        };
+
+        let refs = collect_video_refs(&frame);
+        let keys: Vec<&str> = refs.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec![
+                camera_key_for_device("cam-b").as_str(),
+                camera_key_for_device("cam-a").as_str(),
+                camera_key_for_device("cam-c").as_str(),
+            ]
+        );
+    }
+
     // -- slot ---------------------------------------------------------------
 
     #[test]
@@ -879,6 +1204,32 @@ mod tests {
         // Referenced again → both respawn.
         hub.sync(&refs);
         assert_eq!(log.0.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn hub_pin_keeps_a_capture_alive_without_frame_refs() {
+        let log: SpawnLog = Arc::new((AtomicUsize::new(0), Mutex::new(Vec::new())));
+        let hub = MediaFrameHub::with_timings(fake_spawner(Arc::clone(&log), vec![]), Duration::from_millis(30), Duration::from_millis(10));
+        let key = camera_key_for_device("cam-x");
+
+        // Pin spawns immediately and reports live.
+        hub.pin(key.clone(), opts(true, 1.0));
+        assert_eq!(log.0.load(Ordering::SeqCst), 1, "pin spawns now");
+        assert_eq!(hub.capture_status(), vec![(key.clone(), true)]);
+
+        // Render paths sync without the key; the pinned entry survives linger.
+        std::thread::sleep(Duration::from_millis(45));
+        hub.sync(&[]);
+        assert_eq!(hub.capture_status(), vec![(key.clone(), true)]);
+
+        // Unpin + a sync past the linger window sweeps it.
+        hub.unpin(&key);
+        std::thread::sleep(Duration::from_millis(45));
+        hub.sync(&[]);
+        assert!(
+            !hub.capture_status().iter().any(|(k, _)| *k == key),
+            "unpinned capture swept after linger"
+        );
     }
 
     #[test]

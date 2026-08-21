@@ -442,33 +442,64 @@ camera backgrounds fall back to theme color. All acquisition today is webview
 (`getUserMedia` registry + WebRTC phone relay) and cannot reach the engine
 process.
 
-Shared foundation with Phase H: cameras are just more `FrameSource`s in the
-same hub, keyed `${deviceId}@WxH@fps`, ref-counted across every consumer
-(output window, stage, transport capture, cockpit thumbnail) — the engine-side
-port of the Phase 5 webview source registry.
+**Unified source taxonomy (locked).** One rule governs every capture source:
+the hub consumes `FrameSlot`s — producers differ only in how bytes reach the
+slot. Everything downstream (latest-complete semantics, Arc-pointer texture
+re-upload, ref-counted spawn/sweep, `collect_video_refs`, missing-panel
+fallback) is shared with Phase H unchanged.
 
-- **I1 — local webcams**: ffmpeg dshow capture
+| Source | Producer shape | Hub key | Sub-phase |
+| --- | --- | --- | --- |
+| Webcam | ffmpeg `-f dshow` subprocess → stdout pipe | `cam:{device}@WxH@fps` | I1 |
+| Capture card (UVC: Elgato, AVerMedia…) | **same as webcam** — UVC cards enumerate as dshow devices | `cam:{device}@WxH@fps` | I1 (free) |
+| Capture card (DeckLink) | ffmpeg `-f decklink` or Desktop Video SDK | `card:{device}` | follow-up |
+| Phone via WebRTC | webview decode → shared-memory ring → shm reader thread | `phone:{deviceId}` | I2 |
+| NDI | grafton-ndi receive loop (in-process thread, no pipe) | `ndi:{source}` | I3 |
+| File video (Phase H, shipped) | ffmpeg `-i` subprocess → stdout pipe | persisted path | done |
+
+Consequences designed in from the start:
+
+- **`DecoderSpawner` generalizes to a source spawner**: every producer returns
+  the same `(handle, event_rx)` shape regardless of whether it spawned a
+  process, attached to a shm segment, or started an SDK loop. The hub never
+  knows which.
+- **Failure semantics unify**: dshow EOF (unplug), shm writer stop (phone
+  hangup), NDI source vanish — all surface as `Failed`/`Ended` on the same
+  per-source channel → same missing-panel fallback + retry tombstone.
+- **Keying keeps the `@WxH@fps` suffix** so one device can run 1080p for the
+  program and 720p for previews simultaneously — the engine-side port of the
+  Phase 5 webview registry's dual-quality trick. Ref-counting is per key.
+
+Only genuinely new surfaces per sub-phase: device enumeration (I1), the shm
+contract with the webview (I2), NDI discovery (I3).
+
+- **I1 — local webcams + UVC capture cards**: ffmpeg dshow capture
   (`-f dshow -framerate fps -i video="name" -vf scale=W:H -f rawvideo -pix_fmt
-  rgba pipe:1`). Device enumeration via Media Foundation through the existing
+  rgba pipe:1`). No pacing thread — dshow paces itself; drain on arrival into
+  the slot. Device enumeration via Media Foundation through the existing
   `windows` crate dependency (stable names, no parsing games); capture still
   goes through dshow ffmpeg. Hot-plug: re-enumerate command + device-loss retry
   with backoff; loss degrades zones/items to the placeholder panel exactly like
-  missing media.
+  missing media. No seek/pause control (live source): unref = stop after the
+  linger window.
 - **I2 — phone-camera bridge**: the console keeps terminating the phone's
   WebRTC (relay exists, TLS pairing, permissions); it draws the relayed track
   into an OffscreenCanvas at ≤720p/30 and writes frames into a
   shared-memory ring (`shared_memory` crate, plan §2.1 control header:
-  width/height/stride/frame index) that the engine drains into another
-  `FrameSource`. This is migration scaffolding per §8 — native WebRTC in the
-  engine stays blocked on webrtc-rs maturity.
+  width/height/stride/frame index) that the engine drains into another source
+  entry. The "spawner" attaches to an existing segment instead of spawning a
+  process; hangup = writer stops feeding → unified Failed path. This is
+  migration scaffolding per §8 — native WebRTC in the engine stays blocked on
+  webrtc-rs maturity.
 - **I3 — NDI receive** (SDK-gated, `ndi` feature): `NDIlib_recv_capture_v2`
-  poll loop → BGRA frames → `FrameSource` registration, per §5. Discovered NDI
-  sources appear alongside cameras in the source registry.
+  poll loop → BGRA frames → direct slot push on the receiver thread, per §5.
+  Discovered NDI sources appear alongside cameras in the source registry;
+  source disappearance rides the same event channel.
 
 Cockpit/thumbnail previews of any capture source ride the existing MJPEG
 preview-sink pattern (per-source `PreviewFrame` events, throttled ~10 fps).
 
-IPC (protocol v6, additive): `CaptureListDevices`,
+IPC (protocol v7, additive): `CaptureListDevices`,
 `CaptureStart { key, device, w, h, fps }`, `CaptureStop { key }`,
 `CaptureStatus`; `EngineEvent::CaptureDeviceLost { key }`. TS mirror +
 contract tests.

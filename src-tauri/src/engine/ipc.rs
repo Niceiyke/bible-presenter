@@ -28,7 +28,11 @@ use serde::{Deserialize, Serialize};
 ///
 /// v6 (Phase H): added `MediaControl` plus the `media_ended`/`media_failed`
 /// events for the engine's in-process video decoders.
-pub const ENGINE_PROTOCOL_VERSION: u32 = 6;
+///
+/// v7 (Phase I1): added camera-capture commands (`capture_list_devices`,
+/// `capture_start`, `capture_stop`, `capture_status`) plus
+/// `capture_device_lost` for live dshow sources.
+pub const ENGINE_PROTOCOL_VERSION: u32 = 7;
 
 /// Capabilities the engine offers for future negotiation (additive). A console
 /// can gate UI/commands on these without breaking older engines.
@@ -40,6 +44,7 @@ pub const ENGINE_CAPABILITIES: &[&str] = &[
     "ndi",
     "preview_frames",
     "video_playback",
+    "camera_capture",
 ];
 
 /// A command the console sends to the engine. Mirrors the current Tauri command
@@ -165,6 +170,19 @@ pub enum EngineCommand {
         path: String,
         action: crate::engine::compositor::media::MediaAction,
     },
+    // ---- Engine-owned camera capture (Phase I1) ----
+    /// Enumerate video capture devices (webcams + UVC cards) via Media
+    /// Foundation. Returns `{ devices: [{ name }] }`.
+    CaptureListDevices,
+    /// Pre-warm one live capture by hub key (`cam:{device}@WxH@fps`) so it
+    /// runs even before a program frame references it. Idempotent.
+    CaptureStart { key: String },
+    /// Release a pinned capture started with `CaptureStart`. Captures that are
+    /// still referenced by the live program keep running.
+    CaptureStop { key: String },
+    /// Which camera captures currently have live decoders, plus which keys the
+    /// console has pinned.
+    CaptureStatus,
     /// An unknown/future command from a newer console. The engine replies
     /// `unsupported` instead of failing to parse the frame.
     #[serde(other)]
@@ -210,6 +228,10 @@ pub enum EngineEvent {
     /// affected surfaces fall back to the missing-media panel; the hub retries
     /// after a cooldown while the asset stays referenced.
     MediaFailed { path: String, reason: String },
+    /// A live camera capture ended or failed (Phase I1): device unplug, dshow
+    /// error, or device loss. Affected surfaces degrade to the placeholder;
+    /// the hub retries while the source stays referenced.
+    CaptureDeviceLost { key: String },
     /// Unknown/future event from a newer engine. The console ignores it
     /// (structural typing falls through to a `default` branch).
     #[serde(other)]
@@ -496,5 +518,45 @@ mod tests {
 
         let back: EngineEvent = serde_json::from_value(json).unwrap();
         assert!(matches!(back, EngineEvent::MediaFailed { .. }));
+    }
+
+    #[test]
+    fn capture_commands_round_trip_through_json() {
+        let req = EngineRequest { id: 14, command: EngineCommand::CaptureListDevices };
+        let back: EngineRequest = serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+        assert!(matches!(back.command, EngineCommand::CaptureListDevices));
+
+        let req = EngineRequest {
+            id: 15,
+            command: EngineCommand::CaptureStart { key: "cam:HD Cam@1280x720@30".into() },
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["command"]["cmd"], "capture_start");
+        assert_eq!(json["command"]["key"], "cam:HD Cam@1280x720@30");
+
+        let req = EngineRequest {
+            id: 16,
+            command: EngineCommand::CaptureStop { key: "cam:HD Cam@1280x720@30".into() },
+        };
+        let back: EngineRequest = serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+        match back.command {
+            EngineCommand::CaptureStop { key } => assert_eq!(key, "cam:HD Cam@1280x720@30"),
+            other => panic!("wrong variant: {other:?}"),
+        }
+
+        let req = EngineRequest { id: 17, command: EngineCommand::CaptureStatus };
+        let back: EngineRequest = serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+        assert!(matches!(back.command, EngineCommand::CaptureStatus));
+    }
+
+    #[test]
+    fn capture_device_lost_event_round_trips_through_json() {
+        let event = EngineEvent::CaptureDeviceLost { key: "cam:HD Cam@1280x720@30".into() };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["event"], "capture_device_lost");
+        assert_eq!(json["key"], "cam:HD Cam@1280x720@30");
+
+        let back: EngineEvent = serde_json::from_value(json).unwrap();
+        assert!(matches!(back, EngineEvent::CaptureDeviceLost { .. }));
     }
 }

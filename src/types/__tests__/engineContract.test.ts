@@ -21,12 +21,17 @@ describe("engine IPC contract (Phase A1)", () => {
   it("pins the wire protocol version in lockstep with ipc.rs", () => {
     // MUST equal `ENGINE_PROTOCOL_VERSION` in `src-tauri/src/engine/ipc.rs`.
     // v6 (Phase H): media_control + media_ended/media_failed.
-    expect(ENGINE_PROTOCOL_VERSION).toBe(6);
+    // v7 (Phase I1): capture_list_devices/start/stop/status + capture_device_lost.
+    expect(ENGINE_PROTOCOL_VERSION).toBe(7);
   });
 
   it("advertises the video_playback capability (Phase H)", () => {
     // MUST match `ENGINE_CAPABILITIES` in `src-tauri/src/engine/ipc.rs`.
     expect(ENGINE_CAPABILITIES).toContain("video_playback");
+  });
+
+  it("advertises the camera_capture capability (Phase I1)", () => {
+    expect(ENGINE_CAPABILITIES).toContain("camera_capture");
   });
 
   it("covers the core presentation command names the engine dispatch relies on", () => {
@@ -63,6 +68,11 @@ describe("engine IPC contract (Phase A1)", () => {
       { cmd: "media_control", path: "clip.mp4", action: { action: "pause" } },
       { cmd: "media_control", path: "clip.mp4", action: { action: "resume" } },
       { cmd: "media_control", path: "clip.mp4", action: { action: "seek", ms: 12500 } },
+      // Phase I1 camera capture
+      { cmd: "capture_list_devices" },
+      { cmd: "capture_start", key: "cam:HD Webcam@1280x720@30" },
+      { cmd: "capture_stop", key: "cam:HD Webcam@1280x720@30" },
+      { cmd: "capture_status" },
     ];
     for (const c of cmds) expect(typeof c).toBe("object");
   });
@@ -80,6 +90,8 @@ describe("engine IPC contract (Phase A1)", () => {
       // Phase H decoder lifecycle
       { event: "media_ended", path: "clip.mp4" },
       { event: "media_failed", path: "bad.mp4", reason: "no frames decoded" },
+      // Phase I1 camera lifecycle
+      { event: "capture_device_lost", key: "cam:HD Webcam@1280x720@30" },
     ];
     for (const e of events) expect(typeof e).toBe("object");
   });

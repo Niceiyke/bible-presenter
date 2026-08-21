@@ -21,9 +21,10 @@ pub use lower_third::{
     LowerThirdPayload, LowerThirdTemplate, ResolvedLowerThird,
 };
 pub use media::{
-    collect_video_refs, default_spawner, resolve_media_path, DecoderEvent, DecoderSpawner,
-    FrameSlot, MediaAction, MediaFrameHub, VideoFrame, VideoOpts, MAX_VIDEO_HEIGHT,
-    MAX_VIDEO_WIDTH,
+    camera_key_for_device, collect_video_refs, default_source_spawner, default_spawner,
+    format_camera_key, parse_camera_key, resolve_media_path, DecoderEvent, DecoderSpawner,
+    FrameSlot, MediaAction, MediaFrameHub, VideoFrame, VideoOpts, CAMERA_CAPTURE_FPS,
+    CAMERA_CAPTURE_HEIGHT, CAMERA_CAPTURE_WIDTH, MAX_VIDEO_HEIGHT, MAX_VIDEO_WIDTH,
 };
 pub use resolver::{
     collect_frame_media_paths, derive_logo_state, get_effective_bg, resolve_program_frame,

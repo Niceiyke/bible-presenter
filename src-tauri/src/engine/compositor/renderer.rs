@@ -1136,7 +1136,20 @@ impl Compositor {
                     None => self.fill_rect(pass, [0.0, 0.0, w, h], rgba_to_uniform(theme_bg), 0.0),
                 }
             }
-            BackgroundSetting::Camera(_) | BackgroundSetting::Audio(_) => {
+            BackgroundSetting::Camera(cb) => {
+                // Phase I1: live capture fills the background; theme fill only
+                // when no capture is running for the device.
+                let key = super::media::camera_key_for_device(&cb.device_id);
+                match self.load_video_texture(&key, media) {
+                    Some((tex, vw, vh)) => {
+                        let r = image_fit_rect_for(&cb.object_fit, w, h, Some(vw as i64), Some(vh as i64));
+                        let uv = if cb.mirrored { [1.0, 0.0, 0.0, 1.0] } else { [0.0, 0.0, 1.0, 1.0] };
+                        self.draw_textured(pass, &tex, r, uv, [1.0, 1.0, 1.0, cb.opacity.clamp(0.0, 1.0)], 0.0);
+                    }
+                    None => self.fill_rect(pass, [0.0, 0.0, w, h], rgba_to_uniform(theme_bg), 0.0),
+                }
+            }
+            BackgroundSetting::Audio(_) => {
                 self.fill_rect(pass, [0.0, 0.0, w, h], rgba_to_uniform(theme_bg), 0.0);
             }
         }
@@ -1181,8 +1194,19 @@ impl Compositor {
                 }
             },
             DisplayItem::Camera(c) => {
-                let name = format!("CAMERA {}", c.device_id);
-                self.draw_missing_media(pass, &name, w, h);
+                // Phase I1: live frames come from the hub's `cam:` key; the
+                // placeholder panel shows only when no capture is running.
+                let key = super::media::camera_key_for_device(&c.device_id);
+                match self.load_video_texture(&key, media) {
+                    Some((tex, vw, vh)) => {
+                        let r = image_fit_rect_for("contain", w, h, Some(vw as i64), Some(vh as i64));
+                        self.draw_textured(pass, &tex, r, [0.0, 0.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0], 0.0);
+                    }
+                    None => {
+                        let name = format!("CAMERA {}", c.device_id);
+                        self.draw_missing_media(pass, &name, w, h);
+                    }
+                }
             }
             DisplayItem::Timer(t) => {
                 let size = (h * 0.12).max(40.0);
@@ -1248,8 +1272,18 @@ impl Compositor {
                 }
             }
             DisplayItem::Camera(c) => {
-                let name = format!("CAMERA {}", c.device_id);
-                self.draw_missing_media_in(pass, &name, rect, opacity);
+                let key = super::media::camera_key_for_device(&c.device_id);
+                match self.load_video_texture(&key, media) {
+                    Some((tex, vw, vh)) => {
+                        let r = image_fit_rect_for(zone.fit.as_str(), rect[2], rect[3], Some(vw as i64), Some(vh as i64));
+                        let rr = [rect[0] + (rect[2] - r[2]) / 2.0, rect[1] + (rect[3] - r[3]) / 2.0, r[2], r[3]];
+                        self.draw_textured(pass, &tex, rr, [0.0, 0.0, 1.0, 1.0], [1.0, 1.0, 1.0, opacity], 0.0);
+                    }
+                    None => {
+                        let name = format!("CAMERA {}", c.device_id);
+                        self.draw_missing_media_in(pass, &name, rect, opacity);
+                    }
+                }
             }
             DisplayItem::Verse(v) => {
                 let size = (rect[3] * 0.05).max(14.0);
@@ -2028,5 +2062,42 @@ mod tests {
         // "cover" fills the whole canvas with the frame.
         let corner = &px[0..4];
         assert!(corner[2] > 200 && corner[0] < 40 && corner[1] < 40, "corner should be blue, got {corner:?}");
+    }
+
+    // -- camera arms (Phase I1) ----------------------------------------------
+
+    fn camera_item(device: &str) -> DisplayItem {
+        DisplayItem::Camera(crate::store::CameraBackground {
+            device_id: device.to_string(),
+            opacity: 1.0,
+            object_fit: "contain".to_string(),
+            mirrored: false,
+        })
+    }
+
+    #[test]
+    fn renders_live_camera_item_frame() {
+        let frame = frame_with(Some(camera_item("HD Webcam")), BackgroundSetting::None);
+        let key = crate::engine::compositor::media::camera_key_for_device("HD Webcam");
+        let red = [255u8, 0, 0, 255].repeat(16);
+        let mut media = VideoMedia {
+            images: HashMap::new(),
+            videos: HashMap::from_iter([(
+                key,
+                crate::engine::compositor::media::VideoFrame { width: 4, height: 4, rgba: std::sync::Arc::new(red) },
+            )]),
+        };
+        let (_, _, px) = render_frame_to_pixels(&frame, &mut media).expect("render");
+        let c = center_pixel_index();
+        assert!(px[c] > 200 && px[c + 1] < 40, "center should be red camera frame, got {:?}", &px[c..c + 4]);
+    }
+
+    #[test]
+    fn renders_missing_camera_item_panel_without_a_capture() {
+        let frame = frame_with(Some(camera_item("Ghost Cam")), BackgroundSetting::None);
+        let mut media = VideoMedia { images: HashMap::new(), videos: HashMap::new() };
+        let (_, _, px) = render_frame_to_pixels(&frame, &mut media).expect("render");
+        let c = center_pixel_index();
+        assert!(px[c] < 100, "center should be dimmed panel, got {:?}", &px[c..c + 4]);
     }
 }

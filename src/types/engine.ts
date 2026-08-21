@@ -18,8 +18,11 @@ import type { OutputConfig } from "./output";
 
 /** Must equal `ENGINE_PROTOCOL_VERSION` in `src-tauri/src/engine/ipc.rs`.
  *  v6 (Phase H): added `media_control` plus the `media_ended`/`media_failed`
- *  events for the engine's in-process video decoders. */
-export const ENGINE_PROTOCOL_VERSION = 6;
+ *  events for the engine's in-process video decoders.
+ *  v7 (Phase I1): added camera-capture commands (`capture_list_devices`,
+ *  `capture_start`, `capture_stop`, `capture_status`) plus
+ *  `capture_device_lost` for live dshow sources. */
+export const ENGINE_PROTOCOL_VERSION = 7;
 
 /** Additive capability negotiation — matches `ENGINE_CAPABILITIES` (ipc.rs). */
 export const ENGINE_CAPABILITIES = [
@@ -30,6 +33,7 @@ export const ENGINE_CAPABILITIES = [
   "ndi",
   "preview_frames",
   "video_playback",
+  "camera_capture",
 ] as const;
 
 /** A command the console sends to the engine. Mirrors the current Tauri
@@ -86,6 +90,13 @@ export type EngineCommand =
   // Operator transport control for one playing asset, keyed by its persisted
   // media path. Errors when nothing is playing for that path.
   | { cmd: "media_control"; path: string; action: EngineMediaAction }
+  // ---- Engine-owned camera capture (Phase I1) ----
+  // Hub keys look like `cam:{device}@{w}x{h}@{fps}`; dshow ffmpeg runs in the
+  // engine and every surface shares the decoded frames.
+  | { cmd: "capture_list_devices" }
+  | { cmd: "capture_start"; key: string }
+  | { cmd: "capture_stop"; key: string }
+  | { cmd: "capture_status" }
   | { cmd: string };
 
 /** One request frame on the stdio channel. */
@@ -142,6 +153,8 @@ export type EngineEvent =
   // ---- Engine-owned video playback (Phase H) ----
   | { event: "media_ended"; path: string }
   | { event: "media_failed"; path: string; reason: string }
+  // ---- Engine-owned camera capture (Phase I1) ----
+  | { event: "capture_device_lost"; key: string }
   | { event: string };
 
 export interface EngineEventFrame {

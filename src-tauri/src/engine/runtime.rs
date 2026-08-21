@@ -73,7 +73,7 @@ impl EngineRuntime {
         // The decode hub must exist before the window host spawns so every
         // hosted window's resolver shares it (Phase H).
         let media_hub = crate::engine::compositor::media::MediaFrameHub::new(
-            crate::engine::compositor::media::default_spawner(
+            crate::engine::compositor::media::default_source_spawner(
                 app_data_dir.clone(),
                 crate::binpaths::ffmpeg_path(),
                 crate::binpaths::ffprobe_path(),
@@ -91,7 +91,7 @@ impl EngineRuntime {
         pending_events: Arc<Mutex<Vec<EngineEventFrame>>>,
     ) -> Result<Self, String> {
         let media_hub = crate::engine::compositor::media::MediaFrameHub::new(
-            crate::engine::compositor::media::default_spawner(
+            crate::engine::compositor::media::default_source_spawner(
                 app_data_dir.clone(),
                 crate::binpaths::ffmpeg_path(),
                 crate::binpaths::ffprobe_path(),
@@ -347,10 +347,18 @@ pub fn dispatch(runtime: &EngineRuntime, id: u64, command: EngineCommand) -> (En
         runtime.sync_transport_state();
     }
 
-    // Decoder lifecycle events (Phase H): drained with every reply so the
+    // Decoder lifecycle events (Phase H/I1): drained with every reply so the
     // console learns about ended/failed playback alongside any mutation.
+    // Camera keys surface as `capture_device_lost` (live sources don't
+    // "end", they disappear).
     for event in runtime.media_hub.poll_events() {
         let frame = match event {
+            crate::engine::compositor::media::DecoderEvent::Ended(path)
+            | crate::engine::compositor::media::DecoderEvent::Failed(path, _)
+                if path.starts_with("cam:") =>
+            {
+                EngineEventFrame { event: EngineEvent::CaptureDeviceLost { key: path } }
+            }
             crate::engine::compositor::media::DecoderEvent::Ended(path) => {
                 EngineEventFrame { event: EngineEvent::MediaEnded { path } }
             }
@@ -577,6 +585,40 @@ fn dispatch_command<B: EngineBackend>(
                 Ok(()) => ok(id, revision()),
                 Err(e) => err(id, revision(), "media_error", &e),
             }
+        }
+        EngineCommand::CaptureListDevices => {
+            match crate::engine::capture::list_video_devices() {
+                Ok(devices) => ok_with(id, revision(), json!({ "devices": devices })),
+                Err(e) => err(id, revision(), "capture_error", &e),
+            }
+        }
+        EngineCommand::CaptureStart { key } => {
+            if crate::engine::compositor::media::parse_camera_key(&key).is_none() {
+                err(id, revision(), "capture_error", "not a camera capture key (cam:{device}@WxH@fps)")
+            } else {
+                runtime.media_hub.pin(
+                    key,
+                    crate::engine::compositor::media::VideoOpts {
+                        loop_playback: true,
+                        playback_rate: 1.0,
+                        start_ms: 0,
+                    },
+                );
+                ok(id, revision())
+            }
+        }
+        EngineCommand::CaptureStop { key } => {
+            runtime.media_hub.unpin(&key);
+            ok(id, revision())
+        }
+        EngineCommand::CaptureStatus => {
+            let captures: Vec<Value> = runtime
+                .media_hub
+                .capture_status()
+                .into_iter()
+                .map(|(key, live)| json!({ "key": key, "live": live }))
+                .collect();
+            ok_with(id, revision(), json!({ "captures": captures }))
         }
         EngineCommand::Unknown => EngineResponse::unsupported(id),
     }
