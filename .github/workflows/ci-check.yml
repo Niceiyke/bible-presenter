@@ -91,7 +91,7 @@ jobs:
         shell: pwsh
         run: |
           choco install pkgconfiglite -y --no-progress
-          $pkg = "C:\vcpkg\installed\x64-windows\tools\pkgconf\pkgconf.exe"
+          $pkg = "C:\ProgramData\chocolatey\bin\pkg-config.exe"
           if (Test-Path $pkg) { echo "pkg-config at $pkg" } else { Get-Command pkg-config | Format-List * }
           & $pkg --version
           echo "PKG_CONFIG=$pkg" | Out-File -FilePath $env:GITHUB_ENV -Append
