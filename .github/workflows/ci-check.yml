@@ -91,7 +91,7 @@ jobs:
         shell: pwsh
         run: |
           choco install pkgconfiglite -y --no-progress
-          $pkg = "C:\ProgramData\chocolatey\bin\pkg-config.exe"
+          $pkg = "C:\vcpkg\installed\x64-windows\tools\pkgconf\pkgconf.exe"
           if (Test-Path $pkg) { echo "pkg-config at $pkg" } else { Get-Command pkg-config | Format-List * }
           & $pkg --version
           echo "PKG_CONFIG=$pkg" | Out-File -FilePath $env:GITHUB_ENV -Append
@@ -107,31 +107,44 @@ jobs:
           } else {
             echo "ffmpeg already installed in C:\vcpkg"
           }
+          # Use forward slashes for PKG_CONFIG_PATH to avoid drive-letter colon split on msys pkg-config
           $pkgPath = "C:/vcpkg/installed/x64-windows/lib/pkgconfig"
           $env:PKG_CONFIG_PATH = $pkgPath
           $env:VCPKGRS_DYNAMIC = "1"
-          $env:PKG_CONFIG = "C:\ProgramData\chocolatey\bin\pkg-config.exe"
+          $env:VCPKG_ROOT = "C:\vcpkg"
+          # Prefer vcpkg's own pkgconf (handles Windows paths) over Strawberry
+          $vcpkgPkgConf = Get-ChildItem C:\vcpkg\installed\x64-windows\tools\pkgconf -Recurse -Filter pkgconf.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $vcpkgPkgConf) { $vcpkgPkgConf = "C:\vcpkg\installed\x64-windows\tools\pkgconf\pkgconf.exe" }
+          $env:PKG_CONFIG = $vcpkgPkgConf
           echo "PKG_CONFIG_PATH=$pkgPath" | Out-File -FilePath $env:GITHUB_ENV -Append
           echo "VCPKGRS_DYNAMIC=1" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "PKG_CONFIG=C:\ProgramData\chocolatey\bin\pkg-config.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Get-Command pkg-config | Select-Object Source
+          echo "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "PKG_CONFIG=$vcpkgPkgConf" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "Using PKG_CONFIG=$vcpkgPkgConf"
+          Get-Command pkg-config -ErrorAction SilentlyContinue | Select-Object Source
           & $env:PKG_CONFIG --modversion libavutil
           if ($LASTEXITCODE -ne 0) { throw "pkg-config failed in install step" }
+          & $env:PKG_CONFIG --modversion libavformat
 
       - name: Verify pkg-config can find libavutil
         shell: pwsh
         run: |
           echo "PKG_CONFIG_PATH=$env:PKG_CONFIG_PATH"
           echo "PKG_CONFIG=$env:PKG_CONFIG"
+          echo "VCPKG_ROOT=$env:VCPKG_ROOT"
+          Test-Path $env:VCPKG_ROOT\.vcpkg-root
           Get-ChildItem C:/vcpkg/installed/x64-windows/lib/pkgconfig/libav*.pc | Select-Object Name
           & $env:PKG_CONFIG --modversion libavutil
           & $env:PKG_CONFIG --cflags --libs libavutil
+          & $env:PKG_CONFIG --modversion libavformat
+          & $env:PKG_CONFIG --cflags --libs libavformat
 
       - name: cargo check
         working-directory: src-tauri
         env:
           PKG_CONFIG_PATH: "C:/vcpkg/installed/x64-windows/lib/pkgconfig"
-          PKG_CONFIG: "C:\\ProgramData\\chocolatey\\bin\\pkg-config.exe"
+          PKG_CONFIG: "C:\vcpkg\installed\x64-windows\tools\pkgconf\pkgconf.exe"
+          VCPKG_ROOT: "C:\\vcpkg"
           VCPKGRS_DYNAMIC: "1"
         run: cargo check
 
@@ -139,7 +152,8 @@ jobs:
         working-directory: src-tauri
         env:
           PKG_CONFIG_PATH: "C:/vcpkg/installed/x64-windows/lib/pkgconfig"
-          PKG_CONFIG: "C:\\ProgramData\\chocolatey\\bin\\pkg-config.exe"
+          PKG_CONFIG: "C:\vcpkg\installed\x64-windows\tools\pkgconf\pkgconf.exe"
+          VCPKG_ROOT: "C:\\vcpkg"
           VCPKGRS_DYNAMIC: "1"
         run: cargo clippy --all-targets -- -D warnings
 
@@ -147,6 +161,7 @@ jobs:
         working-directory: src-tauri
         env:
           PKG_CONFIG_PATH: "C:/vcpkg/installed/x64-windows/lib/pkgconfig"
-          PKG_CONFIG: "C:\\ProgramData\\chocolatey\\bin\\pkg-config.exe"
+          PKG_CONFIG: "C:\vcpkg\installed\x64-windows\tools\pkgconf\pkgconf.exe"
+          VCPKG_ROOT: "C:\\vcpkg"
           VCPKGRS_DYNAMIC: "1"
         run: cargo test

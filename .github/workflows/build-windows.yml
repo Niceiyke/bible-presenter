@@ -83,7 +83,7 @@ jobs:
         shell: pwsh
         run: |
           choco install pkgconfiglite -y --no-progress
-          $pkg = "C:\ProgramData\chocolatey\bin\pkg-config.exe"
+          $pkg = "C:\vcpkg\installed\x64-windows\tools\pkgconf\pkgconf.exe"
           & $pkg --version
           echo "PKG_CONFIG=$pkg" | Out-File -FilePath $env:GITHUB_ENV -Append
           echo "C:\ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
@@ -98,10 +98,12 @@ jobs:
           $pkgPath = "C:/vcpkg/installed/x64-windows/lib/pkgconfig"
           $env:PKG_CONFIG_PATH = $pkgPath
           $env:VCPKGRS_DYNAMIC = "1"
-          $env:PKG_CONFIG = "C:\ProgramData\chocolatey\bin\pkg-config.exe"
+          $env:VCPKG_ROOT = "C:\vcpkg"
+          $env:PKG_CONFIG = "C:\vcpkg\installed\x64-windows\tools\pkgconf\pkgconf.exe"
           echo "PKG_CONFIG_PATH=$pkgPath" | Out-File -FilePath $env:GITHUB_ENV -Append
           echo "VCPKGRS_DYNAMIC=1" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "PKG_CONFIG=C:\ProgramData\chocolatey\bin\pkg-config.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "PKG_CONFIG=C:\vcpkg\installed\x64-windows\tools\pkgconf\pkgconf.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
           & $env:PKG_CONFIG --modversion libavutil
 
       - name: Verify pkg-config can find libavutil
@@ -109,7 +111,8 @@ jobs:
         run: |
           echo "PKG_CONFIG_PATH=$env:PKG_CONFIG_PATH"
           echo "PKG_CONFIG=$env:PKG_CONFIG"
-          Get-ChildItem C:\vcpkg\installed\x64-windows\lib\pkgconfig\libav*.pc | Select-Object Name
+          echo "VCPKG_ROOT=$env:VCPKG_ROOT"
+          Get-ChildItem C:/vcpkg/installed/x64-windows/lib/pkgconfig/libav*.pc | Select-Object Name
           & $env:PKG_CONFIG --modversion libavutil
           & $env:PKG_CONFIG --cflags --libs libavutil
 
@@ -150,8 +153,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           RUSTFLAGS: "-C target-feature=-crt-static"
           MSVC_RUNTIME_LIBRARY: "MultiThreadedDLL"
-          PKG_CONFIG_PATH: "C:\\vcpkg\\installed\\x64-windows\\lib\\pkgconfig"
-          PKG_CONFIG: "C:\\ProgramData\\chocolatey\\bin\\pkg-config.exe"
+          PKG_CONFIG_PATH: "C:/vcpkg/installed/x64-windows/lib/pkgconfig"
+          PKG_CONFIG: "C:\\vcpkg\\installed\\x64-windows\\tools\\pkgconf\\pkgconf.exe"
+          VCPKG_ROOT: "C:\\vcpkg"
           VCPKGRS_DYNAMIC: "1"
         with:
           tagName: ${{ github.event_name == 'workflow_dispatch' && format('v__VERSION__-manual-{0}', github.run_number) || 'v__VERSION__' }}
