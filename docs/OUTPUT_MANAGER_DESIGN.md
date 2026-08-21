@@ -382,10 +382,17 @@ ffmpeg/ffprobe are resolved **bundled-first** via `src-tauri/src/binpaths.rs`:
 `{resource_dir}/bin/ffmpeg.exe` (shipped through `bundle.resources`, see
 `tauri.conf.json`) is used when present, with a PATH fallback so dev and
 machines without the bundle still work. The binaries are **not committed** to
-git — `scripts/fetch-ffmpeg.ps1` downloads the BtbN **LGPL** Windows build
-(no x264/x265 → no GPL obligations for the mux-only RTMP path) into
+git — `scripts/fetch-ffmpeg.ps1` downloads the BtbN **GPL** Windows build into
 `src-tauri/binaries/`, and must be run before `npm run tauri build` (tauri-build
 validates resource existence, so `cargo check`/`cargo test` need it too).
+The **GPL** variant is required because the engine's shared encoder uses
+`-c:v libx264` (`engine/transport.rs`) and libx264 is a GPL library that LGPL
+builds do not include — an LGPL ffmpeg has no H.264 software encoder at all.
+Shipping ffmpeg.exe as a separate process the engine talks to over stdio pipes
+keeps it an aggregate work; the obligations are to ship ffmpeg's GPL-2.0 license
+text with distributions (`binaries/ffmpeg-COPYING.GPLv2.txt`, bundled via
+`bundle.resources`) and point at the corresponding source (the pinned BtbN
+release page).
 `binpaths::init` is called in `main.rs` setup with the resolved resource dir.
 Removes the "install ffmpeg" hard gate for RTMP streaming and keeps media
 probing working offline.

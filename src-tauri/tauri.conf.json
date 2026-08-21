@@ -75,6 +75,7 @@
       "../dist": "dist",
       "binaries/ffmpeg.exe": "bin/ffmpeg.exe",
       "binaries/ffprobe.exe": "bin/ffprobe.exe",
+      "binaries/ffmpeg-COPYING.GPLv2.txt": "bin/ffmpeg-COPYING.GPLv2.txt",
       "binaries/wordlyte-engine.exe": "wordlyte-engine.exe"
     },
     "windows": {
