@@ -12,8 +12,9 @@ src-tauri/models/*.onnx
 src-tauri/bible_data/*.db
 src-tauri/bible_data/*.npy
 
-# Bundled media binaries — fetched via scripts/fetch-ffmpeg.ps1 (not committed)
+# Bundled media binaries — staged by scripts/copy-engine-binary.mjs (not committed)
 src-tauri/binaries/*.exe
+src-tauri/binaries/*.dll
 
 # DB-only Bible data release asset (uploaded to the GitHub release, not committed)
 /wordlyte_bible.zip

@@ -68,15 +68,17 @@ jobs:
         with:
           components: clippy
 
-      # tauri-build validates bundled resources at compile time, but dist/ and
-      # the wordlyte-engine binary are gitignored (produced by the build).
-      # Create placeholder so cargo check/clippy/test can run as a fast
-      # compile gate; the release workflow produces the real artifact.
+      # tauri-build validates bundled resources at compile time, but dist/,
+      # the wordlyte-engine binary, and the ffmpeg DLLs are gitignored
+      # (produced by the build). The same --bootstrap mode the release build
+      # uses derives the full resource list from tauri.conf.json and writes
+      # 0-byte placeholders so cargo check/clippy/test can run as a fast
+      # compile gate; the release workflow produces the real artifacts.
       - name: create bundled-resource placeholders for tauri-build
         shell: bash
         run: |
-          mkdir -p src-tauri/binaries dist
-          touch src-tauri/binaries/wordlyte-engine.exe dist/.keep
+          mkdir -p dist
+          node scripts/copy-engine-binary.mjs --bootstrap
 
       - name: Install LLVM (bindgen for ffmpeg-sys-next)
         shell: pwsh
