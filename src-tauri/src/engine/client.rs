@@ -141,11 +141,12 @@ impl EngineClient {
     }
 }
 
-impl Drop for EngineClient {
-    fn drop(&mut self) {
-        self.shutdown();
-    }
-}
+// No `Drop`: `EngineClient` is `Clone` and hot paths clone it for one-off
+// invokes (`commands/misc.rs`, `sync_engine_presentation`) — a `Drop` that
+// shut the sidecar down would kill the engine the first time such a temporary
+// goes out of scope. Teardown is explicit instead: `main.rs` calls
+// `shutdown()` on `RunEvent::Exit`, and if the console dies abruptly the
+// sidecar's stdin pipe closes and the engine exits itself on EOF.
 
 fn spawn_writer(mut stdin: ChildStdin, rx: Receiver<CommandMessage>) {
     std::thread::spawn(move || {
@@ -247,5 +248,44 @@ mod tests {
         };
         let err = client.invoke(EngineCommand::Ping).unwrap_err();
         assert!(err.contains("Engine sidecar channel closed"), "got: {err}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn dropping_a_clone_keeps_the_sidecar_running() {
+        // Regression: `Drop` used to call `shutdown()`, so any temporary clone
+        // (engine_invoke / sync_engine_presentation) killed the shared
+        // sidecar. A dropped clone must leave the process running; only an
+        // explicit `shutdown()` may stop it.
+        let mut child = Command::new("cmd")
+            .args(["/q"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn cmd stand-in");
+        let stdin = child.stdin.take().expect("cmd stdin");
+        let stdout = child.stdout.take().expect("cmd stdout");
+        let (tx, rx) = mpsc::channel();
+        let inner = Arc::new(Inner {
+            tx,
+            next_id: Mutex::new(1),
+            pending: Mutex::new(HashMap::new()),
+            child: Mutex::new(Some(child)),
+            reader: Mutex::new(None),
+        });
+        spawn_writer(stdin, rx);
+        *inner.reader.lock() = Some(spawn_reader(stdout, Arc::clone(&inner)));
+
+        let client = EngineClient { inner };
+        let clone = client.clone();
+        drop(clone);
+        assert!(
+            client.is_running(),
+            "dropping a clone must not stop the sidecar"
+        );
+
+        client.shutdown();
+        assert!(!client.is_running(), "explicit shutdown must stop it");
     }
 }

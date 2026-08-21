@@ -357,7 +357,7 @@ fn session_muxer_args(kind: &SessionKind, fps: u32) -> Vec<String> {
                 "flv".into(),
                 "-flvflags".into(),
                 "no_duration_filesize".into(),
-                url.clone().into(),
+                url.clone(),
             ]);
         }
         SessionKind::Recording { path } => {
@@ -368,7 +368,7 @@ fn session_muxer_args(kind: &SessionKind, fps: u32) -> Vec<String> {
                 "+frag_keyframe+empty_moov".into(),
                 "-fps_mode".into(),
                 "passthrough".into(),
-                path.to_string_lossy().into_owned().into(),
+                path.to_string_lossy().into_owned(),
             ]);
         }
     }
@@ -403,9 +403,9 @@ fn encoder_args(width: u32, height: u32, fps: u32) -> Vec<String> {
         "-pix_fmt".into(),
         "rgba".into(),
         "-s".into(),
-        format!("{width}x{height}").into(),
+        format!("{width}x{height}"),
         "-r".into(),
-        fps.to_string().into(),
+        fps.to_string(),
         "-i".into(),
         "pipe:0".into(),
         "-c:v".into(),
@@ -419,11 +419,11 @@ fn encoder_args(width: u32, height: u32, fps: u32) -> Vec<String> {
         "-profile:v".into(),
         "high".into(),
         "-g".into(),
-        keyint.to_string().into(),
+        keyint.to_string(),
         "-bf".into(),
         "0".into(),
         "-x264-params".into(),
-        format!("keyint={keyint}:min-keyint={fps}:scenecut=-1:repeat-headers=1").into(),
+        format!("keyint={keyint}:min-keyint={fps}:scenecut=-1:repeat-headers=1"),
         "-f".into(),
         "h264".into(),
         "pipe:1".into(),
