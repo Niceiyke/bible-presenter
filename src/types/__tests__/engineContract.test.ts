@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { ENGINE_PROTOCOL_VERSION, type EngineCommand, type EngineEvent } from "../../types/engine";
+import {
+  ENGINE_CAPABILITIES,
+  ENGINE_PROTOCOL_VERSION,
+  type EngineCommand,
+  type EngineEvent,
+} from "../../types/engine";
 
 /**
  * Phase A1 — Rust ⇄ TypeScript engine IPC contract.
@@ -15,7 +20,13 @@ import { ENGINE_PROTOCOL_VERSION, type EngineCommand, type EngineEvent } from ".
 describe("engine IPC contract (Phase A1)", () => {
   it("pins the wire protocol version in lockstep with ipc.rs", () => {
     // MUST equal `ENGINE_PROTOCOL_VERSION` in `src-tauri/src/engine/ipc.rs`.
-    expect(ENGINE_PROTOCOL_VERSION).toBe(5);
+    // v6 (Phase H): media_control + media_ended/media_failed.
+    expect(ENGINE_PROTOCOL_VERSION).toBe(6);
+  });
+
+  it("advertises the video_playback capability (Phase H)", () => {
+    // MUST match `ENGINE_CAPABILITIES` in `src-tauri/src/engine/ipc.rs`.
+    expect(ENGINE_CAPABILITIES).toContain("video_playback");
   });
 
   it("covers the core presentation command names the engine dispatch relies on", () => {
@@ -41,6 +52,17 @@ describe("engine IPC contract (Phase A1)", () => {
       { cmd: "output_window_set_config", label: "output", config: {} as never },
       { cmd: "list_monitors" },
       { cmd: "sync_presentation", snapshot: {} as never },
+      // Phase D transport proxies
+      { cmd: "rtmp_start", session_id: "s", url: "rtmp://x", fps: 30, width: 1920, height: 1080 },
+      { cmd: "rtmp_stop", session_id: "s" },
+      { cmd: "rtmp_status" },
+      { cmd: "recording_start", session_id: "s", path: "r.mp4", fps: 30, width: 1920, height: 1080 },
+      { cmd: "recording_stop", session_id: "s" },
+      { cmd: "recording_status" },
+      // Phase H video playback
+      { cmd: "media_control", path: "clip.mp4", action: { action: "pause" } },
+      { cmd: "media_control", path: "clip.mp4", action: { action: "resume" } },
+      { cmd: "media_control", path: "clip.mp4", action: { action: "seek", ms: 12500 } },
     ];
     for (const c of cmds) expect(typeof c).toBe("object");
   });
@@ -55,6 +77,9 @@ describe("engine IPC contract (Phase A1)", () => {
       { event: "output_state_changed", output_id: "stream-main", state: {} },
       { event: "preview_frame", output_id: "output-main", frame_index: 0, width: 480, height: 270, image_base64: "" },
       { event: "ndi_source_changed", payload: {} },
+      // Phase H decoder lifecycle
+      { event: "media_ended", path: "clip.mp4" },
+      { event: "media_failed", path: "bad.mp4", reason: "no frames decoded" },
     ];
     for (const e of events) expect(typeof e).toBe("object");
   });

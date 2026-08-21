@@ -114,12 +114,15 @@ struct TransportInner {
 pub struct TransportManager {
     inner: Arc<TransportInner>,
     app_data_dir: PathBuf,
+    /// The engine's shared video-decode registry (Phase H): the capture thread
+    /// samples the same decoders the output windows do — never a second copy.
+    media_hub: Arc<crate::engine::compositor::media::MediaFrameHub>,
     alive: Arc<AtomicBool>,
     reaper: Option<JoinHandle<()>>,
 }
 
 impl TransportManager {
-    pub fn new(app_data_dir: PathBuf) -> Self {
+    pub fn new(app_data_dir: PathBuf, media_hub: Arc<crate::engine::compositor::media::MediaFrameHub>) -> Self {
         let inner = Arc::new(TransportInner {
             sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
             encoder: Mutex::new(None),
@@ -128,7 +131,7 @@ impl TransportManager {
         });
         let alive = Arc::new(AtomicBool::new(true));
         let reaper = spawn_reaper(Arc::clone(&inner), Arc::clone(&alive));
-        Self { inner, app_data_dir, alive, reaper: Some(reaper) }
+        Self { inner, app_data_dir, media_hub, alive, reaper: Some(reaper) }
     }
 
     /// Pushes the latest presentation resolver snapshot + scenes so the
@@ -262,6 +265,7 @@ impl TransportManager {
             height,
             fps,
             self.app_data_dir.clone(),
+            Arc::clone(&self.media_hub),
             Arc::clone(&running),
         );
         let fan_thread = spawn_fan_thread(stdout, Arc::clone(&self.inner.sessions), Arc::clone(&running));
@@ -558,12 +562,16 @@ fn spawn_capture_thread(
     height: u32,
     fps: u32,
     app_data_dir: PathBuf,
+    media_hub: Arc<crate::engine::compositor::media::MediaFrameHub>,
     running: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let frame_interval = Duration::from_micros(1_000_000 / fps.max(1) as u64);
         let mut compositor = crate::engine::compositor::Compositor::new(width, height).ok();
-        let mut media = crate::engine::windows::DiskMediaResolver { app_data_dir };
+        let mut media = crate::engine::windows::DiskMediaResolver {
+            app_data_dir,
+            hub: Some(Arc::clone(&media_hub)),
+        };
         let mut next = Instant::now();
         while running.load(Ordering::SeqCst) {
             let frame = {
@@ -582,6 +590,9 @@ fn spawn_capture_thread(
                 };
                 resolve_program_frame(input)
             };
+            // Per-tick decoder lifecycle sync (Phase H): same contract as the
+            // window host — decoders live exactly as long as they're referenced.
+            media_hub.sync(&crate::engine::compositor::media::collect_video_refs(&frame));
             let pixels = match &mut compositor {
                 Some(c) => match c.render(&frame, &mut media) {
                     Ok(()) => c.read_pixels().2,
@@ -662,7 +673,12 @@ mod tests {
     use super::*;
 
     fn manager() -> TransportManager {
-        TransportManager::new(std::env::temp_dir().join("wordlyte-transport-test"))
+        let hub = crate::engine::compositor::media::MediaFrameHub::with_timings(
+            Arc::new(|_, _, _| Err("no decoders in transport tests".to_string())),
+            std::time::Duration::from_secs(30),
+            std::time::Duration::from_secs(30),
+        );
+        TransportManager::new(std::env::temp_dir().join("wordlyte-transport-test"), hub)
     }
 
     /// Registers a session without spawning ffmpeg (the injected muxer child

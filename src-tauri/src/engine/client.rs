@@ -218,7 +218,8 @@ mod tests {
 
     #[test]
     fn protocol_version_constant_matches() {
-        assert_eq!(crate::engine::ipc::ENGINE_PROTOCOL_VERSION, 5);
+        // v6 (Phase H): MediaControl + media_ended/media_failed events.
+        assert_eq!(crate::engine::ipc::ENGINE_PROTOCOL_VERSION, 6);
     }
 
     #[test]

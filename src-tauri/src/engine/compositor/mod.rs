@@ -7,6 +7,7 @@
 
 pub mod frame;
 pub mod lower_third;
+pub mod media;
 pub mod renderer;
 pub mod resolver;
 
@@ -18,6 +19,11 @@ pub use frame::{
 pub use lower_third::{
     default_lt_template, normalize_lt_template, resolve_lower_third, substitute_tokens,
     LowerThirdPayload, LowerThirdTemplate, ResolvedLowerThird,
+};
+pub use media::{
+    collect_video_refs, default_spawner, resolve_media_path, DecoderEvent, DecoderSpawner,
+    FrameSlot, MediaAction, MediaFrameHub, VideoFrame, VideoOpts, MAX_VIDEO_HEIGHT,
+    MAX_VIDEO_WIDTH,
 };
 pub use resolver::{
     collect_frame_media_paths, derive_logo_state, get_effective_bg, resolve_program_frame,

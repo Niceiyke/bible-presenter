@@ -32,11 +32,17 @@ pub struct ImageData {
     pub rgba: Vec<u8>,
 }
 
-/// Supplies image bytes to the compositor by path. The engine host resolves
+/// Supplies media bytes to the compositor by path. The engine host resolves
 /// persisted (relativized) paths against its app data dir; tests use an
 /// in-memory map.
 pub trait MediaResolver {
     fn load_image(&mut self, path: &str) -> Option<ImageData>;
+    /// Latest decoded frame for a playing video asset (Phase H). `None` means
+    /// no decoder is running or the last attempt failed — callers paint the
+    /// safe missing-media fallback instead.
+    fn load_video_frame(&mut self, _path: &str) -> Option<super::media::VideoFrame> {
+        None
+    }
 }
 
 #[repr(C)]
@@ -165,6 +171,10 @@ pub struct Compositor {
     viewport: Viewport,
     // Loaded textures keyed by path (rendered only; lifecycle owned here).
     image_cache: HashMap<String, std::rc::Rc<wgpu::Texture>>,
+    /// Decoded video frames + their GPU textures keyed by path (Phase H). The
+    /// texture re-uploads only when the hub publishes a new frame (detected by
+    /// comparing the shared pixel buffer's pointer).
+    video_cache: HashMap<String, (super::media::VideoFrame, std::rc::Rc<wgpu::Texture>)>,
     /// Text queued during the layer pass and prepared in ONE glyphon
     /// `prepare()` call at the end of the frame — `prepare()` clears its
     /// vertex batch on every invocation, so per-call preparation would keep
@@ -700,6 +710,7 @@ impl Compositor {
             text_renderer,
             viewport,
             image_cache: HashMap::new(),
+            video_cache: HashMap::new(),
             pending_text: Vec::new(),
             instance: Some(instance),
             surface: None,
@@ -821,6 +832,7 @@ impl Compositor {
             text_renderer,
             viewport,
             image_cache: HashMap::new(),
+            video_cache: HashMap::new(),
             pending_text: Vec::new(),
             instance: Some(instance),
             surface: Some(surface),
@@ -1114,7 +1126,17 @@ impl Compositor {
                     self.fill_rect(pass, [0.0, 0.0, w, h], rgba_to_uniform(theme_bg), 0.0);
                 }
             }
-            BackgroundSetting::Video(_) | BackgroundSetting::Camera(_) | BackgroundSetting::Audio(_) => {
+            BackgroundSetting::Video(v) => {
+                match self.load_video_texture(&v.path, media) {
+                    Some((tex, vw, vh)) => {
+                        let r = image_fit_rect_for(&v.object_fit, w, h, Some(vw as i64), Some(vh as i64));
+                        let opacity = v.opacity.clamp(0.0, 1.0);
+                        self.draw_textured(pass, &tex, r, [0.0, 0.0, 1.0, 1.0], [1.0, 1.0, 1.0, opacity], 0.0);
+                    }
+                    None => self.fill_rect(pass, [0.0, 0.0, w, h], rgba_to_uniform(theme_bg), 0.0),
+                }
+            }
+            BackgroundSetting::Camera(_) | BackgroundSetting::Audio(_) => {
                 self.fill_rect(pass, [0.0, 0.0, w, h], rgba_to_uniform(theme_bg), 0.0);
             }
         }
@@ -1146,7 +1168,13 @@ impl Compositor {
                     }
                 }
                 crate::store::MediaItemType::Video => {
-                    self.draw_missing_media(pass, &m.name, w, h);
+                    match self.load_video_texture(&m.path, media) {
+                        Some((tex, vw, vh)) => {
+                            let r = image_fit_rect_for(m.fit_mode.as_str(), w, h, Some(vw as i64), Some(vh as i64));
+                            self.draw_textured(pass, &tex, r, [0.0, 0.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0], 0.0);
+                        }
+                        None => self.draw_missing_media(pass, &m.name, w, h),
+                    }
                 }
                 crate::store::MediaItemType::Audio => {
                     self.draw_missing_media(pass, &m.name, w, h);
@@ -1202,7 +1230,18 @@ impl Compositor {
         let opacity = zone.opacity.clamp(0.0, 1.0);
         match &zone.item {
             DisplayItem::Media(m) => {
-                if let Some(tex) = self.load_texture(&m.path, media) {
+                // Video zones sample the decode hub first; static images fall
+                // through to the image cache.
+                let video = if matches!(m.media_type, crate::store::MediaItemType::Video) {
+                    self.load_video_texture(&m.path, media)
+                } else {
+                    None
+                };
+                if let Some((tex, vw, vh)) = video {
+                    let r = image_fit_rect_for(zone.fit.as_str(), rect[2], rect[3], Some(vw as i64), Some(vh as i64));
+                    let rr = [rect[0] + (rect[2] - r[2]) / 2.0, rect[1] + (rect[3] - r[3]) / 2.0, r[2], r[3]];
+                    self.draw_textured(pass, &tex, rr, [0.0, 0.0, 1.0, 1.0], [1.0, 1.0, 1.0, opacity], 0.0);
+                } else if let Some(tex) = self.load_texture(&m.path, media) {
                     let r = image_fit_rect_for(zone.fit.as_str(), rect[2], rect[3], m.width, m.height);
                     let rr = [rect[0] + (rect[2] - r[2]) / 2.0, rect[1] + (rect[3] - r[3]) / 2.0, r[2], r[3]];
                     self.draw_textured(pass, &tex, rr, [0.0, 0.0, 1.0, 1.0], [1.0, 1.0, 1.0, opacity], 0.0);
@@ -1409,9 +1448,39 @@ impl Compositor {
             return Some(tex.clone());
         }
         let data = media.load_image(path)?;
+        let texture = self.upload_rgba(data.width, data.height, &data.rgba);
+        let rc = std::rc::Rc::new(texture);
+        self.image_cache.insert(path.to_string(), rc.clone());
+        Some(rc)
+    }
+
+    /// Ensure the newest decoded frame for a playing video is on the GPU.
+    /// Returns the texture plus the frame's dimensions (for object-fit math).
+    fn load_video_texture(
+        &mut self,
+        path: &str,
+        media: &mut dyn MediaResolver,
+    ) -> Option<(std::rc::Rc<wgpu::Texture>, u32, u32)> {
+        let fresh = media.load_video_frame(path)?;
+        if let Some((cached, tex)) = self.video_cache.get(path) {
+            if cached.width == fresh.width
+                && cached.height == fresh.height
+                && cached.rgba.as_ptr() == fresh.rgba.as_ptr()
+            {
+                return Some((tex.clone(), cached.width, cached.height));
+            }
+        }
+        let (fw, fh) = (fresh.width, fresh.height);
+        let texture = std::rc::Rc::new(self.upload_rgba(fw, fh, &fresh.rgba));
+        self.video_cache.insert(path.to_string(), (fresh, texture.clone()));
+        Some((texture, fw, fh))
+    }
+
+    /// Upload one RGBA buffer as a sampled GPU texture.
+    fn upload_rgba(&self, width: u32, height: u32, rgba: &[u8]) -> wgpu::Texture {
         let size = wgpu::Extent3d {
-            width: data.width.max(1),
-            height: data.height.max(1),
+            width: width.max(1),
+            height: height.max(1),
             depth_or_array_layers: 1,
         };
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -1431,17 +1500,15 @@ impl Compositor {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &data.rgba,
+            rgba,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(data.width.max(1) * 4),
-                rows_per_image: Some(data.height.max(1)),
+                bytes_per_row: Some(width.max(1) * 4),
+                rows_per_image: Some(height.max(1)),
             },
             size,
         );
-        let rc = std::rc::Rc::new(texture);
-        self.image_cache.insert(path.to_string(), rc.clone());
-        Some(rc)
+        texture
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1682,7 +1749,7 @@ pub fn render_frame_to_pixels(
 mod tests {
     use super::*;
     use crate::outputs::{OutputGeometry, OutputKind, OutputOverlays, OutputSource, OUTPUT_SCHEMA_VERSION};
-    use crate::store::{PresentationSettings, Verse};
+    use crate::store::{PresentationSettings, Verse, VideoBackground};
 
     fn frame_with(item: Option<DisplayItem>, background: BackgroundSetting) -> ProgramFrame {
         let settings = PresentationSettings::default();
@@ -1863,5 +1930,103 @@ mod tests {
         let mid = &px[90 * 320 * 4..(90 + 1) * 320 * 4];
         let non_black = mid.chunks_exact(4).filter(|p| p[3] > 0 && (p[0] > 30 || p[1] > 30 || p[2] > 30)).count();
         assert!(non_black > 5, "expected waiting text pixels, found {non_black}");
+    }
+
+    /// MemoryMedia plus a video-frame map (Phase H): `load_video_frame`
+    /// returns mapped frames so the video draw arms can be tested without
+    /// ffmpeg (the plan's "fake FrameSource").
+    struct VideoMedia {
+        images: HashMap<String, ImageData>,
+        videos: HashMap<String, crate::engine::compositor::media::VideoFrame>,
+    }
+
+    impl MediaResolver for VideoMedia {
+        fn load_image(&mut self, path: &str) -> Option<ImageData> {
+            self.images.get(path).cloned()
+        }
+        fn load_video_frame(&mut self, path: &str) -> Option<crate::engine::compositor::media::VideoFrame> {
+            self.videos.get(path).cloned()
+        }
+    }
+
+    fn video_item() -> DisplayItem {
+        DisplayItem::Media(crate::store::MediaItem {
+            id: "m1".to_string(),
+            name: "clip.mp4".to_string(),
+            path: "clip.mp4".to_string(),
+            media_type: crate::store::MediaItemType::Video,
+            thumbnail_path: None,
+            fit_mode: "contain".to_string(),
+            tags: vec![],
+            description: None,
+            category: None,
+            duration: Some(10.0),
+            width: Some(4),
+            height: Some(4),
+            content_hash: None,
+            loop_playback: true,
+            playback_rate: 1.0,
+            volume: 1.0,
+        })
+    }
+
+    fn center_pixel_index() -> usize {
+        ((180 / 2) * 320 + (320 / 2)) * 4
+    }
+
+    #[test]
+    fn renders_live_video_item_frame() {
+        let frame = frame_with(Some(video_item()), BackgroundSetting::None);
+        // A 4x4 solid green decoded frame stands in for the hub's latest.
+        let green = [0u8, 255, 0, 255].repeat(16);
+        let mut media = VideoMedia {
+            images: HashMap::new(),
+            videos: HashMap::from_iter([(
+                "clip.mp4".to_string(),
+                crate::engine::compositor::media::VideoFrame { width: 4, height: 4, rgba: std::sync::Arc::new(green) },
+            )]),
+        };
+        let (_, _, px) = render_frame_to_pixels(&frame, &mut media).expect("render");
+        // "contain" fits the square frame to the canvas height and centers it.
+        let c = center_pixel_index();
+        assert!(px[c + 1] > 200 && px[c] < 40, "center should be green, got {:?}", &px[c..c + 4]);
+    }
+
+    #[test]
+    fn renders_missing_video_item_panel_without_a_decoder_frame() {
+        let frame = frame_with(Some(video_item()), BackgroundSetting::None);
+        let mut media = VideoMedia { images: HashMap::new(), videos: HashMap::new() };
+        let (_, _, px) = render_frame_to_pixels(&frame, &mut media).expect("render");
+        // No decoder frame → the missing-media panel dims the canvas center;
+        // it is never the bright green a live frame paints.
+        let c = center_pixel_index();
+        assert!(px[c + 1] < 100, "center should be dimmed panel, got {:?}", &px[c..c + 4]);
+    }
+
+    #[test]
+    fn renders_video_background_frame() {
+        let frame = frame_with(
+            None,
+            BackgroundSetting::Video(VideoBackground {
+                path: "bg.mp4".to_string(),
+                object_fit: "cover".to_string(),
+                opacity: 1.0,
+                loop_video: true,
+                muted: true,
+                playback_rate: 1.0,
+            }),
+        );
+        let blue = [0u8, 0, 255, 255].repeat(16);
+        let mut media = VideoMedia {
+            images: HashMap::new(),
+            videos: HashMap::from_iter([(
+                "bg.mp4".to_string(),
+                crate::engine::compositor::media::VideoFrame { width: 4, height: 4, rgba: std::sync::Arc::new(blue) },
+            )]),
+        };
+        let (_, _, px) = render_frame_to_pixels(&frame, &mut media).expect("render");
+        // "cover" fills the whole canvas with the frame.
+        let corner = &px[0..4];
+        assert!(corner[2] > 200 && corner[0] < 40 && corner[1] < 40, "corner should be blue, got {corner:?}");
     }
 }

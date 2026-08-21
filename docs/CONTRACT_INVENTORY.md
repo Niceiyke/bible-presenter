@@ -432,7 +432,12 @@ tests). Contract:
 | --- | --- | --- | --- |
 | `PresentationSnapshot` | `PRESENTATION_SCHEMA_VERSION` | 1 | `engine/presentation.rs`, `src/types/display.ts` |
 | `OutputConfig` | `OUTPUT_SCHEMA_VERSION` | 1 | `outputs.rs`, `src/types/output.ts` |
+| Engine IPC protocol | `ENGINE_PROTOCOL_VERSION` | 6 | `engine/ipc.rs`, `src/types/engine.ts` |
 | Remote protocol | `REMOTE_PROTOCOL_VERSION` | — | `remote/protocol.rs`, `src/types/remote.ts` |
+
+Engine IPC v6 (Phase H) additions: `media_control`
+(`{ path, action: pause | resume | seek { ms } }`) plus the
+`media_ended`/`media_failed` events and the `video_playback` capability.
 
 Rule (plan §7): never change a persisted field's meaning in place; add
 `schema_version` to new documents; read the previous version before writing the

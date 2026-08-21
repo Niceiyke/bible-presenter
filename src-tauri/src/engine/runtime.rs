@@ -48,6 +48,10 @@ pub struct EngineRuntime {
     /// The shared encode → fan-out → mux transport pipeline (Phase D): one
     /// ffmpeg encoder feeding every RTMP/recording session.
     pub transport: TransportManager,
+    /// The shared video-decode registry (Phase H): one decoder per playing
+    /// asset, consumed by the window host, the transport capture thread, and
+    /// operator `MediaControl` commands.
+    pub media_hub: Arc<crate::engine::compositor::media::MediaFrameHub>,
 }
 
 impl EngineRuntime {
@@ -66,16 +70,41 @@ impl EngineRuntime {
     pub fn new_with_windows(app_data_dir: PathBuf) -> Result<Self, String> {
         let pending = Arc::new(Mutex::new(Vec::<EngineEventFrame>::new()));
         let preview_sink = preview_sink(Arc::clone(&pending));
-        let windows = crate::engine::windows::spawn(app_data_dir.clone(), preview_sink)
+        // The decode hub must exist before the window host spawns so every
+        // hosted window's resolver shares it (Phase H).
+        let media_hub = crate::engine::compositor::media::MediaFrameHub::new(
+            crate::engine::compositor::media::default_spawner(
+                app_data_dir.clone(),
+                crate::binpaths::ffmpeg_path(),
+                crate::binpaths::ffprobe_path(),
+            ),
+        );
+        let windows = crate::engine::windows::spawn(app_data_dir.clone(), preview_sink, Arc::clone(&media_hub))
             .map(Some)
             .map_err(|e| format!("could not start window host: {e}"))?;
-        Self::with_windows_and_pending(app_data_dir, windows, pending)
+        Self::with_windows_and_pending_with_hub(app_data_dir, windows, pending, media_hub)
     }
 
     fn with_windows_and_pending(
         app_data_dir: PathBuf,
         windows: Option<WindowHostHandle>,
         pending_events: Arc<Mutex<Vec<EngineEventFrame>>>,
+    ) -> Result<Self, String> {
+        let media_hub = crate::engine::compositor::media::MediaFrameHub::new(
+            crate::engine::compositor::media::default_spawner(
+                app_data_dir.clone(),
+                crate::binpaths::ffmpeg_path(),
+                crate::binpaths::ffprobe_path(),
+            ),
+        );
+        Self::with_windows_and_pending_with_hub(app_data_dir, windows, pending_events, media_hub)
+    }
+
+    fn with_windows_and_pending_with_hub(
+        app_data_dir: PathBuf,
+        windows: Option<WindowHostHandle>,
+        pending_events: Arc<Mutex<Vec<EngineEventFrame>>>,
+        media_hub: Arc<crate::engine::compositor::media::MediaFrameHub>,
     ) -> Result<Self, String> {
         let store = MediaScheduleStore::in_memory(app_data_dir.clone()).map_err(|e| e.to_string())?;
         let initial_settings = store.load_settings().unwrap_or_default();
@@ -86,7 +115,8 @@ impl EngineRuntime {
             pending_events,
             windows,
             window_configs: Mutex::new(HashMap::new()),
-            transport: TransportManager::new(app_data_dir),
+            transport: TransportManager::new(app_data_dir, Arc::clone(&media_hub)),
+            media_hub,
         })
     }
 
@@ -317,6 +347,20 @@ pub fn dispatch(runtime: &EngineRuntime, id: u64, command: EngineCommand) -> (En
         runtime.sync_transport_state();
     }
 
+    // Decoder lifecycle events (Phase H): drained with every reply so the
+    // console learns about ended/failed playback alongside any mutation.
+    for event in runtime.media_hub.poll_events() {
+        let frame = match event {
+            crate::engine::compositor::media::DecoderEvent::Ended(path) => {
+                EngineEventFrame { event: EngineEvent::MediaEnded { path } }
+            }
+            crate::engine::compositor::media::DecoderEvent::Failed(path, reason) => {
+                EngineEventFrame { event: EngineEvent::MediaFailed { path, reason } }
+            }
+        };
+        runtime.pending_events.lock().push(frame);
+    }
+
     // Drain events AFTER computing the response so the console applies the
     // mutation's events before/with the revision the response reports.
     let events = runtime.drain_events();
@@ -527,6 +571,12 @@ fn dispatch_command<B: EngineBackend>(
                 .map(|s| serde_json::to_value(s).unwrap_or_else(|_| json!({})))
                 .collect();
             ok_with(id, revision(), json!({ "sessions": statuses }))
+        }
+        EngineCommand::MediaControl { path, action } => {
+            match runtime.media_hub.control(&path, &action) {
+                Ok(()) => ok(id, revision()),
+                Err(e) => err(id, revision(), "media_error", &e),
+            }
         }
         EngineCommand::Unknown => EngineResponse::unsupported(id),
     }

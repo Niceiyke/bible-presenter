@@ -355,6 +355,11 @@ Status (feat/rust-video-engine):
 
 ### Phase F: Capture — cameras, audio, phone bridge
 
+Superseded in detail by **Phase H** (video playback) and **Phase I** (camera
+capture) below — those sections are the authoritative scope for media decode
+and capture acquisition; this phase remains for the audio graph portion
+(engine audio input → shared bus → record/stream muxes).
+
 - Local cameras via ffmpeg dshow; audio graph in-engine; phone camera relay
   from console over shared memory into the source registry.
 - Delete webview acquisition hooks (`useCameraSource`, `useSharedLocalCameraStream`,
@@ -372,6 +377,110 @@ Status (feat/rust-video-engine):
 - Acceptance: `npm run build` + `cargo check` + `npm run test` green; no
   `getUserMedia`, `VideoEncoder`, `MediaRecorder`, or `<canvas>` capture remains
   in the webview; manual acceptance matrix (§10) passes.
+
+### Phase H: In-engine video playback
+
+Current gap: the compositor's `draw_item` renders `MediaItemType::Video` and
+`BackgroundSetting::Video` as the missing-media panel / theme-color fill
+(`renderer.rs`); only images load. Videos play nowhere since C4 deleted the
+webview outputs.
+
+**Approach — ffmpeg CLI subprocess decode, not ffmpeg-next (yet).** The
+bundled GPL `ffmpeg.exe` is already shipped, pinned, and proven by the
+transport muxers; a subprocess keeps crash isolation (a corrupt file kills the
+decoder child, not the engine) and adds zero build complexity. The pipe
+bandwidth (RGBA 1080p30 ≈ 250 MB/s) is bounded by scaling decode output to the
+target canvas. An internal `FrameSource` trait keeps the door open for an
+in-process libav backend later without touching the compositor again.
+
+New module `src-tauri/src/engine/compositor/media.rs`:
+
+- `trait FrameSource { fn dimensions(&self) -> (u32, u32); fn latest(&mut self)
+  -> Option<Arc<FrameRgba>>; }` — one implementation per playing asset.
+- `VideoDecoder`: spawns `ffmpeg -i <path> [-stream_loop -1] -an
+  -vf scale=W:H -f rawvideo -pix_fmt rgba pipe:1` (W:H capped to the consuming
+  canvas, never upscaled), reads fixed-size frames on a decode thread into a
+  latest-complete slot; late frames are dropped, never queued. `loop_playback`
+  / `playback_rate` map to `-stream_loop` / `setpts`; pause = stop draining,
+  hold last frame; seek = restart with `-ss` (projection-grade, not NLE-grade).
+- `MediaFrameHub` (Arc-shared, owned by `EngineRuntime`): registry keyed by
+  resolved media path, ref-counted by "referenced in the last N resolved
+  frames" hysteresis so transient resolutions don't churn decoders. ONE decoder
+  per path even when the output window, stage window, and transport capture all
+  consume it (agent rule 6: no second source lifecycle). Each renderer pulls
+  latest RGBA via hub handle and uploads to its own cached `wgpu::Texture`
+  (mirrors the per-compositor `image_cache` pattern).
+
+Compositor wiring: `draw_item`/`draw_background` video arms sample the hub's
+latest frame and reuse `image_fit_rect_for` with the decoder-reported
+dimensions; a dead/missing decoder paints the existing `draw_missing_media`
+panel plus an `operator-warning`.
+
+IPC (protocol v6, additive): `EngineCommand::MediaControl { path, action }`
+where action ∈ play/pause/seek_ms/loop/rate — mirrors the console's legacy
+`media-control` semantics; `EngineEvent::MediaEnded { path }` and
+`MediaFailed { path, reason }`. TS mirror in `src/types/engine.ts` + contract
+tests; update `docs/CONTRACT_INVENTORY.md`.
+
+Audio stays out of scope (consistent with Phase D: no program audio until the
+engine audio graph lands); decoders run `-an`.
+
+Tests: decoder arg construction, latest-slot drop-late behavior, hub
+refcount/hysteresis, fit-rect math with real dimensions, missing-file failure
+path. Pixel test with a synthetic video is an `#[ignore]`d integration test
+(requires ffmpeg on PATH) — unit tests use a fake `FrameSource`.
+
+Acceptance: a live video item plays in the output window at canvas fps, loops,
+and appears identically in recordings/streams (same hub); going clear stops the
+decoder within the hysteresis window; corrupt file degrades to the panel
+without touching live state.
+
+### Phase I: In-engine camera capture
+
+Current gap: `DisplayItem::Camera` renders a `CAMERA {id}` placeholder;
+camera backgrounds fall back to theme color. All acquisition today is webview
+(`getUserMedia` registry + WebRTC phone relay) and cannot reach the engine
+process.
+
+Shared foundation with Phase H: cameras are just more `FrameSource`s in the
+same hub, keyed `${deviceId}@WxH@fps`, ref-counted across every consumer
+(output window, stage, transport capture, cockpit thumbnail) — the engine-side
+port of the Phase 5 webview source registry.
+
+- **I1 — local webcams**: ffmpeg dshow capture
+  (`-f dshow -framerate fps -i video="name" -vf scale=W:H -f rawvideo -pix_fmt
+  rgba pipe:1`). Device enumeration via Media Foundation through the existing
+  `windows` crate dependency (stable names, no parsing games); capture still
+  goes through dshow ffmpeg. Hot-plug: re-enumerate command + device-loss retry
+  with backoff; loss degrades zones/items to the placeholder panel exactly like
+  missing media.
+- **I2 — phone-camera bridge**: the console keeps terminating the phone's
+  WebRTC (relay exists, TLS pairing, permissions); it draws the relayed track
+  into an OffscreenCanvas at ≤720p/30 and writes frames into a
+  shared-memory ring (`shared_memory` crate, plan §2.1 control header:
+  width/height/stride/frame index) that the engine drains into another
+  `FrameSource`. This is migration scaffolding per §8 — native WebRTC in the
+  engine stays blocked on webrtc-rs maturity.
+- **I3 — NDI receive** (SDK-gated, `ndi` feature): `NDIlib_recv_capture_v2`
+  poll loop → BGRA frames → `FrameSource` registration, per §5. Discovered NDI
+  sources appear alongside cameras in the source registry.
+
+Cockpit/thumbnail previews of any capture source ride the existing MJPEG
+preview-sink pattern (per-source `PreviewFrame` events, throttled ~10 fps).
+
+IPC (protocol v6, additive): `CaptureListDevices`,
+`CaptureStart { key, device, w, h, fps }`, `CaptureStop { key }`,
+`CaptureStatus`; `EngineEvent::CaptureDeviceLost { key }`. TS mirror +
+contract tests.
+
+Failure rules: a failed capture never mutates presentation state (adapters
+report, resolver falls back); one capture per device regardless of consumer
+count; stopping the last consumer closes the device after a short linger.
+
+Acceptance: one webcam shared by output + stage + recording simultaneously
+without duplicate captures; unplug mid-service → placeholder + recovery on
+replug; phone camera visible in a scene zone and recordable; NDI receive feeds
+a zone when the SDK is present.
 
 ## 10. Manual acceptance matrix (unchanged product surface)
 

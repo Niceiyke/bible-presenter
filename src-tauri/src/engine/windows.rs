@@ -133,13 +133,18 @@ impl Drop for WindowHostHandle {
     }
 }
 
-/// Media resolver that loads images from disk. Persisted (relativized) paths
-/// are relative to the app data dir's `media/` subdirectory — mirroring
-/// `resolvePath` in `src/utils/index.ts` (`{baseDir}\media\{path}`); absolute
-/// paths pass through.
+/// Media resolver that loads images from disk and video frames from the
+/// engine's decode hub. Persisted (relativized) paths are relative to the app
+/// data dir's `media/` subdirectory — mirroring `resolvePath` in
+/// `src/utils/index.ts` (`{baseDir}\media\{path}`); absolute paths pass
+/// through. Video frames are keyed by the raw persisted path (the same key
+/// `collect_video_refs` reports), so no re-resolution happens here.
 #[derive(Debug, Clone)]
 pub struct DiskMediaResolver {
     pub app_data_dir: PathBuf,
+    /// The engine's shared video-decode registry (Phase H). `None` in unit
+    /// tests / headless contexts — video arms then paint their safe fallback.
+    pub hub: Option<std::sync::Arc<crate::engine::compositor::media::MediaFrameHub>>,
 }
 
 impl MediaResolver for DiskMediaResolver {
@@ -154,6 +159,13 @@ impl MediaResolver for DiskMediaResolver {
         let (width, height) = img.dimensions();
         Some(ImageData { width, height, rgba: img.into_raw() })
     }
+
+    fn load_video_frame(
+        &mut self,
+        path: &str,
+    ) -> Option<crate::engine::compositor::media::VideoFrame> {
+        self.hub.as_ref()?.latest(path)
+    }
 }
 
 /// A preview-frame sink: the host pushes a downscaled, JPEG-encoded frame for a
@@ -161,8 +173,14 @@ impl MediaResolver for DiskMediaResolver {
 /// `EngineEvent::PreviewFrame` with the bytes base64-encoded.
 pub type PreviewSink = Arc<dyn Fn(String, u64, u32, u32, Vec<u8>) + Send + Sync>;
 
-/// Spawn the window host on a background thread and return a handle.
-pub fn spawn(app_data_dir: PathBuf, preview_sink: PreviewSink) -> anyhow::Result<WindowHostHandle> {
+/// Spawn the window host on a background thread and return a handle. The hub
+/// is shared with every hosted window's media resolver so video decoders run
+/// once for all surfaces (Phase H).
+pub fn spawn(
+    app_data_dir: PathBuf,
+    preview_sink: PreviewSink,
+    media_hub: std::sync::Arc<crate::engine::compositor::media::MediaFrameHub>,
+) -> anyhow::Result<WindowHostHandle> {
     let frames = Arc::new(RwLock::new(HashMap::<String, SharedFrame>::new()));
     let frames_for_thread = Arc::clone(&frames);
     let (proxy_tx, proxy_rx) = mpsc::channel();
@@ -192,6 +210,7 @@ pub fn spawn(app_data_dir: PathBuf, preview_sink: PreviewSink) -> anyhow::Result
                 frames: frames_for_thread,
                 app_data_dir,
                 preview_sink,
+                media_hub,
             };
             let _ = event_loop.run_app(&mut app);
         })?;
@@ -269,6 +288,13 @@ impl HostedWindow {
         if let Some(compositor) = &mut self.compositor {
             match frame {
                 Some(shared) => {
+                    // Per-tick decoder lifecycle sync: keep decoders alive for
+                    // every video this frame references (Phase H).
+                    if let Some(hub) = &self.media.hub {
+                        let refs =
+                            crate::engine::compositor::media::collect_video_refs(&shared.frame);
+                        hub.sync(&refs);
+                    }
                     self.last_revision = Some(shared.revision);
                     let _ = compositor.present(&shared.frame, &mut self.media);
                 }
@@ -333,6 +359,7 @@ struct WindowHostApp {
     frames: Arc<RwLock<HashMap<String, SharedFrame>>>,
     app_data_dir: PathBuf,
     preview_sink: PreviewSink,
+    media_hub: std::sync::Arc<crate::engine::compositor::media::MediaFrameHub>,
 }
 
 impl WindowHostApp {
@@ -391,7 +418,10 @@ impl WindowHostApp {
             visible: false,
             preferred_monitor,
             compositor,
-            media: DiskMediaResolver { app_data_dir: self.app_data_dir.clone() },
+            media: DiskMediaResolver {
+                app_data_dir: self.app_data_dir.clone(),
+                hub: Some(Arc::clone(&self.media_hub)),
+            },
             last_revision: None,
             preview_index: 0,
             preview_last: std::time::Instant::now(),
@@ -552,7 +582,7 @@ mod tests {
 
     #[test]
     fn disk_resolver_absolute_path_wins() {
-        let mut r = DiskMediaResolver { app_data_dir: PathBuf::from("C:\\missing") };
+        let mut r = DiskMediaResolver { app_data_dir: PathBuf::from("C:\\missing"), hub: None };
         // Absolute path bypasses the app data dir.
         assert!(r.load_image("C:\\definitely\\missing.png").is_none());
     }
@@ -568,7 +598,7 @@ mod tests {
         image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255]))
             .save(base.join("media").join("dot.png"))
             .expect("write");
-        let mut r = DiskMediaResolver { app_data_dir: base.clone() };
+        let mut r = DiskMediaResolver { app_data_dir: base.clone(), hub: None };
         let img = r.load_image("dot.png").expect("relative path must resolve into media/");
         assert_eq!((img.width, img.height), (1, 1));
         std::fs::remove_dir_all(base).ok();

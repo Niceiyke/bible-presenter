@@ -25,7 +25,10 @@ use serde::{Deserialize, Serialize};
 
 /// Wire protocol version for the engine IPC. Must stay in sync with
 /// `ENGINE_PROTOCOL_VERSION` in `src/types/engine.ts`.
-pub const ENGINE_PROTOCOL_VERSION: u32 = 5;
+///
+/// v6 (Phase H): added `MediaControl` plus the `media_ended`/`media_failed`
+/// events for the engine's in-process video decoders.
+pub const ENGINE_PROTOCOL_VERSION: u32 = 6;
 
 /// Capabilities the engine offers for future negotiation (additive). A console
 /// can gate UI/commands on these without breaking older engines.
@@ -36,6 +39,7 @@ pub const ENGINE_CAPABILITIES: &[&str] = &[
     "streaming",
     "ndi",
     "preview_frames",
+    "video_playback",
 ];
 
 /// A command the console sends to the engine. Mirrors the current Tauri command
@@ -154,6 +158,13 @@ pub enum EngineCommand {
     RecordingStop { session_id: String },
     /// Runtime status of every active recording session.
     RecordingStatus,
+    // ---- Engine-owned video playback (Phase H) ----
+    /// Operator transport control for one playing asset, keyed by its
+    /// persisted media path. Errors when nothing is playing for that path.
+    MediaControl {
+        path: String,
+        action: crate::engine::compositor::media::MediaAction,
+    },
     /// An unknown/future command from a newer console. The engine replies
     /// `unsupported` instead of failing to parse the frame.
     #[serde(other)]
@@ -192,6 +203,13 @@ pub enum EngineEvent {
     },
     /// An NDI source appeared/disappeared on the LAN.
     NdiSourceChanged { payload: serde_json::Value },
+    /// A non-looping video finished playing (Phase H). The engine freezes on
+    /// the last frame until the asset is no longer referenced.
+    MediaEnded { path: String },
+    /// A video decoder failed to spawn or produced no frames (Phase H). The
+    /// affected surfaces fall back to the missing-media panel; the hub retries
+    /// after a cooldown while the asset stays referenced.
+    MediaFailed { path: String, reason: String },
     /// Unknown/future event from a newer engine. The console ignores it
     /// (structural typing falls through to a `default` branch).
     #[serde(other)]
@@ -437,5 +455,46 @@ mod tests {
             }
             other => panic!("wrong variant: {other:?}"),
         }
+    }
+
+    #[test]
+    fn media_control_round_trips_through_json() {
+        for action in [
+            crate::engine::compositor::media::MediaAction::Pause,
+            crate::engine::compositor::media::MediaAction::Resume,
+            crate::engine::compositor::media::MediaAction::Seek { ms: 12_500 },
+        ] {
+            let req = EngineRequest {
+                id: 13,
+                command: EngineCommand::MediaControl { path: "clip.mp4".into(), action },
+            };
+            let json = serde_json::to_string(&req).unwrap();
+            let back: EngineRequest = serde_json::from_str(&json).unwrap();
+            match back.command {
+                EngineCommand::MediaControl { path, action } => {
+                    assert_eq!(path, "clip.mp4");
+                    if let crate::engine::compositor::media::MediaAction::Seek { ms } = action {
+                        assert_eq!(ms, 12_500);
+                    }
+                }
+                other => panic!("wrong variant: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn media_lifecycle_events_round_trip_through_json() {
+        let ended = EngineEvent::MediaEnded { path: "clip.mp4".into() };
+        let json = serde_json::to_value(&ended).unwrap();
+        assert_eq!(json["event"], "media_ended");
+        assert_eq!(json["path"], "clip.mp4");
+
+        let failed = EngineEvent::MediaFailed { path: "bad.mp4".into(), reason: "no frames decoded".into() };
+        let json = serde_json::to_value(&failed).unwrap();
+        assert_eq!(json["event"], "media_failed");
+        assert_eq!(json["reason"], "no frames decoded");
+
+        let back: EngineEvent = serde_json::from_value(json).unwrap();
+        assert!(matches!(back, EngineEvent::MediaFailed { .. }));
     }
 }

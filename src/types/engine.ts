@@ -16,8 +16,10 @@ import type { OutputConfig } from "./output";
  * program state.
  */
 
-/** Must equal `ENGINE_PROTOCOL_VERSION` in `src-tauri/src/engine/ipc.rs`. */
-export const ENGINE_PROTOCOL_VERSION = 5;
+/** Must equal `ENGINE_PROTOCOL_VERSION` in `src-tauri/src/engine/ipc.rs`.
+ *  v6 (Phase H): added `media_control` plus the `media_ended`/`media_failed`
+ *  events for the engine's in-process video decoders. */
+export const ENGINE_PROTOCOL_VERSION = 6;
 
 /** Additive capability negotiation — matches `ENGINE_CAPABILITIES` (ipc.rs). */
 export const ENGINE_CAPABILITIES = [
@@ -27,6 +29,7 @@ export const ENGINE_CAPABILITIES = [
   "streaming",
   "ndi",
   "preview_frames",
+  "video_playback",
 ] as const;
 
 /** A command the console sends to the engine. Mirrors the current Tauri
@@ -79,6 +82,10 @@ export type EngineCommand =
   | { cmd: "recording_start"; session_id: string; path: string; fps: number; width: number; height: number }
   | { cmd: "recording_stop"; session_id: string }
   | { cmd: "recording_status" }
+  // ---- Engine-owned video playback (Phase H) ----
+  // Operator transport control for one playing asset, keyed by its persisted
+  // media path. Errors when nothing is playing for that path.
+  | { cmd: "media_control"; path: string; action: EngineMediaAction }
   | { cmd: string };
 
 /** One request frame on the stdio channel. */
@@ -116,6 +123,13 @@ export interface EnginePreviewFrame {
   image_base64: string;
 }
 
+/** Operator transport control for one playing asset (mirrors
+ *  `compositor::media::MediaAction`, serde-tagged `{ action }`). */
+export type EngineMediaAction =
+  | { action: "pause" }
+  | { action: "resume" }
+  | { action: "seek"; ms: number };
+
 export type EngineEvent =
   | { event: "live_item_update"; detected_item: DisplayItem | null; revision: number }
   | { event: "item_staged"; item: DisplayItem | null; revision: number }
@@ -125,6 +139,9 @@ export type EngineEvent =
   | { event: "output_state_changed"; output_id: string; state: unknown }
   | { event: "preview_frame"; output_id: string; frame_index: number } & EnginePreviewFrame
   | { event: "ndi_source_changed"; payload: unknown }
+  // ---- Engine-owned video playback (Phase H) ----
+  | { event: "media_ended"; path: string }
+  | { event: "media_failed"; path: string; reason: string }
   | { event: string };
 
 export interface EngineEventFrame {
