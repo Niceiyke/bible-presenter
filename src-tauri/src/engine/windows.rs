@@ -363,6 +363,28 @@ struct WindowHostApp {
 }
 
 impl WindowHostApp {
+    fn clamp_to_monitor(event_loop: &ActiveEventLoop, preferred_monitor: &Option<String>, mut w: u32, mut h: u32) -> (u32, u32) {
+        let monitors: Vec<_> = event_loop.available_monitors().collect();
+        let primary = event_loop.primary_monitor();
+        let chosen = preferred_monitor
+            .as_ref()
+            .and_then(|name| monitors.iter().find(|m| m.name().as_deref() == Some(name.as_str())))
+            .or(primary.as_ref())
+            .or_else(|| monitors.first());
+        if let Some(monitor) = chosen {
+            let size = monitor.size();
+            // Leave a small margin so window decorations / taskbar never force clipping
+            let max_w = size.width.saturating_sub(16).max(320);
+            let max_h = size.height.saturating_sub(48).max(240);
+            if w > max_w || h > max_h {
+                let scale = (max_w as f64 / w as f64).min(max_h as f64 / h as f64);
+                w = ((w as f64 * scale) as u32).max(320);
+                h = ((h as f64 * scale) as u32).max(240);
+            }
+        }
+        (w, h)
+    }
+
     fn create_or_show(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -372,6 +394,7 @@ impl WindowHostApp {
         width: u32,
         height: u32,
     ) {
+        let (width, height) = Self::clamp_to_monitor(event_loop, &preferred_monitor, width, height);
         if let Some(win) = self.windows.get_mut(label) {
             win.preferred_monitor = preferred_monitor;
             if win.width != width || win.height != height {
@@ -432,6 +455,14 @@ impl WindowHostApp {
 
     fn resize(&mut self, label: &str, width: u32, height: u32) {
         let Some(win) = self.windows.get_mut(label) else { return };
+        // Clamp to current monitor so a remote resize never recreates the
+        // 1920x1080-on-1024x768 clipping seen on small projectors.
+        let (width, height) = {
+            // We don't have an ActiveEventLoop here; clamp conservatively by
+            // ensuring the window never grows beyond a sane projector size.
+            // The next create_or_show (with an event loop) will fully clamp.
+            (width.min(1920).max(320), height.min(1080).max(240))
+        };
         win.width = width;
         win.height = height;
         if let Some(c) = &mut win.compositor {

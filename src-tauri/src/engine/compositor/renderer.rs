@@ -1062,10 +1062,10 @@ impl Compositor {
                     self.draw_background(&mut pass, setting, theme_bg, media);
                 }
                 ProgramLayer::Item { item } => {
-                    self.draw_item(&mut pass, item, media);
+                    self.draw_item(&mut pass, item, frame, media);
                 }
                 ProgramLayer::Zone { zone } => {
-                    self.draw_zone(&mut pass, zone, media);
+                    self.draw_zone(&mut pass, zone, frame, media);
                 }
                 ProgramLayer::Props { .. } => {
                     for prop in &frame.overlays.props {
@@ -1155,21 +1155,62 @@ impl Compositor {
         }
     }
 
-    fn draw_item(&mut self, pass: &mut wgpu::RenderPass<'_>, item: &DisplayItem, media: &mut dyn MediaResolver) {
+    fn draw_item(&mut self, pass: &mut wgpu::RenderPass<'_>, item: &DisplayItem, frame: &ProgramFrame, media: &mut dyn MediaResolver) {
         let w = self.width as f32;
         let h = self.height as f32;
         match item {
             DisplayItem::Verse(v) => {
-                let size = (h * 0.045).max(20.0);
-                let ref_size = size * 0.6;
-                let ref_color = parse_color("#b45309").unwrap_or([180, 83, 9, 255]);
-                let body_color = [255, 255, 255, 255];
-                let header = format!("{} {}:{}", v.book, v.chapter, v.verse);
-                let max_w = w * 0.86;
-                let mut y = h * 0.5 - size * 2.0;
-                y += self.draw_text_centered( &header, y, ref_size, ref_color, true, max_w);
-                y += size * 0.3;
-                self.draw_text_centered( &v.text, y, size, body_color, false, max_w);
+                // Parity with `src/components/outputs/canvasProgramFeed.ts:drawVerse`:
+                // typography comes from `PresentationSettings` + the resolved theme,
+                // not a hard-coded `h * 0.045`. The compositor scales from
+                // `reference_output_height` exactly like the DOM/canvas paths.
+                let settings = &frame.settings;
+                let colors = &frame.colors;
+                let ref_h = frame.reference_output_height as f32;
+                let scale = if ref_h > 0.0 { h / ref_h } else { 1.0 };
+                let pt_to_px = |pt: f64| (pt as f32 * 96.0 / 72.0 * scale).max(8.0);
+                let verse_pt = pt_to_px(settings.font_size);
+                let verse_color = parse_color(&colors.verse_text).unwrap_or([255, 255, 255, 255]);
+                let ref_pt = pt_to_px(settings.reference_font_size);
+                let ref_color = if !settings.reference_color.is_empty() {
+                    parse_color(&settings.reference_color).unwrap_or_else(|| parse_color(&colors.reference_text).unwrap_or([245, 158, 11, 255]))
+                } else {
+                    parse_color(&colors.reference_text).unwrap_or([245, 158, 11, 255])
+                };
+                // TS `padding = 64 * (h / ref)` and `maxWidth = w - padding*2`
+                let padding = 64.0 * scale;
+                let max_w = (w - padding * 2.0).max(80.0);
+                let line_h = verse_pt * 1.25;
+                let ref_line_h = ref_pt * 1.25;
+                let gap = line_h * 0.6;
+                let is_top = settings.reference_position == "top";
+                let mut ref_text = format!("{} {}:{}", v.book, v.chapter, v.verse);
+                if !v.version.is_empty() {
+                    ref_text = format!("{} ({})", ref_text, v.version);
+                }
+                let ref_text = ref_text.to_uppercase();
+                // Count wrapped verse lines to vertically center the block
+                let verse_lines = self.count_wrapped_lines(&v.text, verse_pt, false, max_w);
+                let total_h = verse_lines as f32 * line_h;
+                let content_h = total_h + gap + ref_line_h;
+                let mut y = (h - content_h) / 2.0;
+                if is_top {
+                    y += self.draw_text_centered(&ref_text, y, ref_pt, ref_color, true, max_w);
+                    y += gap;
+                    self.draw_text_centered(&v.text, y, verse_pt, verse_color, false, max_w);
+                } else {
+                    y += self.draw_text_centered(&v.text, y, verse_pt, verse_color, false, max_w);
+                    y += gap;
+                    self.draw_text_centered(&ref_text, y, ref_pt, ref_color, true, max_w);
+                }
+                // Split marker parity (bottom-right)
+                if let (Some(idx), Some(total)) = (v.split_index, v.total_splits) {
+                    let marker = format!("PART {} / {}", idx + 1, total);
+                    let m_size = pt_to_px(12.0);
+                    let m_color = [verse_color[0], verse_color[1], verse_color[2], (verse_color[3] as f32 * 0.3) as u8];
+                    let lw = self.measure_text(&marker, m_size, true);
+                    self.queue_text(&marker, w - padding - lw, h - padding * 0.5, m_size, m_color, true);
+                }
             }
             DisplayItem::Media(m) => match m.media_type {
                 crate::store::MediaItemType::Image => {
@@ -1242,7 +1283,7 @@ impl Compositor {
         }
     }
 
-    fn draw_zone(&mut self, pass: &mut wgpu::RenderPass<'_>, zone: &SceneZone, media: &mut dyn MediaResolver) {
+    fn draw_zone(&mut self, pass: &mut wgpu::RenderPass<'_>, zone: &SceneZone, frame: &ProgramFrame, media: &mut dyn MediaResolver) {
         let w = self.width as f32;
         let h = self.height as f32;
         let rect = [
@@ -1286,13 +1327,17 @@ impl Compositor {
                 }
             }
             DisplayItem::Verse(v) => {
-                let size = (rect[3] * 0.05).max(14.0);
-                let max_w = rect[2] * 0.9;
-                // Reuse the same word-wrap + centering used for full-screen
-                // verses — the old `len * size * 0.5` estimate under/over-shoots
-                // and was the source of the left-margin / right-clip in zones.
-                let y = rect[1] + rect[3] * 0.5 - size * 0.65;
-                self.draw_text_centered_in(&v.text, rect[0], rect[2], y, size, [255, 255, 255, 255], false, max_w);
+                let ref_h = frame.reference_output_height as f32;
+                let zone_scale = if ref_h > 0.0 { rect[3] / ref_h } else { 1.0 };
+                let verse_pt = (frame.settings.font_size as f32 * 96.0 / 72.0 * zone_scale).max(12.0);
+                let max_w = (rect[2] * 0.90).max(40.0);
+                // Estimate lines to vertically center within the zone
+                let verse_lines = self.count_wrapped_lines(&v.text, verse_pt, false, max_w);
+                let line_h = verse_pt * 1.3;
+                let block_h = verse_lines as f32 * line_h;
+                let y = rect[1] + (rect[3] - block_h) / 2.0;
+                let verse_color = parse_color(&frame.colors.verse_text).unwrap_or([255, 255, 255, 255]);
+                self.draw_text_centered_in(&v.text, rect[0], rect[2], y, verse_pt, verse_color, false, max_w);
             }
             _ => {}
         }
@@ -1564,6 +1609,31 @@ impl Compositor {
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.font_system, false);
         buffer.layout_runs().map(|run| run.line_w).fold(0.0_f32, f32::max)
+    }
+
+    /// Count how many wrapped lines `text` occupies at `max_width` (same
+    /// word-wrap as `draw_text_centered_in`). Used to pre-compute block height
+    /// for vertical centering without queuing glyphs.
+    fn count_wrapped_lines(&mut self, text: &str, size: f32, bold: bool, max_width: f32) -> usize {
+        let max_width = max_width.max(10.0);
+        let mut count = 0usize;
+        for paragraph in text.split('\n') {
+            let mut current = String::new();
+            let mut lines_in_para = 0usize;
+            for word in paragraph.split_whitespace() {
+                let candidate = if current.is_empty() { word.to_string() } else { format!("{current} {word}") };
+                if !current.is_empty() && self.measure_text(&candidate, size, bold) > max_width {
+                    lines_in_para += 1;
+                    current = word.to_string();
+                } else {
+                    current = candidate;
+                }
+            }
+            // Even an empty paragraph counts as one line (matches `draw_text_centered_in`)
+            lines_in_para += 1;
+            count += lines_in_para;
+        }
+        if text.is_empty() { 1 } else { count.max(1) }
     }
 
     /// Draw `text` word-wrapped to `max_width` with every line horizontally
