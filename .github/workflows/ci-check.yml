@@ -87,29 +87,47 @@ jobs:
           }
           clang --version
 
-      - name: Setup vcpkg + ffmpeg dev libs
-        uses: lukka/run-vcpkg@v11
-        with:
-          vcpkgJsonGlob: 'src-tauri/vcpkg.json'
-          runVcpkgInstall: true
+      - name: Install pkg-config
+        shell: pwsh
+        run: |
+          if (-not (Get-Command pkg-config -ErrorAction SilentlyContinue)) {
+            choco install pkgconfiglite -y --no-progress
+            echo "C:\Program Files\pkgconfiglite" | Out-File -FilePath $env:GITHUB_PATH -Append
+          }
+          pkg-config --version
+
+      - name: Install ffmpeg via vcpkg (system vcpkg at C:\vcpkg)
+        shell: pwsh
+        run: |
+          vcpkg --version
+          # Use the preinstalled system vcpkg (C:\vcpkg) — no baseline needed.
+          # Install ffmpeg for x64-windows (dynamic, matches Tauri's MSVC DLL CRT).
+          if (-not (Test-Path "C:\vcpkg\installed\x64-windows\lib\pkgconfig\libavutil.pc")) {
+            vcpkg install ffmpeg[core]:x64-windows --clean-after-build
+          } else {
+            echo "ffmpeg already installed in C:\vcpkg"
+          }
+          echo "PKG_CONFIG_PATH=C:\vcpkg\installed\x64-windows\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "VCPKGRS_DYNAMIC=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+          pkg-config --modversion libavutil
 
       - name: cargo check
         working-directory: src-tauri
         env:
-          PKG_CONFIG_PATH: ${{ env.VCPKG_ROOT }}/installed/x64-windows/lib/pkgconfig
+          PKG_CONFIG_PATH: "C:\\vcpkg\\installed\\x64-windows\\lib\\pkgconfig"
           VCPKGRS_DYNAMIC: "1"
         run: cargo check
 
       - name: cargo clippy
         working-directory: src-tauri
         env:
-          PKG_CONFIG_PATH: ${{ env.VCPKG_ROOT }}/installed/x64-windows/lib/pkgconfig
+          PKG_CONFIG_PATH: "C:\\vcpkg\\installed\\x64-windows\\lib\\pkgconfig"
           VCPKGRS_DYNAMIC: "1"
         run: cargo clippy --all-targets -- -D warnings
 
       - name: cargo test
         working-directory: src-tauri
         env:
-          PKG_CONFIG_PATH: ${{ env.VCPKG_ROOT }}/installed/x64-windows/lib/pkgconfig
+          PKG_CONFIG_PATH: "C:\\vcpkg\\installed\\x64-windows\\lib\\pkgconfig"
           VCPKGRS_DYNAMIC: "1"
         run: cargo test
