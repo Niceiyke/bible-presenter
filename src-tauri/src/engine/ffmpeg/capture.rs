@@ -3,10 +3,9 @@
 use std::{
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::AtomicBool,
         mpsc, Arc,
     },
-    time::Duration,
 };
 
 use crate::engine::compositor::media::{DecoderEvent, FrameSlot, VideoFrame};
@@ -70,7 +69,7 @@ fn run_camera_loop(
     device: &str,
     target_w: u32,
     target_h: u32,
-    fps: f64,
+    _fps: f64,
     handle: crate::engine::compositor::media::VideoDecoderHandle,
 ) -> Result<(), String> {
     use ffmpeg_next::software::scaling::{context::Context as SwsContext, flag::Flags};

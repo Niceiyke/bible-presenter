@@ -103,15 +103,15 @@ pub enum DecoderEvent {
 pub struct FrameSlot(Mutex<Option<VideoFrame>>);
 
 impl FrameSlot {
-    fn set(&self, frame: VideoFrame) {
+    pub fn set(&self, frame: VideoFrame) {
         *self.0.lock() = Some(frame);
     }
 
-    fn clear(&self) {
+    pub fn clear(&self) {
         *self.0.lock() = None;
     }
 
-    fn get(&self) -> Option<VideoFrame> {
+    pub fn get(&self) -> Option<VideoFrame> {
         self.0.lock().clone()
     }
 }

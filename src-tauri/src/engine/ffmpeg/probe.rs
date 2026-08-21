@@ -19,18 +19,13 @@ pub fn probe_source_info(path: &Path) -> Result<SourceInfo, String> {
         .best(ffmpeg_next::media::Type::Video)
         .ok_or_else(|| format!("no video stream in {}", path.display()))?;
     let codec_params = stream.parameters();
-    let w = codec_params.width() as u32;
-    let h = codec_params.height() as u32;
+    // Parameters in ffmpeg-next 9.0 does not expose width/height directly; go via decoder context.
+    let ctx = ffmpeg_next::codec::context::Context::from_parameters(codec_params)
+        .map_err(|e| format!("codec context failed: {e}"))?;
+    let dec = ctx.decoder().video().map_err(|e| format!("video decoder failed: {e}"))?;
+    let (w, h) = (dec.width(), dec.height());
     if w == 0 || h == 0 {
-        // Fallback: try decoder context (some containers only expose it there).
-        let ctx = ffmpeg_next::codec::context::Context::from_parameters(codec_params)
-            .map_err(|e| format!("codec context failed: {e}"))?;
-        let dec = ctx.decoder().video().map_err(|e| format!("video decoder failed: {e}"))?;
-        let (dw, dh) = (dec.width(), dec.height());
-        if dw == 0 || dh == 0 {
-            return Err(format!("could not determine dimensions for {}", path.display()));
-        }
-        return Ok(SourceInfo { width: dw, height: dh, fps: fps_from_stream(&stream) });
+        return Err(format!("could not determine dimensions for {}", path.display()));
     }
     Ok(SourceInfo { width: w, height: h, fps: fps_from_stream(&stream) })
 }
@@ -90,7 +85,7 @@ pub fn probe_thumbnail(path: &Path, out_jpg: &Path, seek_secs: f64) -> bool {
     let stream = ictx.stream(video_idx).unwrap();
     let time_base = stream.time_base();
     let codec_params = stream.parameters();
-    let mut ctx = match ffmpeg_next::codec::context::Context::from_parameters(codec_params) {
+    let ctx = match ffmpeg_next::codec::context::Context::from_parameters(codec_params) {
         Ok(c) => c,
         Err(_) => return false,
     };

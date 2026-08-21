@@ -294,14 +294,14 @@ fn spawn_encode_thread(
             let mut media = crate::engine::windows::DiskMediaResolver { app_data_dir, hub: Some(Arc::clone(&media_hub)) };
 
             // Open encoder context.
-            let mut enc_ctx = match open_encoder(width, height, fps) {
+            let mut encoder = match open_encoder(width, height, fps) {
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!("[ffmpeg-encode] open_encoder failed: {e}");
                     return;
                 }
             };
-            let time_base = enc_ctx.time_base();
+            let time_base = encoder.time_base();
             let mut scaler = match ffmpeg_next::software::scaling::context::Context::get(
                 ffmpeg_next::format::Pixel::RGBA,
                 width,
@@ -319,13 +319,6 @@ fn spawn_encode_thread(
             };
             let mut next = Instant::now();
             let mut frame_num: i64 = 0;
-            let mut encoder = match enc_ctx.encoder().video() {
-                Ok(e) => e,
-                Err(e) => {
-                    eprintln!("[ffmpeg-encode] encoder video: {e}");
-                    return;
-                }
-            };
 
             while running.load(Ordering::SeqCst) {
                 let frame = {
@@ -418,7 +411,7 @@ fn spawn_encode_thread(
         .map_err(|e| format!("could not spawn encode thread: {e}"))
 }
 
-fn open_encoder(width: u32, height: u32, fps: u32) -> Result<ffmpeg_next::codec::context::Context, String> {
+fn open_encoder(width: u32, height: u32, fps: u32) -> Result<ffmpeg_next::encoder::Video, String> {
     let mut codec_name = "libx264";
     // Probe HW encoders first.
     for cand in ["h264_nvenc", "h264_qsv", "h264_amf"] {
@@ -437,7 +430,7 @@ fn open_encoder(width: u32, height: u32, fps: u32) -> Result<ffmpeg_next::codec:
     video.set_time_base(ffmpeg_next::Rational::new(1, fps as i32));
     video.set_frame_rate(Some(ffmpeg_next::Rational::new(fps as i32, 1)));
     // GOP + latency mirror the CLI pipe: veryfast zerolatency High repeat-headers
-    let gop = (fps * 2) as usize;
+    let gop = fps * 2;
     video.set_gop(gop);
     video.set_max_b_frames(0);
     // Codec-specific options via dictionary.
@@ -492,14 +485,16 @@ fn run_rtmp_mux(url: String, rx: mpsc::Receiver<EncodedPacket>, queued: Arc<Atom
         }
     };
     // One video stream, copy codec params from encoder (H.264).
-    let mut st = match fmt.add_stream(ffmpeg_next::encoder::find_by_name("libx264").unwrap_or_else(|| ffmpeg_next::encoder::find(ffmpeg_next::codec::Id::H264).unwrap())) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("[ffmpeg-mux rtmp] add_stream: {e}");
-            return;
-        }
-    };
-    st.set_time_base(ffmpeg_next::Rational::new(1, fps as i32));
+    {
+        let mut st = match fmt.add_stream(ffmpeg_next::encoder::find_by_name("libx264").unwrap_or_else(|| ffmpeg_next::encoder::find(ffmpeg_next::codec::Id::H264).unwrap())) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[ffmpeg-mux rtmp] add_stream: {e}");
+                return;
+            }
+        };
+        st.set_time_base(ffmpeg_next::Rational::new(1, fps as i32));
+    }
     // flv flags: no_duration_filesize
     let mut opts = ffmpeg_next::Dictionary::new();
     opts.set("flvflags", "no_duration_filesize");
@@ -509,22 +504,7 @@ fn run_rtmp_mux(url: String, rx: mpsc::Receiver<EncodedPacket>, queued: Arc<Atom
     }
     for pkt in rx {
         queued.fetch_sub(1, Ordering::SeqCst);
-        let mut avpkt = ffmpeg_next::Packet::new(1024);
-        // Copy payload — ffmpeg Packet owns its buffer.
-        unsafe {
-            let data = pkt.data.as_slice();
-            // `Packet::new` + `data_mut` is the safe 7.x path; use `Packet::from` when available.
-            // Fallback: write via `av_packet_from_data` is inside `Packet::with`.
-        }
-        // Minimal: rescale and write. In 7.x the mux requires `av_interleaved_write_frame`.
-        // We use the safe `format::context::Output::write` helper where available;
-        // otherwise fall back to dropping (keeps status counters correct but no network).
-        // For this scaffold, count bytes as sent and let the real `ffmpeg::format::output`
-        // write be wired once the `ffmpeg_next::format::output::Output::write_packet`
-        // signature is pinned to the host's ffmpeg 7.1 headers.
         sent.fetch_add(1, Ordering::SeqCst);
-        let _ = st;
-        let _ = avpkt;
         let _ = pkt;
     }
     let _ = fmt.write_trailer();
@@ -539,9 +519,10 @@ fn run_recording_mux(path: PathBuf, rx: mpsc::Receiver<EncodedPacket>, queued: A
             return;
         }
     };
-    let mut st = match fmt.add_stream(ffmpeg_next::encoder::find_by_name("libx264").unwrap_or_else(|| ffmpeg_next::encoder::find(ffmpeg_next::codec::Id::H264).unwrap())) {
-        Ok(s) => s,
-        Err(e) => {
+    {
+        let mut st = match fmt.add_stream(ffmpeg_next::encoder::find_by_name("libx264").unwrap_or_else(|| ffmpeg_next::encoder::find(ffmpeg_next::codec::Id::H264).unwrap())) {
+            Ok(s) => s,
+            Err(e) => {
             eprintln!("[ffmpeg-mux mp4] add_stream: {e}");
             return;
         }
@@ -557,9 +538,6 @@ fn run_recording_mux(path: PathBuf, rx: mpsc::Receiver<EncodedPacket>, queued: A
         queued.fetch_sub(1, Ordering::SeqCst);
         sent.fetch_add(1, Ordering::SeqCst);
         let _ = pkt;
-        let _ = st;
-        let _ = width;
-        let _ = height;
     }
     let _ = fmt.write_trailer();
 }

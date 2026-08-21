@@ -4,7 +4,7 @@
 use std::{
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::AtomicBool,
         mpsc, Arc,
     },
     time::{Duration, Instant},
