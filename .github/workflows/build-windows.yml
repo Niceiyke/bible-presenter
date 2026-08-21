@@ -93,7 +93,7 @@ jobs:
         run: |
           vcpkg --version
           if (-not (Test-Path "C:\vcpkg\installed\x64-windows\lib\pkgconfig\libavutil.pc")) {
-            vcpkg install ffmpeg[core]:x64-windows --clean-after-build
+            vcpkg install ffmpeg:x64-windows --clean-after-build
           }
           $pkgPath = "C:/vcpkg/installed/x64-windows/lib/pkgconfig"
           $env:PKG_CONFIG_PATH = $pkgPath
