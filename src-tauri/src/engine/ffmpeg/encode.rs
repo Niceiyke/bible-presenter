@@ -523,11 +523,12 @@ fn run_recording_mux(path: PathBuf, rx: mpsc::Receiver<EncodedPacket>, queued: A
         let mut st = match fmt.add_stream(ffmpeg_next::encoder::find_by_name("libx264").unwrap_or_else(|| ffmpeg_next::encoder::find(ffmpeg_next::codec::Id::H264).unwrap())) {
             Ok(s) => s,
             Err(e) => {
-            eprintln!("[ffmpeg-mux mp4] add_stream: {e}");
-            return;
-        }
-    };
-    st.set_time_base(ffmpeg_next::Rational::new(1, fps as i32));
+                eprintln!("[ffmpeg-mux mp4] add_stream: {e}");
+                return;
+            }
+        };
+        st.set_time_base(ffmpeg_next::Rational::new(1, fps as i32));
+    }
     let mut opts = ffmpeg_next::Dictionary::new();
     opts.set("movflags", "+frag_keyframe+empty_moov");
     if fmt.write_header_with(opts).is_err() {
