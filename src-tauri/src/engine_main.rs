@@ -36,6 +36,18 @@ fn main() {
     let resource_path = std::env::args().nth(2).map(PathBuf::from);
     if let Some(resource) = &resource_path {
         wordlyte_lib::binpaths::init(resource);
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            let bin_dir = resource.join("bin");
+            if bin_dir.exists() {
+                let wide: Vec<u16> = bin_dir.as_os_str().encode_wide().chain(Some(0)).collect();
+                unsafe {
+                    windows::Win32::System::LibraryLoader::SetDllDirectoryW(windows::core::PCWSTR(wide.as_ptr()));
+                }
+                eprintln!("[engine] DLL dir: {:?}", bin_dir);
+            }
+        }
     }
     let runtime = match EngineRuntime::new_with_windows(app_data_dir.clone()) {
         Ok(rt) => rt,
