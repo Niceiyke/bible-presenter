@@ -134,7 +134,9 @@ impl Drop for WindowHostHandle {
 }
 
 /// Media resolver that loads images from disk. Persisted (relativized) paths
-/// resolve against the engine's app data dir; absolute paths pass through.
+/// are relative to the app data dir's `media/` subdirectory — mirroring
+/// `resolvePath` in `src/utils/index.ts` (`{baseDir}\media\{path}`); absolute
+/// paths pass through.
 #[derive(Debug, Clone)]
 pub struct DiskMediaResolver {
     pub app_data_dir: PathBuf,
@@ -143,7 +145,11 @@ pub struct DiskMediaResolver {
 impl MediaResolver for DiskMediaResolver {
     fn load_image(&mut self, path: &str) -> Option<ImageData> {
         let raw = PathBuf::from(path);
-        let full = if raw.is_absolute() { raw } else { self.app_data_dir.join(raw) };
+        let full = if raw.is_absolute() {
+            raw
+        } else {
+            self.app_data_dir.join("media").join(raw)
+        };
         let img = image::open(&full).ok()?.to_rgba8();
         let (width, height) = img.dimensions();
         Some(ImageData { width, height, rgba: img.into_raw() })
@@ -549,6 +555,23 @@ mod tests {
         let mut r = DiskMediaResolver { app_data_dir: PathBuf::from("C:\\missing") };
         // Absolute path bypasses the app data dir.
         assert!(r.load_image("C:\\definitely\\missing.png").is_none());
+    }
+
+    #[test]
+    fn disk_resolver_joins_media_dir_for_relative_paths() {
+        // Regression: persisted paths are relativized against the `media/`
+        // subdirectory (relativizePath), so a bare filename must resolve to
+        // `{app_data_dir}/media/{name}` — not `{app_data_dir}/{name}`.
+        let base = std::env::temp_dir().join(format!("wordlyte-resolver-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(base.join("media")).expect("mkdir");
+        // 1x1 red PNG written via the same `image` crate the resolver decodes with.
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255]))
+            .save(base.join("media").join("dot.png"))
+            .expect("write");
+        let mut r = DiskMediaResolver { app_data_dir: base.clone() };
+        let img = r.load_image("dot.png").expect("relative path must resolve into media/");
+        assert_eq!((img.width, img.height), (1, 1));
+        std::fs::remove_dir_all(base).ok();
     }
 
     #[test]

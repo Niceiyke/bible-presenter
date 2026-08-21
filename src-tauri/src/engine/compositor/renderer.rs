@@ -165,6 +165,11 @@ pub struct Compositor {
     viewport: Viewport,
     // Loaded textures keyed by path (rendered only; lifecycle owned here).
     image_cache: HashMap<String, std::rc::Rc<wgpu::Texture>>,
+    /// Text queued during the layer pass and prepared in ONE glyphon
+    /// `prepare()` call at the end of the frame — `prepare()` clears its
+    /// vertex batch on every invocation, so per-call preparation would keep
+    /// only the last draw's glyphs.
+    pending_text: Vec<QueuedText>,
     // Window-surface present path (Phase C). Present for a compositor created
     // via [`Compositor::new_surface`]: the instance keeps the display/backend
     // connection alive for the surface's lifetime, and the blit pipeline copies
@@ -181,6 +186,14 @@ pub struct Compositor {
 
 /// Convenience `MediaResolver` backed by an in-memory path → image map (tests).
 pub struct MemoryMedia(pub HashMap<String, ImageData>);
+
+/// A shaped text run queued for the frame's single batched glyphon prepare.
+struct QueuedText {
+    buffer: Buffer,
+    left: f32,
+    top: f32,
+    color: [u8; 4],
+}
 
 impl MediaResolver for MemoryMedia {
     fn load_image(&mut self, path: &str) -> Option<ImageData> {
@@ -687,6 +700,7 @@ impl Compositor {
             text_renderer,
             viewport,
             image_cache: HashMap::new(),
+            pending_text: Vec::new(),
             instance: Some(instance),
             surface: None,
             surface_config: None,
@@ -807,6 +821,7 @@ impl Compositor {
             text_renderer,
             viewport,
             image_cache: HashMap::new(),
+            pending_text: Vec::new(),
             instance: Some(instance),
             surface: Some(surface),
             surface_config: Some(config),
@@ -1005,6 +1020,7 @@ impl Compositor {
 
     /// Render a full `ProgramFrame` into the target texture.
     pub fn render(&mut self, frame: &ProgramFrame, media: &mut dyn MediaResolver) -> anyhow::Result<()> {
+        self.pending_text.clear();
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compositor frame") });
@@ -1058,13 +1074,13 @@ impl Compositor {
                     let color = parse_color(&frame.colors.waiting_text).unwrap_or([120, 120, 120, 255]);
                     let size = (h * 0.04).max(18.0);
                     let text = "WAITING".to_string();
-                    let bw = text.len() as f32 * size * 0.55;
                     let bh = size * 1.4;
-                    self.draw_text(&mut pass, &text, (w - bw) / 2.0, h / 2.0 - bh / 2.0, size, color, false);
+                    self.draw_text_centered( &text, h / 2.0 - bh / 2.0, size, color, false, w * 0.86);
                 }
             }
         }
 
+        self.flush_text();
         self.text_renderer
             .render(&self.atlas, &self.viewport, &mut pass)
             .map_err(|e| anyhow::anyhow!("text render: {e:?}"))?;
@@ -1114,13 +1130,11 @@ impl Compositor {
                 let ref_color = parse_color("#b45309").unwrap_or([180, 83, 9, 255]);
                 let body_color = [255, 255, 255, 255];
                 let header = format!("{} {}:{}", v.book, v.chapter, v.verse);
-                let hbw = header.len() as f32 * ref_size * 0.6;
-                let hbh = ref_size * 1.4;
-                let y0 = h * 0.5 - size * 2.0;
-                self.draw_text(pass, &header, (w - hbw) / 2.0, y0, ref_size, ref_color, true);
-                let body = &v.text;
-                let bw = body.len() as f32 * size * 0.52;
-                self.draw_text(pass, body, (w - bw) / 2.0, y0 + hbh + size * 0.3, size, body_color, false);
+                let max_w = w * 0.86;
+                let mut y = h * 0.5 - size * 2.0;
+                y += self.draw_text_centered( &header, y, ref_size, ref_color, true, max_w);
+                y += size * 0.3;
+                self.draw_text_centered( &v.text, y, size, body_color, false, max_w);
             }
             DisplayItem::Media(m) => match m.media_type {
                 crate::store::MediaItemType::Image => {
@@ -1146,21 +1160,19 @@ impl Compositor {
                 let size = (h * 0.12).max(40.0);
                 let secs = (t.duration_secs.unwrap_or(0) as i64) - (frame_now_secs()) + (t.started_at.unwrap_or(0) as i64);
                 let text = format_timer(secs, t.timer_type.as_str());
-                let bw = text.len() as f32 * size * 0.55;
-                self.draw_text(pass, &text, (w - bw) / 2.0, h / 2.0 - size / 2.0, size, [255, 255, 255, 255], false);
+                self.draw_text_centered( &text, h / 2.0 - size / 2.0, size, [255, 255, 255, 255], false, w * 0.86);
             }
             DisplayItem::Song(s) => {
                 let size = (h * 0.05).max(22.0);
+                let max_w = w * 0.86;
                 let mut y = h * 0.35;
                 if !s.section_label.is_empty() {
                     let label = &s.section_label;
-                    let lw = label.len() as f32 * size * 0.6;
-                    self.draw_text(pass, label, (w - lw) / 2.0, y, size * 0.7, [245, 158, 11, 255], true);
+                    self.draw_text_centered( label, y, size * 0.7, [245, 158, 11, 255], true, max_w);
                     y += size * 1.3;
                 }
                 for line in &s.lines {
-                    let lw = line.len() as f32 * size * 0.5;
-                    self.draw_text(pass, line, (w - lw) / 2.0, y, size, [255, 255, 255, 255], false);
+                    self.draw_text_centered( line, y, size, [255, 255, 255, 255], false, max_w);
                     y += size * 1.4;
                 }
             }
@@ -1204,7 +1216,7 @@ impl Compositor {
                 let size = (rect[3] * 0.05).max(14.0);
                 let body = &v.text;
                 let bw = body.len() as f32 * size * 0.5;
-                self.draw_text(pass, body, rect[0] + (rect[2] - bw) / 2.0, rect[1] + rect[3] / 2.0, size, [255, 255, 255, 255], false);
+                self.queue_text( body, rect[0] + (rect[2] - bw) / 2.0, rect[1] + rect[3] / 2.0, size, [255, 255, 255, 255], false);
             }
             _ => {}
         }
@@ -1229,7 +1241,7 @@ impl Compositor {
                 let text = prop.text.clone().unwrap_or_default();
                 let size = (rect[3] * 0.8).max(12.0);
                 let color = parse_color(prop.color.as_deref().unwrap_or("#ffffff")).unwrap_or([255, 255, 255, 255]);
-                self.draw_text(pass, &text, rect[0], rect[1], size, color, false);
+                self.queue_text( &text, rect[0], rect[1], size, color, false);
             }
             _ => {}
         }
@@ -1260,7 +1272,7 @@ impl Compositor {
                 .and_then(parse_color)
                 .unwrap_or([255, 255, 255, 255]);
             let bw = text.len() as f32 * size * 0.6;
-            self.draw_text(pass, text, w - bw - 40.0, 40.0, size, [color[0], color[1], color[2], (color[3] as f32 * opacity) as u8], false);
+            self.queue_text( text, w - bw - 40.0, 40.0, size, [color[0], color[1], color[2], (color[3] as f32 * opacity) as u8], false);
         }
     }
 
@@ -1296,21 +1308,21 @@ impl Compositor {
             let size = resolved.slots.headline.size as f32;
             let col = parse_color(&resolved.slots.headline.color).unwrap_or(default_color);
             let tx = x + g.padding_x as f32;
-            self.draw_text(pass, &content.headline, tx, ty, size, col, resolved.slots.headline.bold);
+            self.queue_text( &content.headline, tx, ty, size, col, resolved.slots.headline.bold);
             ty += size * 1.3;
         }
         if resolved.slots.show_subline && !content.subline.is_empty() {
             let size = resolved.slots.subline.size as f32;
             let col = parse_color(&resolved.slots.subline.color).unwrap_or(default_color);
             let tx = x + g.padding_x as f32;
-            self.draw_text(pass, &content.subline, tx, ty, size, col, resolved.slots.subline.bold);
+            self.queue_text( &content.subline, tx, ty, size, col, resolved.slots.subline.bold);
             ty += size * 1.3;
         }
         if resolved.slots.show_kicker && !content.kicker.is_empty() {
             let size = resolved.slots.kicker.size as f32;
             let col = parse_color(&resolved.slots.kicker.color).unwrap_or(default_color);
             let tx = x + g.padding_x as f32;
-            self.draw_text(pass, &content.kicker, tx, ty, size, col, resolved.slots.kicker.bold);
+            self.queue_text( &content.kicker, tx, ty, size, col, resolved.slots.kicker.bold);
         }
         // Accent bar on the configured side.
         if resolved.accent.enabled {
@@ -1374,7 +1386,7 @@ impl Compositor {
                 let text = el.content.as_str().unwrap_or_default().to_string();
                 let size = el.font_size.unwrap_or(24.0) as f32;
                 let color = el.color.as_deref().and_then(parse_color).unwrap_or([255, 255, 255, 255]);
-                self.draw_text(pass, &text, x, y, size, color, false);
+                self.queue_text( &text, x, y, size, color, false);
             }
             _ => {}
         }
@@ -1388,7 +1400,7 @@ impl Compositor {
     fn draw_missing_media_in(&mut self, pass: &mut wgpu::RenderPass<'_>, name: &str, rect: [f32; 4], opacity: f32) {
         self.fill_rect(pass, rect, [0.0, 0.0, 0.0, 0.6 * opacity], 8.0);
         let size = (rect[3] * 0.06).max(12.0);
-        self.draw_text(pass, name, rect[0] + 16.0, rect[1] + 16.0, size, [255, 255, 255, 255], false);
+        self.queue_text( name, rect[0] + 16.0, rect[1] + 16.0, size, [255, 255, 255, 255], false);
     }
 
     /// Ensure every referenced image is uploaded as a GPU texture.
@@ -1433,16 +1445,70 @@ impl Compositor {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn draw_text(
+    /// Measure the laid-out width of `text` shaped as a single unconstrained
+    /// line (no wrapping).
+    fn measure_text(&mut self, text: &str, size: f32, bold: bool) -> f32 {
+        let mut buffer = Buffer::new(
+            &mut self.font_system,
+            Metrics::new(size, (size * 1.3).max(2.0)),
+        );
+        let mut attrs = Attrs::new().family(Family::SansSerif);
+        if bold {
+            attrs = attrs.weight(glyphon::Weight::BOLD);
+        }
+        buffer.set_size(None, None);
+        buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut self.font_system, false);
+        buffer.layout_runs().map(|run| run.line_w).fold(0.0_f32, f32::max)
+    }
+
+    /// Draw `text` word-wrapped to `max_width` with every line horizontally
+    /// centered on the canvas. Returns the total block height so callers can
+    /// stack content below. This mirrors the DOM renderers, which wrap and
+    /// center via CSS — the old character-count estimate produced negative x
+    /// origins for any real verse, clipping the left edge.
+    fn draw_text_centered(
         &mut self,
-        _pass: &mut wgpu::RenderPass<'_>,
         text: &str,
-        x: f32,
         y: f32,
         size: f32,
         color: [u8; 4],
         bold: bool,
-    ) {
+        max_width: f32,
+    ) -> f32 {
+        let w = self.width as f32;
+        let line_h = (size * 1.3).max(2.0);
+        let mut lines: Vec<String> = Vec::new();
+        for paragraph in text.split('\n') {
+            let mut current = String::new();
+            for word in paragraph.split_whitespace() {
+                let candidate =
+                    if current.is_empty() { word.to_string() } else { format!("{current} {word}") };
+                if !current.is_empty() && self.measure_text(&candidate, size, bold) > max_width {
+                    lines.push(std::mem::take(&mut current));
+                    current = word.to_string();
+                } else {
+                    current = candidate;
+                }
+            }
+            lines.push(current);
+        }
+        let mut yy = y;
+        for line in &lines {
+            let lw = self.measure_text(line, size, bold);
+            let x = ((w - lw) / 2.0).max(0.0);
+            self.queue_text(line, x, yy, size, color, bold);
+            yy += line_h;
+        }
+        yy - y
+    }
+
+    /// Shape `text` and queue it for the frame's single batched glyphon
+    /// prepare (flushed in [`Compositor::render`]).
+    fn queue_text(&mut self, text: &str, x: f32, y: f32, size: f32, color: [u8; 4], bold: bool) {
+        if text.is_empty() {
+            return;
+        }
         let mut buffer = Buffer::new(
             &mut self.font_system,
             Metrics::new(size, (size * 1.3).max(2.0)),
@@ -1454,24 +1520,43 @@ impl Compositor {
         }
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.font_system, false);
-        let area = TextArea {
-            buffer: &buffer,
-            left: x,
-            top: y,
-            scale: 1.0,
-            bounds: glyphon::TextBounds { left: 0, top: 0, right: self.width as i32, bottom: self.height as i32 },
-            default_color: GlyphColor::rgba(color[0], color[1], color[2], color[3]),
-            custom_glyphs: &[],
-        };
-        let _ = self.text_renderer.prepare(
+        self.pending_text.push(QueuedText { buffer, left: x, top: y, color });
+    }
+
+    /// Prepare every queued text run in ONE glyphon call — `prepare()` clears
+    /// its vertex batch each invocation, so batching is what makes all of the
+    /// frame's text actually survive to `render()`.
+    fn flush_text(&mut self) {
+        if self.pending_text.is_empty() {
+            return;
+        }
+        let (width, height) = (self.width as i32, self.height as i32);
+        let areas: Vec<TextArea> = self
+            .pending_text
+            .iter()
+            .map(|q| TextArea {
+                buffer: &q.buffer,
+                left: q.left,
+                top: q.top,
+                scale: 1.0,
+                bounds: glyphon::TextBounds { left: 0, top: 0, right: width, bottom: height },
+                default_color: GlyphColor::rgba(q.color[0], q.color[1], q.color[2], q.color[3]),
+                custom_glyphs: &[],
+            })
+            .collect();
+        let result = self.text_renderer.prepare(
             &self.device,
             &self.queue,
             &mut self.font_system,
             &mut self.atlas,
             &self.viewport,
-            [area],
+            areas,
             &mut self.swash_cache,
         );
+        if let Err(e) = result {
+            eprintln!("[engine] text prepare failed: {e:?}");
+        }
+        self.pending_text.clear();
     }
 
     /// Copy the target texture to CPU memory as RGBA8 (bottom row first due to
@@ -1721,6 +1806,50 @@ mod tests {
         let row = &px[mid_row * 320 * 4..(mid_row + 1) * 320 * 4];
         let non_black = row.chunks_exact(4).filter(|p| p[3] > 0 && (p[0] > 30 || p[1] > 30 || p[2] > 30)).count();
         assert!(non_black > 10, "expected text pixels, found {non_black}");
+    }
+
+    #[test]
+    fn long_verse_wraps_centered_without_left_clipping() {
+        // Regression: the character-count width estimate made `(w - bw) / 2`
+        // negative for any real verse, pushing the text off the left edge.
+        let long_text = "For God so loved the world that he gave his one and only Son, that whoever believes in him shall not perish but have eternal life. For God did not send his Son into the world to condemn the world, but to save the world through him.".repeat(2);
+        let frame = frame_with(
+            Some(DisplayItem::Verse(Verse {
+                book: "JHN".to_string(),
+                chapter: 3,
+                verse: 16,
+                text: long_text,
+                version: "KJV".to_string(),
+                split_index: None,
+                total_splits: None,
+                score: None,
+            })),
+            BackgroundSetting::Color("#0000ff".to_string()),
+        );
+        let mut media = MemoryMedia(HashMap::new());
+        let (w, h, px) = render_frame_to_pixels(&frame, &mut media).expect("render");
+        let mut cols: Vec<u32> = Vec::new();
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let i = (y * w as usize + x) * 4;
+                let p = &px[i..i + 4];
+                if p[0] > 200 && p[1] > 200 && p[2] > 200 {
+                    cols.push(x as u32);
+                }
+            }
+        }
+        assert!(!cols.is_empty(), "expected white verse text pixels (near-white={} total={})", cols.len(), w * h);
+        let margin = (w * 2 / 100).max(1);
+        assert!(
+            cols.iter().all(|&x| x >= margin),
+            "verse text clipped into the left edge (min x {})",
+            cols.iter().min().unwrap()
+        );
+        assert!(
+            cols.iter().all(|&x| x < w - margin),
+            "verse text overflows the right edge (max x {})",
+            cols.iter().max().unwrap()
+        );
     }
 
     #[test]
