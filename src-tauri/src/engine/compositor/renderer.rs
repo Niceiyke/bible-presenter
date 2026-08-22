@@ -1796,11 +1796,12 @@ impl Compositor {
         self.device.poll(wgpu::PollType::wait_indefinitely()).unwrap_or(wgpu::PollStatus::QueueEmpty);
         let _ = rx.recv();
         let data = slice.get_mapped_range().expect("readback buffer map failed");
-        // Unpack the padded rows into a tight buffer, flipping vertically in
-        // the same pass (texture row 0 is the bottom).
+        // Unpack the padded rows into a tight buffer. wgpu texture origin is
+        // the TOP-left and the pipelines map pixel y=0 to NDC +1 (framebuffer
+        // top), so buffer row 0 is already the image top — no flip.
         let mut out = Vec::with_capacity(raw_row * self.height as usize);
         for y in 0..self.height as usize {
-            let src = (self.height as usize - 1 - y) * stride;
+            let src = y * stride;
             out.extend_from_slice(&data[src..src + raw_row]);
         }
         drop(data);
