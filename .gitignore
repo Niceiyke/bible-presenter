@@ -16,6 +16,10 @@ src-tauri/bible_data/*.npy
 src-tauri/binaries/*.exe
 src-tauri/binaries/dll/
 
+# FFmpeg dev tree (include/ lib/ bin/) staged by scripts/fetch-ffmpeg.ps1;
+# point FFMPEG_DIR here to link against exactly the DLLs that ship
+src-tauri/ffmpeg-dist/
+
 # DB-only Bible data release asset (uploaded to the GitHub release, not committed)
 /wordlyte_bible.zip
 

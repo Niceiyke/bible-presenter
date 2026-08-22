@@ -1,5 +1,9 @@
-# Fetch the GPL ffmpeg + ffprobe binaries used by the bundled-media-binaries
-# resolver (src-tauri/src/binpaths.rs).
+# Fetches TWO pinned artifacts from one BtbN autobuild release:
+#   1. the NON-shared GPL zip -> ffmpeg.exe + ffprobe.exe into src-tauri/binaries/
+#      (subprocess fallback resolved by src-tauri/src/binpaths.rs)
+#   2. the SHARED GPL zip     -> src-tauri/ffmpeg-dist/ (include/ lib/ bin/,
+#      the FFMPEG_DIR tree ffmpeg-sys-next links against) + av*/sw*.dll into
+#      src-tauri/binaries/dll/ (bundled beside the exes by tauri.conf.json).
 #
 # Source: BtbN FFmpeg-Builds Windows build. The GPL variant is REQUIRED: the
 # engine's shared encoder uses `-c:v libx264` (src-tauri/src/engine/transport.rs)
@@ -31,6 +35,11 @@
 $ErrorActionPreference = "Stop"
 
 $BinDir = Join-Path $PSScriptRoot "..\src-tauri\binaries"
+# Full shared-build development tree staged here: include/, lib/, bin/. Point
+# FFMPEG_DIR at this directory so ffmpeg-sys-next links against exactly the
+# DLLs this repo ships (scripts/copy-engine-binary.mjs stages $FFMPEG_DIR/bin
+# into src-tauri/binaries/dll at bundle time).
+$DistDir = Join-Path $PSScriptRoot "..\src-tauri\ffmpeg-dist"
 # PINNED autobuild tag (NOT `latest`): a moving tag makes release builds
 # non-reproducible, so the tag must be a specific BtbN autobuild. Update both
 # the tag and `$ExpectedSha256` together when deliberately upgrading ffmpeg.
@@ -39,21 +48,56 @@ $ReleaseTag = "autobuild-2026-08-17-13-05"
 # independent of the (moving) checksums.sha256 and makes the fetch tamper-proof
 # even if the release's own checksum file were replaced.
 $ExpectedSha256 = "423d30b197e52e20e0702278a30bc63e006cc383c968935874c4c13dda9eb299"
+# The SHARED GPL win64 zip from the SAME pinned release provides the libav
+# development tree (import libs + headers) the engine links against AND the
+# av*/sw*.dll runtime libraries bundled beside the exes. Pinned to the n9.0.1
+# branch build so CI matches the libav ABI (63/61/12/7/10) developers link
+# against locally.
+$SharedAssetPattern = 'win64-gpl-shared-9\.0\.zip$'
+$ExpectedSharedSha256 = "dab4523561a1889a0247bcacad2480c97f29c6fca15ca306bbbcf741ae3adcf8"
 $BaseUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$ReleaseTag"
 $ChecksumsUrl = "$BaseUrl/checksums.sha256"
 $Zip = Join-Path $env:TEMP "ffmpeg-gpl.zip"
 $Checksums = Join-Path $env:TEMP "ffmpeg-checksums.sha256"
 $Extract = Join-Path $env:TEMP "ffmpeg-gpl"
+$SharedZip = Join-Path $env:TEMP "ffmpeg-gpl-shared.zip"
+$SharedExtract = Join-Path $env:TEMP "ffmpeg-gpl-shared"
 
 # Reproducibility gate: a release build must never use the moving `latest` tag.
 if ($ReleaseTag -eq "latest" -or $ReleaseTag -match "latest") {
     throw "ReleaseTag must be pinned to a specific autobuild tag (e.g. autobuild-YYYY-MM-DD-HH-MM), not 'latest', for reproducible releases."
 }
 
+# Idempotency (CI caching): when both outputs from a previous run of THIS
+# script version are present, skip the downloads. The cache key hashes this
+# script, so a pin/hash edit invalidates it.
+$haveExes = (Test-Path (Join-Path $BinDir "ffmpeg.exe")) -and (Test-Path (Join-Path $BinDir "ffprobe.exe"))
+$haveDist = Test-Path (Join-Path $DistDir "lib\avcodec.lib")
+$haveDlls = Test-Path (Join-Path $BinDir "dll\avcodec-*.dll")
+if ($haveExes -and $haveDist -and $haveDlls) {
+    Write-Host "ffmpeg artifacts already staged (exes, ffmpeg-dist dev tree, runtime DLLs) - skipping download."
+    exit 0
+}
+
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 
+# Large GitHub release assets occasionally drop mid-transfer (proxy/AV/TLS
+# resets); retry so a flaky network cannot fail an otherwise valid build.
+function Fetch-WithRetry([string]$Url, [string]$OutFile, [int]$Attempts = 3) {
+    for ($i = 1; $i -le $Attempts; $i++) {
+        try {
+            Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing
+            return
+        } catch {
+            if ($i -eq $Attempts) { throw }
+            Write-Host "  download attempt $i failed ($($_.Exception.Message)) - retrying in 5s..."
+            Start-Sleep -Seconds (5 * $i)
+        }
+    }
+}
+
 Write-Host "Resolving ffmpeg asset for $ReleaseTag..."
-Invoke-WebRequest -Uri $ChecksumsUrl -OutFile $Checksums
+Fetch-WithRetry $ChecksumsUrl $Checksums
 
 # The archive name embeds the ffmpeg revision, so resolve it from the release's
 # own checksums file: pick the non-shared win64 GPL zip line.
@@ -69,7 +113,7 @@ if (-not $AssetName) {
 
 Write-Host "  asset: $AssetName"
 Write-Host "Downloading GPL ffmpeg build ($ReleaseTag, ~150 MB)..."
-Invoke-WebRequest -Uri "$BaseUrl/$AssetName" -OutFile $Zip
+Fetch-WithRetry "$BaseUrl/$AssetName" $Zip
 
 $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Zip).Hash.ToLower()
 if ($actual -ne $published) {
@@ -105,8 +149,64 @@ if ($license) {
     Write-Host "  keeping committed ffmpeg-COPYING.GPLv2.txt"
 }
 
+# ---------------------------------------------------------------------------
+# SHARED GPL build: libav development tree (FFMPEG_DIR) + runtime DLLs.
+# ---------------------------------------------------------------------------
+$SharedLine = Get-Content $Checksums | Where-Object { $_ -match $SharedAssetPattern } | Select-Object -First 1
+if (-not $SharedLine) {
+    throw "checksums.sha256 did not list a win64 gpl-shared zip matching $SharedAssetPattern - refusing to stage an unverified dev tree."
+}
+$SharedName = ($SharedLine -split '\s+') | Where-Object { $_ -match '\.zip$' } | Select-Object -First 1
+$SharedPublished = ($SharedLine -split '\s+')[0].Trim().ToLower()
+if (-not $SharedName) {
+    throw "Could not determine the shared asset name from checksums.sha256."
+}
+
+Write-Host "Downloading SHARED GPL ffmpeg build ($SharedName, ~120 MB)..."
+Fetch-WithRetry "$BaseUrl/$SharedName" $SharedZip
+
+$sharedActual = (Get-FileHash -Algorithm SHA256 -LiteralPath $SharedZip).Hash.ToLower()
+if ($sharedActual -ne $SharedPublished) {
+    throw "SHA-256 mismatch for $SharedName vs published checksums (expected $SharedPublished, got $sharedActual) - aborting."
+}
+if ($sharedActual -ne $ExpectedSharedSha256) {
+    throw "SHA-256 mismatch for $SharedName vs the committed pinned hash (expected $ExpectedSharedSha256, got $sharedActual) - update ExpectedSharedSha256 together with the release tag when upgrading."
+}
+Write-Host "  SHA-256 verified: $sharedActual"
+
+if (Test-Path $SharedExtract) { Remove-Item -Recurse -Force $SharedExtract }
+Expand-Archive -Path $SharedZip -DestinationPath $SharedExtract -Force
+$SharedRoot = Get-ChildItem -Path $SharedExtract -Recurse -Filter "avcodec*.dll" | Select-Object -First 1
+if (-not $SharedRoot) { throw "avcodec dll not found in the shared archive" }
+$SharedBin = Split-Path $SharedRoot.FullName   # ...\bin
+$DistSource = Split-Path $SharedBin           # archive root containing include/ lib/ bin/
+
+# Stage the full development tree (include/, lib/, bin/) as FFMPEG_DIR so
+# ffmpeg-sys-next links against import libs whose ABI exactly matches the
+# runtime DLLs staged below.
+if (Test-Path $DistDir) { Remove-Item -Recurse -Force $DistDir }
+New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
+foreach ($sub in @("include", "lib", "bin")) {
+    Copy-Item -Path (Join-Path $DistSource $sub) -Destination (Join-Path $DistDir $sub) -Recurse -Force
+}
+Write-Host "  staged ffmpeg dev tree -> $DistDir"
+
+# Stage the av*/sw*.dll runtime libraries for bundling. tauri.conf.json maps
+# `binaries/dll/*.dll` -> the bundle ROOT beside both exes: they are load-time
+# static imports and the Windows loader searches only the exe's own folder
+# before any app code runs.
+New-Item -ItemType Directory -Force -Path (Join-Path $BinDir "dll") | Out-Null
+Get-ChildItem -Path $SharedBin -Filter "*.dll" | Where-Object { $_.Name -match '^(av|sw)' } | ForEach-Object {
+    Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $BinDir "dll" $_.Name) -Force
+    Write-Host "  staged runtime $($_.Name)"
+}
+
+Remove-Item -Recurse -Force $SharedExtract
+
 Remove-Item -Force $Zip
 Remove-Item -Force $Checksums
 Remove-Item -Recurse -Force $Extract
+Remove-Item -Force $SharedZip
 
-Write-Host "Done. src-tauri\binaries\ now contains ffmpeg.exe and ffprobe.exe (~$([math]::Round((Get-ChildItem $BinDir | Measure-Object Length -Sum).Sum / 1MB)) MB total)."
+Write-Host ("Done. src-tauri\binaries\ has ffmpeg.exe + ffprobe.exe; src-tauri\binaries\dll\ has the runtime DLLs; " +
+    "set FFMPEG_DIR=$DistDir to build against them.")

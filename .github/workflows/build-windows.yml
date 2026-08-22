@@ -79,42 +79,29 @@ jobs:
           }
           clang --version
 
-      - name: Install pkg-config
-        shell: pwsh
-        run: |
-          choco install pkgconfiglite -y --no-progress
-          $pkg = "C:\ProgramData\chocolatey\bin\pkg-config.exe"
-          & $pkg --version
-          echo "PKG_CONFIG=$pkg" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "C:\ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+      # Cache the pinned ffmpeg artifacts keyed on the fetch script (a pin or
+      # hash edit changes the key and forces a re-download).
+      - name: restore pinned ffmpeg artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/ffmpeg-dist
+            src-tauri/binaries/dll
+          key: ffmpeg-${{ hashFiles('scripts/fetch-ffmpeg.ps1') }}
 
-      - name: Install ffmpeg via vcpkg
+      # Downloads the pinned shared GPL build and stages:
+      #   src-tauri/ffmpeg-dist/{include,lib,bin}  (FFMPEG_DIR for linking)
+      #   src-tauri/binaries/dll/av*.dll+sw*.dll   (bundled beside the exes)
+      # Idempotent — exits early when the cached artifacts are present. The
+      # bundler (scripts/copy-engine-binary.mjs, beforeBundleCommand) then
+      # ships the DLLs from $FFMPEG_DIR/bin at the bundle ROOT beside both exes.
+      - name: fetch pinned ffmpeg shared build
         shell: pwsh
         run: |
-          vcpkg --version
-          if (-not (Test-Path "C:\vcpkg\installed\x64-windows\lib\pkgconfig\libavutil.pc")) {
-            vcpkg install ffmpeg:x64-windows --clean-after-build
-          }
-          $pkgPath = "C:/vcpkg/installed/x64-windows/lib/pkgconfig"
-          $env:PKG_CONFIG_PATH = $pkgPath
-          $env:VCPKGRS_DYNAMIC = "1"
-          $env:VCPKG_ROOT = "C:\vcpkg"
-          $env:PKG_CONFIG = "C:\vcpkg\installed\x64-windows\tools\pkgconf\pkgconf.exe"
-          echo "PKG_CONFIG_PATH=$pkgPath" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "VCPKGRS_DYNAMIC=1" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "PKG_CONFIG=C:\vcpkg\installed\x64-windows\tools\pkgconf\pkgconf.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
-          & $env:PKG_CONFIG --modversion libavutil
-
-      - name: Verify pkg-config can find libavutil
-        shell: pwsh
-        run: |
-          echo "PKG_CONFIG_PATH=$env:PKG_CONFIG_PATH"
-          echo "PKG_CONFIG=$env:PKG_CONFIG"
-          echo "VCPKG_ROOT=$env:VCPKG_ROOT"
-          Get-ChildItem C:/vcpkg/installed/x64-windows/lib/pkgconfig/libav*.pc | Select-Object Name
-          & $env:PKG_CONFIG --modversion libavutil
-          & $env:PKG_CONFIG --cflags --libs libavutil
+          powershell -ExecutionPolicy Bypass -File scripts/fetch-ffmpeg.ps1
+          $dist = Join-Path $env:GITHUB_WORKSPACE "src-tauri\ffmpeg-dist"
+          if (-not (Test-Path (Join-Path $dist "lib\avcodec.lib"))) { throw "ffmpeg dev tree missing after fetch" }
+          echo "FFMPEG_DIR=$dist" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: install frontend dependencies
         run: npm ci
@@ -153,10 +140,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           RUSTFLAGS: "-C target-feature=-crt-static"
           MSVC_RUNTIME_LIBRARY: "MultiThreadedDLL"
-          PKG_CONFIG_PATH: "C:/vcpkg/installed/x64-windows/lib/pkgconfig"
-          PKG_CONFIG: "C:\\vcpkg\\installed\\x64-windows\\tools\\pkgconf\\pkgconf.exe"
-          VCPKG_ROOT: "C:\\vcpkg"
-          VCPKGRS_DYNAMIC: "1"
         with:
           tagName: ${{ github.event_name == 'workflow_dispatch' && format('v__VERSION__-manual-{0}', github.run_number) || 'v__VERSION__' }}
           releaseName: ${{ github.event_name == 'workflow_dispatch' && format('Bible Presenter v__VERSION__ (Manual Build {0})', github.run_number) || 'Bible Presenter v__VERSION__' }}

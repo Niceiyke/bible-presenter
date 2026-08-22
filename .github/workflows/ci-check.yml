@@ -58,7 +58,9 @@ jobs:
     # crates also fail to pkg-config on bare ubuntu runners. Build/check on the
     # actual target platform instead of installing the whole Linux GTK stack.
     # ffmpeg-next is now default (pipe removed) — this job always builds the
-    # in-process libav path (needs LLVM + vcpkg ffmpeg).
+    # in-process libav path: it links against the pinned BtbN SHARED GPL build
+    # fetched by scripts/fetch-ffmpeg.ps1 (needs LLVM for bindgen; FFMPEG_DIR
+    # alone steers ffmpeg-sys-next — no vcpkg / pkg-config).
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,18 +69,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-
-      # tauri-build validates bundled resources at compile time, but dist/,
-      # the wordlyte-engine binary, and the ffmpeg DLLs are gitignored
-      # (produced by the build). The same --bootstrap mode the release build
-      # uses derives the full resource list from tauri.conf.json and writes
-      # 0-byte placeholders so cargo check/clippy/test can run as a fast
-      # compile gate; the release workflow produces the real artifacts.
-      - name: create bundled-resource placeholders for tauri-build
-        shell: bash
-        run: |
-          mkdir -p dist
-          node scripts/copy-engine-binary.mjs --bootstrap
 
       - name: Install LLVM (bindgen for ffmpeg-sys-next)
         shell: pwsh
@@ -89,81 +79,48 @@ jobs:
           }
           clang --version
 
-      - name: Install pkg-config
-        shell: pwsh
-        run: |
-          choco install pkgconfiglite -y --no-progress
-          $pkg = "C:\ProgramData\chocolatey\bin\pkg-config.exe"
-          if (Test-Path $pkg) { echo "pkg-config at $pkg" } else { Get-Command pkg-config | Format-List * }
-          & $pkg --version
-          echo "PKG_CONFIG=$pkg" | Out-File -FilePath $env:GITHUB_ENV -Append
-          # Prepend chocolatey bin so it wins over Strawberry's pkg-config.bat
-          echo "C:\ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+      # Cache the pinned ffmpeg artifacts keyed on the fetch script (a pin or
+      # hash edit changes the key and forces a re-download).
+      - name: restore pinned ffmpeg artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/ffmpeg-dist
+            src-tauri/binaries/dll
+          key: ffmpeg-${{ hashFiles('scripts/fetch-ffmpeg.ps1') }}
 
-      - name: Install ffmpeg via vcpkg (system vcpkg at C:\vcpkg)
+      # Downloads the pinned shared GPL build and stages:
+      #   src-tauri/ffmpeg-dist/{include,lib,bin}  (FFMPEG_DIR for linking)
+      #   src-tauri/binaries/dll/av*.dll+sw*.dll   (bundled beside the exes)
+      # Idempotent — exits early when the cached artifacts are present.
+      - name: fetch pinned ffmpeg shared build
         shell: pwsh
         run: |
-          vcpkg --version
-          if (-not (Test-Path "C:\vcpkg\installed\x64-windows\lib\pkgconfig\libavutil.pc")) {
-            vcpkg install ffmpeg:x64-windows --clean-after-build
-          } else {
-            echo "ffmpeg already installed in C:\vcpkg"
-          }
-          # Use forward slashes for PKG_CONFIG_PATH to avoid drive-letter colon split on msys pkg-config
-          $pkgPath = "C:/vcpkg/installed/x64-windows/lib/pkgconfig"
-          $env:PKG_CONFIG_PATH = $pkgPath
-          $env:VCPKGRS_DYNAMIC = "1"
-          $env:VCPKG_ROOT = "C:\vcpkg"
-          # Prefer vcpkg's own pkgconf (handles Windows paths) over Strawberry
-          $vcpkgPkgConf = Get-ChildItem C:\vcpkg\installed\x64-windows\tools\pkgconf -Recurse -Filter pkgconf.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
-          if (-not $vcpkgPkgConf) { $vcpkgPkgConf = "C:\vcpkg\installed\x64-windows\tools\pkgconf\pkgconf.exe" }
-          $env:PKG_CONFIG = $vcpkgPkgConf
-          echo "PKG_CONFIG_PATH=$pkgPath" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "VCPKGRS_DYNAMIC=1" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "PKG_CONFIG=$vcpkgPkgConf" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "Using PKG_CONFIG=$vcpkgPkgConf"
-          Get-Command pkg-config -ErrorAction SilentlyContinue | Select-Object Source
-          & $env:PKG_CONFIG --modversion libavutil
-          if ($LASTEXITCODE -ne 0) { throw "pkg-config failed in install step" }
-          & $env:PKG_CONFIG --modversion libavformat
+          powershell -ExecutionPolicy Bypass -File scripts/fetch-ffmpeg.ps1
+          $dist = Join-Path $env:GITHUB_WORKSPACE "src-tauri\ffmpeg-dist"
+          if (-not (Test-Path (Join-Path $dist "lib\avcodec.lib"))) { throw "ffmpeg dev tree missing after fetch" }
+          echo "FFMPEG_DIR=$dist" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Verify pkg-config can find libavutil
-        shell: pwsh
+      # tauri-build validates bundled resources at compile time, but dist/
+      # and the wordlyte-engine binary are gitignored (produced by the build).
+      # The same --bootstrap mode the release build uses derives the resource
+      # list from tauri.conf.json and writes 0-byte placeholders (the runtime
+      # DLL glob is already satisfied by the fetched av*/sw*.dll) so cargo
+      # check/clippy/test can run as a fast compile gate.
+      - name: create bundled-resource placeholders for tauri-build
+        shell: bash
         run: |
-          echo "PKG_CONFIG_PATH=$env:PKG_CONFIG_PATH"
-          echo "PKG_CONFIG=$env:PKG_CONFIG"
-          echo "VCPKG_ROOT=$env:VCPKG_ROOT"
-          Test-Path $env:VCPKG_ROOT\.vcpkg-root
-          Get-ChildItem C:/vcpkg/installed/x64-windows/lib/pkgconfig/libav*.pc | Select-Object Name
-          & $env:PKG_CONFIG --modversion libavutil
-          & $env:PKG_CONFIG --cflags --libs libavutil
-          & $env:PKG_CONFIG --modversion libavformat
-          & $env:PKG_CONFIG --cflags --libs libavformat
+          mkdir -p dist
+          node scripts/copy-engine-binary.mjs --bootstrap
 
       - name: cargo check
         working-directory: src-tauri
-        env:
-          PKG_CONFIG_PATH: "C:/vcpkg/installed/x64-windows/lib/pkgconfig"
-          PKG_CONFIG: "C:\vcpkg\installed\x64-windows\tools\pkgconf\pkgconf.exe"
-          VCPKG_ROOT: "C:\\vcpkg"
-          VCPKGRS_DYNAMIC: "1"
         run: cargo check
 
       - name: cargo clippy
         working-directory: src-tauri
-        env:
-          PKG_CONFIG_PATH: "C:/vcpkg/installed/x64-windows/lib/pkgconfig"
-          PKG_CONFIG: "C:\vcpkg\installed\x64-windows\tools\pkgconf\pkgconf.exe"
-          VCPKG_ROOT: "C:\\vcpkg"
-          VCPKGRS_DYNAMIC: "1"
         run: cargo clippy --all-targets -- -D warnings
 
       - name: cargo test
         working-directory: src-tauri
-        env:
-          PKG_CONFIG_PATH: "C:/vcpkg/installed/x64-windows/lib/pkgconfig"
-          PKG_CONFIG: "C:\vcpkg\installed\x64-windows\tools\pkgconf\pkgconf.exe"
-          VCPKG_ROOT: "C:\\vcpkg"
-          VCPKGRS_DYNAMIC: "1"
         run: cargo test

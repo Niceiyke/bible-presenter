@@ -74,7 +74,7 @@
       "bible_data/hymns.json": "bible_data/hymns.json",
       "../dist": "dist",
       "binaries/wordlyte-engine.exe": "wordlyte-engine.exe",
-      "binaries/dll": "bin"
+      "binaries/dll/*.dll": "."
     },
     "windows": {
       "nsis": {

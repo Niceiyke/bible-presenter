@@ -108,10 +108,14 @@ fn main() {
             // `{resource_dir}/bin`, falling back to PATH when absent.
             wordlyte_lib::binpaths::init(&resource_path);
 
-            // For in-process ffmpeg (dynamic VCPKGRS_DYNAMIC=1), the av*.dll
-            // are bundled at `{resource_dir}/bin` (see tauri.conf.json + copy-engine-binary.mjs).
-            // Add that dir to the DLL search path so `wordlyte.exe` and
-            // `wordlyte-engine.exe` can find them without requiring PATH.
+            // In-process ffmpeg links libav dynamically (VCPKGRS_DYNAMIC=1):
+            // the av*.dll / sw*.dll load-time imports must sit beside the exes,
+            // which the installer guarantees by mapping
+            // `binaries/dll/*.dll` -> the bundle root (tauri.conf.json +
+            // copy-engine-binary.mjs); build.rs stages them into the target dir
+            // for dev runs. This SetDllDirectory call cannot satisfy load-time
+            // imports (the loader runs before any app code) but is kept for any
+            // future dynamically loaded libraries under `{resource_dir}/bin`.
             #[cfg(windows)]
             {
                 use std::os::windows::ffi::OsStrExt;
@@ -119,7 +123,7 @@ fn main() {
                 if bin_dir.exists() {
                     let wide: Vec<u16> = bin_dir.as_os_str().encode_wide().chain(Some(0)).collect();
                     unsafe {
-                        windows::Win32::System::LibraryLoader::SetDllDirectoryW(windows::core::PCWSTR(wide.as_ptr()));
+                        let _ = windows::Win32::System::LibraryLoader::SetDllDirectoryW(windows::core::PCWSTR(wide.as_ptr()));
                     }
                     log_msg(app, &format!("Added DLL directory: {:?}", bin_dir));
                 }
