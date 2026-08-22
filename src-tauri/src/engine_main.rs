@@ -43,7 +43,7 @@ fn main() {
             if bin_dir.exists() {
                 let wide: Vec<u16> = bin_dir.as_os_str().encode_wide().chain(Some(0)).collect();
                 unsafe {
-                    windows::Win32::System::LibraryLoader::SetDllDirectoryW(windows::core::PCWSTR(wide.as_ptr()));
+                    let _ = windows::Win32::System::LibraryLoader::SetDllDirectoryW(windows::core::PCWSTR(wide.as_ptr()));
                 }
                 eprintln!("[engine] DLL dir: {:?}", bin_dir);
             }

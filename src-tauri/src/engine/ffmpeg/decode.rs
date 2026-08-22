@@ -57,7 +57,7 @@ fn spawn_ffmpeg_decoder(
     std::thread::Builder::new()
         .name(format!("ffmpeg-decode:{key}"))
         .spawn(move || {
-            if let Err(e) = run_ffmpeg_decode_loop(thread_handle.clone(), &path, w, h, fps, opts, key_owned.clone()) {
+            if let Err(e) = run_ffmpeg_decode_loop(thread_handle.clone(), &path, w, h, fps, opts) {
                 if thread_handle.slot().get().is_none() {
                     let _ = tx.send(DecoderEvent::Failed(key_owned, format!("ffmpeg decode failed: {e}")));
                 }
@@ -74,7 +74,6 @@ fn run_ffmpeg_decode_loop(
     target_h: u32,
     fps: f64,
     opts: VideoOpts,
-    key: String,
 ) -> Result<(), String> {
     use ffmpeg_next::software::scaling::{context::Context as SwsContext, flag::Flags};
     crate::engine::ffmpeg::init()?;
@@ -92,7 +91,7 @@ fn run_ffmpeg_decode_loop(
         let st = ictx.stream(stream_idx).unwrap();
         st.parameters()
     };
-    let mut ctx = ffmpeg_next::codec::context::Context::from_parameters(codec_params)
+    let ctx = ffmpeg_next::codec::context::Context::from_parameters(codec_params)
         .map_err(|e| format!("codec context: {e}"))?;
     let mut decoder = ctx.decoder().video().map_err(|e| format!("video decoder: {e}"))?;
     let mut scaler = SwsContext::get(
@@ -191,7 +190,7 @@ fn run_ffmpeg_decode_loop(
             }
             if opts.loop_playback {
                 let _ = ictx.seek(0, ..0);
-                let _ = decoder.flush();
+                decoder.flush();
                 continue 'outer;
             } else {
                 if got_frame {

@@ -82,7 +82,7 @@ fn run_camera_loop(
         .map(|s| s.index())
         .ok_or_else(|| format!("no video stream for camera {device}"))?;
     let codec_params = ictx.stream(stream_idx).unwrap().parameters();
-    let mut ctx = ffmpeg_next::codec::context::Context::from_parameters(codec_params)
+    let ctx = ffmpeg_next::codec::context::Context::from_parameters(codec_params)
         .map_err(|e| format!("camera codec context: {e}"))?;
     let mut decoder = ctx.decoder().video().map_err(|e| format!("camera decoder: {e}"))?;
     let mut scaler = SwsContext::get(

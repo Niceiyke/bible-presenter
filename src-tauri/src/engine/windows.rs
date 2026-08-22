@@ -461,7 +461,7 @@ impl WindowHostApp {
             // We don't have an ActiveEventLoop here; clamp conservatively by
             // ensuring the window never grows beyond a sane projector size.
             // The next create_or_show (with an event loop) will fully clamp.
-            (width.min(1920).max(320), height.min(1080).max(240))
+            (width.clamp(320, 1920), height.clamp(240, 1080))
         };
         win.width = width;
         win.height = height;

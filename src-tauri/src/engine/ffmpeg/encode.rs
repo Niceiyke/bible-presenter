@@ -31,6 +31,9 @@ const MAX_QUEUED_PACKETS: usize = 120;
 
 /// Live packet emitted by the shared encoder. Cloned (Arc) per muxer — same
 /// bounded drop-newest backpressure as the pipe fan thread (`transport.rs:480`).
+/// Fields are consumed when the mux threads write packet payloads; until then
+/// they are intentionally carried.
+#[allow(dead_code)]
 #[derive(Clone)]
 struct EncodedPacket {
     data: Arc<Vec<u8>>,
@@ -54,6 +57,10 @@ struct FfmpegEncoder {
     // EOF; joining flushes the encoder and closes every muxer.
     running: Arc<AtomicBool>,
     handle: JoinHandle<()>,
+}
+
+/// Program geometry + rate the shared encoder was opened with.
+struct EncoderSpec {
     width: u32,
     height: u32,
     fps: u32,
@@ -128,7 +135,7 @@ impl FfmpegTransportManager {
             SessionKind::Recording { path } => SessionKind::Recording { path: path.clone() },
         };
         // Spawn per-session mux thread consuming from `rx`.
-        let handle = spawn_mux_thread(kind_clone, rx, Arc::clone(&queued), Arc::clone(&sent), Arc::clone(&dropped), fps, width, height)?;
+        let handle = spawn_mux_thread(kind_clone, rx, Arc::clone(&queued), Arc::clone(&sent), fps, width, height)?;
         let is_first = sessions.is_empty();
         sessions.insert(
             session_id.to_string(),
@@ -159,7 +166,7 @@ impl FfmpegTransportManager {
                 drop(sessions);
                 let _ = h.join();
             }
-            drop(self.ensure_encoder_stopped());
+            let _ = self.ensure_encoder_stopped();
         }
         Ok(())
     }
@@ -212,14 +219,12 @@ impl FfmpegTransportManager {
             Arc::clone(&self.inner.snapshot),
             Arc::clone(&self.inner.scenes),
             Arc::clone(&self.inner.sessions),
-            width,
-            height,
-            fps,
+            EncoderSpec { width, height, fps },
             self.inner.app_data_dir.clone(),
             Arc::clone(&self.inner.media_hub),
             Arc::clone(&running),
         )?;
-        *enc = Some(FfmpegEncoder { running, handle, width, height, fps });
+        *enc = Some(FfmpegEncoder { running, handle });
         Ok(())
     }
 
@@ -275,9 +280,7 @@ fn spawn_encode_thread(
     snapshot: Arc<Mutex<Option<ResolverSnapshot>>>,
     scenes: Arc<Mutex<Option<Vec<Scene>>>>,
     sessions: Arc<Mutex<HashMap<String, FfmpegSession>>>,
-    width: u32,
-    height: u32,
-    fps: u32,
+    spec: EncoderSpec,
     app_data_dir: PathBuf,
     media_hub: Arc<crate::engine::compositor::media::MediaFrameHub>,
     running: Arc<AtomicBool>,
@@ -288,6 +291,7 @@ fn spawn_encode_thread(
     std::thread::Builder::new()
         .name("ffmpeg-encode".into())
         .spawn(move || {
+            let EncoderSpec { width, height, fps } = spec;
             let frame_interval = Duration::from_micros(1_000_000 / fps.max(1) as u64);
             // Compositor (owns GPU, `!Send` → must be created on this thread).
             let mut compositor = crate::engine::compositor::Compositor::new(width, height).ok();
@@ -422,7 +426,7 @@ fn open_encoder(width: u32, height: u32, fps: u32) -> Result<ffmpeg_next::encode
     }
     let codec = ffmpeg_next::encoder::find_by_name(codec_name)
         .ok_or_else(|| format!("encoder {codec_name} not found"))?;
-    let mut ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
+    let ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
     let mut video = ctx.encoder().video().map_err(|e| format!("encoder video: {e}"))?;
     video.set_width(width);
     video.set_height(height);
@@ -454,7 +458,6 @@ fn spawn_mux_thread(
     rx: mpsc::Receiver<EncodedPacket>,
     queued: Arc<AtomicUsize>,
     sent: Arc<AtomicUsize>,
-    dropped: Arc<AtomicUsize>,
     fps: u32,
     width: u32,
     height: u32,
@@ -471,7 +474,6 @@ fn spawn_mux_thread(
             } else if let Some(u) = url {
                 run_rtmp_mux(u, rx, queued, sent, fps);
             }
-            let _ = dropped; // keep alive
         })
         .map_err(|e| format!("could not spawn mux thread: {e}"))
 }
@@ -510,7 +512,7 @@ fn run_rtmp_mux(url: String, rx: mpsc::Receiver<EncodedPacket>, queued: Arc<Atom
     let _ = fmt.write_trailer();
 }
 
-fn run_recording_mux(path: PathBuf, rx: mpsc::Receiver<EncodedPacket>, queued: Arc<AtomicUsize>, sent: Arc<AtomicUsize>, fps: u32, width: u32, height: u32) {
+fn run_recording_mux(path: PathBuf, rx: mpsc::Receiver<EncodedPacket>, queued: Arc<AtomicUsize>, sent: Arc<AtomicUsize>, fps: u32, _width: u32, _height: u32) {
     let url = path.to_string_lossy().to_string();
     let mut fmt = match ffmpeg_next::format::output(&url) {
         Ok(o) => o,

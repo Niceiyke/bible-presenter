@@ -57,7 +57,7 @@ pub fn probe_duration_secs(path: &Path) -> Option<f64> {
     let _ = crate::engine::ffmpeg::init();
     let ictx = ffmpeg_next::format::input(path).ok()?;
     let dur = ictx.duration(); // microseconds, AV_NOPTS_VALUE if unknown
-    if dur == ffmpeg_next::ffi::AV_NOPTS_VALUE as i64 || dur <= 0 {
+    if dur == ffmpeg_next::ffi::AV_NOPTS_VALUE || dur <= 0 {
         return None;
     }
     Some(dur as f64 / 1_000_000.0)

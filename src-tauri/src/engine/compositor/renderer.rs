@@ -519,7 +519,7 @@ fn build_common(
 
     let readback_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("compositor readback"),
-        size: (width as u64) * (height as u64) * 4,
+        size: u64::from(padded_bytes_per_row(width)) * (height as u64),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
@@ -941,7 +941,7 @@ impl Compositor {
         self.target_view = self.target.create_view(&wgpu::TextureViewDescriptor::default());
         self.readback_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("compositor readback"),
-            size: (self.width as u64) * (self.height as u64) * 4,
+            size: u64::from(padded_bytes_per_row(self.width)) * (self.height as u64),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -1761,9 +1761,12 @@ impl Compositor {
         self.pending_text.clear();
     }
 
-    /// Copy the target texture to CPU memory as RGBA8 (bottom row first due to
-    /// texture coordinate origin). Returns width, height, bytes.
+    /// Copy the target texture to CPU memory as tightly packed RGBA8 (top row
+    /// first, like the DOM). Buffer copies require 256-byte-aligned row
+    /// strides, so the readback buffer is padded and rows are unpacked here.
     pub fn read_pixels(&mut self) -> (u32, u32, Vec<u8>) {
+        let stride = padded_bytes_per_row(self.width) as usize;
+        let raw_row = (self.width * 4) as usize;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("readback") });
@@ -1778,7 +1781,7 @@ impl Compositor {
                 buffer: &self.readback_buf,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(self.width * 4),
+                    bytes_per_row: Some(stride as u32),
                     rows_per_image: Some(self.height),
                 },
             },
@@ -1793,32 +1796,25 @@ impl Compositor {
         self.device.poll(wgpu::PollType::wait_indefinitely()).unwrap_or(wgpu::PollStatus::QueueEmpty);
         let _ = rx.recv();
         let data = slice.get_mapped_range().expect("readback buffer map failed");
-        let mut out = data.to_vec();
+        // Unpack the padded rows into a tight buffer, flipping vertically in
+        // the same pass (texture row 0 is the bottom).
+        let mut out = Vec::with_capacity(raw_row * self.height as usize);
+        for y in 0..self.height as usize {
+            let src = (self.height as usize - 1 - y) * stride;
+            out.extend_from_slice(&data[src..src + raw_row]);
+        }
         drop(data);
         self.readback_buf.unmap();
-        // Flip rows: texture row 0 is the bottom; expose top-down like the DOM.
-        let row = (self.width * 4) as usize;
-        for y in 0..(self.height as usize / 2) {
-            let top = y * row;
-            let bottom = (self.height as usize - 1 - y) * row;
-            out.swap_slices(top..top + row, bottom..bottom + row);
-        }
         (self.width, self.height, out)
     }
 }
 
-/// Swap two non-overlapping slices of a vec (helper for row flipping).
-trait SwapSlices {
-    fn swap_slices(&mut self, a: std::ops::Range<usize>, b: std::ops::Range<usize>);
-}
-impl SwapSlices for Vec<u8> {
-    fn swap_slices(&mut self, a: std::ops::Range<usize>, b: std::ops::Range<usize>) {
-        let len = a.len();
-        debug_assert_eq!(len, b.len());
-        for i in 0..len {
-            self.swap(a.start + i, b.start + i);
-        }
-    }
+/// wgpu buffer↔texture copies require row strides to be 256-byte aligned;
+/// RGBA8 makes the tight row `width * 4`, which is only aligned when
+/// `width % 64 == 0`. Pad to the next multiple so any window size works.
+fn padded_bytes_per_row(width: u32) -> u32 {
+    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    (width * 4).div_ceil(align) * align
 }
 
 fn frame_now_secs() -> i64 {
@@ -2052,6 +2048,77 @@ mod tests {
             "verse text overflows the right edge (max x {})",
             cols.iter().max().unwrap()
         );
+    }
+
+    #[test]
+    fn dbg_wrap_probe() {
+        let long_text = "For God so loved the world that he gave his one and only Son, that whoever believes in him shall not perish but have eternal life. For God did not send his Son into the world to condemn the world, but to save the world through him.".repeat(2);
+        let frame = frame_with(
+            Some(DisplayItem::Verse(Verse {
+                book: "JHN".to_string(),
+                chapter: 3,
+                verse: 16,
+                text: long_text.clone(),
+                version: "KJV".to_string(),
+                split_index: None,
+                total_splits: None,
+                score: None,
+            })),
+            BackgroundSetting::Color("#0000ff".to_string()),
+        );
+        println!("font_size={} ref_font_size={} ref_h={} ref_pos={}",
+            frame.settings.font_size, frame.settings.reference_font_size,
+            frame.reference_output_height, frame.settings.reference_position);
+        println!("colors: verse={:?} ref={:?}", frame.colors.verse_text, frame.colors.reference_text);
+
+        let scale = 180.0 / frame.reference_output_height as f32;
+        let pt_to_px = |pt: f64| (pt as f32 * 96.0 / 72.0 * scale).max(8.0);
+        let verse_pt = pt_to_px(frame.settings.font_size);
+        let ref_pt = pt_to_px(frame.settings.reference_font_size);
+        let padding = 64.0 * scale;
+        let max_w = ((320.0 - padding * 2.0).max(80.0)).min(320.0 * 0.98);
+        println!("verse_pt={verse_pt} ref_pt={ref_pt} max_w={max_w}");
+
+        let mut c = Compositor::new(320, 180).expect("compositor");
+        let n = c.count_wrapped_lines(&long_text, verse_pt, false, max_w);
+        println!("wrapped lines: {n}");
+        // Show first few wrapped line widths.
+        {
+            let mut current = String::new();
+            for word in long_text.split_whitespace() {
+                let candidate = if current.is_empty() { word.to_string() } else { format!("{current} {word}") };
+                if !current.is_empty() && c.measure_text(&candidate, verse_pt, false) > max_w {
+                    println!("  line w={:.1}: {current:?}", c.measure_text(&current, verse_pt, false));
+                    current = word.to_string();
+                } else {
+                    current = candidate;
+                }
+            }
+            println!("  last w={:.1}", c.measure_text(&current, verse_pt, false));
+            println!("  REF w={:.1}", c.measure_text(&"JHN 3:16 (KJV)".to_uppercase(), ref_pt, true));
+        }
+
+        let mut media = MemoryMedia(HashMap::new());
+        let (_w, _h, px) = render_frame_to_pixels(&frame, &mut media).expect("render");
+        // Cluster white pixels into row bands.
+        let (w, h) = (320u32, 180u32);
+        let mut bands: Vec<(u32, u32, u32, u32)> = Vec::new(); // y0,y1,minx,maxx
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                let p = &px[i..i + 4];
+                if p[0] > 200 && p[1] > 200 && p[2] > 200 {
+                    if let Some(b) = bands.last_mut() {
+                        if y <= b.1 + 1 && x >= b.2.saturating_sub(40) && x <= b.3 + 40 {
+                            b.1 = b.1.max(y); b.2 = b.2.min(x); b.3 = b.3.max(x);
+                            continue;
+                        }
+                    }
+                    bands.push((y, y, x, x));
+                }
+            }
+        }
+        for b in &bands { println!("band y={}-{} x={}-{}", b.0, b.1, b.2, b.3); }
     }
 
     #[test]

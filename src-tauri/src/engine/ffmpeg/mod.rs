@@ -1,12 +1,14 @@
 //! In-process ffmpeg pipeline (feature `ffmpeg-next`).
 //!
 //! This module is the `ffmpeg-next` (libav*) counterpart to the bundled
-//! `ffmpeg.exe` CLI pipe in `engine/compositor/media.rs` + `engine/transport.rs`
-//! + `store/media_schedule.rs`. When the `ffmpeg-next` cargo feature is enabled
-//! the engine swaps every producer/consumer to these in-process paths — same
+//! `ffmpeg.exe` CLI pipe in `engine/compositor/media.rs`,
+//! `engine/transport.rs`, and `store/media_schedule.rs`. When the
+//! `ffmpeg-next` cargo feature is enabled the engine swaps every
+//! producer/consumer to these in-process paths — same
 //! `MediaFrameHub`/`DecoderSpawner`/`TransportManager` contracts, zero pipe
-//! `read_exact`/`write_all` hops, HW decode/encode (d3d11va/NVENC/QSV) where the
-//! host supports it, and typed `AVERROR` instead of string-parsed ffprobe output.
+//! `read_exact`/`write_all` hops, HW decode/encode (d3d11va/NVENC/QSV) where
+//! the host supports it, and typed `AVERROR` instead of string-parsed ffprobe
+//! output.
 //!
 //! Fallback: with the feature **disabled** the engine keeps the subprocess pipe
 //! (aggregate GPL, crash-isolated) and this module compiles to no-ops so
