@@ -50,6 +50,9 @@ export function matchWebviewDeviceId(
 
 let engineNameByWebviewId = new Map<string, string>();
 let webviewIdByEngineName = new Map<string, string>();
+/// Last successfully fetched MF names, so single-device updates made after a
+/// stream opens (`noteLocalStreamLabel`) can match without re-querying.
+let lastEngineNames: string[] = [];
 
 /**
  * Rebuild both lookup maps from the current webview enumeration + engine
@@ -76,8 +79,32 @@ export function applyCameraNameMaps(
       if (id) nextReverse.set(name, id);
     }
   }
+  cacheEngineNames(engineNames);
   engineNameByWebviewId = nextForward;
   webviewIdByEngineName = nextReverse;
+}
+
+/** Remember the engine's device names for later single-device lookups. */
+function cacheEngineNames(names: string[]): void {
+  if (names.length > 0) lastEngineNames = names;
+}
+
+/**
+ * Register one device id ↔ label pair learned from a LIVE stream (the track
+ * label is the real MF name and proves camera permission was granted — the
+ * pre-permission `enumerateDevices` pass has empty labels and can't match).
+ * No-op when the bridge already knows this id or nothing matches.
+ */
+export function noteLocalStreamLabel(webviewDeviceId: string, trackLabel: string): void {
+  const label = trackLabel.trim();
+  if (!label || !webviewDeviceId) return;
+  if (engineNameByWebviewId.has(webviewDeviceId)) return;
+  const name = matchEngineName(lastEngineNames, label);
+  if (!name) return;
+  engineNameByWebviewId = new Map(engineNameByWebviewId).set(webviewDeviceId, name);
+  if (!webviewIdByEngineName.has(name)) {
+    webviewIdByEngineName = new Map(webviewIdByEngineName).set(name, webviewDeviceId);
+  }
 }
 
 /** Live MF device names from the engine sidecar; `[]` when unreachable. */
@@ -89,7 +116,9 @@ export async function listEngineCameras(): Promise<string[]> {
     });
     if (!reply.response.ok) return [];
     const result = reply.response.result as { devices?: { name?: string }[] } | undefined;
-    return (result?.devices ?? []).map((d) => d.name ?? "").filter(Boolean);
+    const names = (result?.devices ?? []).map((d) => d.name ?? "").filter(Boolean);
+    cacheEngineNames(names);
+    return names;
   } catch {
     return [];
   }

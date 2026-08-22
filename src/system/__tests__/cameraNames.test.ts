@@ -4,6 +4,7 @@ import {
   engineNameForWebviewId,
   matchEngineName,
   matchWebviewDeviceId,
+  noteLocalStreamLabel,
   webviewDeviceIdForEngineName,
 } from "../cameraNames";
 
@@ -95,6 +96,39 @@ describe("cameraNames bridge", () => {
       applyCameraNameMaps([{ deviceId: "new", label: "New Cam" }], ["New Cam"]);
       expect(engineNameForWebviewId("old")).toBeNull();
       expect(engineNameForWebviewId("new")).toBe("New Cam");
+    });
+  });
+
+  describe("noteLocalStreamLabel (post-permission hydration)", () => {
+    it("registers a pair learned from a live stream track label", () => {
+      // Pre-permission enumeration found no devices but knows the engine
+      // list; the maps start empty until a real label arrives.
+      applyCameraNameMaps([], ["HD Webcam", "Integrated Camera"]);
+      expect(engineNameForWebviewId("hash-hd")).toBeNull();
+      noteLocalStreamLabel("hash-hd", "HD Webcam");
+      expect(engineNameForWebviewId("hash-hd")).toBe("HD Webcam");
+      expect(webviewDeviceIdForEngineName("HD Webcam")).toBe("hash-hd");
+      expect(webviewDeviceIdForEngineName("Integrated Camera")).toBe("Integrated Camera");
+    });
+
+    it("keeps the first id for a name already on the reverse map", () => {
+      applyCameraNameMaps([{ deviceId: "dup-a", label: "Twin" }], ["Twin"]);
+      noteLocalStreamLabel("dup-b", "Twin");
+      expect(webviewDeviceIdForEngineName("Twin")).toBe("dup-a");
+      expect(engineNameForWebviewId("dup-b")).toBe("Twin");
+    });
+
+    it("ignores labels that match no engine device", () => {
+      applyCameraNameMaps([], ["Only Cam"]);
+      noteLocalStreamLabel("hash-x", "Ghost Cam");
+      expect(engineNameForWebviewId("hash-x")).toBeNull();
+    });
+
+    it("ignores empty labels and empty ids", () => {
+      applyCameraNameMaps([], ["Cam"]);
+      noteLocalStreamLabel("hash-y", "");
+      noteLocalStreamLabel("", "Cam");
+      expect(engineNameForWebviewId("hash-y")).toBeNull();
     });
   });
 });

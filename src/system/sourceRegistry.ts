@@ -19,7 +19,7 @@
  * React hooks in `src/hooks/useCameraSource.ts`.
  */
 
-import { webviewDeviceIdForEngineName } from "./cameraNames";
+import { webviewDeviceIdForEngineName, noteLocalStreamLabel } from "./cameraNames";
 
 export type SourceStatus =
   /** Known (enumerated or registered) but not requested. */
@@ -245,6 +245,11 @@ function openLocal(key: string, deviceId: string, q: CaptureQuality): void {
         stream.getTracks().forEach((t) => t.stop());
         return;
       }
+      // The live track's label is the real MF friendly name — teach the
+      // webview/engine ID bridge with it (pre-permission enumeration has no
+      // labels, so this may be the first time the pair becomes known).
+      const trackLabel = stream.getVideoTracks()[0]?.label;
+      if (trackLabel) void noteLocalStreamLabel(deviceId, trackLabel);
       // React to a device being unplugged / track ending with one auto-retry.
       stream.getVideoTracks().forEach((track) => {
         track.onended = () => {

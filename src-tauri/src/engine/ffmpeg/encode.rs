@@ -7,7 +7,7 @@
 //! `gop=fps*2`, `bf=0`) that eats RGBA `AVFrame`s from the capture compositor
 //! and emits Annex-B `AVPacket`s. Each `FfmpegMuxer` owns an `AVFormatContext`
 //! (`flv` for RTMP, `mp4` fragmented for recording) fed from the same packet
-//! bus â€” no re-encode, no pipe `clone()`. `TransportManager` swaps to this when
+//! bus — no re-encode, no pipe `clone()`. `TransportManager` swaps to this when
 //! `ffmpeg-next` is enabled; the `RtmpStatus` wire shape is unchanged.
 
 use std::{
@@ -29,7 +29,7 @@ use crate::store::Scene;
 
 const MAX_QUEUED_PACKETS: usize = 120;
 
-/// Live packet emitted by the shared encoder. Cloned (Arc) per muxer â€” same
+/// Live packet emitted by the shared encoder. Cloned (Arc) per muxer — same
 /// bounded drop-newest backpressure as the pipe fan thread (`transport.rs:480`).
 /// Fields are consumed when the mux threads write packet payloads; until then
 /// they are intentionally carried.
@@ -43,7 +43,7 @@ struct EncodedPacket {
 }
 
 /// Codec parameters the mux threads must have before they can write a valid
-/// container header â€” the encoder opens asynchronously inside its own thread,
+/// container header — the encoder opens asynchronously inside its own thread,
 /// so they block on this slot instead of writing a header with `codec none`.
 #[derive(Clone)]
 struct EncoderParams {
@@ -74,7 +74,7 @@ pub struct FfmpegTransportInner {
     /// + bounded packet queue. Shared with the encoder fan for broadcast.
     sessions: Arc<Mutex<HashMap<String, FfmpegSession>>>,
     encoder: Mutex<Option<FfmpegEncoder>>,
-    /// Result of the last encoder open â€” mux threads block on this before
+    /// Result of the last encoder open — mux threads block on this before
     /// writing their container header (see `EncoderParams`).
     encoder_params: EncoderResultSlot,
     snapshot: Arc<Mutex<Option<ResolverSnapshot>>>,
@@ -156,7 +156,7 @@ impl FfmpegTransportManager {
     fn start_session(&self, session_id: &str, kind: SessionKind, fps: u32, width: u32, height: u32) -> Result<(), String> {
         let mut sessions = self.inner.sessions.lock();
         if sessions.contains_key(session_id) {
-            return Err("This destination is already live â€” stop it first.".into());
+            return Err("This destination is already live — stop it first.".into());
         }
         let (tx, rx) = mpsc::sync_channel::<EncodedPacket>(MAX_QUEUED_PACKETS);
         let queued = Arc::new(AtomicUsize::new(0));
@@ -406,7 +406,7 @@ fn spawn_encode_thread(
                 };
                 // Wrap RGBA â†’ AVFrame(RGBA) â†’ scale â†’ AVFrame(YUV420P) â†’ send.
                 let mut src = ffmpeg_next::frame::Video::new(ffmpeg_next::format::Pixel::RGBA, width, height);
-                // Copy tightly â€” ffmpeg frame may have padded stride.
+                // Copy tightly — ffmpeg frame may have padded stride.
                 {
                     let stride = src.stride(0);
                     let data = src.data_mut(0);
@@ -476,14 +476,42 @@ fn spawn_encode_thread(
 }
 
 fn open_encoder(width: u32, height: u32, fps: u32) -> Result<ffmpeg_next::encoder::Video, String> {
-    let mut codec_name = "libx264";
-    // Probe HW encoders first.
-    for cand in ["h264_nvenc", "h264_qsv", "h264_amf"] {
-        if ffmpeg_next::encoder::find_by_name(cand).is_some() {
-            codec_name = cand;
-            break;
+    // Probe HW encoders in preference order. `find_by_name` only proves the
+    // codec is compiled into libav — the nvcuda/QuickSync/AMF runtimes may
+    // still be missing on this machine — so each candidate must actually
+    // OPEN, falling through to software on failure.
+    let candidates = ["h264_nvenc", "h264_qsv", "h264_amf"];
+    let mut last_hw_err = String::new();
+    for cand in candidates {
+        if ffmpeg_next::encoder::find_by_name(cand).is_none() {
+            continue;
+        }
+        match try_open_encoder(cand, width, height, fps) {
+            Ok(v) => {
+                eprintln!("[ffmpeg-encode] using hardware encoder {cand}");
+                return Ok(v);
+            }
+            Err(e) => {
+                eprintln!("[ffmpeg-encode] {cand} unavailable ({e}) — trying next");
+                last_hw_err = format!("{cand}: {e}");
+            }
         }
     }
+    try_open_encoder("libx264", width, height, fps).map_err(|e| {
+        if last_hw_err.is_empty() {
+            format!("open encoder libx264: {e}")
+        } else {
+            format!("no usable h264 encoder — HW failed ({last_hw_err}), libx264: {e}")
+        }
+    })
+}
+
+fn try_open_encoder(
+    codec_name: &str,
+    width: u32,
+    height: u32,
+    fps: u32,
+) -> Result<ffmpeg_next::encoder::Video, String> {
     let codec = ffmpeg_next::encoder::find_by_name(codec_name)
         .ok_or_else(|| format!("encoder {codec_name} not found"))?;
     let ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
@@ -509,12 +537,11 @@ fn open_encoder(width: u32, height: u32, fps: u32) -> Result<ffmpeg_next::encode
         opts.set("x264-params", &format!("keyint={gop}:min-keyint={}:scenecut=-1", fps));
     } else {
         // HW: low-latency tuning. The legacy preset names ("llhp" & co.) were
-        // removed in FFmpeg 9 â€” only the p1â€“p7 scale is accepted there.
+        // removed in FFmpeg 9 — only the p1–p7 scale is accepted there.
         opts.set("preset", "p4");
         opts.set("rc", "cbr");
     }
-    let ctx = video.open_with(opts).map_err(|e| format!("open encoder {codec_name}: {e}"))?;
-    Ok(ctx)
+    video.open_with(opts).map_err(|e| format!("open encoder {codec_name}: {e}"))
 }
 
 fn spawn_mux_thread(
