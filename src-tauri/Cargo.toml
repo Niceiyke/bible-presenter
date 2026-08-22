@@ -65,7 +65,7 @@ winapi = { version = "0.3", features = ["dpapi", "wincrypt", "winbase", "winnt",
 # ID3D12Device types. Pinning windows to exactly 0.62.0 satisfies both ranges
 # (gpu-allocator `<=0.62.0`, wgpu-hal `>=0.62.0, <0.63.0`) and unifies the types.
 # Features are additive: MediaFoundation + Com serve camera enumeration (Phase I1).
-windows = { version = "=0.62.0", features = ["Win32_Media_MediaFoundation", "Win32_System_Com", "Win32_System_LibraryLoader"], default-features = false }
+windows = { version = "=0.62.0", features = ["Win32_Media_MediaFoundation", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_Graphics_Dxgi"], default-features = false }
 
 [lib]
 name = "wordlyte_lib"

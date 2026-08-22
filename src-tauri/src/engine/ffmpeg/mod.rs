@@ -19,6 +19,7 @@
 pub mod capture;
 pub mod decode;
 pub mod encode;
+pub mod gpu;
 pub mod probe;
 
 /// One-time libav init. Safe to call multiple times (atomic guard).

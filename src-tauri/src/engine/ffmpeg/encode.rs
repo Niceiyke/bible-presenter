@@ -479,13 +479,31 @@ fn open_encoder(width: u32, height: u32, fps: u32) -> Result<ffmpeg_next::encode
     // Probe HW encoders in preference order. `find_by_name` only proves the
     // codec is compiled into libav — the nvcuda/QuickSync/AMF runtimes may
     // still be missing on this machine — so each candidate must actually
-    // OPEN, falling through to software on failure.
-    let candidates = ["h264_nvenc", "h264_qsv", "h264_amf"];
+    // OPEN. DXGI vendor detection (gpu.rs) skips candidates whose hardware is
+    // absent entirely; when detection itself fails we try every candidate as
+    // before.
+    const VENDOR_FOR_ENCODER: &[(&str, u32)] = &[
+        ("h264_nvenc", super::gpu::VENDOR_NVIDIA),
+        ("h264_qsv", super::gpu::VENDOR_INTEL),
+        ("h264_amf", super::gpu::VENDOR_AMD),
+    ];
+    let vendors = match super::gpu::detected_gpu_vendors() {
+        Ok(v) => Some(v),
+        Err(e) => {
+            eprintln!("[ffmpeg-encode] gpu detection unavailable ({e}) — probing all HW encoders");
+            None
+        }
+    };
+    let candidates: Vec<&str> = VENDOR_FOR_ENCODER
+        .iter()
+        .filter(|(name, vendor)| match &vendors {
+            Some(v) => v.contains(vendor) && ffmpeg_next::encoder::find_by_name(name).is_some(),
+            None => ffmpeg_next::encoder::find_by_name(name).is_some(),
+        })
+        .map(|(name, _)| *name)
+        .collect();
     let mut last_hw_err = String::new();
     for cand in candidates {
-        if ffmpeg_next::encoder::find_by_name(cand).is_none() {
-            continue;
-        }
         match try_open_encoder(cand, width, height, fps) {
             Ok(v) => {
                 eprintln!("[ffmpeg-encode] using hardware encoder {cand}");
