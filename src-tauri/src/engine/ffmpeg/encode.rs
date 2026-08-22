@@ -488,7 +488,11 @@ fn open_encoder(width: u32, height: u32, fps: u32) -> Result<ffmpeg_next::encode
         ("h264_amf", super::gpu::VENDOR_AMD),
     ];
     let vendors = match super::gpu::detected_gpu_vendors() {
-        Ok(v) => Some(v),
+        Ok(v) => {
+            let hex: Vec<String> = v.iter().map(|id| format!("{id:#06x}")).collect();
+            eprintln!("[ffmpeg-encode] detected GPUs: {}", if hex.is_empty() { "none".into() } else { hex.join(", ") });
+            Some(v)
+        }
         Err(e) => {
             eprintln!("[ffmpeg-encode] gpu detection unavailable ({e}) — probing all HW encoders");
             None
@@ -546,18 +550,34 @@ fn try_open_encoder(
     // Muxers consume the extradata via the shared EncoderParams slot, so ask
     // for a global header regardless of which container opens first.
     video.set_flags(ffmpeg_next::codec::flag::Flags::GLOBAL_HEADER);
-    // Codec-specific options via dictionary.
+    // Codec-specific options via dictionary. Each encoder has its own option
+    // vocabulary — the p1–p7 preset scale is NVENC-only (FFmpeg 9 removed the
+    // legacy llhp names); QSV speaks the x264-style scale; AMF uses
+    // quality=speed and rejects `preset` outright.
     let mut opts = ffmpeg_next::Dictionary::new();
-    if codec_name == "libx264" {
-        opts.set("preset", "veryfast");
-        opts.set("tune", "zerolatency");
-        opts.set("profile", "high");
-        opts.set("x264-params", &format!("keyint={gop}:min-keyint={}:scenecut=-1", fps));
-    } else {
-        // HW: low-latency tuning. The legacy preset names ("llhp" & co.) were
-        // removed in FFmpeg 9 — only the p1–p7 scale is accepted there.
-        opts.set("preset", "p4");
-        opts.set("rc", "cbr");
+    match codec_name {
+        "libx264" => {
+            opts.set("preset", "veryfast");
+            opts.set("tune", "zerolatency");
+            opts.set("profile", "high");
+            opts.set("x264-params", &format!("keyint={gop}:min-keyint={}:scenecut=-1", fps));
+        }
+        "h264_nvenc" => {
+            // Low-latency tuning; FFmpeg 9 only accepts the p1–p7 scale here.
+            opts.set("preset", "p4");
+            opts.set("rc", "cbr");
+        }
+        "h264_qsv" => {
+            opts.set("preset", "veryfast");
+            // Shallow async pipeline for latency parity with the CLI pipe.
+            opts.set("async_depth", "1");
+        }
+        "h264_amf" => {
+            opts.set("quality", "speed");
+        }
+        other => {
+            return Err(format!("no option profile for encoder {other}"));
+        }
     }
     video.open_with(opts).map_err(|e| format!("open encoder {codec_name}: {e}"))
 }

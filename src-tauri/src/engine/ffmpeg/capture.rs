@@ -73,7 +73,19 @@ fn run_camera_loop(
     handle: crate::engine::compositor::media::VideoDecoderHandle,
 ) -> Result<(), String> {
     use ffmpeg_next::software::scaling::{context::Context as SwsContext, flag::Flags};
-    let mut ictx = open_dshow_input(device, target_w, target_h, fps)?;
+    let mut ictx = match open_dshow_input(device, target_w, target_h, fps) {
+        Ok(ctx) => ctx,
+        Err(open_err) => {
+            // Chromium device-ID hashes (64 hex chars) leak into staged items
+            // when the webview enumerated cameras before permission was
+            // granted — they can never match a dshow name. Resolve to a real
+            // device: normalized-name match first, else the sole camera.
+            let resolved = resolve_device_name(device)
+                .ok_or_else(|| format!("camera {device} not found ({open_err})"))?;
+            eprintln!("[ffmpeg-capture] '{device}' is not a dshow name ({open_err}) — using '{resolved}'");
+            open_dshow_input(&resolved, target_w, target_h, fps)?
+        }
+    };
     let stream_idx = ictx
         .streams()
         .best(ffmpeg_next::media::Type::Video)
@@ -149,5 +161,23 @@ fn open_dshow_input(
     match ffmpeg_next::format::open_with(&format!("video={device}"), &iformat, opts) {
         Ok(ctx) => Ok(ctx.input()),
         Err(e) => Err(format!("could not open camera {device}: {e}")),
+    }
+}
+
+/// Best-effort mapping of an unopenable device id to a real dshow name.
+///
+/// A 64-hex id is Chromium's `deviceId` hash — one-way, unrecoverable. When
+/// the machine has exactly one camera we can safely substitute it; with
+/// multiple cameras guessing would pick the wrong feed, so we decline.
+fn resolve_device_name(requested: &str) -> Option<String> {
+    let is_hash = requested.len() == 64 && requested.chars().all(|c| c.is_ascii_hexdigit());
+    if !is_hash {
+        return None;
+    }
+    let mut devices = crate::engine::capture::list_video_devices().ok()?;
+    if devices.len() == 1 {
+        Some(devices.remove(0).name)
+    } else {
+        None
     }
 }
