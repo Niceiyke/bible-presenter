@@ -549,11 +549,14 @@ fn try_open_encoder(
 ) -> Result<(ffmpeg_next::encoder::Video, ffmpeg_next::format::Pixel), String> {
     let codec = ffmpeg_next::encoder::find_by_name(codec_name)
         .ok_or_else(|| format!("encoder {codec_name} not found"))?;
+    let input_pix =
+        pick_input_pixfmt(unsafe { codec.as_ptr() })
+            .ok_or_else(|| format!("{codec_name} accepts no software-frame pixel format"))?;
     let ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
     let mut video = ctx.encoder().video().map_err(|e| format!("encoder video: {e}"))?;
     video.set_width(width);
     video.set_height(height);
-    video.set_format(codec_input_format(codec_name));
+    video.set_format(input_pix);
     video.set_time_base(ffmpeg_next::Rational::new(1, fps as i32));
     video.set_frame_rate(Some(ffmpeg_next::Rational::new(fps as i32, 1)));
     // GOP + latency mirror the CLI pipe: veryfast zerolatency High repeat-headers
@@ -593,16 +596,50 @@ fn try_open_encoder(
         }
     }
     video.open_with(opts)
-        .map(|v| (v, codec_input_format(codec_name)))
+        .map(|v| (v, input_pix))
         .map_err(|e| format!("open encoder {codec_name}: {e}"))
 }
 
-/// Input pixel format each encoder accepts: QSV requires NV12, while
-/// x264/NVENC take planar YUV420P.
-fn codec_input_format(codec_name: &str) -> ffmpeg_next::format::Pixel {
-    match codec_name {
-        "h264_qsv" => ffmpeg_next::format::Pixel::NV12,
-        _ => ffmpeg_next::format::Pixel::YUV420P,
+/// Query the codec's advertised input pixel formats via
+/// `avcodec_get_supported_config` (FFmpeg ≥ 7.1 — direct `AVCodec.pix_fmts`
+/// access was removed in 9) and pick our preference: YUV420P first (best
+/// scaler path), then NV12. A null/empty result means "no advertised
+/// restriction" → default YUV420P. Returns None when the encoder only takes
+/// formats we cannot produce from software frames (e.g. hardware-only `qsv`
+/// surfaces).
+fn pick_input_pixfmt(
+    codec: *const ffmpeg_next::ffi::AVCodec,
+) -> Option<ffmpeg_next::format::Pixel> {
+    use ffmpeg_next::ffi::{self, AVPixelFormat};
+    use ffmpeg_next::format::Pixel;
+    unsafe {
+        let mut configs: *const std::os::raw::c_void = std::ptr::null();
+        let mut num: std::os::raw::c_int = 0;
+        let rc = ffi::avcodec_get_supported_config(
+            std::ptr::null(),
+            codec,
+            ffi::AVCodecConfig::AV_CODEC_CONFIG_PIX_FORMAT,
+            0,
+            &mut configs,
+            &mut num,
+        );
+        if rc != 0 || configs.is_null() || num <= 0 {
+            return Some(Pixel::YUV420P);
+        }
+        let yuv = AVPixelFormat::AV_PIX_FMT_YUV420P as i64;
+        let nv12 = AVPixelFormat::AV_PIX_FMT_NV12 as i64;
+        // Entries are the config values cast to `const void *`.
+        let mut has_nv12 = false;
+        for i in 0..num as isize {
+            let entry = configs.offset(i) as i64;
+            if entry == yuv {
+                return Some(Pixel::YUV420P);
+            }
+            if entry == nv12 {
+                has_nv12 = true;
+            }
+        }
+        if has_nv12 { Some(Pixel::NV12) } else { None }
     }
 }
 
