@@ -69,13 +69,11 @@ fn run_camera_loop(
     device: &str,
     target_w: u32,
     target_h: u32,
-    _fps: f64,
+    fps: f64,
     handle: crate::engine::compositor::media::VideoDecoderHandle,
 ) -> Result<(), String> {
     use ffmpeg_next::software::scaling::{context::Context as SwsContext, flag::Flags};
-    let input_name = format!("video={device}");
-    let mut ictx = ffmpeg_next::format::input(&input_name)
-        .map_err(|e| format!("could not open camera {device}: {e}"))?;
+    let mut ictx = open_dshow_input(device, target_w, target_h, fps)?;
     let stream_idx = ictx
         .streams()
         .best(ffmpeg_next::media::Type::Video)
@@ -123,4 +121,33 @@ fn run_camera_loop(
         }
     }
     Err(format!("camera {device} stream ended"))
+}
+
+/// Open one dshow device. libavformat cannot probe a device URL
+/// (`video=Name`) the way it probes a file — the `dshow` demuxer must be
+/// selected explicitly or `avformat_open_input` always fails with "Invalid
+/// data found when processing input", so no camera frame ever reaches the hub.
+fn open_dshow_input(
+    device: &str,
+    w: u32,
+    h: u32,
+    fps: f64,
+) -> Result<ffmpeg_next::format::context::Input, String> {
+    let name =
+        std::ffi::CString::new("dshow").map_err(|_| "invalid demuxer name".to_string())?;
+    let raw = unsafe { ffmpeg_next::ffi::av_find_input_format(name.as_ptr()) };
+    if raw.is_null() {
+        return Err(
+            "this libav build has no dshow demuxer — camera capture is unavailable".to_string(),
+        );
+    }
+    let iformat =
+        ffmpeg_next::Format::Input(unsafe { ffmpeg_next::format::Input::wrap(raw as *mut _) });
+    let mut opts = ffmpeg_next::Dictionary::new();
+    opts.set("framerate", &format!("{}", fps.round().max(1.0) as u32));
+    opts.set("video_size", &format!("{w}x{h}"));
+    match ffmpeg_next::format::open_with(&format!("video={device}"), &iformat, opts) {
+        Ok(ctx) => Ok(ctx.input()),
+        Err(e) => Err(format!("could not open camera {device}: {e}")),
+    }
 }

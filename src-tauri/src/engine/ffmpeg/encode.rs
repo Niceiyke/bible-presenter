@@ -7,7 +7,7 @@
 //! `gop=fps*2`, `bf=0`) that eats RGBA `AVFrame`s from the capture compositor
 //! and emits Annex-B `AVPacket`s. Each `FfmpegMuxer` owns an `AVFormatContext`
 //! (`flv` for RTMP, `mp4` fragmented for recording) fed from the same packet
-//! bus — no re-encode, no pipe `clone()`. `TransportManager` swaps to this when
+//! bus â€” no re-encode, no pipe `clone()`. `TransportManager` swaps to this when
 //! `ffmpeg-next` is enabled; the `RtmpStatus` wire shape is unchanged.
 
 use std::{
@@ -29,7 +29,7 @@ use crate::store::Scene;
 
 const MAX_QUEUED_PACKETS: usize = 120;
 
-/// Live packet emitted by the shared encoder. Cloned (Arc) per muxer — same
+/// Live packet emitted by the shared encoder. Cloned (Arc) per muxer â€” same
 /// bounded drop-newest backpressure as the pipe fan thread (`transport.rs:480`).
 /// Fields are consumed when the mux threads write packet payloads; until then
 /// they are intentionally carried.
@@ -39,6 +39,34 @@ struct EncodedPacket {
     data: Arc<Vec<u8>>,
     is_key: bool,
     pts: i64,
+    dts: Option<i64>,
+}
+
+/// Codec parameters the mux threads must have before they can write a valid
+/// container header â€” the encoder opens asynchronously inside its own thread,
+/// so they block on this slot instead of writing a header with `codec none`.
+#[derive(Clone)]
+struct EncoderParams {
+    width: u32,
+    height: u32,
+    fps: u32,
+    /// SPS/PPS from `GLOBAL_HEADER`: MP4 needs it for avcC, FLV for metadata.
+    extradata: Vec<u8>,
+}
+
+type EncoderResultSlot = Arc<Mutex<Option<Result<EncoderParams, String>>>>;
+
+fn wait_for_encoder_params(slot: &EncoderResultSlot) -> Result<EncoderParams, String> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(res) = slot.lock().clone() {
+            return res;
+        }
+        if Instant::now() >= deadline {
+            return Err("shared encoder did not open in time".into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 pub struct FfmpegTransportInner {
@@ -46,6 +74,9 @@ pub struct FfmpegTransportInner {
     /// + bounded packet queue. Shared with the encoder fan for broadcast.
     sessions: Arc<Mutex<HashMap<String, FfmpegSession>>>,
     encoder: Mutex<Option<FfmpegEncoder>>,
+    /// Result of the last encoder open â€” mux threads block on this before
+    /// writing their container header (see `EncoderParams`).
+    encoder_params: EncoderResultSlot,
     snapshot: Arc<Mutex<Option<ResolverSnapshot>>>,
     scenes: Arc<Mutex<Option<Vec<Scene>>>>,
     app_data_dir: PathBuf,
@@ -93,6 +124,7 @@ impl FfmpegTransportManager {
         let inner = Arc::new(FfmpegTransportInner {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             encoder: Mutex::new(None),
+            encoder_params: Arc::new(Mutex::new(None)),
             snapshot: Arc::new(Mutex::new(None)),
             scenes: Arc::new(Mutex::new(None)),
             app_data_dir,
@@ -124,7 +156,7 @@ impl FfmpegTransportManager {
     fn start_session(&self, session_id: &str, kind: SessionKind, fps: u32, width: u32, height: u32) -> Result<(), String> {
         let mut sessions = self.inner.sessions.lock();
         if sessions.contains_key(session_id) {
-            return Err("This destination is already live — stop it first.".into());
+            return Err("This destination is already live â€” stop it first.".into());
         }
         let (tx, rx) = mpsc::sync_channel::<EncodedPacket>(MAX_QUEUED_PACKETS);
         let queued = Arc::new(AtomicUsize::new(0));
@@ -135,7 +167,13 @@ impl FfmpegTransportManager {
             SessionKind::Recording { path } => SessionKind::Recording { path: path.clone() },
         };
         // Spawn per-session mux thread consuming from `rx`.
-        let handle = spawn_mux_thread(kind_clone, rx, Arc::clone(&queued), Arc::clone(&sent), fps, width, height)?;
+        let handle = spawn_mux_thread(
+            kind_clone,
+            rx,
+            Arc::clone(&queued),
+            Arc::clone(&sent),
+            Arc::clone(&self.inner.encoder_params),
+        )?;
         let is_first = sessions.is_empty();
         sessions.insert(
             session_id.to_string(),
@@ -215,6 +253,7 @@ impl FfmpegTransportManager {
             return Ok(());
         }
         let running = Arc::new(AtomicBool::new(true));
+        *self.inner.encoder_params.lock() = None;
         let handle = spawn_encode_thread(
             Arc::clone(&self.inner.snapshot),
             Arc::clone(&self.inner.scenes),
@@ -223,6 +262,7 @@ impl FfmpegTransportManager {
             self.inner.app_data_dir.clone(),
             Arc::clone(&self.inner.media_hub),
             Arc::clone(&running),
+            Arc::clone(&self.inner.encoder_params),
         )?;
         *enc = Some(FfmpegEncoder { running, handle });
         Ok(())
@@ -233,6 +273,7 @@ impl FfmpegTransportManager {
             return None;
         }
         let enc = self.inner.encoder.lock().take()?;
+        *self.inner.encoder_params.lock() = None;
         enc.running.store(false, Ordering::SeqCst);
         let _ = enc.handle.join();
         Some(())
@@ -276,6 +317,7 @@ fn transport_config(width: u32, height: u32) -> OutputConfig {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_encode_thread(
     snapshot: Arc<Mutex<Option<ResolverSnapshot>>>,
     scenes: Arc<Mutex<Option<Vec<Scene>>>>,
@@ -284,6 +326,7 @@ fn spawn_encode_thread(
     app_data_dir: PathBuf,
     media_hub: Arc<crate::engine::compositor::media::MediaFrameHub>,
     running: Arc<AtomicBool>,
+    encoder_params: EncoderResultSlot,
 ) -> Result<JoinHandle<()>, String> {
     crate::engine::ffmpeg::init()?;
     // Build encoder: prefer HW (h264_nvenc / h264_qsv / h264_amf), fallback libx264.
@@ -293,7 +336,7 @@ fn spawn_encode_thread(
         .spawn(move || {
             let EncoderSpec { width, height, fps } = spec;
             let frame_interval = Duration::from_micros(1_000_000 / fps.max(1) as u64);
-            // Compositor (owns GPU, `!Send` → must be created on this thread).
+            // Compositor (owns GPU, `!Send` â†’ must be created on this thread).
             let mut compositor = crate::engine::compositor::Compositor::new(width, height).ok();
             let mut media = crate::engine::windows::DiskMediaResolver { app_data_dir, hub: Some(Arc::clone(&media_hub)) };
 
@@ -302,9 +345,24 @@ fn spawn_encode_thread(
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!("[ffmpeg-encode] open_encoder failed: {e}");
+                    *encoder_params.lock() = Some(Err(e));
                     return;
                 }
             };
+            // Publish the codec parameters (incl. SPS/PPS extradata from
+            // GLOBAL_HEADER) so waiting mux threads can write valid headers.
+            {
+                let extradata = unsafe {
+                    let c = encoder.as_ptr();
+                    let size = (*c).extradata_size.max(0) as usize;
+                    if size > 0 && !(*c).extradata.is_null() {
+                        std::slice::from_raw_parts((*c).extradata, size).to_vec()
+                    } else {
+                        Vec::new()
+                    }
+                };
+                *encoder_params.lock() = Some(Ok(EncoderParams { width, height, fps, extradata }));
+            }
             let time_base = encoder.time_base();
             let mut scaler = match ffmpeg_next::software::scaling::context::Context::get(
                 ffmpeg_next::format::Pixel::RGBA,
@@ -346,9 +404,9 @@ fn spawn_encode_thread(
                     },
                     None => fallback_pixels(width, height),
                 };
-                // Wrap RGBA → AVFrame(RGBA) → scale → AVFrame(YUV420P) → send.
+                // Wrap RGBA â†’ AVFrame(RGBA) â†’ scale â†’ AVFrame(YUV420P) â†’ send.
                 let mut src = ffmpeg_next::frame::Video::new(ffmpeg_next::format::Pixel::RGBA, width, height);
-                // Copy tightly — ffmpeg frame may have padded stride.
+                // Copy tightly â€” ffmpeg frame may have padded stride.
                 {
                     let stride = src.stride(0);
                     let data = src.data_mut(0);
@@ -375,6 +433,7 @@ fn spawn_encode_thread(
                     pkt.rescale_ts(time_base, time_base);
                     let is_key = pkt.is_key();
                     let pts = pkt.pts().unwrap_or(frame_num);
+                    let dts = pkt.dts();
                     let data = pkt.data().map(|d| d.to_vec()).unwrap_or_default();
                     // Fan-out to every session's bounded queue (drop-newest).
                     let sessions = sessions.lock();
@@ -383,7 +442,7 @@ fn spawn_encode_thread(
                             s.dropped.fetch_add(data.len(), Ordering::SeqCst);
                         } else {
                             s.queued.fetch_add(1, Ordering::SeqCst);
-                            let pkt = EncodedPacket { data: Arc::new(data.clone()), is_key, pts };
+                            let pkt = EncodedPacket { data: Arc::new(data.clone()), is_key, pts, dts };
                             if s.tx.try_send(pkt).is_err() {
                                 s.queued.fetch_sub(1, Ordering::SeqCst);
                                 s.dropped.fetch_add(data.len(), Ordering::SeqCst);
@@ -405,9 +464,10 @@ fn spawn_encode_thread(
                 let data = pkt.data().map(|d| d.to_vec()).unwrap_or_default();
                 let is_key = pkt.is_key();
                 let pts = pkt.pts().unwrap_or(frame_num);
+                let dts = pkt.dts();
                 let sessions = sessions.lock();
                 for s in sessions.values() {
-                    let _ = s.tx.try_send(EncodedPacket { data: Arc::new(data.clone()), is_key, pts });
+                    let _ = s.tx.try_send(EncodedPacket { data: Arc::new(data.clone()), is_key, pts, dts });
                 }
             }
             // Dropping sessions' tx signals EOF to muxers (they flush + close).
@@ -437,16 +497,20 @@ fn open_encoder(width: u32, height: u32, fps: u32) -> Result<ffmpeg_next::encode
     let gop = fps * 2;
     video.set_gop(gop);
     video.set_max_b_frames(0);
+    // Muxers consume the extradata via the shared EncoderParams slot, so ask
+    // for a global header regardless of which container opens first.
+    video.set_flags(ffmpeg_next::codec::flag::Flags::GLOBAL_HEADER);
     // Codec-specific options via dictionary.
     let mut opts = ffmpeg_next::Dictionary::new();
     if codec_name == "libx264" {
         opts.set("preset", "veryfast");
         opts.set("tune", "zerolatency");
         opts.set("profile", "high");
-        opts.set("x264-params", &format!("keyint={gop}:min-keyint={}:scenecut=-1:repeat-headers=1", fps));
+        opts.set("x264-params", &format!("keyint={gop}:min-keyint={}:scenecut=-1", fps));
     } else {
-        // HW: low-latency tuning; keep repeat-headers where supported.
-        opts.set("preset", "llhp");
+        // HW: low-latency tuning. The legacy preset names ("llhp" & co.) were
+        // removed in FFmpeg 9 â€” only the p1â€“p7 scale is accepted there.
+        opts.set("preset", "p4");
         opts.set("rc", "cbr");
     }
     let ctx = video.open_with(opts).map_err(|e| format!("open encoder {codec_name}: {e}"))?;
@@ -458,9 +522,7 @@ fn spawn_mux_thread(
     rx: mpsc::Receiver<EncodedPacket>,
     queued: Arc<AtomicUsize>,
     sent: Arc<AtomicUsize>,
-    fps: u32,
-    width: u32,
-    height: u32,
+    params_slot: EncoderResultSlot,
 ) -> Result<JoinHandle<()>, String> {
     let (path, url) = match &kind {
         SessionKind::Rtmp { url } => (None, Some(url.clone())),
@@ -470,15 +532,78 @@ fn spawn_mux_thread(
         .name(format!("ffmpeg-mux:{}", match &kind { SessionKind::Rtmp { url } => url.clone(), SessionKind::Recording { path } => path.display().to_string() }))
         .spawn(move || {
             if let Some(p) = path {
-                run_recording_mux(p, rx, queued, sent, fps, width, height);
+                run_recording_mux(p, rx, queued, sent, params_slot);
             } else if let Some(u) = url {
-                run_rtmp_mux(u, rx, queued, sent, fps);
+                run_rtmp_mux(u, rx, queued, sent, params_slot);
             }
         })
         .map_err(|e| format!("could not spawn mux thread: {e}"))
 }
 
-fn run_rtmp_mux(url: String, rx: mpsc::Receiver<EncodedPacket>, queued: Arc<AtomicUsize>, sent: Arc<AtomicUsize>, fps: u32) {
+/// Add one H.264 video stream to a fresh output context and populate its
+/// codec parameters. Without this the stream's codec id stays NONE and every
+/// container rejects the header ("Could not find tag for codec none").
+fn add_video_stream(
+    fmt: &mut ffmpeg_next::format::context::Output,
+    p: &EncoderParams,
+) -> Result<(), String> {
+    let codec = ffmpeg_next::encoder::find_by_name("libx264")
+        .or_else(|| ffmpeg_next::encoder::find(ffmpeg_next::codec::Id::H264))
+        .ok_or_else(|| "h264 encoder/codec not found".to_string())?;
+    let mut st = fmt.add_stream(codec).map_err(|e| format!("add_stream: {e}"))?;
+    st.set_time_base(ffmpeg_next::Rational::new(1, p.fps as i32));
+    st.set_rate(ffmpeg_next::Rational::new(p.fps as i32, 1));
+    unsafe {
+        let par = (*st.as_mut_ptr()).codecpar;
+        (*par).codec_type = ffmpeg_next::ffi::AVMediaType::AVMEDIA_TYPE_VIDEO;
+        (*par).codec_id = ffmpeg_next::ffi::AVCodecID::AV_CODEC_ID_H264;
+        (*par).width = p.width as i32;
+        (*par).height = p.height as i32;
+        (*par).format = ffmpeg_next::ffi::AVPixelFormat::AV_PIX_FMT_YUV420P as i32;
+        if !p.extradata.is_empty() {
+            let len = p.extradata.len();
+            let pad = ffmpeg_next::ffi::AV_INPUT_BUFFER_PADDING_SIZE as usize;
+            (*par).extradata =
+                ffmpeg_next::ffi::av_mallocz(len + pad) as *mut u8;
+            if (*par).extradata.is_null() {
+                return Err("extradata allocation failed".into());
+            }
+            std::ptr::copy_nonoverlapping(p.extradata.as_ptr(), (*par).extradata, len);
+            (*par).extradata_size = len as i32;
+        }
+    }
+    Ok(())
+}
+
+/// Wrap one fanned-out packet for writing: same time base as the stream
+/// (encoder tb == 1/fps), single video stream, keyframe flag preserved.
+fn packet_for_stream(pkt: &EncodedPacket, fps: u32) -> ffmpeg_next::Packet {
+    let mut out = ffmpeg_next::Packet::copy(&pkt.data);
+    out.set_stream(0);
+    out.set_time_base(ffmpeg_next::Rational::new(1, fps as i32));
+    out.set_pts(Some(pkt.pts));
+    out.set_dts(pkt.dts.or(Some(pkt.pts)));
+    if pkt.is_key {
+        out.set_flags(ffmpeg_next::codec::packet::flag::Flags::KEY);
+    }
+    out
+}
+
+fn run_rtmp_mux(
+    url: String,
+    rx: mpsc::Receiver<EncodedPacket>,
+    queued: Arc<AtomicUsize>,
+    sent: Arc<AtomicUsize>,
+    params_slot: EncoderResultSlot,
+) {
+    let params = match wait_for_encoder_params(&params_slot) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[ffmpeg-mux rtmp] aborted before header ({url}): {e}");
+            for _ in rx {}
+            return;
+        }
+    };
     let mut fmt = match ffmpeg_next::format::output(&url) {
         Ok(o) => o,
         Err(e) => {
@@ -486,34 +611,44 @@ fn run_rtmp_mux(url: String, rx: mpsc::Receiver<EncodedPacket>, queued: Arc<Atom
             return;
         }
     };
-    // One video stream, copy codec params from encoder (H.264).
-    {
-        let mut st = match fmt.add_stream(ffmpeg_next::encoder::find_by_name("libx264").unwrap_or_else(|| ffmpeg_next::encoder::find(ffmpeg_next::codec::Id::H264).unwrap())) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("[ffmpeg-mux rtmp] add_stream: {e}");
-                return;
-            }
-        };
-        st.set_time_base(ffmpeg_next::Rational::new(1, fps as i32));
+    if let Err(e) = add_video_stream(&mut fmt, &params) {
+        eprintln!("[ffmpeg-mux rtmp] {e}");
+        return;
     }
     // flv flags: no_duration_filesize
     let mut opts = ffmpeg_next::Dictionary::new();
     opts.set("flvflags", "no_duration_filesize");
-    if fmt.write_header_with(opts).is_err() {
-        eprintln!("[ffmpeg-mux rtmp] write_header failed for {}", url);
+    if let Err(e) = fmt.write_header_with(opts) {
+        eprintln!("[ffmpeg-mux rtmp] write_header failed for {url}: {e}");
         return;
     }
     for pkt in rx {
         queued.fetch_sub(1, Ordering::SeqCst);
         sent.fetch_add(1, Ordering::SeqCst);
-        let _ = pkt;
+        let out = packet_for_stream(&pkt, params.fps);
+        if let Err(e) = out.write_interleaved(&mut fmt) {
+            eprintln!("[ffmpeg-mux rtmp] write_interleaved failed: {e}");
+        }
     }
     let _ = fmt.write_trailer();
 }
 
-fn run_recording_mux(path: PathBuf, rx: mpsc::Receiver<EncodedPacket>, queued: Arc<AtomicUsize>, sent: Arc<AtomicUsize>, fps: u32, _width: u32, _height: u32) {
+fn run_recording_mux(
+    path: PathBuf,
+    rx: mpsc::Receiver<EncodedPacket>,
+    queued: Arc<AtomicUsize>,
+    sent: Arc<AtomicUsize>,
+    params_slot: EncoderResultSlot,
+) {
     let url = path.to_string_lossy().to_string();
+    let params = match wait_for_encoder_params(&params_slot) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[ffmpeg-mux mp4] aborted before header ({}): {e}", path.display());
+            for _ in rx {}
+            return;
+        }
+    };
     let mut fmt = match ffmpeg_next::format::output(&url) {
         Ok(o) => o,
         Err(e) => {
@@ -521,26 +656,25 @@ fn run_recording_mux(path: PathBuf, rx: mpsc::Receiver<EncodedPacket>, queued: A
             return;
         }
     };
-    {
-        let mut st = match fmt.add_stream(ffmpeg_next::encoder::find_by_name("libx264").unwrap_or_else(|| ffmpeg_next::encoder::find(ffmpeg_next::codec::Id::H264).unwrap())) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("[ffmpeg-mux mp4] add_stream: {e}");
-                return;
-            }
-        };
-        st.set_time_base(ffmpeg_next::Rational::new(1, fps as i32));
+    if let Err(e) = add_video_stream(&mut fmt, &params) {
+        eprintln!("[ffmpeg-mux mp4] {e}");
+        return;
     }
+    // Fragmented MP4: the moov is written immediately, so a crash or an
+    // operator kill still leaves a playable file.
     let mut opts = ffmpeg_next::Dictionary::new();
     opts.set("movflags", "+frag_keyframe+empty_moov");
-    if fmt.write_header_with(opts).is_err() {
-        eprintln!("[ffmpeg-mux mp4] write_header failed for {}", path.display());
+    if let Err(e) = fmt.write_header_with(opts) {
+        eprintln!("[ffmpeg-mux mp4] write_header failed for {}: {e}", path.display());
         return;
     }
     for pkt in rx {
         queued.fetch_sub(1, Ordering::SeqCst);
         sent.fetch_add(1, Ordering::SeqCst);
-        let _ = pkt;
+        let out = packet_for_stream(&pkt, params.fps);
+        if let Err(e) = out.write_interleaved(&mut fmt) {
+            eprintln!("[ffmpeg-mux mp4] write_interleaved failed: {e}");
+        }
     }
     let _ = fmt.write_trailer();
 }
@@ -561,6 +695,7 @@ fn spawn_reaper(inner: Arc<FfmpegTransportInner>, alive: Arc<AtomicBool>) -> Joi
             };
             if encoder_dead {
                 // Tear down remaining sessions.
+                *inner.encoder_params.lock() = None;
                 let handles: Vec<JoinHandle<()>> = {
                     let mut sessions = inner.sessions.lock();
                     sessions.drain().filter_map(|(_, mut s)| s.handle.take()).collect()
