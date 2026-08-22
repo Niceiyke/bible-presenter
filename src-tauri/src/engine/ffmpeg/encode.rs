@@ -52,6 +52,8 @@ struct EncoderParams {
     fps: u32,
     /// SPS/PPS from `GLOBAL_HEADER`: MP4 needs it for avcC, FLV for metadata.
     extradata: Vec<u8>,
+    /// Encoded pixel format — muxers must publish a matching codecpar.
+    pix_fmt: i32,
 }
 
 type EncoderResultSlot = Arc<Mutex<Option<Result<EncoderParams, String>>>>;
@@ -336,12 +338,13 @@ fn spawn_encode_thread(
         .spawn(move || {
             let EncoderSpec { width, height, fps } = spec;
             let frame_interval = Duration::from_micros(1_000_000 / fps.max(1) as u64);
-            // Compositor (owns GPU, `!Send` â†’ must be created on this thread).
+            // Compositor (owns GPU, `!Send` → must be created on this thread).
             let mut compositor = crate::engine::compositor::Compositor::new(width, height).ok();
             let mut media = crate::engine::windows::DiskMediaResolver { app_data_dir, hub: Some(Arc::clone(&media_hub)) };
 
-            // Open encoder context.
-            let mut encoder = match open_encoder(width, height, fps) {
+            // Open encoder context. Also learn which input pixel format the
+            // chosen encoder accepts — QSV wants NV12, the rest YUV420P.
+            let (mut encoder, input_pix) = match open_encoder(width, height, fps) {
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!("[ffmpeg-encode] open_encoder failed: {e}");
@@ -361,14 +364,20 @@ fn spawn_encode_thread(
                         Vec::new()
                     }
                 };
-                *encoder_params.lock() = Some(Ok(EncoderParams { width, height, fps, extradata }));
+                *encoder_params.lock() = Some(Ok(EncoderParams {
+                    width,
+                    height,
+                    fps,
+                    extradata,
+                    pix_fmt: pix_fmt_ffi(input_pix),
+                }));
             }
             let time_base = encoder.time_base();
             let mut scaler = match ffmpeg_next::software::scaling::context::Context::get(
                 ffmpeg_next::format::Pixel::RGBA,
                 width,
                 height,
-                ffmpeg_next::format::Pixel::YUV420P,
+                input_pix,
                 width,
                 height,
                 ffmpeg_next::software::scaling::flag::Flags::BILINEAR,
@@ -404,7 +413,7 @@ fn spawn_encode_thread(
                     },
                     None => fallback_pixels(width, height),
                 };
-                // Wrap RGBA â†’ AVFrame(RGBA) â†’ scale â†’ AVFrame(YUV420P) â†’ send.
+                // Wrap RGBA → AVFrame(RGBA) → scale → AVFrame(input_pix) → send.
                 let mut src = ffmpeg_next::frame::Video::new(ffmpeg_next::format::Pixel::RGBA, width, height);
                 // Copy tightly — ffmpeg frame may have padded stride.
                 {
@@ -475,7 +484,11 @@ fn spawn_encode_thread(
         .map_err(|e| format!("could not spawn encode thread: {e}"))
 }
 
-fn open_encoder(width: u32, height: u32, fps: u32) -> Result<ffmpeg_next::encoder::Video, String> {
+fn open_encoder(
+    width: u32,
+    height: u32,
+    fps: u32,
+) -> Result<(ffmpeg_next::encoder::Video, ffmpeg_next::format::Pixel), String> {
     // Probe HW encoders in preference order. `find_by_name` only proves the
     // codec is compiled into libav — the nvcuda/QuickSync/AMF runtimes may
     // still be missing on this machine — so each candidate must actually
@@ -509,9 +522,9 @@ fn open_encoder(width: u32, height: u32, fps: u32) -> Result<ffmpeg_next::encode
     let mut last_hw_err = String::new();
     for cand in candidates {
         match try_open_encoder(cand, width, height, fps) {
-            Ok(v) => {
+            Ok((v, pix)) => {
                 eprintln!("[ffmpeg-encode] using hardware encoder {cand}");
-                return Ok(v);
+                return Ok((v, pix));
             }
             Err(e) => {
                 eprintln!("[ffmpeg-encode] {cand} unavailable ({e}) — trying next");
@@ -533,14 +546,14 @@ fn try_open_encoder(
     width: u32,
     height: u32,
     fps: u32,
-) -> Result<ffmpeg_next::encoder::Video, String> {
+) -> Result<(ffmpeg_next::encoder::Video, ffmpeg_next::format::Pixel), String> {
     let codec = ffmpeg_next::encoder::find_by_name(codec_name)
         .ok_or_else(|| format!("encoder {codec_name} not found"))?;
     let ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
     let mut video = ctx.encoder().video().map_err(|e| format!("encoder video: {e}"))?;
     video.set_width(width);
     video.set_height(height);
-    video.set_format(ffmpeg_next::format::Pixel::YUV420P);
+    video.set_format(codec_input_format(codec_name));
     video.set_time_base(ffmpeg_next::Rational::new(1, fps as i32));
     video.set_frame_rate(Some(ffmpeg_next::Rational::new(fps as i32, 1)));
     // GOP + latency mirror the CLI pipe: veryfast zerolatency High repeat-headers
@@ -579,7 +592,26 @@ fn try_open_encoder(
             return Err(format!("no option profile for encoder {other}"));
         }
     }
-    video.open_with(opts).map_err(|e| format!("open encoder {codec_name}: {e}"))
+    video.open_with(opts)
+        .map(|v| (v, codec_input_format(codec_name)))
+        .map_err(|e| format!("open encoder {codec_name}: {e}"))
+}
+
+/// Input pixel format each encoder accepts: QSV requires NV12, while
+/// x264/NVENC take planar YUV420P.
+fn codec_input_format(codec_name: &str) -> ffmpeg_next::format::Pixel {
+    match codec_name {
+        "h264_qsv" => ffmpeg_next::format::Pixel::NV12,
+        _ => ffmpeg_next::format::Pixel::YUV420P,
+    }
+}
+
+fn pix_fmt_ffi(pix: ffmpeg_next::format::Pixel) -> i32 {
+    use ffmpeg_next::ffi::AVPixelFormat;
+    match pix {
+        ffmpeg_next::format::Pixel::NV12 => AVPixelFormat::AV_PIX_FMT_NV12 as i32,
+        _ => AVPixelFormat::AV_PIX_FMT_YUV420P as i32,
+    }
 }
 
 fn spawn_mux_thread(
@@ -624,7 +656,7 @@ fn add_video_stream(
         (*par).codec_id = ffmpeg_next::ffi::AVCodecID::AV_CODEC_ID_H264;
         (*par).width = p.width as i32;
         (*par).height = p.height as i32;
-        (*par).format = ffmpeg_next::ffi::AVPixelFormat::AV_PIX_FMT_YUV420P as i32;
+        (*par).format = p.pix_fmt;
         if !p.extradata.is_empty() {
             let len = p.extradata.len();
             let pad = ffmpeg_next::ffi::AV_INPUT_BUFFER_PADDING_SIZE as usize;
