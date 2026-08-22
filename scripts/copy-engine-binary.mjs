@@ -20,7 +20,7 @@
 // The script must NOT build the engine itself (any `cargo build` on this
 // package hits the same validation). It resolves paths from its own location,
 // so it works regardless of the hook's working directory.
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync, readdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
@@ -50,76 +50,97 @@ const targets = [
   `${base}-${triple}${ext}`, // triple-suffixed fallback
 ];
 
-// The ffmpeg shared-library DLLs that tauri.conf.json bundles
-// (`binaries/<name>.dll` -> `bin/<name>.dll`). Parsed from the config instead
-// of hardcoded here so the list can never drift from what tauri-build's
-// existence check requires at cargo-build time.
-function requiredFfmpegDlls() {
+// Runtime shared-library directories declared as bundle resources in
+// tauri.conf.json (`binaries/dll` -> `bin/`). The ffmpeg DLL names embed the
+// library major version (avcodec-63.dll, swresample-7.dll, ...) and vcpkg
+// bumps them whenever its ffmpeg port updates, so the config maps a DIRECTORY
+// instead of listing files: whatever this build's vcpkg provides is exactly
+// what ships. tauri-build validates resource paths at cargo-build time; an
+// empty directory passes that check (tauri-utils skips empty walks), so
+// --bootstrap only has to create it.
+function runtimeLibDirs() {
   const conf = JSON.parse(
     readFileSync(join(root, "src-tauri", "tauri.conf.json"), "utf8")
   );
   const resources = conf.bundle?.resources ?? {};
   return Object.keys(resources)
-    .filter((key) => /^binaries\/[^/]+\.dll$/i.test(key))
-    .map((key) => key.slice("binaries/".length))
-    .sort();
+    .filter((key) => {
+      if (!/^binaries\//i.test(key) || key.includes("*")) return false;
+      const base = key.slice("binaries/".length);
+      return base.length > 0 && !base.includes("."); // directory, not a file
+    })
+    .map((key) => join(binDir, key.slice("binaries/".length)));
 }
 
-const dlls = requiredFfmpegDlls();
+const libDirs = runtimeLibDirs();
 
 function vcpkgBinDir() {
   const vcpkgRoot = process.env.VCPKG_ROOT || "C:\\vcpkg";
   return join(vcpkgRoot, "installed", "x64-windows", "bin");
 }
 
-function dllIsStaged(name) {
-  const dest = join(binDir, name);
-  return existsSync(dest) && statSync(dest).size > 0;
+function isRuntimeDll(name) {
+  return /^(av|sw).+\.dll$/i.test(name);
+}
+
+function stagedDllCount(dir) {
+  try {
+    return readdirSync(dir).filter((f) => {
+      if (!isRuntimeDll(f)) return false;
+      const st = statSync(join(dir, f));
+      return st.isFile() && st.size > 0;
+    }).length;
+  } catch {
+    return 0;
+  }
 }
 
 // Stage the runtime DLLs the dynamically linked engine needs (ffmpeg-sys-next
-// with VCPKGRS_DYNAMIC=1; vcpkg installs them to
-// {VCPKG_ROOT}/installed/x64-windows/bin/av*.dll + sw*.dll), then VERIFY every
-// DLL tauri.conf.json bundles is present and real. A leftover 0-byte bootstrap
-// placeholder or a vcpkg port bump that renames libraries (e.g.
-// avcodec-63.dll -> avcodec-64.dll) must fail the bundle loudly here — an
-// installer whose engine cannot load libav would otherwise fail only at the
-// customer's first launch.
+// with VCPKGRS_DYNAMIC=1; vcpkg installs av*.dll + sw*.dll to
+// {VCPKG_ROOT}/installed/x64-windows/bin). A reachable vcpkg is authoritative:
+// staged DLLs that THIS install does not provide are swept first, so the
+// shipped set always matches exactly what compiled and linked this build and
+// a leftover from an earlier build can never ride along. Fails loudly when
+// nothing usable was staged - an installer whose engine cannot load libav
+// would otherwise fail only at the customer's first launch.
 function stageFfmpegDlls() {
+  for (const dir of libDirs) {
+    mkdirSync(dir, { recursive: true });
+  }
   const vcpkgBin = vcpkgBinDir();
-  let missing;
   if (existsSync(vcpkgBin)) {
     for (const f of readdirSync(vcpkgBin)) {
-      if (/^(av|sw).+\.dll$/i.test(f)) {
+      if (!isRuntimeDll(f)) continue;
+      for (const dir of libDirs) {
         try {
-          copyFileSync(join(vcpkgBin, f), join(binDir, f));
-          console.log(`[copy-engine-binary] staged ${f}`);
+          copyFileSync(join(vcpkgBin, f), join(dir, f));
         } catch (e) {
           console.warn(`[copy-engine-binary] failed to stage ${f}: ${e.message}`);
         }
       }
+      console.log(`[copy-engine-binary] staged ${f}`);
     }
-    // A reachable vcpkg is authoritative: every configured DLL must be
-    // provided by THIS install AND land in binaries/, so neither a version
-    // bump nor a failed copy can be masked by a stale file left over from an
-    // earlier build.
-    missing = dlls.filter(
-      (name) => !existsSync(join(vcpkgBin, name)) || !dllIsStaged(name)
-    );
+    for (const dir of libDirs) {
+      for (const f of readdirSync(dir)) {
+        if (!isRuntimeDll(f)) continue;
+        if (!existsSync(join(vcpkgBin, f))) {
+          rmSync(join(dir, f));
+          console.warn(`[copy-engine-binary] removed stale ${f}`);
+        }
+      }
+    }
   } else {
-    missing = dlls.filter((name) => !dllIsStaged(name));
-    if (missing.length === 0) {
-      console.warn(
-        `[copy-engine-binary] ${vcpkgBin} not found; using already-staged DLLs`
-      );
-    }
+    console.warn(
+      `[copy-engine-binary] ${vcpkgBin} not found; keeping already-staged DLLs`
+    );
   }
-  if (missing.length > 0) {
+  const total = libDirs.reduce((n, dir) => n + stagedDllCount(dir), 0);
+  if (total === 0) {
     throw new Error(
-      `[copy-engine-binary] ffmpeg DLLs required by tauri.conf.json are missing, ` +
-        `stale, or still placeholders: ${missing.join(", ")}. Install ` +
-        `ffmpeg:x64-windows into vcpkg and update the resources map to match ` +
-        `(${vcpkgBin}).`
+      `[copy-engine-binary] no ffmpeg runtime DLLs were staged into ` +
+        `${libDirs.join(", ")}. Install ffmpeg:x64-windows into vcpkg ` +
+        `(set VCPKG_ROOT if it lives elsewhere) or pre-stage av*/sw*.dll ` +
+        `files matching the libav version this build linked against.`
     );
   }
 }
@@ -142,13 +163,14 @@ if (existsSync(src)) {
       console.log(`[copy-engine-binary] wrote placeholder ${name}`);
     }
   }
-  // Same for the bundled ffmpeg DLLs: tauri-build validates their paths during
-  // cargo build, before beforeBundleCommand stages the real files from vcpkg.
-  for (const name of dlls) {
-    const dest = join(binDir, name);
-    if (!existsSync(dest)) {
-      writeFileSync(dest, "");
-      console.log(`[copy-engine-binary] wrote placeholder ${name}`);
+  // Runtime lib dirs (binaries/dll -> bin/): tauri-build skips empty
+  // directory walks during its cargo-build-time validation, so creating them
+  // is enough on a fresh checkout; beforeBundleCommand stages the real DLLs
+  // before the bundler reads them.
+  for (const dir of libDirs) {
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+      console.log(`[copy-engine-binary] created ${dir}/`);
     }
   }
 } else {

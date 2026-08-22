@@ -14,7 +14,7 @@ src-tauri/bible_data/*.npy
 
 # Bundled media binaries — staged by scripts/copy-engine-binary.mjs (not committed)
 src-tauri/binaries/*.exe
-src-tauri/binaries/*.dll
+src-tauri/binaries/dll/
 
 # DB-only Bible data release asset (uploaded to the GitHub release, not committed)
 /wordlyte_bible.zip
