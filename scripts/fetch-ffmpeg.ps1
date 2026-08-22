@@ -197,7 +197,7 @@ Write-Host "  staged ffmpeg dev tree -> $DistDir"
 # before any app code runs.
 New-Item -ItemType Directory -Force -Path (Join-Path $BinDir "dll") | Out-Null
 Get-ChildItem -Path $SharedBin -Filter "*.dll" | Where-Object { $_.Name -match '^(av|sw)' } | ForEach-Object {
-    Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $BinDir "dll" $_.Name) -Force
+    Copy-Item -LiteralPath $_.FullName -Destination (Join-Path (Join-Path $BinDir "dll") $_.Name) -Force
     Write-Host "  staged runtime $($_.Name)"
 }
 
