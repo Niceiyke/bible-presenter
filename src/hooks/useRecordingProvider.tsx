@@ -45,7 +45,7 @@ interface RecordingContextValue {
   error: string | null;
   /** Latest mirrored recording status (null until first poll). */
   status: NativeRecordingStatus | null;
-  start: (enableAudio?: boolean) => Promise<void>;
+  start: (audioDevice?: string | null) => Promise<void>;
   stop: () => Promise<string | null>;
   cancel: () => void;
   /** Capture resolution/fps for the recording. */
@@ -129,19 +129,20 @@ export function RecordingProvider({ children }: { children: ReactNode }) {
   }, [recording, status?.startedMs]);
   const elapsed = recording ? Math.max(0, (now - (status?.startedMs ?? now)) / 1000) : 0;
 
-  const start = useCallback(async (enableAudio?: boolean) => {
+  const start = useCallback(async (audioDevice?: string | null) => {
     if (recording) return;
     if (license && license.status === "active" && !tierCapabilities(license.tier).recording) {
       setToast("Recording is a Pro feature. Upgrade in Settings → License.");
       return;
     }
     setError(null);
+    const device = audioDevice && audioDevice.trim().length > 0 ? audioDevice : null;
     try {
       const s = await invoke<NativeRecordingStatus>("recording_start", {
         width: captureWidth,
         height: captureHeight,
         fps: captureFps,
-        enableAudio: !!enableAudio,
+        audioDevice: device,
       });
       setStatus(s);
       setLastSaved(null);

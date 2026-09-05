@@ -1,4 +1,3 @@
-use crate::commands::program_audio::AudioFeed;
 use crate::commands::rtmp::build_rtmp_url;
 use crate::license::{ensure_active_tier, LicenseTier};
 use crate::state::AppState;
@@ -16,8 +15,7 @@ const STREAM_SINK_CAPACITY: usize = 8;
 
 /// One destination as configured by the operator (persisted on the `stream-main`
 /// output as `stream_destinations`). `enabled` joins the master Go Live; when the
-/// broadcast enables program audio, an `AudioFeed` is attached to each
-/// destination whose `audio` flag is set.
+/// broadcast captures a native audio device, the same mix rides every tee target.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamDest {
@@ -110,9 +108,14 @@ pub struct BroadcastSession {
     pub writer_thread: Option<std::thread::JoinHandle<()>>,
     pub frames: Arc<std::sync::atomic::AtomicU64>,
     pub bytes: Arc<std::sync::atomic::AtomicU64>,
-    /// Optional program-audio loopback feed muxed (`-c:a copy`) into every
-    /// destination's stream.
-    pub audio: Option<AudioFeed>,
+    /// The directshow audio device name captured natively by ffmpeg (if any)
+    /// and muxed as AAC into every destination's stream.
+    pub audio_device: Option<String>,
+    /// This broadcast's private relay onto the shared audio feed (when audio is
+    /// enabled). Dropping it before the ffmpeg wait lets the broadcast's ffmpeg
+    /// see audio EOF and finalize cleanly even while a recording keeps the feed
+    /// alive.
+    pub audio: Option<crate::commands::program_audio::AudioRelay>,
     /// This broadcast's consumer handle against the capture session, used to
     /// detach on stop. When the session is shared with a recording, detaching
     /// only removes this broadcast's sink.
@@ -127,22 +130,20 @@ pub struct BroadcastSession {
 /// target is a normal FLV mux writing the same encoded packets, so N
 /// destinations cost one encode + one cheap `-c copy` mux each.
 ///
-/// When `audio_port` is set, a second ADTS input (ffmpeg demuxer `aac`) pulls
-/// program audio from the loopback feed and muxes it into every target
-/// (`-c:a copy` — no re-encode). The ADTS frames go through
-/// `-bsf:a aac_adtstoasc` first: the FLV muxer needs the AAC sequence header
-/// (ASC), and copying ADTS-framed AAC straight in fails the mux. Note: the
-/// demuxer is named `aac`, not `adts`. Every `-map` is emitted only after ALL
-/// inputs are declared — ffmpeg's parser rejects a `-map` that directly follows
-/// an input URL (`cannot be applied to input url tcp://...`), so maps must not
-/// sit right after `-i tcp://`.
+/// When `audio_feed_port` is set, the consumer reads AAC/ADTS from the shared
+/// `AudioFeed` TCP socket (`-f aac -i tcp://127.0.0.1:PORT` — `aac` is the
+/// raw-ADTS demuxer name) rather than opening the dshow device directly.  The
+/// feed captured and encoded the device once; the consumer copies the stream
+/// without re-encoding (`-c:a copy`).
+/// Every `-map` is emitted only AFTER all inputs are declared — ffmpeg's
+/// parser rejects a `-map` that directly follows an input.
 fn stream_tee_args(
     width: u32,
     height: u32,
     fps: u32,
     encoder: &str,
     urls: &[String],
-    audio_port: Option<u16>,
+    audio_feed_port: Option<u16>,
 ) -> Vec<String> {
     // ~2s keyframe interval for hardware encoders; software encoders ignore `-g`.
     let encoder_block = crate::commands::recordings::h264_encoder_block(encoder, fps * 2);
@@ -151,6 +152,7 @@ fn stream_tee_args(
         .map(|u| format!("[f=flv:onfail=ignore]{u}"))
         .collect::<Vec<_>>()
         .join("|");
+    let has_audio = audio_feed_port.is_some();
     let mut args = vec![
         "-y".into(),
         "-hide_banner".into(),
@@ -168,7 +170,7 @@ fn stream_tee_args(
         "-i".into(),
         "pipe:0".into(),
     ];
-    if let Some(port) = audio_port {
+    if let Some(port) = audio_feed_port {
         args.extend([
             "-f".into(),
             "aac".into(),
@@ -179,17 +181,13 @@ fn stream_tee_args(
         args.push("-an".into());
     }
     args.extend(encoder_block);
-    if audio_port.is_some() {
-        args.extend([
-            "-c:a".into(),
-            "copy".into(),
-            "-bsf:a".into(),
-            "aac_adtstoasc".into(),
-        ]);
+    if has_audio {
+        // Feed already encoded AAC; copy without re-encoding.
+        args.extend(["-c:a".into(), "copy".into()]);
     }
     args.push("-map".into());
     args.push("0:v:0".into());
-    if audio_port.is_some() {
+    if has_audio {
         args.push("-map".into());
         args.push("1:a:0".into());
     }
@@ -207,7 +205,8 @@ fn stream_tee_args(
 /// ONE ffmpeg process encodes the program once (`-f tee`) and fans the encoded
 /// stream out to each RTMP ingest, so N destinations cost a single encode. Only
 /// one broadcast can be live at a time. The off-screen capture window must be
-/// available.
+/// available. When `audio_device` names a DirectShow input device, ffmpeg
+/// captures it natively and encodes it to AAC for every destination.
 #[tauri::command]
 pub fn stream_rtmp_start(
     app: AppHandle,
@@ -216,10 +215,10 @@ pub fn stream_rtmp_start(
     width: u32,
     height: u32,
     fps: u32,
-    enable_audio: bool,
+    audio_device: Option<String>,
 ) -> Result<StreamingStatus, String> {
     ensure_active_tier(&state, LicenseTier::Pro)?;
-    if enable_audio {
+    if audio_device.is_some() {
         ensure_active_tier(&state, LicenseTier::Premium)?;
     }
     {
@@ -230,6 +229,18 @@ pub fn stream_rtmp_start(
     if !crate::binpaths::ffmpeg_available() {
         return Err("ffmpeg was not found — install ffmpeg to stream.".into());
     }
+    let audio_device = audio_device.filter(|d| !d.trim().is_empty());
+    // Capture the device ONCE via the shared AudioFeed, then open a private
+    // relay for THIS broadcast.  Both this broadcast and a concurrent recording
+    // subscribe to the same feed instead of opening dshow twice — two ffmpeg
+    // processes competing for the same dshow pin disrupted both pipelines under
+    // QSV load.
+    let relay = if let Some(device) = &audio_device {
+        Some(crate::commands::program_audio::subscribe_feed(device)?)
+    } else {
+        None
+    };
+    let audio_feed_port = relay.as_ref().map(|r| r.port());
 
     let enabled: Vec<StreamDest> = destinations.into_iter().filter(|d| d.enabled).collect();
     if enabled.is_empty() {
@@ -254,16 +265,6 @@ pub fn stream_rtmp_start(
         urls.push(url);
     }
 
-    // A single program-audio loopback feed when the operator enables audio;
-    // every tee target carries the same mux. Spawning the feed is effectively
-    // infallible; if it ever fails the broadcast proceeds video-only.
-    let audio = if enable_audio {
-        AudioFeed::spawn().ok()
-    } else {
-        None
-    };
-    let audio_port = audio.as_ref().map(|f| f.port());
-
     // One bounded (tx, rx) pair feeding the single tee ffmpeg. try_send
     // (drop-newest) under congestion never stalls capture or a concurrent
     // recording.
@@ -273,7 +274,7 @@ pub fn stream_rtmp_start(
     // 1080p NV12 frame is ~4 MB, so the write end alone would churn ~1,000
     // partial writes (syscall + kernel copy each) per frame.
     let (stdin_file, stdin_stdio) = crate::commands::recordings::encoder_stdin_stdio();
-    let args = stream_tee_args(w, h, f, &encoder, &urls, audio_port);
+    let args = stream_tee_args(w, h, f, &encoder, &urls, audio_feed_port);
     let mut child = match Command::new(crate::binpaths::ffmpeg_path())
         .args(&args)
         .stdin(stdin_stdio)
@@ -314,7 +315,7 @@ pub fn stream_rtmp_start(
             h,
             f,
             enabled.len(),
-            if audio.is_some() { "on" } else { "off" }
+            audio_device.as_deref().unwrap_or("off")
         ),
     );
 
@@ -367,7 +368,7 @@ pub fn stream_rtmp_start(
             id: d.id,
             label: d.label,
             url,
-            audio: audio.is_some(),
+            audio: audio_device.is_some(),
         })
         .collect();
 
@@ -382,7 +383,8 @@ pub fn stream_rtmp_start(
         writer_thread: Some(writer_thread),
         frames,
         bytes,
-        audio,
+        audio_device,
+        audio: relay,
         consumer,
         stderr_tail,
     };
@@ -402,7 +404,7 @@ fn streaming_status_locked(guard: &mut parking_lot::MutexGuard<Option<BroadcastS
         Some(b) => {
             let frames = b.frames.load(std::sync::atomic::Ordering::SeqCst);
             let bytes = b.bytes.load(std::sync::atomic::Ordering::SeqCst);
-            let audio_attached = b.audio.is_some();
+            let audio_attached = b.audio_device.is_some();
             // None = ffmpeg still running (all destinations mirror it as live).
             let shared_error: Option<String> = match b.child.try_wait() {
                 Ok(None) => None,
@@ -478,11 +480,11 @@ pub async fn stream_rtmp_stop(app: AppHandle, state: State<'_, AppState>) -> Res
     if let Some(join) = broadcast.writer_thread.take() {
         let _ = join.join();
     }
-    // EOF the audio input so ffmpeg finalizes its targets instead of waiting on
-    // an audio socket that never closes. MUST happen before child.wait() below.
-    if let Some(mut feed) = broadcast.audio.take() {
-        feed.close();
-    }
+    // Close this broadcast's relay onto the shared audio feed BEFORE waiting on
+    // ffmpeg. The stream's audio input is the relay's TCP socket, not a dshow
+    // device ffmpeg owns, so ffmpeg only sees audio EOF once the relay drops.
+    // (A concurrent recording keeps the feed itself alive via its own relay.)
+    broadcast.audio = None;
 
     let timeout = std::time::Instant::now() + std::time::Duration::from_secs(5);
     // Only a child that exited ON ITS OWN with a failure counts: a
@@ -553,16 +555,19 @@ mod tests {
     }
 
     #[test]
-    fn tee_args_with_audio_add_loopback_aac_input() {
+    fn tee_args_with_audio_feed_tcp_input() {
         let urls = vec!["rtmp://host/live/key".to_string()];
-        let args = stream_tee_args(1280, 720, 30, "libx264", &urls, Some(44111));
+        let args = stream_tee_args(1280, 720, 30, "libx264", &urls, Some(43210));
         let joined = args.join(" ");
-        assert!(joined.contains("-f aac -i tcp://127.0.0.1:44111"));
+        assert!(joined.contains("-f aac"));
+        assert!(joined.contains("-i tcp://127.0.0.1:43210"));
         assert!(joined.contains("-map 0:v:0"));
         assert!(joined.contains("-map 1:a:0"));
         assert!(joined.contains("-c:a copy"));
-        assert!(joined.contains("-bsf:a aac_adtstoasc"));
+        assert!(!joined.contains("-c:a aac"));
         assert!(!joined.contains("-an"));
+        assert!(!joined.contains("-f dshow"));
+        assert!(!joined.contains("-f adts"));
         assert!(joined.contains("-f tee"));
         assert!(joined.contains("[f=flv:onfail=ignore]rtmp://host/live/key"));
     }
@@ -573,7 +578,7 @@ mod tests {
         // URL (`Option map cannot be applied to input url tcp://...`), so every
         // `-map` must come after all `-i <url>` declarations.
         let urls = vec!["rtmp://host/live/key".to_string()];
-        let args = stream_tee_args(1280, 720, 30, "libx264", &urls, Some(44111));
+        let args = stream_tee_args(1280, 720, 30, "libx264", &urls, Some(43210));
         let mut i = 0;
         while i < args.len() {
             if args[i] == "-i" {
@@ -637,6 +642,7 @@ mod tests {
             writer_thread: None,
             frames: Arc::new(std::sync::atomic::AtomicU64::new(42)),
             bytes: Arc::new(std::sync::atomic::AtomicU64::new(42)),
+            audio_device: None,
             audio: None,
             consumer: crate::capture::ConsumerHandle { id: 1, strict: false },
             stderr_tail: Arc::new(parking_lot::Mutex::new(Vec::new())),

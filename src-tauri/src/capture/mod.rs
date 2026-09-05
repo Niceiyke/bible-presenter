@@ -89,19 +89,21 @@ impl FrameConsumers {
         let id = self.next_id;
         self.next_id += 1;
         let slot = SinkSlot { id, tx };
-        if strict {
+        // Strict (blocking) sends are only safe while this consumer is the SOLE
+        // one on the session. Any attach that would produce a second consumer —
+        // a live destination joining a solo recorder, OR a strict recorder
+        // joining a live session — downgrades every held strict sink to
+        // best-effort so nothing can block the shared capture thread (which
+        // would starve the live stream's frames and stall the idle re-feed).
+        if !self.strict.is_empty() || !self.best_effort.is_empty() {
+            let mut moved: Vec<SinkSlot> = self.strict.drain(..).collect();
+            self.best_effort.append(&mut moved);
+        }
+        let sole = self.strict.is_empty() && self.best_effort.is_empty();
+        if strict && sole {
             self.strict.push(slot);
         } else {
-            // A live consumer is joining a session that may already hold a
-            // strict recorder. Downgrade the strict sinks to best-effort so
-            // nothing can backpressure the shared capture thread.
-            if !self.strict.is_empty() {
-                let mut moved: Vec<SinkSlot> = self.strict.drain(..).collect();
-                moved.push(slot);
-                self.best_effort.append(&mut moved);
-            } else {
-                self.best_effort.push(slot);
-            }
+            self.best_effort.push(slot);
         }
         ConsumerHandle { id, strict }
     }
@@ -247,6 +249,25 @@ pub(crate) fn bgra_to_nv12(src: &[u8], w: usize, h: usize) -> Vec<u8> {
             uv_plane[o] = u.clamp(16, 240) as u8;
             uv_plane[o + 1] = v.clamp(16, 240) as u8;
         }
+    }
+    out
+}
+
+/// A synthetic black NV12 frame (BT.601 limited range: Y=16, U/V=128). Fed to
+/// consumers before the first WGC frame arrives so a static capture window can
+/// never starve the encoders (the old code parked behind WGC's blocking
+/// `TryGetNextFrame` and aborted recordings/streams with `-10053`).
+#[cfg(target_os = "windows")]
+fn black_nv12(w: u32, h: u32) -> Vec<u8> {
+    let w = w.max(1) as usize;
+    let h = h.max(1) as usize;
+    let y_size = w * h;
+    let uv_size = w.div_ceil(2) * h.div_ceil(2) * 2;
+    let mut out = vec![0u8; y_size + uv_size];
+    out[..y_size].fill(16);
+    for plane in out[y_size..].chunks_exact_mut(2) {
+        plane[0] = 128;
+        plane[1] = 128;
     }
     out
 }
@@ -574,6 +595,7 @@ fn capture_thread_windows(
     stop: Arc<AtomicBool>,
 ) {
     use windows::core::{factory, Interface};
+    use windows::Foundation::TypedEventHandler;
     use windows::Graphics::Capture::{Direct3D11CaptureFramePool, GraphicsCaptureItem};
     use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
     use windows::Graphics::DirectX::DirectXPixelFormat;
@@ -741,94 +763,214 @@ fn capture_thread_windows(
         }
 
         let mut dropped_total = 0u64;
-        let mut fps_start = Instant::now();
-        let mut fps_count = 0u32;
 
-        // Idle re-feed: Windows Graphics Capture only delivers a new frame when
-        // the window presents one. A static window (e.g. scripture held on
-        // screen) stops presenting, so WGC goes quiet and a recording would
-        // stall after the first moments. To keep the recorded timeline
-        // continuous, remember the last captured frame and re-feed it at the
-        // target rate whenever no new frame arrives; H.264 encodes the identical
-        // frames at near-zero bitrate, so the output spans the real duration.
+        // Event-driven frame delivery. WGC only raises `FrameArrived` when the
+        // window presents a new frame, and `TryGetNextFrame` BLOCKS until a
+        // frame is pending — so it must be called from the event callback
+        // (where a frame is guaranteed ready and the call returns immediately),
+        // never from a free-running poll. The handler forwards the captured
+        // frame over a bounded channel; the liveness loop below only ever does
+        // bounded receives, so it can never park on a static window (which
+        // previously starved encoders and aborted recordings/streams with
+        // `-10053`).
+        let (frame_tx, frame_rx) =
+            std::sync::mpsc::sync_channel::<windows::Graphics::Capture::Direct3D11CaptureFrame>(
+                2,
+            );
+        let dropped_flag = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let copy_drop_flag = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let handler_count = dropped_flag.clone();
+        let frame_arrived = TypedEventHandler::<Direct3D11CaptureFramePool, windows::core::IInspectable>::new(
+            move |sender: windows::core::Ref<'_, Direct3D11CaptureFramePool>,
+                  _args: windows::core::Ref<'_, windows::core::IInspectable>| {
+                if let Some(pool_ref) = sender.as_ref() {
+                    if let Ok(frame) = pool_ref.TryGetNextFrame() {
+                        if frame_tx.try_send(frame).is_err() {
+                            // Pool saturated; the next present supersedes this
+                            // frame, so dropping it is safe (latest-wins).
+                            handler_count.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                }
+                Ok(())
+            });
+        let token = match pool.FrameArrived(&frame_arrived) {
+            Ok(t) => t,
+            Err(e) => {
+                fail(format!("FrameArrived: {e:?}"));
+                CoUninitialize();
+                return;
+            }
+        };
+
+        // The GPU readback (`CopyResource` + `Map` + software `bgra_to_nv12`)
+        // runs on a DEDICATED copy thread. On this iGPU the readback contends
+        // with QSV encoding and can stall for seconds-to-minutes; if it ran
+        // inline, that single stall would freeze the whole feed and abort the
+        // broadcast (`-10053`). Decoupled, the liveness loop below keeps
+        // pushing re-feed frames at the target rate regardless of how long any
+        // one readback takes, so encoders are never starved.
         let present_interval =
             std::time::Duration::from_secs_f64(1.0 / (fps.max(1) as f64));
-        let mut last_present = Instant::now();
-        let mut last_cf: Option<Arc<CaptureFrame>> = None;
-        // Reusable staging texture: creating one per frame is wasteful D3D11
-        // resource churn on a hot 30 fps loop. Lazily (re)created when the
-        // surface size changes (window resize), reused every frame otherwise.
-        let mut staging: Option<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> = None;
-
-        while !stop.load(Ordering::SeqCst) {
-            // Drain the pool keeping the newest frame, counting the superseded
-            // ones as drops (latest-wins for the ring consumer).
-            let mut latest_frame: Option<windows::Graphics::Capture::Direct3D11CaptureFrame> = None;
-            while let Ok(f) = pool.TryGetNextFrame() {
-                if latest_frame.take().is_some() {
-                    dropped_total += 1;
-                }
-                latest_frame = Some(f);
-            }
-
-            if let Some(frame) = latest_frame {
-                if let Some(frame_data) = copy_rgba(&device, &context, &frame, &mut staging) {
-                    let ts = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64;
-                    let cf = Arc::new(CaptureFrame {
-                        width: frame_data.0,
-                        height: frame_data.1,
-                        pixels: frame_data.2,
-                        timestamp_ms: ts,
-                    });
-                    // Remember the newest frame for the idle re-feed below.
-                    last_cf = Some(cf.clone());
-                    // Always refresh the ring so previews stay current.
-                    if let Ok(mut l) = latest.lock() {
-                        *l = Some(cf.clone());
-                    }
-                    // Stream to the consumer(s) when attached; prune any that
-                    // went away (sender error) and fall back to ring-only.
-                    push_frames(&shared, &cf);
-                    if let Ok(mut st) = status.lock() {
-                        st.frames_captured += 1;
-                        st.width = frame_data.0;
-                        st.height = frame_data.1;
-                    }
-                    fps_count += 1;
-                    if fps_start.elapsed().as_millis() >= 1000 {
-                        if let Ok(mut st) = status.lock() {
-                            st.fps = fps_count;
+        let last_cf: Arc<Mutex<Option<Arc<CaptureFrame>>>> = Arc::new(Mutex::new(None));
+        let copy_busy = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (copy_tx, copy_rx) =
+            std::sync::mpsc::sync_channel::<windows::Graphics::Capture::Direct3D11CaptureFrame>(
+                1,
+            );
+        {
+            let copy_busy_c = copy_busy.clone();
+            let last_cf_c = last_cf.clone();
+            let status_c = status.clone();
+            let latest_c = latest.clone();
+            let shared_c = shared.clone();
+            let stop_c = stop.clone();
+            let copy_drop_c = copy_drop_flag.clone();
+            let session_name = session_id.clone();
+            let mut fps_start = Instant::now();
+            let mut fps_count = 0u32;
+            let _ = std::thread::Builder::new()
+                .name(format!("capture-copy-{session_id}"))
+                .spawn(move || {
+                    // Reusable staging texture, owned exclusively by this
+                    // thread. Lazily (re)created when the surface size changes
+                    // (window resize), reused every frame otherwise.
+                    let mut staging: Option<
+                        windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+                    > = None;
+                    while !stop_c.load(Ordering::SeqCst) {
+                        let frame = match copy_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                            Ok(f) => f,
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                        };
+                        let copied = copy_rgba(&device, &context, &frame, &mut staging);
+                        drop(frame);
+                        if let Some(frame_data) = copied {
+                            let ts = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64;
+                            let cf = Arc::new(CaptureFrame {
+                                width: frame_data.0,
+                                height: frame_data.1,
+                                pixels: frame_data.2,
+                                timestamp_ms: ts,
+                            });
+                            // Remember the newest frame for the idle re-feed.
+                            if let Ok(mut l) = last_cf_c.lock() {
+                                *l = Some(cf.clone());
+                            }
+                            // Always refresh the ring so previews stay current.
+                            if let Ok(mut l) = latest_c.lock() {
+                                *l = Some(cf.clone());
+                            }
+                            // Stream to the consumers when attached; prune any
+                            // that went away (sender error).
+                            push_frames(&shared_c, &cf);
+                            if let Ok(mut st) = status_c.lock() {
+                                st.frames_captured += 1;
+                                st.width = frame_data.0;
+                                st.height = frame_data.1;
+                            }
+                            fps_count += 1;
+                            if fps_start.elapsed().as_millis() >= 1000 {
+                                if let Ok(mut st) = status_c.lock() {
+                                    st.fps = fps_count;
+                                }
+                                fps_count = 0;
+                                fps_start = Instant::now();
+                            }
+                        } else {
+                            copy_drop_c.fetch_add(1, Ordering::SeqCst);
                         }
-                        fps_count = 0;
-                        fps_start = Instant::now();
+                        copy_busy_c.store(false, Ordering::SeqCst);
                     }
-                    last_present = Instant::now();
+                    drop(device);
+                    drop(context);
+                    println!("capture: copy thread {session_name} ended");
+                });
+        }
+
+        let mut last_present = Instant::now();
+        let mut last_feed_gap_warn = Instant::now();
+        while !stop.load(Ordering::SeqCst) {
+            // Bounded pull — never blocks on WGC. On timeout (no new present)
+            // fall through to the idle re-feed; on disconnect (pool torn down)
+            // leave the loop.
+            let pending = match frame_rx.recv_timeout(std::time::Duration::from_millis(2)) {
+                Ok(frame) => Some(frame),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+
+            if let Some(frame) = pending {
+                // Latest-wins drain: if a burst arrived (the copy thread is
+                // behind), superseded frames count as drops and only the
+                // newest is handed to the copy thread.
+                let mut newest = frame;
+                while let Ok(extra) = frame_rx.try_recv() {
+                    dropped_total += 1;
+                    newest = extra;
+                }
+                // Forward to the copy thread when it is free; otherwise drop
+                // the raw frame — the idle re-feed keeps the stream alive.
+                if !copy_busy.swap(true, Ordering::SeqCst) {
+                    if copy_tx.try_send(newest).is_err() {
+                        copy_drop_flag.fetch_add(1, Ordering::SeqCst);
+                        copy_busy.store(false, Ordering::SeqCst);
+                    }
                 } else {
                     dropped_total += 1;
                 }
             } else {
-                // No new frame: the window is idle (static content) — WGC stops
-                // delivering until the next present. Re-feed the last captured
-                // frame at the target rate so the recorded timeline stays
-                // continuous and spans the real wall-clock duration.
-                if let Some(cf) = last_cf.as_ref() {
-                    if last_present.elapsed() >= present_interval {
-                        push_frames(&shared, cf);
-                        last_present = Instant::now();
-                    }
+                // No new frame arrived: the window is idle (static content) —
+                // WGC stops delivering until the next present. Re-feed the last
+                // captured frame (or a synthetic black one before the first
+                // frame) at the target rate so encoders are never starved.
+                if last_present.elapsed() >= present_interval {
+                    let cf = last_cf
+                        .lock()
+                        .ok()
+                        .and_then(|l| l.clone())
+                        .unwrap_or_else(|| {
+                            Arc::new(CaptureFrame {
+                                width: cap_w,
+                                height: cap_h,
+                                pixels: black_nv12(cap_w, cap_h),
+                                timestamp_ms: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                            })
+                        });
+                    push_frames(&shared, &cf);
+                    last_present = Instant::now();
                 }
-                // Brief backoff between idle probes.
-                std::thread::sleep(std::time::Duration::from_millis(2));
             }
 
             if let Ok(mut st) = status.lock() {
-                st.frames_dropped = dropped_total;
+                st.frames_dropped =
+                    dropped_total + dropped_flag.load(Ordering::SeqCst) + copy_drop_flag.load(Ordering::SeqCst);
+            }
+
+            // Feed-liveness watchdog: if the loop stops iterating (thread
+            // starvation, e.g. audio-on load) or a refeed push stalls, the
+            // encoders go silent long enough for mediaMTX to time out the
+            // broadcast (`i/o timeout` -> `-10053`). Log a gap > 5 s.
+            if last_feed_gap_warn.elapsed() >= std::time::Duration::from_secs(5) {
+                last_feed_gap_warn = Instant::now();
+                let gap = last_present.elapsed();
+                if gap >= std::time::Duration::from_secs(2) {
+                    println!(
+                        "capture: session {session_id} FEED GAP {gap:?} since last handed-out frame"
+                    );
+                }
             }
         }
 
+        drop(copy_tx);
+        let _ = pool.RemoveFrameArrived(token);
         let _ = session.Close();
         let _ = pool.Close();
         drop(item);
@@ -951,6 +1093,24 @@ mod tests {
         assert_eq!(s.frames_captured, 0);
     }
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn black_nv12_is_limited_range_black() {
+        let (w, h) = (4u32, 4u32);
+        let p = black_nv12(w, h);
+        let (w, h) = (w as usize, h as usize);
+        assert_eq!(p.len(), w * h + (w * h) / 2);
+        for &b in &p[..w * h] {
+            assert_eq!(b, 16);
+        }
+        for &b in &p[w * h..] {
+            assert_eq!(b, 128);
+        }
+        // An odd dimension exercises the div_ceil sizing path too.
+        let q = black_nv12(3, 3);
+        assert_eq!(q.len(), 9 + 2 * 2 * 2);
+    }
+
     #[test]
     fn manager_start_requires_window_resolution() {
         // Without a real Tauri app, start() must fail gracefully rather than
@@ -1068,6 +1228,39 @@ mod tests {
 
         // The recorder handle still detaches cleanly from the new bucket even
         // though its handle reports strict=true.
+        assert!(set.detach(rec_h));
+        assert_eq!(set.best_effort.len(), 1);
+        assert!(set.detach(best_h));
+        assert!(set.is_empty());
+        drop(rec_rx);
+    }
+
+    #[test]
+    fn strict_recorder_joining_a_live_session_is_downgraded() {
+        let mut set = FrameConsumers::default();
+        let (best_tx, _best_rx) = sync_channel::<Arc<CaptureFrame>>(2);
+        let (rec_tx, rec_rx) = sync_channel::<Arc<CaptureFrame>>(2);
+        let cf = Arc::new(CaptureFrame {
+            width: 2,
+            height: 2,
+            pixels: vec![0u8; 6],
+            timestamp_ms: 0,
+        });
+
+        // A live broadcast owns the session first (best-effort sink).
+        let best_h = set.attach(best_tx, false);
+        assert!(set.strict.is_empty());
+        assert_eq!(set.best_effort.len(), 1);
+        assert!(set.push(&cf));
+
+        // A strict recorder then joins: it is downgraded along with any held
+        // strict slot so a blocking send can never stall the shared thread
+        // while the stream is live. Both buckets never mix.
+        let rec_h = set.attach(rec_tx, true);
+        assert!(set.strict.is_empty(), "new strict recorder downgraded on join");
+        assert_eq!(set.best_effort.len(), 2);
+        assert!(set.push(&cf), "delivery keeps both consumers attached");
+
         assert!(set.detach(rec_h));
         assert_eq!(set.best_effort.len(), 1);
         assert!(set.detach(best_h));

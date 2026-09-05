@@ -11,8 +11,8 @@ import type { StreamDestination } from "../types";
  * enabled RTMP destination — each encoding rawvideo -> libx264 -> FLV -> its
  * RTMP ingest. The operator starts/stops the whole broadcast at once; there is
  * no per-destination independent transport. Program audio (external mic /
- * line-in) is muxed into every enabled destination when the broadcast is
- * started with `enableAudio`.
+ * line-in) is captured natively by ffmpeg and muxed into every enabled
+ * destination when the broadcast is started with an `audioDevice` name.
  *
  * This hook is a thin controller around the `stream_rtmp_*` backend commands;
  * it polls `stream_rtmp_status` while a broadcast is live and exposes the
@@ -61,7 +61,13 @@ export interface NativeRtmpBroadcast {
   pending: boolean;
   /** Per-destination display status keyed by destination id. */
   destStatus: Record<string, { status: DestDisplayStatus; bitrateKbps: number }>;
-  goLive: (destinations: StreamDestination[], width: number, height: number, fps: number, enableAudio?: boolean) => Promise<void>;
+  goLive: (
+    destinations: StreamDestination[],
+    width: number,
+    height: number,
+    fps: number,
+    audioDevice?: string | null,
+  ) => Promise<void>;
   stopAll: () => Promise<void>;
 }
 
@@ -98,9 +104,16 @@ export function useNativeRtmpBroadcast(): NativeRtmpBroadcast {
   }, [status.active, refresh]);
 
   const goLive = useCallback(
-    async (destinations: StreamDestination[], width: number, height: number, fps: number, enableAudio?: boolean) => {
+    async (
+      destinations: StreamDestination[],
+      width: number,
+      height: number,
+      fps: number,
+      audioDevice?: string | null,
+    ) => {
       setPending(true);
       try {
+        const hasAudio = !!audioDevice && audioDevice.trim().length > 0;
         const payload = destinations
           .filter((d) => d.enabled && d.mode === "rtmp")
           .map((d) => ({
@@ -109,14 +122,14 @@ export function useNativeRtmpBroadcast(): NativeRtmpBroadcast {
             url: d.url,
             streamKey: d.stream_key ?? null,
             enabled: true,
-            audio: !!enableAudio,
+            audio: hasAudio,
           }));
         const s = await invoke<NativeStreamStatus>("stream_rtmp_start", {
           destinations: payload,
           width,
           height,
           fps,
-          enableAudio: !!enableAudio,
+          audioDevice: hasAudio ? audioDevice : null,
         });
         setStatus(s);
       } finally {

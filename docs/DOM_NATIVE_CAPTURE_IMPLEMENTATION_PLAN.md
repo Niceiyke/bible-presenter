@@ -264,7 +264,7 @@ What shipped:
   feed that generalizes the legacy `rtmp.rs` transport: binds `127.0.0.1:0`,
   spawns an accept+writer thread (non-blocking, ~5s, buffering early packets),
   and drains a bounded drop-newest channel into the socket ffmpeg reads as a
-  second `-f adts -i tcp://127.0.0.1:<port>` input (`-c:a copy`, no re-encode).
+  second `-f aac -i tcp://127.0.0.1:<port>` input (`-c:a copy`, no re-encode; `aac` is the raw-ADTS demuxer name).
 - Recorder (`recordings.rs`): `recording_start` gained `enable_audio`;
   `record_ffmpeg_args` takes `audio_port`; `RecordingSession.audio` holds the
   feed; `RecordingStatus.audio_attached` reports it.

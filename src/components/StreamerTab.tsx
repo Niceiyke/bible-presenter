@@ -174,7 +174,13 @@ export function StreamerTab() {
     }
     await persistDestinations(destinations);
     try {
-      await broadcast.goLive(destinations, captureWidth, captureHeight, captureFps, programAudio.enabled);
+      await broadcast.goLive(
+      destinations,
+      captureWidth,
+      captureHeight,
+      captureFps,
+      programAudio.enabled ? programAudio.device : null,
+    );
     } catch (e: any) {
       setToast(`Could not go live: ${e?.message ?? e}`);
     }
@@ -216,7 +222,7 @@ export function StreamerTab() {
             {live && (
               <div className="absolute top-2 left-2 z-10 flex items-center gap-1.5 px-2 py-1 rounded bg-red-600 text-white text-[10px] font-black uppercase tracking-widest">
                 <span className="w-2 h-2 rounded-full bg-white animate-pulse" /> LIVE
-                {programAudio.enabled && (
+                {programAudio.enabled && programAudio.device && (
                   <span className="ml-1 px-1 rounded bg-black/40 normal-case font-mono">+ AUD</span>
                 )}
               </div>
@@ -325,27 +331,24 @@ export function StreamerTab() {
               </span>
             </label>
             <select
-              value={programAudio.deviceId ?? ""}
-              onChange={(e) => programAudio.setDeviceId(e.target.value || null)}
+              value={programAudio.device ?? ""}
+              onChange={(e) => programAudio.setDevice(e.target.value || null)}
               disabled={programAudio.devices.length === 0}
               className="px-2 py-1 bg-slate-950 border border-slate-700 rounded text-slate-200 text-[11px] focus:outline-none focus:border-slate-500"
               title="External audio input to mux into every stream"
             >
-              <option value="">Default input</option>
-              {programAudio.devices.map((d) => (
-                <option key={d.deviceId} value={d.deviceId}>
-                  {d.label || `Input ${d.deviceId.slice(0, 8)}`}
+              <option value="">Select an audio input</option>
+              {programAudio.devices.map((name) => (
+                <option key={name} value={name}>
+                  {name}
                 </option>
               ))}
             </select>
-            {programAudio.running && (
-              <span className="text-[10px] text-emerald-400">Encoding input…</span>
-            )}
-            {programAudio.error && (
-              <span className="text-[10px] text-red-400">{programAudio.error}</span>
+            {programAudio.enabled && !programAudio.device && (
+              <span className="text-[10px] text-amber-400">Select an input device below</span>
             )}
             <span className="text-[10px] text-slate-600">
-              Muxes an external mic / line-in (AAC) into every destination — no re-encode. Premium.
+              Captures an external mic / line-in natively (ffmpeg DirectShow) into every destination as AAC. Premium.
             </span>
           </div>
         </div>

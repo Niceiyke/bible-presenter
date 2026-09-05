@@ -1,4 +1,3 @@
-use crate::commands::program_audio::AudioFeed;
 use crate::license::{ensure_active_tier, LicenseTier};
 use crate::state::AppState;
 use parking_lot::Mutex;
@@ -269,8 +268,11 @@ pub struct RecordingSession {
     pub child: Child,
     pub writer_thread: Option<std::thread::JoinHandle<()>>,
     pub status: Arc<Mutex<RecordingStatus>>,
-    /// Optional program-audio loopback feed being muxed into the recording.
-    pub audio: Option<AudioFeed>,
+    /// This recording's private relay onto the shared audio feed (when audio is
+    /// enabled). Dropping it before the ffmpeg wait lets the recording's ffmpeg
+    /// see audio EOF and finalize the MP4 footer even while a broadcast keeps
+    /// the feed alive.
+    pub audio: Option<crate::commands::program_audio::AudioRelay>,
     /// Retained ffmpeg stderr tail for failure diagnostics.
     pub stderr_tail: Arc<Mutex<Vec<u8>>>,
 }
@@ -444,21 +446,22 @@ pub(crate) fn h264_encoder_block(encoder: &str, gop_frames: u32) -> Vec<String> 
 
 /// Build the ffmpeg argv for a recording: raw NV12 from stdin, H.264 to an MP4
 /// temp file (written as it goes, purely local — never piped over IPC). When
-/// `audio_port` is set, a second ADTS input (ffmpeg demuxer `aac`) pulls program
-/// audio from the loopback feed and muxes it in (`-c:a copy` — no re-encode).
-/// The ADTS frames are passed through `-bsf:a aac_adtstoasc` first: the MP4
-/// muxer needs raw ASC, and copying ADTS-framed AAC straight in fails the mux
-/// (ffmpeg exits EINVAL). Note: the demuxer is named `aac`, not `adts`.
+/// `audio_feed_port` is set, the consumer reads AAC/ADTS from the shared
+/// `AudioFeed` TCP socket (`-f aac -i tcp://127.0.0.1:PORT` — `aac` is the
+/// raw-ADTS demuxer name) rather than opening the dshow device directly.  The
+/// feed captured and encoded the device once; the consumer copies the stream
+/// without re-encoding (`-c:a copy`).
 fn record_ffmpeg_args(
     width: u32,
     height: u32,
     fps: u32,
     encoder: &str,
     tmp: &Path,
-    audio_port: Option<u16>,
+    audio_feed_port: Option<u16>,
 ) -> Vec<String> {
     // ~2s keyframe interval for hardware encoders; software encoders ignore `-g`.
     let encoder_block = h264_encoder_block(encoder, fps * 2);
+    let has_audio = audio_feed_port.is_some();
     let mut args = vec![
         "-y".into(),
         "-hide_banner".into(),
@@ -477,27 +480,24 @@ fn record_ffmpeg_args(
         "-i".into(),
         "pipe:0".into(),
     ];
-    if let Some(port) = audio_port {
+    if let Some(port) = audio_feed_port {
         args.extend([
             "-f".into(),
             "aac".into(),
             "-i".into(),
             format!("tcp://127.0.0.1:{port}"),
-            "-map".into(),
-            "0:v:0".into(),
-            "-map".into(),
-            "1:a:0".into(),
         ]);
-        args.extend(encoder_block);
-        args.extend([
-            "-c:a".into(),
-            "copy".into(),
-            "-bsf:a".into(),
-            "aac_adtstoasc".into(),
-        ]);
+    }
+    args.extend(encoder_block);
+    if has_audio {
+        args.push("-map".into());
+        args.push("0:v:0".into());
+        args.push("-map".into());
+        args.push("1:a:0".into());
+        // Feed already encoded AAC; copy without re-encoding.
+        args.extend(["-c:a".into(), "copy".into()]);
     } else {
         args.push("-an".into());
-        args.extend(encoder_block);
     }
     args.extend(["-movflags".into(), "+faststart".into(), tmp.to_string_lossy().to_string()]);
     args
@@ -507,7 +507,10 @@ fn record_ffmpeg_args(
 /// (streaming frames to a sink) and spawn ffmpeg to mux them to a temp MP4 on
 /// disk. Only one
 /// recording can be active at a time. The off-screen capture window must be
-/// available (it is always created at startup, parked off-screen).
+/// available (it is always created at startup, parked off-screen). When
+/// `audio_device` names an input device, a shared `AudioFeed` subprocess opens
+/// it ONCE and the recording connects to its TCP fan-out, copying the AAC/ADTS
+/// stream into the recording without re-encoding.
 #[tauri::command]
 pub fn recording_start(
     app: AppHandle,
@@ -515,7 +518,7 @@ pub fn recording_start(
     width: u32,
     height: u32,
     fps: u32,
-    enable_audio: bool,
+    audio_device: Option<String>,
 ) -> Result<RecordingStatus, String> {
     ensure_active_tier(&state, LicenseTier::Pro)?;
     {
@@ -526,12 +529,21 @@ pub fn recording_start(
     if !crate::binpaths::ffmpeg_available() {
         return Err("ffmpeg was not found — install ffmpeg to record.".into());
     }
-    let audio_feed = if enable_audio {
+    let audio_device = audio_device.filter(|d| !d.trim().is_empty());
+    if audio_device.is_some() {
         ensure_active_tier(&state, LicenseTier::Premium)?;
-        Some(AudioFeed::spawn()?)
+    }
+    // Capture the device ONCE via the shared AudioFeed, then open a private
+    // relay for THIS recording.  Both this recording and a concurrent broadcast
+    // subscribe to the same feed instead of opening dshow twice — two ffmpeg
+    // processes competing for the same dshow pin disrupted both pipelines under
+    // QSV load.
+    let relay = if let Some(device) = &audio_device {
+        Some(crate::commands::program_audio::subscribe_feed(device)?)
     } else {
         None
     };
+    let audio_feed_port = relay.as_ref().map(|r| r.port());
 
     let w = width.max(1);
     let h = height.max(1);
@@ -542,23 +554,29 @@ pub fn recording_start(
     let final_path = dir.join(format!("recording-{stamp}.mp4"));
     let tmp_path = dir.join(".recording-tmp.mp4");
 
-    let audio_port = audio_feed.as_ref().map(|a| a.port());
     let encoder = pick_h264_encoder();
     crate::store::log_msg(
         &app,
         &format!(
-            "Recording started (encoder: {}; {}x{} @ {}fps)",
-            encoder, w, h, f
+            "Recording started (encoder: {}; {}x{} @ {}fps; audio: {})",
+            encoder,
+            w,
+            h,
+            f,
+            audio_device.as_deref().unwrap_or("off")
         ),
     );
     let (stdin_file, stdin_stdio) = encoder_stdin_stdio();
-    let mut child = Command::new(crate::binpaths::ffmpeg_path())
-        .args(record_ffmpeg_args(w, h, f, &encoder, &tmp_path, audio_port))
+    let mut child = match Command::new(crate::binpaths::ffmpeg_path())
+        .args(record_ffmpeg_args(w, h, f, &encoder, &tmp_path, audio_feed_port))
         .stdin(stdin_stdio)
         .stderr(Stdio::piped())
         .stdout(Stdio::null())
         .spawn()
-        .map_err(|e| format!("Failed to start ffmpeg: {e}"))?;
+    {
+        Ok(c) => c,
+        Err(e) => return Err(format!("Failed to start ffmpeg: {e}")),
+    };
     // Drain stderr from the start: an undrained pipe can stall ffmpeg, and the
     // retained tail turns a bare exit code into ffmpeg's real error message.
     let stderr_tail = drain_stderr_tail(&mut child);
@@ -569,7 +587,11 @@ pub fn recording_start(
     let stdin: Box<dyn std::io::Write + Send> = match (child.stdin.take(), stdin_file) {
         (Some(cs), _) => Box::new(cs),
         (None, Some(wf)) => Box::new(wf),
-        (None, None) => return Err("ffmpeg stdin was not available.".to_string()),
+        (None, None) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("ffmpeg stdin was not available.".to_string());
+        }
     };
 
     let (tx, rx) = crate::capture::bounded_sink(SINK_CAPACITY);
@@ -614,7 +636,7 @@ pub fn recording_start(
         bytes_written: 0,
         started_ms: chrono::Utc::now().timestamp_millis() as u64,
         error: None,
-        audio_attached: audio_feed.is_some(),
+        audio_attached: audio_device.is_some(),
     }));
 
     // Writer thread: drain captured frames into ffmpeg stdin. Dropping every
@@ -651,7 +673,7 @@ pub fn recording_start(
         child,
         writer_thread: Some(writer_thread),
         status: status.clone(),
-        audio: audio_feed,
+        audio: relay,
         stderr_tail,
     };
     *state.recording.lock() = Some(session);
@@ -693,17 +715,21 @@ pub async fn recording_stop_active(state: State<'_, AppState>) -> Result<Recordi
 
     crate::capture::detach_consumer(&state.capture, &session.capture_session_id, session.consumer);
 
+    // Close this recording's relay onto the shared audio feed BEFORE waiting on
+    // ffmpeg. The recording's audio input is the relay's TCP socket, not a
+    // dshow device ffmpeg owns, so ffmpeg only sees audio EOF once the relay
+    // drops — otherwise `child.wait()` below would block forever on the open
+    // audio socket and silently lose the recording. (A concurrent broadcast
+    // keeps the feed itself alive via its own relay.)
+    session.audio = None;
+
     // Let the writer drain any last frames and close ffmpeg stdin (EOF), which
     // makes ffmpeg finalize the MP4 footer and exit.
     if let Some(join) = session.writer_thread {
         let _ = join.join();
     }
-    // EOF the audio input too BEFORE waiting on ffmpeg: with the audio socket
-    // still open, ffmpeg never sees EOF on*all* inputs, never finalizes, and
-    // `child.wait()` blocks forever (the file is never closed/saved).
-    if let Some(mut feed) = session.audio.take() {
-        feed.close();
-    }
+    // stdin EOF (video) + relay EOF (audio, dropped above) are both in place, so
+    // ffmpeg sees end-of-input on every stream and finalizes the MP4 footer.
 
     let mut child = session.child;
     let status_code = child.wait().map_err(|e| format!("ffmpeg finalize failed: {e}"))?;
@@ -741,11 +767,9 @@ pub async fn recording_abort(state: State<'_, AppState>) -> Result<(), String> {
         .ok_or_else(|| "No recording is in progress.".to_string())?;
 
     crate::capture::detach_consumer(&state.capture, &session.capture_session_id, session.consumer);
+    session.audio = None;
     if let Some(join) = session.writer_thread {
         let _ = join.join();
-    }
-    if let Some(mut feed) = session.audio.take() {
-        feed.close();
     }
     let mut child = session.child;
     let _ = child.kill();
@@ -770,14 +794,17 @@ mod tests {
     }
 
     #[test]
-    fn record_args_with_audio_add_loopback_aac_input() {
-        let args = record_ffmpeg_args(1280, 720, 30, "libx264", Path::new("out.mp4"), Some(44111));
+    fn record_args_with_audio_feed_tcp_input() {
+        let args = record_ffmpeg_args(1280, 720, 30, "libx264", Path::new("out.mp4"), Some(43210));
         let joined = args.join(" ");
-        assert!(joined.contains("-f aac -i tcp://127.0.0.1:44111"));
+        assert!(joined.contains("-f aac"));
+        assert!(joined.contains("-i tcp://127.0.0.1:43210"));
         assert!(joined.contains("-map 0:v:0 -map 1:a:0"));
         assert!(joined.contains("-c:a copy"));
-        assert!(joined.contains("-bsf:a aac_adtstoasc"));
-        assert!(joined.contains("-c:v ") && !joined.contains("-an"));
+        assert!(!joined.contains("-c:a aac"));
+        assert!(!joined.contains("-an"));
+        assert!(!joined.contains("-f dshow"));
+        assert!(!joined.contains("-f adts"));
         assert!(joined.ends_with("out.mp4"));
     }
 
@@ -794,46 +821,6 @@ mod tests {
             let block = h264_encoder_block(enc, 60).join(" ");
             assert_eq!(block, expect, "block args for {enc}");
         }
-    }
-
-    #[test]
-    fn audio_feed_reports_its_port_and_accepts_packets() {
-        let feed = AudioFeed::spawn().expect("audio feed should bind");
-        assert!(feed.port() > 0);
-        // A few small ADTS-like packets should enqueue without erroring. The
-        // writer thread may not have a connected ffmpeg, but send() is bounded
-        // drop-newest — it never blocks and returns Ok.
-        for _ in 0..5 {
-            let result = feed.send(vec![0xff, 0xf1, 0x50, 0x80, 0x00, 0x1f, 0xfc, 0x01, 0x02]);
-            assert!(result.is_ok(), "send should not fail on a warm feed");
-        }
-    }
-
-    #[test]
-    fn audio_feed_close_sends_eof_to_the_consumer() {
-        let mut feed = AudioFeed::spawn().expect("audio feed should bind");
-        let mut client = std::net::TcpStream::connect(("127.0.0.1", feed.port()))
-            .expect("should connect to the feed");
-        client
-            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .expect("read timeout");
-        feed.send(vec![0xff, 0xf1, 0x50, 0x80, 0x00, 0x1f, 0xfc, 0x01, 0x02])
-            .expect("send on a connected feed");
-        let mut buf = [0u8; 16];
-        let n = std::io::Read::read(&mut client, &mut buf).expect("should receive the queued packet");
-        assert_eq!(n, 9, "the ADTS packet should be delivered to the consumer");
-        // Closing the feed drops the sender and joins the writer, so the socket
-        // is closed deterministically: the consumer now reads 0 (EOF). This is
-        // what lets ffmpeg finalize the mux on both inputs instead of hanging in
-        // `child.wait()` with the audio socket never closed.
-        feed.close();
-        let total = match std::io::Read::read(&mut client, &mut buf) {
-            Ok(n) => n as i64,
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => -1,
-            Err(_) => -1,
-        };
-        assert_eq!(total, 0, "consumer must see EOF after close");
-        assert!(feed.send(vec![0x00]).is_err(), "send after close must error");
     }
 
     #[test]

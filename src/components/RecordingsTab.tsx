@@ -120,7 +120,7 @@ export function RecordingsTab() {
               <div className="absolute top-2 left-2 z-10 flex items-center gap-1.5 px-2 py-1 rounded bg-red-600 text-white text-[10px] font-black uppercase tracking-widest">
             <span className="w-2 h-2 rounded-full bg-white animate-pulse" /> REC
             <span className="font-mono normal-case">{formatDuration(elapsed)}</span>
-            {recording && programAudio.enabled && (
+            {recording && programAudio.enabled && programAudio.device && (
               <span className="ml-1 px-1.5 rounded bg-black/40 text-slate-100 font-mono normal-case">(AUD)</span>
             )}
               </div>
@@ -138,7 +138,7 @@ export function RecordingsTab() {
               </button>
             ) : (
               <button
-                onClick={() => start(programAudio.enabled)}
+                onClick={() => start(programAudio.enabled ? programAudio.device : null)}
                 disabled={recordingBlocked}
                 title={recordingBlocked ? "Recording is a Pro feature" : "Record the output window to an MP4"}
                 className="flex-1 py-2.5 rounded-md bg-red-700 hover:bg-red-600 disabled:bg-slate-800 disabled:text-slate-500 text-white text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
@@ -214,27 +214,24 @@ export function RecordingsTab() {
               </span>
             </label>
             <select
-              value={programAudio.deviceId ?? ""}
-              onChange={(e) => programAudio.setDeviceId(e.target.value || null)}
+              value={programAudio.device ?? ""}
+              onChange={(e) => programAudio.setDevice(e.target.value || null)}
               disabled={programAudio.devices.length === 0}
               className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-[11px] text-slate-300"
               title="External audio input to mux into the recording"
             >
-              <option value="">Default input</option>
-              {programAudio.devices.map((d) => (
-                <option key={d.deviceId} value={d.deviceId}>
-                  {d.label || `Input ${d.deviceId.slice(0, 8)}`}
+              <option value="">Select an audio input</option>
+              {programAudio.devices.map((name) => (
+                <option key={name} value={name}>
+                  {name}
                 </option>
               ))}
             </select>
-            {programAudio.running && (
-              <span className="text-[10px] text-emerald-400">Encoding input…</span>
-            )}
-            {programAudio.error && (
-              <span className="text-[10px] text-red-400">{programAudio.error}</span>
+            {programAudio.enabled && !programAudio.device && (
+              <span className="text-[10px] text-amber-400">Select an input device below</span>
             )}
             <span className="text-[10px] text-slate-600">
-              Muxes an external mic / line-in (AAC) into the MP4 — no re-encode. Premium.
+              Captures an external mic / line-in natively (ffmpeg DirectShow) into the MP4 as AAC. Premium.
             </span>
           </div>
 
