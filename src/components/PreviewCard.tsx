@@ -44,7 +44,7 @@ export function PreviewCard({
   isLocalPreview?: boolean;
   hideHeader?: boolean;
 }) {
-  const { appDataDir, settings, cameraLook, cameraChroma } = useAppStore();
+  const { appDataDir, settings, cameraLook } = useAppStore();
   const phoneStreams = usePhoneCameraStreams();
   const isVideo = item?.type === "Media" && (item.data as MediaItem).media_type === "Video";
   const isAudio = item?.type === "Media" && (item.data as MediaItem).media_type === "Audio";
@@ -337,7 +337,6 @@ export function PreviewCard({
                   look={cameraLook[item.data.deviceId] ?? null}
                   mirrored={item.data.mirrored}
                   objectFit="contain"
-                  chromaKey={cameraChroma[item.data.deviceId] ?? null}
                 />
                 <div className="absolute top-2 left-2 px-1.5 py-0.5 bg-red-500/80 rounded text-[8px] font-black text-white flex items-center gap-1 animate-pulse">
                   <div className="w-1.5 h-1.5 rounded-full bg-white" />

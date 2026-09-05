@@ -18,7 +18,6 @@ import {
 import PhoneCameraVideo, {
   usePhoneCameraOrientation,
   usePhoneCameraLook,
-  useCameraChroma,
 } from "./PhoneCameraVideo";
 import { Music } from "lucide-react";
 
@@ -146,7 +145,7 @@ function ZoneMedia({
  * Camera zone content. Hooks must run unconditionally, so this is a separate
  * component: native camera zones open their own getUserMedia stream (stopped
  * on unmount), phone camera zones pull the relayed WebRTC stream from
- * `phoneStreams` and apply the phone's live orientation/look/chroma.
+ * `phoneStreams` and apply the phone's live orientation/look.
  */
 function ZoneCamera({
   item,
@@ -161,7 +160,6 @@ function ZoneCamera({
   const stream = isPhone ? (phoneStreams?.[deviceId] ?? null) : nativeStream;
   const orientation = isPhone ? usePhoneCameraOrientation(deviceId) : null;
   const look = isPhone ? usePhoneCameraLook(deviceId) : null;
-  const chroma = isPhone ? useCameraChroma(deviceId) : null;
   if (!deviceId) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-[#0b1220]">
@@ -177,7 +175,6 @@ function ZoneCamera({
       mirrored={item.data.mirrored}
       objectFit={item.data.objectFit as any}
       style={{ opacity: item.data.opacity ?? 1 }}
-      chromaKey={chroma}
     />
   );
 }

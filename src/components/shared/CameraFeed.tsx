@@ -36,7 +36,7 @@ export function CameraFeed({
   const isPhone = deviceId.startsWith("phone-camera-");
   const phoneStreams = usePhoneCameraStreams();
   const phoneStates = usePhoneCameraStates();
-  const { cameraOrientations, cameraLook, cameraDefaults, cameraChroma } = useAppStore();
+  const { cameraOrientations, cameraLook, cameraDefaults } = useAppStore();
   const local = useSharedLocalCameraStream(isPhone ? null : deviceId, uid);
 
   const stream = isPhone ? (phoneStreams[deviceId] ?? null) : local.stream;
@@ -46,7 +46,6 @@ export function CameraFeed({
   const look = cameraLook[deviceId] ?? null;
   const mirrored = cameraDefaults[deviceId]?.mirrored ?? false;
   const backdrop = cameraDefaults[deviceId]?.backdropColor;
-  const chroma = cameraChroma[deviceId] ?? null;
 
   useEffect(() => {
     onStatus?.({ connected, error: isPhone ? null : local.error });
@@ -64,7 +63,6 @@ export function CameraFeed({
           objectFit={objectFit}
           onMetadata={onMetadata}
           videoRef={videoRef}
-          chromaKey={chroma}
         />
       </div>
     </div>

@@ -23,7 +23,6 @@ import { CompositionRenderer } from "../shared/CompositionRenderer";
 import PhoneCameraVideo, {
   usePhoneCameraOrientation,
   usePhoneCameraLook,
-  useCameraChroma,
 } from "../shared/PhoneCameraVideo";
 
 export interface ProgramSurfaceRuntimeProps {
@@ -158,10 +157,8 @@ export function ProgramSurface({ frame, runtime, mode = "output", silent = false
     liveCameraDeviceId?.startsWith("phone-camera-") ? liveCameraDeviceId : null
   );
   const liveCameraLook = usePhoneCameraLook(liveCameraDeviceId);
-  const liveCameraChroma = useCameraChroma(liveCameraDeviceId);
 
   const bgCameraLook = usePhoneCameraLook(backgrounds.camera?.deviceId ?? null);
-  const bgCameraChroma = useCameraChroma(backgrounds.camera?.deviceId ?? null);
   const bgPhoneOrientation = usePhoneCameraOrientation(
     backgrounds.camera?.deviceId?.startsWith("phone-camera-") ? backgrounds.camera.deviceId : null
   );
@@ -265,7 +262,6 @@ export function ProgramSurface({ frame, runtime, mode = "output", silent = false
           mirrored={backgrounds.camera?.mirrored}
           objectFit={(backgrounds.camera?.objectFit as any) ?? "cover"}
           style={{ opacity: backgrounds.camera?.opacity ?? 1 }}
-          chromaKey={bgCameraChroma}
           videoRef={(el) => { cameraRef.current = el; }}
         />
       </div>
@@ -382,7 +378,6 @@ export function ProgramSurface({ frame, runtime, mode = "output", silent = false
                   mirrored={item.data.mirrored}
                   objectFit={(item.data.objectFit as any) ?? "cover"}
                   style={{ opacity: item.data.opacity ?? 1 }}
-                  chromaKey={liveCameraChroma}
                   videoRef={(el) => { mainCameraRef.current = el; }}
                 />
               </div>

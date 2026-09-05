@@ -9,7 +9,7 @@ import PhoneCameraVideo from "./shared/PhoneCameraVideo";
 import { Camera, RefreshCw, Video, Play, Monitor, AlertTriangle, Smartphone, Tag, Zap, ArrowLeftRight, Aperture, SlidersHorizontal } from "lucide-react";
 import type { DisplayItem, CameraBackground, MediaItem } from "../types";
 import type { CameraLook, PhoneCameraOrientation } from "../types/remote";
-import { DEFAULT_CAMERA_LOOK, DEFAULT_CAMERA_CHROMA } from "../types/remote";
+import { DEFAULT_CAMERA_LOOK } from "../types/remote";
 
 interface CameraTabProps {
   onStage?: (item: DisplayItem) => void;
@@ -42,8 +42,6 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     setCameraDefaults,
     cameraLook,
     setCameraLook,
-    cameraChroma,
-    setCameraChroma,
     liveItem,
     setToast,
   } = useAppStore();
@@ -233,15 +231,6 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
     if (selectedCameraId) setCameraLook(selectedCameraId, { [key]: value });
   };
 
-  // Chroma key (green/blue screen) config for the selected camera. Stored per
-  // device id so the output window can key the same feed live.
-  const chroma = selectedCameraId ? (cameraChroma[selectedCameraId] ?? DEFAULT_CAMERA_CHROMA) : undefined;
-  const chromaSliders: { key: "threshold" | "smoothness" | "spill"; label: string; min: number; max: number; step: number; format: (v: number) => string }[] = [
-    { key: "threshold", label: "Threshold", min: 0, max: 1, step: 0.01, format: (v) => `${v.toFixed(2)}` },
-    { key: "smoothness", label: "Smoothness", min: 0, max: 1, step: 0.01, format: (v) => `${v.toFixed(2)}` },
-    { key: "spill", label: "Spill", min: 0, max: 1, step: 0.01, format: (v) => `${v.toFixed(2)}` },
-  ];
-
   const handleSnapshot = async () => {
     const el = videoRef.current;
     if (!el || !el.videoWidth || !el.videoHeight) {
@@ -321,7 +310,6 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                   look={cameraLook[selectedCameraId] ?? null}
                   mirrored={mirrorOn}
                   objectFit="contain"
-                  chromaKey={chroma ?? null}
                   videoRef={(el) => { videoRef.current = el; }}
                 />
               </div>
@@ -494,61 +482,6 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                     );
                   })}
                 </div>
-              </div>
-
-              <div className="flex flex-col gap-2 px-1 pt-1 border-t border-slate-800">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
-                    <Aperture size={12} /> Chroma Key
-                  </span>
-                  <button
-                    onClick={() => setCameraChroma(selectedCameraId!, { enabled: !chroma?.enabled })}
-                    className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase transition-all ${
-                      chroma?.enabled ? "bg-emerald-600 text-white" : "bg-slate-800 hover:bg-slate-700 text-slate-300"
-                    }`}
-                    title="Remove a solid-color background so only the subject remains"
-                  >
-                    {chroma?.enabled ? "Enabled" : "Off"}
-                  </button>
-                </div>
-                {chroma?.enabled && (
-                  <div className="flex flex-col gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 w-14 shrink-0">Key Color</span>
-                      <input
-                        type="color"
-                        value={chroma.keyColor}
-                        onChange={(e) => setCameraChroma(selectedCameraId!, { keyColor: e.target.value })}
-                        className="w-7 h-7 rounded cursor-pointer border border-slate-600"
-                        title="Background color to remove (use a uniform green or blue screen)"
-                      />
-                      <span className="text-[10px] text-slate-400 font-mono">{chroma.keyColor}</span>
-                    </div>
-                    <div className="grid grid-cols-1 gap-y-1.5">
-                      {chromaSliders.map((s) => (
-                        <label key={s.key} className="flex items-center gap-2 text-[9px] font-bold uppercase tracking-wider text-slate-500">
-                          <span className="w-14 shrink-0">{s.label}</span>
-                          <input
-                            type="range"
-                            min={s.min}
-                            max={s.max}
-                            step={s.step}
-                            value={chroma[s.key]}
-                            onChange={(e) => setCameraChroma(selectedCameraId!, { [s.key]: parseFloat(e.target.value) })}
-                            className="flex-1 h-1.5 accent-emerald-500 cursor-pointer"
-                          />
-                          <span className="w-9 text-right text-slate-400 shrink-0">{s.format(chroma[s.key])}</span>
-                        </label>
-                      ))}
-                    </div>
-                    <button
-                      onClick={() => setCameraChroma(selectedCameraId!, { ...DEFAULT_CAMERA_CHROMA })}
-                      className="self-start px-2 py-0.5 rounded text-[9px] font-bold uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
-                    >
-                      Reset
-                    </button>
-                  </div>
-                )}
               </div>
             </>
           )}
