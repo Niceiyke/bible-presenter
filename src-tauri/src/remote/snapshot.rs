@@ -100,8 +100,12 @@ pub fn build_snapshot(
         .and_then(|w| w.is_visible().ok())
         .unwrap_or(false);
 
+    // The "capture" window is the WGC source only when a session is running AND
+    // the projector is off — while the output window is on screen a live session
+    // captures the real window instead, so the phone's "capture" peer (and the
+    // capture window's camera work) must be off.
     let capture_active =
-        state.recording.lock().is_some() || state.streaming.lock().is_some();
+        (state.recording.lock().is_some() || state.streaming.lock().is_some()) && !output_visible;
 
     RemoteSnapshot {
         protocol_version: crate::remote::protocol::REMOTE_PROTOCOL_VERSION,

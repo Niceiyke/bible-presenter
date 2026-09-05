@@ -245,18 +245,26 @@ fn main() {
                     win.on_window_event(move |event| {
                         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                             api.prevent_close();
-                            let _ = win2.hide();
-                            // External hide/close must be mirrored into the
-                            // OutputManager runtime + persisted visibility so
-                            // UI, disk, and the actual window never diverge.
+                            // Mirror the external close into the OutputManager
+                            // FIRST — `set_output_visible` hides the window
+                            // itself and, for "output", moves any live
+                            // session's capture source to the `capture` window
+                            // before the projector disappears (a hidden window
+                            // freezes WGC). A direct hide only runs when state
+                            // isn't managed or the mirror failed.
                             if let Some(state) = app_handle.try_state::<AppState>() {
-                                let _ = wordlyte_lib::commands::outputs::set_output_visible(
+                                let mirrored = wordlyte_lib::commands::outputs::set_output_visible(
                                     &app_handle,
                                     state.inner(),
                                     label,
                                     false,
-                                );
+                                )
+                                .is_ok();
+                                if mirrored {
+                                    return;
+                                }
                             }
+                            let _ = win2.hide();
                         }
                     });
                 }

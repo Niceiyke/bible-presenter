@@ -325,7 +325,12 @@ export function OutputWindow() {
     getCurrentWindow().isVisible().then((v) => setBootOutputVisible(v)).catch(() => {});
   }, []);
   const outputVisible = isOutputWindow ? (outputConfig?.visible ?? bootOutputVisible) : false;
-  const gateCameras = isOutputWindow ? outputVisible : isCaptureWindow ? captureActive : false;
+  // The `capture` window is the WGC source only while the projector is OFF —
+  // when the output window is on screen a live session captures the real window
+  // instead, so the fallback window must not decode/answer/relay anything
+  // (avoiding a second full render of a feed the audience window already shows).
+  const captureSourceLive = isCaptureWindow && captureActive && !(outputConfig?.visible ?? false);
+  const gateCameras = isOutputWindow ? outputVisible : captureSourceLive;
 
   // Browser-only camera stream lifecycle. Phone cameras stream over the WebRTC
   // relay hosted by this window's answering peer (their ids are synthetic and

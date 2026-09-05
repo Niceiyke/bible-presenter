@@ -5,11 +5,12 @@
 //! a window renders, so recording/streaming can be fed by real program pixels
 //! (the DOM renderer) instead of a second canvas renderer.
 //!
-//! By default, the recorder and streamer target the dedicated `capture` window,
-//! which renders the same `OutputWindow` DOM surface as the audience `output`
-//! window — this decouples recording/streaming from the projection window being
-//! open. The capture window is hidden by default and revealed only for the
-//! duration of a recording/broadcast session (`ensure_capture_visible`), since
+//! By default, the recorder and streamer capture the audience `output` window
+//! while it is on screen (the exact pixels being projected); when it is closed
+//! they fall back to the dedicated `capture` window, which renders the same
+//! `OutputWindow` DOM surface — this decouples recording/streaming from the
+//! projection window being open. The capture window is hidden by default and
+//! revealed only while a session is sourcing it (`ensure_capture_visible`), since
 //! WGC only delivers frames while the window is on-screen and presenting. The
 //! `window_label` parameter is caller-controlled so verification surfaces can
 //! still target the live `output` window directly.

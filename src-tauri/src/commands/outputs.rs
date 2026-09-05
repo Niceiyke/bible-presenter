@@ -17,7 +17,9 @@ pub fn publish_state(app: &AppHandle, state: &OutputState) {
 }
 
 /// Broadcasts the current output-window visibility state to every connected
-/// remote so `output.changed` mirrors the actual window state.
+/// remote so `output.changed` mirrors the actual window state. Output
+/// visibility now also determines the recorder/streamer's capture source, so
+/// the capture-active signal is republished here too.
 pub fn publish_output_visible(app: &AppHandle, state: &AppState) {
     let visible = app
         .get_webview_window("output")
@@ -28,13 +30,18 @@ pub fn publish_output_visible(app: &AppHandle, state: &AppState) {
         json!({ "output_visible": visible }),
         None,
     );
+    publish_capture_active(app, state);
 }
 
-/// Broadcasts whether a recording/streaming session is active so every remote
-/// can open (or close) its "capture" WebRTC peer. Called whenever a recording
-/// or broadcast starts or stops.
-pub fn publish_capture_active(state: &AppState) {
-    let active = state.recording.lock().is_some() || state.streaming.lock().is_some();
+/// Broadcasts whether the `capture` window is the live WGC source for a
+/// recording/streaming session, so every remote can open (or close) its
+/// "capture" WebRTC peer. Called whenever a recording/broadcast starts or stops
+/// AND whenever the projector window toggles, because a live session fronts the
+/// real `output` window when it is visible and only the fallback `capture`
+/// window while it is off.
+pub fn publish_capture_active(app: &AppHandle, state: &AppState) {
+    let active = (state.recording.lock().is_some() || state.streaming.lock().is_some())
+        && !crate::commands::capture::output_window_visible(app);
     state.remote.hub.publish(
         RemoteEventKind::CaptureChanged,
         json!({ "capture_active": active }),
@@ -160,7 +167,28 @@ pub fn set_output_visible(app: &AppHandle, state: &AppState, id: &str, visible: 
             window.show().map_err(|e: tauri::Error| e.to_string())?;
             window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
             rebroadcast_presentation(app, state);
+            // A live session should capture the real projector window now that
+            // it is present. This must NOT fail the toggle (the session keeps
+            // recording/streaming from the capture window), so log-then-continue.
+            if label == "output" {
+                let source = crate::commands::capture::output_window_visible(app);
+                if let Err(e) = crate::commands::capture::sync_capture_sources(app, state, source)
+                {
+                    crate::store::log_msg(
+                        app,
+                        &format!("Capture source could not follow the projector: {e}"),
+                    );
+                }
+            }
         } else {
+            // Moving the projector OFF screen mid-session: the live session's
+            // capture source MUST move to the dedicated `capture` window BEFORE
+            // the projector hides, otherwise WGC freezes on a hidden window (the
+            // recording/stream would stall on the last frame). Refuse the hide
+            // if the swap fails so the session never loses its source.
+            if label == "output" {
+                crate::commands::capture::sync_capture_sources(app, state, false)?;
+            }
             window.hide().map_err(|e: tauri::Error| e.to_string())?;
         }
     }

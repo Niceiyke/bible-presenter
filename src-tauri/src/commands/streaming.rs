@@ -11,7 +11,7 @@ use tauri::{AppHandle, State};
 /// before the capture side drops the newest frame. Because the capture fan-out
 /// uses try_send (drop-newest), a congested broadcast never stalls capture or
 /// a recording. Each frame is ~W*H*1.5 bytes, so this bounds buffering.
-const STREAM_SINK_CAPACITY: usize = 8;
+pub(crate) const STREAM_SINK_CAPACITY: usize = 8;
 
 /// One destination as configured by the operator (persisted on the `stream-main`
 /// output as `stream_destinations`). `enabled` joins the master Go Live; when the
@@ -92,12 +92,16 @@ pub struct StreamDestinationSession {
     pub audio: bool,
 }
 
-/// An active broadcast: one shared capture session of the `capture` window
-/// feeds one ffmpeg process that encodes once and `tee`s the stream to N RTMP
-/// ingests. Stopping the broadcast detaches the consumer (closes the channel ->
-/// stdin EOF) so ffmpeg finalizes cleanly.
+/// An active broadcast: one shared capture session of the program surface
+/// (the `output` window when it is on-screen, the dedicated `capture` window
+/// otherwise) feeds one ffmpeg process that encodes once and `tee`s the stream
+/// to N RTMP ingests. Stopping the broadcast detaches the consumer (closes the
+/// channel -> stdin EOF) so ffmpeg finalizes cleanly.
 pub struct BroadcastSession {
-    pub capture_session_id: String,
+    /// This broadcast's live capture source (window label, session id, consumer
+    /// handle, and the writer's frame channel), swappable mid-session when the
+    /// projector window toggles via `sync_capture_sources`.
+    pub capture: crate::commands::capture::ActiveCapture,
     pub width: u32,
     pub height: u32,
     pub fps: u32,
@@ -116,10 +120,6 @@ pub struct BroadcastSession {
     /// see audio EOF and finalize cleanly even while a recording keeps the feed
     /// alive.
     pub audio: Option<crate::commands::program_audio::AudioRelay>,
-    /// This broadcast's consumer handle against the capture session, used to
-    /// detach on stop. When the session is shared with a recording, detaching
-    /// only removes this broadcast's sink.
-    pub consumer: crate::capture::ConsumerHandle,
     /// Retained ffmpeg stderr tail for failure diagnostics.
     pub stderr_tail: Arc<parking_lot::Mutex<Vec<u8>>>,
 }
@@ -201,11 +201,13 @@ fn stream_tee_args(
     args
 }
 
-/// Start an RTMP broadcast of the `output` window to every enabled destination.
-/// ONE ffmpeg process encodes the program once (`-f tee`) and fans the encoded
-/// stream out to each RTMP ingest, so N destinations cost a single encode. Only
-/// one broadcast can be live at a time. The hidden-by-default `capture` window
-/// is revealed for the session (WGC requires an on-screen, presenting window).
+/// Start an RTMP broadcast of the program to every enabled destination. ONE
+/// ffmpeg process encodes once (`-f tee`) and fans the encoded stream out to
+/// each RTMP ingest, so N destinations cost a single encode. Only one
+/// broadcast can be live at a time. The source is the audience `output` window
+/// while it is on screen; when it is off, the hidden-by-default `capture`
+/// window is revealed for the session (WGC requires an on-screen, presenting
+/// window).
 /// When `audio_device` names a DirectShow input device, ffmpeg
 /// captures it natively and encodes it to AAC for every destination.
 #[tauri::command]
@@ -287,36 +289,46 @@ pub fn stream_rtmp_start(
         Err(e) => return Err(format!("Failed to start ffmpeg: {e}")),
     };
 
-    // The WGC capture thread only receives frames while the `capture` window is
-    // on-screen and presenting, so it MUST be on the desktop before the session
-    // binds — a hidden window freezes capture on a stale frame. Reveal it now
-    // (idempotent when a recording already revealed it), re-broadcast the
-    // program so its DOM presents the freshest content, then bind (joining the
-    // recorder's session when one is live). `maybe_hide_capture` restores the
-    // hidden-by-default state once no recording or broadcast needs it.
-    if let Err(e) = crate::commands::capture::ensure_capture_visible(&app, state.inner()) {
-        // ffmpeg is already alive at this point; tear it down on a reveal
-        // failure so it cannot linger.
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(e);
-    }
+    // Prefer the audience `output` window as the WGC source while it is on
+    // screen (one real readback of the projected pixels); fall back to the
+    // dedicated `capture` window when the projector is off.
+    let capture_source = match crate::commands::capture::initial_capture_source(&app, state.inner())
+    {
+        Ok(s) => s,
+        Err(e) => {
+            // ffmpeg is already alive at this point; tear it down on a reveal
+            // failure so it cannot linger.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(e);
+        }
+    };
     crate::commands::outputs::rebroadcast_presentation(&app, state.inner());
 
-    // Attach the single bounded sink to a shared capture session on the
-    // `capture` window. When a recording is already capturing that window at the
-    // same geometry, the broadcast joins that SAME session (one WGC readback);
+    // Attach the single bounded sink to a shared capture session on the chosen
+    // window. When a recording is already capturing that window at the same
+    // geometry, the broadcast joins that SAME session (one WGC readback);
     // otherwise it starts a fresh session.
     let (capture_session_id, consumer) =
-        match crate::capture::start_for_consumer(&state.capture, &app, "capture".to_string(), w, h, f, tx, false)
-        {
+        match crate::capture::start_for_consumer(
+            &state.capture,
+            &app,
+            capture_source.clone(),
+            w,
+            h,
+            f,
+            tx,
+            false,
+        ) {
             Ok(joined) => joined,
             Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();
                 // No session bound; restore the window (unless a recording still
-                // needs it).
-                crate::commands::capture::maybe_hide_capture(&app, state.inner());
+                // needs it) when the capture window was our source.
+                if capture_source == crate::commands::capture::CAPTURE_WINDOW {
+                    crate::commands::capture::maybe_hide_capture(&app, state.inner());
+                }
                 return Err(e);
             }
         };
@@ -324,13 +336,14 @@ pub fn stream_rtmp_start(
     crate::store::log_msg(
         &app,
         &format!(
-            "Broadcast started (encoder: {}; {}x{} @ {}fps; {} destination(s); audio: {})",
+            "Broadcast started (encoder: {}; {}x{} @ {}fps; {} destination(s); audio: {}; source: {})",
             encoder,
             w,
             h,
             f,
             enabled.len(),
-            audio_device.as_deref().unwrap_or("off")
+            audio_device.as_deref().unwrap_or("off"),
+            capture_source
         ),
     );
 
@@ -353,15 +366,29 @@ pub fn stream_rtmp_start(
     let stderr_tail = crate::commands::recordings::drain_stderr_tail(&mut child);
     let frames = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    // The receiver lives behind a mutex so a mid-session source swap can hand
+    // the writer a fresh channel without ever closing ffmpeg's stdin.
+    let active_rx: Arc<parking_lot::Mutex<crate::capture::FrameSinkRx>> =
+        Arc::new(parking_lot::Mutex::new(rx));
     let fcounter = frames.clone();
     let bcounter = bytes.clone();
+    let writer_rx = active_rx.clone();
     let writer_thread = std::thread::Builder::new()
         .name("stream-writer".to_string())
         .spawn(move || {
             let mut stdin = stdin;
             let mut n = 0u64;
             let mut b = 0u64;
-            while let Ok(frame) = rx.recv() {
+            loop {
+                let frame = {
+                    let guard = writer_rx.lock();
+                    match guard.recv_timeout(std::time::Duration::from_millis(20)) {
+                        Ok(f) => Some(f),
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
+                    }
+                };
+                let Some(frame) = frame else { continue; };
                 let data: &[u8] = &frame.pixels;
                 if stdin.write_all(data).is_err() {
                     break; // ffmpeg closed the pipe (crash / uplink failure)
@@ -388,7 +415,12 @@ pub fn stream_rtmp_start(
         .collect();
 
     let broadcast = BroadcastSession {
-        capture_session_id,
+        capture: crate::commands::capture::ActiveCapture {
+            session_id: capture_session_id,
+            consumer,
+            source: capture_source,
+            rx: active_rx,
+        },
         width: w,
         height: h,
         fps: f,
@@ -400,11 +432,10 @@ pub fn stream_rtmp_start(
         bytes,
         audio_device,
         audio: relay,
-        consumer,
         stderr_tail,
     };
     *state.streaming.lock() = Some(broadcast);
-    crate::commands::outputs::publish_capture_active(&state);
+    crate::commands::outputs::publish_capture_active(&app, &state);
 
     let mut guard = state.streaming.lock();
     Ok(streaming_status_locked(&mut guard))
@@ -452,7 +483,7 @@ fn streaming_status_locked(guard: &mut parking_lot::MutexGuard<Option<BroadcastS
                 .collect();
             StreamingStatus {
                 active: true,
-                capture_session_id: Some(b.capture_session_id.clone()),
+                capture_session_id: Some(b.capture.session_id.clone()),
                 width: b.width,
                 height: b.height,
                 fps: b.fps,
@@ -484,7 +515,7 @@ pub async fn stream_rtmp_stop(app: AppHandle, state: State<'_, AppState>) -> Res
         .take()
         .ok_or_else(|| "No broadcast is live.".to_string())?;
 
-    crate::commands::outputs::publish_capture_active(&state);
+    crate::commands::outputs::publish_capture_active(&app, &state);
 
     // Detach this broadcast's sink from the shared capture session. The last
     // consumer to detach (recorder or this broadcast) stops and removes the
@@ -492,12 +523,15 @@ pub async fn stream_rtmp_stop(app: AppHandle, state: State<'_, AppState>) -> Res
     // running for it.
     crate::capture::detach_consumer(
         &state.capture,
-        &broadcast.capture_session_id,
-        broadcast.consumer,
+        &broadcast.capture.session_id,
+        broadcast.capture.consumer,
     );
-    // With this broadcast's consumer detached, the capture window is only still
-    // needed if a recording is live — hide it when nothing is (idempotent).
-    crate::commands::capture::maybe_hide_capture(&app, state.inner());
+    // With this broadcast's consumer detached, release its hold on the capture
+    // window (only when it was the capture source) so the window hides once no
+    // other session needs it.
+    if broadcast.capture.source == crate::commands::capture::CAPTURE_WINDOW {
+        crate::commands::capture::maybe_hide_capture(&app, state.inner());
+    }
     if let Some(join) = broadcast.writer_thread.take() {
         let _ = join.join();
     }
@@ -640,7 +674,14 @@ mod tests {
         let _ = child.wait();
 
         let broadcast = BroadcastSession {
-            capture_session_id: "cap".into(),
+            capture: crate::commands::capture::ActiveCapture {
+                session_id: "cap".into(),
+                consumer: crate::capture::ConsumerHandle { id: 1, strict: false },
+                source: crate::commands::capture::CAPTURE_WINDOW.to_string(),
+                rx: Arc::new(parking_lot::Mutex::new(
+                    crate::capture::bounded_sink(8).1,
+                )),
+            },
             width: 1280,
             height: 720,
             fps: 30,
@@ -665,7 +706,6 @@ mod tests {
             bytes: Arc::new(std::sync::atomic::AtomicU64::new(42)),
             audio_device: None,
             audio: None,
-            consumer: crate::capture::ConsumerHandle { id: 1, strict: false },
             stderr_tail: Arc::new(parking_lot::Mutex::new(Vec::new())),
         };
         let guard = parking_lot::Mutex::new(Some(broadcast));

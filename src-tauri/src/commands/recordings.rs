@@ -12,7 +12,7 @@ use tauri::{AppHandle, Manager, State};
 /// the capture thread blocks (natural backpressure). Each frame is ~W*H*4
 /// bytes; 4 frames bounds the in-memory buffer to ~32 MB at 1080p, and blocks
 /// rather than growing unbounded or silently dropping recorded frames.
-const SINK_CAPACITY: usize = 8;
+pub(crate) const SINK_CAPACITY: usize = 8;
 
 /// stdin-pipe buffer size for the ffmpeg child. `Stdio::piped()` uses the OS
 /// default anonymous-pipe buffer (4 KB on modern Windows). A raw 1080p BGRA
@@ -257,12 +257,10 @@ pub struct RecordingStatus {
 /// the join handle for the writer thread, and the raw-bookkeeping so stop/abort
 /// can finalize deterministically.
 pub struct RecordingSession {
-    pub capture_session_id: String,
-    /// This recording's consumer handle against `capture_session_id`, used to
-    /// detach from a (possibly shared) capture session on stop/abort. When the
-    /// session was shared with a broadcast, detaching only removes this
-    /// recording — the shared capture keeps running for the other consumers.
-    pub consumer: crate::capture::ConsumerHandle,
+    /// This recording's live capture source (window label, session id, consumer
+    /// handle, and the writer's frame channel), swappable mid-session when the
+    /// projector window toggles via `sync_capture_sources`.
+    pub capture: crate::commands::capture::ActiveCapture,
     pub tmp_path: PathBuf,
     pub final_path: PathBuf,
     pub child: Child,
@@ -503,11 +501,12 @@ fn record_ffmpeg_args(
     args
 }
 
-/// Start recording the `capture` window: reveal it (hidden by default), begin
-/// native capture (streaming frames to a sink) and spawn ffmpeg to mux them to
-/// a temp MP4 on disk. Only one
-/// recording can be active at a time. The capture window is kept hidden until a
-/// session needs it (WGC requires an on-screen, presenting window). When
+/// Start recording the program: capture the `output` window while it is on
+/// screen (one readback of the projected pixels) and fall back to the
+/// dedicated `capture` window (revealed from its hidden-by-default state)
+/// while it is off, then begin native capture (streaming frames to a sink)
+/// and spawn ffmpeg to mux them to a temp MP4 on disk. Only one
+/// recording can be active at a time. When
 /// `audio_device` names an input device, a shared `AudioFeed` subprocess opens
 /// it ONCE and the recording connects to its TCP fan-out, copying the AAC/ADTS
 /// stream into the recording without re-encoding.
@@ -595,31 +594,36 @@ pub fn recording_start(
     };
 
     let (tx, rx) = crate::capture::bounded_sink(SINK_CAPACITY);
-    // The WGC capture thread only receives frames while the `capture` window is
-    // on-screen and presenting, so it MUST be on the desktop before the session
-    // binds — a hidden window freezes capture on a stale frame. Reveal it now,
-    // re-broadcast the program so its DOM presents the freshest content, then
-    // bind. `maybe_hide_capture` restores the hidden-by-default state once no
-    // recording or broadcast needs the window anymore.
-    if let Err(e) = crate::commands::capture::ensure_capture_visible(&app, state.inner()) {
-        // ffmpeg is already alive at this point; tear it down on a reveal
-        // failure so it cannot linger or leave a stray temp file.
-        let _ = child.kill();
-        let _ = child.wait();
-        let _ = std::fs::remove_file(&tmp_path);
-        return Err(e);
-    }
+    // Prefer the audience `output` window as the WGC source while it is on
+    // screen (one real readback of the projected pixels); fall back to the
+    // dedicated `capture` window when the projector is off. The `output` window
+    // already presents the program, so no rebroadcast is needed for it — the
+    // `capture` window (hidden by default) is revealed and re-broadcast below.
+    let capture_source = match crate::commands::capture::initial_capture_source(&app, state.inner())
+    {
+        Ok(s) => s,
+        Err(e) => {
+            // ffmpeg is already alive at this point; tear it down on a reveal
+            // failure so it cannot linger or leave a stray temp file.
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(e);
+        }
+    };
     crate::commands::outputs::rebroadcast_presentation(&app, state.inner());
+    crate::store::log_msg(
+        &app,
+        &format!("Recording capture source: {}", capture_source),
+    );
 
-    // Record the dedicated `capture` window (same program DOM surface as
-    // `output`), so recording works even when the projection window is closed.
-    // When a broadcast already captures that window at the same geometry, the
-    // recorder attaches a strict consumer to the SAME session instead of running
-    // a second WGC readback.
+    // When a broadcast already captures the same window at the same geometry,
+    // the recorder attaches a strict consumer to the SAME session instead of
+    // running a second WGC readback.
     let (capture_session_id, consumer) = match crate::capture::start_for_consumer(
         &state.capture,
         &app,
-        "capture".to_string(),
+        capture_source.clone(),
         w,
         h,
         f,
@@ -627,14 +631,16 @@ pub fn recording_start(
         true,
     ) {
         // If capture failed to bind the capture window, put it back in its
-        // hidden-by-default state and tear ffmpeg down before it can linger or
-        // leave a stray temp file.
+        // hidden-by-default state (only when it was our source) and tear ffmpeg
+        // down before it can linger or leave a stray temp file.
         Ok(ok) => ok,
         Err(e) => {
             let _ = child.kill();
             let _ = child.wait();
             let _ = std::fs::remove_file(&tmp_path);
-            crate::commands::capture::maybe_hide_capture(&app, state.inner());
+            if capture_source == crate::commands::capture::CAPTURE_WINDOW {
+                crate::commands::capture::maybe_hide_capture(&app, state.inner());
+            }
             return Err(e);
         }
     };
@@ -653,15 +659,28 @@ pub fn recording_start(
 
     // Writer thread: drain captured frames into ffmpeg stdin. Dropping every
     // sink sender (done when the capture session is stopped) closes the channel
-    // here, which closes stdin -> ffmpeg finalizes the MP4 footer.
+    // here, which closes stdin -> ffmpeg finalizes the MP4 footer. The receiver
+    // lives behind a mutex so a mid-session source swap can hand the writer a
+    // fresh channel without ever closing stdin — ffmpeg keeps running.
+    let active_rx: Arc<parking_lot::Mutex<crate::capture::FrameSinkRx>> = Arc::new(Mutex::new(rx));
     let wstatus = status.clone();
+    let writer_rx = active_rx.clone();
     let writer_thread = std::thread::Builder::new()
         .name("recording-writer".to_string())
         .spawn(move || {
             let mut stdin = stdin;
             let mut bytes = 0u64;
             let mut frames = 0u64;
-            while let Ok(frame) = rx.recv() {
+            loop {
+                let frame = {
+                    let guard = writer_rx.lock();
+                    match guard.recv_timeout(std::time::Duration::from_millis(20)) {
+                        Ok(f) => Some(f),
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
+                    }
+                };
+                let Some(frame) = frame else { continue; };
                 let data: &[u8] = &frame.pixels;
                 if stdin.write_all(data).is_err() {
                     break; // ffmpeg closed the pipe (crash / early exit)
@@ -678,17 +697,24 @@ pub fn recording_start(
         .map_err(|e| {
             // Rare spawn failure: detach the capture consumer (tearing down the
             // shared session if the recorder was its sole consumer), re-hide the
-            // capture window, and kill ffmpeg so nothing lingers.
+            // capture window when it was our source, and kill ffmpeg so nothing
+            // lingers.
             crate::capture::detach_consumer(&state.capture, &capture_session_id, consumer);
-            crate::commands::capture::maybe_hide_capture(&app, state.inner());
+            if capture_source == crate::commands::capture::CAPTURE_WINDOW {
+                crate::commands::capture::maybe_hide_capture(&app, state.inner());
+            }
             let _ = child.kill();
             let _ = child.wait();
             e.to_string()
         })?;
 
     let session = RecordingSession {
-        capture_session_id,
-        consumer,
+        capture: crate::commands::capture::ActiveCapture {
+            session_id: capture_session_id,
+            consumer,
+            source: capture_source,
+            rx: active_rx,
+        },
         tmp_path,
         final_path,
         child,
@@ -698,7 +724,7 @@ pub fn recording_start(
         stderr_tail,
     };
     *state.recording.lock() = Some(session);
-    crate::commands::outputs::publish_capture_active(&state);
+    crate::commands::outputs::publish_capture_active(&app, &state);
 
     let s = status.lock();
     Ok(s.clone())
@@ -735,13 +761,15 @@ pub async fn recording_stop_active(app: AppHandle, state: State<'_, AppState>) -
         .take()
         .ok_or_else(|| "No recording is in progress.".to_string())?;
 
-    crate::capture::detach_consumer(&state.capture, &session.capture_session_id, session.consumer);
+    crate::capture::detach_consumer(&state.capture, &session.capture.session_id, session.capture.consumer);
 
-    crate::commands::outputs::publish_capture_active(&state);
-
-    // With this recording's consumer detached, the capture window is only still
-    // needed if a broadcast is live — hide it when nothing is (idempotent).
-    crate::commands::capture::maybe_hide_capture(&app, state.inner());
+    // With this recording's consumer detached, release its hold on the capture
+    // window (only when it was the capture source) so the window hides once no
+    // other session needs it.
+    if session.capture.source == crate::commands::capture::CAPTURE_WINDOW {
+        crate::commands::capture::maybe_hide_capture(&app, state.inner());
+    }
+    crate::commands::outputs::publish_capture_active(&app, &state);
 
     // Close this recording's relay onto the shared audio feed BEFORE waiting on
     // ffmpeg. The recording's audio input is the relay's TCP socket, not a
@@ -794,9 +822,11 @@ pub async fn recording_abort(app: AppHandle, state: State<'_, AppState>) -> Resu
         .take()
         .ok_or_else(|| "No recording is in progress.".to_string())?;
 
-    crate::capture::detach_consumer(&state.capture, &session.capture_session_id, session.consumer);
-    crate::commands::outputs::publish_capture_active(&state);
-    crate::commands::capture::maybe_hide_capture(&app, state.inner());
+    crate::capture::detach_consumer(&state.capture, &session.capture.session_id, session.capture.consumer);
+    if session.capture.source == crate::commands::capture::CAPTURE_WINDOW {
+        crate::commands::capture::maybe_hide_capture(&app, state.inner());
+    }
+    crate::commands::outputs::publish_capture_active(&app, &state);
     session.audio = None;
     if let Some(join) = session.writer_thread {
         let _ = join.join();
