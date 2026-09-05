@@ -181,6 +181,7 @@ fn main() {
                 capture: Arc::new(wordlyte_lib::capture::CaptureManager::new()),
                 recording: Arc::new(Mutex::new(None)),
                 streaming: Arc::new(Mutex::new(None)),
+                capture_window_users: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             };
 
             app.manage(state);
@@ -210,13 +211,15 @@ fn main() {
             // the `output` window, so WGC pixels match projection exactly. It MUST
             // intersect the desktop to keep presenting: a fully off-screen (or
             // hidden/minimized) window stops delivering new frames and capture
-            // freezes on the first idle frame. So it lives on the primary
-            // monitor, behind everything (`alwaysOnBottom`), click-through, off
-            // the taskbar, and never focused — WGC captures covered windows just
-            // fine, so the operator never sees it in practice. It is never
-            // revealed through `outputs_set_visible`, so it can't be surfaced
-            // by the operator. Sized to fit the monitor so no region hangs
-            // off-desktop (WGC scales the surface to each session's target).
+            // freezes on the first idle frame. So it is HIDDEN BY DEFAULT and only
+            // revealed while a recording or broadcast session is active
+            // (`ensure_capture_visible`), living on the primary monitor behind
+            // everything (`alwaysOnBottom`), click-through, off the taskbar, and
+            // never focused — WGC captures covered windows just fine, so the
+            // operator never sees it. It is never revealed through
+            // `outputs_set_visible`, so it can't be surfaced by the operator. Sized
+            // to fit the monitor so no region hangs off-desktop (WGC scales the
+            // surface to each session's target).
             if let Some(capture) = app.get_webview_window("capture") {
                 if let Ok(Some(mon)) = capture.primary_monitor() {
                     let size = mon.size();
@@ -233,7 +236,6 @@ fn main() {
                     }));
                 }
                 let _ = capture.set_ignore_cursor_events(true);
-                let _ = capture.show();
             }
 
             for label in ["output", "stage", "studio"] {

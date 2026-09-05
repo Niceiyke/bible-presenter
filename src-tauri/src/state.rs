@@ -80,4 +80,11 @@ pub struct AppState {
     /// Active native broadcast session (one capture fan-out -> N ffmpeg RTMP
     /// destinations). `None` when idle. Guarded so start/status/stop are atomic.
     pub streaming: Arc<Mutex<Option<crate::commands::streaming::BroadcastSession>>>,
+    /// Hold count for the `capture` window. Each recording/broadcast start
+    /// increments it (`ensure_capture_visible` reveals the window on 0->1) and
+    /// each stop/abort/error releases it (`maybe_hide_capture` hides on 1->0).
+    /// A counter rather than session-presence keeps a concurrent start from
+    /// being hidden by the other surface's stop mid-WGC-bind: a stop can only
+    /// drop the count to 0 once every started surface has released its hold.
+    pub capture_window_users: Arc<std::sync::atomic::AtomicUsize>,
 }

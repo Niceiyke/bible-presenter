@@ -204,8 +204,9 @@ fn stream_tee_args(
 /// Start an RTMP broadcast of the `output` window to every enabled destination.
 /// ONE ffmpeg process encodes the program once (`-f tee`) and fans the encoded
 /// stream out to each RTMP ingest, so N destinations cost a single encode. Only
-/// one broadcast can be live at a time. The off-screen capture window must be
-/// available. When `audio_device` names a DirectShow input device, ffmpeg
+/// one broadcast can be live at a time. The hidden-by-default `capture` window
+/// is revealed for the session (WGC requires an on-screen, presenting window).
+/// When `audio_device` names a DirectShow input device, ffmpeg
 /// captures it natively and encodes it to AAC for every destination.
 #[tauri::command]
 pub fn stream_rtmp_start(
@@ -286,6 +287,22 @@ pub fn stream_rtmp_start(
         Err(e) => return Err(format!("Failed to start ffmpeg: {e}")),
     };
 
+    // The WGC capture thread only receives frames while the `capture` window is
+    // on-screen and presenting, so it MUST be on the desktop before the session
+    // binds — a hidden window freezes capture on a stale frame. Reveal it now
+    // (idempotent when a recording already revealed it), re-broadcast the
+    // program so its DOM presents the freshest content, then bind (joining the
+    // recorder's session when one is live). `maybe_hide_capture` restores the
+    // hidden-by-default state once no recording or broadcast needs it.
+    if let Err(e) = crate::commands::capture::ensure_capture_visible(&app, state.inner()) {
+        // ffmpeg is already alive at this point; tear it down on a reveal
+        // failure so it cannot linger.
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(e);
+    }
+    crate::commands::outputs::rebroadcast_presentation(&app, state.inner());
+
     // Attach the single bounded sink to a shared capture session on the
     // `capture` window. When a recording is already capturing that window at the
     // same geometry, the broadcast joins that SAME session (one WGC readback);
@@ -297,14 +314,12 @@ pub fn stream_rtmp_start(
             Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();
+                // No session bound; restore the window (unless a recording still
+                // needs it).
+                crate::commands::capture::maybe_hide_capture(&app, state.inner());
                 return Err(e);
             }
         };
-
-    // Re-broadcast the current program so the off-screen capture window
-    // converges even if it missed an earlier live/staged/settings broadcast.
-    // Harmless to windows already in sync — they re-apply identical state.
-    crate::commands::outputs::rebroadcast_presentation(&app, state.inner());
 
     crate::store::log_msg(
         &app,
@@ -480,6 +495,9 @@ pub async fn stream_rtmp_stop(app: AppHandle, state: State<'_, AppState>) -> Res
         &broadcast.capture_session_id,
         broadcast.consumer,
     );
+    // With this broadcast's consumer detached, the capture window is only still
+    // needed if a recording is live — hide it when nothing is (idempotent).
+    crate::commands::capture::maybe_hide_capture(&app, state.inner());
     if let Some(join) = broadcast.writer_thread.take() {
         let _ = join.join();
     }

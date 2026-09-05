@@ -503,11 +503,11 @@ fn record_ffmpeg_args(
     args
 }
 
-/// Start recording the off-screen `capture` window: begin native capture
-/// (streaming frames to a sink) and spawn ffmpeg to mux them to a temp MP4 on
-/// disk. Only one
-/// recording can be active at a time. The off-screen capture window must be
-/// available (it is always created at startup, parked off-screen). When
+/// Start recording the `capture` window: reveal it (hidden by default), begin
+/// native capture (streaming frames to a sink) and spawn ffmpeg to mux them to
+/// a temp MP4 on disk. Only one
+/// recording can be active at a time. The capture window is kept hidden until a
+/// session needs it (WGC requires an on-screen, presenting window). When
 /// `audio_device` names an input device, a shared `AudioFeed` subprocess opens
 /// it ONCE and the recording connects to its TCP fan-out, copying the AAC/ADTS
 /// stream into the recording without re-encoding.
@@ -595,11 +595,27 @@ pub fn recording_start(
     };
 
     let (tx, rx) = crate::capture::bounded_sink(SINK_CAPACITY);
-    // Record the dedicated off-screen `capture` window (same program DOM surface
-    // as `output`), so recording works even when the projection window is
-    // closed. When a broadcast already captures that window at the same
-    // geometry, the recorder attaches a strict consumer to the SAME session
-    // instead of running a second WGC readback.
+    // The WGC capture thread only receives frames while the `capture` window is
+    // on-screen and presenting, so it MUST be on the desktop before the session
+    // binds — a hidden window freezes capture on a stale frame. Reveal it now,
+    // re-broadcast the program so its DOM presents the freshest content, then
+    // bind. `maybe_hide_capture` restores the hidden-by-default state once no
+    // recording or broadcast needs the window anymore.
+    if let Err(e) = crate::commands::capture::ensure_capture_visible(&app, state.inner()) {
+        // ffmpeg is already alive at this point; tear it down on a reveal
+        // failure so it cannot linger or leave a stray temp file.
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+    crate::commands::outputs::rebroadcast_presentation(&app, state.inner());
+
+    // Record the dedicated `capture` window (same program DOM surface as
+    // `output`), so recording works even when the projection window is closed.
+    // When a broadcast already captures that window at the same geometry, the
+    // recorder attaches a strict consumer to the SAME session instead of running
+    // a second WGC readback.
     let (capture_session_id, consumer) = match crate::capture::start_for_consumer(
         &state.capture,
         &app,
@@ -610,22 +626,18 @@ pub fn recording_start(
         tx,
         true,
     ) {
-        // If capture failed to bind the off-screen capture window, tear ffmpeg
-        // down before it can linger or leave a stray temp file.
+        // If capture failed to bind the capture window, put it back in its
+        // hidden-by-default state and tear ffmpeg down before it can linger or
+        // leave a stray temp file.
         Ok(ok) => ok,
         Err(e) => {
             let _ = child.kill();
             let _ = child.wait();
             let _ = std::fs::remove_file(&tmp_path);
+            crate::commands::capture::maybe_hide_capture(&app, state.inner());
             return Err(e);
         }
     };
-
-    // Re-broadcast the current program so the off-screen capture window
-    // converges even if it missed an earlier live/staged/settings broadcast
-    // (e.g. it mounted after the operator went live). Harmless to windows
-    // that are already in sync — they just re-apply identical state.
-    crate::commands::outputs::rebroadcast_presentation(&app, state.inner());
 
     let status = Arc::new(Mutex::new(RecordingStatus {
         active: true,
@@ -663,7 +675,16 @@ pub fn recording_start(
             s.frames_written = frames;
             s.bytes_written = bytes;
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            // Rare spawn failure: detach the capture consumer (tearing down the
+            // shared session if the recorder was its sole consumer), re-hide the
+            // capture window, and kill ffmpeg so nothing lingers.
+            crate::capture::detach_consumer(&state.capture, &capture_session_id, consumer);
+            crate::commands::capture::maybe_hide_capture(&app, state.inner());
+            let _ = child.kill();
+            let _ = child.wait();
+            e.to_string()
+        })?;
 
     let session = RecordingSession {
         capture_session_id,
@@ -707,7 +728,7 @@ pub fn recording_status(state: State<'_, AppState>) -> RecordingStatus {
 /// reaches EOF -> ffmpeg finalized), wait, then rename the temp file and return
 /// the saved file. Errors if nothing is recording.
 #[tauri::command]
-pub async fn recording_stop_active(state: State<'_, AppState>) -> Result<RecordingFile, String> {
+pub async fn recording_stop_active(app: AppHandle, state: State<'_, AppState>) -> Result<RecordingFile, String> {
     let mut session = state
         .recording
         .lock()
@@ -717,6 +738,10 @@ pub async fn recording_stop_active(state: State<'_, AppState>) -> Result<Recordi
     crate::capture::detach_consumer(&state.capture, &session.capture_session_id, session.consumer);
 
     crate::commands::outputs::publish_capture_active(&state);
+
+    // With this recording's consumer detached, the capture window is only still
+    // needed if a broadcast is live — hide it when nothing is (idempotent).
+    crate::commands::capture::maybe_hide_capture(&app, state.inner());
 
     // Close this recording's relay onto the shared audio feed BEFORE waiting on
     // ffmpeg. The recording's audio input is the relay's TCP socket, not a
@@ -762,7 +787,7 @@ pub async fn recording_stop_active(state: State<'_, AppState>) -> Result<Recordi
 /// Stop the active recording without saving (differs from stop-and-save in that
 /// the temp file is deleted rather than renamed).
 #[tauri::command]
-pub async fn recording_abort(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn recording_abort(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let mut session = state
         .recording
         .lock()
@@ -771,6 +796,7 @@ pub async fn recording_abort(state: State<'_, AppState>) -> Result<(), String> {
 
     crate::capture::detach_consumer(&state.capture, &session.capture_session_id, session.consumer);
     crate::commands::outputs::publish_capture_active(&state);
+    crate::commands::capture::maybe_hide_capture(&app, state.inner());
     session.audio = None;
     if let Some(join) = session.writer_thread {
         let _ = join.join();
