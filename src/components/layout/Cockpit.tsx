@@ -6,7 +6,7 @@ import { displayItemLabel, getItemUid, resolvePath } from "../../utils";
 import { PreviewCard } from "../PreviewCard";
 import { LowerThirdPreview } from "../LowerThirdPreview";
 import { PropsRenderer } from "../shared/Renderers";
-import { ProgramFeedPreview } from "../outputs/ProgramFeedPreview";
+import { ProgramSurfacePreview } from "../outputs/ProgramSurfacePreview";
 import { ClearAllModal } from "./ClearAllModal";
 import { Button, ProgressBar } from "../ui";
 import { itemMetaAt } from "../../items/registry";
@@ -204,7 +204,7 @@ export function Cockpit({
               <button onClick={() => setPgmCanvasView((v) => !v)}
                 aria-pressed={pgmCanvasView}
                 className={`px-2 py-1 text-[8px] font-black uppercase rounded flex items-center gap-1 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)] ${pgmCanvasView ? "bg-tool-design text-white" : "bg-console-surface-strong text-console-text-muted hover:text-console-text"}`}
-                title="Toggle the Phase 2 canvas compositor preview (what recording/streaming will capture)">
+                title="Toggle the shared DOM ProgramSurface preview (the single render path, matching the output window)">
                 <Layers size={9} /> PGM
               </button>
               <Button variant="live" size="md" onClick={clearLive} disabled={clearBusy} loading={clearBusy}
@@ -215,11 +215,13 @@ export function Cockpit({
           </div>
           <div className="w-full rounded-lg overflow-hidden ring-2 ring-state-live/30 bg-black relative" style={{ aspectRatio: "16/9" }}>
             {pgmCanvasView ? (
-              /* Phase 2 canvas compositor — the single render path that
-                  recorder/streamer surfaces will capture. Its rasterization
-                  includes background, content, logo, props, lower third, and
-                  blanking, so the DOM overlays below are skipped in this mode. */
-              <ProgramFeedPreview className="absolute inset-0 w-full h-full" />
+              /* Shared DOM program renderer — the same ProgramSurface that
+                  drives the output window, in preview mode. This is the "one
+                  renderer" validation point: what the operator sees here matches
+                  the projected output exactly. Its rendering includes background,
+                  content, logo, props, lower third, and blanking, so the DOM
+                  overlay layers below are skipped in this mode. */
+              <ProgramSurfacePreview className="absolute inset-0 w-full h-full" />
             ) : (
               <PreviewCard item={liveItem} label="" accent="" badge={null} empty="Output is empty" hideHeader />
             )}

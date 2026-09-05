@@ -7485,6 +7485,7 @@ dependencies = [
  "machine-uid",
  "once_cell",
  "parking_lot",
+ "raw-window-handle",
  "rcgen",
  "regex",
  "reqwest 0.12.28",
@@ -7506,6 +7507,7 @@ dependencies = [
  "tracing",
  "uuid",
  "webrtc",
+ "windows 0.61.3",
  "zip",
 ]
 

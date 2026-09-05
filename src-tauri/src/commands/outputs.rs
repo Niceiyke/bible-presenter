@@ -79,8 +79,10 @@ fn enforce_free_window_cap(app: &AppHandle, state: &AppState, this_label: &str) 
 }
 
 /// Re-broadcast authoritative presentation state so a freshly-revealed window
-/// can hydrate even if it missed events while hidden.
-fn rebroadcast_presentation(app: &AppHandle, state: &AppState) {
+/// can hydrate even if it missed events while hidden. Also used by the
+/// recorder/streamer on start so the off-screen `capture` window converges to
+/// the current program even if it missed an earlier broadcast.
+pub(crate) fn rebroadcast_presentation(app: &AppHandle, state: &AppState) {
     let settings = state.presentation.settings.lock().clone();
     emit_checked(app, "settings-changed", &settings);
     let live = state.presentation.live_item.lock().clone();

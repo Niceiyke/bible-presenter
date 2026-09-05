@@ -9,15 +9,13 @@ import type { CapabilityInputs, SystemCapabilities } from "../types/system";
  * provider and feeds `computeCapabilities`.
  *
  * Hardware acceleration is not directly exposed by WebCodecs, so `hwAccelLikely`
- * is a documented heuristic: H.264 encoding must be supported and the machine
- * must have at least 4 logical cores (software encoders still win on many-core
- * machines, but they also take the biggest CPU hit — the tier accounts for that).
+ * is a documented heuristic: a machine with at least 4 logical cores (software
+ * encoders still win on many-core machines, but they also take the biggest CPU
+ * hit — the tier accounts for that).
  */
 export function computeCapabilities(inputs: CapabilityInputs): SystemCapabilities {
   const {
-    h264Supported,
     ffmpegAvailable,
-    webrtcAvailable,
     audioInputPresent,
     cameraPresent,
     ndiSupported,
@@ -27,13 +25,12 @@ export function computeCapabilities(inputs: CapabilityInputs): SystemCapabilitie
     deviceMemory,
   } = inputs;
 
-  const rtmpAvailable = h264Supported && ffmpegAvailable;
-  const whipAvailable = webrtcAvailable;
+  const rtmpAvailable = ffmpegAvailable;
   const audioAvailable = audioInputPresent;
   const cameraAvailable = cameraPresent;
   const ndiAvailable = ndiSupported;
   const monitorsAvailable = monitors >= 1;
-  const hwAccelLikely = h264Supported && hardwareConcurrency >= 4;
+  const hwAccelLikely = hardwareConcurrency >= 4;
 
   const score =
     (hardwareConcurrency >= 8 ? 2 : hardwareConcurrency >= 4 ? 1 : 0) +
@@ -42,13 +39,11 @@ export function computeCapabilities(inputs: CapabilityInputs): SystemCapabilitie
   const streamingCapacityTier = score >= 4 ? "high" : score >= 2 ? "medium" : "low";
   const recommendedMaxStreams = score >= 4 ? 4 : score >= 2 ? 2 : 1;
 
-  const rtmpReason = !h264Supported
-    ? "WebCodecs H.264 encoding is unavailable in this WebView2 build; RTMP destinations are disabled."
-    : !ffmpegAvailable
-      ? "ffmpeg was not found (bundled or on PATH); RTMP destinations are disabled. Reinstall or restore the bundled binaries."
-      : hardwareConcurrency < 4
-        ? "H.264 encoding is supported but CPU is limited — keep simultaneous RTMP streams low."
-        : "RTMP destinations are available.";
+  const rtmpReason = !ffmpegAvailable
+    ? "ffmpeg was not found (bundled or on PATH); RTMP destinations are disabled. Reinstall or restore the bundled binaries."
+    : hardwareConcurrency < 4
+      ? "ffmpeg is available but CPU is limited — keep simultaneous RTMP streams low."
+      : "RTMP destinations are available.";
 
   const audioReason = !audioInputPresent
     ? "No audio input device detected — shared audio in the Streaming workspace is disabled."
@@ -60,7 +55,6 @@ export function computeCapabilities(inputs: CapabilityInputs): SystemCapabilitie
 
   return {
     rtmpAvailable,
-    whipAvailable,
     audioAvailable,
     cameraAvailable,
     ndiAvailable,

@@ -6,3 +6,4 @@ pub mod remote;
 pub mod outputs;
 pub mod binpaths;
 pub mod license;
+pub mod capture;

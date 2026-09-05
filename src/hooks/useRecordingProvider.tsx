@@ -2,42 +2,53 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store";
-import { useRecorder } from "./useRecorder";
 import { tierCapabilities } from "../system/tiers";
-import { ProgramFeedPreview } from "../components/outputs/ProgramFeedPreview";
 
 /**
- * `RecordingProvider` — App-level owner of the recorder + compositor pipeline
- * (Phase 3 fix). The Recordings tab unmounts when the operator navigates to
- * another workspace, which used to kill the canvas capture loop and end any
- * in-flight recording. Lifting both the hidden `ProgramFeedPreview` compositor
- * and the recorder here keeps the capture stream alive for the whole
- * recording even after the operator leaves the page (the tab only stops the
- * compositor when neither it is visible nor a recording is running).
- *
- * The provider also owns the shared audio-input capture (mic / line-in /
- * mixer feed, audio processing off — mirroring the streamer). Its track is
- * combined with the compositor's video track before the recording starts, so
- * recordings include sound.
+ * Live progress of a native recording, mirrored from the backend
+ * `recording_status` command (camelCase serde in `commands/recordings.rs`).
+ */
+export interface NativeRecordingStatus {
+  active: boolean;
+  width: number;
+  height: number;
+  fps: number;
+  /** Frames written to ffmpeg, not just captured. */
+  framesWritten: number;
+  /** Bytes written to disk so far. */
+  bytesWritten: number;
+  /** Unix ms of wall-clock start, for the elapsed timer. */
+  startedMs: number;
+  error: string | null;
+  /** Whether program audio is attached and being muxed into the recording. */
+  audioAttached: boolean;
+}
+
+/**
+ * `RecordingProvider` — App-level owner of the native recording surface (Phase
+ * 5). The backend owns the whole pipeline: it captures the dedicated off-screen
+ * `capture` window (which renders the same program DOM surface as the audience
+ * `output` window) via Windows Graphics Capture and streams the pixels to
+ * ffmpeg on disk, so recording works even when the projection window is closed
+ * and a recording survives navigating away from the Recordings tab — the
+ * provider merely controls and reports that backend session. There is no
+ * frontend compositor, canvas, or MediaRecorder in this path; the Recorder
+ * preview renders the same store-driven `ProgramSurfacePreview` as the Cockpit.
  */
 interface RecordingContextValue {
   recording: boolean;
+  /** Elapsed recording time in seconds. */
   elapsed: number;
+  /** The last saved file name (after a completed save). */
   lastSaved: string | null;
+  /** Error from the last start/stop, or the backend's live error. */
   error: string | null;
-  /** The live composited program stream (video +, when enabled, audio). */
-  stream: MediaStream | null;
-  streamReady: boolean;
-  start: () => void;
+  /** Latest mirrored recording status (null until first poll). */
+  status: NativeRecordingStatus | null;
+  start: (enableAudio?: boolean) => Promise<void>;
   stop: () => Promise<string | null>;
   cancel: () => void;
-  audioEnabled: boolean;
-  setAudioEnabled: (v: boolean) => void;
-  audioDevices: MediaDeviceInfo[];
-  audioDeviceId: string;
-  setAudioDeviceId: (id: string) => void;
-  audioError: string | null;
-  /** Capture resolution/fps for the recording compositor. */
+  /** Capture resolution/fps for the recording. */
   captureWidth: number;
   captureHeight: number;
   captureFps: number;
@@ -54,8 +65,6 @@ export function useRecording(): RecordingContextValue {
 }
 
 export function RecordingProvider({ children }: { children: ReactNode }) {
-  const recorder = useRecorder();
-  const tabActive = useAppStore((s) => s.activeTab === "recordings");
   const license = useAppStore((s) => s.license);
   const setToast = useAppStore((s) => s.setToast);
   const outputs = useAppStore((s) => s.outputs);
@@ -81,120 +90,106 @@ export function RecordingProvider({ children }: { children: ReactNode }) {
     [outputs, setOutputs]
   );
 
-  const [stream, setStream] = useState<MediaStream | null>(null);
-  const audioTrackRef = useRef<MediaStreamTrack | null>(null);
-  const [audioEnabled, setAudioEnabled] = useState(false);
-  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
-  const [audioDeviceId, setAudioDeviceId] = useState("");
-  const [audioError, setAudioError] = useState<string | null>(null);
+  const [status, setStatus] = useState<NativeRecordingStatus | null>(null);
+  const [lastSaved, setLastSaved] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  // Capture the shared audio input (processing off) while enabled. The track
-  // is combined into the recorded stream on start and kept alive so a
-  // recording survives tab navigation.
-  useEffect(() => {
-    if (!audioEnabled) {
-      audioTrackRef.current?.stop();
-      audioTrackRef.current = null;
-      setAudioError(null);
-      return;
+  const recording = status?.active ?? false;
+
+  // Recover state on mount (e.g. a recording left running if the app was
+  // rebuilt/restarted the backend) and reconcile any backend-side change.
+  const refresh = useCallback(async () => {
+    try {
+      setStatus(await invoke<NativeRecordingStatus>("recording_status"));
+    } catch (e: any) {
+      console.error("recording_status failed:", e);
     }
-    let cancelled = false;
-    navigator.mediaDevices
-      .enumerateDevices()
-      .then((devices) => {
-        if (cancelled) return;
-        const inputs = devices.filter((d) => d.kind === "audioinput");
-        setAudioDevices(inputs);
-        setAudioDeviceId((prev) => prev || inputs[0]?.deviceId || "");
-      })
-      .catch(() => {});
-    navigator.mediaDevices
-      .getUserMedia({
-        audio: {
-          deviceId: audioDeviceId ? { exact: audioDeviceId } : undefined,
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        },
-      })
-      .then((ms) => {
-        if (cancelled) {
-          ms.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        const t = ms.getAudioTracks()[0] ?? null;
-        audioTrackRef.current = t;
-        setAudioError(t ? null : "No audio input device was found.");
-      })
-      .catch((e: any) => {
-        if (!cancelled) setAudioError(`Failed to open the audio input: ${e?.message ?? e}`);
-      });
-    return () => {
-      cancelled = true;
-      audioTrackRef.current?.stop();
-      audioTrackRef.current = null;
-    };
-  }, [audioEnabled, audioDeviceId]);
+  }, []);
 
-  const streamReady = !!stream && stream.getVideoTracks().length > 0;
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
-  const start = useCallback(() => {
-    if (recorder.recording || !stream) return;
+  // Poll while recording so elapsed/bytes/frames stay live and a backend-side
+  // stop (ffmpeg crash) is reflected immediately.
+  useEffect(() => {
+    if (!recording) return;
+    const id = setInterval(() => void refresh(), 500);
+    return () => clearInterval(id);
+  }, [recording, refresh]);
+
+  // Elapsed wall-clock time from the backend's start anchor.
+  const startedRef = useRef(0);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!recording) return;
+    startedRef.current = status?.startedMs ?? Date.now();
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [recording, status?.startedMs]);
+  const elapsed = recording ? Math.max(0, (now - (status?.startedMs ?? now)) / 1000) : 0;
+
+  const start = useCallback(async (enableAudio?: boolean) => {
+    if (recording) return;
     if (license && license.status === "active" && !tierCapabilities(license.tier).recording) {
       setToast("Recording is a Pro feature. Upgrade in Settings → License.");
       return;
     }
-    const tracks: MediaStreamTrack[] = [...stream.getVideoTracks()];
-    if (audioTrackRef.current) tracks.push(audioTrackRef.current);
-    const recStream = new MediaStream(tracks);
-    void recorder.start(recStream);
-  }, [recorder, stream, license, setToast]);
+    setError(null);
+    try {
+      const s = await invoke<NativeRecordingStatus>("recording_start", {
+        width: captureWidth,
+        height: captureHeight,
+        fps: captureFps,
+        enableAudio: !!enableAudio,
+      });
+      setStatus(s);
+      setLastSaved(null);
+    } catch (e: any) {
+      setError(`Failed to start recording: ${e?.message ?? e}`);
+    }
+  }, [recording, license, captureWidth, captureHeight, captureFps, setToast]);
 
-  const stop = useCallback(async () => recorder.stop(), [recorder]);
+  const stop = useCallback(async (): Promise<string | null> => {
+    if (!recording) return null;
+    try {
+      const saved = await invoke<{ name: string; size: number; modified: number }>("recording_stop_active");
+      setStatus((s) => (s ? { ...s, active: false } : s));
+      setLastSaved(saved.name);
+      setError(null);
+      return saved.name;
+    } catch (e: any) {
+      setError(`Failed to stop recording: ${e?.message ?? e}`);
+      setStatus((s) => (s ? { ...s, active: false } : s));
+      return null;
+    }
+  }, [recording]);
 
-  // Keep the compositor running while the tab is visible OR a recording is in
-  // progress, so leaving the page mid-recording does not end the capture.
-  const active = tabActive || recorder.recording;
+  const cancel = useCallback(() => {
+    if (!recording) return;
+    setError(null);
+    void invoke<void>("recording_abort")
+      .then(() => setStatus((s) => (s ? { ...s, active: false } : s)))
+      .catch((e: any) => setError(`Failed to abort recording: ${e?.message ?? e}`));
+  }, [recording]);
 
   const value = useMemo<RecordingContextValue>(
     () => ({
-      recording: recorder.recording,
-      elapsed: recorder.elapsed,
-      lastSaved: recorder.lastSaved,
-      error: recorder.error,
-      stream,
-      streamReady,
+      recording,
+      elapsed,
+      lastSaved,
+      error: error ?? status?.error ?? null,
+      status,
       start,
       stop,
-      cancel: recorder.cancel,
-      audioEnabled,
-      setAudioEnabled,
-      audioDevices,
-      audioDeviceId,
-      setAudioDeviceId,
-      audioError,
+      cancel,
       captureWidth,
       captureHeight,
       captureFps,
       setCapture,
     }),
-    [recorder, stream, streamReady, start, stop, audioEnabled, audioDevices, audioDeviceId, audioError, captureWidth, captureHeight, captureFps, setCapture]
+    [recording, elapsed, lastSaved, error, status, start, stop, cancel, captureWidth, captureHeight, captureFps, setCapture]
   );
 
-  return (
-    <RecordingContext.Provider value={value}>
-      {children}
-      <div
-        style={{ position: "fixed", left: -100000, top: 0, width: 1, height: 1, overflow: "hidden", pointerEvents: "none" }}
-        aria-hidden
-      >
-        <ProgramFeedPreview
-          geometry={{ width: captureWidth, height: captureHeight }}
-          fps={captureFps}
-          active={active}
-          onStream={setStream}
-        />
-      </div>
-    </RecordingContext.Provider>
-  );
+  return <RecordingContext.Provider value={value}>{children}</RecordingContext.Provider>;
 }

@@ -3,13 +3,14 @@ import type { StreamDestination, StreamPlatform } from "../../types";
 /**
  * Streaming Hub platform presets. The operator picks a platform and the form
  * pre-fills the ingest server; only the stream key is needed from their
- * dashboard. `Custom RTMP` / `Custom WHIP` cover anything else (Restream, SRS,
- * MediaMTX, Cloudflare Stream, …).
+ * dashboard. Every platform here publishes over RTMP (`ffmpeg` -> FLV), which
+ * is the native backend transport (Phase 6). `Custom RTMP` covers anything else
+ * (Restream, SRS, MediaMTX, …).
  */
 export interface PlatformPreset {
   platform: StreamPlatform;
   label: string;
-  mode: "whip" | "rtmp" | "ndi";
+  mode: "rtmp";
   /** Ingest server URL (no stream key). */
   url: string;
   /** Where the operator finds their key. */
@@ -44,20 +45,6 @@ export const PLATFORM_PRESETS: PlatformPreset[] = [
     mode: "rtmp",
     url: "",
     hint: "Any RTMP ingest — e.g. a Restream URL or your own media server.",
-  },
-  {
-    platform: "custom-whip",
-    label: "Custom WHIP",
-    mode: "whip",
-    url: "",
-    hint: "Any WHIP endpoint — Cloudflare Stream, SRS, MediaMTX, Eyevinn.",
-  },
-  {
-    platform: "ndi",
-    label: "NDI",
-    mode: "ndi",
-    url: "",
-    hint: "Publishes this machine's program as an NDI source on the LAN (NDI|HX) — consumable by OBS (obs-ndi), vMix, ProPresenter, and NDI-enabled gear. Requires the NDI SDK.",
   },
 ];
 

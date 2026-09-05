@@ -73,4 +73,11 @@ pub struct AppState {
     /// License manager: machine fingerprint, persisted license record, and
     /// online validation against the Cloudflare Worker.
     pub license: Arc<crate::license::LicenseManager>,
+    pub capture: Arc<crate::capture::CaptureManager>,
+    /// Active native recording session (capture -> ffmpeg -> disk). `None` when
+    /// idle. Guarded by a mutex so start/status/stop are atomic.
+    pub recording: Arc<Mutex<Option<crate::commands::recordings::RecordingSession>>>,
+    /// Active native broadcast session (one capture fan-out -> N ffmpeg RTMP
+    /// destinations). `None` when idle. Guarded so start/status/stop are atomic.
+    pub streaming: Arc<Mutex<Option<crate::commands::streaming::BroadcastSession>>>,
 }

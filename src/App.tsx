@@ -14,6 +14,7 @@ import { useLtFlatLines } from "./hooks/useLtFlatLines";
 import { PhoneCameraProvider } from "./hooks/usePhoneCameraHost";
 import { SystemDiagnosticsProvider } from "./system/SystemDiagnosticsContext";
 import { RecordingProvider } from "./hooks/useRecordingProvider";
+import { ProgramAudioProvider } from "./hooks/useProgramAudio";
 import { LicenseGate, OfflineLicenseBanner } from "./components/LicenseGate";
 import { isLicenseBlocked } from "./types/license";
 
@@ -148,6 +149,7 @@ export default function App() {
   }, [isInitialized, loadScenes]);
 
   if (label === "output") return <ErrorBoundary windowLabel="output"><OutputWindow /></ErrorBoundary>;
+  if (label === "capture") return <ErrorBoundary windowLabel="capture"><OutputWindow /></ErrorBoundary>;
   if (label === "stage") return <ErrorBoundary windowLabel="stage"><StageWindow /></ErrorBoundary>;
 
   // Neutral startup surface until the window role is known AND while the
@@ -213,6 +215,7 @@ export default function App() {
     <PhoneCameraProvider>
       <SystemDiagnosticsProvider>
       <RecordingProvider>
+      <ProgramAudioProvider>
       <div className="h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden select-none">
 
       <AppHeader />
@@ -347,6 +350,7 @@ export default function App() {
         }}
       />
       </div>
+      </ProgramAudioProvider>
       </RecordingProvider>
       </SystemDiagnosticsProvider>
     </PhoneCameraProvider>

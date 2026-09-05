@@ -1,12 +1,14 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  FolderOpen, Play, RotateCcw, Square, Trash2, Video, Clock, HardDrive, Mic, MonitorPlay,
+  FolderOpen, Play, RotateCcw, Square, Trash2, Video, Clock, HardDrive, MonitorPlay, Mic,
 } from "lucide-react";
 import { useRecording } from "../hooks/useRecordingProvider";
+import { useProgramAudio } from "../hooks/useProgramAudio";
 import { useAppStore } from "../store";
 import { tierCapabilities } from "../system/tiers";
 import { CAPTURE_RESOLUTIONS, CAPTURE_FPS_OPTIONS } from "../types";
+import { ProgramSurfacePreview } from "./outputs/ProgramSurfacePreview";
 
 export interface RecordingFile {
   name: string;
@@ -35,23 +37,23 @@ function formatDate(ms: number): string {
 }
 
 /**
- * `RecordingsTab` — Phase 3 recorder workspace.
+ * `RecordingsTab` — Phase 5 native recorder workspace.
  *
- * The live program-feed compositor and the recorder are owned by the
- * App-level `RecordingProvider`, so a recording survives navigating away and
- * can capture the shared audio input. This tab previews the composited stream
- * live (a `<video>` bound to the provider's stream), shows a REC/STOP
- * transport, audio-input controls, and the saved recordings list. Recorder
- * output goes to the app-data `recordings/` dir as WebM.
+ * The recording itself is owned backend-side (Windows Graphics Capture of the
+ * `output` window -> ffmpeg -> MP4 on disk), owned by `RecordingProvider`, so it
+ * survives navigating away. This tab previews the broadcast program with the
+ * same store-driven `ProgramSurfacePreview` as the Cockpit (there is no canvas
+ * / MediaRecorder in the recorder path), shows a REC/STOP/Abort transport, and
+ * lists the saved files. Recording goes to the app-data `recordings/` dir as MP4.
+ * Program audio (external mic / line-in) is muxed in as a second AAC input when enabled.
  */
 export function RecordingsTab() {
   const {
-    recording, elapsed, lastSaved, error, stream, streamReady,
+    recording, elapsed, lastSaved, error,
     start, stop, cancel,
-    audioEnabled, setAudioEnabled, audioDevices, audioDeviceId, setAudioDeviceId, audioError,
     captureWidth, captureHeight, captureFps, setCapture,
   } = useRecording();
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const programAudio = useProgramAudio();
   const [recordings, setRecordings] = useState<RecordingFile[]>([]);
   const [loading, setLoading] = useState(false);
   const license = useAppStore((s) => s.license);
@@ -73,10 +75,6 @@ export function RecordingsTab() {
     refreshList();
   }, [refreshList]);
 
-  useEffect(() => {
-    if (videoRef.current && stream) videoRef.current.srcObject = stream;
-  }, [stream]);
-
   const handleRecordStop = async () => {
     const name = await stop();
     if (name) {
@@ -95,7 +93,7 @@ export function RecordingsTab() {
 
   const handlePlay = () => {
     // Reveal in the OS file manager — a full media player is out of scope
-    // for the recorder surface (WebM may not preview in the webview).
+    // for the recorder surface.
     void invoke("recordings_open_folder");
   };
 
@@ -117,23 +115,14 @@ export function RecordingsTab() {
         {/* Composer preview + transport */}
         <div className="flex flex-col gap-2">
           <div className="relative rounded-lg overflow-hidden border border-slate-700 bg-black" style={{ aspectRatio: "16/9" }}>
-            {streamReady ? (
-              <video
-                ref={videoRef}
-                autoPlay
-                muted
-                playsInline
-                className="absolute inset-0 w-full h-full object-contain"
-              />
-            ) : (
-              <div className="absolute inset-0 flex items-center justify-center text-slate-600 text-xs">
-                Program feed idle — open a live item to preview.
-              </div>
-            )}
+            <ProgramSurfacePreview className="absolute inset-0 w-full h-full" />
             {recording && (
               <div className="absolute top-2 left-2 z-10 flex items-center gap-1.5 px-2 py-1 rounded bg-red-600 text-white text-[10px] font-black uppercase tracking-widest">
-                <span className="w-2 h-2 rounded-full bg-white animate-pulse" /> REC
-                <span className="font-mono normal-case">{formatDuration(elapsed)}</span>
+            <span className="w-2 h-2 rounded-full bg-white animate-pulse" /> REC
+            <span className="font-mono normal-case">{formatDuration(elapsed)}</span>
+            {recording && programAudio.enabled && (
+              <span className="ml-1 px-1.5 rounded bg-black/40 text-slate-100 font-mono normal-case">(AUD)</span>
+            )}
               </div>
             )}
           </div>
@@ -149,9 +138,9 @@ export function RecordingsTab() {
               </button>
             ) : (
               <button
-                onClick={start}
-                disabled={!streamReady || recordingBlocked}
-                title={recordingBlocked ? "Recording is a Pro feature" : streamReady ? "Record the program feed" : "Program feed not ready"}
+                onClick={() => start(programAudio.enabled)}
+                disabled={recordingBlocked}
+                title={recordingBlocked ? "Recording is a Pro feature" : "Record the output window to an MP4"}
                 className="flex-1 py-2.5 rounded-md bg-red-700 hover:bg-red-600 disabled:bg-slate-800 disabled:text-slate-500 text-white text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
               >
                 <span className="w-2.5 h-2.5 rounded-full bg-white" /> Record
@@ -208,40 +197,45 @@ export function RecordingsTab() {
                 </option>
               ))}
             </select>
-            <span className="text-[10px] text-slate-600">WebM — the compositor rescales the program feed.</span>
+            <span className="text-[10px] text-slate-600">MP4 (H.264) — records the live program even when the projection window is closed.</span>
           </div>
 
-          {/* Audio input for the recording */}
-          <div className="flex flex-wrap items-center gap-2 p-2 rounded-lg border border-slate-800 bg-slate-900/30">
-            <label className="flex items-center gap-2 text-[11px] text-slate-400 cursor-pointer select-none">
+          {/* Program audio (external mic / line-in mix bus) */}
+          <div className="flex flex-wrap items-center gap-3 p-2 rounded-lg border border-slate-800 bg-slate-900/30">
+            <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
-                checked={audioEnabled}
-                onChange={(e) => setAudioEnabled(e.target.checked)}
-                disabled={recording}
-                className="accent-cyan-500"
+                checked={programAudio.enabled}
+                onChange={(e) => programAudio.setEnabled(e.target.checked)}
+                className="accent-amber-500"
               />
-              <Mic size={11} className="text-slate-500" /> Record audio input
+              <span className="text-[11px] text-slate-300 flex items-center gap-1.5">
+                <Mic size={11} className="text-slate-500" /> Program audio
+              </span>
             </label>
-            {audioEnabled && (
-              <>
-                <select
-                  value={audioDeviceId}
-                  onChange={(e) => setAudioDeviceId(e.target.value)}
-                  disabled={recording}
-                  className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-[11px] text-slate-300"
-                >
-                  {audioDevices.length === 0 && <option value="">Default input…</option>}
-                  {audioDevices.map((d, i) => (
-                    <option key={d.deviceId} value={d.deviceId}>
-                      {d.label || `Input ${i + 1}`}
-                    </option>
-                  ))}
-                </select>
-                <span className="text-[10px] text-slate-600">Mic / line-in / mixer feed — processing off.</span>
-              </>
+            <select
+              value={programAudio.deviceId ?? ""}
+              onChange={(e) => programAudio.setDeviceId(e.target.value || null)}
+              disabled={programAudio.devices.length === 0}
+              className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-[11px] text-slate-300"
+              title="External audio input to mux into the recording"
+            >
+              <option value="">Default input</option>
+              {programAudio.devices.map((d) => (
+                <option key={d.deviceId} value={d.deviceId}>
+                  {d.label || `Input ${d.deviceId.slice(0, 8)}`}
+                </option>
+              ))}
+            </select>
+            {programAudio.running && (
+              <span className="text-[10px] text-emerald-400">Encoding input…</span>
             )}
-            {audioError && <span className="text-[10px] text-red-400">{audioError}</span>}
+            {programAudio.error && (
+              <span className="text-[10px] text-red-400">{programAudio.error}</span>
+            )}
+            <span className="text-[10px] text-slate-600">
+              Muxes an external mic / line-in (AAC) into the MP4 — no re-encode. Premium.
+            </span>
           </div>
 
           {error && (

@@ -30,6 +30,20 @@
         "create": false
       },
       {
+        "title": "Wordlyte - Capture",
+        "label": "capture",
+        "width": 1920,
+        "height": 1080,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": false,
+        "alwaysOnBottom": true,
+        "fullscreen": false,
+        "visible": false,
+        "skipTaskbar": true,
+        "create": false
+      },
+      {
         "title": "Wordlyte - Stage",
         "label": "stage",
         "width": 1280,

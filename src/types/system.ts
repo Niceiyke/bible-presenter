@@ -9,7 +9,11 @@ export interface SystemInfo {
   physical_cores: number | null;
   total_ram_mb: number;
   total_disk_mb: number;
-  ffmpeg_available: boolean;
+ffmpeg_available: boolean;
+  /** The H.264 encoder the recorder/streamer uses (`h264_mf`/`h264_qsv`/`h264_nvenc`/`h264_amf`/`libx264`). */
+  h264_encoder: string;
+  windows_graphics_capture_supported: boolean;
+  windows_graphics_capture_reason: string;
 }
 
 /** Cheap polled metric for the live performance monitor (backend). */
@@ -39,7 +43,6 @@ export interface CapabilityInputs {
 /** Derived service availability + a hardware-capacity estimate. */
 export interface SystemCapabilities {
   rtmpAvailable: boolean;
-  whipAvailable: boolean;
   audioAvailable: boolean;
   cameraAvailable: boolean;
   ndiAvailable: boolean;

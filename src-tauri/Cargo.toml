@@ -42,6 +42,26 @@ log = "0.4"
 sysinfo = "0.33"
 machine-uid = "0.4"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+# Phase 0 native-capture probe + Phase 4 WGC capture pipeline.
+raw-window-handle = "0.6"
+windows = { version = "=0.61.3", features = [
+  "Graphics_Capture",
+  "Graphics_DirectX",
+  "Graphics_DirectX_Direct3D11",
+  "Win32_Foundation",
+  "Win32_System_WinRT",
+  "Win32_System_WinRT_Direct3D11",
+  "Win32_System_WinRT_Graphics_Capture",
+  "Win32_System_Com",
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_System_Pipes",
+  "Win32_Security",
+] }
+
 [lib]
 name = "wordlyte_lib"
 crate-type = ["rlib"]

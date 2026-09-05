@@ -37,7 +37,7 @@ export function useAppInitialization() {
   useEffect(() => {
     const windowLabel = getCurrentWindow().label;
     setLabel(windowLabel);
-    if (windowLabel === "output") {
+    if (windowLabel === "output" || windowLabel === "capture") {
       setIsInitialized(true);
       return;
     }

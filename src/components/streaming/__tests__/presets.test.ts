@@ -9,18 +9,6 @@ describe("streaming presets", () => {
     expect(byPlatform.facebook).toMatchObject({ mode: "rtmp", url: "rtmp://live-api-s.facebook.com:443/rtmp" });
     expect(byPlatform.twitch).toMatchObject({ mode: "rtmp", url: "rtmp://live.twitch.tv/app" });
     expect(byPlatform["custom-rtmp"]).toMatchObject({ mode: "rtmp", url: "" });
-    expect(byPlatform["custom-whip"]).toMatchObject({ mode: "whip", url: "" });
-    // NDI is a LAN source — no ingest URL; the label becomes the source name.
-    expect(byPlatform.ndi).toMatchObject({ mode: "ndi", url: "" });
-  });
-
-  it("makeDestination builds an NDI destination without an ingest URL", () => {
-    const d = makeDestination("ndi");
-    expect(d.platform).toBe("ndi");
-    expect(d.mode).toBe("ndi");
-    expect(d.url).toBe("");
-    expect(d.label).toBe("NDI");
-    expect(d.enabled).toBe(true);
   });
 
   it("makeDestination creates an enabled audio-carrying destination", () => {
@@ -63,7 +51,7 @@ describe("streaming presets", () => {
 
   it("presetFor returns the matching preset or custom RTMP", () => {
     expect(presetFor("facebook").label).toBe("Facebook Live");
-    expect(presetFor("custom-whip").mode).toBe("whip");
+    expect(presetFor("custom-rtmp").mode).toBe("rtmp");
   });
 
   it("newDestinationId yields distinct ids", () => {

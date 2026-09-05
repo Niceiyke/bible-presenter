@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "output",
-  "description": "Capabilities for Wordlyte output window",
-  "windows": ["output"],
+  "description": "Capabilities for the Wordlyte output and capture windows (same program surface, same IPC needs)",
+  "windows": ["output", "capture"],
   "permissions": [
     "core:default",
     "core:webview:allow-internal-toggle-devtools"

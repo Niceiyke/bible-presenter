@@ -19,16 +19,13 @@ function inputs(overrides: Partial<CapabilityInputs> = {}): CapabilityInputs {
 }
 
 describe("computeCapabilities", () => {
-  it("flags RTMP as available only when both H.264 and ffmpeg are present", () => {
+  it("flags RTMP as available when ffmpeg is present (backend encodes with libx264)", () => {
     expect(computeCapabilities(inputs()).rtmpAvailable).toBe(true);
     expect(
       computeCapabilities(inputs({ ffmpegAvailable: false })).rtmpAvailable,
     ).toBe(false);
     expect(
-      computeCapabilities(inputs({ h264Supported: false })).rtmpAvailable,
-    ).toBe(false);
-    expect(
-      computeCapabilities(inputs({ h264Supported: false, ffmpegAvailable: false }))
+      computeCapabilities(inputs({ ffmpegAvailable: false, h264Supported: false }))
         .rtmpAvailable,
     ).toBe(false);
   });
@@ -36,15 +33,6 @@ describe("computeCapabilities", () => {
   it("explains WHY a service is disabled, not just that it is", () => {
     const noFfmpeg = computeCapabilities(inputs({ ffmpegAvailable: false }));
     expect(noFfmpeg.rtmpReason).toContain("ffmpeg");
-    const noH264 = computeCapabilities(inputs({ h264Supported: false }));
-    expect(noH264.rtmpReason).toContain("WebCodecs");
-  });
-
-  it("gates WHIP on WebRTC availability", () => {
-    expect(computeCapabilities(inputs()).whipAvailable).toBe(true);
-    expect(
-      computeCapabilities(inputs({ webrtcAvailable: false })).whipAvailable,
-    ).toBe(false);
   });
 
   it("gates NDI on the backend SDK probe and passes its reason through", () => {
@@ -71,10 +59,9 @@ describe("computeCapabilities", () => {
     expect(computeCapabilities(inputs({ monitors: 0 })).monitorsAvailable).toBe(false);
   });
 
-  it("applies the hardware-acceleration heuristic only when H.264 is supported", () => {
+  it("applies the hardware-acceleration heuristic to multi-core machines", () => {
     expect(computeCapabilities(inputs()).hwAccelLikely).toBe(true);
     expect(computeCapabilities(inputs({ hardwareConcurrency: 2 })).hwAccelLikely).toBe(false);
-    expect(computeCapabilities(inputs({ h264Supported: false })).hwAccelLikely).toBe(false);
   });
 
   it("scales the streaming capacity tier with CPU + RAM", () => {

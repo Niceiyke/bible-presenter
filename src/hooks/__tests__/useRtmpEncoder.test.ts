@@ -433,6 +433,8 @@ describe("wrapAdts", () => {
     expect(adts.length).toBe(507);
     expect(adts[0]).toBe(0xff);
     expect(adts[1]).toBe(0xf1);
+    // AAC-LC profile bits must be present (0x40) or the FLV/RTMP mux dies.
+    expect(adts[2] & 0xc0).toBe(0x40);
     // frameLength = 507 => bits 12..11 in byte3, rest across bytes 4-5.
     const frameLength = ((adts[3] & 0x03) << 11) | (adts[4] << 3) | (adts[5] >> 5);
     expect(frameLength).toBe(507);
@@ -440,8 +442,11 @@ describe("wrapAdts", () => {
   });
 
   it("maps known sample rates to the MPEG-4 table", () => {
-    expect(wrapAdts(new Uint8Array(10), 48000, 2)[2] >> 2).toBe(3);
-    expect(wrapAdts(new Uint8Array(10), 44100, 2)[2] >> 2).toBe(4);
+    expect((wrapAdts(new Uint8Array(10), 48000, 2)[2] & 0x3c) >> 2).toBe(3);
+    expect((wrapAdts(new Uint8Array(10), 44100, 2)[2] & 0x3c) >> 2).toBe(4);
+    // Channels: 2ch -> channel_config 2. Mono -> config 1.
+    expect(wrapAdts(new Uint8Array(10), 48000, 2)[3] >> 6).toBe(2);
+    expect(wrapAdts(new Uint8Array(10), 48000, 1)[3] >> 6).toBe(1);
   });
 
   it("rejects unsupported sample rates", () => {

@@ -64,7 +64,16 @@ async function probeH264(): Promise<boolean> {
 async function runChecks(): Promise<SystemChecks> {
   const [backendInfo, monitorInfo, h264Supported, devices, ndiStatus] = await Promise.all([
     isTauri()
-      ? invoke<{ cpu_model: string; physical_cores: number | null; total_ram_mb: number; total_disk_mb: number; ffmpeg_available: boolean }>("system_info").catch(() => null)
+      ? invoke<{
+          cpu_model: string;
+          physical_cores: number | null;
+          total_ram_mb: number;
+          total_disk_mb: number;
+ffmpeg_available: boolean;
+          h264_encoder: string;
+          windows_graphics_capture_supported: boolean;
+          windows_graphics_capture_reason: string;
+        }>("system_info").catch(() => null)
       : Promise.resolve(null),
     isTauri()
       ? invoke<MonitorInfo[]>("get_available_monitors").catch(() => [] as MonitorInfo[])
@@ -102,7 +111,10 @@ async function runChecks(): Promise<SystemChecks> {
           physical_cores: backendInfo.physical_cores,
           total_ram_mb: backendInfo.total_ram_mb,
           total_disk_mb: backendInfo.total_disk_mb,
-          ffmpeg_available: backendInfo.ffmpeg_available,
+ffmpeg_available: backendInfo.ffmpeg_available,
+          h264_encoder: backendInfo.h264_encoder,
+          windows_graphics_capture_supported: backendInfo.windows_graphics_capture_supported,
+          windows_graphics_capture_reason: backendInfo.windows_graphics_capture_reason,
         }
       : null,
     h264Supported,

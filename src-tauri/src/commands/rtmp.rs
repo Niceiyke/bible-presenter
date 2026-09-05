@@ -25,7 +25,8 @@ use tauri::State;
 /// all be live from the one compositor stream at once.
 ///
 /// Optional audio (Phase 6.1): when enabled, ffmpeg gets a second input —
-/// ADTS AAC pulled from a loopback TCP socket (`-f adts -i tcp://127.0.0.1:PORT`)
+/// ADTS AAC pulled from a loopback TCP socket (`-f aac -i tcp://127.0.0.1:PORT`,
+/// demuxer `aac` — not `adts`)
 /// that the backend accepts and feeds from an `rtmp_send_audio` channel, mirroring
 /// the video writer. The frontend captures an input device with `getUserMedia`
 /// and encodes AAC with WebCodecs, so the A/V sync is preserved mux-only.
@@ -75,9 +76,12 @@ pub fn build_rtmp_url(server_url: &str, stream_key: Option<&str>) -> String {
 }
 
 /// Mux-only ffmpeg arguments. Video is H.264 Annex-B read from stdin; optional
-/// audio is ADTS AAC read from a loopback TCP socket (ffmpeg connects, the
-/// backend accepts). Nothing is re-encoded — packets are copied straight into
-/// the FLV output for the RTMP ingest.
+/// audio is ADTS AAC read from a loopback TCP socket (ffmpeg demuxer `aac`
+/// connects to `tcp://127.0.0.1:PORT`, the backend accepts). Nothing is
+/// re-encoded — packets are copied straight into the FLV output for the RTMP
+/// ingest, after `-bsf:a aac_adtstoasc` converts the
+/// ADTS framing to the ASC the FLV muxer requires (copying ADTS straight in
+/// fails the mux).
 fn ffmpeg_args(url: &str, audio_port: Option<u16>) -> Vec<String> {
     let mut args = vec![
         "-y".to_string(),
@@ -96,7 +100,7 @@ fn ffmpeg_args(url: &str, audio_port: Option<u16>) -> Vec<String> {
     if let Some(port) = audio_port {
         args.extend([
             "-f".into(),
-            "adts".into(),
+            "aac".into(),
             "-i".into(),
             format!("tcp://127.0.0.1:{port}"),
             "-map".into(),
@@ -107,6 +111,8 @@ fn ffmpeg_args(url: &str, audio_port: Option<u16>) -> Vec<String> {
             "copy".into(),
             "-c:a".into(),
             "copy".into(),
+            "-bsf:a".into(),
+            "aac_adtstoasc".into(),
         ]);
     } else {
         args.extend([
@@ -448,7 +454,7 @@ mod tests {
         let joined = args.join(" ");
         assert!(joined.contains("-f h264") && joined.contains("-i pipe:0"));
         assert!(joined.contains("-map 0:v:0") && joined.contains("-c:v copy"));
-        assert!(!joined.contains("adts") && !joined.contains("tcp://") && !joined.contains("-c:a"));
+        assert!(!joined.contains("tcp://") && !joined.contains("-c:a"));
         assert!(joined.ends_with("-f flv -flvflags no_duration_filesize rtmp://host/live/key"));
     }
 
@@ -456,9 +462,10 @@ mod tests {
     fn ffmpeg_args_with_audio_adds_loopback_aac_input() {
         let args = ffmpeg_args("rtmp://host/live/key", Some(44111));
         let joined = args.join(" ");
-        assert!(joined.contains("-f adts -i tcp://127.0.0.1:44111"));
+        assert!(joined.contains("-f aac -i tcp://127.0.0.1:44111"));
         assert!(joined.contains("-map 0:v:0 -map 1:a:0"));
         assert!(joined.contains("-c:v copy -c:a copy"));
+        assert!(joined.contains("-bsf:a aac_adtstoasc"));
     }
 
     #[test]

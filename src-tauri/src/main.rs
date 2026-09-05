@@ -176,6 +176,9 @@ fn main() {
                 rtmp: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 cpu_sampler: Arc::new(Mutex::new(None)),
                 license,
+                capture: Arc::new(wordlyte_lib::capture::CaptureManager::new()),
+                recording: Arc::new(Mutex::new(None)),
+                streaming: Arc::new(Mutex::new(None)),
             };
 
             app.manage(state);
@@ -198,6 +201,37 @@ fn main() {
             // `AppState` exists for any command the webviews call on mount.
             for window_config in app.config().app.windows.iter() {
                 tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?.build()?;
+            }
+
+            // The `capture` window is the dedicated, invisible-in-practice source
+            // for the recorder/streamer. It renders the same program DOM surface as
+            // the `output` window, so WGC pixels match projection exactly. It MUST
+            // intersect the desktop to keep presenting: a fully off-screen (or
+            // hidden/minimized) window stops delivering new frames and capture
+            // freezes on the first idle frame. So it lives on the primary
+            // monitor, behind everything (`alwaysOnBottom`), click-through, off
+            // the taskbar, and never focused — WGC captures covered windows just
+            // fine, so the operator never sees it in practice. It is never
+            // revealed through `outputs_set_visible`, so it can't be surfaced
+            // by the operator. Sized to fit the monitor so no region hangs
+            // off-desktop (WGC scales the surface to each session's target).
+            if let Some(capture) = app.get_webview_window("capture") {
+                if let Ok(Some(mon)) = capture.primary_monitor() {
+                    let size = mon.size();
+                    let pos = mon.position();
+                    let w = 1920u32.min(size.width).max(320);
+                    let h = 1080u32.min(size.height).max(200);
+                    let _ = capture.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                        width: w,
+                        height: h,
+                    }));
+                    let _ = capture.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                        x: pos.x,
+                        y: pos.y,
+                    }));
+                }
+                let _ = capture.set_ignore_cursor_events(true);
+                let _ = capture.show();
             }
 
             for label in ["output", "stage", "studio"] {
@@ -332,17 +366,31 @@ fn main() {
             wordlyte_lib::commands::recordings::recording_save,
             wordlyte_lib::commands::recordings::recording_delete,
             wordlyte_lib::commands::recordings::recordings_open_folder,
+            wordlyte_lib::commands::recordings::recording_start,
+            wordlyte_lib::commands::recordings::recording_status,
+            wordlyte_lib::commands::recordings::recording_stop_active,
+            wordlyte_lib::commands::recordings::recording_abort,
             wordlyte_lib::commands::rtmp::rtmp_start,
             wordlyte_lib::commands::rtmp::rtmp_send,
             wordlyte_lib::commands::rtmp::rtmp_send_audio,
             wordlyte_lib::commands::rtmp::rtmp_stop,
             wordlyte_lib::commands::rtmp::rtmp_status,
+            wordlyte_lib::commands::streaming::stream_rtmp_start,
+            wordlyte_lib::commands::streaming::stream_rtmp_status,
+            wordlyte_lib::commands::streaming::stream_rtmp_stop,
+            wordlyte_lib::commands::program_audio::recording_send_audio,
+            wordlyte_lib::commands::program_audio::stream_rtmp_send_audio,
+            wordlyte_lib::commands::program_audio::program_audio_send,
+            wordlyte_lib::commands::program_audio::program_audio_consumers,
             wordlyte_lib::commands::ndi::ndi_status,
             wordlyte_lib::commands::ndi::ndi_start,
             wordlyte_lib::commands::ndi::ndi_send,
             wordlyte_lib::commands::ndi::ndi_stop,
             wordlyte_lib::commands::system::system_info,
             wordlyte_lib::commands::system::system_metrics,
+            wordlyte_lib::commands::capture::program_capture_start,
+            wordlyte_lib::commands::capture::program_capture_stop,
+            wordlyte_lib::commands::capture::program_capture_status,
             wordlyte_lib::commands::assets::get_startup_status,
             wordlyte_lib::commands::assets::download_bible_db_cmd,
             wordlyte_lib::commands::remote::remote_enable,

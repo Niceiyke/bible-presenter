@@ -136,8 +136,10 @@ const AAC_CODEC = "mp4a.40.2"; // AAC-LC — universal RTMP audio
 const ADTS_SAMPLE_RATES = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
 
 /**
- * Wrap a raw AAC access unit in a 7-byte ADTS header so ffmpeg's `-f adts`
- * demuxer can parse it without the codec description.
+ * Wrap a raw AAC access unit in a 7-byte ADTS header so ffmpeg's `-f aac`
+ * demuxer can parse it without the codec description. Declares AAC-LC (profile
+ * bits `0x40`) — omitting them encodes profile 0 (Main), which the FLV/RTMP
+ * muxer rejects and kills the stream.
  */
 export function wrapAdts(payload: Uint8Array, sampleRate: number, channels: number): Uint8Array {
   const sfIndex = ADTS_SAMPLE_RATES.indexOf(sampleRate);
@@ -148,7 +150,7 @@ export function wrapAdts(payload: Uint8Array, sampleRate: number, channels: numb
   const header = new Uint8Array(7);
   header[0] = 0xff; // syncword
   header[1] = 0xf1; // MPEG-4, layer 0, no CRC
-  header[2] = (sfIndex << 2) | ((channels >> 2) & 0x01);
+  header[2] = 0x40 | (sfIndex << 2) | ((channels >> 2) & 0x01); // AAC-LC | sf-index | channel-config high bit
   header[3] = ((channels & 0x03) << 6) | ((frameLength >> 11) & 0x03);
   header[4] = (frameLength >> 3) & 0xff;
   header[5] = ((frameLength & 0x07) << 5) | 0x1f; // full buffer fullness

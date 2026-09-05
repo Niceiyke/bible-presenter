@@ -81,6 +81,28 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
   );
 }
 
+const HARDWARE_ENCODERS = new Set(["h264_mf", "h264_qsv", "h264_nvenc", "h264_amf"]);
+
+function isHardwareEncoder(encoder: string): boolean {
+  return HARDWARE_ENCODERS.has(encoder);
+}
+
+function encoderLabel(encoder: string): string {
+  switch (encoder) {
+    case "h264_mf": return "Media Foundation";
+    case "h264_qsv": return "Intel Quick Sync";
+    case "h264_nvenc": return "NVIDIA NVENC";
+    case "h264_amf": return "AMD AMF";
+    case "libopenh264": return "OpenH264";
+    case "mpeg4": return "MPEG-4";
+    default: return encoder;
+  }
+}
+
+function encoderMode(encoder: string): string {
+  return isHardwareEncoder(encoder) ? "Hardware" : "Software (CPU)";
+}
+
 function HardwareSummary({ checks }: { checks: SystemChecks }) {
   const info = checks.info;
   return (
@@ -89,11 +111,25 @@ function HardwareSummary({ checks }: { checks: SystemChecks }) {
         <SummaryItem icon={Cpu} label="CPU" value={info ? info.cpu_model : "Unknown"} detail={info?.physical_cores ? `${info.physical_cores} cores` : undefined} />
         <SummaryItem icon={MemoryStick} label="RAM" value={info ? `${(info.total_ram_mb / 1024).toFixed(1)} GB` : "Unknown"} />
         <SummaryItem icon={HardDrive} label="Disk" value={info ? `${(info.total_disk_mb / 1024).toFixed(0)} GB` : "Unknown"} />
-        <SummaryItem
+<SummaryItem
           icon={Radio}
           label="ffmpeg"
           value={info?.ffmpeg_available ? "Available" : "Missing"}
           ok={info?.ffmpeg_available}
+        />
+        <SummaryItem
+          icon={Video}
+          label="H.264 encoder"
+          value={info?.h264_encoder ? encoderLabel(info.h264_encoder) : "Unknown"}
+          ok={info ? isHardwareEncoder(info.h264_encoder) : undefined}
+          detail={info ? encoderMode(info.h264_encoder) : undefined}
+        />
+        <SummaryItem
+          icon={Video}
+          label="Native capture"
+          value={info?.windows_graphics_capture_supported ? "Available" : "Unavailable"}
+          ok={info?.windows_graphics_capture_supported}
+          detail={info?.windows_graphics_capture_reason}
         />
       </div>
       {!info && (
@@ -135,8 +171,12 @@ function SummaryItem({
 function ReadinessChecklist({ checks }: { checks: SystemChecks }) {
   const rows = [
     { label: "WebCodecs H.264 encode", ok: checks.h264Supported, detail: checks.h264Supported ? "VideoEncoder + avc1 supported" : "Unavailable in this WebView2 build" },
-    { label: "ffmpeg on PATH", ok: checks.info?.ffmpeg_available ?? false, detail: "Required for RTMP destinations" },
-    { label: "WebRTC (WHIP)", ok: checks.webrtcAvailable, detail: checks.webrtcAvailable ? "RTCPeerConnection available" : "Unavailable" },
+    { label: "ffmpeg on PATH", ok: checks.info?.ffmpeg_available ?? false, detail: "Required for the native RTMP destinations" },
+    {
+      label: "Native output capture",
+      ok: checks.info?.windows_graphics_capture_supported ?? false,
+      detail: checks.info?.windows_graphics_capture_reason ?? "Backend unavailable",
+    },
     { label: "Audio input", ok: checks.audioInputPresent, detail: checks.audioInputPresent ? "Microphone / line-in detected" : "No microphone / line-in detected" },
     { label: "Camera", ok: checks.cameraPresent, detail: checks.cameraPresent ? "Camera detected" : "No camera detected" },
     { label: "Displays", ok: checks.monitors >= 1, detail: checks.monitors >= 1 ? `${checks.monitors} monitor(s) for output/stage` : "No external displays detected" },
@@ -165,7 +205,6 @@ function CapabilityReport({ checks }: { checks: SystemChecks }) {
   const c = checks.capabilities;
   const services: { name: string; available: boolean; reason: string }[] = [
     { name: "RTMP streaming", available: c.rtmpAvailable, reason: c.rtmpReason },
-    { name: "WHIP streaming", available: c.whipAvailable, reason: c.whipAvailable ? "WebRTC available — sub-second latency." : "WebRTC unavailable in this build." },
     { name: "NDI output", available: c.ndiAvailable, reason: c.ndiReason },
     { name: "Shared audio input", available: c.audioAvailable, reason: c.audioReason },
     { name: "Camera sources", available: c.cameraAvailable, reason: c.cameraReason },
