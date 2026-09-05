@@ -9,7 +9,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { readCaptureFps } from "./captureMetrics";
 import { computeCapabilities } from "./capabilities";
 import type { SystemChecks, SystemMetrics } from "../types/system";
 
@@ -201,14 +200,4 @@ export function useSystemDiagnostics(): SystemDiagnosticsValue {
   const ctx = useContext(SystemDiagnosticsContext);
   if (!ctx) throw new Error("useSystemDiagnostics must be used within SystemDiagnosticsProvider");
   return ctx;
-}
-
-/** Convenience: latest compositor capture FPS from the rolling counter. */
-export function useCaptureFps(): number {
-  const [fps, setFps] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setFps(readCaptureFps()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  return fps;
 }

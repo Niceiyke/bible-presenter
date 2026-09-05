@@ -14,7 +14,7 @@ import {
   XCircle,
   MemoryStick,
 } from "lucide-react";
-import { useCaptureFps, useSystemDiagnostics } from "../system/SystemDiagnosticsContext";
+import { useSystemDiagnostics } from "../system/SystemDiagnosticsContext";
 import type { SystemChecks, SystemMetrics } from "../types/system";
 
 /**
@@ -22,13 +22,12 @@ import type { SystemChecks, SystemMetrics } from "../types/system";
  *
  * Readiness checklist + hardware summary + live performance monitor. The check
  * battery runs once on app start (provider); this panel re-runs it on demand
- * and — while mounted — activates the metrics poll (CPU / RAM / disk / compositor
- * capture FPS / active RTMP sessions).
+ * and — while mounted — activates the metrics poll (CPU / RAM / disk / active
+ * RTMP sessions).
  */
 export function SystemTab() {
   const { checks, metrics, monitorActive, setMonitorActive, loading, refresh, lastError } =
     useSystemDiagnostics();
-  const captureFps = useCaptureFps();
 
   React.useEffect(() => {
     setMonitorActive(true);
@@ -65,7 +64,7 @@ export function SystemTab() {
           <HardwareSummary checks={checks} />
           <ReadinessChecklist checks={checks} />
           <CapabilityReport checks={checks} />
-          <PerformanceMonitor checks={checks} metrics={metrics} captureFps={captureFps} monitoring={monitorActive} />
+          <PerformanceMonitor checks={checks} metrics={metrics} monitoring={monitorActive} />
         </>
       )}
     </div>
@@ -250,12 +249,10 @@ function CapabilityReport({ checks }: { checks: SystemChecks }) {
 function PerformanceMonitor({
   checks,
   metrics,
-  captureFps,
   monitoring,
 }: {
   checks: SystemChecks;
   metrics: SystemMetrics | null;
-  captureFps: number;
   monitoring: boolean;
 }) {
   const bars = metrics
@@ -285,17 +282,6 @@ function PerformanceMonitor({
               </div>
             ))}
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 w-8">FPS</span>
-              <div className="flex-1 flex items-center gap-2">
-                <span className={`text-[11px] font-bold ${captureFps >= 25 ? "text-green-400" : captureFps > 0 ? "text-amber-400" : "text-slate-600"}`}>
-                  {captureFps > 0 ? captureFps.toFixed(1) : "—"} / 30
-                </span>
-                <span className="text-[10px] text-slate-600">
-                  compositor capture {captureFps > 0 && captureFps < 25 ? "— behind target, consider lowering previews" : "— on target"}
-                </span>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
               <span className="text-[10px] font-bold text-slate-400 w-8">RTMP</span>
               <span className="text-[11px] font-bold text-slate-300">
                 {metrics.active_rtmp_sessions > 0 ? (
@@ -308,7 +294,7 @@ function PerformanceMonitor({
           </>
         ) : (
           <p className="text-[10px] text-slate-600 flex items-center gap-1.5">
-            <Activity size={11} /> Polling is active while this panel is open — CPU / RAM / disk / capture FPS update every 3s.
+            <Activity size={11} /> Polling is active while this panel is open — CPU / RAM / disk / RTMP sessions update every 3s.
           </p>
         )}
       </div>
