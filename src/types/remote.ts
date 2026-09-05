@@ -95,6 +95,7 @@ export type RemoteEventKind =
   | "schedule.changed"
   | "lower_third.changed"
   | "output.changed"
+  | "capture.changed"
   | "blackout.changed"
   | "logo.changed"
   | "controller.changed"
@@ -197,6 +198,10 @@ export interface RemoteSnapshot {
   active_service: ServiceMeta | null;
   schedule_entries: ScheduleEntry[];
   output_visible: boolean;
+  /** True while a recording or stream broadcast is active — the phone opens its
+   *  "capture" WebRTC peer only while this holds, so the off-screen `capture`
+   *  window (the WGC source) receives the feed even with projection closed. */
+  capture_active: boolean;
   blackout: boolean;
   background_logo: boolean;
   lower_third: unknown | null;

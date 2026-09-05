@@ -136,6 +136,9 @@ function applyEvent(snapshot: RemoteSnapshot, event: RemoteEvent): RemoteSnapsho
     case "output.changed":
       next.output_visible = Boolean(p.output_visible);
       return next;
+    case "capture.changed":
+      next.capture_active = Boolean(p.capture_active);
+      return next;
     case "blackout.changed":
       next.blackout = Boolean(p.blackout);
       return next;

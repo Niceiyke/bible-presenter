@@ -677,6 +677,7 @@ pub fn recording_start(
         stderr_tail,
     };
     *state.recording.lock() = Some(session);
+    crate::commands::outputs::publish_capture_active(&state);
 
     let s = status.lock();
     Ok(s.clone())
@@ -714,6 +715,8 @@ pub async fn recording_stop_active(state: State<'_, AppState>) -> Result<Recordi
         .ok_or_else(|| "No recording is in progress.".to_string())?;
 
     crate::capture::detach_consumer(&state.capture, &session.capture_session_id, session.consumer);
+
+    crate::commands::outputs::publish_capture_active(&state);
 
     // Close this recording's relay onto the shared audio feed BEFORE waiting on
     // ffmpeg. The recording's audio input is the relay's TCP socket, not a
@@ -767,6 +770,7 @@ pub async fn recording_abort(state: State<'_, AppState>) -> Result<(), String> {
         .ok_or_else(|| "No recording is in progress.".to_string())?;
 
     crate::capture::detach_consumer(&state.capture, &session.capture_session_id, session.consumer);
+    crate::commands::outputs::publish_capture_active(&state);
     session.audio = None;
     if let Some(join) = session.writer_thread {
         let _ = join.join();

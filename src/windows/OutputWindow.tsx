@@ -7,6 +7,7 @@ import type { PresentationSnapshot } from "../types";
 import { getVideoBackground, getCameraBackground, getAudioBackground, getImageBackground, resolvePath } from "../utils";
 import { signalOperatorWarning } from "../hooks/useAppInitialization";
 import { useFonts } from "../hooks/useFonts";
+import { useCaptureActive } from "../hooks/useCaptureActive";
 import type { LicenseInfo } from "../types/license";
 import { resolveOutputFrame } from "../outputs/resolveOutputFrame";
 import { ProgramSurface } from "../components/outputs/ProgramSurface";
@@ -303,8 +304,31 @@ export function OutputWindow() {
   const audioBg = getAudioBackground(settings, liveItem);
   const bgImage = getImageBackground(settings, liveItem);
 
+  // Camera decode gating (per window). The audience "output" window only
+  // decodes camera feeds while it is visible (its OutputConfig carries the
+  // authoritative `visible` flag). The off-screen "capture" window — the WGC
+  // source for recording/streaming — only decodes while a session is actively
+  // capturing it. When the gate is off, local getUserMedia opens are skipped
+  // and hosted phone peers are torn down, so a hidden projector or an idle
+  // capture window costs no camera encode or WebRTC decode.
+  const captureActive = useCaptureActive();
+  const windowLabel = getCurrentWindow().label;
+  const isOutputWindow = windowLabel === "output";
+  const isCaptureWindow = windowLabel === "capture";
+  // Which phone WebRTC "target" this window answers: the audience "output"
+  // window hosts the "output" peer; the off-screen "capture" window hosts the
+  // "capture" peer; anything else hosts neither (the operation-preview
+  // "operator" peer belongs to the main window).
+  const phonePeerTarget = isOutputWindow ? "output" : isCaptureWindow ? "capture" : null;
+  const [bootOutputVisible, setBootOutputVisible] = useState(false);
+  useEffect(() => {
+    getCurrentWindow().isVisible().then((v) => setBootOutputVisible(v)).catch(() => {});
+  }, []);
+  const outputVisible = isOutputWindow ? (outputConfig?.visible ?? bootOutputVisible) : false;
+  const gateCameras = isOutputWindow ? outputVisible : isCaptureWindow ? captureActive : false;
+
   // Browser-only camera stream lifecycle. Phone cameras stream over the WebRTC
-  // relay hosted by this window's "output" peer (their ids are synthetic and
+  // relay hosted by this window's answering peer (their ids are synthetic and
   // can never be opened with getUserMedia here).
   useEffect(() => {
     const deviceId = cameraBg?.deviceId;
@@ -315,6 +339,12 @@ export function OutputWindow() {
         localBgCameraRef.current = null;
       }
     };
+
+    if (!gateCameras) {
+      stopLocal();
+      setCameraStream(null);
+      return;
+    }
 
     if (deviceId?.startsWith("phone-camera-")) {
       stopLocal();
@@ -335,7 +365,7 @@ export function OutputWindow() {
 
     stopLocal();
     setCameraStream(null);
-  }, [cameraBg?.deviceId, phoneStreams]);
+  }, [cameraBg?.deviceId, phoneStreams, gateCameras]);
 
   useEffect(() => () => {
     if (localBgCameraRef.current) {
@@ -360,6 +390,14 @@ export function OutputWindow() {
       }
     };
 
+    if (!gateCameras) {
+      if (mainCameraStream) {
+        mainCameraStream.getTracks().forEach(track => track.stop());
+        setMainCameraStream(null);
+      }
+      return () => {};
+    }
+
     // Phone cameras are handled by the WebRTC relay effect; skip them here so
     // this effect never opens a bogus getUserMedia or clears the relayed stream.
     const isPhoneCamera = liveItem?.type === "Camera" && liveItem?.data?.deviceId?.startsWith("phone-camera-");
@@ -378,15 +416,16 @@ export function OutputWindow() {
         activeStream.getTracks().forEach(track => track.stop());
       }
     };
-  }, [liveItem?.type === "Camera" ? liveItem.data.deviceId : null]);
+  }, [liveItem?.type === "Camera" ? liveItem.data.deviceId : null, gateCameras]);
 
-  // Phone camera WebRTC relay: host the answering peer for each phone. Only the
-  // real audience `output` window hosts the "output" answering peer — the
-  // off-screen `capture` window renders the same surface but must not also
-  // answer, or the phone would receive two answers for the same peer.
-  const isProjectionWindow = getCurrentWindow().label === "output";
+  // Phone camera WebRTC relay: host the answering peer for this window's
+  // target. The audience `output` window answers "output" peers; the off-screen
+  // `capture` window (the WGC source for recording/streaming) answers "capture"
+  // peers; the main operator window hosts the "operator" preview peer itself.
+  const gateRef = useRef(gateCameras);
+  gateRef.current = gateCameras;
   useEffect(() => {
-    if (!isProjectionWindow) return;
+    if (!phonePeerTarget) return;
     let unlistenOffer: (() => void) | null = null;
     let unlistenIce: (() => void) | null = null;
     let unlistenStop: (() => void) | null = null;
@@ -423,7 +462,7 @@ export function OutputWindow() {
               candidate: ev.candidate.candidate,
               sdpMid: ev.candidate.sdpMid ?? "",
               sdpMLineIndex: ev.candidate.sdpMLineIndex ?? 0,
-              target: "output",
+              target: phonePeerTarget,
             }).catch((e) => console.error("phone_camera_ice failed:", e));
           }
         };
@@ -438,7 +477,7 @@ export function OutputWindow() {
         await pc.setRemoteDescription({ type: "offer", sdp });
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        await invoke("phone_camera_answer", { deviceId: pcKey, sdp: answer.sdp ?? "", target: "output" });
+        await invoke("phone_camera_answer", { deviceId: pcKey, sdp: answer.sdp ?? "", target: phonePeerTarget });
       } catch (err) {
         console.error("Phone camera answer setup failed:", err);
         teardown(deviceId);
@@ -448,14 +487,14 @@ export function OutputWindow() {
     (async () => {
       unlistenOffer = await listen("phone-camera-offer", (e) => {
         const p = e.payload as { device_id: string; device_name: string; sdp: string; target?: string };
-        // The main operator window hosts the "operator" peer (preview). This
-        // projection window only answers the "output" peer.
-        if (p.target === "operator") return;
+        // Only answer the target this window hosts (see phonePeerTarget). ICE
+        // relays for other targets flow to a different window.
+        if (!gateRef.current || p.target !== phonePeerTarget) return;
         handleOffer(p.device_id, p.sdp, p.device_id);
       });
       unlistenIce = await listen("phone-camera-ice", (e) => {
         const p = e.payload as { device_id: string; candidate: string; sdp_mid: string; sdp_m_line_index: number; target?: string };
-        if (p.target === "operator") return;
+        if (!gateRef.current || p.target !== phonePeerTarget) return;
         const pc = phonePCsRef.current.get(p.device_id);
         if (pc && p.candidate) {
           pc.addIceCandidate({ candidate: p.candidate, sdpMid: p.sdp_mid, sdpMLineIndex: p.sdp_m_line_index }).catch(
@@ -476,19 +515,32 @@ export function OutputWindow() {
       phonePCsRef.current.forEach((pc) => pc.close());
       phonePCsRef.current.clear();
     };
-  }, []);
+  }, [phonePeerTarget]);
+
+  // When the camera gate turns off, tear down this window's hosted answering
+  // peers and stop the relayed tracks immediately — decoding must stop now, not
+  // whenever the phone next notices via snapshot events.
+  useEffect(() => {
+    if (gateCameras) return;
+    phonePCsRef.current.forEach((pc) => pc.close());
+    phonePCsRef.current.clear();
+    setPhoneStreams((prev) => {
+      Object.values(prev).forEach((s) => s?.getTracks().forEach((t) => t.stop()));
+      return {};
+    });
+  }, [gateCameras]);
 
   // When the live item is a phone camera, present the relayed stream instead of
   // a local getUserMedia feed (which cannot open a "phone-camera-*" device id).
   useEffect(() => {
     const deviceId = liveItem?.type === "Camera" ? liveItem.data.deviceId : null;
     const phoneStream = deviceId && deviceId.startsWith("phone-camera-") ? phoneStreams[deviceId] : undefined;
-    if (phoneStream) {
+    if (phoneStream && gateCameras) {
       setMainCameraStream(phoneStream);
     } else {
       setMainCameraStream(null);
     }
-  }, [liveItem?.type === "Camera" ? liveItem.data.deviceId : null, phoneStreams]);
+  }, [liveItem?.type === "Camera" ? liveItem.data.deviceId : null, phoneStreams, gateCameras]);
 
   useEffect(() => {
     if (bgVideoRef.current && videoBg) {

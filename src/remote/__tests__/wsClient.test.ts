@@ -16,6 +16,7 @@ function makeSnapshot(overrides: Partial<RemoteSnapshot> = {}): RemoteSnapshot {
     active_service: null,
     schedule_entries: [],
     output_visible: false,
+    capture_active: false,
     blackout: false,
     background_logo: false,
     lower_third: null,
@@ -389,6 +390,20 @@ describe("useRemote event hydration", () => {
       lastWs().recv({ kind: "logo.changed", revision: 3, timestamp: 1, payload: { logo: true } });
     });
     expect(result.current.snapshot?.background_logo).toBe(true);
+    expect(result.current.snapshot?.revision).toBe(3);
+  });
+
+  it("tracks capture.active via a capture.changed event", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const { result } = renderHook(() => useRemote());
+    act(() => lastWs().open());
+    act(() => recvSnapshot(lastWs(), 2));
+    expect(result.current.snapshot?.capture_active).toBe(false);
+
+    act(() => {
+      lastWs().recv({ kind: "capture.changed", revision: 3, timestamp: 1, payload: { capture_active: true } });
+    });
+    expect(result.current.snapshot?.capture_active).toBe(true);
     expect(result.current.snapshot?.revision).toBe(3);
   });
 

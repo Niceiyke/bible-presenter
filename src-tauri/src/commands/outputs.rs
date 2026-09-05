@@ -30,6 +30,18 @@ pub fn publish_output_visible(app: &AppHandle, state: &AppState) {
     );
 }
 
+/// Broadcasts whether a recording/streaming session is active so every remote
+/// can open (or close) its "capture" WebRTC peer. Called whenever a recording
+/// or broadcast starts or stops.
+pub fn publish_capture_active(state: &AppState) {
+    let active = state.recording.lock().is_some() || state.streaming.lock().is_some();
+    state.remote.hub.publish(
+        RemoteEventKind::CaptureChanged,
+        json!({ "capture_active": active }),
+        None,
+    );
+}
+
 /// Position the output window on the operator's preferred monitor (used when a
 /// multi-monitor layout is detected).
 fn position_output_on_preferred(app: &AppHandle, state: &AppState) -> Result<(), String> {

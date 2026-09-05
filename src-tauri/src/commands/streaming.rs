@@ -389,6 +389,7 @@ pub fn stream_rtmp_start(
         stderr_tail,
     };
     *state.streaming.lock() = Some(broadcast);
+    crate::commands::outputs::publish_capture_active(&state);
 
     let mut guard = state.streaming.lock();
     Ok(streaming_status_locked(&mut guard))
@@ -467,6 +468,8 @@ pub async fn stream_rtmp_stop(app: AppHandle, state: State<'_, AppState>) -> Res
         .lock()
         .take()
         .ok_or_else(|| "No broadcast is live.".to_string())?;
+
+    crate::commands::outputs::publish_capture_active(&state);
 
     // Detach this broadcast's sink from the shared capture session. The last
     // consumer to detach (recorder or this broadcast) stops and removes the

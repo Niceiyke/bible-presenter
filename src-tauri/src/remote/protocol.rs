@@ -243,6 +243,8 @@ pub enum RemoteEventKind {
     LowerThirdChanged,
     #[serde(rename = "output.changed")]
     OutputChanged,
+    #[serde(rename = "capture.changed")]
+    CaptureChanged,
     #[serde(rename = "blackout.changed")]
     BlackoutChanged,
     #[serde(rename = "logo.changed")]
@@ -488,6 +490,11 @@ pub struct RemoteSnapshot {
     pub active_service: Option<store::ServiceMeta>,
     pub schedule_entries: Vec<store::ScheduleEntry>,
     pub output_visible: bool,
+    /// True while a recording or streaming broadcast is active. The phone opens
+    /// its "capture" WebRTC peer only when this is set, so the off-screen
+    /// `capture` window (the WGC source) receives the phone feed even when the
+    /// projection window is hidden.
+    pub capture_active: bool,
     pub blackout: bool,
     pub background_logo: bool,
     pub lower_third: Option<serde_json::Value>,
@@ -535,6 +542,7 @@ mod tests {
             active_service: None,
             schedule_entries: Vec::new(),
             output_visible: false,
+            capture_active: false,
             blackout: false,
             background_logo: false,
             lower_third: None,

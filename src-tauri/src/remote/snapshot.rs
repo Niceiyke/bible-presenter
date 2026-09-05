@@ -100,6 +100,9 @@ pub fn build_snapshot(
         .and_then(|w| w.is_visible().ok())
         .unwrap_or(false);
 
+    let capture_active =
+        state.recording.lock().is_some() || state.streaming.lock().is_some();
+
     RemoteSnapshot {
         protocol_version: crate::remote::protocol::REMOTE_PROTOCOL_VERSION,
         revision: state.remote.hub.current_revision(),
@@ -113,6 +116,7 @@ pub fn build_snapshot(
         active_service,
         schedule_entries,
         output_visible,
+        capture_active,
         blackout: settings.is_blanked,
         background_logo: settings.show_background_logo,
         lower_third,

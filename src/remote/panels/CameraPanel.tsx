@@ -5,6 +5,11 @@ import { Card, Btn, cx } from "../ui";
 
 type FacingMode = "user" | "environment";
 
+/** Operator-side window that can host one of this phone's answering peers:
+ *  "operator" (main window preview), "output" (audience projection), or
+ *  "capture" (the off-screen WGC source, only while recording/streaming). */
+type PeerTarget = "operator" | "output" | "capture";
+
 /** Physical phone orientation: portrait when the device is held upright,
  *  landscape when rotated a quarter turn. Falls back to the viewport aspect
  *  ratio when the ScreenOrientation API is unavailable. */
@@ -83,13 +88,13 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const pcsRef = useRef<{ operator: RTCPeerConnection | null; output: RTCPeerConnection | null }>({ operator: null, output: null });
+  const pcsRef = useRef<Record<PeerTarget, RTCPeerConnection | null>>({ operator: null, output: null, capture: null });
   // Streaming lifecycle refs so the open-ended peer re-offer loops and zoom/torch
   // constraints can read the live state without re-creating closures.
   const isStreamingRef = useRef(false);
   const trackRef = useRef<MediaStreamTrack | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const reconnectPeerRef = useRef<(target: "operator" | "output") => void>(() => {});
+  const reconnectPeerRef = useRef<(target: PeerTarget) => void>(() => {});
   const [zoomCaps, setZoomCaps] = useState<{ min: number; max: number; step: number } | null>(null);
   const [zoom, setZoom] = useState(1);
   const [torchSupported, setTorchSupported] = useState(false);
@@ -107,9 +112,9 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
     setZoom(1);
     setTorchSupported(false);
     setTorchOn(false);
-    const pcs = [pcsRef.current.operator, pcsRef.current.output];
+    const pcs = [pcsRef.current.operator, pcsRef.current.output, pcsRef.current.capture];
     pcs.forEach((pc) => pc?.close());
-    pcsRef.current = { operator: null, output: null };
+    pcsRef.current = { operator: null, output: null, capture: null };
     if (stream) {
       stream.getTracks().forEach(track => track.stop());
       setStream(null);
@@ -117,7 +122,7 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
     setIsStreaming(false);
   }, [stream]);
 
-  const makeOffer = useCallback(async (pc: RTCPeerConnection, target: "operator" | "output") => {
+  const makeOffer = useCallback(async (pc: RTCPeerConnection, target: PeerTarget) => {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     await client.command("camera.offer", {
@@ -127,7 +132,7 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
     });
   }, [client, deviceId]);
 
-  const setupPeer = useCallback((pc: RTCPeerConnection, target: "operator" | "output") => {
+  const setupPeer = useCallback((pc: RTCPeerConnection, target: PeerTarget) => {
     // Handle ICE candidates, tagged with the peer target so the backend
     // relays them to the correct operator-side window.
     pc.onicecandidate = (event) => {
@@ -149,7 +154,7 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
   // window that reloaded — *after* the phone started would otherwise never pick
   // up the offer. Stops when the peer connects, the camera stops, or the peer
   // object is replaced by a restart.
-  const keepReOffering = useCallback(async (pc: RTCPeerConnection, target: "operator" | "output") => {
+  const keepReOffering = useCallback(async (pc: RTCPeerConnection, target: PeerTarget) => {
     while (
       isStreamingRef.current &&
       pcsRef.current[target] === pc &&
@@ -169,11 +174,18 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
   // Peer state transitions: connected → toast; failed/disconnected → rebuild
   // the peer and re-offer so an operator/projector window reload recovers
   // automatically instead of killing the camera.
-  const wirePeerState = useCallback((pc: RTCPeerConnection, target: "operator" | "output") => {
+  const wirePeerState = useCallback((pc: RTCPeerConnection, target: PeerTarget) => {
     pc.onconnectionstatechange = () => {
       const st = pc.connectionState;
       if (st === "connected") {
-        pushToast(target === "operator" ? "Camera streaming to operator" : "Camera ready on projector", "info");
+        pushToast(
+          target === "operator"
+            ? "Camera streaming to operator"
+            : target === "output"
+              ? "Camera ready on projector"
+              : "Camera feeding recorder/stream",
+          "info",
+        );
         tuneSender(pc);
       } else if (st === "failed" || st === "disconnected") {
         setTimeout(() => {
@@ -185,9 +197,9 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
 
   // Build one peer: create the connection, add the local video, prefer the
   // hardware H.264 encoder, wire ICE + state, offer, and keep re-offering
-  // while it has not connected. Both the "operator" (preview) and "output"
-  // (projection) peers are created through here.
-  const createPeer = useCallback((target: "operator" | "output") => {
+  // while it has not connected. The "operator" (preview), "output"
+  // (projection) and "capture" (recorder/streamer) peers all go through here.
+  const createPeer = useCallback((target: PeerTarget) => {
     const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
     pcsRef.current = { ...pcsRef.current, [target]: pc };
     setupPeer(pc, target);
@@ -201,7 +213,7 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
   // Rebuild one peer from scratch when the operator-side window hosting it
   // reloads or drops: the camera keeps running and a fresh offer is answered
   // as soon as the window is back. Used instead of tearing the camera down.
-  const reconnectPeer = useCallback((target: "operator" | "output") => {
+  const reconnectPeer = useCallback((target: PeerTarget) => {
     const old = pcsRef.current[target];
     if (old) {
       old.onconnectionstatechange = null;
@@ -219,12 +231,29 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
   // avoids double-encoding for the whole streamed session.
   const myDeviceId = `phone-camera-${deviceId}`;
   const liveItemData = client.snapshot?.live_item;
+
+  // The "output" (projection) peer exists only while this phone's camera is
+  // actually live on a visible projection window — the only time its frames
+  // are being encoded toward the projector. While the feed is merely
+  // previewed or staged, the operator peer alone is enough, so the phone
+  // avoids double-encoding for the whole streamed session.
   const outputNeeded =
     (client.snapshot?.output_visible ?? false) &&
     liveItemData?.type === "Camera" &&
     liveItemData.data.deviceId === myDeviceId;
   const outputNeededRef = useRef(outputNeeded);
   outputNeededRef.current = outputNeeded;
+
+  // The "capture" (recorder/streamer) peer exists only while the same feed is
+  // live AND a recording or broadcast is capturing the program. The off-screen
+  // `capture` window is the WGC source and answers this peer, so a recording
+  // still contains the phone feed even when the projection window is hidden.
+  const captureNeeded =
+    (client.snapshot?.capture_active ?? false) &&
+    liveItemData?.type === "Camera" &&
+    liveItemData.data.deviceId === myDeviceId;
+  const captureNeededRef = useRef(captureNeeded);
+  captureNeededRef.current = captureNeeded;
 
   useEffect(() => {
     if (!isStreamingRef.current) return;
@@ -237,6 +266,18 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
       pc.close();
     }
   }, [outputNeeded, createPeer]);
+
+  useEffect(() => {
+    if (!isStreamingRef.current) return;
+    if (captureNeeded) {
+      if (!pcsRef.current.capture) createPeer("capture");
+    } else if (pcsRef.current.capture) {
+      const pc = pcsRef.current.capture;
+      pcsRef.current.capture = null;
+      pc.onconnectionstatechange = null;
+      pc.close();
+    }
+  }, [captureNeeded, createPeer]);
 
   // Keep the reported physical orientation current: if the phone is rotated
   // while streaming, re-register the camera (register-only and idempotent on
@@ -321,6 +362,7 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
       // never double-encodes while nothing is being projected.
       createPeer("operator");
       if (outputNeededRef.current) createPeer("output");
+      if (captureNeededRef.current) createPeer("capture");
 
       // Send start command (the operator preview connects even if the
       // projection window never answers).
@@ -386,13 +428,20 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
   }, [torchOn]);
 
   // Handle incoming answer and ICE from the main app, routing each to the
-  // matching peer connection by its `target`.
+  // matching peer connection by its `target` ("operator" | "output" | "capture").
   useEffect(() => {
+    const peerFor = (target: unknown): RTCPeerConnection | null => {
+      if (target === "operator" || target === "output" || target === "capture") {
+        return pcsRef.current[target];
+      }
+      return null;
+    };
+
     const handleMessage = (event: MessageEvent) => {
       try {
         const msg = JSON.parse(event.data);
         if (msg.kind === "camera.answer" && msg.payload?.device_id === deviceId) {
-          const pc = pcsRef.current[msg.payload.target === "output" ? "output" : "operator"];
+          const pc = peerFor(msg.payload.target);
           if (pc) {
             pc.setRemoteDescription({
               type: "answer",
@@ -400,7 +449,7 @@ export function CameraPanel({ client, pushToast }: { client: ReturnType<typeof u
             }).catch(console.error);
           }
         } else if (msg.kind === "camera.ice" && msg.payload?.device_id === deviceId) {
-          const pc = pcsRef.current[msg.payload.target === "output" ? "output" : "operator"];
+          const pc = peerFor(msg.payload.target);
           if (pc) {
             pc.addIceCandidate({
               candidate: msg.payload.candidate,
