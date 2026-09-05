@@ -6,7 +6,10 @@
  *   POST /validate   Called by the desktop app (Rust `license.rs`). Body:
  *                    { license_key, machine_id, app_name, app_version }.
  *                    Registers a machine against a key (up to `max_machines`)
- *                    and returns authoritative status/expiry/server time.
+ *                    and returns authoritative status/expiry/server time —
+ *                    Ed25519-signed over the fields the desktop client
+ *                    persists, so forged local records and stubbed endpoints
+ *                    are rejected (see `signValidation` / `generate-keypair.mjs`).
  *
  *   POST /issue      Admin only. Bearer token. Issues a new key:
  *                    { church_name, email, duration_days, max_machines, tier, note }
@@ -93,30 +96,45 @@ export default {
           message: "Unknown license key. Check the key or contact the Wordlyte team.",
         });
 
-      const common = () => ({
-        expires_at: rec.expires_at,
-        issued_at: rec.issued_at,
-        church_name: rec.church_name,
-        email: rec.email,
-        tier: tierOf(rec),
-        max_machines: rec.max_machines,
-        machines_used: (rec.machines || []).length,
-        server_time: serverTime,
-      });
+      // Signed response builder for a known record. The signature covers the
+      // authoritative fields the desktop client persists (`license.json` v2),
+      // so a hand-edited local record or a stubbed `WORDLYTE_LICENSE_URL`
+      // endpoint can never pass the client's Ed25519 verification.
+      const signed = async (status, message, machinesUsed) => {
+        const tier = tierOf(rec);
+        const sig = await signValidation(env, {
+          key,
+          machine_id: machineId,
+          status,
+          issued_at: rec.issued_at,
+          expires_at: rec.expires_at,
+          tier,
+          max_machines: rec.max_machines,
+          machines_used: machinesUsed,
+          server_time: serverTime,
+        });
+        return json({
+          status,
+          message,
+          license_key: key,
+          machine_id: machineId,
+          issued_at: rec.issued_at,
+          expires_at: rec.expires_at,
+          church_name: rec.church_name,
+          email: rec.email,
+          tier,
+          max_machines: rec.max_machines,
+          machines_used: machinesUsed,
+          server_time: serverTime,
+          ...(sig ? { sig } : {}),
+        });
+      };
+      const used = (r) => (r.machines || []).length;
 
       if (rec.revoked)
-        return json({
-          status: "revoked",
-          message: "This license has been revoked by the administrator.",
-          ...common(),
-        });
+        return signed("revoked", "This license has been revoked by the administrator.", used(rec));
 
-      if (serverTime >= rec.expires_at)
-        return json({
-          status: "expired",
-          message: "This license has expired.",
-          ...common(),
-        });
+      if (serverTime >= rec.expires_at) return signed("expired", "This license has expired.", used(rec));
 
       let machines = rec.machines || [];
       if (!machines.includes(machineId)) {
@@ -131,13 +149,13 @@ export default {
         });
         const data = await res.json();
         if (data.status !== "active") {
-          return json({ status: "invalid", message: data.message, ...common() });
+          return signed("invalid", data.message, used(rec));
         }
         rec = data.rec;
         machines = rec.machines || [];
       }
 
-      return json({ status: "active", message: "ok", ...common() });
+      return signed("active", "ok", used(rec));
     }
 
     // ── Admin (Authorization: Bearer <ADMIN_TOKEN>) ────────────────────────
@@ -408,6 +426,51 @@ export class LicenseRegistry {
     await this.save(key, rec);
     return json({ status: "ok", ...rec });
   }
+}
+
+/// ── Ed25519 response signing (license anti-tamper) ───────────────────
+/// The worker signs every `/validate` response over the authoritative fields
+/// the desktop client persists. The client embeds the matching Ed25519 public
+/// key and refuses any record whose signature does not verify, so a forged or
+/// hand-edited `license.json` and any stubbed `WORDLYTE_LICENSE_URL` endpoint
+/// are both rejected. Generate the keypair with `scripts/generate-keypair.mjs`
+/// and deploy the private JWK as the `LICENSE_SIGN_PRIVATE_KEY` secret.
+async function getSignKey(env) {
+  if (env.__wordlyteSignKey) return env.__wordlyteSignKey;
+  if (!env.LICENSE_SIGN_PRIVATE_KEY) return null;
+  const jwk = JSON.parse(env.LICENSE_SIGN_PRIVATE_KEY);
+  const key = await crypto.subtle
+    .importKey("jwk", jwk, { name: "Ed25519" }, false, ["sign"])
+    .catch(() => null);
+  if (key) env.__wordlyteSignKey = key;
+  return key || null;
+}
+
+/// Canonical string MUST match `canonical_license` in `src-tauri/src/license.rs`.
+/// Field order is significant and never changes.
+async function signValidation(env, f) {
+  const canonical = [
+    "wl2",
+    f.key,
+    f.machine_id,
+    f.status,
+    String(f.issued_at),
+    String(f.expires_at),
+    f.tier,
+    String(f.max_machines),
+    String(f.machines_used),
+    String(f.server_time),
+  ].join("|");
+  const sigKey = await getSignKey(env);
+  if (!sigKey) return "";
+  const sig = await crypto.subtle.sign({ name: "Ed25519" }, sigKey, new TextEncoder().encode(canonical));
+  return b64(new Uint8Array(sig));
+}
+
+function b64(bytes) {
+  let s = "";
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s);
 }
 
 function generateKey() {

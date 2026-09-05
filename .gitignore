@@ -30,3 +30,7 @@ src-tauri/check_*.log
 # Cloudflare Workers secrets (ADMIN_TOKEN lives here) and local build/dev artifacts
 .dev.vars
 .wrangler/
+
+# License signing keypair — NEVER commit the private half. Only the public key
+# (embedded in src-tauri/src/license.rs) is checked in.
+workers/license/.license-sign-private.jwk

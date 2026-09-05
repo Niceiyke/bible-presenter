@@ -5,7 +5,9 @@ use tauri::{AppHandle, State};
 
 /// Broadcast the authoritative license snapshot to every window so the
 /// operator shell and any license UI stay in sync after activation/refresh.
-fn publish_license(app: &AppHandle, info: &LicenseStatusInfo) {
+/// `pub(crate)` because the background revalidation loop
+/// (`license::spawn_periodic_refresh`) publishes status changes too.
+pub(crate) fn publish_license(app: &AppHandle, info: &LicenseStatusInfo) {
     emit_checked(app, "license-updated", info);
 }
 

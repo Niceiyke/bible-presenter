@@ -8,7 +8,8 @@
 // Requires Node >= 18 (global fetch) and the `wrangler` devDependency installed.
 
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { generateKeyPairSync, verify as verifySig } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +32,51 @@ if (!adminToken) {
   }
 }
 const ADMIN_TOKEN = adminToken || "local-test-token";
+
+// ── License-signing key for the local worker ──────────────────────────
+// Generate a throwaway Ed25519 keypair and drop it into `.dev.vars` so
+// wrangler dev signs every /validate response, then verify the signatures on
+// the client side (same shape the Rust client uses). The original `.dev.vars`
+// contents are restored afterwards.
+const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+const SIGN_PRIV = JSON.stringify(privateKey.export({ format: "jwk" }));
+const SIGN_PUB = publicKey;
+const devVarsPath = join(ROOT, ".dev.vars");
+const hadDevVars = (() => {
+  try {
+    readFileSync(devVarsPath, "utf8");
+    return true;
+  } catch {
+    return false;
+  }
+})();
+const originalDevVars = hadDevVars ? readFileSync(devVarsPath, "utf8") : null;
+
+/// Canonical string must match the worker's `signValidation` and the Rust
+/// client's `canonical_license`. Field order is significant.
+function canonicalOf(d) {
+  return [
+    "wl2",
+    d.license_key,
+    d.machine_id,
+    d.status,
+    String(d.issued_at),
+    String(d.expires_at),
+    d.tier,
+    String(d.max_machines),
+    String(d.machines_used),
+    String(d.server_time),
+  ].join("|");
+}
+
+function sigValid(d) {
+  if (!d || typeof d.sig !== "string" || !d.sig) return false;
+  try {
+    return verifySig(null, canonicalOf(d), SIGN_PUB, Buffer.from(d.sig, "base64"));
+  } catch {
+    return false;
+  }
+}
 
 const results = [];
 function check(name, cond) {
@@ -66,6 +112,15 @@ async function waitForServer(url, timeoutMs = 90000) {
 
 const persist = await mkdtemp(join(tmpdir(), "license-test-"));
 const wranglerJs = join(ROOT, "node_modules", "wrangler", "bin", "wrangler.js");
+const signingLine = `LICENSE_SIGN_PRIVATE_KEY=${SIGN_PRIV}`;
+// Inject the signing secret into `.dev.vars` (keeps ADMIN_TOKEN intact).
+if (hadDevVars) {
+  const lines = originalDevVars.split(/\r?\n/).filter((l) => !l.startsWith("LICENSE_SIGN_PRIVATE_KEY="));
+  lines.push(signingLine);
+  writeFileSync(devVarsPath, lines.join("\n"));
+} else {
+  writeFileSync(devVarsPath, `ADMIN_TOKEN=${ADMIN_TOKEN}\n${signingLine}\n`);
+}
 const proc = spawn(process.execPath, [wranglerJs, "dev", "--local", "--port", String(PORT), "--persist-to", persist], {
   cwd: ROOT,
   stdio: ["ignore", "ignore", "pipe"],
@@ -144,6 +199,10 @@ try {
   // validate: activate machines up to cap
   r = await call("/validate", { method: "POST", body: { license_key: key, machine_id: M1 } });
   check("validate machine 1 → active, machines_used 1", r.status === 200 && r.data.status === "active" && r.data.machines_used === 1);
+  check("validate response is Ed25519-signed", sigValid(r.data));
+  const tampered = { ...r.data, tier: "premium" };
+  check("tampered tier fails signature verification", !sigValid(tampered));
+  check("validate echoes the machine_id it signed", r.data.machine_id === M1);
   r = await call("/validate", { method: "POST", body: { license_key: key, machine_id: M2 } });
   check("validate machine 2 → active, machines_used 2", r.status === 200 && r.data.status === "active" && r.data.machines_used === 2);
   r = await call("/validate", { method: "POST", body: { license_key: key, machine_id: M3 } });
@@ -241,6 +300,7 @@ try {
   check("registry key revoke after registration", r.status === 200 && r.data.status === "ok" && r.data.revoked === true);
   r = await call("/validate", { method: "POST", body: { license_key: key2, machine_id: M1 } });
   check("registry key revoked → revoked", r.status === 200 && r.data.status === "revoked");
+  check("revoked response is Ed25519-signed", sigValid(r.data));
 
   // expiring
   r = await call("/expiring?days=365", { token: ADMIN_TOKEN });
@@ -263,6 +323,11 @@ try {
   proc.kill();
   await new Promise((r) => setTimeout(r, 300));
   await rm(persist, { recursive: true, force: true }).catch(() => {});
+  if (hadDevVars && originalDevVars !== null) {
+    writeFileSync(devVarsPath, originalDevVars);
+  } else if (!hadDevVars) {
+    await rm(devVarsPath, { force: true }).catch(() => {});
+  }
 }
 
 const failures = results.filter((r) => !r.ok);

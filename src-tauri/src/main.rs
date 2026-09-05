@@ -186,6 +186,12 @@ fn main() {
 
             app.manage(state);
 
+            // Re-validate the stored license against the server shortly after
+            // startup and then roughly every 6 hours (jittered). Keeps
+            // revocations, expiry changes, and any forged/stale local record in
+            // sync without waiting for the operator to open Settings → License.
+            wordlyte_lib::license::spawn_periodic_refresh(app.handle().clone());
+
             // Build the Bible FTS search index OFF the UI thread. On a fresh
             // install the rebuild is a large write (it also drives the
             // -wal/-shm sidecar growth); doing it here in setup would freeze

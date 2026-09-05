@@ -437,13 +437,7 @@ mod tests {
         let _reader = listener.accept().unwrap(); // never consumes
 
         // Drive the pipe to full so writes return WouldBlock.
-        let fill = [0u8; 8192];
-        loop {
-            match c.stream.write(&fill) {
-                Ok(_) => continue,
-                Err(_) => break,
-            }
-        }
+        while c.stream.write_all(&[0u8; 8192]).is_ok() {}
 
         // A stuck consumer buffers into its own bounded pending Vec, then is
         // pruned past the cap — the fan-out must never block on it forever.
