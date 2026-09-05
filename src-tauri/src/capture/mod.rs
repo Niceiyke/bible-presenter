@@ -33,7 +33,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -832,19 +832,24 @@ fn capture_thread_windows(
             let _ = std::thread::Builder::new()
                 .name(format!("capture-copy-{session_id}"))
                 .spawn(move || {
-                    // Reusable staging texture, owned exclusively by this
-                    // thread. Lazily (re)created when the surface size changes
-                    // (window resize), reused every frame otherwise.
+                    // Reusable staging texture + BGRA readback buffer, owned
+                    // exclusively by this thread. The texture is lazily
+                    // (re)created when the surface size changes (window
+                    // resize); the mutably-extended `bgra` Vec is pooled so a
+                    // 1080p frame no longer allocates ~8 MiB every capture tick
+                    // (8.3 MB BGRA + 3.1 MB NV12 per frame at 30 fps was over
+                    // 300 MB/s of allocator churn before this reuse).
                     let mut staging: Option<
                         windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
                     > = None;
+                    let mut bgra_scratch: Vec<u8> = Vec::new();
                     while !stop_c.load(Ordering::SeqCst) {
                         let frame = match copy_rx.recv_timeout(std::time::Duration::from_millis(50)) {
                             Ok(f) => f,
                             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
                             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                         };
-                        let copied = copy_rgba(&device, &context, &frame, &mut staging);
+                        let copied = copy_rgba(&device, &context, &frame, &mut staging, &mut bgra_scratch);
                         drop(frame);
                         if let Some(frame_data) = copied {
                             let ts = std::time::SystemTime::now()
@@ -893,6 +898,15 @@ fn capture_thread_windows(
         }
 
         let mut last_present = Instant::now();
+        // Time of the last *genuine* WGC present (vs. an idle re-feed). When
+        // the window has presented nothing for a while (static scripture held
+        // on screen), the re-feed cadence is throttled so the encoders still
+        // see a live, wall-clock-continuous timeline but the copy/encode cost
+        // of re-feeding identical frames collapses to ~1/4 of full rate.
+        let mut last_real_frame = Instant::now();
+        const IDLE_THRESHOLD: Duration = Duration::from_secs(2);
+        const IDLE_REFEED_FPS: f64 = 8.0;
+        let idle_refeed_interval = Duration::from_secs_f64(1.0 / IDLE_REFEED_FPS);
         let mut last_feed_gap_warn = Instant::now();
         while !stop.load(Ordering::SeqCst) {
             // Bounded pull — never blocks on WGC. On timeout (no new present)
@@ -905,6 +919,11 @@ fn capture_thread_windows(
             };
 
             if let Some(frame) = pending {
+                // A real present means the window is live — the copy thread
+                // must run at full cadence again (throttling resets here even
+                // if an individual frame is dropped while the copy thread is
+                // busy, since the window is clearly re-rendering).
+                last_real_frame = Instant::now();
                 // Latest-wins drain: if a burst arrived (the copy thread is
                 // behind), superseded frames count as drops and only the
                 // newest is handed to the copy thread.
@@ -927,8 +946,14 @@ fn capture_thread_windows(
                 // No new frame arrived: the window is idle (static content) —
                 // WGC stops delivering until the next present. Re-feed the last
                 // captured frame (or a synthetic black one before the first
-                // frame) at the target rate so encoders are never starved.
-                if last_present.elapsed() >= present_interval {
+                // frame) so encoders are never starved, throttling when the
+                // window has been static for a while.
+                let refeed_interval = if last_real_frame.elapsed() >= IDLE_THRESHOLD {
+                    idle_refeed_interval
+                } else {
+                    present_interval
+                };
+                if last_present.elapsed() >= refeed_interval {
                     let cf = last_cf
                         .lock()
                         .ok()
@@ -980,13 +1005,19 @@ fn capture_thread_windows(
 }
 
 /// Copies the frame from the WGC surface into a packed NV12 buffer (the same
-/// format QSV encodes natively). Returns (width, height, nv12 bytes).
+/// format QSV encodes natively). `bgra_scratch` is a thread-owned pooled buffer
+/// reused across frames so each capture tick does not allocate an 8 MiB BGRA
+/// Vec. Returns (width, height, nv12 bytes) — the NV12 Vec is the frame payload
+/// and therefore cannot be reused (it is wrapped in an `Arc` and shared across
+/// consumer channels), but it is 2.6x smaller than the BGRA intermediate we no
+/// longer allocate.
 #[cfg(target_os = "windows")]
 unsafe fn copy_rgba(
     device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
     context: &windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
     frame: &windows::Graphics::Capture::Direct3D11CaptureFrame,
     staging: &mut Option<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D>,
+    bgra_scratch: &mut Vec<u8>,
 ) -> Option<(u32, u32, Vec<u8>)> {
     use windows::core::Interface;
     use windows::Win32::Graphics::Direct3D11::{
@@ -1063,20 +1094,22 @@ unsafe fn copy_rgba(
     }
 
     let src = std::slice::from_raw_parts(mapped.pData as *const u8, (mapped.RowPitch as usize) * h);
-    let mut bgra = Vec::with_capacity(w * h * 4);
+    // Reuse the pooled buffer: clear keeps capacity (largest surface so far),
+    // so the steady-state 1080p case performs zero allocations per frame.
+    bgra_scratch.clear();
     if mapped.RowPitch as usize == w * 4 {
         // Tightly packed rows — one contiguous copy instead of 1080 row slices.
-        bgra.extend_from_slice(&src[..w * h * 4]);
+        bgra_scratch.extend_from_slice(&src[..w * h * 4]);
     } else {
         for row in 0..h {
             let offset = row * mapped.RowPitch as usize;
             let line = &src[offset..offset + w * 4];
-            bgra.extend_from_slice(line);
+            bgra_scratch.extend_from_slice(line);
         }
     }
     context.Unmap(staging_texture, 0);
 
-    let nv12 = bgra_to_nv12(&bgra, w, h);
+    let nv12 = bgra_to_nv12(bgra_scratch, w, h);
     Some((w as u32, h as u32, nv12))
 }
 

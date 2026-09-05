@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   drawProgramFrame,
   getEffectiveBg,
+  frameHasMotion,
+  frameHasTimeDisplay,
+  frameRepaintSignature,
   ProgramFeedFrame,
   CanvasResources,
 } from "./canvasProgramFeed";
@@ -90,6 +93,28 @@ export function ProgramFeedCanvas({
   frameRef.current = frame;
 
   const appDataDir = frame.res.appDataDir ?? null;
+
+  // Dirty-skip state for the rAF loop. A fully static frame (scripture held,
+  // no motion content) is repainted only when the content signature changes,
+  // so an idle compositor costs ~0 CPU instead of full-rate clear+draw.
+  const motionRef = useRef(frameHasMotion(frame));
+  const timeRef = useRef(frameHasTimeDisplay(frame));
+  const sigRef = useRef("");
+  const lastDrawnSigRef = useRef("");
+  const lastPaintAtRef = useRef(0);
+
+  // The signature excludes `res`/`now` but includes which resources have
+  // loaded so the moment a referenced image/video finishes loading the next
+  // tick repaints it (a load changes pixels without a data-signature change).
+  const frameSig = useMemo(() => {
+    const framePart = frameRepaintSignature(frame);
+    const keyed = (o: Record<string, unknown>) => Object.keys(o).sort().join(",");
+    return `${framePart}|imgs:${keyed(images)}|vids:${keyed(videos)}|cams:${keyed(cameraVideos)}`;
+  }, [frame, images, videos, cameraVideos]);
+
+  motionRef.current = frameHasMotion(frame);
+  timeRef.current = frameHasTimeDisplay(frame);
+  sigRef.current = frameSig;
 
   // Collect every media path the current frame draws, so we only load what's
   // needed and drop references that are gone.
@@ -257,6 +282,18 @@ export function ProgramFeedCanvas({
   // Register the draw callback once; it reads fresh state from refs.
   useEffect(() => {
     setDraw((ctx, width, height) => {
+      // Dirty-skip: motion content repaints every tick (pixels change between
+      // frames); timer/clock content repaints at most 1 Hz; static content
+      // repaints only when the render signature (content or loaded resources)
+      // changes — preserving the last painted frame otherwise.
+      const motion = motionRef.current;
+      if (!motion) {
+        const sig = sigRef.current;
+        if (sig !== "" && sig === lastDrawnSigRef.current) {
+          const now = Date.now();
+          if (!timeRef.current || now - lastPaintAtRef.current < 1000) return;
+        }
+      }
       const f = frameRef.current;
       const res: CanvasResources = {
         images,
@@ -267,6 +304,8 @@ export function ProgramFeedCanvas({
       };
       const g: CanvasGeometry = { width, height };
       drawProgramFrame(ctx, g, { ...f, res, now: Date.now() });
+      lastDrawnSigRef.current = sigRef.current;
+      lastPaintAtRef.current = Date.now();
     });
   }, [setDraw, images, videos, cameraStreams, cameraVideos, appDataDir]);
 

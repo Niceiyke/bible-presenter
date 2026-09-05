@@ -338,6 +338,69 @@ export function collectCameraDeviceIds(
   return [...ids];
 }
 
+// ─── Repaint classification (dirty-skip) ─────────────────────────────────────
+
+/** Whether a background layer is motion content (video or camera feed), which
+ *  changes every frame and therefore must be composited at full cadence. */
+function bgIsMotion(bg: BackgroundSetting): boolean {
+  return bg.type === "Video" || bg.type === "Camera";
+}
+
+/** Whether a display item (or its effective background) is motion content. */
+function itemIsMotion(it: DisplayItem | null, settings: PresentationSettings): boolean {
+  if (!it) return false;
+  switch (it.type) {
+    case "Media":
+      return it.data.media_type === "Video";
+    case "Camera":
+      return true;
+    case "CustomSlide": {
+      if (it.data.background.type === "video") return true;
+      return (it.data.elements ?? []).some((el) => el.kind === "video");
+    }
+    case "SceneComposition":
+      return it.data.zones.some(
+        (z) => bgIsMotion(getEffectiveBg(settings, z.item)) || itemIsMotion(z.item, settings)
+      );
+    default:
+      return false;
+  }
+}
+
+/** Whether the current frame contains standalone motion content (live video,
+ *  camera feed, or a video element) — the compositor must repaint it every
+ *  tick because the pixels change between frames. */
+export function frameHasMotion(f: ProgramFeedFrame): boolean {
+  return bgIsMotion(getEffectiveBg(f.settings, f.item)) || itemIsMotion(f.item, f.settings);
+}
+
+/** Whether the current frame contains a clock or countdown whose text changes
+ *  every second WITHOUT any data-signature change. `lowerThird` counts (a
+ *  `clock` template ticks live; also conservative so a static nameplate just
+ *  costs a 1 Hz repaint instead of freezing if a template is later enriched). */
+export function frameHasTimeDisplay(f: ProgramFeedFrame): boolean {
+  if (f.lowerThird) return true;
+  const it = f.item;
+  if (!it) return false;
+  if (it.type === "Timer") return true;
+  if (it.type === "SceneComposition") return it.data.zones.some((z) => z.item.type === "Timer");
+  return false;
+}
+
+/** Stable, cheap signature of the frame's non-time-dependent render inputs.
+ *  `res` and `now` are excluded — resources/render-time are handled separately
+ *  by the caller. */
+export function frameRepaintSignature(f: ProgramFeedFrame): string {
+  return JSON.stringify({
+    item: f.item,
+    settings: f.settings,
+    colors: f.colors,
+    overlays: f.overlays,
+    propItems: f.propItems,
+    lowerThird: f.lowerThird,
+  });
+}
+
 // ─── Item renderers ──────────────────────────────────────────────────────────
 
 export interface ItemRenderContext {

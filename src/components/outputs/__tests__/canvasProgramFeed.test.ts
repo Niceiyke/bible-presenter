@@ -8,6 +8,9 @@ import {
   ptToPx,
   getEffectiveBg,
   collectCameraDeviceIds,
+  frameHasMotion,
+  frameHasTimeDisplay,
+  frameRepaintSignature,
 } from "../canvasProgramFeed";
 import type { DisplayItem, PresentationSettings } from "../../../types";
 import { THEMES } from "../../../types";
@@ -154,6 +157,77 @@ describe("canvasProgramFeed", () => {
     });
     it("returns an empty list when nothing references a camera", () => {
       expect(collectCameraDeviceIds(null, baseSettings)).toEqual([]);
+    });
+  });
+
+  describe("frameHasMotion", () => {
+    it("treats a static verse + color background as motionless", () => {
+      const verse = { type: "Verse", data: { book: "JHN", chapter: 3, verse: 16, text: "hi", version: "KJV" } } as any;
+      expect(frameHasMotion(frameFor(verse))).toBe(false);
+    });
+    it("treats a camera background as motion", () => {
+      const s = {
+        ...baseSettings,
+        bible_background: { type: "Camera", value: { deviceId: "phone-camera-abcd", opacity: 1, objectFit: "cover", mirrored: false } },
+      } as any;
+      const verse = { type: "Verse", data: { book: "JHN", chapter: 3, verse: 16, text: "hi", version: "KJV" } } as any;
+      expect(frameHasMotion(frameFor(verse, s))).toBe(true);
+    });
+    it("treats a live Media video item as motion", () => {
+      const video = { type: "Media", data: { id: "m1", media_type: "Video", path: "x.mp4" } } as any;
+      expect(frameHasMotion(frameFor(video))).toBe(true);
+    });
+    it("treats a camera background pinned in a scene zone as motion", () => {
+      const scene = {
+        type: "SceneComposition",
+        data: {
+          scene_id: "s1",
+          name: "Cam+Bible",
+          zones: [
+            { id: "z1", item: { type: "Camera", data: { deviceId: "phone-camera-1" } }, x: 0, y: 0, w: 0.5, h: 1, fit: "cover", opacity: 1, z: 1 },
+          ],
+        },
+      } as any;
+      expect(frameHasMotion(frameFor(scene))).toBe(true);
+    });
+    it("treats a timer-only scene as motionless", () => {
+      const scene = {
+        type: "SceneComposition",
+        data: {
+          scene_id: "s1",
+          name: "Timer",
+          zones: [{ id: "z1", item: { type: "Timer", data: {} }, x: 0, y: 0, w: 1, h: 1, fit: "cover", opacity: 1, z: 1 }],
+        },
+      } as any;
+      expect(frameHasMotion(frameFor(scene))).toBe(false);
+    });
+  });
+
+  describe("frameHasTimeDisplay", () => {
+    it("treats a Timer item as time-based", () => {
+      const timer = { type: "Timer", data: {} } as any;
+      expect(frameHasTimeDisplay(frameFor(timer))).toBe(true);
+    });
+    it("treats any lower third as time-based", () => {
+      expect(frameHasTimeDisplay(frameFor(null, {}, { lowerThird: { visible: true, title: "Name" } }))).toBe(true);
+    });
+    it("treats a static verse as non-time-based", () => {
+      const verse = { type: "Verse", data: { book: "JHN", chapter: 3, verse: 16, text: "hi", version: "KJV" } } as any;
+      expect(frameHasTimeDisplay(frameFor(verse))).toBe(false);
+    });
+  });
+
+  describe("frameRepaintSignature", () => {
+    it("is stable across time and dimensions", () => {
+      const verse = { type: "Verse", data: { book: "JHN", chapter: 3, verse: 16, text: "hi", version: "KJV" } } as any;
+      const a = frameFor(verse, {}, { res: {}, now: 1000 });
+      const b = frameFor(verse, {}, { res: { images: [] }, now: 9999 });
+      expect(frameRepaintSignature(a)).toBe(frameRepaintSignature(b));
+    });
+    it("changes when the live item changes", () => {
+      const v1 = frameFor({ type: "Verse", data: { book: "JHN", chapter: 3, verse: 16, text: "hi", version: "KJV" } } as any);
+      const v2 = frameFor({ type: "Verse", data: { book: "JHN", chapter: 3, verse: 17, text: "there", version: "KJV" } } as any);
+      expect(frameRepaintSignature(v1)).not.toBe(frameRepaintSignature(v2));
     });
   });
 

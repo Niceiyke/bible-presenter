@@ -85,6 +85,39 @@ fn feed_ref() -> &'static Mutex<Option<FeedInner>> {
     FEED.get_or_init(|| Mutex::new(None))
 }
 
+/// One connected audio consumer (a recording/streaming ffmpeg reading our TCP
+/// relay). `pending` holds bytes a nonblocking write couldn't flush yet, so a
+/// slow reader buffers into ITS OWN bounded Vec instead of stalling the shared
+/// fan-out thread (a tail-blocked consumer used to serialize every other
+/// destination's audio behind a 200 ms write timeout).
+struct FanClient {
+    stream: TcpStream,
+    pending: Vec<u8>,
+}
+
+/// Encode a read chunk into a slow consumer's pending buffer and try to flush
+/// as much as possible with nonblocking writes. Returns whether the client
+/// should be kept: `false` prunes it (socket dead/closed, or its pending
+/// buffer overflowed past `FAN_MAX_PENDING` after ~2 s of not draining at
+/// 128 kbps — better to drop that destination's audio than let one stuck
+/// reader grow without bound).
+const FAN_MAX_PENDING: usize = 512 * 1024;
+
+fn fan_client_feed(c: &mut FanClient, data: &[u8]) -> bool {
+    c.pending.extend_from_slice(data);
+    while !c.pending.is_empty() {
+        match c.stream.write(&c.pending) {
+            Ok(0) => return false,
+            Ok(n) => {
+                c.pending.drain(..n);
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(_) => return false,
+        }
+    }
+    c.pending.len() <= FAN_MAX_PENDING
+}
+
 /// Start (or join) the shared audio feed.  Returns the TCP port that consumers
 /// connect to (`-f aac -i tcp://127.0.0.1:{port}`).
 ///
@@ -175,8 +208,8 @@ pub fn start_feed(device: &str) -> Result<u16, String> {
         })
         .ok();
 
-    // --- fan-out thread: TCP accept + broadcast ---
-    let clients: Arc<Mutex<Vec<TcpStream>>> = Arc::new(Mutex::new(Vec::new()));
+    // --- fan-out thread: TCP accept + nonblocking broadcast ---
+    let clients: Arc<Mutex<Vec<FanClient>>> = Arc::new(Mutex::new(Vec::new()));
     let clients2 = clients;
     std::thread::Builder::new()
         .name("audio-feed-fanout".into())
@@ -185,15 +218,19 @@ pub fn start_feed(device: &str) -> Result<u16, String> {
             loop {
                 if let Ok((stream, _)) = listener.accept() {
                     stream.set_nodelay(true).ok();
-                    stream
-                        .set_write_timeout(Some(Duration::from_millis(200)))
-                        .ok();
-                    clients2.lock().unwrap().push(stream);
+                    stream.set_nonblocking(true).ok();
+                    clients2.lock().unwrap().push(FanClient {
+                        stream,
+                        pending: Vec::new(),
+                    });
                 }
                 match rx.recv_timeout(Duration::from_millis(5)) {
                     Ok(data) => {
                         let mut guard = clients2.lock().unwrap();
-                        guard.retain_mut(|c| c.write_all(&data).is_ok());
+                        // Nonblocking per-client writes; prune dead/overflowed
+                        // consumers so no single slow reader can stall the
+                        // fan-out for everyone else.
+                        guard.retain_mut(|c| fan_client_feed(c, &data));
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => continue,
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -371,6 +408,55 @@ mod tests {
 [dshow @ 0000021]  "HDMI Capture"
 "#;
         assert!(parse_devices(lines).is_empty());
+    }
+
+    #[test]
+    fn fan_client_feed_flushes_when_reader_consumes() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut c = FanClient {
+            stream: TcpStream::connect(listener.local_addr().unwrap()).unwrap(),
+            pending: Vec::new(),
+        };
+        c.stream.set_nonblocking(true).unwrap();
+        let (mut reader, _) = listener.accept().unwrap();
+        assert!(fan_client_feed(&mut c, b"hello"));
+        assert!(c.pending.is_empty(), "app data must flush on a draining reader");
+        let mut out = [0u8; 5];
+        reader.read_exact(&mut out).unwrap();
+        assert_eq!(&out, b"hello");
+    }
+
+    #[test]
+    fn fan_client_feed_prunes_a_stuck_reader_instead_of_stalling() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut c = FanClient {
+            stream: TcpStream::connect(listener.local_addr().unwrap()).unwrap(),
+            pending: Vec::new(),
+        };
+        c.stream.set_nonblocking(true).unwrap(); // like the fan-out accept path
+        let _reader = listener.accept().unwrap(); // never consumes
+
+        // Drive the pipe to full so writes return WouldBlock.
+        let fill = [0u8; 8192];
+        loop {
+            match c.stream.write(&fill) {
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+
+        // A stuck consumer buffers into its own bounded pending Vec, then is
+        // pruned past the cap — the fan-out must never block on it forever.
+        let chunk = vec![0u8; 64 * 1024];
+        let mut pruned = false;
+        for _ in 0..32 {
+            if !fan_client_feed(&mut c, &chunk) {
+                pruned = true;
+                break;
+            }
+        }
+        assert!(pruned, "overflowing a stuck reader must prune it");
+        assert!(c.pending.len() > FAN_MAX_PENDING);
     }
 
     #[test]
