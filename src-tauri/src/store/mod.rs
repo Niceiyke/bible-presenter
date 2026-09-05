@@ -115,15 +115,16 @@ pub struct BibleStore {
 }
 
 impl BibleStore {
-    pub fn new_empty(app: &tauri::AppHandle) -> Self {
+    pub fn new_empty(app: &tauri::AppHandle) -> anyhow::Result<Self> {
         log_msg(app, "BibleStore: Initializing in empty mode (waiting for database download).");
-        let conn = Connection::open_in_memory().expect("Failed to create in-memory DB");
+        let conn = Connection::open_in_memory()
+            .map_err(|e| anyhow::anyhow!("Failed to create in-memory Bible DB: {e}"))?;
         let patterns = RegexSet::new([
             r"(?i)\b([1-3]?\s*[a-z]+)\s+(\d+):(\d+)\b",
             r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)",
-        ]).unwrap();
+        ]).map_err(|e| anyhow::anyhow!("Failed to compile Bible reference patterns: {e}"))?;
 
-        Self {
+        Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             _patterns: patterns,
             book_map: HashMap::new(),
@@ -132,7 +133,7 @@ impl BibleStore {
             active_version: Mutex::new("KJV".to_string()),
             db_path: String::new(),
             search_index_ready: AtomicBool::new(true), // nothing to index
-        }
+        })
     }
 
     pub fn new(app: &tauri::AppHandle, db_path: &str) -> anyhow::Result<Self> {

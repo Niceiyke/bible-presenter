@@ -102,7 +102,9 @@ fn main() {
                     log_msg(app, &format!(
                         "Warning: Could not connect to Bible Database: {}. Using empty placeholder.", e
                     ));
-                    Arc::new(store::BibleStore::new_empty(app.handle()))
+                    let empty = store::BibleStore::new_empty(app.handle())
+                        .map_err(|e| format!("Could not create empty Bible store: {e}"))?;
+                    Arc::new(empty)
                 }
             };
 

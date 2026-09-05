@@ -126,7 +126,8 @@ export default function App() {
   useEffect(() => {
     if (!isInitialized) return;
     const t = setTimeout(() => {
-      invoke("save_workspace", { key: "recents", value: recentItems }).catch(() => {});
+      invoke("save_workspace", { key: "recents", value: recentItems })
+        .catch((e) => setToast(`Failed to save recents: ${e}`));
     }, 800);
     return () => clearTimeout(t);
   }, [recentItems, isInitialized]);
@@ -138,7 +139,7 @@ export default function App() {
       invoke("save_workspace", {
         key: "schedule_history",
         value: { entries: scheduleEntries, past: pastScheduleStates, future: futureScheduleStates }
-      }).catch(() => {});
+      }).catch((e) => setToast(`Failed to save schedule history: ${e}`));
     }, 800);
     return () => clearTimeout(t);
   }, [scheduleEntries, pastScheduleStates, futureScheduleStates, isInitialized]);
@@ -295,11 +296,11 @@ export default function App() {
             setActiveServiceId(recovery.activeServiceId);
             setToast("Session restored successfully");
             setRecovery(null);
-            invoke("clear_recovery").catch(() => {});
+            invoke("clear_recovery").catch((e) => setToast(`Failed to clear recovery: ${e}`));
           }}
           onDiscard={() => {
             setRecovery(null);
-            invoke("clear_recovery").catch(() => {});
+            invoke("clear_recovery").catch((e) => setToast(`Failed to clear recovery: ${e}`));
           }}
         />
       )}

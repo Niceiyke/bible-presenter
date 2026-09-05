@@ -5,18 +5,8 @@
   "windows": ["main", "stage", "studio"],
   "permissions": [
     "core:default",
-    "core:webview:allow-internal-toggle-devtools",
-    "dialog:allow-open",
-    "dialog:allow-save",
-    "dialog:allow-confirm",
-    "dialog:allow-message",
-    "shell:allow-open",
-    "fs:default",
-    "fs:allow-read-file",
-    "fs:allow-write-file",
-    "fs:allow-read-dir",
-    "fs:allow-mkdir",
-    "fs:allow-remove",
-    "fs:allow-exists"
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:webview:allow-internal-toggle-devtools"
   ]
 }

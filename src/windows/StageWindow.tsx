@@ -118,10 +118,10 @@ export function StageWindow() {
           drainPresentation();
         });
 
-      invoke<string>("get_app_data_dir").then(setAppDataDir).catch(() => {});
+      invoke<string>("get_app_data_dir").then(setAppDataDir).catch((e: any) => signalOperatorWarning(`Stage hydrate (appdir): ${e?.message ?? e}`));
       invoke<OutputConfig[]>("outputs_list").then((configs) => {
         setOutputConfig(configs.find((c) => c.window_label === "stage") ?? null);
-      }).catch(() => {});
+      }).catch((e: any) => signalOperatorWarning(`Stage hydrate (config): ${e?.message ?? e}`));
     })();
 
     const tick = () => {

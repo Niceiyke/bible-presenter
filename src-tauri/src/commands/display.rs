@@ -152,6 +152,24 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<store::Presentat
 
 #[tauri::command]
 pub async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: store::PresentationSettings) -> Result<(), String> {
+    // Free plan: at most one enabled Bible version. Enforced on the backend so
+    // a modified frontend or direct `invoke` cannot unlock more versions.
+    let info = state.license.status();
+    if info.status == crate::license::LicenseStatus::Active
+        && info.tier == crate::license::LicenseTier::Free
+    {
+        let available = state.store.get_available_versions();
+        let disabled = settings.disabled_bible_versions.iter()
+            .map(|s| s.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        let enabled = available.iter().filter(|v| !disabled.contains(v.as_str())).count();
+        if enabled > 1 {
+            return Err(
+                "The Free plan enables one Bible version at a time. Disable the current version first or upgrade in Settings → License."
+                    .to_owned(),
+            );
+        }
+    }
     state.media_schedule.save_settings(&settings).map_err(|e| e.to_string())?;
     let (prev_blanked, prev_logo) = {
         let guard = state.presentation.settings.lock();

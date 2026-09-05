@@ -156,14 +156,14 @@ export function useAppInitialization() {
         // hydration so a stale live item never lingers on a null payload.
         invoke<DisplayItem | null>("get_current_item")
           .then((v) => setLiveItem(v ?? null))
-          .catch(() => {});
+          .catch((e) => signalOperatorWarning(`Failed to hydrate live item: ${e}`));
       }
       drainPresentation();
 
       // P1.5 — Restore persisted recents and schedule undo/redo stacks.
       invoke<any>("load_workspace", { key: "recents" }).then((r) => {
         if (r) setRecentItems(r);
-      }).catch(() => {});
+      }).catch((e) => signalOperatorWarning(`Failed to restore recents: ${e}`));
       invoke<any>("load_workspace", { key: "schedule_history" }).then((h) => {
         if (h && Array.isArray(h.past) && Array.isArray(h.future)) {
           useAppStore.setState({
@@ -171,26 +171,26 @@ export function useAppInitialization() {
             futureScheduleStates: h.future,
           });
         }
-      }).catch(() => {});
+      }).catch((e) => signalOperatorWarning(`Failed to restore schedule history: ${e}`));
 
       // P1.6 — Load scenes.
-      invoke<any[]>("list_scenes").then(setScenes).catch(() => {});
+      invoke<any[]>("list_scenes").then(setScenes).catch((e) => signalOperatorWarning(`Failed to load scenes: ${e}`));
 
       // Output manager — load configs + runtime states.
-      invoke<OutputConfig[]>("outputs_list").then(setOutputs).catch(() => {});
+      invoke<OutputConfig[]>("outputs_list").then(setOutputs).catch((e) => signalOperatorWarning(`Failed to load outputs: ${e}`));
       invoke<OutputState[]>("outputs_states").then((states) => {
         states.forEach((s) => setOutputState(s));
-      }).catch(() => {});
+      }).catch((e) => signalOperatorWarning(`Failed to load output states: ${e}`));
 
       // License — hydrate before the operator shell is revealed so the first
       // frame is either the gated activation screen or an active license.
-      invoke<LicenseInfo>("license_status").then(setLicense).catch(() => {});
+      invoke<LicenseInfo>("license_status").then(setLicense).catch((e) => signalOperatorWarning(`License status unavailable: ${e}`));
 
       // Bible FTS search index may still be building off-thread on a fresh
       // install; search degrades to LIKE until it reports ready.
       invoke<boolean>("bible_fts_status")
         .then((ready) => setBibleIndexing(!ready))
-        .catch(() => {});
+        .catch((e) => signalOperatorWarning(`Bible index status unavailable: ${e}`));
 
       setIsInitialized(true);
     };
@@ -327,7 +327,8 @@ export function useAppInitialization() {
   useEffect(() => {
     const label = getCurrentWindow().label;
     if (label === "main") {
-      invoke("set_bible_version", { version: useAppStore.getState().bibleVersion }).catch(() => {});
+      invoke("set_bible_version", { version: useAppStore.getState().bibleVersion })
+        .catch((e) => signalOperatorWarning(`Failed to apply Bible version: ${e}`));
     }
   }, [useAppStore.getState().bibleVersion]);
 }

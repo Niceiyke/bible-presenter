@@ -15,6 +15,17 @@ export default defineConfig({
         main: resolve(__dirname, 'index.html'),
         remote: resolve(__dirname, 'remote.html'),
       },
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return;
+          if (id.includes('@tiptap') || id.includes('prosemirror')) return 'editor';
+          if (id.includes('framer-motion') || id.includes('motion')) return 'motion';
+          if (id.includes('wavesurfer')) return 'audio';
+          if (id.includes('react') || id.includes('scheduler') || id.includes('zustand')) return 'react';
+          if (id.includes('lucide')) return 'icons';
+          return 'vendor';
+        },
+      },
     },
   },
   server: {

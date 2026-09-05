@@ -10,7 +10,8 @@ use crate::state::AppState;
 use axum::body::Bytes;
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, State};
-use axum::response::Response;
+use axum::http::HeaderMap;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
@@ -45,9 +46,48 @@ pub fn router(ctx: RemoteCtx) -> Router {
 
 async fn ws_handler(
     ws: WebSocketUpgrade,
+    headers: HeaderMap,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(ctx): State<RemoteCtx>,
 ) -> Response {
+    // Origin allowlist: browsers send the Origin header matching the page's
+    // origin (https://<operator-ip>:<port>), which is served BY this server.
+    // A LAN attacker driving a normal browser hits a mismatched Origin and is
+    // rejected here before ever reaching the pairing handshake (defense in
+    // depth on top of the single-use pairing code + rate limits). Non-browser
+    // clients (no Origin header) are permitted — the server is LAN-only by
+    // design and the pairing code still gates them.
+    if let Some(origin) = headers
+        .get("origin")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|o| !o.is_empty())
+    {
+        // The Origin header is `scheme://host[:port]`; parse the host.
+        let stripped = origin
+            .trim_start_matches("https://")
+            .trim_start_matches("http://");
+        let origin_host = stripped
+            .rsplit_once(':')
+            .filter(|(_, p)| p.chars().all(|c| c.is_ascii_digit()))
+            .map(|(host, _)| host)
+            .unwrap_or(stripped)
+            .trim_matches(|c| c == '[' || c == ']') // IPv6 brackets
+            .to_string();
+        let lan_ip = crate::remote::primary_local_ip();
+        let origin_allowed = matches!(origin_host.as_str(), "localhost" | "127.0.0.1" | "::1" | "0.0.0.0")
+            || lan_ip
+                .map(|ip| ip.to_string() == origin_host)
+                .unwrap_or(false);
+        if !origin_allowed {
+            crate::store::log_msg(
+                &ctx.app,
+                &format!("Rejected remote WS connection from {addr}: disallowed Origin {origin_host}"),
+            );
+            return axum::response::Json(json!({ "error": "forbidden" })).into_response();
+        }
+    }
+
     // Bound frame/message sizes so a malicious or buggy client cannot OOM the
     // operator machine with giant WS payloads. Commands and events are small;
     // 1 MiB frames leave ample headroom for large schedule snapshots.

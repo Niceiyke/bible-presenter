@@ -153,7 +153,7 @@ return (
                 const pres = data as CustomPresentation;
                 setStudioSlides({ ...studioSlides, [id]: pres.slides });
                 setEditingPres(pres);
-              }).catch(() => {});
+              }).catch((e) => setToast(`Failed to open presentation: ${e}`));
             }}
             onNewPresentation={() => {
               const id = stableId();
@@ -183,7 +183,7 @@ return (
                 emit("studio-sync", nextList);
                 setStudioSlides({ ...studioSlides, [id]: newPres.slides });
                 setEditingPres(newPres);
-              }).catch(() => {});
+              }).catch((e) => setToast(`Failed to create presentation: ${e}`));
             }}
           />
         )}
