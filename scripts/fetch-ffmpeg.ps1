@@ -14,7 +14,7 @@
 # Reproducibility: BtbN publishes rolling auto-builds under a moving `latest`
 # tag (whose assets are also re-uploaded later the same day). To keep release
 # builds deterministic, pin `$ReleaseTag` to a specific immutable autobuild tag
-# (e.g. `autobuild-2026-08-17-13-05`, see
+# (e.g. `autobuild-2026-09-05-13-10`, see
 # https://github.com/BtbN/FFmpeg-Builds/releases) rather than `latest`. The
 # archive name varies per build (it embeds the ffmpeg revision), so it is
 # resolved from that release's own `checksums.sha256`, and the downloaded zip
@@ -28,11 +28,11 @@ $BinDir = Join-Path $PSScriptRoot "..\src-tauri\binaries"
 # PINNED autobuild tag (NOT `latest`): a moving tag makes release builds
 # non-reproducible, so the tag must be a specific BtbN autobuild. Update both
 # the tag and `$ExpectedSha256` together when deliberately upgrading ffmpeg.
-$ReleaseTag = "autobuild-2026-08-17-13-05"
+$ReleaseTag = "autobuild-2026-09-05-13-10"
 # Committed SHA-256 of the NON-shared LGPL win64 zip for the pinned tag. This is
 # independent of the (moving) checksums.sha256 and makes the fetch tamper-proof
 # even if the release's own checksum file were replaced.
-$ExpectedSha256 = "fdf4fcb4797762e8b4cc3eccdedfedad1e4a345fe9bd8f6a44a20ebf57718c7a"
+$ExpectedSha256 = "fd5a992e91eb0637e17e2151dd34dc4ea4ff028a90b170ccf3f0a27c909bd974"
 $BaseUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$ReleaseTag"
 $ChecksumsUrl = "$BaseUrl/checksums.sha256"
 $Zip = Join-Path $env:TEMP "ffmpeg-lgpl.zip"
