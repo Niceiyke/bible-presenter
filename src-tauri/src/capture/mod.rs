@@ -99,8 +99,7 @@ impl FrameConsumers {
         // best-effort so nothing can block the shared capture thread (which
         // would starve the live stream's frames and stall the idle re-feed).
         if !self.strict.is_empty() || !self.best_effort.is_empty() {
-            let mut moved: Vec<SinkSlot> = self.strict.drain(..).collect();
-            self.best_effort.append(&mut moved);
+            self.best_effort.append(&mut std::mem::take(&mut self.strict));
         }
         let sole = self.strict.is_empty() && self.best_effort.is_empty();
         if strict && sole {
@@ -268,7 +267,7 @@ fn black_nv12(w: u32, h: u32) -> Vec<u8> {
     let uv_size = w.div_ceil(2) * h.div_ceil(2) * 2;
     let mut out = vec![0u8; y_size + uv_size];
     out[..y_size].fill(16);
-    for plane in out[y_size..].chunks_exact_mut(2) {
+    for plane in out[y_size..].as_chunks_mut::<2>().0 {
         plane[0] = 128;
         plane[1] = 128;
     }
