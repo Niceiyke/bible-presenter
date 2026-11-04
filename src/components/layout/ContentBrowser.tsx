@@ -23,6 +23,7 @@ const LtDesignerTab = lazy(() => import("../LtDesignerTab").then((m) => ({ defau
 const RecordingsTab = lazy(() => import("../RecordingsTab").then((m) => ({ default: m.RecordingsTab })));
 const StreamerTab = lazy(() => import("../StreamerTab").then((m) => ({ default: m.StreamerTab })));
 const SystemTab = lazy(() => import("../SystemTab").then((m) => ({ default: m.SystemTab })));
+const AiScriptureTab = lazy(() => import("../AiScriptureTab").then((m) => ({ default: m.AiScriptureTab })));
 
 /**
  * Full-page Scene Builder workspace (mirrors the LT Designer tab layout).
@@ -133,6 +134,7 @@ return (
       : "flex-1 min-h-0 overflow-y-auto p-4 custom-scrollbar"}>
       <Suspense fallback={null}>
         {activeTab === "bible" && <BibleTab onStage={stageItem} onLive={sendLive} onAddToSchedule={addToSchedule} />}
+        {activeTab === "ai-scripture" && <AiScriptureTab onStage={stageItem} />}
         {activeTab === "media" && (
           <MediaTab
             onStage={stageItem} onLive={sendLive} onAddToSchedule={addToSchedule}

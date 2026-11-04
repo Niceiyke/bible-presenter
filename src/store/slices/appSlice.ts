@@ -16,8 +16,8 @@ export interface AppSlice {
   setLabel: (v: string) => void;
   settings: PresentationSettings;
   setSettings: (v: PresentationSettings | ((prev: PresentationSettings) => PresentationSettings)) => void;
-  activeTab: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "lt-designer" | "camera" | "scenes" | "scene-builder" | "remote" | "recordings" | "streaming" | "diagnostics";
-  setActiveTab: (v: "bible" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "lt-designer" | "camera" | "scenes" | "scene-builder" | "remote" | "recordings" | "streaming" | "diagnostics") => void;
+  activeTab: "bible" | "ai-scripture" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "lt-designer" | "camera" | "scenes" | "scene-builder" | "remote" | "recordings" | "streaming" | "diagnostics";
+  setActiveTab: (v: "bible" | "ai-scripture" | "media" | "songs" | "lower-third" | "timers" | "studio" | "schedule" | "settings" | "props" | "lt-designer" | "camera" | "scenes" | "scene-builder" | "remote" | "recordings" | "streaming" | "diagnostics") => void;
   toast: string | null;
   setToast: (v: string | null) => void;
   sidebarWidth: number;

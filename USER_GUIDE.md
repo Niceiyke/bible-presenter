@@ -30,6 +30,16 @@ In **Presentations**, choose **Import PPTX**. Wordlyte asks desktop Microsoft Po
 - Animations, transitions, embedded video, presenter notes, and macros do not remain interactive.
 - PowerPoint is not required for playback after a successful import.
 
+## AI Scripture Assistant (beta)
+
+Open **AI Scripture**, enter a church-owned Deepgram API key, choose the mixer or microphone input, and choose the translation used for suggestion cards. Select **Start listening** only after obtaining any consent required by your church and local law.
+
+- Audio and transcript data are sent to Deepgram while listening. Stop listening when transcription is no longer needed.
+- The API key is encrypted with Windows DPAPI for the current Windows user. It is excluded from Wordlyte backups.
+- The assistant detects spoken references and close direct quotations in English. Treat every result as a suggestion and verify its reference and text.
+- **Stage** places a suggestion in the normal staged preview. The assistant cannot send content live; only the operator can use **Go Live**.
+- If the network or provider fails, normal Scripture search and all projection controls remain available.
+
 ## Backup and restore
 
 Open **Settings → Data & Backup**.

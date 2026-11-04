@@ -22,3 +22,4 @@ pub mod capture;
 pub mod program_audio;
 pub mod backup;
 pub mod pptx;
+pub mod ai_scripture;

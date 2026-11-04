@@ -40,6 +40,11 @@ fn main() {
         }
     }));
 
+    // The dependency graph enables both rustls crypto backends. Select one
+    // explicitly before any HTTP/WebSocket client is created; otherwise
+    // rustls panics while establishing the first TLS connection.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -437,6 +442,12 @@ fn main() {
             wordlyte_lib::commands::backup::restart_application,
             wordlyte_lib::commands::pptx::import_pptx_rendered,
             wordlyte_lib::commands::pptx::discard_pptx_import,
+            wordlyte_lib::commands::ai_scripture::ai_key_status,
+            wordlyte_lib::commands::ai_scripture::ai_set_api_key,
+            wordlyte_lib::commands::ai_scripture::ai_clear_api_key,
+            wordlyte_lib::commands::ai_scripture::ai_status,
+            wordlyte_lib::commands::ai_scripture::ai_start,
+            wordlyte_lib::commands::ai_scripture::ai_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
