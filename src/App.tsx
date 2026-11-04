@@ -30,6 +30,7 @@ import { ShortcutsModal } from "./components/ShortcutsModal";
 import { LogViewer } from "./components/LogViewer";
 import { RecoveryModal } from "./components/RecoveryModal";
 import { MusicPlayer } from "./components/MusicPlayer";
+import { OnboardingTour } from "./components/OnboardingTour";
 
 import { OutputWindow, StageWindow } from "./windows";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -350,6 +351,7 @@ export default function App() {
           setPendingScheduleItem(null);
         }}
       />
+      <OnboardingTour />
       </div>
       </ProgramAudioProvider>
       </RecordingProvider>

@@ -10,14 +10,22 @@ This document lists the available keyboard shortcuts for managing the projection
 - **Ctrl + B**: Toggle Blackout (Stop projection without clearing item).
 - **Ctrl + T**: Toggle Unified Bottom Studio Deck (Show/Hide bottom dock).
 - **Ctrl + S**: Toggle Settings Tab.
+- **?**: Show or hide the in-app shortcut reference.
+- **Ctrl + G**: Go Live with the currently staged item.
+- **Ctrl + L**: Clear Live Output.
+- **Ctrl + Shift + X**: Clear both staged and live output.
 
 ## Navigation & Tabs
 
 - **F1**: Switch to **Bible** Tab.
 - **F2**: Switch to **Songs** Tab.
 - **F3**: Switch to **Media** Tab.
-- **F4**: Switch to **PPTX Presentations** Tab.
-- **F5**: Open **Unified Studio Deck** (Presentation & Lower Third Designer).
+- **F4**: Switch to **Presentations** (including rendered PPTX imports).
+- **F5**: Switch to **Lower Third Designer**.
+- **F6**: Switch to **Service Plan**.
+- **F7**: Switch to **Props**.
+- **F8**: Switch to **Media**, filtered to cameras.
+- **F9**: Switch to **Settings**.
 
 ## Bible & Verses
 
@@ -28,6 +36,15 @@ This document lists the available keyboard shortcuts for managing the projection
 
 - **Arrow Right**: Next Slide (PowerPoint or Custom Studio Slide).
 - **Arrow Left**: Previous Slide (PowerPoint or Custom Studio Slide).
+- **Home**: First slide/section in the currently live item.
+- **End**: Last slide/section in the currently live item.
+
+## Service Plan
+
+- **Arrow Down**: Send the next Service Plan entry live.
+- **Arrow Up**: Send the previous Service Plan entry live.
+
+The active Service Plan position changes only after Wordlyte confirms that the item went live.
 
 ## Lower Thirds
 

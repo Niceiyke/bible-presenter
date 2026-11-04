@@ -48,6 +48,7 @@ const en: Dict = {
   "schedule.renamePrompt": "Rename service:",
 
   "settings.output": "Output Settings",
+  "settings.category.data": "Data & Backup",
   "settings.blankScreen": "BLANK SCREEN",
   "settings.screenBlanked": "SCREEN BLANKED",
   "settings.scriptureVerse": "Scripture Verse",

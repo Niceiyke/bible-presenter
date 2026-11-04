@@ -71,4 +71,17 @@ describe("serviceSlice schedule undo/redo", () => {
     expect(useAppStore.getState().pastScheduleStates.length).toBeLessThanOrEqual(50);
     expect(useAppStore.getState().pastScheduleStates.length).toBe(50);
   });
+
+  it("commits a drag reorder with the pre-drag order as the undo snapshot", () => {
+    const before = entries(["a", "b", "c"]);
+    const after = entries(["c", "a", "b"]);
+    useAppStore.setState({ scheduleEntries: after });
+
+    useAppStore.getState().commitScheduleReorder(before, after);
+    useAppStore.getState().undoSchedule();
+
+    expect(useAppStore.getState().scheduleEntries.map((e) => e.id)).toEqual(["a", "b", "c"]);
+    useAppStore.getState().redoSchedule();
+    expect(useAppStore.getState().scheduleEntries.map((e) => e.id)).toEqual(["c", "a", "b"]);
+  });
 });

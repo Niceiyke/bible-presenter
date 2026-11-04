@@ -1,12 +1,19 @@
 import React, { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { Plus, Presentation, Edit2, Trash2, Search } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { Plus, Presentation, Edit2, Trash2, Search, FileUp } from "lucide-react";
 import { useAppStore } from "../store";
 import { StudioSlideCard } from "./StudioSlideCard";
 import { buildCustomSlideItem } from "../utils";
 import { ContentCard, ConfirmModal, StatusBadge, Button } from "./ui";
 import type { CustomPresentation, CustomSlide, DisplayItem, PresentationSummary } from "../types";
+
+interface RenderedPptxImport {
+  id: string;
+  name: string;
+  slide_paths: string[];
+}
 
 interface StudioTabProps {
   onStage?: (item: DisplayItem) => void;
@@ -26,6 +33,48 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
 
   const [search, setSearch] = useState("");
   const [deletePres, setDeletePres] = useState<PresentationSummary | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  const importPowerPoint = async () => {
+    const selected = await open({
+      title: "Import PowerPoint as rendered slides",
+      multiple: false,
+      directory: false,
+      filters: [{ name: "PowerPoint Presentation", extensions: ["pptx"] }],
+    });
+    if (typeof selected !== "string") return;
+    setImporting(true);
+    setToast("Rendering PowerPoint slides…");
+    try {
+      const imported = await invoke<RenderedPptxImport>("import_pptx_rendered", { path: selected });
+      const presentation: CustomPresentation = {
+        id: imported.id,
+        name: imported.name,
+        version: 2,
+        slides: imported.slide_paths.map((path, index) => ({
+          id: `${imported.id}-slide-${index + 1}`,
+          background: { type: "image", value: path, objectFit: "contain" },
+          elements: [],
+        })),
+      };
+      try {
+        await invoke("save_studio_presentation", { presentation });
+      } catch (error) {
+        await invoke("discard_pptx_import", { id: imported.id }).catch(() => undefined);
+        throw error;
+      }
+      const list = await invoke<PresentationSummary[]>("list_studio_presentations");
+      setStudioList(list);
+      setStudioSlides({ ...studioSlides, [presentation.id]: presentation.slides });
+      setExpandedStudioPresId(presentation.id);
+      await emit("studio-sync", list);
+      setToast(`Imported ${presentation.slides.length} rendered PowerPoint slides`);
+    } catch (error) {
+      setToast(`PowerPoint import failed: ${error}`);
+    } finally {
+      setImporting(false);
+    }
+  };
 
   const handleDelete = async (id: string) => {
     await invoke("delete_studio_presentation", { id });
@@ -63,12 +112,17 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
           <h2 className="text-sm font-bold text-slate-200">Presentations</h2>
           <p className="text-[10px] text-slate-600">{studioList.length} {studioList.length === 1 ? "presentation" : "presentations"}</p>
         </div>
-        <button
-          onClick={onNewPresentation}
-          className="flex items-center gap-1.5 px-3 py-2 bg-purple-600 hover:bg-purple-500 text-white text-[11px] font-bold rounded-lg transition-all shadow-lg shadow-purple-900/30"
-        >
-          <Plus size={13} /> New
-        </button>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="md" onClick={importPowerPoint} loading={importing} disabled={importing}>
+            <FileUp size={13} /> Import PPTX
+          </Button>
+          <button
+            onClick={onNewPresentation}
+            className="flex items-center gap-1.5 px-3 py-2 bg-purple-600 hover:bg-purple-500 text-white text-[11px] font-bold rounded-lg transition-all shadow-lg shadow-purple-900/30"
+          >
+            <Plus size={13} /> New
+          </button>
+        </div>
       </div>
 
       {studioList.length > 3 && (
@@ -159,7 +213,7 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
             </div>
             <div>
               <p className="text-console-text-muted text-sm font-medium">No presentations yet</p>
-              <p className="text-console-text-subtle text-xs mt-1">Click New to create your first presentation</p>
+              <p className="text-console-text-subtle text-xs mt-1">Create a deck or import a .pptx as rendered slides</p>
             </div>
           </div>
         )}

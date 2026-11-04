@@ -27,6 +27,12 @@ jobs:
       - name: run frontend tests
         run: npm run test
 
+      - name: install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: run operator workflow E2E tests
+        run: npm run test:e2e
+
   backend:
     # The app ships only for Windows (NSIS/WebView2); Tauri's glib/gtk -sys
     # crates also fail to pkg-config on bare ubuntu runners. Build/check on the

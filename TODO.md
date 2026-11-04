@@ -33,6 +33,12 @@ steps on the dev machine.
 
 ## 1. NDI output — real SDK sender
 
+- [x] Add a strict `ndi` build gate: Windows target, installed SDK (`NDI_SDK_DIR`),
+      and a staged runtime DLL are all required before the feature compiles.
+- [x] Add `scripts/prepare-ndi.ps1` and `tauri.ndi.conf.json` so the EULA-provided
+      runtime can be staged and bundled without committing or downloading it.
+- [x] Extend `ndi_status` with compile/runtime diagnostics while keeping
+      `supported=false` until sender validation is complete.
 - [ ] Add `grafton-ndi` as an optional dependency wired to the `ndi` cargo feature
       (`Cargo.toml`).
 - [ ] `ndi_status` (`#[cfg(feature = "ndi")]` in `commands/ndi.rs`): real probe —

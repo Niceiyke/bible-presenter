@@ -15,6 +15,7 @@ use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
 static BUNDLED_BIN_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+static RESOURCE_BIN_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 fn ffmpeg_exe() -> &'static str {
     if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" }
@@ -28,8 +29,18 @@ fn ffprobe_exe() -> &'static str {
 /// actually contains ffmpeg, so a missing binary silently keeps PATH behavior.
 pub fn init(resource_dir: &Path) {
     let dir = resource_dir.join("bin");
+    let _ = RESOURCE_BIN_DIR.set(dir.clone());
     let present = dir.join(ffmpeg_exe()).exists();
     let _ = BUNDLED_BIN_DIR.set(if present { Some(dir) } else { None });
+}
+
+/// Resolve an optional bundled runtime without falling back to PATH. Vendor
+/// integrations use this so an arbitrary same-named DLL is never loaded.
+pub fn bundled_runtime(name: &str) -> Option<PathBuf> {
+    RESOURCE_BIN_DIR
+        .get()
+        .map(|dir| dir.join(name))
+        .filter(|path| path.is_file())
 }
 
 fn bundled_dir() -> Option<PathBuf> {

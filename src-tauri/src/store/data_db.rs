@@ -74,6 +74,15 @@ pub type MediaRow = (
 );
 
 impl DataDb {
+    /// Create a consistent snapshot while the application is running. Using
+    /// SQLite's online backup API avoids copying a database mid-transaction.
+    pub fn backup_to(&self, destination: &std::path::Path) -> Result<(), rusqlite::Error> {
+        let source = self.conn.lock();
+        let mut target = Connection::open(destination)?;
+        let backup = rusqlite::backup::Backup::new(&source, &mut target)?;
+        backup.run_to_completion(64, std::time::Duration::from_millis(10), None)
+    }
+
     pub fn open(db_path: &PathBuf) -> Result<Self, OpenError> {
         match Self::try_open(db_path) {
             Ok(db) => Ok(db),

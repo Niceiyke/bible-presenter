@@ -1023,6 +1023,14 @@ impl Clone for MediaScheduleStore {
 }
 
 impl MediaScheduleStore {
+    pub fn backup_database(&self, destination: &std::path::Path) -> Result<()> {
+        self.data_db.backup_to(destination).map_err(|e| anyhow::anyhow!(e))
+    }
+
+    pub fn app_data_dir(&self) -> &std::path::Path {
+        &self.app_data_dir
+    }
+
     pub fn new(app_data_dir: PathBuf) -> Result<Self> {
         let media_dir = app_data_dir.join("media");
         let thumbnails_dir = app_data_dir.join("thumbnails");
@@ -1770,7 +1778,14 @@ impl MediaScheduleStore {
     }
 
     pub fn delete_studio_presentation(&self, id: &str) -> Result<()> {
-        self.data_db.hash_delete("presentations", id).map_err(|e| anyhow::anyhow!(e))
+        self.data_db.hash_delete("presentations", id).map_err(|e| anyhow::anyhow!(e))?;
+        // Rendered PPTX decks own a UUID-named folder beneath media. The UUID
+        // check makes this cleanup path traversal-proof; authored decks simply
+        // have no matching folder and remain unaffected.
+        if Uuid::parse_str(id).is_ok() {
+            let _ = std::fs::remove_dir_all(self.media_dir.join("presentations").join(id));
+        }
+        Ok(())
     }
 
     // ---- Slide templates ----

@@ -81,6 +81,12 @@ fn main() {
                     .map_err(|e| format!("Cannot create data dir {:?}: {}", app_data_dir, e))?;
             }
 
+            match wordlyte_lib::commands::backup::apply_pending_restore(&app_data_dir) {
+                Ok(Some(previous)) => log_msg(app, &format!("Backup restored. Previous data preserved at {:?}", previous)),
+                Ok(None) => {}
+                Err(e) => log_msg(app, &format!("Pending backup restore could not be applied: {e}")),
+            }
+
             let db_path = assets::bible_db_path(&app_data_dir, &resource_path);
 
             log_msg(app, &format!("Bible Database path: {:?}", db_path));
@@ -426,6 +432,11 @@ fn main() {
             wordlyte_lib::commands::license::license_activate,
             wordlyte_lib::commands::license::license_refresh,
             wordlyte_lib::commands::license::license_deactivate,
+            wordlyte_lib::commands::backup::backup_create,
+            wordlyte_lib::commands::backup::backup_stage_restore,
+            wordlyte_lib::commands::backup::restart_application,
+            wordlyte_lib::commands::pptx::import_pptx_rendered,
+            wordlyte_lib::commands::pptx::discard_pptx_import,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

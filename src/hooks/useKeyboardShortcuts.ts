@@ -169,8 +169,9 @@ export function useKeyboardShortcuts(props: Props): void {
           e.preventDefault();
           const nextIdx = activeScheduleIdx !== null ? activeScheduleIdx + 1 : 0;
           if (nextIdx < scheduleEntries.length) {
-            setActiveScheduleIdx(nextIdx);
-            sendLive(scheduleEntries[nextIdx].item);
+            void sendLive(scheduleEntries[nextIdx].item).then((sent) => {
+              if (sent) setActiveScheduleIdx(nextIdx);
+            });
           }
           break;
         }
@@ -178,8 +179,9 @@ export function useKeyboardShortcuts(props: Props): void {
           e.preventDefault();
           const prevIdx = activeScheduleIdx !== null ? activeScheduleIdx - 1 : scheduleEntries.length - 1;
           if (prevIdx >= 0 && scheduleEntries.length > 0) {
-            setActiveScheduleIdx(prevIdx);
-            sendLive(scheduleEntries[prevIdx].item);
+            void sendLive(scheduleEntries[prevIdx].item).then((sent) => {
+              if (sent) setActiveScheduleIdx(prevIdx);
+            });
           }
           break;
         }
@@ -199,4 +201,3 @@ export function useKeyboardShortcuts(props: Props): void {
     },
   );
 }
-

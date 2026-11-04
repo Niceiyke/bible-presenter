@@ -9,15 +9,15 @@ import { Button, IconButton, ConfirmModal, SaveStatus, type SaveStatusState } fr
 import type { DisplayItem, Schedule, ScheduleEntry, ServiceMeta } from "../types";
 
 interface ScheduleTabProps {
-  onSendItem: (item: DisplayItem, idx: number) => void;
-  onPersist: () => void;
-  stageItem: (item: DisplayItem) => void;
+  onSendItem: (item: DisplayItem, idx: number) => Promise<boolean>;
+  onPersist: () => Promise<void>;
+  stageItem: (item: DisplayItem) => Promise<boolean>;
 }
 
 export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabProps) {
   const {
     scheduleEntries, setScheduleEntries,
-    pushScheduleState, undoSchedule, redoSchedule,
+    pushScheduleState, commitScheduleReorder, undoSchedule, redoSchedule,
     pastScheduleStates, futureScheduleStates,
     activeScheduleIdx, setActiveScheduleIdx,
     services, setServices,
@@ -34,6 +34,9 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [createValue, setCreateValue] = useState("");
   const saveTimerRef = useRef<number | null>(null);
+  const reorderStartRef = useRef<ScheduleEntry[] | null>(null);
+  const playingEntryRef = useRef<string | null>(null);
+  const [playingEntryId, setPlayingEntryId] = useState<string | null>(null);
 
   // Derive a readable save state for the SaveStatus pill.
   const derivedSave: SaveStatusState = (() => {
@@ -64,15 +67,28 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
 
   useEffect(() => () => { if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current); }, []);
 
-  const sendAndMaybeRemove = (item: DisplayItem, idx: number, entryId: string) => {
-    onSendItem(item, idx);
-    if (!isSchedulePersistent) {
-      const next = scheduleEntries.filter((e) => e.id !== entryId);
-      pushScheduleState(next);
-      setActiveScheduleIdx(null);
-      debouncedPersist();
-    } else {
-      setActiveScheduleIdx(idx);
+  const sendAndMaybeRemove = async (item: DisplayItem, idx: number, entryId: string) => {
+    if (playingEntryRef.current) return false;
+    playingEntryRef.current = entryId;
+    setPlayingEntryId(entryId);
+    try {
+      const sent = await onSendItem(item, idx);
+      // A one-shot item must remain available when staging or committing fails.
+      // Likewise, the persistent playhead only advances after the output
+      // backend confirms what actually went live.
+      if (!sent) return false;
+      if (!isSchedulePersistent) {
+        const next = useAppStore.getState().scheduleEntries.filter((e) => e.id !== entryId);
+        pushScheduleState(next);
+        setActiveScheduleIdx(null);
+        debouncedPersist();
+      } else {
+        setActiveScheduleIdx(idx);
+      }
+      return true;
+    } finally {
+      playingEntryRef.current = null;
+      setPlayingEntryId(null);
     }
   };
 
@@ -80,14 +96,14 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
     if (activeScheduleIdx === null || activeScheduleIdx <= 0) return;
     const idx = activeScheduleIdx - 1;
     const entry = scheduleEntries[idx];
-    sendAndMaybeRemove(entry.item, idx, entry.id);
+    await sendAndMaybeRemove(entry.item, idx, entry.id);
   };
 
   const handleNextItem = async () => {
     const next = activeScheduleIdx === null ? 0 : activeScheduleIdx + 1;
     if (next >= scheduleEntries.length) return;
     const entry = scheduleEntries[next];
-    sendAndMaybeRemove(entry.item, next, entry.id);
+    await sendAndMaybeRemove(entry.item, next, entry.id);
   };
 
   const removeFromSchedule = async (id: string) => {
@@ -98,11 +114,15 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
   };
 
   const handleReorder = (next: typeof scheduleEntries) => {
+    if (!reorderStartRef.current) reorderStartRef.current = scheduleEntries;
     setScheduleEntries(next);
   };
 
   const handleReorderEnd = () => {
-    pushScheduleState(scheduleEntries);
+    const previous = reorderStartRef.current;
+    reorderStartRef.current = null;
+    if (!previous) return;
+    commitScheduleReorder(previous, useAppStore.getState().scheduleEntries);
     debouncedPersist();
   };
 
@@ -307,9 +327,10 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
                     variant="primary"
                     size="sm"
                     icon={<Play size={10} />}
-                    onClick={() => sendAndMaybeRemove(entry.item, idx, entry.id)}
+                    onClick={() => void sendAndMaybeRemove(entry.item, idx, entry.id)}
+                    disabled={playingEntryId !== null}
                   >
-                    Play Next
+                    {playingEntryId === entry.id ? "Sending…" : "Play Next"}
                   </Button>
                   <IconButton
                     label="Remove from schedule"

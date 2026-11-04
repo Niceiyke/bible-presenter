@@ -14,6 +14,12 @@ src-tauri/bible_data/*.npy
 
 # Bundled media binaries — fetched via scripts/fetch-ffmpeg.ps1 (not committed)
 src-tauri/binaries/*.exe
+# NDI runtime is copied from the developer's EULA-accepted SDK installation.
+src-tauri/binaries/ndi/*.dll
+
+# Playwright artifacts
+test-results/
+playwright-report/
 
 # DB-only Bible data release asset (uploaded to the GitHub release, not committed)
 /wordlyte_bible.zip

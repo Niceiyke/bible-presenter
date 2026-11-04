@@ -8,6 +8,7 @@ export interface ServiceSlice {
   scheduleEntries: ScheduleEntry[];
   setScheduleEntries: (v: ScheduleEntry[]) => void;
   pushScheduleState: (v: ScheduleEntry[]) => void;
+  commitScheduleReorder: (previous: ScheduleEntry[], next: ScheduleEntry[]) => void;
   undoSchedule: () => void;
   redoSchedule: () => void;
   pastScheduleStates: ScheduleEntry[][];
@@ -37,6 +38,15 @@ export const createServiceSlice: StateCreator<AppStore, [], [], ServiceSlice> = 
   futureScheduleStates: [],
   pushScheduleState: (next) => set((s) => ({
     pastScheduleStates: [...s.pastScheduleStates, s.scheduleEntries].slice(-50),
+    scheduleEntries: next,
+    futureScheduleStates: []
+  })),
+  // Framer Motion updates `scheduleEntries` continuously while an item is
+  // dragged. At drag end the store already contains `next`, so the normal
+  // pushScheduleState helper would save the post-drag state as its own undo
+  // snapshot. Accept the pre-drag snapshot explicitly instead.
+  commitScheduleReorder: (previous, next) => set((s) => ({
+    pastScheduleStates: [...s.pastScheduleStates, previous].slice(-50),
     scheduleEntries: next,
     futureScheduleStates: []
   })),

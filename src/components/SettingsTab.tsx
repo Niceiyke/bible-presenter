@@ -15,6 +15,7 @@ import { MonitorsSection } from "./settings/sections/MonitorsSection";
 import { StageSection } from "./settings/sections/StageSection";
 import { OperatorSection } from "./settings/sections/OperatorSection";
 import { LicenseSection } from "./settings/sections/LicenseSection";
+import { DataManagementSection } from "./settings/sections/DataManagementSection";
 
 const CATEGORIES: SettingsCategory[] = [
   { id: "assets", labelKey: "settings.category.assets", keywords: ["asset", "bible", "database", "download", "install", "core", "scriptures", "required"] },
@@ -27,6 +28,7 @@ const CATEGORIES: SettingsCategory[] = [
   { id: "monitors", labelKey: "settings.category.monitors", keywords: ["monitor", "screen", "display", "output monitor", "test", "projector"] },
   { id: "stage", labelKey: "settings.category.stage", keywords: ["stage", "second monitor", "performer", "confidence", "themed"] },
   { id: "operator", labelKey: "settings.category.operator", keywords: ["behaviour", "behavior", "auto hide", "logo clear", "locale", "language", "i18n"] },
+  { id: "data", labelKey: "settings.category.data", keywords: ["backup", "restore", "data", "archive", "transfer", "recovery"] },
   { id: "license", labelKey: "settings.category.license", keywords: ["license", "key", "activate", "beta", "expiry", "expires", "church", "device", "deactivate"] },
 ];
 
@@ -97,6 +99,7 @@ export function SettingsTab({ onUpdateSettings, onUploadMedia }: SettingsTabProp
     if (category === "monitors") return <MonitorsSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
     if (category === "stage") return <StageSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
     if (category === "operator") return <OperatorSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
+    if (category === "data") return <DataManagementSection />;
     if (category === "license") return <LicenseSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
     return null;
   };
