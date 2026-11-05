@@ -1,4 +1,6 @@
-use crate::ai_detection::{detect_reference, direct_quote_match_score, quote_tokens};
+use crate::ai_detection::{
+    detect_reference, direct_quote_match_score, quote_tokens, MIN_DIRECT_QUOTE_WORDS,
+};
 use crate::commands::program_audio::{subscribe_feed, AudioRelay};
 use crate::semantic_scripture::{self, SemanticScripture};
 use crate::state::AppState;
@@ -68,6 +70,7 @@ const BIBLE_KEYTERMS: &[&str] = &[
 ];
 const CONTEXT_WINDOW: Duration = Duration::from_secs(20);
 const SUGGESTION_COOLDOWN: Duration = Duration::from_secs(60);
+const MAX_SHORT_QUOTE_CONFIDENCE: f32 = 0.89;
 
 fn deepgram_url() -> String {
     let mut url = DEEPGRAM_BASE_URL.to_string();
@@ -932,7 +935,7 @@ fn detect_direct_quote(
     asr_confidence: f32,
 ) -> Option<ScriptureSuggestion> {
     let query_tokens = quote_tokens(rolling_text);
-    if query_tokens.len() < 6 {
+    if query_tokens.len() < MIN_DIRECT_QUOTE_WORDS {
         return None;
     }
     let query = query_tokens
@@ -960,14 +963,24 @@ fn detect_direct_quote(
         )
         .ok()
         .flatten()?;
+    let confidence = quote_confidence(score, asr_confidence, quote_tokens(evidence).len());
     Some(ScriptureSuggestion {
         id: Uuid::new_v4().to_string(),
         detection: "quote".into(),
-        confidence: (score * 0.85 + asr_confidence * 0.15).clamp(0.0, 0.98),
+        confidence,
         evidence: evidence.to_string(),
         verse,
         timestamp: now_ms(),
     })
+}
+
+fn quote_confidence(score: f32, asr_confidence: f32, evidence_words: usize) -> f32 {
+    let confidence = (score * 0.85 + asr_confidence * 0.15).clamp(0.0, 0.98);
+    if evidence_words <= MIN_DIRECT_QUOTE_WORDS {
+        confidence.min(MAX_SHORT_QUOTE_CONFIDENCE)
+    } else {
+        confidence
+    }
 }
 
 #[cfg(test)]
@@ -985,6 +998,12 @@ mod tests {
         assert!((transcript.confidence - 0.97).abs() < f32::EPSILON);
         assert!(parse_deepgram_transcript(r#"{"type":"Metadata"}"#).is_none());
         assert!(parse_deepgram_transcript("not json").is_none());
+    }
+
+    #[test]
+    fn five_word_quotes_never_reach_auto_stage_confidence() {
+        assert_eq!(quote_confidence(1.0, 1.0, 5), 0.89);
+        assert_eq!(quote_confidence(1.0, 1.0, 6), 0.98);
     }
 
     #[test]

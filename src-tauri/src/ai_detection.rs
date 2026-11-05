@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+pub(crate) const MIN_DIRECT_QUOTE_WORDS: usize = 5;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptureReference {
     pub book: String,
@@ -217,6 +219,18 @@ pub(crate) fn quote_tokens(text: &str) -> Vec<String> {
     tokenize(text)
         .into_iter()
         .filter(|word| word != ":" && word != "-")
+        // ASR commonly drops possessive endings ("the Lord" for "the
+        // Lord's"). Ignore only the possessive suffix so short, otherwise
+        // exact quotations can still align without broadly stemming words.
+        .map(|word| {
+            let word = word.replace('’', "'");
+            word.strip_suffix("'s")
+                // Some legacy Bible rows contain U+FFFD where an apostrophe
+                // was decoded incorrectly (for example, "LORD�s").
+                .or_else(|| word.strip_suffix("�s"))
+                .unwrap_or(&word)
+                .to_string()
+        })
         .collect()
 }
 
@@ -239,7 +253,7 @@ fn lcs_len(left: &[String], right: &[String]) -> usize {
 fn direct_quote_score(spoken: &str, verse: &str) -> f32 {
     let spoken = quote_tokens(spoken);
     let verse = quote_tokens(verse);
-    if spoken.len() < 5 || verse.len() < 5 {
+    if spoken.len() < MIN_DIRECT_QUOTE_WORDS || verse.len() < MIN_DIRECT_QUOTE_WORDS {
         return 0.0;
     }
     let denominator = spoken.len().min(verse.len()) as f32;
@@ -258,7 +272,13 @@ fn direct_quote_score(spoken: &str, verse: &str) -> f32 {
         }
     }
     let lexical = overlap as f32 / denominator;
-    ordered * 0.7 + lexical * 0.3
+    let base = ordered * 0.7 + lexical * 0.3;
+    // Prefer the canonical verse where a short quotation begins the text over
+    // later verses that repeat it inside a longer sentence. Non-prefix quotes
+    // remain eligible; this small tie-break only resolves otherwise identical
+    // lexical scores (for example Psalm 24:1 vs. 1 Corinthians 10:26).
+    let starts_verse = verse.starts_with(&spoken);
+    base * if starts_verse { 1.0 } else { 0.98 }
 }
 
 /// Return the calibrated lexical-alignment score when `spoken` is close enough
@@ -266,7 +286,7 @@ fn direct_quote_score(spoken: &str, verse: &str) -> f32 {
 pub fn direct_quote_match_score(spoken: &str, verse: &str) -> Option<f32> {
     let score = direct_quote_score(spoken, verse);
     let ordered_words = lcs_len(&quote_tokens(spoken), &quote_tokens(verse));
-    (score >= 0.72 && ordered_words >= 5).then_some(score)
+    (score >= 0.72 && ordered_words >= MIN_DIRECT_QUOTE_WORDS).then_some(score)
 }
 
 #[cfg(test)]
@@ -361,6 +381,30 @@ mod tests {
             verse
         )
         .is_none());
+    }
+
+    #[test]
+    fn direct_quote_accepts_five_words_with_dropped_possessive() {
+        let psalm_score = direct_quote_match_score(
+            "The earth is the Lord.",
+            "The earth is the Lord's, and all its fullness, the world and those who dwell therein.",
+        )
+        .unwrap();
+        let repeated_score = direct_quote_match_score(
+            "The earth is the Lord.",
+            "For the earth is the Lord's, and all its fullness.",
+        )
+        .unwrap();
+        assert!(psalm_score > repeated_score);
+        assert!(direct_quote_match_score(
+            "Earth is the Lord.",
+            "The earth is the Lord's, and all its fullness."
+        )
+        .is_none());
+        assert_eq!(
+            quote_tokens("The earth is the LORD�s."),
+            quote_tokens("The earth is the Lord.")
+        );
     }
 
     #[test]
