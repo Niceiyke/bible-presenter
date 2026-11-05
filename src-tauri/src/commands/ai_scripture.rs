@@ -1,7 +1,7 @@
 use crate::ai_detection::{
     detect_reference, direct_quote_match_score, quote_tokens, MIN_DIRECT_QUOTE_WORDS,
 };
-use crate::commands::program_audio::{subscribe_feed, AudioRelay};
+use crate::commands::program_audio::{feed_diagnostics, subscribe_feed, AudioRelay};
 use crate::semantic_scripture::{self, SemanticScripture};
 use crate::state::AppState;
 use crate::store::{BibleStore, Verse};
@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::AsyncReadExt;
-use tokio::process::{Child, Command};
+use tokio::process::{Child, ChildStdout, Command};
 use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 use uuid::Uuid;
@@ -75,6 +75,8 @@ const MAX_SEMANTIC_SENTENCES: usize = 2;
 const MIN_COMPLETE_THOUGHT_WORDS: usize = 5;
 const SUGGESTION_COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_SHORT_QUOTE_CONFIDENCE: f32 = 0.89;
+const MAX_AUDIO_RECOVERIES: usize = 2;
+const MAX_DECODER_ERROR_BYTES: usize = 8 * 1024;
 
 fn deepgram_url() -> String {
     let mut url = DEEPGRAM_BASE_URL.to_string();
@@ -607,8 +609,38 @@ pub fn ai_remove_semantic(
     semantic_scripture::engine(&state.app_data_dir).remove_local_model(&app)
 }
 
-async fn spawn_pcm_decoder(relay: &AudioRelay) -> Result<Child, String> {
-    Command::new(crate::binpaths::ffmpeg_path())
+struct PcmDecoder {
+    child: Child,
+    stdout: ChildStdout,
+    stderr_task: tokio::task::JoinHandle<String>,
+}
+
+impl PcmDecoder {
+    async fn exit_diagnostics(&mut self) -> String {
+        let status = self
+            .child
+            .wait()
+            .await
+            .map(|status| status.to_string())
+            .unwrap_or_else(|error| format!("status unavailable: {error}"));
+        let stderr = (&mut self.stderr_task).await.unwrap_or_default();
+        let stderr = stderr.trim();
+        if stderr.is_empty() {
+            format!("decoder exited with {status}")
+        } else {
+            format!("decoder exited with {status}; ffmpeg: {stderr}")
+        }
+    }
+
+    async fn stop(mut self) {
+        let _ = self.child.kill().await;
+        let _ = self.child.wait().await;
+        let _ = self.stderr_task.await;
+    }
+}
+
+async fn spawn_pcm_decoder(relay: &AudioRelay) -> Result<PcmDecoder, String> {
+    let mut child = Command::new(crate::binpaths::ffmpeg_path())
         .args([
             "-hide_banner",
             "-loglevel",
@@ -629,10 +661,38 @@ async fn spawn_pcm_decoder(relay: &AudioRelay) -> Result<Child, String> {
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("Could not start the transcription audio decoder: {e}"))
+        .map_err(|e| format!("Could not start the transcription audio decoder: {e}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Could not read transcription audio.".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Could not inspect transcription audio errors.".to_string())?;
+    let stderr_task = tokio::spawn(async move {
+        let mut stderr = stderr;
+        let mut tail: VecDeque<u8> = VecDeque::with_capacity(MAX_DECODER_ERROR_BYTES);
+        let mut buf = [0u8; 1024];
+        while let Ok(count) = stderr.read(&mut buf).await {
+            if count == 0 {
+                break;
+            }
+            tail.extend(&buf[..count]);
+            while tail.len() > MAX_DECODER_ERROR_BYTES {
+                tail.pop_front();
+            }
+        }
+        String::from_utf8_lossy(&tail.into_iter().collect::<Vec<_>>()).to_string()
+    });
+    Ok(PcmDecoder {
+        child,
+        stdout,
+        stderr_task,
+    })
 }
 
 async fn run_deepgram_session(
@@ -675,11 +735,9 @@ async fn run_deepgram_session(
         })?
         .map_err(|e| format!("Deepgram connection failed: {e}"))?;
 
-    let mut decoder = spawn_pcm_decoder(&relay).await?;
-    let mut stdout = decoder
-        .stdout
-        .take()
-        .ok_or_else(|| "Could not read transcription audio.".to_string())?;
+    let mut relay = Some(relay);
+    let mut decoder = spawn_pcm_decoder(relay.as_ref().expect("audio relay initialized")).await?;
+    let mut audio_recoveries = 0usize;
     emit_status(
         &app,
         "listening",
@@ -726,9 +784,50 @@ async fn run_deepgram_session(
             changed = stop.changed() => {
                 if changed.is_ok() && *stop.borrow() { break; }
             }
-            read = stdout.read(&mut audio) => {
+            read = decoder.stdout.read(&mut audio) => {
                 let count = read.map_err(|e| format!("Audio decoder failed: {e}"))?;
-                if count == 0 { return Err("The transcription audio decoder stopped unexpectedly.".into()); }
+                if count == 0 {
+                    let decoder_diagnostics = decoder.exit_diagnostics().await;
+                    let feed_diagnostics = feed_diagnostics();
+                    let diagnostics = format!("{decoder_diagnostics}; {feed_diagnostics}");
+                    crate::store::log_msg(
+                        &app,
+                        &format!("[ai-scripture] audio decoder EOF: {diagnostics}"),
+                    );
+                    if audio_recoveries >= MAX_AUDIO_RECOVERIES {
+                        return Err(format!(
+                            "Transcription audio stopped after {MAX_AUDIO_RECOVERIES} automatic recovery attempts. Check the selected input and try again."
+                        ));
+                    }
+
+                    audio_recoveries += 1;
+                    emit_status(
+                        &app,
+                        "connecting",
+                        format!(
+                            "Recovering transcription audio ({audio_recoveries}/{MAX_AUDIO_RECOVERIES})…"
+                        ),
+                        Some(audio_device.clone()),
+                        Some(version.clone()),
+                    );
+                    drop(relay.take());
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    let replacement = subscribe_feed(&audio_device).map_err(|error| {
+                        format!("Could not recover transcription audio: {error}")
+                    })?;
+                    decoder = spawn_pcm_decoder(&replacement).await.map_err(|error| {
+                        format!("Could not recover transcription audio: {error}")
+                    })?;
+                    relay = Some(replacement);
+                    emit_status(
+                        &app,
+                        "listening",
+                        "Listening for Scripture…",
+                        Some(audio_device.clone()),
+                        Some(version.clone()),
+                    );
+                    continue;
+                }
                 socket.send(Message::Binary(audio[..count].to_vec().into()))
                     .await
                     .map_err(|e| format!("Could not send audio to Deepgram: {e}"))?;
@@ -759,8 +858,8 @@ async fn run_deepgram_session(
     let _ = socket
         .send(Message::Text(r#"{"type":"CloseStream"}"#.into()))
         .await;
-    let _ = decoder.kill().await;
-    drop(relay);
+    decoder.stop().await;
+    drop(relay.take());
     Ok(())
 }
 

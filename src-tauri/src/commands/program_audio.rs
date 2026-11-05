@@ -18,6 +18,7 @@
 //! inputs (parsed from `ffmpeg -list_devices`), which the frontend renders in a
 //! device picker.
 
+use std::collections::VecDeque;
 use std::io::{BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
@@ -77,6 +78,7 @@ struct FeedInner {
     consumers: u32,
     device: String,
     child: Child,
+    stderr_tail: Arc<Mutex<VecDeque<u8>>>,
 }
 
 static FEED: OnceLock<Mutex<Option<FeedInner>>> = OnceLock::new();
@@ -182,12 +184,34 @@ pub fn start_feed(device: &str) -> Result<u16, String> {
             "pipe:1",
         ])
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .stdin(Stdio::null())
         .spawn()
         .map_err(|e| format!("Audio feed ffmpeg failed to start: {e}"))?;
 
     let stdout = child.stdout.take().expect("stdout piped");
+    let stderr = child.stderr.take().expect("stderr piped");
+    let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(8 * 1024)));
+    let stderr_tail_writer = stderr_tail.clone();
+    std::thread::Builder::new()
+        .name("audio-feed-stderr".into())
+        .spawn(move || {
+            let mut reader = BufReader::new(stderr);
+            let mut buf = [0u8; 1024];
+            while let Ok(count) = reader.read(&mut buf) {
+                if count == 0 {
+                    break;
+                }
+                let Ok(mut tail) = stderr_tail_writer.lock() else {
+                    break;
+                };
+                tail.extend(&buf[..count]);
+                while tail.len() > 8 * 1024 {
+                    tail.pop_front();
+                }
+            }
+        })
+        .ok();
 
     // --- reader thread: ffmpeg stdout → bounded channel ---
     let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(8);
@@ -244,8 +268,37 @@ pub fn start_feed(device: &str) -> Result<u16, String> {
         consumers: 1,
         device: device.to_string(),
         child,
+        stderr_tail,
     });
     Ok(port)
+}
+
+/// Return a bounded, credential-free snapshot of the shared capture process.
+/// Consumers use this only when their private decoder reaches EOF.
+pub fn feed_diagnostics() -> String {
+    let Ok(mut guard) = feed_ref().lock() else {
+        return "shared audio feed status unavailable".into();
+    };
+    let Some(inner) = guard.as_mut() else {
+        return "shared audio feed is not running".into();
+    };
+    let state = match inner.child.try_wait() {
+        Ok(Some(status)) => format!("shared audio feed exited with {status}"),
+        Ok(None) => "shared audio feed is still running".into(),
+        Err(error) => format!("shared audio feed status failed: {error}"),
+    };
+    let stderr = inner
+        .stderr_tail
+        .lock()
+        .ok()
+        .map(|tail| String::from_utf8_lossy(&tail.iter().copied().collect::<Vec<_>>()).to_string())
+        .unwrap_or_default();
+    let stderr = stderr.trim();
+    if stderr.is_empty() {
+        state
+    } else {
+        format!("{state}; ffmpeg: {stderr}")
+    }
 }
 
 /// Decrement the consumer count and tear the feed down when the last consumer

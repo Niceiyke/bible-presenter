@@ -26,6 +26,7 @@ The assistant listens to an English sermon and proposes Scripture for an operato
 13. Paraphrase preparation and retrieval run off the audio/WebSocket loop. Paraphrase confidence is capped at 89% and the frontend independently prevents paraphrase auto-staging until a representative sermon corpus supports calibration.
 14. Exact cosine ranking blends each verse with immediate same-chapter neighbors, collapses adjacent winners into passage signals, and can show up to three distinct manual-only theme candidates. Similarity must be `>= 0.70`. A distinct-passage margin below `0.025` is labeled ambiguous and is shown only when at least two qualified manual alternatives are available.
 15. The operator can inspect local retrieval latency, thresholds, winner margin, and candidate references without exposing sermon text in diagnostics. Preparation reports verified-file progress, pre-warms inference, shows disk usage, supports cancellation/retry, and can remove downloaded model files.
+16. A transient transcription-decoder EOF triggers up to two bounded audio-feed recovery attempts while the Deepgram session remains open. Decoder and shared-feed exit details are retained only in the local application log; exhausting recovery ends AI Scripture without affecting normal projection.
 
 ### Local paraphrase components
 
