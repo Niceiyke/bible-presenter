@@ -32,6 +32,7 @@ src-tauri/*.log
 src-tauri/*.err.log
 src-tauri/check_*.log
 .env
+evaluation/ai-scripture/private/
 
 # Cloudflare Workers secrets (ADMIN_TOKEN lives here) and local build/dev artifacts
 .dev.vars

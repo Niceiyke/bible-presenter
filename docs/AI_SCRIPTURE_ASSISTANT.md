@@ -4,7 +4,7 @@
 
 The assistant listens to an English sermon and proposes Scripture for an operator to review. It is assistive, not autonomous:
 
-- It may create suggestion cards and stage an operator-selected verse.
+- It may create suggestion cards and automatically stage a verse when its displayed confidence is at least 90%; lower-confidence suggestions remain manual.
 - It must never commit staged content, clear live output, or otherwise change the program feed.
 - Normal Scripture search and projection must remain usable when audio, the network, or the transcription provider fails.
 - An LLM must never invent a Bible reference. Any future LLM use is limited to reranking candidates retrieved from installed Bible text.
@@ -16,8 +16,10 @@ The assistant listens to an English sermon and proposes Scripture for an operato
 3. Live interim/final transcript diagnostics.
 4. Deterministic parsing for numeric and spoken references, including numbered books and spoken numbers through the Bible's chapter/verse range.
 5. Lexical direct-quotation alignment. Candidate retrieval searches every installed English translation; the winning canonical reference is displayed in the operator-selected translation.
-6. A 20-second rolling context, duplicate suppression, confidence labels, and a Stage-only suggestion action.
+6. A 20-second rolling context, duplicate suppression, confidence labels, and automatic Stage-only handling at 90% confidence or above.
 7. Bring-your-own Deepgram credentials encrypted at rest with current-user Windows DPAPI and excluded from Wordlyte backups.
+8. Nova-3 Bible-name keyterm prompting, focused on uncommon and commonly misheard book names while avoiding broad words such as “Mark” and “Job.”
+9. A CI-gated synthetic evaluation corpus and `npm run ai:eval` runner for precision, recall, F1, exact-result accuracy, and local detector p95 latency.
 
 Paraphrase retrieval is deliberately excluded. The existing `search_semantic_query` command is lexical FTS/LIKE search, not vector retrieval.
 
@@ -32,7 +34,7 @@ DirectShow input
   -> final/interim transcript events
   -> deterministic reference parser OR lexical quotation matcher
   -> operator suggestion card
-  -> Stage (operator action)
+  -> Stage (automatic at >=90% confidence; otherwise operator action)
   -> Go Live (separate operator action)
 ```
 
@@ -59,7 +61,7 @@ The Rust backend owns credentials, audio transport, transcription, and detection
 
 ### Corpus and measurement
 
-- Build a consented, de-identified sermon corpus with accents, room acoustics, reference styles, quotations, and hard negatives.
+- Expand beyond the checked-in synthetic regression corpus with a consented, de-identified sermon corpus containing accents, room acoustics, reference styles, quotations, and hard negatives.
 - Record reference precision/recall, quotation precision/recall, provider word error rate, and end-to-end latency.
 - Add fixtures for ASR variants such as “First John,” “one John,” ranges, abbreviations, and cross-segment references.
 

@@ -102,7 +102,7 @@ export function AiScriptureTab({ onStage }: AiScriptureTabProps) {
           </p>
         </div>
         <div className="flex items-center gap-2 text-[10px] text-emerald-400 border border-emerald-900/70 bg-emerald-950/30 rounded-md px-2.5 py-1.5">
-          <ShieldCheck size={12} /> Suggestions can only be staged; the operator controls Go Live.
+          <ShieldCheck size={12} /> 90%+ suggestions auto-stage; the operator controls Go Live.
         </div>
       </div>
 
@@ -213,7 +213,7 @@ export function AiScriptureTab({ onStage }: AiScriptureTabProps) {
             <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1.5">
               <WandSparkles size={11} className="text-violet-400" /> Suggestions
             </h3>
-            <span className="text-[10px] text-slate-600">Newest first</span>
+            <span className="text-[10px] text-slate-600">90%+ auto-stage · Newest first</span>
           </div>
           <div className="p-3 flex flex-col gap-2 flex-1 max-h-[420px] overflow-y-auto custom-scrollbar">
             {ai.suggestions.length === 0 ? (

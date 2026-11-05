@@ -219,7 +219,7 @@ export default function App() {
       <SystemDiagnosticsProvider>
       <RecordingProvider>
       <ProgramAudioProvider>
-      <AiScriptureProvider>
+      <AiScriptureProvider onStage={stageItem}>
       <div className="h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden select-none">
 
       <AppHeader />

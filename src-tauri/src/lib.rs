@@ -7,3 +7,4 @@ pub mod outputs;
 pub mod binpaths;
 pub mod license;
 pub mod capture;
+pub mod ai_detection;

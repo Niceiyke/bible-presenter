@@ -37,7 +37,7 @@ Open **AI Scripture**, enter a church-owned Deepgram API key, choose the mixer o
 - Audio and transcript data are sent to Deepgram while listening. Stop listening when transcription is no longer needed.
 - The API key is encrypted with Windows DPAPI for the current Windows user. It is excluded from Wordlyte backups.
 - The assistant detects spoken references and close direct quotations in English. Treat every result as a suggestion and verify its reference and text.
-- **Stage** places a suggestion in the normal staged preview. The assistant cannot send content live; only the operator can use **Go Live**.
+- Suggestions at **90% confidence or above are staged automatically** in the normal staged preview. Lower-confidence suggestions require **Stage**. Always review the staged verse: the assistant cannot send content live, and only the operator can use **Go Live**.
 - If the network or provider fails, normal Scripture search and all projection controls remain available.
 
 ## Backup and restore

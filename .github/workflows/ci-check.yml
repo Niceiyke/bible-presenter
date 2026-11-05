@@ -67,3 +67,9 @@ jobs:
       - name: cargo test
         working-directory: src-tauri
         run: cargo test
+
+      - name: lint AI Scripture evaluator
+        run: cargo clippy --manifest-path tools/ai-eval/Cargo.toml -- -D warnings
+
+      - name: evaluate AI Scripture detectors
+        run: cargo run --manifest-path tools/ai-eval/Cargo.toml -- evaluation/ai-scripture/synthetic.jsonl

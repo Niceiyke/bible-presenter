@@ -1,8 +1,11 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Verse } from "../types";
+import { useAppStore } from "../store";
+import type { DisplayItem, Verse } from "../types";
+
+export const AI_AUTO_STAGE_CONFIDENCE = 0.9;
 
 export interface AiRuntimeStatus {
   state: "stopped" | "connecting" | "running" | "listening" | "error";
@@ -27,6 +30,10 @@ export interface ScriptureSuggestion {
   evidence: string;
   verse: Verse;
   timestamp: number;
+}
+
+export function shouldAutoStageSuggestion(suggestion: ScriptureSuggestion): boolean {
+  return Number.isFinite(suggestion.confidence) && suggestion.confidence >= AI_AUTO_STAGE_CONFIDENCE;
 }
 
 interface AiScriptureContextValue {
@@ -55,11 +62,23 @@ export function useAiScripture(): AiScriptureContextValue {
   return context;
 }
 
-export function AiScriptureProvider({ children }: { children: ReactNode }) {
+export function AiScriptureProvider({
+  children,
+  onStage,
+}: {
+  children: ReactNode;
+  onStage: (item: DisplayItem) => Promise<boolean>;
+}) {
   const [status, setStatus] = useState<AiRuntimeStatus>(STOPPED);
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
   const [interim, setInterim] = useState<TranscriptSegment | null>(null);
   const [suggestions, setSuggestions] = useState<ScriptureSuggestion[]>([]);
+  const onStageRef = useRef(onStage);
+  const autoStagedSuggestionIds = useRef(new Set<string>());
+
+  useEffect(() => {
+    onStageRef.current = onStage;
+  }, [onStage]);
 
   useEffect(() => {
     let mounted = true;
@@ -83,7 +102,31 @@ export function AiScriptureProvider({ children }: { children: ReactNode }) {
         }
       }),
       listen<ScriptureSuggestion>("ai-scripture-suggestion", (event) => {
-        if (mounted) setSuggestions((current) => [event.payload, ...current].slice(0, 30));
+        if (!mounted) return;
+        const suggestion = event.payload;
+        setSuggestions((current) => [suggestion, ...current].slice(0, 30));
+        if (!shouldAutoStageSuggestion(suggestion) || autoStagedSuggestionIds.current.has(suggestion.id)) return;
+
+        // Event registration can briefly overlap during development remounts.
+        // Track IDs before awaiting so one suggestion can never stage twice.
+        autoStagedSuggestionIds.current.add(suggestion.id);
+        if (autoStagedSuggestionIds.current.size > 100) {
+          const oldest = autoStagedSuggestionIds.current.values().next().value;
+          if (oldest) autoStagedSuggestionIds.current.delete(oldest);
+        }
+
+        void onStageRef.current({ type: "Verse", data: suggestion.verse })
+          .then((staged) => {
+            const reference = `${suggestion.verse.book} ${suggestion.verse.chapter}:${suggestion.verse.verse}`;
+            if (staged) {
+              useAppStore.getState().setToast(`${reference} auto-staged at ${Math.round(suggestion.confidence * 100)}% confidence. Review it before Go Live.`);
+            } else {
+              useAppStore.getState().setToast(`${reference} could not be auto-staged. Use Stage to retry.`);
+            }
+          })
+          .catch((error) => {
+            useAppStore.getState().setToast(`AI Scripture could not auto-stage: ${error}`);
+          });
       }),
     ]).then((next) => {
       if (mounted) unlisteners.push(...next);
@@ -111,6 +154,7 @@ export function AiScriptureProvider({ children }: { children: ReactNode }) {
     setTranscript([]);
     setInterim(null);
     setSuggestions([]);
+    autoStagedSuggestionIds.current.clear();
   }, []);
 
   const value = useMemo<AiScriptureContextValue>(
