@@ -20,10 +20,12 @@ The assistant listens to an English sermon and proposes Scripture for an operato
 7. Bring-your-own Deepgram credentials encrypted at rest with current-user Windows DPAPI and excluded from Wordlyte backups.
 8. Nova-3 Bible-name keyterm prompting, focused on uncommon and commonly misheard book names while avoiding broad words such as “Mark” and “Job.”
 9. A CI-gated synthetic evaluation corpus and `npm run ai:eval` runner for precision, recall, F1, exact-result accuracy, and local detector p95 latency.
-10. A low-latency detection pipeline: finalized explicit references use an immediate deterministic fast path, while one bounded cross-translation quotation query runs in a coalescing background worker and stale quote results are discarded.
+10. A low-latency detection pipeline: finalized explicit references use an immediate deterministic fast path, while one bounded cross-translation quotation query runs in a coalescing background worker and stale quote results are discarded. Semantic context keeps at most the latest two punctuated sentences, stops across a four-second speech gap, and is capped at 48 words.
 11. AI auto-staging splits and stages a verse in one backend round trip while retaining all splits for normal next/previous navigation.
 12. Optional local paraphrase retrieval uses a quantized BGE-small sentence-transformer and one int8 embedding per canonical verse. The bundled 12 MB index averages the precomputed vectors of every installed English translation; the selected translation is fetched only after a canonical match is found. Model downloads are pinned to immutable revision `ea104dacec62c0de699686887e3f920caeb4f3e3`, and every ONNX/tokenizer file is SHA-256 verified before loading.
 13. Paraphrase preparation and retrieval run off the audio/WebSocket loop. Paraphrase confidence is capped at 89% and the frontend independently prevents paraphrase auto-staging until a representative sermon corpus supports calibration.
+14. Exact cosine ranking blends each verse with immediate same-chapter neighbors, collapses adjacent winners into passage signals, and can show up to three distinct manual-only theme candidates. The conservative beta gates are similarity `>= 0.70` and distinct-passage margin `>= 0.025`.
+15. The operator can inspect local retrieval latency, thresholds, winner margin, and candidate references without exposing sermon text in diagnostics. Preparation reports verified-file progress, pre-warms inference, shows disk usage, supports cancellation/retry, and can remove downloaded model files.
 
 ### Local paraphrase components
 
@@ -37,7 +39,7 @@ The model is downloaded only after the operator selects **Prepare**. After a suc
 
 The older `search_semantic_query` command remains lexical FTS/LIKE search. AI Scripture paraphrases use the separate local vector path in `semantic_scripture.rs`; they run only after reference and quotation detection fail.
 
-Run the small labeled semantic probe with `cargo test semantic_scripture::tests::bundled_index_quality_probe -- --ignored --nocapture`. The current fixtures are a conservative regression check, not a confidence-calibration corpus.
+Run the labeled semantic probe with `cargo test semantic_scripture::tests::bundled_index_quality_probe -- --ignored --nocapture`. The current 35 fixtures (20 positive themes and 15 operational hard negatives) are a conservative regression check, not a confidence-calibration corpus. The current gate rejects all checked-in hard negatives; broader consented sermon data is still required before changing manual-only handling.
 
 ## Runtime flow
 

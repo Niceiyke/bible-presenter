@@ -30,6 +30,12 @@ export interface ScriptureSuggestion {
   evidence: string;
   verse: Verse;
   timestamp: number;
+  groupId?: string;
+  rank?: number;
+  passageStart?: number;
+  passageEnd?: number;
+  similarity?: number;
+  margin?: number;
 }
 
 export function shouldAutoStageSuggestion(suggestion: ScriptureSuggestion): boolean {

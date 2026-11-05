@@ -49,9 +49,15 @@ const MODEL_FILES: &[(&str, &str)] = &[
 ];
 const EMBEDDING_DIMENSION: usize = 384;
 const MIN_QUERY_WORDS: usize = 5;
-const MIN_SIMILARITY: f32 = 0.50;
-const MIN_MARGIN: f32 = 0.025;
+pub const MIN_SIMILARITY: f32 = 0.70;
+pub const MIN_MARGIN: f32 = 0.025;
+const MAX_SEMANTIC_SUGGESTIONS: usize = 3;
+const RANKING_POOL_SIZE: usize = 24;
+const MAX_ALTERNATIVE_DELTA: f32 = 0.10;
+const MAX_PASSAGE_NEIGHBOR_DELTA: f32 = 0.05;
+const PASSAGE_CONTEXT_WEIGHT: f32 = 0.10;
 pub const MAX_PARAPHRASE_CONFIDENCE: f32 = 0.89;
+const PREPARATION_CANCELLED: &str = "Local paraphrase preparation was cancelled.";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,6 +67,8 @@ pub struct SemanticStatus {
     pub indexed: usize,
     pub total: usize,
     pub model: String,
+    pub disk_bytes: u64,
+    pub verified: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +77,38 @@ pub struct SemanticMatch {
     pub confidence: f32,
     pub similarity: f32,
     pub margin: f32,
+    pub rank: usize,
+    pub passage_start: i32,
+    pub passage_end: i32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticDiagnosticCandidate {
+    pub reference: String,
+    pub similarity: f32,
+    pub passage_start: i32,
+    pub passage_end: i32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticDiagnostic {
+    pub state: String,
+    pub reason: String,
+    pub query_words: usize,
+    pub context_segments: usize,
+    pub similarity: Option<f32>,
+    pub margin: Option<f32>,
+    pub minimum_similarity: f32,
+    pub minimum_margin: f32,
+    pub latency_ms: f64,
+    pub candidates: Vec<SemanticDiagnosticCandidate>,
+}
+
+pub struct SemanticSearchOutcome {
+    pub matches: Vec<SemanticMatch>,
+    pub diagnostic: SemanticDiagnostic,
 }
 
 #[derive(Debug, Clone)]
@@ -85,44 +125,69 @@ struct SemanticIndex {
     vectors: Vec<i8>,
 }
 
-type RankedIndexMatch = ((usize, f32), Option<(usize, f32)>);
-
 impl SemanticIndex {
-    fn best_two(&self, query: &[f32]) -> Option<RankedIndexMatch> {
+    fn ranked(&self, query: &[f32], limit: usize) -> Vec<(usize, f32)> {
         if query.len() != self.dimension || self.entries.is_empty() {
-            return None;
+            return Vec::new();
         }
-        let mut first: Option<(usize, f32)> = None;
-        let mut second: Option<(usize, f32)> = None;
-        for (index, vector) in self.vectors.chunks_exact(self.dimension).enumerate() {
-            let (dot, vector_magnitude_squared) = query.iter().zip(vector).fold(
-                (0.0_f32, 0.0_f32),
-                |(dot, magnitude), (left, right)| {
-                    let right = *right as f32 / 127.0;
-                    (dot + left * right, magnitude + right * right)
-                },
-            );
-            // Quantization slightly changes vector length. Divide it back out
-            // so ranking remains normalized cosine rather than raw dot product.
-            let score = if vector_magnitude_squared > f32::EPSILON {
-                dot / vector_magnitude_squared.sqrt()
-            } else {
-                f32::NEG_INFINITY
-            };
-            if first.is_none_or(|(_, current)| score > current) {
-                second = first;
-                first = Some((index, score));
-            } else if second.is_none_or(|(_, current)| score > current) {
-                second = Some((index, score));
+        let raw_scores = self
+            .vectors
+            .chunks_exact(self.dimension)
+            .map(|vector| {
+                let (dot, vector_magnitude_squared) = query.iter().zip(vector).fold(
+                    (0.0_f32, 0.0_f32),
+                    |(dot, magnitude), (left, right)| {
+                        let right = *right as f32 / 127.0;
+                        (dot + left * right, magnitude + right * right)
+                    },
+                );
+                // Quantization slightly changes vector length. Divide it back out
+                // so ranking remains normalized cosine rather than raw dot product.
+                if vector_magnitude_squared > f32::EPSILON {
+                    dot / vector_magnitude_squared.sqrt()
+                } else {
+                    f32::NEG_INFINITY
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut ranked: Vec<(usize, f32)> = Vec::with_capacity(limit);
+        for (index, &raw_score) in raw_scores.iter().enumerate() {
+            let entry = &self.entries[index];
+            let mut score = raw_score;
+            let mut context_count = 0.0_f32;
+            for neighbor_index in [index.checked_sub(1), index.checked_add(1)]
+                .into_iter()
+                .flatten()
+                .filter(|neighbor| *neighbor < self.entries.len())
+            {
+                let neighbor = &self.entries[neighbor_index];
+                if neighbor.book == entry.book
+                    && neighbor.chapter == entry.chapter
+                    && (neighbor.verse - entry.verse).abs() == 1
+                {
+                    score += raw_scores[neighbor_index] * PASSAGE_CONTEXT_WEIGHT;
+                    context_count += PASSAGE_CONTEXT_WEIGHT;
+                }
+            }
+            score -= raw_score * context_count;
+            let position = ranked
+                .binary_search_by(|(_, current)| current.total_cmp(&score).reverse())
+                .unwrap_or_else(|position| position);
+            if position < limit {
+                ranked.insert(position, (index, score));
+                if ranked.len() > limit {
+                    ranked.pop();
+                }
             }
         }
-        first.map(|winner| (winner, second))
+        ranked
     }
 }
 
 pub struct SemanticScripture {
     root: PathBuf,
     preparing: AtomicBool,
+    cancel_requested: AtomicBool,
     status: Mutex<SemanticStatus>,
     model: Mutex<Option<TextEmbedding>>,
     index: Mutex<Option<SemanticIndex>>,
@@ -132,9 +197,11 @@ impl SemanticScripture {
     fn new(app_data_dir: &Path) -> Self {
         let root = app_data_dir.join("ai").join("semantic");
         let has_index = prepared_marker_matches(&root);
+        let disk_bytes = directory_size(&root);
         Self {
             root,
             preparing: AtomicBool::new(false),
+            cancel_requested: AtomicBool::new(false),
             status: Mutex::new(SemanticStatus {
                 state: "notPrepared".into(),
                 message: if has_index {
@@ -146,6 +213,8 @@ impl SemanticScripture {
                 indexed: 0,
                 total: 0,
                 model: MODEL_ID.into(),
+                disk_bytes,
+                verified: false,
             }),
             model: Mutex::new(None),
             index: Mutex::new(None),
@@ -153,7 +222,9 @@ impl SemanticScripture {
     }
 
     pub fn status(&self) -> SemanticStatus {
-        self.status.lock().clone()
+        let mut status = self.status.lock().clone();
+        status.disk_bytes = directory_size(&self.root);
+        status
     }
 
     pub fn is_ready(&self) -> bool {
@@ -178,6 +249,8 @@ impl SemanticScripture {
             indexed,
             total,
             model: MODEL_ID.into(),
+            disk_bytes: directory_size(&self.root),
+            verified: state == "ready",
         };
         *self.status.lock() = status.clone();
         let _ = app.emit("ai-semantic-status", status);
@@ -211,7 +284,34 @@ impl SemanticScripture {
             0,
             total,
         );
-        let model = load_pinned_model(&self.root)?;
+        let mut model = load_pinned_model(&self.root, |completed, total, file| {
+            if self.cancel_requested.load(Ordering::Acquire) {
+                return Err(PREPARATION_CANCELLED.to_string());
+            }
+            self.update_status(
+                app,
+                "preparing",
+                format!("Preparing model files… {completed}/{total} verified ({file})"),
+                completed,
+                total,
+            );
+            Ok(())
+        })?;
+        if self.cancel_requested.load(Ordering::Acquire) {
+            return Err(PREPARATION_CANCELLED.into());
+        }
+
+        self.update_status(
+            app,
+            "preparing",
+            "Warming the local paraphrase model…",
+            MODEL_FILES.len(),
+            MODEL_FILES.len(),
+        );
+        let warmup = format!("{QUERY_PREFIX}local Bible passage retrieval");
+        model
+            .embed(vec![warmup.as_str()], Some(1))
+            .map_err(|error| format!("Could not warm the local paraphrase model: {error}"))?;
 
         self.update_status(
             app,
@@ -250,9 +350,50 @@ impl SemanticScripture {
         query: &str,
         output_version: &str,
         bible: &BibleStore,
-    ) -> Result<Option<SemanticMatch>, String> {
-        if query.split_whitespace().count() < MIN_QUERY_WORDS || !self.is_ready() {
-            return Ok(None);
+    ) -> Result<SemanticSearchOutcome, String> {
+        let started = std::time::Instant::now();
+        let query_words = query.split_whitespace().count();
+        let diagnostic = |state: &str,
+                          reason: &str,
+                          similarity: Option<f32>,
+                          margin: Option<f32>,
+                          candidates: Vec<SemanticDiagnosticCandidate>| {
+            SemanticDiagnostic {
+                state: state.into(),
+                reason: reason.into(),
+                query_words,
+                context_segments: 0,
+                similarity,
+                margin,
+                minimum_similarity: MIN_SIMILARITY,
+                minimum_margin: MIN_MARGIN,
+                latency_ms: started.elapsed().as_secs_f64() * 1_000.0,
+                candidates,
+            }
+        };
+        if query_words < MIN_QUERY_WORDS {
+            return Ok(SemanticSearchOutcome {
+                matches: Vec::new(),
+                diagnostic: diagnostic(
+                    "skipped",
+                    "Waiting for at least five words in the current thought.",
+                    None,
+                    None,
+                    Vec::new(),
+                ),
+            });
+        }
+        if !self.is_ready() {
+            return Ok(SemanticSearchOutcome {
+                matches: Vec::new(),
+                diagnostic: diagnostic(
+                    "skipped",
+                    "Local paraphrase matching is not ready.",
+                    None,
+                    None,
+                    Vec::new(),
+                ),
+            });
         }
         let query_input = format!("{QUERY_PREFIX}{query}");
         let mut embeddings = self
@@ -268,39 +409,163 @@ impl SemanticScripture {
         normalize(&mut query_vector);
 
         let index = self.index.lock();
-        let Some(((winner_index, similarity), runner_up)) = index
-            .as_ref()
-            .and_then(|index| index.best_two(&query_vector))
-        else {
-            return Ok(None);
+        let Some(index) = index.as_ref() else {
+            return Err("Local paraphrase index is not loaded.".into());
         };
-        let margin = runner_up
+        let ranked = index.ranked(&query_vector, RANKING_POOL_SIZE);
+        let Some(&(winner_index, similarity)) = ranked.first() else {
+            return Ok(SemanticSearchOutcome {
+                matches: Vec::new(),
+                diagnostic: diagnostic(
+                    "rejected",
+                    "The local index returned no candidates.",
+                    None,
+                    None,
+                    Vec::new(),
+                ),
+            });
+        };
+        let winner = &index.entries[winner_index];
+        let distinct_runner = ranked.iter().skip(1).find(|(candidate_index, _)| {
+            !same_passage_neighborhood(winner, &index.entries[*candidate_index])
+        });
+        let margin = distinct_runner
             .map(|(_, score)| similarity - score)
             .unwrap_or(similarity);
-        if similarity < MIN_SIMILARITY || margin < MIN_MARGIN {
-            return Ok(None);
+
+        let mut diagnostic_candidates = Vec::new();
+        let mut matches = Vec::new();
+        let mut consumed = std::collections::HashSet::new();
+        for &(candidate_index, candidate_similarity) in &ranked {
+            if matches.len() >= MAX_SEMANTIC_SUGGESTIONS
+                || similarity - candidate_similarity > MAX_ALTERNATIVE_DELTA
+                || candidate_similarity < MIN_SIMILARITY
+            {
+                break;
+            }
+            if consumed.contains(&candidate_index) {
+                continue;
+            }
+            let entry = &index.entries[candidate_index];
+            let mut passage_start = entry.verse;
+            let mut passage_end = entry.verse;
+            for &(neighbor_index, neighbor_similarity) in &ranked {
+                let neighbor = &index.entries[neighbor_index];
+                if same_passage_neighborhood(entry, neighbor)
+                    && candidate_similarity - neighbor_similarity <= MAX_PASSAGE_NEIGHBOR_DELTA
+                {
+                    consumed.insert(neighbor_index);
+                    passage_start = passage_start.min(neighbor.verse);
+                    passage_end = passage_end.max(neighbor.verse);
+                }
+            }
+            let reference = if passage_start == passage_end {
+                format!("{} {}:{}", entry.book, entry.chapter, entry.verse)
+            } else {
+                format!(
+                    "{} {}:{}-{}",
+                    entry.book, entry.chapter, passage_start, passage_end
+                )
+            };
+            diagnostic_candidates.push(SemanticDiagnosticCandidate {
+                reference,
+                similarity: candidate_similarity,
+                passage_start,
+                passage_end,
+            });
+            let Some(verse) = bible
+                .get_verse(&entry.book, entry.chapter, entry.verse, output_version)
+                .map_err(|error| error.to_string())?
+            else {
+                continue;
+            };
+
+            let rank = matches.len() + 1;
+            let confidence =
+                (0.55 + (candidate_similarity - MIN_SIMILARITY) * 0.65 + margin * 0.35
+                    - (rank.saturating_sub(1) as f32 * 0.04))
+                    .clamp(0.55, MAX_PARAPHRASE_CONFIDENCE);
+            matches.push(SemanticMatch {
+                verse,
+                confidence,
+                similarity: candidate_similarity,
+                margin,
+                rank,
+                passage_start,
+                passage_end,
+            });
         }
-        let entry = &index.as_ref().expect("index checked above").entries[winner_index];
-        let verse = bible
-            .get_verse(&entry.book, entry.chapter, entry.verse, output_version)
-            .map_err(|error| error.to_string())?;
-        let Some(verse) = verse else {
-            return Ok(None);
+
+        let (state, reason) = if similarity < MIN_SIMILARITY {
+            matches.clear();
+            (
+                "rejected",
+                "Best candidate was below the minimum similarity threshold.",
+            )
+        } else if margin < MIN_MARGIN {
+            matches.clear();
+            (
+                "rejected",
+                "Top distinct passages were too close to choose safely.",
+            )
+        } else {
+            ("matched", "Returned manual-only possible-theme candidates.")
         };
 
-        // This is deliberately a conservative, provisional score rather than
-        // pretending cosine similarity is calibrated probability. It remains
-        // below the global 90% auto-stage boundary until a sermon corpus can
-        // calibrate paraphrase confidence empirically.
-        let confidence = (0.55 + (similarity - MIN_SIMILARITY) * 0.65 + margin * 0.35)
-            .clamp(0.55, MAX_PARAPHRASE_CONFIDENCE);
-        Ok(Some(SemanticMatch {
-            verse,
-            confidence,
-            similarity,
-            margin,
-        }))
+        Ok(SemanticSearchOutcome {
+            matches,
+            diagnostic: diagnostic(
+                state,
+                reason,
+                Some(similarity),
+                Some(margin),
+                diagnostic_candidates,
+            ),
+        })
     }
+
+    pub fn cancel_preparation(&self, app: &AppHandle) -> SemanticStatus {
+        if self.preparing.load(Ordering::Acquire) {
+            self.cancel_requested.store(true, Ordering::Release);
+            self.update_status(
+                app,
+                "preparing",
+                "Cancelling after the current model file finishes…",
+                0,
+                MODEL_FILES.len(),
+            );
+        }
+        self.status()
+    }
+
+    pub fn remove_local_model(&self, app: &AppHandle) -> Result<SemanticStatus, String> {
+        if self.preparing.load(Ordering::Acquire) {
+            return Err("Cancel paraphrase preparation before removing local files.".into());
+        }
+        *self.model.lock() = None;
+        *self.index.lock() = None;
+        if self.root.exists() {
+            if let Err(error) = fs::remove_dir_all(&self.root) {
+                let message = format!("Could not remove the local AI model: {error}");
+                self.update_status(app, "error", &message, 0, 0);
+                return Err(message);
+            }
+        }
+        self.update_status(
+            app,
+            "notPrepared",
+            "Local paraphrase model removed. Normal Scripture features are unaffected.",
+            0,
+            0,
+        );
+        Ok(self.status())
+    }
+}
+
+fn same_passage_neighborhood(left: &IndexEntry, right: &IndexEntry) -> bool {
+    left.book == right.book
+        && left.chapter == right.chapter
+        && (left.verse - right.verse).abs() <= 1
 }
 
 static ENGINE: OnceLock<Arc<SemanticScripture>> = OnceLock::new();
@@ -320,6 +585,7 @@ pub fn prepare_in_background(
     if engine.is_ready() || engine.preparing.swap(true, Ordering::AcqRel) {
         return engine.status();
     }
+    engine.cancel_requested.store(false, Ordering::Release);
     engine.update_status(
         &app,
         "preparing",
@@ -342,6 +608,13 @@ pub fn prepare_in_background(
             worker_engine.prepare(&app, &bible, &bundled_index)
         })) {
             Ok(Ok(())) => {}
+            Ok(Err(error)) if error == PREPARATION_CANCELLED => worker_engine.update_status(
+                &app,
+                "notPrepared",
+                "Preparation cancelled. Verified downloads remain cached for a faster retry.",
+                0,
+                0,
+            ),
             Ok(Err(error)) => worker_engine.update_status(&app, "error", error, 0, 0),
             Err(_) => worker_engine.update_status(
                 &app,
@@ -370,7 +643,10 @@ fn prepared_marker_matches(root: &Path) -> bool {
         .is_ok_and(|revision| revision.trim() == MODEL_REVISION)
 }
 
-fn load_pinned_model(root: &Path) -> Result<TextEmbedding, String> {
+fn load_pinned_model(
+    root: &Path,
+    mut progress: impl FnMut(usize, usize, &str) -> Result<(), String>,
+) -> Result<TextEmbedding, String> {
     let api = hf_hub::api::sync::ApiBuilder::new()
         .with_cache_dir(root.join("model"))
         .with_progress(false)
@@ -383,7 +659,8 @@ fn load_pinned_model(root: &Path) -> Result<TextEmbedding, String> {
         MODEL_REVISION.into(),
     ));
     let mut files = std::collections::HashMap::new();
-    for (name, expected_hash) in MODEL_FILES {
+    for (index, (name, expected_hash)) in MODEL_FILES.iter().enumerate() {
+        progress(index, MODEL_FILES.len(), name)?;
         let path = repository
             .get(name)
             .map_err(|error| format!("Could not download {name}: {error}"))?;
@@ -396,9 +673,31 @@ fn load_pinned_model(root: &Path) -> Result<TextEmbedding, String> {
             ));
         }
         files.insert(*name, bytes);
+        progress(index + 1, MODEL_FILES.len(), name)?;
     }
 
     create_model(files)
+}
+
+fn directory_size(path: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| {
+            entry
+                .metadata()
+                .map(|metadata| {
+                    if metadata.is_dir() {
+                        directory_size(&entry.path())
+                    } else {
+                        metadata.len()
+                    }
+                })
+                .unwrap_or(0)
+        })
+        .sum()
 }
 
 fn create_model(
@@ -584,7 +883,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exact_search_returns_best_two_normalized_vectors() {
+    fn exact_search_ranks_normalized_vectors() {
         let index = SemanticIndex {
             fingerprint: [7; 32],
             dimension: 3,
@@ -607,9 +906,9 @@ mod tests {
             ],
             vectors: vec![127, 0, 0, 0, 127, 0, 102, 25, 0],
         };
-        let (first, second) = index.best_two(&[1.0, 0.0, 0.0]).unwrap();
-        assert_eq!(first.0, 0);
-        assert_eq!(second.unwrap().0, 2);
+        let ranked = index.ranked(&[1.0, 0.0, 0.0], 2);
+        assert_eq!(ranked[0].0, 0);
+        assert_eq!(ranked[1].0, 2);
     }
 
     #[test]
@@ -674,7 +973,7 @@ mod tests {
     fn pinned_model_loads_and_embeds_offline_query() {
         let root = std::env::temp_dir().join(format!("wordlyte-model-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
-        let mut model = load_pinned_model(&root).unwrap();
+        let mut model = load_pinned_model(&root, |_, _, _| Ok(())).unwrap();
         let embeddings = model
             .embed(vec!["God gives strength to the weak"], Some(1))
             .unwrap();
@@ -734,8 +1033,9 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str::<Fixture>(line).unwrap())
             .collect::<Vec<_>>();
-        let mut true_positives = 0_usize;
-        let mut false_positives = Vec::new();
+        let mut top_one_hits = 0_usize;
+        let mut top_three_hits = 0_usize;
+        let mut accepted_negatives = Vec::new();
         let mut positives = 0_usize;
         let mut latencies = Vec::with_capacity(fixtures.len());
         for fixture in fixtures {
@@ -744,29 +1044,63 @@ mod tests {
             let input = format!("{QUERY_PREFIX}{}", fixture.transcript);
             let mut vector = model.embed(vec![input], Some(1)).unwrap().remove(0);
             normalize(&mut vector);
-            let (first, second) = index.best_two(&vector).unwrap();
+            let ranked = index.ranked(&vector, RANKING_POOL_SIZE);
+            let first = ranked[0];
             let winner = &index.entries[first.0];
-            let second = second.unwrap();
+            let second = ranked
+                .iter()
+                .skip(1)
+                .find(|(position, _)| !same_passage_neighborhood(winner, &index.entries[*position]))
+                .copied()
+                .unwrap();
             let runner = &index.entries[second.0];
             let margin = first.1 - second.1;
             let accepted = first.1 >= MIN_SIMILARITY && margin >= MIN_MARGIN;
-            let expected = fixture.expected.iter().any(|expected| {
+            let expected_top_one = fixture.expected.iter().any(|expected| {
                 winner.book == expected.book
                     && winner.chapter == expected.chapter
                     && winner.verse == expected.verse
             });
-            if accepted && expected {
-                true_positives += 1;
-            } else if accepted {
-                false_positives.push(fixture.id.clone());
+            let mut distinct = Vec::new();
+            for &(position, score) in &ranked {
+                if distinct.len() >= MAX_SEMANTIC_SUGGESTIONS
+                    || first.1 - score > MAX_ALTERNATIVE_DELTA
+                    || score < MIN_SIMILARITY
+                {
+                    break;
+                }
+                let entry = &index.entries[position];
+                if distinct.iter().all(|(existing, _)| {
+                    !same_passage_neighborhood(entry, &index.entries[*existing])
+                }) {
+                    distinct.push((position, score));
+                }
+            }
+            let expected_top_three = distinct.iter().any(|(position, _)| {
+                let candidate = &index.entries[*position];
+                fixture.expected.iter().any(|expected| {
+                    candidate.book == expected.book
+                        && candidate.chapter == expected.chapter
+                        && candidate.verse == expected.verse
+                })
+            });
+            if accepted && expected_top_one {
+                top_one_hits += 1;
+            }
+            if accepted && expected_top_three {
+                top_three_hits += 1;
+            }
+            if accepted && fixture.expected.is_empty() {
+                accepted_negatives.push(fixture.id.clone());
             }
             let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
             latencies.push(elapsed_ms);
             eprintln!(
-                "fixture={} accepted={} expected={} winner={} {}:{} score={:.3} runner={} {}:{} margin={:.3} elapsed_ms={:.1}",
+                "fixture={} accepted={} top1={} top3={} winner={} {}:{} score={:.3} runner={} {}:{} margin={:.3} elapsed_ms={:.1}",
                 fixture.id,
                 accepted,
-                expected,
+                expected_top_one,
+                expected_top_three,
                 winner.book,
                 winner.chapter,
                 winner.verse,
@@ -783,12 +1117,12 @@ mod tests {
             .saturating_sub(1)
             .min(latencies.len() - 1)];
         eprintln!(
-            "semantic fixture summary: true_positives={true_positives}/{positives} false_positives={} p95_ms={p95:.1}",
-            false_positives.len(),
+            "semantic fixture summary: top1={top_one_hits}/{positives} top3={top_three_hits}/{positives} accepted_negatives={} p95_ms={p95:.1}",
+            accepted_negatives.len(),
         );
         assert!(
-            false_positives.is_empty(),
-            "conservative gate emitted incorrect fixtures: {false_positives:?}"
+            accepted_negatives.is_empty(),
+            "conservative gate emitted hard negatives: {accepted_negatives:?}"
         );
         assert!(p95 < 3_000.0, "semantic debug p95 exceeded 3 seconds");
     }

@@ -7,3 +7,29 @@
 {"id":"technical-audio","transcript":"Move the microphone closer and lower channel three on the mixer.","expected":[]}
 {"id":"schedule-announcement","transcript":"The youth meeting has moved from Tuesday evening to Thursday evening.","expected":[]}
 {"id":"generic-encouragement","transcript":"Things will probably improve if everyone keeps trying their best.","expected":[]}
+{"id":"seek-first-kingdom","transcript":"Put God's kingdom and his way of living first, and trust him to provide what you need.","expected":[{"book":"Matthew","chapter":6,"verse":33}]}
+{"id":"all-things-work","transcript":"Even painful circumstances can be woven by God for the good of those who love him.","expected":[{"book":"Romans","chapter":8,"verse":28}]}
+{"id":"ask-for-wisdom","transcript":"When you do not know what to do, ask God for wisdom and he gives generously.","expected":[{"book":"James","chapter":1,"verse":5}]}
+{"id":"trust-not-understanding","transcript":"Rely on the Lord completely instead of treating your own understanding as the final authority.","expected":[{"book":"Proverbs","chapter":3,"verse":5},{"book":"Proverbs","chapter":3,"verse":6}]}
+{"id":"renewed-strength","transcript":"Those who keep waiting and hoping in the Lord receive fresh strength to continue.","expected":[{"book":"Isaiah","chapter":40,"verse":31}]}
+{"id":"peace-beyond-understanding","transcript":"God can guard our hearts and thoughts with a peace deeper than human understanding.","expected":[{"book":"Philippians","chapter":4,"verse":7}]}
+{"id":"hear-and-faith","transcript":"Faith grows as people hear the message about Christ proclaimed.","expected":[{"book":"Romans","chapter":10,"verse":17}]}
+{"id":"doers-not-hearers","transcript":"Do not merely listen to God's word and walk away; put what it says into practice.","expected":[{"book":"James","chapter":1,"verse":22}]}
+{"id":"run-with-endurance","transcript":"Lay aside every burden and persistent sin so you can keep running the race with endurance.","expected":[{"book":"Hebrews","chapter":12,"verse":1}]}
+{"id":"tongue-life-death","transcript":"Our words can bring life or destruction, so what we say carries serious power.","expected":[{"book":"Proverbs","chapter":18,"verse":21}]}
+{"id":"fruit-of-spirit","transcript":"When the Spirit shapes a person, love, joy, peace, patience, kindness and self-control become visible.","expected":[{"book":"Galatians","chapter":5,"verse":22},{"book":"Galatians","chapter":5,"verse":23}]}
+{"id":"armor-against-evil","transcript":"God provides spiritual armor so believers can stand firm against the enemy's schemes.","expected":[{"book":"Ephesians","chapter":6,"verse":11},{"book":"Ephesians","chapter":6,"verse":13}]}
+{"id":"truth-brings-freedom","transcript":"Continuing in Christ's teaching leads us into truth, and that truth brings freedom.","expected":[{"book":"John","chapter":8,"verse":31},{"book":"John","chapter":8,"verse":32}]}
+{"id":"wisdom-gentle","transcript":"Wisdom that comes from heaven produces purity, peace, gentleness, mercy and sincere goodness.","expected":[{"book":"James","chapter":3,"verse":17}]}
+{"id":"forgive-one-another","transcript":"Because the Lord forgave us, we should patiently forgive the people who have wronged us.","expected":[{"book":"Colossians","chapter":3,"verse":13},{"book":"Ephesians","chapter":4,"verse":32}]}
+{"id":"parking-instructions","transcript":"Please leave the first two parking rows open for elderly visitors and families with children.","expected":[]}
+{"id":"projector-resolution","transcript":"Change the projector output to nineteen twenty by ten eighty before rehearsal begins.","expected":[]}
+{"id":"volunteer-roster","transcript":"The updated volunteer roster will be emailed to every department leader tomorrow afternoon.","expected":[]}
+{"id":"lunch-announcement","transcript":"Lunch will be served in the hall immediately after the second service.","expected":[]}
+{"id":"weather-plan","transcript":"If the rain continues, the outdoor event will move into the community center.","expected":[]}
+{"id":"battery-reminder","transcript":"Replace the wireless microphone batteries and return the spare pack to the sound desk.","expected":[]}
+{"id":"door-locking","transcript":"The last person leaving tonight should lock the side entrance and switch off the foyer lights.","expected":[]}
+{"id":"website-update","transcript":"Upload the new event photographs to the website and correct the registration deadline.","expected":[]}
+{"id":"choir-rehearsal","transcript":"Choir rehearsal starts thirty minutes earlier this week because the musicians need a sound check.","expected":[]}
+{"id":"printer-supplies","transcript":"We need another box of paper and two black cartridges for the office printer.","expected":[]}
+{"id":"bus-maintenance","transcript":"The church bus is due for an oil change before the next youth trip.","expected":[]}

@@ -69,6 +69,9 @@ const BIBLE_KEYTERMS: &[&str] = &[
     "Third John",
 ];
 const CONTEXT_WINDOW: Duration = Duration::from_secs(20);
+const SEMANTIC_CONTEXT_GAP: Duration = Duration::from_secs(4);
+const MAX_SEMANTIC_CONTEXT_WORDS: usize = 48;
+const MAX_SEMANTIC_SENTENCES: usize = 2;
 const SUGGESTION_COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_SHORT_QUOTE_CONFIDENCE: f32 = 0.89;
 
@@ -119,6 +122,18 @@ pub struct ScriptureSuggestion {
     pub evidence: String,
     pub verse: Verse,
     pub timestamp: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rank: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passage_start: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passage_end: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub similarity: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub margin: Option<f32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -169,6 +184,7 @@ struct QuoteJob {
     generation: u64,
     rolling_text: String,
     semantic_text: String,
+    semantic_segments: usize,
     evidence: String,
     asr_confidence: f32,
 }
@@ -214,6 +230,37 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn semantic_context(context: &VecDeque<(Instant, String)>) -> (String, usize) {
+    let mut recent = Vec::new();
+    let mut newer_at: Option<Instant> = None;
+    for (at, text) in context.iter().rev() {
+        if newer_at.is_some_and(|newer| newer.duration_since(*at) > SEMANTIC_CONTEXT_GAP) {
+            break;
+        }
+        recent.push(text.as_str());
+        newer_at = Some(*at);
+    }
+    recent.reverse();
+    let segment_count = recent.len();
+    let joined = recent.join(" ");
+    let sentences = joined
+        .split_inclusive(['.', '!', '?'])
+        .map(str::trim)
+        .filter(|sentence| !sentence.is_empty())
+        .collect::<Vec<_>>();
+    let selected = sentences
+        .iter()
+        .rev()
+        .take(MAX_SEMANTIC_SENTENCES)
+        .rev()
+        .copied()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let words = selected.split_whitespace().collect::<Vec<_>>();
+    let start = words.len().saturating_sub(MAX_SEMANTIC_CONTEXT_WORDS);
+    (words[start..].join(" "), segment_count)
 }
 
 fn key_path(app_data_dir: &Path) -> PathBuf {
@@ -527,6 +574,30 @@ pub fn ai_prepare_semantic(
     semantic_scripture::prepare_in_background(app, state.store.clone(), state.app_data_dir.clone())
 }
 
+#[tauri::command]
+pub fn ai_cancel_semantic(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> semantic_scripture::SemanticStatus {
+    semantic_scripture::engine(&state.app_data_dir).cancel_preparation(&app)
+}
+
+#[tauri::command]
+pub fn ai_remove_semantic(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<semantic_scripture::SemanticStatus, String> {
+    if runtime()
+        .lock()
+        .map_err(|error| error.to_string())?
+        .session
+        .is_some()
+    {
+        return Err("Stop AI Scripture before removing the local model.".into());
+    }
+    semantic_scripture::engine(&state.app_data_dir).remove_local_model(&app)
+}
+
 async fn spawn_pcm_decoder(relay: &AudioRelay) -> Result<Child, String> {
     Command::new(crate::binpaths::ffmpeg_path())
         .args([
@@ -742,39 +813,73 @@ fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Opt
                 continue;
             }
             match semantic_result {
-                Ok(Ok(Some(found))) => {
+                Ok(Ok(mut outcome)) => {
+                    outcome.diagnostic.context_segments = job.semantic_segments;
+                    outcome.diagnostic.latency_ms =
+                        semantic_started.elapsed().as_secs_f64() * 1_000.0;
+                    let _ = worker
+                        .app
+                        .emit("ai-scripture-diagnostic", &outcome.diagnostic);
                     crate::store::log_msg(
                         &worker.app,
                         &format!(
-                            "[ai-scripture] paraphrase match {} {}:{} similarity={:.3} margin={:.3} latency_ms={:.1}",
-                            found.verse.book,
-                            found.verse.chapter,
-                            found.verse.verse,
-                            found.similarity,
-                            found.margin,
-                            semantic_started.elapsed().as_secs_f64() * 1_000.0,
+                            "[ai-scripture] semantic {} similarity={:?} margin={:?} candidates={} latency_ms={:.1}: {}",
+                            outcome.diagnostic.state,
+                            outcome.diagnostic.similarity,
+                            outcome.diagnostic.margin,
+                            outcome.matches.len(),
+                            outcome.diagnostic.latency_ms,
+                            outcome.diagnostic.reason,
                         ),
                     );
-                    let suggestion = ScriptureSuggestion {
-                        id: Uuid::new_v4().to_string(),
-                        detection: "paraphrase".into(),
-                        confidence: found.confidence,
-                        evidence: job.evidence.clone(),
-                        verse: found.verse,
-                        timestamp: now_ms(),
-                    };
-                    let _ =
-                        emit_suggestion_if_new(&worker.app, &worker.recently_suggested, suggestion);
+                    let group_id = Uuid::new_v4().to_string();
+                    // Events are prepended in React, so emit alternatives in
+                    // reverse order and leave rank 1 at the top of the group.
+                    for found in outcome.matches.into_iter().rev() {
+                        let suggestion = ScriptureSuggestion {
+                            id: Uuid::new_v4().to_string(),
+                            detection: "paraphrase".into(),
+                            confidence: found.confidence,
+                            evidence: job.evidence.clone(),
+                            verse: found.verse,
+                            timestamp: now_ms(),
+                            group_id: Some(group_id.clone()),
+                            rank: Some(found.rank),
+                            passage_start: Some(found.passage_start),
+                            passage_end: Some(found.passage_end),
+                            similarity: Some(found.similarity),
+                            margin: Some(found.margin),
+                        };
+                        let _ = emit_suggestion_if_new(
+                            &worker.app,
+                            &worker.recently_suggested,
+                            suggestion,
+                        );
+                    }
                 }
-                Ok(Err(error)) => crate::store::log_msg(
-                    &worker.app,
-                    &format!("[ai-scripture] paraphrase retrieval skipped: {error}"),
-                ),
+                Ok(Err(error)) => {
+                    let diagnostic = semantic_scripture::SemanticDiagnostic {
+                        state: "error".into(),
+                        reason: error.clone(),
+                        query_words: job.semantic_text.split_whitespace().count(),
+                        context_segments: job.semantic_segments,
+                        similarity: None,
+                        margin: None,
+                        minimum_similarity: semantic_scripture::MIN_SIMILARITY,
+                        minimum_margin: semantic_scripture::MIN_MARGIN,
+                        latency_ms: semantic_started.elapsed().as_secs_f64() * 1_000.0,
+                        candidates: Vec::new(),
+                    };
+                    let _ = worker.app.emit("ai-scripture-diagnostic", diagnostic);
+                    crate::store::log_msg(
+                        &worker.app,
+                        &format!("[ai-scripture] paraphrase retrieval skipped: {error}"),
+                    );
+                }
                 Err(error) => crate::store::log_msg(
                     &worker.app,
                     &format!("[ai-scripture] paraphrase worker stopped: {error}"),
                 ),
-                Ok(Ok(None)) => {}
             }
         }
     });
@@ -790,10 +895,7 @@ fn emit_suggestion_if_new(
         return false;
     };
     recent.retain(|_, at| now.duration_since(*at) <= SUGGESTION_COOLDOWN);
-    let key = format!(
-        "{}:{}:{}",
-        suggestion.verse.book, suggestion.verse.chapter, suggestion.verse.verse
-    );
+    let key = suggestion_cooldown_key(&suggestion.detection, &suggestion.verse);
     if let std::collections::hash_map::Entry::Vacant(entry) = recent.entry(key) {
         entry.insert(now);
         drop(recent);
@@ -802,6 +904,13 @@ fn emit_suggestion_if_new(
     } else {
         false
     }
+}
+
+fn suggestion_cooldown_key(detection: &str, verse: &Verse) -> String {
+    format!(
+        "{}:{}:{}:{}",
+        detection, verse.book, verse.chapter, verse.verse
+    )
 }
 
 fn handle_deepgram_message(
@@ -859,15 +968,7 @@ fn handle_deepgram_message(
         .map(|(_, text)| text.as_str())
         .collect::<Vec<_>>()
         .join(" ");
-    let semantic_text = pipeline
-        .context
-        .iter()
-        .rev()
-        .take(3)
-        .rev()
-        .map(|(_, text)| text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
+    let (semantic_text, semantic_segments) = semantic_context(&pipeline.context);
     let current_generation = pipeline.generation.fetch_add(1, Ordering::AcqRel) + 1;
 
     // Explicit references are deterministic and take the fast path. Quotation
@@ -892,6 +993,12 @@ fn handle_deepgram_message(
             evidence: transcript.to_string(),
             verse,
             timestamp: now_ms(),
+            group_id: None,
+            rank: None,
+            passage_start: None,
+            passage_end: None,
+            similarity: None,
+            margin: None,
         });
 
     if suggestion.is_some_and(|suggestion| {
@@ -903,6 +1010,7 @@ fn handle_deepgram_message(
         generation: current_generation,
         rolling_text,
         semantic_text,
+        semantic_segments,
         evidence: transcript.to_string(),
         asr_confidence: confidence,
     }));
@@ -971,6 +1079,12 @@ fn detect_direct_quote(
         evidence: evidence.to_string(),
         verse,
         timestamp: now_ms(),
+        group_id: None,
+        rank: None,
+        passage_start: None,
+        passage_end: None,
+        similarity: None,
+        margin: None,
     })
 }
 
@@ -1004,6 +1118,59 @@ mod tests {
     fn five_word_quotes_never_reach_auto_stage_confidence() {
         assert_eq!(quote_confidence(1.0, 1.0, 5), 0.89);
         assert_eq!(quote_confidence(1.0, 1.0, 6), 0.98);
+    }
+
+    #[test]
+    fn semantic_context_keeps_two_recent_sentences_and_respects_silence() {
+        let now = Instant::now();
+        let context = VecDeque::from([
+            (
+                now - Duration::from_secs(10),
+                "Old announcement about next week's schedule.".into(),
+            ),
+            (
+                now - Duration::from_secs(2),
+                "Do not let the culture shape you.".into(),
+            ),
+            (now, "Let God transform the way you think.".into()),
+        ]);
+        let (text, segments) = semantic_context(&context);
+        assert_eq!(segments, 2);
+        assert_eq!(
+            text,
+            "Do not let the culture shape you. Let God transform the way you think."
+        );
+    }
+
+    #[test]
+    fn semantic_context_discards_older_sentences_within_one_segment() {
+        let context = VecDeque::from([(
+            Instant::now(),
+            "Welcome everyone. The notices are finished. Grace rescues us through faith.".into(),
+        )]);
+        let (text, _) = semantic_context(&context);
+        assert_eq!(
+            text,
+            "The notices are finished. Grace rescues us through faith."
+        );
+    }
+
+    #[test]
+    fn paraphrase_cooldown_cannot_suppress_an_explicit_reference() {
+        let verse = Verse {
+            book: "John".into(),
+            chapter: 3,
+            verse: 16,
+            text: "For God so loved the world".into(),
+            version: "KJV".into(),
+            split_index: None,
+            total_splits: None,
+            score: None,
+        };
+        assert_ne!(
+            suggestion_cooldown_key("paraphrase", &verse),
+            suggestion_cooldown_key("reference", &verse)
+        );
     }
 
     #[test]

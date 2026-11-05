@@ -449,6 +449,8 @@ fn main() {
             wordlyte_lib::commands::ai_scripture::ai_status,
             wordlyte_lib::commands::ai_scripture::ai_semantic_status,
             wordlyte_lib::commands::ai_scripture::ai_prepare_semantic,
+            wordlyte_lib::commands::ai_scripture::ai_cancel_semantic,
+            wordlyte_lib::commands::ai_scripture::ai_remove_semantic,
             wordlyte_lib::commands::ai_scripture::ai_start,
             wordlyte_lib::commands::ai_scripture::ai_stop,
         ])

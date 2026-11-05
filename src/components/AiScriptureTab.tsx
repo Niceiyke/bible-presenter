@@ -18,6 +18,28 @@ interface SemanticStatus {
   indexed: number;
   total: number;
   model: string;
+  diskBytes: number;
+  verified: boolean;
+}
+
+interface SemanticDiagnosticCandidate {
+  reference: string;
+  similarity: number;
+  passageStart: number;
+  passageEnd: number;
+}
+
+interface SemanticDiagnostic {
+  state: "matched" | "rejected" | "skipped" | "error";
+  reason: string;
+  queryWords: number;
+  contextSegments: number;
+  similarity: number | null;
+  margin: number | null;
+  minimumSimilarity: number;
+  minimumMargin: number;
+  latencyMs: number;
+  candidates: SemanticDiagnosticCandidate[];
 }
 
 const INITIAL_SEMANTIC_STATUS: SemanticStatus = {
@@ -26,7 +48,14 @@ const INITIAL_SEMANTIC_STATUS: SemanticStatus = {
   indexed: 0,
   total: 0,
   model: "BAAI/bge-small-en-v1.5-quantized",
+  diskBytes: 0,
+  verified: false,
 };
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 MB";
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 interface AiScriptureTabProps {
   onStage: (item: DisplayItem) => Promise<boolean>;
@@ -45,6 +74,9 @@ export function AiScriptureTab({ onStage }: AiScriptureTabProps) {
   const [apiKey, setApiKey] = useState("");
   const [savingKey, setSavingKey] = useState(false);
   const [semanticStatus, setSemanticStatus] = useState<SemanticStatus>(INITIAL_SEMANTIC_STATUS);
+  const [semanticDiagnostic, setSemanticDiagnostic] = useState<SemanticDiagnostic | null>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [removingModel, setRemovingModel] = useState(false);
   const [audioDevice, setAudioDevice] = useState(programAudio.device ?? "");
   const enabledVersions = useMemo(
     () => availableVersions.filter((version) => !(settings.disabled_bible_versions ?? []).includes(version)),
@@ -61,7 +93,7 @@ export function AiScriptureTab({ onStage }: AiScriptureTabProps) {
 
   useEffect(() => {
     let mounted = true;
-    let unlisten: (() => void) | undefined;
+    const unlisteners: Array<() => void> = [];
     void invoke<SemanticStatus>("ai_semantic_status")
       .then((status) => mounted && setSemanticStatus(status))
       .catch((error) => mounted && setSemanticStatus({
@@ -69,15 +101,20 @@ export function AiScriptureTab({ onStage }: AiScriptureTabProps) {
         state: "error",
         message: `Could not read paraphrase status: ${error}`,
       }));
-    void listen<SemanticStatus>("ai-semantic-status", (event) => {
-      if (mounted) setSemanticStatus(event.payload);
-    }).then((stop) => {
-      if (mounted) unlisten = stop;
-      else stop();
+    void Promise.all([
+      listen<SemanticStatus>("ai-semantic-status", (event) => {
+        if (mounted) setSemanticStatus(event.payload);
+      }),
+      listen<SemanticDiagnostic>("ai-scripture-diagnostic", (event) => {
+        if (mounted) setSemanticDiagnostic(event.payload);
+      }),
+    ]).then((stops) => {
+      if (mounted) unlisteners.push(...stops);
+      else stops.forEach((stop) => stop());
     });
     return () => {
       mounted = false;
-      unlisten?.();
+      unlisteners.forEach((stop) => stop());
     };
   }, []);
 
@@ -119,6 +156,28 @@ export function AiScriptureTab({ onStage }: AiScriptureTabProps) {
       setSemanticStatus(status);
     } catch (error) {
       setToast(`Could not prepare local paraphrase matching: ${error}`);
+    }
+  };
+
+  const cancelParaphrases = async () => {
+    try {
+      setSemanticStatus(await invoke<SemanticStatus>("ai_cancel_semantic"));
+    } catch (error) {
+      setToast(`Could not cancel paraphrase preparation: ${error}`);
+    }
+  };
+
+  const removeParaphrases = async () => {
+    if (!window.confirm("Remove the downloaded local AI model? The bundled Bible meaning index and normal projection will remain available.")) return;
+    setRemovingModel(true);
+    try {
+      setSemanticStatus(await invoke<SemanticStatus>("ai_remove_semantic"));
+      setSemanticDiagnostic(null);
+      setToast("Local paraphrase model removed.");
+    } catch (error) {
+      setToast(`Could not remove the local paraphrase model: ${error}`);
+    } finally {
+      setRemovingModel(false);
     }
   };
 
@@ -206,13 +265,33 @@ export function AiScriptureTab({ onStage }: AiScriptureTabProps) {
               {semanticStatus.message}
             </p>
           </div>
-          <button
-            onClick={() => void prepareParaphrases()}
-            disabled={active || semanticStatus.state === "preparing" || semanticStatus.state === "ready"}
-            className="shrink-0 px-3 py-1.5 rounded-md border border-violet-800 bg-violet-950/40 hover:bg-violet-900/50 disabled:border-slate-800 disabled:bg-slate-900 disabled:text-slate-600 text-violet-300 text-[10px] font-black uppercase tracking-wide"
-          >
-            {semanticStatus.state === "ready" ? "Ready" : semanticStatus.state === "preparing" ? "Preparing…" : semanticStatus.state === "error" ? "Retry" : "Prepare"}
-          </button>
+          <div className="flex items-center gap-2">
+            {semanticStatus.state === "preparing" ? (
+              <button
+                onClick={() => void cancelParaphrases()}
+                className="shrink-0 px-3 py-1.5 rounded-md border border-amber-800 bg-amber-950/40 hover:bg-amber-900/50 text-amber-300 text-[10px] font-black uppercase tracking-wide"
+              >
+                Cancel
+              </button>
+            ) : (
+              <button
+                onClick={() => void prepareParaphrases()}
+                disabled={active || semanticStatus.state === "ready"}
+                className="shrink-0 px-3 py-1.5 rounded-md border border-violet-800 bg-violet-950/40 hover:bg-violet-900/50 disabled:border-slate-800 disabled:bg-slate-900 disabled:text-slate-600 text-violet-300 text-[10px] font-black uppercase tracking-wide"
+              >
+                {semanticStatus.state === "ready" ? "Ready" : semanticStatus.state === "error" ? "Retry" : "Prepare"}
+              </button>
+            )}
+            {semanticStatus.diskBytes > 0 && semanticStatus.state !== "preparing" && (
+              <button
+                onClick={() => void removeParaphrases()}
+                disabled={active || removingModel}
+                className="shrink-0 px-2.5 py-1.5 rounded-md border border-slate-700 hover:bg-slate-800 disabled:opacity-40 text-slate-400 text-[10px] font-bold"
+              >
+                {removingModel ? "Removing…" : "Remove model"}
+              </button>
+            )}
+          </div>
         </div>
         {semanticStatus.state === "preparing" && semanticStatus.total > 0 && (
           <div className="h-1.5 overflow-hidden rounded-full bg-slate-800" aria-label="Paraphrase index progress">
@@ -223,8 +302,48 @@ export function AiScriptureTab({ onStage }: AiScriptureTabProps) {
           </div>
         )}
         <p className="text-[10px] text-slate-600">
-          Preparation downloads a small MIT-licensed model once and loads Wordlyte's compact Bible meaning index. Sermon text is not sent to an additional AI service. Paraphrases remain manual-only.
+          Preparation downloads a small MIT-licensed model once and loads Wordlyte's compact Bible meaning index. Up to three passage-aware themes may appear; all remain manual-only and sermon text stays local.
         </p>
+        <div className="flex flex-wrap items-center justify-between gap-2 text-[9px] text-slate-600">
+          <span>{semanticStatus.model} · {formatBytes(semanticStatus.diskBytes)} local storage{semanticStatus.verified ? " · integrity verified" : ""}</span>
+          <button
+            onClick={() => setShowDiagnostics((current) => !current)}
+            className="text-slate-500 hover:text-slate-300 font-bold uppercase tracking-wide"
+          >
+            {showDiagnostics ? "Hide diagnostics" : "Show diagnostics"}
+          </button>
+        </div>
+        {showDiagnostics && (
+          <div className="rounded-md border border-slate-800 bg-slate-950/70 p-2.5 text-[10px] text-slate-500">
+            {!semanticDiagnostic ? (
+              <p>No semantic retrieval has run in this session.</p>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                <div className="flex flex-wrap gap-x-3 gap-y-1">
+                  <span className={semanticDiagnostic.state === "matched" ? "text-emerald-400" : semanticDiagnostic.state === "error" ? "text-red-400" : "text-amber-400"}>
+                    {semanticDiagnostic.state.toUpperCase()}
+                  </span>
+                  <span>{semanticDiagnostic.latencyMs.toFixed(1)} ms</span>
+                  <span>{semanticDiagnostic.queryWords} words</span>
+                  <span>{semanticDiagnostic.contextSegments} recent segment{semanticDiagnostic.contextSegments === 1 ? "" : "s"}</span>
+                  {semanticDiagnostic.similarity != null && <span>best {semanticDiagnostic.similarity.toFixed(3)}</span>}
+                  {semanticDiagnostic.margin != null && <span>margin {semanticDiagnostic.margin.toFixed(3)}</span>}
+                  <span>gates ≥{semanticDiagnostic.minimumSimilarity.toFixed(3)} / ≥{semanticDiagnostic.minimumMargin.toFixed(3)}</span>
+                </div>
+                <p>{semanticDiagnostic.reason}</p>
+                {semanticDiagnostic.candidates.length > 0 && (
+                  <ol className="grid gap-1 sm:grid-cols-3">
+                    {semanticDiagnostic.candidates.map((candidate, index) => (
+                      <li key={`${candidate.reference}-${index}`} className="rounded border border-slate-800 px-2 py-1">
+                        {index + 1}. {candidate.reference} · {candidate.similarity.toFixed(3)}
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
       <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-3">
@@ -272,7 +391,7 @@ export function AiScriptureTab({ onStage }: AiScriptureTabProps) {
         <section className="rounded-lg border border-slate-800 bg-slate-900/30 flex flex-col min-h-0">
           <div className="px-3 py-2 border-b border-slate-800 flex items-center justify-between">
             <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Live transcript</h3>
-            <button onClick={ai.clearSession} className="text-[10px] text-slate-500 hover:text-slate-300 flex items-center gap-1">
+            <button onClick={() => { ai.clearSession(); setSemanticDiagnostic(null); }} className="text-[10px] text-slate-500 hover:text-slate-300 flex items-center gap-1">
               <RotateCcw size={10} /> Clear session
             </button>
           </div>
@@ -299,17 +418,22 @@ export function AiScriptureTab({ onStage }: AiScriptureTabProps) {
             {ai.suggestions.length === 0 ? (
               <p className="text-xs text-slate-600 italic">Detected references, close quotations, and prepared paraphrase matches will appear here.</p>
             ) : ai.suggestions.map((suggestion) => (
-              <article key={suggestion.id} className="rounded-md border border-slate-800 bg-slate-950/70 p-3">
+              <article key={suggestion.id} className={`rounded-md border bg-slate-950/70 p-3 ${suggestion.detection === "paraphrase" && suggestion.rank === 1 ? "border-amber-900/80" : "border-slate-800"}`}>
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <strong className="text-xs text-slate-100">{referenceOf(suggestion)}</strong>
                       <span className={`text-[9px] uppercase font-black tracking-wide px-1.5 py-0.5 rounded ${suggestion.detection === "reference" ? "bg-blue-950 text-blue-400" : suggestion.detection === "quote" ? "bg-violet-950 text-violet-400" : "bg-amber-950 text-amber-400"}`}>
-                        {suggestion.detection === "reference" ? "Reference" : suggestion.detection === "quote" ? "Direct quote" : "Possible theme"}
+                        {suggestion.detection === "reference" ? "Reference" : suggestion.detection === "quote" ? "Direct quote" : `Possible theme${suggestion.rank ? ` #${suggestion.rank}` : ""}`}
                       </span>
                       <span className="text-[9px] text-slate-600">{Math.round(suggestion.confidence * 100)}%</span>
                     </div>
                     <p className="mt-2 text-xs text-slate-300 leading-relaxed select-text">{suggestion.verse.text}</p>
+                    {suggestion.detection === "paraphrase" && suggestion.passageStart != null && suggestion.passageEnd != null && suggestion.passageStart !== suggestion.passageEnd && (
+                      <p className="mt-1.5 text-[10px] text-amber-700">
+                        Passage signal: {suggestion.verse.book} {suggestion.verse.chapter}:{suggestion.passageStart}–{suggestion.passageEnd}; Stage uses the strongest verse shown above.
+                      </p>
+                    )}
                     <p className="mt-2 text-[10px] text-slate-600 truncate" title={suggestion.evidence}>Heard: “{suggestion.evidence}”</p>
                   </div>
                   <button
