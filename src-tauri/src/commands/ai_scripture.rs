@@ -1,5 +1,6 @@
 use crate::ai_detection::{detect_reference, direct_quote_match_score, quote_tokens};
 use crate::commands::program_audio::{subscribe_feed, AudioRelay};
+use crate::semantic_scripture::{self, SemanticScripture};
 use crate::state::AppState;
 use crate::store::{BibleStore, Verse};
 use futures_util::{FutureExt, SinkExt, StreamExt};
@@ -11,7 +12,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
 use tokio::sync::watch;
@@ -164,6 +165,7 @@ struct DetectionConfig {
 struct QuoteJob {
     generation: u64,
     rolling_text: String,
+    semantic_text: String,
     evidence: String,
     asr_confidence: f32,
 }
@@ -173,6 +175,16 @@ struct DetectionPipeline {
     recently_suggested: Arc<Mutex<HashMap<String, Instant>>>,
     generation: Arc<AtomicU64>,
     quote_tx: watch::Sender<Option<QuoteJob>>,
+}
+
+struct DetectionWorker {
+    app: AppHandle,
+    bible: Arc<BibleStore>,
+    detection: Arc<DetectionConfig>,
+    generation: Arc<AtomicU64>,
+    active: Arc<AtomicBool>,
+    recently_suggested: Arc<Mutex<HashMap<String, Instant>>>,
+    semantic: Arc<SemanticScripture>,
 }
 
 struct ActiveDetectionSession(Arc<AtomicBool>);
@@ -400,6 +412,14 @@ pub async fn ai_start(
     }
     let api_key = load_api_key(&state.app_data_dir)?;
     let relay = subscribe_feed(&audio_device)?;
+    let semantic = semantic_scripture::engine(&state.app_data_dir);
+    if semantic.was_prepared() && !semantic.is_ready() {
+        let _ = semantic_scripture::prepare_in_background(
+            app.clone(),
+            state.store.clone(),
+            state.app_data_dir.clone(),
+        );
+    }
     let session_id = Uuid::new_v4().to_string();
     let (stop_tx, stop_rx) = watch::channel(false);
     {
@@ -491,6 +511,19 @@ pub fn ai_stop() -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn ai_semantic_status(state: State<'_, AppState>) -> semantic_scripture::SemanticStatus {
+    semantic_scripture::engine(&state.app_data_dir).status()
+}
+
+#[tauri::command]
+pub fn ai_prepare_semantic(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> semantic_scripture::SemanticStatus {
+    semantic_scripture::prepare_in_background(app, state.store.clone(), state.app_data_dir.clone())
+}
+
 async fn spawn_pcm_decoder(relay: &AudioRelay) -> Result<Child, String> {
     Command::new(crate::binpaths::ffmpeg_path())
         .args([
@@ -528,6 +561,13 @@ async fn run_deepgram_session(
     version: String,
     mut stop: watch::Receiver<bool>,
 ) -> Result<(), String> {
+    let semantic = semantic_scripture::engine(
+        app.path()
+            .app_local_data_dir()
+            .or_else(|_| app.path().app_data_dir())
+            .map_err(|error| error.to_string())?
+            .as_path(),
+    );
     let mut request = deepgram_url()
         .into_client_request()
         .map_err(|e| format!("Could not create the Deepgram request: {e}"))?;
@@ -579,13 +619,16 @@ async fn run_deepgram_session(
     let _active_detection_session = ActiveDetectionSession(detection_active.clone());
     let (quote_tx, quote_rx) = watch::channel(None::<QuoteJob>);
     spawn_quote_worker(
-        app.clone(),
-        bible.clone(),
-        detection.clone(),
+        DetectionWorker {
+            app: app.clone(),
+            bible: bible.clone(),
+            detection: detection.clone(),
+            generation: detection_generation.clone(),
+            active: detection_active,
+            recently_suggested: recently_suggested.clone(),
+            semantic,
+        },
         quote_rx,
-        detection_generation.clone(),
-        detection_active,
-        recently_suggested.clone(),
     );
     let mut pipeline = DetectionPipeline {
         context: VecDeque::new(),
@@ -638,22 +681,14 @@ async fn run_deepgram_session(
     Ok(())
 }
 
-fn spawn_quote_worker(
-    app: AppHandle,
-    bible: Arc<BibleStore>,
-    detection: Arc<DetectionConfig>,
-    mut quote_rx: watch::Receiver<Option<QuoteJob>>,
-    generation: Arc<AtomicU64>,
-    active: Arc<AtomicBool>,
-    recently_suggested: Arc<Mutex<HashMap<String, Instant>>>,
-) {
+fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Option<QuoteJob>>) {
     tauri::async_runtime::spawn(async move {
         while quote_rx.changed().await.is_ok() {
             let Some(job) = quote_rx.borrow_and_update().clone() else {
                 continue;
             };
-            let worker_bible = bible.clone();
-            let worker_detection = detection.clone();
+            let worker_bible = worker.bible.clone();
+            let worker_detection = worker.detection.clone();
             let worker_job = job.clone();
             let suggestion = tokio::task::spawn_blocking(move || {
                 detect_direct_quote(
@@ -672,13 +707,71 @@ fn spawn_quote_worker(
             // references. If any newer final transcript arrived while this
             // search ran, discard the stale result so it cannot replace a
             // newer auto-staged reference.
-            if !active.load(Ordering::Acquire)
-                || generation.load(Ordering::Acquire) != job.generation
+            if !worker.active.load(Ordering::Acquire)
+                || worker.generation.load(Ordering::Acquire) != job.generation
             {
                 continue;
             }
             if let Some(suggestion) = suggestion {
-                let _ = emit_suggestion_if_new(&app, &recently_suggested, suggestion);
+                let _ = emit_suggestion_if_new(&worker.app, &worker.recently_suggested, suggestion);
+                continue;
+            }
+
+            if !worker.semantic.is_ready() {
+                continue;
+            }
+            let semantic_engine = worker.semantic.clone();
+            let semantic_bible = worker.bible.clone();
+            let semantic_job = job.clone();
+            let output_version = worker.detection.output_version.clone();
+            let semantic_started = Instant::now();
+            let semantic_result = tokio::task::spawn_blocking(move || {
+                semantic_engine.search(
+                    &semantic_job.semantic_text,
+                    &output_version,
+                    &semantic_bible,
+                )
+            })
+            .await;
+            if !worker.active.load(Ordering::Acquire)
+                || worker.generation.load(Ordering::Acquire) != job.generation
+            {
+                continue;
+            }
+            match semantic_result {
+                Ok(Ok(Some(found))) => {
+                    crate::store::log_msg(
+                        &worker.app,
+                        &format!(
+                            "[ai-scripture] paraphrase match {} {}:{} similarity={:.3} margin={:.3} latency_ms={:.1}",
+                            found.verse.book,
+                            found.verse.chapter,
+                            found.verse.verse,
+                            found.similarity,
+                            found.margin,
+                            semantic_started.elapsed().as_secs_f64() * 1_000.0,
+                        ),
+                    );
+                    let suggestion = ScriptureSuggestion {
+                        id: Uuid::new_v4().to_string(),
+                        detection: "paraphrase".into(),
+                        confidence: found.confidence,
+                        evidence: job.evidence.clone(),
+                        verse: found.verse,
+                        timestamp: now_ms(),
+                    };
+                    let _ =
+                        emit_suggestion_if_new(&worker.app, &worker.recently_suggested, suggestion);
+                }
+                Ok(Err(error)) => crate::store::log_msg(
+                    &worker.app,
+                    &format!("[ai-scripture] paraphrase retrieval skipped: {error}"),
+                ),
+                Err(error) => crate::store::log_msg(
+                    &worker.app,
+                    &format!("[ai-scripture] paraphrase worker stopped: {error}"),
+                ),
+                Ok(Ok(None)) => {}
             }
         }
     });
@@ -763,6 +856,15 @@ fn handle_deepgram_message(
         .map(|(_, text)| text.as_str())
         .collect::<Vec<_>>()
         .join(" ");
+    let semantic_text = pipeline
+        .context
+        .iter()
+        .rev()
+        .take(3)
+        .rev()
+        .map(|(_, text)| text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
     let current_generation = pipeline.generation.fetch_add(1, Ordering::AcqRel) + 1;
 
     // Explicit references are deterministic and take the fast path. Quotation
@@ -797,6 +899,7 @@ fn handle_deepgram_message(
     pipeline.quote_tx.send_replace(Some(QuoteJob {
         generation: current_generation,
         rolling_text,
+        semantic_text,
         evidence: transcript.to_string(),
         asr_confidence: confidence,
     }));

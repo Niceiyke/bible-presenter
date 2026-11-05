@@ -447,6 +447,8 @@ fn main() {
             wordlyte_lib::commands::ai_scripture::ai_set_api_key,
             wordlyte_lib::commands::ai_scripture::ai_clear_api_key,
             wordlyte_lib::commands::ai_scripture::ai_status,
+            wordlyte_lib::commands::ai_scripture::ai_semantic_status,
+            wordlyte_lib::commands::ai_scripture::ai_prepare_semantic,
             wordlyte_lib::commands::ai_scripture::ai_start,
             wordlyte_lib::commands::ai_scripture::ai_stop,
         ])

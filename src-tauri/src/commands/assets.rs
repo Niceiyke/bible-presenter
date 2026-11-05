@@ -10,9 +10,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 // Constants
 // ---------------------------------------------------------------------------
 
-/// DB-only Bible data asset: a zip containing just `wordlyte_bible.db` (no
-/// sentence-transformer embeddings — the app only reads the SQLite text DB;
-/// search is FTS5 keyword, not vector). Uploaded to the v2.0.0 release.
+/// DB-only Bible data asset: a zip containing just `wordlyte_bible.db`.
+/// Normal search remains FTS5; the small read-only AI paraphrase index is a
+/// separately generated, installer-bundled resource.
 pub const BIBLE_DATA_ZIP_URL: &str = "https://github.com/Niceiyke/bible-presenter/releases/download/v2.0.0/wordlyte_bible.zip";
 pub const BIBLE_DB_FILENAME: &str = "wordlyte_bible.db";
 /// Pinned SHA-256 of the `wordlyte_bible.zip` asset (computed from the

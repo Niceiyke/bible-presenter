@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { BrainCircuit, KeyRound, Mic, RotateCcw, ShieldCheck, Square, WandSparkles } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
+import { BrainCircuit, Database, KeyRound, Mic, RotateCcw, ShieldCheck, Square, WandSparkles } from "lucide-react";
 import { useAiScripture, type ScriptureSuggestion } from "../hooks/useAiScripture";
 import { useProgramAudio } from "../hooks/useProgramAudio";
 import { useAppStore } from "../store";
@@ -10,6 +11,22 @@ interface AiKeyStatus {
   configured: boolean;
   provider: string;
 }
+
+interface SemanticStatus {
+  state: "notPrepared" | "preparing" | "ready" | "error";
+  message: string;
+  indexed: number;
+  total: number;
+  model: string;
+}
+
+const INITIAL_SEMANTIC_STATUS: SemanticStatus = {
+  state: "notPrepared",
+  message: "Checking local paraphrase model…",
+  indexed: 0,
+  total: 0,
+  model: "BAAI/bge-small-en-v1.5-quantized",
+};
 
 interface AiScriptureTabProps {
   onStage: (item: DisplayItem) => Promise<boolean>;
@@ -27,6 +44,7 @@ export function AiScriptureTab({ onStage }: AiScriptureTabProps) {
   const [keyStatus, setKeyStatus] = useState<AiKeyStatus>({ configured: false, provider: "deepgram" });
   const [apiKey, setApiKey] = useState("");
   const [savingKey, setSavingKey] = useState(false);
+  const [semanticStatus, setSemanticStatus] = useState<SemanticStatus>(INITIAL_SEMANTIC_STATUS);
   const [audioDevice, setAudioDevice] = useState(programAudio.device ?? "");
   const enabledVersions = useMemo(
     () => availableVersions.filter((version) => !(settings.disabled_bible_versions ?? []).includes(version)),
@@ -40,6 +58,28 @@ export function AiScriptureTab({ onStage }: AiScriptureTabProps) {
       .then(setKeyStatus)
       .catch((error) => setToast(`Could not read AI credentials: ${error}`));
   }, [setToast]);
+
+  useEffect(() => {
+    let mounted = true;
+    let unlisten: (() => void) | undefined;
+    void invoke<SemanticStatus>("ai_semantic_status")
+      .then((status) => mounted && setSemanticStatus(status))
+      .catch((error) => mounted && setSemanticStatus({
+        ...INITIAL_SEMANTIC_STATUS,
+        state: "error",
+        message: `Could not read paraphrase status: ${error}`,
+      }));
+    void listen<SemanticStatus>("ai-semantic-status", (event) => {
+      if (mounted) setSemanticStatus(event.payload);
+    }).then((stop) => {
+      if (mounted) unlisten = stop;
+      else stop();
+    });
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (!audioDevice && programAudio.device) setAudioDevice(programAudio.device);
@@ -73,6 +113,15 @@ export function AiScriptureTab({ onStage }: AiScriptureTabProps) {
     }
   };
 
+  const prepareParaphrases = async () => {
+    try {
+      const status = await invoke<SemanticStatus>("ai_prepare_semantic");
+      setSemanticStatus(status);
+    } catch (error) {
+      setToast(`Could not prepare local paraphrase matching: ${error}`);
+    }
+  };
+
   const toggleListening = async () => {
     try {
       if (active) {
@@ -98,7 +147,7 @@ export function AiScriptureTab({ onStage }: AiScriptureTabProps) {
             <BrainCircuit size={16} className="text-violet-400" /> AI Scripture Assistant
           </h2>
           <p className="text-[11px] text-slate-500 mt-1">
-            English sermon transcription with explicit-reference and direct-quotation suggestions.
+            English sermon transcription with references, direct quotations, and local paraphrase suggestions.
           </p>
         </div>
         <div className="flex items-center gap-2 text-[10px] text-emerald-400 border border-emerald-900/70 bg-emerald-950/30 rounded-md px-2.5 py-1.5">
@@ -144,6 +193,37 @@ export function AiScriptureTab({ onStage }: AiScriptureTabProps) {
         </div>
         <p className="text-[10px] text-slate-600">
           Stored with Windows DPAPI for the current user. Audio and transcript data are sent to Deepgram only while listening.
+        </p>
+      </section>
+
+      <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-3 flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1.5">
+              <Database size={12} /> Local paraphrase matching
+            </h3>
+            <p className={`mt-1 text-[10px] ${semanticStatus.state === "error" ? "text-red-400" : semanticStatus.state === "ready" ? "text-emerald-400" : "text-slate-500"}`}>
+              {semanticStatus.message}
+            </p>
+          </div>
+          <button
+            onClick={() => void prepareParaphrases()}
+            disabled={active || semanticStatus.state === "preparing" || semanticStatus.state === "ready"}
+            className="shrink-0 px-3 py-1.5 rounded-md border border-violet-800 bg-violet-950/40 hover:bg-violet-900/50 disabled:border-slate-800 disabled:bg-slate-900 disabled:text-slate-600 text-violet-300 text-[10px] font-black uppercase tracking-wide"
+          >
+            {semanticStatus.state === "ready" ? "Ready" : semanticStatus.state === "preparing" ? "Preparing…" : semanticStatus.state === "error" ? "Retry" : "Prepare"}
+          </button>
+        </div>
+        {semanticStatus.state === "preparing" && semanticStatus.total > 0 && (
+          <div className="h-1.5 overflow-hidden rounded-full bg-slate-800" aria-label="Paraphrase index progress">
+            <div
+              className="h-full bg-violet-600 transition-[width]"
+              style={{ width: `${Math.min(100, (semanticStatus.indexed / semanticStatus.total) * 100)}%` }}
+            />
+          </div>
+        )}
+        <p className="text-[10px] text-slate-600">
+          Preparation downloads a small MIT-licensed model once and loads Wordlyte's compact Bible meaning index. Sermon text is not sent to an additional AI service. Paraphrases remain manual-only.
         </p>
       </section>
 
@@ -217,15 +297,15 @@ export function AiScriptureTab({ onStage }: AiScriptureTabProps) {
           </div>
           <div className="p-3 flex flex-col gap-2 flex-1 max-h-[420px] overflow-y-auto custom-scrollbar">
             {ai.suggestions.length === 0 ? (
-              <p className="text-xs text-slate-600 italic">Detected references and close direct quotations will appear here.</p>
+              <p className="text-xs text-slate-600 italic">Detected references, close quotations, and prepared paraphrase matches will appear here.</p>
             ) : ai.suggestions.map((suggestion) => (
               <article key={suggestion.id} className="rounded-md border border-slate-800 bg-slate-950/70 p-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <strong className="text-xs text-slate-100">{referenceOf(suggestion)}</strong>
-                      <span className={`text-[9px] uppercase font-black tracking-wide px-1.5 py-0.5 rounded ${suggestion.detection === "reference" ? "bg-blue-950 text-blue-400" : "bg-violet-950 text-violet-400"}`}>
-                        {suggestion.detection === "reference" ? "Reference" : "Direct quote"}
+                      <span className={`text-[9px] uppercase font-black tracking-wide px-1.5 py-0.5 rounded ${suggestion.detection === "reference" ? "bg-blue-950 text-blue-400" : suggestion.detection === "quote" ? "bg-violet-950 text-violet-400" : "bg-amber-950 text-amber-400"}`}>
+                        {suggestion.detection === "reference" ? "Reference" : suggestion.detection === "quote" ? "Direct quote" : "Possible theme"}
                       </span>
                       <span className="text-[9px] text-slate-600">{Math.round(suggestion.confidence * 100)}%</span>
                     </div>

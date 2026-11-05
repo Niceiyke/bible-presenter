@@ -44,6 +44,11 @@ machine-uid = "0.4"
 # Ed25519 verification for the license signing layer (see license.rs + workers/license).
 # The client never signs — it only verifies against the embedded public key.
 ed25519-dalek = "2"
+# Local English sentence embeddings for paraphrase retrieval. The quantized
+# BGE model is downloaded only when the operator explicitly prepares
+# paraphrase matching, then cached under Wordlyte's app-data directory.
+fastembed = { version = "7.5.0", default-features = false, features = ["onnx", "ort-download-binaries-rustls-tls"] }
+hf-hub = { version = "0.5.0", default-features = false, features = ["ureq"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Phase 0 native-capture probe + Phase 4 WGC capture pipeline.

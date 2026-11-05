@@ -8,3 +8,4 @@ pub mod binpaths;
 pub mod license;
 pub mod capture;
 pub mod ai_detection;
+pub mod semantic_scripture;

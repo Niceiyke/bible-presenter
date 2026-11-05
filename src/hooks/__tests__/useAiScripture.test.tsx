@@ -76,6 +76,16 @@ describe("AiScriptureProvider automatic staging", () => {
     expect(onStageVerse).not.toHaveBeenCalled();
   });
 
+  it("never auto-stages an uncalibrated paraphrase", async () => {
+    const onStageVerse = vi.fn().mockResolvedValue(true);
+    render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);
+    await waitFor(() => expect(mocks.listeners.has("ai-scripture-suggestion")).toBe(true));
+
+    await emitSuggestion({ ...suggestion(0.99), detection: "paraphrase" });
+
+    expect(onStageVerse).not.toHaveBeenCalled();
+  });
+
   it("never auto-stages the same suggestion event twice", async () => {
     const onStageVerse = vi.fn().mockResolvedValue(true);
     render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);

@@ -25,7 +25,7 @@ export interface TranscriptSegment {
 
 export interface ScriptureSuggestion {
   id: string;
-  detection: "reference" | "quote";
+  detection: "reference" | "quote" | "paraphrase";
   confidence: number;
   evidence: string;
   verse: Verse;
@@ -33,7 +33,12 @@ export interface ScriptureSuggestion {
 }
 
 export function shouldAutoStageSuggestion(suggestion: ScriptureSuggestion): boolean {
-  return Number.isFinite(suggestion.confidence) && suggestion.confidence >= AI_AUTO_STAGE_CONFIDENCE;
+  // Paraphrase confidence is deliberately provisional until it is calibrated
+  // against a representative sermon corpus. Keep a frontend safety boundary
+  // in addition to the backend's 89% cap.
+  return suggestion.detection !== "paraphrase"
+    && Number.isFinite(suggestion.confidence)
+    && suggestion.confidence >= AI_AUTO_STAGE_CONFIDENCE;
 }
 
 interface AiScriptureContextValue {

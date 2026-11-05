@@ -96,6 +96,17 @@ pub struct SearchResponse {
     pub method: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct SemanticCorpusVerse {
+    pub book: String,
+    pub chapter: i32,
+    pub verse: i32,
+    /// Text from every installed English translation for this canonical
+    /// reference. One aggregate embedding lets all installed translations
+    /// contribute to retrieval without multiplying the in-memory index.
+    pub text: String,
+}
+
 pub struct BibleStore {
     conn: Arc<Mutex<Connection>>,
     _patterns: RegexSet,
@@ -352,6 +363,33 @@ impl BibleStore {
 
     pub fn get_available_versions(&self) -> Vec<String> {
         self.available_versions.clone()
+    }
+
+    /// Returns one deterministic record per canonical English Bible verse.
+    /// Translation text is ordered by version before aggregation so the
+    /// semantic-index fingerprint remains stable across launches.
+    pub fn semantic_corpus(&self) -> anyhow::Result<Vec<SemanticCorpusVerse>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT title, chapter, verse, GROUP_CONCAT(text, '\n')
+             FROM (
+                 SELECT title, book, chapter, verse, text, version
+                 FROM wordlyte_bible
+                 WHERE language = 'EN' AND text IS NOT NULL AND text != ''
+                 ORDER BY book, chapter, verse, version
+             )
+             GROUP BY book, title, chapter, verse
+             ORDER BY book, chapter, verse"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(SemanticCorpusVerse {
+                book: row.get(0)?,
+                chapter: row.get(1)?,
+                verse: row.get(2)?,
+                text: row.get(3)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn get_active_version(&self) -> String {
