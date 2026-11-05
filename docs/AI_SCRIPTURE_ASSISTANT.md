@@ -20,6 +20,8 @@ The assistant listens to an English sermon and proposes Scripture for an operato
 7. Bring-your-own Deepgram credentials encrypted at rest with current-user Windows DPAPI and excluded from Wordlyte backups.
 8. Nova-3 Bible-name keyterm prompting, focused on uncommon and commonly misheard book names while avoiding broad words such as “Mark” and “Job.”
 9. A CI-gated synthetic evaluation corpus and `npm run ai:eval` runner for precision, recall, F1, exact-result accuracy, and local detector p95 latency.
+10. A low-latency detection pipeline: finalized explicit references use an immediate deterministic fast path, while one bounded cross-translation quotation query runs in a coalescing background worker and stale quote results are discarded.
+11. AI auto-staging splits and stages a verse in one backend round trip while retaining all splits for normal next/previous navigation.
 
 Paraphrase retrieval is deliberately excluded. The existing `search_semantic_query` command is lexical FTS/LIKE search, not vector retrieval.
 
@@ -32,7 +34,7 @@ DirectShow input
   -> ffmpeg mono PCM 16 kHz decoder
   -> Deepgram streaming WebSocket
   -> final/interim transcript events
-  -> deterministic reference parser OR lexical quotation matcher
+  -> deterministic reference fast path OR background lexical quotation matcher
   -> operator suggestion card
   -> Stage (automatic at >=90% confidence; otherwise operator action)
   -> Go Live (separate operator action)

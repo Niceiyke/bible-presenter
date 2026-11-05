@@ -8,6 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
@@ -153,10 +154,33 @@ struct AiRuntime {
     last_message: String,
 }
 
+#[derive(Clone)]
 struct DetectionConfig {
     output_version: String,
     books: Vec<String>,
-    quote_versions: Vec<String>,
+}
+
+#[derive(Clone)]
+struct QuoteJob {
+    generation: u64,
+    rolling_text: String,
+    evidence: String,
+    asr_confidence: f32,
+}
+
+struct DetectionPipeline {
+    context: VecDeque<(Instant, String)>,
+    recently_suggested: Arc<Mutex<HashMap<String, Instant>>>,
+    generation: Arc<AtomicU64>,
+    quote_tx: watch::Sender<Option<QuoteJob>>,
+}
+
+struct ActiveDetectionSession(Arc<AtomicBool>);
+
+impl Drop for ActiveDetectionSession {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 static RUNTIME: OnceLock<Mutex<AiRuntime>> = OnceLock::new();
@@ -545,13 +569,30 @@ async fn run_deepgram_session(
     // The MVP is English-only, so every installed translation can help align
     // a quotation. The winning canonical reference is converted back to the
     // operator-selected output translation before it reaches the UI.
-    let detection = DetectionConfig {
+    let detection = Arc::new(DetectionConfig {
         output_version: version.clone(),
         books,
-        quote_versions: bible.get_available_versions(),
+    });
+    let recently_suggested = Arc::new(Mutex::new(HashMap::new()));
+    let detection_generation = Arc::new(AtomicU64::new(0));
+    let detection_active = Arc::new(AtomicBool::new(true));
+    let _active_detection_session = ActiveDetectionSession(detection_active.clone());
+    let (quote_tx, quote_rx) = watch::channel(None::<QuoteJob>);
+    spawn_quote_worker(
+        app.clone(),
+        bible.clone(),
+        detection.clone(),
+        quote_rx,
+        detection_generation.clone(),
+        detection_active,
+        recently_suggested.clone(),
+    );
+    let mut pipeline = DetectionPipeline {
+        context: VecDeque::new(),
+        recently_suggested,
+        generation: detection_generation,
+        quote_tx,
     };
-    let mut context: VecDeque<(Instant, String)> = VecDeque::new();
-    let mut recently_suggested: HashMap<String, Instant> = HashMap::new();
     let mut audio = vec![0u8; 3200];
 
     loop {
@@ -574,8 +615,7 @@ async fn run_deepgram_session(
                             &bible,
                             &detection,
                             text.as_ref(),
-                            &mut context,
-                            &mut recently_suggested,
+                            &mut pipeline,
                         )?;
                     }
                     Some(Ok(Message::Close(frame))) => {
@@ -598,13 +638,82 @@ async fn run_deepgram_session(
     Ok(())
 }
 
+fn spawn_quote_worker(
+    app: AppHandle,
+    bible: Arc<BibleStore>,
+    detection: Arc<DetectionConfig>,
+    mut quote_rx: watch::Receiver<Option<QuoteJob>>,
+    generation: Arc<AtomicU64>,
+    active: Arc<AtomicBool>,
+    recently_suggested: Arc<Mutex<HashMap<String, Instant>>>,
+) {
+    tauri::async_runtime::spawn(async move {
+        while quote_rx.changed().await.is_ok() {
+            let Some(job) = quote_rx.borrow_and_update().clone() else {
+                continue;
+            };
+            let worker_bible = bible.clone();
+            let worker_detection = detection.clone();
+            let worker_job = job.clone();
+            let suggestion = tokio::task::spawn_blocking(move || {
+                detect_direct_quote(
+                    &worker_bible,
+                    &worker_job.rolling_text,
+                    &worker_job.evidence,
+                    &worker_detection.output_version,
+                    worker_job.asr_confidence,
+                )
+            })
+            .await
+            .ok()
+            .flatten();
+
+            // Quote retrieval is deliberately lower priority than explicit
+            // references. If any newer final transcript arrived while this
+            // search ran, discard the stale result so it cannot replace a
+            // newer auto-staged reference.
+            if !active.load(Ordering::Acquire)
+                || generation.load(Ordering::Acquire) != job.generation
+            {
+                continue;
+            }
+            if let Some(suggestion) = suggestion {
+                let _ = emit_suggestion_if_new(&app, &recently_suggested, suggestion);
+            }
+        }
+    });
+}
+
+fn emit_suggestion_if_new(
+    app: &AppHandle,
+    recently_suggested: &Mutex<HashMap<String, Instant>>,
+    suggestion: ScriptureSuggestion,
+) -> bool {
+    let now = Instant::now();
+    let Ok(mut recent) = recently_suggested.lock() else {
+        return false;
+    };
+    recent.retain(|_, at| now.duration_since(*at) <= SUGGESTION_COOLDOWN);
+    let key = format!(
+        "{}:{}:{}",
+        suggestion.verse.book, suggestion.verse.chapter, suggestion.verse.verse
+    );
+    if let std::collections::hash_map::Entry::Vacant(entry) = recent.entry(key) {
+        entry.insert(now);
+        drop(recent);
+        let _ = app.emit("ai-scripture-suggestion", suggestion);
+        true
+    } else {
+        false
+    }
+}
+
 fn handle_deepgram_message(
     app: &AppHandle,
     bible: &BibleStore,
     detection: &DetectionConfig,
     json: &str,
-    context: &mut VecDeque<(Instant, String)>,
-    recently_suggested: &mut HashMap<String, Instant>,
+    pipeline: &mut DetectionPipeline,
 ) -> Result<(), String> {
     let Some(provider_transcript) = parse_deepgram_transcript(json) else {
         return Ok(());
@@ -628,21 +737,38 @@ fn handle_deepgram_message(
     }
 
     let now = Instant::now();
-    context.push_back((now, transcript.to_string()));
-    while context
+    pipeline.context.push_back((now, transcript.to_string()));
+    while pipeline
+        .context
         .front()
         .is_some_and(|(at, _)| now.duration_since(*at) > CONTEXT_WINDOW)
     {
-        context.pop_front();
+        pipeline.context.pop_front();
     }
-    recently_suggested.retain(|_, at| now.duration_since(*at) <= SUGGESTION_COOLDOWN);
-    let rolling_text = context
+    let rolling_text = pipeline
+        .context
         .iter()
         .map(|(_, text)| text.as_str())
         .collect::<Vec<_>>()
         .join(" ");
+    // Two final segments are enough to recover a reference split at an ASR
+    // boundary without letting an older reference suppress quotation matching
+    // for the full 20-second quotation context window.
+    let reference_text = pipeline
+        .context
+        .iter()
+        .rev()
+        .take(2)
+        .rev()
+        .map(|(_, text)| text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let current_generation = pipeline.generation.fetch_add(1, Ordering::AcqRel) + 1;
 
-    let suggestion = detect_reference(&rolling_text, &detection.books)
+    // Explicit references are deterministic and take the fast path. Quotation
+    // retrieval can scan every installed translation and therefore runs in a
+    // coalescing background worker instead of blocking audio/WebSocket I/O.
+    let suggestion = detect_reference(&reference_text, &detection.books)
         .and_then(|reference| {
             bible
                 .get_verse(
@@ -661,28 +787,19 @@ fn handle_deepgram_message(
             evidence: transcript.to_string(),
             verse,
             timestamp: now_ms(),
-        })
-        .or_else(|| {
-            detect_direct_quote(
-                bible,
-                &rolling_text,
-                transcript,
-                &detection.quote_versions,
-                &detection.output_version,
-                confidence,
-            )
         });
 
-    if let Some(suggestion) = suggestion {
-        let key = format!(
-            "{}:{}:{}",
-            suggestion.verse.book, suggestion.verse.chapter, suggestion.verse.verse
-        );
-        if let std::collections::hash_map::Entry::Vacant(entry) = recently_suggested.entry(key) {
-            entry.insert(now);
-            let _ = app.emit("ai-scripture-suggestion", suggestion);
-        }
+    if suggestion.is_some_and(|suggestion| {
+        emit_suggestion_if_new(app, &pipeline.recently_suggested, suggestion)
+    }) {
+        return Ok(());
     }
+    pipeline.quote_tx.send_replace(Some(QuoteJob {
+        generation: current_generation,
+        rolling_text,
+        evidence: transcript.to_string(),
+        asr_confidence: confidence,
+    }));
     Ok(())
 }
 
@@ -708,7 +825,6 @@ fn detect_direct_quote(
     bible: &BibleStore,
     rolling_text: &str,
     evidence: &str,
-    search_versions: &[String],
     output_version: &str,
     asr_confidence: f32,
 ) -> Option<ScriptureSuggestion> {
@@ -724,10 +840,10 @@ fn detect_direct_quote(
         .cloned()
         .collect::<Vec<_>>()
         .join(" ");
-    let (matched_verse, score) = search_versions
-        .iter()
-        .filter_map(|version| bible.search_all(&query, version).ok())
-        .flat_map(|response| response.results)
+    let (matched_verse, score) = bible
+        .search_quote_candidates(&query)
+        .ok()?
+        .into_iter()
         .filter_map(|verse| {
             direct_quote_match_score(rolling_text, &verse.text).map(|score| (verse, score))
         })

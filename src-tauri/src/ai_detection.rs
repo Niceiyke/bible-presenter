@@ -35,8 +35,17 @@ fn book_aliases(books: &[String]) -> Vec<(Vec<String>, String)> {
                 aliases.push((tokenize(&format!("{prefix} {rest}")), book.clone()));
             }
         }
-        if lower == "psalms" {
-            aliases.push((vec!["psalm".into()], book.clone()));
+        let singular_alias = match lower.as_str() {
+            "psalms" => Some("psalm"),
+            "numbers" => Some("number"),
+            "judges" => Some("judge"),
+            "acts" => Some("act"),
+            "romans" => Some("roman"),
+            "hebrews" => Some("hebrew"),
+            _ => None,
+        };
+        if let Some(alias) = singular_alias {
+            aliases.push((vec![alias.into()], book.clone()));
         }
         if lower == "song of solomon" {
             aliases.push((tokenize("song of songs"), book.clone()));
@@ -272,6 +281,11 @@ mod tests {
             "Revelation".into(),
             "1 Corinthians".into(),
             "Song of Solomon".into(),
+            "Hebrews".into(),
+            "Acts".into(),
+            "Numbers".into(),
+            "Judges".into(),
+            "Romans".into(),
         ]
     }
 
@@ -325,6 +339,14 @@ mod tests {
             })
         );
         assert_eq!(detect_reference("Psalm twenty three", &books()), None);
+        assert_eq!(
+            detect_reference("Hebrew one six", &books()),
+            Some(ScriptureReference {
+                book: "Hebrews".into(),
+                chapter: 1,
+                verse: 6
+            })
+        );
     }
 
     #[test]
@@ -339,5 +361,25 @@ mod tests {
             verse
         )
         .is_none());
+    }
+
+    #[test]
+    fn detects_curated_singular_book_aliases() {
+        for (transcript, book) in [
+            ("Act one six", "Acts"),
+            ("Number one six", "Numbers"),
+            ("Judge one six", "Judges"),
+            ("Roman one six", "Romans"),
+        ] {
+            assert_eq!(
+                detect_reference(transcript, &books()),
+                Some(ScriptureReference {
+                    book: book.into(),
+                    chapter: 1,
+                    verse: 6,
+                }),
+                "failed to parse {transcript}"
+            );
+        }
     }
 }

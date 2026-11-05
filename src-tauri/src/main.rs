@@ -335,6 +335,7 @@ fn main() {
             wordlyte_lib::commands::schedule::load_service,
             wordlyte_lib::commands::schedule::delete_service,
             wordlyte_lib::commands::display::stage_item,
+            wordlyte_lib::commands::display::stage_verse,
             wordlyte_lib::commands::display::commit_staged,
             wordlyte_lib::commands::display::go_live,
             wordlyte_lib::commands::display::send_live_item,

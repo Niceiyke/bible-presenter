@@ -25,6 +25,13 @@ pub struct PresentationSnapshot {
     pub revision: u64,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageVerseResult {
+    pub item: store::DisplayItem,
+    pub splits: Vec<store::Verse>,
+}
+
 #[tauri::command]
 pub async fn presentation_snapshot(state: State<'_, AppState>) -> Result<PresentationSnapshot, String> {
     // Read the whole presentation under the mutation lock so the snapshot is
@@ -45,6 +52,29 @@ pub async fn stage_item(app: AppHandle, state: State<'_, AppState>, item: store:
     crate::license::ensure_allowed(&state)?;
     remote_stage(&app, &state, item, None, 0);
     Ok(())
+}
+
+/// Split and stage a verse in one backend round trip. AI auto-staging uses this
+/// path so the first preview does not wait for a separate `split_verse` IPC.
+/// Returning every split preserves the frontend's next/previous split cache.
+#[tauri::command]
+pub async fn stage_verse(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    verse: store::Verse,
+    auto_split: bool,
+    threshold: Option<usize>,
+) -> Result<StageVerseResult, String> {
+    crate::license::ensure_allowed(&state)?;
+    let splits = if auto_split {
+        crate::commands::bible::split_verse(verse.clone(), threshold)
+    } else {
+        vec![verse.clone()]
+    };
+    let staged_verse = splits.first().cloned().unwrap_or(verse);
+    let item = store::DisplayItem::Verse(staged_verse);
+    remote_stage(&app, &state, item.clone(), None, 0);
+    Ok(StageVerseResult { item, splits })
 }
 
 /// Atomically copy the staged slot into the live slot and broadcast the

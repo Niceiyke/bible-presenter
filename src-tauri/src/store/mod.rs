@@ -531,6 +531,49 @@ impl BibleStore {
         Ok(SearchResponse { results, method: if indexing { "like".to_string() } else { "keyword".to_string() } })
     }
 
+    /// Retrieve direct-quotation candidates across every installed English
+    /// translation with one bounded query per search tier. AI quote matching
+    /// scores the returned text lexically and converts the winning canonical
+    /// reference back to the operator-selected translation.
+    pub fn search_quote_candidates(&self, query: &str) -> anyhow::Result<Vec<Verse>> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let tokens: Vec<String> = query.split_whitespace().filter_map(clean_token).collect();
+        if tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let escaped = query.replace('"', "\"\"");
+        let phrase = format!("\"{}\"", escaped);
+        let phrase_hits = self.run_fts_query_all_english(&phrase);
+        if !phrase_hits.is_empty() {
+            return Ok(phrase_hits);
+        }
+
+        let and_terms: Vec<String> = tokens.iter().map(|token| {
+            if STOP_WORDS.contains(&token.as_str()) { token.clone() } else { format!("{}*", token) }
+        }).collect();
+        let and_hits = self.run_fts_query_all_english(&and_terms.join(" AND "));
+        if !and_hits.is_empty() {
+            return Ok(and_hits);
+        }
+
+        let or_terms: Vec<String> = tokens.iter()
+            .filter(|token| !STOP_WORDS.contains(&token.as_str()))
+            .map(|token| format!("{}*", token))
+            .collect();
+        if !or_terms.is_empty() {
+            let or_hits = self.run_fts_query_all_english(&or_terms.join(" OR "));
+            if !or_hits.is_empty() {
+                return Ok(or_hits);
+            }
+        }
+
+        self.like_contiguous_all_english(query)
+    }
+
     /// True when the query contains tokens beyond a Bible reference (book words + numbers),
     /// i.e. real search terms. Stop words are ignored.
     fn query_has_extra_words(&self, query: &str) -> bool {
@@ -643,6 +686,57 @@ impl BibleStore {
             .collect()
     }
 
+    fn run_fts_query_all_english(&self, match_query: &str) -> Vec<Verse> {
+        let conn = self.conn.lock();
+        let Ok(mut stmt) = conn.prepare_cached(
+            "SELECT b.title, b.text, b.version, b.chapter, b.verse,
+                    bm25(wordlyte_bible_fts) AS relevance
+             FROM wordlyte_bible b
+             JOIN wordlyte_bible_fts f ON b.rowid = f.rowid
+             WHERE wordlyte_bible_fts MATCH ?1 AND b.language = 'EN'
+             ORDER BY relevance
+             LIMIT 300"
+        ) else {
+            return Vec::new();
+        };
+
+        let mut scored: Vec<(Verse, f32)> = Vec::new();
+        match stmt.query_map(params![match_query], |row| {
+            let text: Option<String> = row.get(1)?;
+            Ok((
+                Verse {
+                    book: row.get(0)?,
+                    text: text.unwrap_or_default(),
+                    version: row.get(2)?,
+                    chapter: row.get(3)?,
+                    verse: row.get(4)?,
+                    split_index: None,
+                    total_splits: None,
+                    score: None,
+                },
+                row.get::<_, f32>(5)?,
+            ))
+        }) {
+            Ok(rows) => {
+                for row in rows.flatten() {
+                    scored.push(row);
+                }
+            }
+            Err(_) => return Vec::new(),
+        }
+        if scored.is_empty() {
+            return Vec::new();
+        }
+
+        let min = scored.iter().map(|(_, score)| *score).fold(f32::INFINITY, f32::min);
+        let max = scored.iter().map(|(_, score)| *score).fold(f32::NEG_INFINITY, f32::max);
+        let range = if (max - min).abs() > f32::EPSILON { max - min } else { 1.0 };
+        scored.into_iter().map(|(mut verse, score)| {
+            verse.score = Some(1.0 - ((score - min) / range));
+            verse
+        }).collect()
+    }
+
     /// Contiguous-substring LIKE fallback, restricted to the active version.
     fn like_contiguous(&self, query: &str, version: &str) -> anyhow::Result<Vec<Verse>> {
         let pattern = format!("%{}%", query.trim().replace(' ', "%"));
@@ -669,6 +763,35 @@ impl BibleStore {
         let mut results = Vec::new();
         for v in rows.flatten() {
             results.push(v);
+        }
+        Ok(results)
+    }
+
+    fn like_contiguous_all_english(&self, query: &str) -> anyhow::Result<Vec<Verse>> {
+        let pattern = format!("%{}%", query.trim().replace(' ', "%"));
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare_cached(
+            "SELECT title, text, version, chapter, verse FROM wordlyte_bible \
+             WHERE text LIKE ?1 AND language = 'EN' \
+             ORDER BY rowid \
+             LIMIT 100"
+        )?;
+        let rows = stmt.query_map(params![pattern], |row| {
+            let text: Option<String> = row.get(1)?;
+            Ok(Verse {
+                book: row.get(0)?,
+                text: text.unwrap_or_default(),
+                version: row.get(2)?,
+                chapter: row.get(3)?,
+                verse: row.get(4)?,
+                split_index: None,
+                total_splits: None,
+                score: None,
+            })
+        })?;
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
         }
         Ok(results)
     }

@@ -79,7 +79,7 @@ export default function App() {
   useFonts(); // P2.5: inject @font-face for user-installed fonts.
 
   const {
-    nextLiveItem, stageItem, goLive, sendLive, clearStaged, clearAll, undoClearAll, getNextItem,
+    nextLiveItem, stageItem, stageVerse, goLive, sendLive, clearStaged, clearAll, undoClearAll, getNextItem,
     addToSchedule, addToService, persistSchedule, handleFileUpload, handleDeleteMedia,
     updateSettings, updateProps,
     loadScenes, saveScene, deleteScene, applyScene, captureScene,
@@ -219,7 +219,7 @@ export default function App() {
       <SystemDiagnosticsProvider>
       <RecordingProvider>
       <ProgramAudioProvider>
-      <AiScriptureProvider onStage={stageItem}>
+      <AiScriptureProvider onStageVerse={stageVerse}>
       <div className="h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden select-none">
 
       <AppHeader />

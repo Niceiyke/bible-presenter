@@ -56,35 +56,35 @@ describe("AiScriptureProvider automatic staging", () => {
   });
 
   it("auto-stages suggestions at exactly 90% confidence", async () => {
-    const onStage = vi.fn().mockResolvedValue(true);
-    render(<AiScriptureProvider onStage={onStage}><div /></AiScriptureProvider>);
+    const onStageVerse = vi.fn().mockResolvedValue(true);
+    render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);
     await waitFor(() => expect(mocks.listeners.has("ai-scripture-suggestion")).toBe(true));
 
     await emitSuggestion(suggestion(0.9));
 
-    expect(onStage).toHaveBeenCalledOnce();
-    expect(onStage).toHaveBeenCalledWith({ type: "Verse", data: suggestion(0.9).verse });
+    expect(onStageVerse).toHaveBeenCalledOnce();
+    expect(onStageVerse).toHaveBeenCalledWith(suggestion(0.9).verse);
   });
 
   it("leaves suggestions below 90% for manual staging", async () => {
-    const onStage = vi.fn().mockResolvedValue(true);
-    render(<AiScriptureProvider onStage={onStage}><div /></AiScriptureProvider>);
+    const onStageVerse = vi.fn().mockResolvedValue(true);
+    render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);
     await waitFor(() => expect(mocks.listeners.has("ai-scripture-suggestion")).toBe(true));
 
     await emitSuggestion(suggestion(0.899));
 
-    expect(onStage).not.toHaveBeenCalled();
+    expect(onStageVerse).not.toHaveBeenCalled();
   });
 
   it("never auto-stages the same suggestion event twice", async () => {
-    const onStage = vi.fn().mockResolvedValue(true);
-    render(<AiScriptureProvider onStage={onStage}><div /></AiScriptureProvider>);
+    const onStageVerse = vi.fn().mockResolvedValue(true);
+    render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);
     await waitFor(() => expect(mocks.listeners.has("ai-scripture-suggestion")).toBe(true));
     const payload = suggestion(0.97, "same-id");
 
     await emitSuggestion(payload);
     await emitSuggestion(payload);
 
-    expect(onStage).toHaveBeenCalledOnce();
+    expect(onStageVerse).toHaveBeenCalledOnce();
   });
 });

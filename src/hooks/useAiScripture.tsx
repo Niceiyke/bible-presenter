@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../store";
-import type { DisplayItem, Verse } from "../types";
+import type { Verse } from "../types";
 
 export const AI_AUTO_STAGE_CONFIDENCE = 0.9;
 
@@ -64,21 +64,21 @@ export function useAiScripture(): AiScriptureContextValue {
 
 export function AiScriptureProvider({
   children,
-  onStage,
+  onStageVerse,
 }: {
   children: ReactNode;
-  onStage: (item: DisplayItem) => Promise<boolean>;
+  onStageVerse: (verse: Verse) => Promise<boolean>;
 }) {
   const [status, setStatus] = useState<AiRuntimeStatus>(STOPPED);
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
   const [interim, setInterim] = useState<TranscriptSegment | null>(null);
   const [suggestions, setSuggestions] = useState<ScriptureSuggestion[]>([]);
-  const onStageRef = useRef(onStage);
+  const onStageVerseRef = useRef(onStageVerse);
   const autoStagedSuggestionIds = useRef(new Set<string>());
 
   useEffect(() => {
-    onStageRef.current = onStage;
-  }, [onStage]);
+    onStageVerseRef.current = onStageVerse;
+  }, [onStageVerse]);
 
   useEffect(() => {
     let mounted = true;
@@ -115,7 +115,7 @@ export function AiScriptureProvider({
           if (oldest) autoStagedSuggestionIds.current.delete(oldest);
         }
 
-        void onStageRef.current({ type: "Verse", data: suggestion.verse })
+        void onStageVerseRef.current(suggestion.verse)
           .then((staged) => {
             const reference = `${suggestion.verse.book} ${suggestion.verse.chapter}:${suggestion.verse.verse}`;
             if (staged) {

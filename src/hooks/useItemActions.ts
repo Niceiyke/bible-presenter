@@ -5,7 +5,7 @@ import { useAppStore } from "../store";
 import { displayItemLabel, stableId } from "../utils";
 import { resolveSongLtTemplate } from "../utils/song";
 import { itemNextLive, type ItemLookup } from "../items/registry";
-import type { DisplayItem, PresentationSettings, PropItem, MediaItem, ScheduleEntry, Schedule, ServiceMeta, Scene } from "../types";
+import type { DisplayItem, PresentationSettings, PropItem, MediaItem, ScheduleEntry, Schedule, ServiceMeta, Scene, Verse } from "../types";
 import type { LtLivePayload } from "../store/slices/lowerThirdSlice";
 
 const getVerseKey = (v: any, threshold: number) => `${v.book}-${v.chapter}-${v.verse}-${v.version}-${threshold}`;
@@ -131,6 +131,39 @@ export function useItemActions() {
     }
     return true;
   }, [setStagedItem, settings, setBackendError, setBusyAction]);
+
+  const stageVerse = useCallback(async (verse: Verse): Promise<boolean> => {
+    const reqId = ++stageReqRef.current;
+    const prevStaged = useAppStore.getState().stagedItem;
+    const key = getVerseKey(verse, settings.verse_split_threshold);
+    setBusyAction("stage", true);
+    try {
+      const result = await invoke<{ item: DisplayItem; splits: Verse[] }>("stage_verse", {
+        verse,
+        autoSplit: settings.auto_split_verses,
+        threshold: settings.verse_split_threshold,
+      });
+      if (reqId !== stageReqRef.current) return false;
+
+      if (result.splits.length > 0) {
+        const keys = Object.keys(verseSplitsRef.current);
+        if (keys.length >= MAX_VERSE_SPLITS && !verseSplitsRef.current[key]) {
+          delete verseSplitsRef.current[keys[0]];
+        }
+        verseSplitsRef.current[key] = result.splits;
+      }
+      setStagedItem(result.item);
+      return true;
+    } catch (err: any) {
+      if (reqId === stageReqRef.current) {
+        setStagedItem(prevStaged);
+        setBackendError(`Failed to stage verse: ${err?.message ?? err}`);
+      }
+      return false;
+    } finally {
+      if (reqId === stageReqRef.current) setBusyAction("stage", false);
+    }
+  }, [setStagedItem, settings.auto_split_verses, settings.verse_split_threshold, setBackendError, setBusyAction]);
 
   const getNextItem = useCallback((item: DisplayItem): DisplayItem | null => {
     return itemNextLive(item, buildLookup());
@@ -527,6 +560,7 @@ export function useItemActions() {
   return {
     nextLiveItem,
     stageItem,
+    stageVerse,
     goLive,
     sendLive,
     clearStaged,

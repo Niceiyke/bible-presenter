@@ -68,6 +68,28 @@ describe("useItemActions", () => {
     });
   });
 
+  describe("stageVerse", () => {
+    it("splits and stages through one backend round trip", async () => {
+      const item = makeVerse();
+      if (item.type !== "Verse") throw new Error("expected verse fixture");
+      const verse = item.data;
+      mockInvoke.mockResolvedValueOnce({ item, splits: [verse] });
+      const { result } = renderHook(() => useItemActions());
+
+      let ok = false;
+      await act(async () => { ok = await result.current.stageVerse(verse); });
+
+      expect(ok).toBe(true);
+      expect(mockInvoke).toHaveBeenCalledOnce();
+      expect(mockInvoke).toHaveBeenCalledWith("stage_verse", {
+        verse,
+        autoSplit: false,
+        threshold: useAppStore.getState().settings.verse_split_threshold,
+      });
+      expect(useAppStore.getState().stagedItem).toEqual(item);
+    });
+  });
+
   describe("sendLive (transactional single round-trip)", () => {
     it("returns false and keeps live untouched when the backend rejects the atomic send", async () => {
       const current = makeVerse(15);
