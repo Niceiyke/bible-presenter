@@ -33,3 +33,5 @@
 {"id":"choir-rehearsal","transcript":"Choir rehearsal starts thirty minutes earlier this week because the musicians need a sound check.","expected":[]}
 {"id":"printer-supplies","transcript":"We need another box of paper and two black cartridges for the office printer.","expected":[]}
 {"id":"bus-maintenance","transcript":"The church bus is due for an oil change before the next youth trip.","expected":[]}
+{"id":"observed-god-gave-son-latest","transcript":"For God to show his love, he have to give his son to come and die.","expected":[{"book":"John","chapter":3,"verse":16},{"book":"1 John","chapter":4,"verse":9}]}
+{"id":"observed-god-gave-son-core","transcript":"God showed his love by giving his son.","expected":[{"book":"John","chapter":3,"verse":16},{"book":"1 John","chapter":4,"verse":9}]}

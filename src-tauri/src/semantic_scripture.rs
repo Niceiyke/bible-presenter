@@ -496,17 +496,23 @@ impl SemanticScripture {
             });
         }
 
+        let accepted = accepts_semantic_candidates(similarity, margin, matches.len());
         let (state, reason) = if similarity < MIN_SIMILARITY {
             matches.clear();
             (
                 "rejected",
                 "Best candidate was below the minimum similarity threshold.",
             )
-        } else if margin < MIN_MARGIN {
+        } else if !accepted {
             matches.clear();
             (
                 "rejected",
-                "Top distinct passages were too close to choose safely.",
+                "Top passages were too close and no qualified alternative could be shown.",
+            )
+        } else if margin < MIN_MARGIN {
+            (
+                "ambiguous",
+                "Top passages are close; returned manual-only alternatives for operator review.",
             )
         } else {
             ("matched", "Returned manual-only possible-theme candidates.")
@@ -566,6 +572,10 @@ fn same_passage_neighborhood(left: &IndexEntry, right: &IndexEntry) -> bool {
     left.book == right.book
         && left.chapter == right.chapter
         && (left.verse - right.verse).abs() <= 1
+}
+
+fn accepts_semantic_candidates(similarity: f32, margin: f32, candidate_count: usize) -> bool {
+    similarity >= MIN_SIMILARITY && (margin >= MIN_MARGIN || candidate_count >= 2)
 }
 
 static ENGINE: OnceLock<Arc<SemanticScripture>> = OnceLock::new();
@@ -946,6 +956,14 @@ mod tests {
     }
 
     #[test]
+    fn close_semantic_candidates_require_manual_alternatives() {
+        assert!(!accepts_semantic_candidates(0.75, 0.01, 1));
+        assert!(accepts_semantic_candidates(0.75, 0.01, 2));
+        assert!(accepts_semantic_candidates(0.70, 0.01, 3));
+        assert!(!accepts_semantic_candidates(0.69, 0.10, 3));
+    }
+
+    #[test]
     fn bundled_index_has_pinned_integrity() {
         let index = load_verified_index(
             &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1055,7 +1073,6 @@ mod tests {
                 .unwrap();
             let runner = &index.entries[second.0];
             let margin = first.1 - second.1;
-            let accepted = first.1 >= MIN_SIMILARITY && margin >= MIN_MARGIN;
             let expected_top_one = fixture.expected.iter().any(|expected| {
                 winner.book == expected.book
                     && winner.chapter == expected.chapter
@@ -1084,6 +1101,7 @@ mod tests {
                         && candidate.verse == expected.verse
                 })
             });
+            let accepted = accepts_semantic_candidates(first.1, margin, distinct.len());
             if accepted && expected_top_one {
                 top_one_hits += 1;
             }

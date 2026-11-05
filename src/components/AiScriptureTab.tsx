@@ -30,7 +30,7 @@ interface SemanticDiagnosticCandidate {
 }
 
 interface SemanticDiagnostic {
-  state: "matched" | "rejected" | "skipped" | "error";
+  state: "matched" | "ambiguous" | "rejected" | "skipped" | "error";
   reason: string;
   queryWords: number;
   contextSegments: number;

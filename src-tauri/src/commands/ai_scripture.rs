@@ -72,6 +72,7 @@ const CONTEXT_WINDOW: Duration = Duration::from_secs(20);
 const SEMANTIC_CONTEXT_GAP: Duration = Duration::from_secs(4);
 const MAX_SEMANTIC_CONTEXT_WORDS: usize = 48;
 const MAX_SEMANTIC_SENTENCES: usize = 2;
+const MIN_COMPLETE_THOUGHT_WORDS: usize = 5;
 const SUGGESTION_COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_SHORT_QUOTE_CONFIDENCE: f32 = 0.89;
 
@@ -250,10 +251,18 @@ fn semantic_context(context: &VecDeque<(Instant, String)>) -> (String, usize) {
         .map(str::trim)
         .filter(|sentence| !sentence.is_empty())
         .collect::<Vec<_>>();
+    let latest_is_complete = sentences
+        .last()
+        .is_some_and(|sentence| sentence.split_whitespace().count() >= MIN_COMPLETE_THOUGHT_WORDS);
+    let sentence_count = if latest_is_complete {
+        1
+    } else {
+        MAX_SEMANTIC_SENTENCES
+    };
     let selected = sentences
         .iter()
         .rev()
-        .take(MAX_SEMANTIC_SENTENCES)
+        .take(sentence_count)
         .rev()
         .copied()
         .collect::<Vec<_>>()
@@ -786,10 +795,16 @@ fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Opt
             {
                 continue;
             }
-            if let Some(suggestion) = suggestion {
-                let _ = emit_suggestion_if_new(&worker.app, &worker.recently_suggested, suggestion);
+            if suggestion.is_some_and(|suggestion| {
+                emit_suggestion_if_new(&worker.app, &worker.recently_suggested, suggestion)
+            }) {
                 continue;
             }
+
+            // An older quotation can remain in the rolling lexical window
+            // after its card has already been shown. A cooldown-suppressed
+            // duplicate must not starve semantic retrieval for the speaker's
+            // newer sentence-aware thought.
 
             if !worker.semantic.is_ready() {
                 continue;
@@ -1121,7 +1136,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_context_keeps_two_recent_sentences_and_respects_silence() {
+    fn semantic_context_prefers_the_latest_complete_thought() {
         let now = Instant::now();
         let context = VecDeque::from([
             (
@@ -1136,23 +1151,17 @@ mod tests {
         ]);
         let (text, segments) = semantic_context(&context);
         assert_eq!(segments, 2);
-        assert_eq!(
-            text,
-            "Do not let the culture shape you. Let God transform the way you think."
-        );
+        assert_eq!(text, "Let God transform the way you think.");
     }
 
     #[test]
-    fn semantic_context_discards_older_sentences_within_one_segment() {
+    fn semantic_context_uses_previous_sentence_when_latest_is_short() {
         let context = VecDeque::from([(
             Instant::now(),
-            "Welcome everyone. The notices are finished. Grace rescues us through faith.".into(),
+            "The notices are finished. Grace rescues us through faith. There is hope.".into(),
         )]);
         let (text, _) = semantic_context(&context);
-        assert_eq!(
-            text,
-            "The notices are finished. Grace rescues us through faith."
-        );
+        assert_eq!(text, "Grace rescues us through faith. There is hope.");
     }
 
     #[test]
