@@ -476,6 +476,18 @@ pub struct PresentationSettings {
     /// the hardcoded slate palette. Defaults to false (legacy behaviour).
     #[serde(default)]
     pub stage_uses_theme: bool,
+    /// Explicit operator opt-in for AI Scripture suggestions to go live. Every
+    /// source category remains off by default, including references.
+    #[serde(default)]
+    pub ai_scripture_auto_live: bool,
+    #[serde(default)]
+    pub ai_scripture_auto_live_references: bool,
+    #[serde(default)]
+    pub ai_scripture_auto_live_quotes: bool,
+    #[serde(default)]
+    pub ai_scripture_auto_live_paraphrases: bool,
+    #[serde(default)]
+    pub ai_scripture_auto_live_voice_commands: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -524,6 +536,11 @@ impl Default for PresentationSettings {
             highlight_color: default_highlight_color(), custom_theme_colors: None,
             auto_clear_background_logo: default_auto_clear_background_logo(),
             stage_uses_theme: false,
+            ai_scripture_auto_live: false,
+            ai_scripture_auto_live_references: false,
+            ai_scripture_auto_live_quotes: false,
+            ai_scripture_auto_live_paraphrases: false,
+            ai_scripture_auto_live_voice_commands: false,
         }
     }
 }

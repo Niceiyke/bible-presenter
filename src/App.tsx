@@ -219,7 +219,7 @@ export default function App() {
       <SystemDiagnosticsProvider>
       <RecordingProvider>
       <ProgramAudioProvider>
-      <AiScriptureProvider onStageVerse={stageVerse}>
+      <AiScriptureProvider onStageVerse={stageVerse} onSendLiveVerse={async (verse) => sendLive({ type: "Verse", data: verse })}>
       <div className="h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden select-none">
 
       <AppHeader />

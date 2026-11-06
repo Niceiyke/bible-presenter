@@ -2,12 +2,15 @@ import React, { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Plus, Presentation, Edit2, Trash2, Search, FileUp } from "lucide-react";
+import { Plus, Presentation, Edit2, Trash2, Search, FileUp, Sparkles, FileText } from "lucide-react";
 import { useAppStore } from "../store";
 import { StudioSlideCard } from "./StudioSlideCard";
 import { buildCustomSlideItem } from "../utils";
 import { ContentCard, ConfirmModal, StatusBadge, Button } from "./ui";
 import type { CustomPresentation, CustomSlide, DisplayItem, PresentationSummary } from "../types";
+import { AiPresentationModal } from "./presentations/AiPresentationModal";
+import { PrayerDocxImportModal } from "./presentations/PrayerDocxImportModal";
+import { compilePrayerGuide, type PrayerGuideImport } from "../imports/prayerGuide";
 
 interface RenderedPptxImport {
   id: string;
@@ -28,24 +31,27 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
     studioList, setStudioList,
     expandedStudioPresId, setExpandedStudioPresId,
     studioSlides, setStudioSlides,
-    appDataDir, setToast,
+    appDataDir, setToast, bibleVersion,
   } = useAppStore();
 
   const [search, setSearch] = useState("");
   const [deletePres, setDeletePres] = useState<PresentationSummary | null>(null);
   const [importing, setImporting] = useState(false);
+  const [showAiCreation, setShowAiCreation] = useState(false);
+  const [importingPrayer, setImportingPrayer] = useState(false);
+  const [prayerImport, setPrayerImport] = useState<PrayerGuideImport | null>(null);
 
   const importPowerPoint = async () => {
-    const selected = await open({
-      title: "Import PowerPoint as rendered slides",
-      multiple: false,
-      directory: false,
-      filters: [{ name: "PowerPoint Presentation", extensions: ["pptx"] }],
-    });
-    if (typeof selected !== "string") return;
     setImporting(true);
-    setToast("Rendering PowerPoint slides…");
     try {
+      const selected = await open({
+        title: "Import PowerPoint as rendered slides",
+        multiple: false,
+        directory: false,
+        filters: [{ name: "PowerPoint Presentation", extensions: ["pptx"] }],
+      });
+      if (typeof selected !== "string") return;
+      setToast("Rendering PowerPoint slides…");
       const imported = await invoke<RenderedPptxImport>("import_pptx_rendered", { path: selected });
       const presentation: CustomPresentation = {
         id: imported.id,
@@ -76,12 +82,64 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
     }
   };
 
+  const importPrayerDocx = async () => {
+    setImportingPrayer(true);
+    try {
+      const selected = await open({
+        title: "Import daily prayer Word document",
+        multiple: false,
+        directory: false,
+        filters: [{ name: "Word Document", extensions: ["docx"] }],
+      });
+      if (typeof selected !== "string") return;
+      setToast("Reading prayer document and verifying Scripture…");
+      const imported = await invoke<PrayerGuideImport>("import_prayer_docx", { path: selected, version: bibleVersion });
+      setPrayerImport(imported);
+      setToast(`Found ${imported.days.length} daily prayer sections`);
+    } catch (error) {
+      setToast(`Prayer DOCX import failed: ${error}`);
+    } finally {
+      setImportingPrayer(false);
+    }
+  };
+
   const handleDelete = async (id: string) => {
     await invoke("delete_studio_presentation", { id });
     const next = studioList.filter((p) => p.id !== id);
     setStudioList(next);
     emit("studio-sync", next);
     if (expandedStudioPresId === id) setExpandedStudioPresId(null);
+  };
+
+  const createAiPresentation = async (presentation: CustomPresentation) => {
+    await invoke("save_studio_presentation", { presentation });
+    const list = await invoke<PresentationSummary[]>("list_studio_presentations");
+    setStudioList(list);
+    setStudioSlides({ ...studioSlides, [presentation.id]: presentation.slides });
+    setExpandedStudioPresId(presentation.id);
+    await emit("studio-sync", list);
+    setToast(`Created ${presentation.slides.length}-slide AI draft`);
+    onOpenEditor(presentation.id);
+  };
+
+  const createPrayerDecks = async () => {
+    if (!prayerImport) return;
+    const presentations = compilePrayerGuide(prayerImport);
+    try {
+      await Promise.all(presentations.map((presentation) => invoke("save_studio_presentation", { presentation })));
+      const list = await invoke<PresentationSummary[]>("list_studio_presentations");
+      setStudioList(list);
+      setStudioSlides({
+        ...studioSlides,
+        ...Object.fromEntries(presentations.map((presentation) => [presentation.id, presentation.slides])),
+      });
+      if (presentations[0]) setExpandedStudioPresId(presentations[0].id);
+      await emit("studio-sync", list);
+      setToast(`Created ${presentations.length} daily prayer decks`);
+      setPrayerImport(null);
+    } catch (error) {
+      setToast(`Could not save prayer decks: ${error}`);
+    }
   };
 
   const handlePresentStudio = async (id: string) => {
@@ -113,6 +171,12 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
           <p className="text-[10px] text-slate-600">{studioList.length} {studioList.length === 1 ? "presentation" : "presentations"}</p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="ghost" size="md" onClick={() => setShowAiCreation(true)}>
+            <Sparkles size={13} /> Create with AI
+          </Button>
+          <Button variant="ghost" size="md" onClick={() => void importPrayerDocx()} loading={importingPrayer} disabled={importingPrayer}>
+            <FileText size={13} /> Prayer DOCX
+          </Button>
           <Button variant="ghost" size="md" onClick={importPowerPoint} loading={importing} disabled={importing}>
             <FileUp size={13} /> Import PPTX
           </Button>
@@ -230,6 +294,17 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
           if (deletePres) await handleDelete(deletePres.id);
         }}
         onClose={() => setDeletePres(null)}
+      />
+      <AiPresentationModal
+        open={showAiCreation}
+        defaultBibleVersion={bibleVersion}
+        onClose={() => setShowAiCreation(false)}
+        onCreate={createAiPresentation}
+      />
+      <PrayerDocxImportModal
+        imported={prayerImport}
+        onClose={() => setPrayerImport(null)}
+        onCreate={createPrayerDecks}
       />
     </div>
   );

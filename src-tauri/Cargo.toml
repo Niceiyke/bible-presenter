@@ -29,6 +29,7 @@ futures-util = { version = "0.3", features = ["sink"] }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
 chrono = { version = "0.4", features = ["serde"] }
 zip = { version = "2.2.1", features = ["deflate"] }
+quick-xml = "0.38"
 sha2 = "0.10"
 axum = { version = "0.8", features = ["ws"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }

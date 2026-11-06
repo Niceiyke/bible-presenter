@@ -11,10 +11,11 @@ import React from "react";
 import {
   Type, Image as ImageIcon, Copy, Square,
   AlignCenter, AlignLeft, AlignRight, Trash2,
-  BookOpen, Layers, Video, Grid3x3,
+  BookOpen, Layers, Video, Grid3x3, Sparkles,
 } from "lucide-react";
 import { Btn, ToggleBtn, Div, FontPicker, EditorMenu } from "./components";
 import type { SlideElement } from "../../../types";
+import type { AiSlideEditAction } from "../../../ai/presentations";
 import { useFonts } from "../../../hooks/useFonts";
 import { FONT_SIZE_MAX, FONT_SIZE_MIN, FONT_SIZE_STEP, stepFontSize } from "./textStyleSystem";
 
@@ -42,6 +43,7 @@ export interface EditorToolbarProps {
   onUpdateElement: (id: string, updates: Partial<SlideElement>) => void;
   onDuplicateSlide: () => void;
   onDeleteSlide: () => void;
+  onAiAction?: (action: AiSlideEditAction) => void;
 }
 
 const SHAPES: { value: "rect" | "rounded" | "circle" | "line" | "triangle"; label: string }[] = [
@@ -82,6 +84,7 @@ export function EditorToolbar({
   onUpdateElement,
   onDuplicateSlide,
   onDeleteSlide,
+  onAiAction,
 }: EditorToolbarProps) {
   // P2.5: merge user-installed @font-face families with the built-in list.
   const { availableFonts } = useFonts();
@@ -193,6 +196,26 @@ export function EditorToolbar({
         <Div />
         <label className="flex items-center gap-1.5 shrink-0 cursor-pointer"><input type="checkbox" checked={activeEl.loop !== false} onChange={e => onUpdateElement(activeEl.id, { loop: e.target.checked })} className="accent-state-stage" /><span className="text-[10px] font-bold text-console-text-subtle">Loop</span></label>
         <label className="flex items-center gap-1.5 shrink-0 cursor-pointer"><input type="checkbox" checked={activeEl.muted !== false} onChange={e => onUpdateElement(activeEl.id, { muted: e.target.checked })} className="accent-state-stage" /><span className="text-[10px] font-bold text-console-text-subtle">Muted</span></label>
+      </>}
+
+      {onAiAction && <>
+        <Div />
+        <EditorMenu<AiSlideEditAction>
+          label="AI slide assistant"
+          trigger={<><Sparkles size={14} /> AI</>}
+          triggerClassName="text-action-primary border-action-primary/40 bg-action-primary/10"
+          items={[
+            ...(activeEl?.kind === "text" && !activeEl.locked && selectedCount === 1 ? [
+              { value: "shorten" as const, label: "Shorten for projection" },
+              { value: "rewrite" as const, label: "Rewrite clearly" },
+              { value: "bullets" as const, label: "Convert to bullets" },
+              { value: "highlight" as const, label: "Highlight key phrases" },
+            ] : []),
+            { value: "speaker-notes" as const, label: "Generate speaker notes" },
+            { value: "regenerate-slide" as const, label: "Regenerate this slide" },
+          ]}
+          onSelect={onAiAction}
+        />
       </>}
 
       <div className="flex-1" />

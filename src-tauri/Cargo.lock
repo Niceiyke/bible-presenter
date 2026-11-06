@@ -7277,6 +7277,7 @@ dependencies = [
  "machine-uid",
  "once_cell",
  "parking_lot",
+ "quick-xml",
  "raw-window-handle",
  "rcgen",
  "regex",

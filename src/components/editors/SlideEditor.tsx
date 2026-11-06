@@ -9,8 +9,18 @@ import { SlideCanvas } from "./slide/SlideCanvas";
 import { PropertiesPanel } from "./slide/PropertiesPanel";
 import { ZoomControls } from "./slide/ZoomControls";
 import { SlideEditorModals } from "./slide/SlideEditorModals";
+import { AiSlideAssistantModal } from "../presentations/AiSlideAssistantModal";
 import { useReferenceHeight } from "../../hooks/useReferenceHeight";
 import type { CustomPresentation, CustomSlide, MediaItem, SlideTheme, DisplayItem } from "../../types";
+import {
+  AI_PRESENTATION_THEME,
+  applyAiRegeneratedSlide,
+  applyAiTextEdit,
+  proseMirrorToPlainText,
+  slideToPlainText,
+  type AiSlideEditAction,
+  type AiSlideEditResult,
+} from "../../ai/presentations";
 
 // ─── Main SlideEditor ────────────────────────────────────────────────────────
 // P1.4: this component is presentational. All state + mutation handlers live
@@ -74,12 +84,13 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose, onStageS
     handleCreateMaster, handleApplyMasterToSlide, handleDeleteMaster,
     previewOpen, setPreviewOpen,
     // global / store data
-    appDataDir, templates, stagedItem,
+    appDataDir, templates, stagedItem, bibleVersion,
   } = useSlideEditor({ initialPres, onClose, onStageSlide });
 
   // P3: inspector collapsibility. Auto-collapse below the breakpoint so the
   // canvas never gets squeezed on a 1280×720 operator window with scaling.
   const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [aiAction, setAiAction] = useState<AiSlideEditAction | null>(null);
   useEffect(() => {
     const check = () => setInspectorOpen(window.innerWidth >= INSPECTOR_COLLAPSE_BREAKPOINT);
     check();
@@ -165,6 +176,7 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose, onStageS
             onUpdateElement={updateElement}
             onDuplicateSlide={handleDuplicateSlide}
             onDeleteSlide={handleDeleteSlide}
+            onAiAction={setAiAction}
           />
 
           <SlideCanvas
@@ -288,6 +300,30 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose, onStageS
         onImageSelect={handleImageSelect}
         onVideoSelect={handleVideoSelect}
         onAddVerse={handleAddVerse}
+      />
+
+      <AiSlideAssistantModal
+        action={aiAction}
+        content={activeEl?.kind === "text" ? proseMirrorToPlainText(activeEl.content) : slideToPlainText(slide)}
+        slideContext={slideToPlainText(slide)}
+        presentationTitle={pres.name}
+        bibleVersion={bibleVersion}
+        onClose={() => setAiAction(null)}
+        onApply={(result: AiSlideEditResult) => {
+          if (!aiAction) return;
+          const theme = pres.theme ?? AI_PRESENTATION_THEME;
+          if (["shorten", "rewrite", "bullets", "highlight"].includes(aiAction)) {
+            if (activeEl?.kind === "text" && !activeEl.locked) {
+              updateElement(activeEl.id, applyAiTextEdit(activeEl, result, aiAction, theme.accentColor));
+            }
+            return;
+          }
+          if (aiAction === "speaker-notes") {
+            updateSlide({ ...slide, notes: result.slide.speakerNotes });
+            return;
+          }
+          updateSlide(applyAiRegeneratedSlide(slide, result.slide, theme, pres.name));
+        }}
       />
 
       {/* ══ LIVE PREVIEW PIP (P4.7) ═══════════════════════════════════════ */}

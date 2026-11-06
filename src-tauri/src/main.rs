@@ -1,13 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use wordlyte_lib::{remote, store, state};
-use store::log_msg;
 use parking_lot::Mutex;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use store::log_msg;
 use tauri::Manager;
+use wordlyte_lib::{remote, state, store};
 
 use state::{AppState, PresentationState};
 use wordlyte_lib::commands::assets;
@@ -28,14 +28,21 @@ fn main() {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let text = format!("[{}] PANIC: {} (at {})\n{}\n", stamp, payload, loc, backtrace);
+        let text = format!(
+            "[{}] PANIC: {} (at {})\n{}\n",
+            stamp, payload, loc, backtrace
+        );
         let dir = std::env::var("LOCALAPPDATA")
             .map(PathBuf::from)
             .unwrap_or_default()
             .join("io.wordlyte.app")
             .join("logs");
         let _ = std::fs::create_dir_all(&dir);
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("panic.log")) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("panic.log"))
+        {
             let _ = f.write_all(text.as_bytes());
         }
     }));
@@ -453,6 +460,13 @@ fn main() {
             wordlyte_lib::commands::ai_scripture::ai_remove_semantic,
             wordlyte_lib::commands::ai_scripture::ai_start,
             wordlyte_lib::commands::ai_scripture::ai_stop,
+            wordlyte_lib::commands::ai_presentations::ai_presentation_key_status,
+            wordlyte_lib::commands::ai_presentations::ai_presentation_set_api_key,
+            wordlyte_lib::commands::ai_presentations::ai_presentation_clear_api_key,
+            wordlyte_lib::commands::ai_presentations::ai_generate_presentation,
+            wordlyte_lib::commands::ai_presentations::ai_edit_presentation_slide,
+            wordlyte_lib::commands::ai_presentations::ai_cancel_presentation,
+            wordlyte_lib::commands::prayer_docx::import_prayer_docx,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

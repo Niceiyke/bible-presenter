@@ -3,6 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Database, KeyRound } from "lucide-react";
 import { useAiScripture, type AiProvider } from "../../../hooks/useAiScripture";
+import { useAppStore } from "../../../store";
+import type { PresentationSettings } from "../../../types";
+import { AiScripturePerformancePanel } from "./AiScripturePerformancePanel";
 
 interface AiKeyStatus {
   configured: boolean;
@@ -39,8 +42,9 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function AiScriptureSection() {
+export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (settings: PresentationSettings) => Promise<void> | void }) {
   const ai = useAiScripture();
+  const settings = useAppStore((state) => state.settings);
   const [selectedProvider, setSelectedProvider] = useState<AiProvider>(ai.provider);
   const [keyStatus, setKeyStatus] = useState<AiKeyStatus>({ configured: false, provider: ai.provider });
   const [apiKey, setApiKey] = useState("");
@@ -183,6 +187,49 @@ export function AiScriptureSection() {
         <p className="text-[10px] text-console-text-subtle">Stored with Windows DPAPI for the current user. Audio and transcript data are sent only while listening.{active ? ` ${ai.status.provider === selectedProvider ? "Stop listening before replacing or removing the active provider key." : `${ai.status.provider} is currently listening; ${providerName} will be used next time you start.`}` : ""}</p>
       </section>
 
+      <section className={`rounded-lg border p-3 flex flex-col gap-3 ${settings.ai_scripture_auto_live ? "border-state-error/60 bg-state-error/5" : "border-console-border bg-console-surface-raised/40"}`}>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-console-text-muted">AI Scripture Auto Live</p>
+            <p className="mt-1 text-[10px] text-console-text-subtle">When enabled, selected verified suggestions can replace the live output without pressing Go Live. It is off by default.</p>
+          </div>
+          <label className="flex shrink-0 items-center gap-2 text-[11px] font-bold text-console-text">
+            <input
+              type="checkbox"
+              checked={settings.ai_scripture_auto_live === true}
+              onChange={(event) => {
+                if (event.target.checked && !window.confirm("Enable AI Scripture Auto Live? Selected suggestions will change the congregation's live output without an additional Go Live click.")) return;
+                onUpdateSettings({ ...settings, ai_scripture_auto_live: event.target.checked });
+              }}
+              className="accent-red-500"
+            />
+            Enable Auto Live
+          </label>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {[
+            ["ai_scripture_auto_live_references", "Direct references", "Final references at 90% confidence or above."],
+            ["ai_scripture_auto_live_quotes", "Direct quotations", "Final confirmed quotations at 90% confidence or above."],
+            ["ai_scripture_auto_live_paraphrases", "Paraphrase themes", "Only the stable top-ranked local theme suggestion."],
+            ["ai_scripture_auto_live_voice_commands", "Voice commands", "Next/previous verse and translation-command cards."],
+          ].map(([key, label, description]) => (
+            <label key={key} className="flex items-start gap-2 rounded-md border border-console-border bg-console-surface px-2.5 py-2 text-[10px] text-console-text-subtle">
+              <input
+                type="checkbox"
+                disabled={settings.ai_scripture_auto_live !== true}
+                checked={settings[key as keyof PresentationSettings] === true}
+                onChange={(event) => onUpdateSettings({ ...settings, [key]: event.target.checked })}
+                className="mt-0.5 accent-red-500 disabled:opacity-40"
+              />
+              <span><strong className="block text-[11px] text-console-text">{label}</strong>{description}</span>
+            </label>
+          ))}
+        </div>
+        <p className="text-[10px] text-state-stage">Auto Live uses the same normal output path as Send Live. Turning off the master switch immediately restores Stage-only behavior; category choices are retained for the next time it is enabled.</p>
+      </section>
+
+      <AiScripturePerformancePanel />
+
       <section className="rounded-lg border border-console-border bg-console-surface-raised/40 p-3 flex flex-col gap-3">
         <div className="flex items-center justify-between gap-3">
           <div>
@@ -196,7 +243,7 @@ export function AiScriptureSection() {
           )}
         </div>
         {semanticStatus.state === "preparing" && semanticStatus.total > 0 && <div className="h-1.5 overflow-hidden rounded-full bg-console-surface-strong"><div className="h-full bg-action-primary" style={{ width: `${Math.min(100, (semanticStatus.indexed / semanticStatus.total) * 100)}%` }} /></div>}
-        <p className="text-[10px] text-console-text-subtle">Downloads the pinned local embedding model and loads Wordlyte's verified Bible meaning index. Theme suggestions remain manual-only.</p>
+        <p className="text-[10px] text-console-text-subtle">Downloads the pinned local embedding model and loads Wordlyte's verified Bible meaning index. Theme suggestions remain manual unless explicitly selected under Auto Live above.</p>
         <div className="flex flex-wrap items-center justify-between gap-2 text-[9px] text-console-text-subtle">
           <span>{semanticStatus.model} · {formatBytes(semanticStatus.diskBytes)} local storage{semanticStatus.verified ? " · integrity verified" : ""}</span>
           {semanticStatus.diskBytes > 0 && semanticStatus.state !== "preparing" && <button onClick={() => void removeModel()} disabled={active || removingModel} className="text-console-text-muted font-bold disabled:opacity-40">{removingModel ? "Removing…" : "Remove model"}</button>}

@@ -42,7 +42,7 @@ export interface UseSlideEditorArgs {
 export type AddSlideKind = "title" | "default" | "blank" | "quote" | "announcement" | "imageCaption" | "scripture";
 
 export function useSlideEditor({ initialPres, onClose, onStageSlide, onAddToService }: UseSlideEditorArgs) {
-  const { appDataDir, stagedItem, liveItem, setToast, templates, setTemplates } = useAppStore();
+  const { appDataDir, stagedItem, liveItem, setToast, templates, setTemplates, bibleVersion } = useAppStore();
 
   const init = () => migratePresentation(JSON.parse(JSON.stringify(initialPres)));
   // P1.4 + P1.6: history + coalescing live in the hook. `setPres` accepts
@@ -108,6 +108,7 @@ export function useSlideEditor({ initialPres, onClose, onStageSlide, onAddToServ
   const [zoom, setZoom] = useState(1);
 
   const suppressClickRef = useRef(false);
+  const lastElementClickRef = useRef<{ id: string; at: number } | null>(null);
 
   const activeElementId = activeElementIds.length === 1 ? activeElementIds[0] : null;
 
@@ -710,10 +711,27 @@ export function useSlideEditor({ initialPres, onClose, onStageSlide, onAddToServ
     // aren't lost.
     setActiveElementIds([]);
     setEditingElementId(null);
+    lastElementClickRef.current = null;
   };
 
   const handleElementClick = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    const now = Date.now();
+    const previous = lastElementClickRef.current;
+    const repeatedClick = previous?.id === id && now - previous.at <= 500;
+    const el = slide.elements.find(x => x.id === id);
+
+    // WebView2 does not reliably dispatch `dblclick` for an element that also
+    // owns pointer-based drag behavior. Treat the second ordinary click as the
+    // edit gesture as well. `event.detail` handles the standard browser path;
+    // the timestamp fallback handles WebView builds where detail stays at 1.
+    if (!(e.ctrlKey || e.metaKey) && (e.detail >= 2 || repeatedClick) && el?.kind === "text" && !el.locked) {
+      lastElementClickRef.current = null;
+      setActiveElementIds([id]);
+      setEditingElementId(id);
+      return;
+    }
+    lastElementClickRef.current = { id, at: now };
     // Clicking a (possibly different) element also ends inline editing,
     // committing the active editor. `editingElementId` is cleared so the
     // green editing ring doesn't linger under the new selection.
@@ -1090,7 +1108,7 @@ export function useSlideEditor({ initialPres, onClose, onStageSlide, onAddToServ
     // P4.7 — in-editor live preview
     previewOpen, setPreviewOpen,
     // global / store data
-    appDataDir, templates, stagedItem,
+    appDataDir, templates, stagedItem, bibleVersion,
   };
 }
 

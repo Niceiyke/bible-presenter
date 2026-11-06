@@ -2,21 +2,22 @@
 
 ## Product boundary
 
-The assistant listens to an English sermon and proposes Scripture for an operator to review. It is assistive, not autonomous:
+The assistant listens to an English sermon and proposes Scripture for an operator to review. It is assistive by default:
 
 - It may create suggestion cards and automatically stage a verse when its displayed confidence is at least 90%; lower-confidence suggestions remain manual.
-- It must never commit staged content, clear live output, or otherwise change the program feed.
+- It must never clear live output. It may use the normal atomic Send Live path only when the operator has explicitly enabled Auto Live and selected the suggestion category.
 - Normal Scripture search and projection must remain usable when audio, the network, or the transcription provider fails.
 - An LLM must never invent a Bible reference. Any future LLM use is limited to reranking candidates retrieved from installed Bible text.
 
 ## Implemented beta slice
 
 1. A provider-neutral frontend session boundary with Deepgram and AssemblyAI streaming ASR adapters.
+2. Two operator-selected listening modes: Service mode listens continuously until stopped; Operator mode is an on-demand one-result session that stops after a verified reference, direct quote, or deterministic voice command. It does not stop for raw transcript or paraphrase candidates.
 2. A dedicated consumer of the existing shared audio feed, preventing transcription, recording, and streaming from opening the DirectShow device independently.
 3. Live interim/final transcript diagnostics.
 4. Deterministic parsing for numeric and spoken references, including numbered books, spoken numbers through the Bible's chapter/verse range, and bounded spoken verse ranges such as “First Corinthians chapter ten, verses eleven and twelve.” The first verse is eligible for automatic staging; additional range cards remain manual.
 5. Lexical direct-quotation alignment. Candidate retrieval searches every installed English translation; the winning canonical reference is displayed in the operator-selected translation. Five-word exact quotations are supported but capped at 89% confidence for manual review.
-6. A 20-second rolling context, duplicate suppression, confidence labels, and automatic Stage-only handling at 90% confidence or above for eligible longer quotations and explicit references.
+6. A 20-second rolling context, duplicate suppression, confidence labels, automatic staging at 90% confidence or above for eligible longer quotations and explicit references, and an explicit off-by-default Auto Live control.
 7. Bring-your-own Deepgram or AssemblyAI credentials encrypted at rest with current-user Windows DPAPI and excluded from Wordlyte backups.
 8. Nova-3 Bible-name keyterm prompting, focused on uncommon and commonly misheard book names while avoiding broad words such as “Mark” and “Job.”
 9. A CI-gated synthetic evaluation corpus and `npm run ai:eval` runner for precision, recall, F1, exact-result accuracy, and local detector p95 latency.
@@ -27,7 +28,9 @@ The assistant listens to an English sermon and proposes Scripture for an operato
 14. Exact cosine ranking blends each verse with immediate same-chapter neighbors and collapses adjacent winners into passage signals. Similarity must be `>= 0.70`. Possible themes are emitted immediately only with exceptionally strong similarity and margin; otherwise the same chapter must recur across consecutive complete thoughts. This stability gate suppresses transient one-segment embedding associations.
 15. The operator can inspect local retrieval latency, thresholds, winner margin, and candidate references without exposing sermon text in diagnostics. Preparation reports verified-file progress, pre-warms inference, shows disk usage, supports cancellation/retry, and can remove downloaded model files.
 16. A transient transcription-decoder EOF triggers up to two bounded audio-feed recovery attempts while the selected ASR session remains open. Decoder and shared-feed exit details are retained only in the local application log; exhausting recovery ends AI Scripture without affecting normal projection.
-17. AssemblyAI Universal-3.6 Pro uses explicit low-latency turn detection (`mode=min_latency`, 300 ms minimum and 900 ms maximum turn silence). During an unusually long open turn, Wordlyte checks growing partial snapshots every six words: an explicit reference must remain unchanged across two snapshots, and interim references/strong quotations are capped at 89% for manual review. Semantic themes still require formatted final turns. On Stop, Wordlyte continues reading after `Terminate` through the provider's final `Turn` and `Termination` messages so the open sentence is not lost; its confirmed card replaces the matching interim card.
+17. AssemblyAI Universal-3.6 Pro uses explicit low-latency turn detection (`mode=min_latency`, 300 ms minimum and 900 ms maximum turn silence). During an unusually long open turn, Wordlyte checks growing partial snapshots every six words. Deepgram revisions use the same local interim path without waiting for `is_final`. Explicit references and quotation candidates must remain unchanged across two snapshots before early handling; their normal confidence rules then apply, including Auto Stage/Live where enabled. Semantic themes still require formatted final turns. On Stop, Wordlyte continues reading after `Terminate` through the provider's final `Turn` and `Termination` messages so the open sentence is not lost; its confirmed card replaces the matching interim card.
+18. Deterministic final-turn voice commands maintain a canonical last-detected-verse cursor. “Next verse,” “following verse,” “previous verse,” and “go back one verse” retrieve adjacent local Bible rows. Command cards are manual unless the operator enables Auto Live and selects voice commands. When listening starts after a verse was already projected, navigation falls back to the live verse (then the staged verse) as its cursor.
+19. Translation commands resolve only against enabled installed versions. Common spoken aliases include King James/KJV, New King James/NKJV, New Living/NLT, Amplified/AMP, NIV, ESV, NASB, RSV/NRSV, CSB/HCSB, Message, TPT, GNT, and CEV. Commands can stand alone (“give me NLT”), modify navigation (“next verse in NLT”), or accompany an explicit reference (“John 3:16 in King James”). Incidental translation names without command/reference context are ignored. A standalone switch re-renders the verse currently under discussion in the new translation and returns before quotation/semantic retrieval, so operational speech is not treated as sermon content.
 
 ### Local paraphrase components
 
@@ -52,11 +55,11 @@ DirectShow input
   -> ffmpeg mono PCM 16 kHz decoder
   -> selected Deepgram or AssemblyAI streaming WebSocket
   -> final/interim transcript events
-  -> deterministic reference fast path OR background lexical quotation matcher
+  -> deterministic voice command / reference fast path OR background lexical quotation matcher
   -> if neither matches, optional local BGE query + exact cosine verse retrieval
   -> operator suggestion card
   -> Stage (automatic at >=90% confidence; otherwise operator action)
-  -> Go Live (separate operator action)
+     OR atomic Send Live (only after explicit Auto Live category opt-in)
 ```
 
 The Rust backend owns credentials, audio transport, transcription, and detection. The Scripture workspace contains the Live Scripture Assistant panel, while a global React provider owns session status and recent transcript/suggestions so listening continues while the operator changes workspaces. Provider keys and local-model controls are in Settings → AI Scripture.
@@ -67,14 +70,17 @@ The Rust backend owns credentials, audio transport, transcription, and detection
 - Churches are responsible for obtaining consent required by their policy and local law.
 - API keys are never embedded in the distributed desktop app or returned to the frontend after storage.
 - The transcript and suggestions are held in memory only in this beta. They are not added to backups or service data.
+- Settings → AI Scripture includes a local session Performance panel. It records only counters and timing samples (not audio, transcript text, Bible text, references, or credentials): ASR final/interim activity, suggestion source counts, automatic/manual stage/live outcomes, failures, and median/p95 ASR-update-to-verified-Scripture, verified-to-operator/stage/live timing. ASR verification samples are broken down by references, quotes, themes, and commands. “ASR update → verified Scripture” starts after a provider interim/final update reaches Wordlyte and must not be presented as speech or provider-recognition latency. “Live committed” ends at acknowledgement of Wordlyte’s atomic Send Live command; it must not be presented as a measure of display render time or downstream encoder/CDN latency.
 - Provider errors end the AI session and surface an error status without affecting live or staged content.
+- Auto Live is disabled by default. It requires a separate master confirmation and per-category choice for references, quotations, paraphrases, and voice-command cards. When disabled, voice navigation and translation changes never auto-stage and never mutate live output.
+- With Auto Live enabled, final references and quotations still require 90% confidence; paraphrase output is limited to the stable rank-one candidate; voice-command cards are locally retrieved Bible rows. Each permitted card uses the normal atomic Send Live path. Disabling the master switch immediately restores Stage-only behavior.
 - Commercial distribution should replace BYO keys with short-lived, metered Wordlyte-issued sessions; a permanent provider master key must not ship in the app.
 
 ## Acceptance targets
 
 - At least 99% precision for explicit-reference suggestions on the agreed sermon evaluation corpus.
 - Under 3 seconds p95 from final ASR segment to visible suggestion under supported network conditions.
-- Zero live transitions initiated by the assistant.
+- Zero assistant-initiated live transitions unless the operator has explicitly enabled Auto Live and selected that suggestion category.
 - Recording, streaming, and AI transcription can share one selected audio device without capture contention.
 - Loss of provider connectivity does not interrupt normal projection.
 

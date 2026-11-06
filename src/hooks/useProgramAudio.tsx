@@ -34,6 +34,16 @@ interface ProgramAudioContextValue {
 }
 
 const ProgramAudioContext = createContext<ProgramAudioContextValue | null>(null);
+const PROGRAM_AUDIO_DEVICE_STORAGE_KEY = "pref_programAudioDevice";
+
+function storedDevice(): string | null {
+  try {
+    const value = localStorage.getItem(PROGRAM_AUDIO_DEVICE_STORAGE_KEY)?.trim();
+    return value || null;
+  } catch {
+    return null;
+  }
+}
 
 export function useProgramAudio(): ProgramAudioContextValue {
   const ctx = useContext(ProgramAudioContext);
@@ -44,12 +54,21 @@ export function useProgramAudio(): ProgramAudioContextValue {
 export function ProgramAudioProvider({ children }: { children: ReactNode }) {
   const [enabled, setEnabledState] = useState(false);
   const [devices, setDevices] = useState<string[]>([]);
-  const [device, setDeviceState] = useState<string | null>(null);
+  const [device, setDeviceState] = useState<string | null>(storedDevice);
 
   const refreshDevices = useCallback(async () => {
     try {
       const names = await invoke<string[]>("audio_devices");
-      setDevices(names ?? []);
+      const available = names ?? [];
+      setDevices(available);
+      // Do not silently feed a changed/removed hardware name to ffmpeg. A
+      // successful enumeration is authoritative; transient enumeration errors
+      // below retain the saved choice for the next refresh instead.
+      setDeviceState((current) => {
+        if (!current || available.includes(current)) return current;
+        try { localStorage.removeItem(PROGRAM_AUDIO_DEVICE_STORAGE_KEY); } catch { /* ignore */ }
+        return null;
+      });
     } catch {
       setDevices([]);
     }
@@ -65,6 +84,12 @@ export function ProgramAudioProvider({ children }: { children: ReactNode }) {
 
   const setDevice = useCallback((name: string | null) => {
     setDeviceState(name);
+    try {
+      if (name?.trim()) localStorage.setItem(PROGRAM_AUDIO_DEVICE_STORAGE_KEY, name);
+      else localStorage.removeItem(PROGRAM_AUDIO_DEVICE_STORAGE_KEY);
+    } catch {
+      // Selection remains usable for the current app session.
+    }
   }, []);
 
   const value = useMemo<ProgramAudioContextValue>(

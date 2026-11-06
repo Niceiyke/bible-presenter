@@ -88,6 +88,21 @@ describe("EditorToolbar (Phase 2)", () => {
     expect(screen.getByRole("button", { name: /Video/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Bible/i })).toBeTruthy();
   });
+
+  it("offers contextual AI actions for a selected text element", () => {
+    const onAiAction = vi.fn();
+    const activeEl = {
+      id: "text-1", kind: "text", x: 10, y: 10, w: 80, h: 30, z_index: 1,
+      content: { type: "doc", content: [{ type: "paragraph" }] },
+      font_size: 40, font_family: "Arial", color: "#fff",
+      align: "center", v_align: "middle",
+    } as SlideElement;
+    render(<EditorToolbar {...baseProps} activeEl={activeEl} selectedCount={1} onAiAction={onAiAction} />);
+    fireEvent.click(screen.getByRole("button", { name: "AI slide assistant" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Shorten for projection" }));
+    expect(onAiAction).toHaveBeenCalledWith("shorten");
+  });
+
 });
 
 describe("EditorMenu (Phase 2)", () => {

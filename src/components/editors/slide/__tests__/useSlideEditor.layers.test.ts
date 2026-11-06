@@ -106,4 +106,18 @@ describe("Phase 4 — layers + lock + hide + z-order", () => {
     act(() => result.current.updateElement("a", { name: "Title" }));
     expect(result.current.pres.slides[0].elements[0].name).toBe("Title");
   });
+
+  it("enters inline text editing on a repeated click when dblclick is suppressed", () => {
+    const { result } = renderEditor([textEl("a", 1)]);
+    const click = () => ({
+      detail: 1,
+      ctrlKey: false,
+      metaKey: false,
+      stopPropagation: vi.fn(),
+    } as unknown as React.MouseEvent);
+    act(() => result.current.handleElementClick("a", click()));
+    expect(result.current.editingElementId).toBeNull();
+    act(() => result.current.handleElementClick("a", click()));
+    expect(result.current.editingElementId).toBe("a");
+  });
 });

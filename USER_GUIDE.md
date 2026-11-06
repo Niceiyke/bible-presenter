@@ -30,6 +30,35 @@ In **Presentations**, choose **Import PPTX**. Wordlyte asks desktop Microsoft Po
 - Animations, transitions, embedded video, presenter notes, and macros do not remain interactive.
 - PowerPoint is not required for playback after a successful import.
 
+## AI presentation creation (beta)
+
+Open **Settings → AI Creation** and save a church-owned OpenAI API key. In **Presentations**, select **Create with AI**, enter a topic and optional notes, choose the audience, slide count, and installed Bible version, then select **Generate outline**.
+
+- Wordlyte shows the generated outline and Scripture-verification warnings before creating anything.
+- Select **Create editable deck** to save a normal Studio presentation and open it in the Slide Editor. Generated text, layouts, key-point accents, and speaker notes remain editable.
+- Bible verse text is never accepted from the AI provider. Wordlyte validates generated references and loads exact text from the selected installed Bible version.
+- Topic and notes are sent to OpenAI only when generation starts. The API key is protected with Windows DPAPI and excluded from backups.
+- Generation never stages a slide or changes live output. Review the finished deck and continue using the normal **Stage → Go Live** workflow.
+
+### AI slide editing
+
+Open an editable presentation in the Slide Editor and use the **AI** menu in the canvas toolbar:
+
+- Select an unlocked text element to **Shorten**, **Rewrite**, **Convert to bullets**, or **Highlight key phrases**.
+- Use **Generate speaker notes** or **Regenerate this slide** with or without a selected text element.
+- Wordlyte shows the current content and AI suggestion side by side. Nothing changes until you select **Apply change**.
+- An applied suggestion is one normal Undo step. Existing slide geometry, media, background, and theme are preserved when regenerating a slide.
+- Regenerated Scripture is inserted only after its reference is verified against the selected installed Bible. AI editing never stages a slide or changes live output.
+
+### Daily prayer DOCX import
+
+In **Presentations**, select **Prayer DOCX** and choose a weekly Covenant Hour of Prayer `.docx` file. Wordlyte detects the weekday sections and intercessions, verifies each reference against the currently selected installed Bible version, and previews the result before saving.
+
+- Choose **Create daily decks** to create one editable presentation per day.
+- Each daily deck contains a title slide, followed by separate prayer and verified-Scripture slides for every intercession.
+- Verse text is loaded from Wordlyte's installed Bible rather than copied from the Word document.
+- Missing or invalid references are shown as review warnings. Import never stages content or changes live output.
+
 ## AI Scripture Assistant (beta)
 
 Open **Settings → AI Scripture** to choose Deepgram or AssemblyAI and save the church-owned API key for that provider. Then return to **Scripture**, expand **Live Scripture Assistant**, choose the mixer or microphone input and translation, and select **Start listening** only after obtaining any consent required by your church and local law.
@@ -37,11 +66,17 @@ Open **Settings → AI Scripture** to choose Deepgram or AssemblyAI and save the
 - Audio and transcript data are sent to the selected provider while listening. Stop listening when transcription is no longer needed. Provider keys are stored separately with Windows DPAPI and are never included in backups.
 - The API key is encrypted with Windows DPAPI for the current Windows user. It is excluded from Wordlyte backups.
 - The assistant detects spoken references and close direct quotations in English. Select **Prepare** under Local paraphrase matching to download the small local model once and load Wordlyte's compact index of installed English Bible text. Preparation runs in the background and is not required for normal projection, references, or quotations.
+- After a reference or confirmed direct quotation, say **“next verse”**, **“following verse”**, **“previous verse”**, or **“go back one verse”** to create a manual voice-command suggestion for the adjacent verse.
+- Change translation without stopping transcription by saying **“give me NLT”**, **“show me Amplified”**, **“switch to King James”**, or the name/code of another enabled installed translation. Combined commands such as **“next verse in NLT”** and references such as **“John 3:16 in King James”** are supported. Wordlyte acknowledges the switch and updates the Scripture workspace translation. When a verse is already under discussion, it also shows that verse in the new translation as a manual suggestion card. It never alters the live feed.
 - A paraphrased thought may produce up to three amber **Possible theme** cards. Adjacent high-scoring verses are shown as a passage signal, but **Stage** always uses the strongest verse printed on that card. Every possible theme remains manual-only.
 - When two strong themes are too close to select safely, Wordlyte may show both as manual alternatives instead of declaring one winner. The diagnostics panel labels this result **Ambiguous**.
 - Use **Show diagnostics** to inspect the latest local similarity, distinct-passage margin, candidate references, and latency. Diagnostics do not display or persist sermon text. Preparation can be cancelled and retried; **Remove model** deletes downloaded AI files without affecting normal Bible projection or the bundled meaning index.
 - Paraphrase cards are labeled **Possible theme** and remain manual-only while confidence is being qualified. Treat every result as a suggestion and verify its reference and text.
-- Suggestions at **90% confidence or above are staged automatically** in the normal staged preview. Lower-confidence suggestions require **Stage**. Always review the staged verse: the assistant cannot send content live, and only the operator can use **Go Live**.
+- Explicit-reference and confirmed direct-quotation suggestions at **90% confidence or above are staged automatically** in the normal staged preview. Lower-confidence suggestions, possible themes, and next/previous voice commands require **Stage** by default.
+- To allow automatic live output, open **Settings → AI Scripture → AI Scripture Auto Live**, enable the master switch, then choose the allowed categories: direct references, direct quotations, paraphrase themes, and/or voice commands. All switches default to off. References and quotes still require a final 90%+ match; only the top stable local paraphrase can auto-live. The setting uses the normal Send Live path and changes congregation output immediately, so enable only with an operator monitoring the service.
+- **Performance measurements:** Open **Settings → AI Scripture → AI Scripture Performance** during a listening session. It shows median and p95 timings for **ASR update → verified Scripture**, verified-to-operator, verified-to-stage, verified-to-live-commit, and Auto Live request acknowledgement; it also breaks ASR-to-verification timing down by references, quotes, themes, and commands. Service restarts and repeated Operator mode calls accumulate in the same measurement set, so run 30–100 calls before copying a qualification report; press **Reset** to start over, or switch provider/mode for a separate set. Aggregate-only data is retained locally across app restarts; it contains no audio, transcript text, Bible text, or references. ASR update → verified begins only after the provider sends an interim/final update, so it does not claim to measure speech or provider-recognition time. “Live committed” ends when Wordlyte receives success from its atomic Send Live command; it does not claim to measure output-screen rendering or downstream streaming/CDN delay.
+- **Listening modes:** The Live Scripture Assistant offers **Service mode** for continuous sermon listening and **Operator mode** for an on-demand voice lookup. Operator mode starts when you press **Start command** and stops after one verified local reference, direct quote, or voice command; raw transcript and possible paraphrase themes do not stop it. The selected mode is remembered on this device. Auto Live remains separately controlled in Settings.
+- **Audio input:** The microphone/mixer selected in the Live Scripture Assistant is remembered and shared with the Recording and Streaming input pickers. If the device is unplugged or renamed, Wordlyte safely clears the saved choice and asks for a new input.
 - If the network or provider fails, normal Scripture search and all projection controls remain available.
 
 ## Backup and restore

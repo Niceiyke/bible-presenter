@@ -85,6 +85,8 @@ function snapTo(value: number, gridSize: number | undefined): number {
  *  recommendation from the plan and feels right on a 16:9 1080p
  *  canvas — about 9.6px in either axis before snap engages. */
 const GUIDE_THRESHOLD = 0.5;
+/** Keep ordinary clicks and double-clicks out of the drag lifecycle. */
+const DRAG_THRESHOLD_PX = 3;
 
 interface SnapCandidate {
   /** Dragged-element coordinate we are matching (e.g. its left edge,
@@ -187,7 +189,13 @@ export function useElementDrag(opts: DragOptions) {
     (id: string, e: React.PointerEvent) => {
       if (e.button !== 0) return;
       e.stopPropagation();
-      e.preventDefault();
+
+      // Do not prevent the initial pointer event. Cancelling `pointerdown`
+      // suppresses Chromium's compatibility click sequence on some WebView2
+      // versions, which means the overlay never receives `dblclick` and text
+      // elements cannot enter inline-edit mode. The canvas is already
+      // `select-none` outside edit mode, so native text selection is not a
+      // concern; we cancel only after the pointer has become a real drag.
 
       if (!opts.canvasRef.current) return;
       const rect = opts.canvasRef.current.getBoundingClientRect();
@@ -216,6 +224,7 @@ export function useElementDrag(opts: DragOptions) {
 
       const sx = e.clientX;
       const sy = e.clientY;
+      let dragStarted = false;
       const finalPositions = new Map<string, { x: number; y: number }>(
         startPositions.map((p) => [p.id, { x: p.ix, y: p.iy }]),
       );
@@ -227,6 +236,12 @@ export function useElementDrag(opts: DragOptions) {
       controllerRef.current = controller;
 
       const move = (mv: PointerEvent) => {
+        if (!dragStarted) {
+          const distance = Math.hypot(mv.clientX - sx, mv.clientY - sy);
+          if (distance < DRAG_THRESHOLD_PX) return;
+          dragStarted = true;
+        }
+        if (mv.cancelable) mv.preventDefault();
         const dx = ((mv.clientX - sx) / rect.width) * 100;
         const dy = ((mv.clientY - sy) / rect.height) * 100;
         // P3.1: smart guides operate on the *primary* dragged element
@@ -264,14 +279,16 @@ export function useElementDrag(opts: DragOptions) {
       const up = () => {
         controller.abort();
         controllerRef.current = null;
-        for (const sp of startPositions) {
-          const final = finalPositions.get(sp.id);
-          if (final) {
-            // P3.2: snap on commit only, so the snap is a "settle"
-            // rather than a sticky grinder mid-drag.
-            const snappedX = snapTo(final.x, opts.gridSize);
-            const snappedY = snapTo(final.y, opts.gridSize);
-            opts.onCommitted(sp.id, { x: snappedX, y: snappedY });
+        if (dragStarted) {
+          for (const sp of startPositions) {
+            const final = finalPositions.get(sp.id);
+            if (final) {
+              // P3.2: snap on commit only, so the snap is a "settle"
+              // rather than a sticky grinder mid-drag.
+              const snappedX = snapTo(final.x, opts.gridSize);
+              const snappedY = snapTo(final.y, opts.gridSize);
+              opts.onCommitted(sp.id, { x: snappedX, y: snappedY });
+            }
           }
         }
         // P3.1: clear the guide overlay on pointer-up. The slide history

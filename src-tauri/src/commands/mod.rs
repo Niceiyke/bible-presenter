@@ -23,3 +23,5 @@ pub mod program_audio;
 pub mod backup;
 pub mod pptx;
 pub mod ai_scripture;
+pub mod ai_presentations;
+pub mod prayer_docx;

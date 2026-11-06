@@ -27,7 +27,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import Underline from "@tiptap/extension-underline";
 import { TextStyle as TipTapTextStyle } from "@tiptap/extension-text-style";
 import Color from "@tiptap/extension-color";
 import TextAlign from "@tiptap/extension-text-align";
@@ -79,6 +78,7 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
   // P2.5: user-installed @font-face families merged with built-ins.
   const { availableFonts } = useFonts();
   const committedRef = useRef(false);
+  const stableMountRef = useRef(false);
   // `onCommit` is rebuilt on every parent render (SlideCanvas constructs
   // `html => onCommit(el.id, html)` inline in its `.map` body). Keeping it
   // in the commit-cleanup effect's deps would re-run that cleanup on any
@@ -105,7 +105,6 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
         // within the element without affecting slide history.
         undoRedo: { depth: 200, newGroupDelay: 600 },
       }),
-      Underline,
       TipTapTextStyle,
       Color,
       TextAlign.configure({ types: ["heading", "paragraph"] }),
@@ -145,8 +144,19 @@ export function InlineTextEditor({ el, canvasScale, theme, onCommit }: InlineTex
   // serialised its state — committing on `onBlur` is racy because React
   // already tears down the editor instance by then.
   useEffect(() => {
+    // React Strict Mode runs a setup → cleanup → setup cycle immediately
+    // after a component mounts in development. Treating that simulated
+    // cleanup as a real editing exit calls the parent commit handler, which
+    // clears `editingElementId` before the operator can type anything. Mark
+    // the mount stable on the next task so only a genuine later unmount
+    // commits the editor contents.
+    stableMountRef.current = false;
+    const stableTimer = window.setTimeout(() => {
+      stableMountRef.current = true;
+    }, 0);
     return () => {
-      if (committedRef.current || !editor) return;
+      window.clearTimeout(stableTimer);
+      if (!stableMountRef.current || committedRef.current || !editor) return;
       committedRef.current = true;
       onCommitRef.current(editor.getJSON() as unknown as ProseMirrorJSON);
     };

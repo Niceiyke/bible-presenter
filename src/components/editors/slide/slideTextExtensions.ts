@@ -28,7 +28,6 @@ import type { CommandProps } from "@tiptap/core";
 import "@tiptap/extension-text-style";
 import { generateHTML, generateJSON } from "@tiptap/html";
 import StarterKit from "@tiptap/starter-kit";
-import Underline from "@tiptap/extension-underline";
 import { TextStyle } from "@tiptap/extension-text-style";
 import Color from "@tiptap/extension-color";
 import TextAlign from "@tiptap/extension-text-align";
@@ -252,7 +251,6 @@ export const ParagraphStyleInline = Extension.create({
  */
 export const SLIDE_TEXT_EXTENSIONS = [
   StarterKit.configure({ undoRedo: false }),
-  Underline,
   TextStyle,
   Color,
   TextAlign.configure({ types: ["heading", "paragraph"] }),

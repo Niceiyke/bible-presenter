@@ -1,6 +1,8 @@
 import { act, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AiScriptureProvider, type ScriptureSuggestion } from "../useAiScripture";
+import { useAppStore } from "../../store";
+import { DEFAULT_SETTINGS } from "../../types";
 
 const mocks = vi.hoisted(() => ({
   listeners: new Map<string, (event: { payload: unknown }) => void>(),
@@ -46,6 +48,10 @@ describe("AiScriptureProvider automatic staging", () => {
   beforeEach(() => {
     mocks.listeners.clear();
     mocks.invoke.mockReset();
+    localStorage.removeItem("pref_aiListeningMode");
+    localStorage.removeItem("pref_aiScripturePerformanceV1");
+    useAppStore.getState().setBibleVersion("KJV");
+    useAppStore.getState().setSettings({ ...DEFAULT_SETTINGS });
     mocks.invoke.mockResolvedValue({
       state: "stopped",
       provider: "deepgram",
@@ -93,6 +99,76 @@ describe("AiScriptureProvider automatic staging", () => {
     expect(onStageVerse).not.toHaveBeenCalled();
   });
 
+  it("keeps next-verse voice commands manual even at high confidence", async () => {
+    const onStageVerse = vi.fn().mockResolvedValue(true);
+    render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);
+    await waitFor(() => expect(mocks.listeners.has("ai-scripture-suggestion")).toBe(true));
+
+    await emitSuggestion({ ...suggestion(0.99, "next-verse"), detection: "command" });
+
+    expect(onStageVerse).not.toHaveBeenCalled();
+  });
+
+  it("sends only an explicitly selected reference live", async () => {
+    const onStageVerse = vi.fn().mockResolvedValue(true);
+    const onSendLiveVerse = vi.fn().mockResolvedValue(true);
+    useAppStore.getState().setSettings({
+      ...DEFAULT_SETTINGS,
+      ai_scripture_auto_live: true,
+      ai_scripture_auto_live_references: true,
+    });
+    render(<AiScriptureProvider onStageVerse={onStageVerse} onSendLiveVerse={onSendLiveVerse}><div /></AiScriptureProvider>);
+    await waitFor(() => expect(mocks.listeners.has("ai-scripture-suggestion")).toBe(true));
+
+    await emitSuggestion(suggestion(0.97, "reference-live"));
+
+    expect(onSendLiveVerse).toHaveBeenCalledWith(suggestion(0.97, "reference-live").verse);
+    expect(onStageVerse).not.toHaveBeenCalled();
+  });
+
+  it("uses the independently selected command and top paraphrase settings", async () => {
+    const onStageVerse = vi.fn().mockResolvedValue(true);
+    const onSendLiveVerse = vi.fn().mockResolvedValue(true);
+    useAppStore.getState().setSettings({
+      ...DEFAULT_SETTINGS,
+      ai_scripture_auto_live: true,
+      ai_scripture_auto_live_voice_commands: true,
+      ai_scripture_auto_live_paraphrases: true,
+    });
+    render(<AiScriptureProvider onStageVerse={onStageVerse} onSendLiveVerse={onSendLiveVerse}><div /></AiScriptureProvider>);
+    await waitFor(() => expect(mocks.listeners.has("ai-scripture-suggestion")).toBe(true));
+
+    await emitSuggestion({ ...suggestion(0.99, "command-live"), detection: "command" });
+    await emitSuggestion({ ...suggestion(0.89, "theme-alternative"), detection: "paraphrase", rank: 2 });
+    await emitSuggestion({ ...suggestion(0.89, "theme-live"), detection: "paraphrase", rank: 1 });
+
+    expect(onSendLiveVerse).toHaveBeenCalledTimes(2);
+    expect(onStageVerse).not.toHaveBeenCalled();
+  });
+
+  it("applies a voice translation command without staging content", async () => {
+    const onStageVerse = vi.fn().mockResolvedValue(true);
+    useAppStore.getState().setBibleVersion("KJV");
+    render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);
+    await waitFor(() => expect(mocks.listeners.has("ai-scripture-command")).toBe(true));
+
+    await act(async () => {
+      mocks.listeners.get("ai-scripture-command")?.({
+        payload: {
+          command: "version",
+          message: "Voice command: Scripture translation changed to NLT.",
+          version: "NLT",
+          reference: null,
+          timestamp: 1,
+        },
+      });
+      await Promise.resolve();
+    });
+
+    expect(useAppStore.getState().bibleVersion).toBe("NLT");
+    expect(onStageVerse).not.toHaveBeenCalled();
+  });
+
   it("never auto-stages the same suggestion event twice", async () => {
     const onStageVerse = vi.fn().mockResolvedValue(true);
     render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);
@@ -103,5 +179,53 @@ describe("AiScriptureProvider automatic staging", () => {
     await emitSuggestion(payload);
 
     expect(onStageVerse).toHaveBeenCalledOnce();
+  });
+
+  it("keeps Service mode listening after a recognized suggestion", async () => {
+    const onStageVerse = vi.fn().mockResolvedValue(true);
+    render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);
+    await waitFor(() => expect(mocks.listeners.has("ai-scripture-suggestion")).toBe(true));
+
+    await emitSuggestion(suggestion(0.5, "service-keeps-listening"));
+
+    expect(mocks.invoke).not.toHaveBeenCalledWith("ai_stop");
+  });
+
+  it("stops Operator mode after one verified reference", async () => {
+    localStorage.setItem("pref_aiListeningMode", "operator");
+    const onStageVerse = vi.fn().mockResolvedValue(true);
+    render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);
+    await waitFor(() => expect(mocks.listeners.has("ai-scripture-suggestion")).toBe(true));
+
+    await emitSuggestion(suggestion(0.5, "operator-one-result"));
+
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("ai_stop"));
+  });
+
+  it("does not stop Operator mode for a possible paraphrase theme", async () => {
+    localStorage.setItem("pref_aiListeningMode", "operator");
+    const onStageVerse = vi.fn().mockResolvedValue(true);
+    render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);
+    await waitFor(() => expect(mocks.listeners.has("ai-scripture-suggestion")).toBe(true));
+
+    await emitSuggestion({ ...suggestion(0.89, "operator-theme"), detection: "paraphrase", rank: 1 });
+
+    expect(mocks.invoke).not.toHaveBeenCalledWith("ai_stop");
+  });
+
+  it("stops Operator mode for a standalone voice command", async () => {
+    localStorage.setItem("pref_aiListeningMode", "operator");
+    const onStageVerse = vi.fn().mockResolvedValue(true);
+    render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);
+    await waitFor(() => expect(mocks.listeners.has("ai-scripture-command")).toBe(true));
+
+    await act(async () => {
+      mocks.listeners.get("ai-scripture-command")?.({
+        payload: { command: "version", message: "Translation changed", version: "NLT", reference: null, timestamp: 1 },
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("ai_stop"));
   });
 });

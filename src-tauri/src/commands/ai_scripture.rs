@@ -71,6 +71,26 @@ const BIBLE_KEYTERMS: &[&str] = &[
     "Second John",
     "Third John",
 ];
+const VOICE_COMMAND_KEYTERMS: &[&str] = &[
+    "next verse",
+    "previous verse",
+    "King James",
+    "New King James",
+    "New Living Translation",
+    "Amplified",
+    "New International Version",
+    "English Standard Version",
+    "New American Standard",
+    "The Message",
+    "Good News Translation",
+    "Contemporary English Version",
+    "KJV",
+    "NKJV",
+    "NLT",
+    "NIV",
+    "ESV",
+    "NASB",
+];
 const CONTEXT_WINDOW: Duration = Duration::from_secs(20);
 const SEMANTIC_CONTEXT_GAP: Duration = Duration::from_secs(4);
 const MAX_SEMANTIC_CONTEXT_WORDS: usize = 48;
@@ -126,7 +146,7 @@ impl AsrProvider {
 
 fn deepgram_url() -> String {
     let mut url = DEEPGRAM_BASE_URL.to_string();
-    for keyterm in BIBLE_KEYTERMS {
+    for keyterm in BIBLE_KEYTERMS.iter().chain(VOICE_COMMAND_KEYTERMS) {
         url.push_str("&keyterm=");
         // Every configured term is controlled ASCII; Deepgram requires a
         // repeated query parameter and encoded spaces for each separate term.
@@ -148,7 +168,14 @@ fn percent_encode(value: &str) -> String {
 }
 
 fn assemblyai_url() -> String {
-    let keyterms = serde_json::to_string(BIBLE_KEYTERMS).expect("Bible keyterms are serializable");
+    let keyterms = serde_json::to_string(
+        &BIBLE_KEYTERMS
+            .iter()
+            .chain(VOICE_COMMAND_KEYTERMS)
+            .copied()
+            .collect::<Vec<_>>(),
+    )
+    .expect("Bible and voice-command keyterms are serializable");
     let language_codes = percent_encode(r#"["en"]"#);
     format!(
         "{ASSEMBLYAI_BASE_URL}?speech_model=universal-3-6-pro&mode=min_latency&encoding=pcm_s16le&sample_rate=16000&language_codes={language_codes}&include_partial_turns=true&session_heartbeat=true&min_turn_silence=300&max_turn_silence=900&keyterms_prompt={}",
@@ -199,6 +226,11 @@ pub struct ScriptureSuggestion {
     pub evidence: String,
     pub verse: Verse,
     pub timestamp: u64,
+    /// Timestamp of the ASR update that supplied the text used for this
+    /// verified result. This makes local ASR-to-detection timing measurable
+    /// without retaining the transcript itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_transcript_timestamp: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -268,6 +300,7 @@ struct AsrSessionConfig {
     provider: AsrProvider,
     audio_device: String,
     version: String,
+    available_versions: Vec<String>,
 }
 
 struct AiRuntime {
@@ -278,8 +311,39 @@ struct AiRuntime {
 
 #[derive(Clone)]
 struct DetectionConfig {
-    output_version: String,
+    output_version: Arc<Mutex<String>>,
+    available_versions: Vec<String>,
     books: Vec<String>,
+    navigation_anchor: Arc<Mutex<Option<VerseAnchor>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VerseAnchor {
+    book: String,
+    chapter: i32,
+    verse: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerseNavigation {
+    Next,
+    Previous,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VoiceDirective {
+    navigation: Option<VerseNavigation>,
+    version: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VoiceCommandEvent {
+    command: String,
+    message: String,
+    version: Option<String>,
+    reference: Option<String>,
+    timestamp: u64,
 }
 
 #[derive(Clone)]
@@ -291,6 +355,7 @@ struct QuoteJob {
     evidence: String,
     asr_confidence: f32,
     is_interim: bool,
+    source_transcript_timestamp: u64,
 }
 
 struct DetectionPipeline {
@@ -298,9 +363,10 @@ struct DetectionPipeline {
     recently_suggested: Arc<Mutex<HashMap<String, Instant>>>,
     generation: Arc<AtomicU64>,
     quote_tx: watch::Sender<Option<QuoteJob>>,
-    assemblyai_turn_order: Option<u64>,
-    assemblyai_partial_words: usize,
-    assemblyai_partial_reference: Option<(String, u8)>,
+    partial_turn_order: Option<u64>,
+    partial_words: usize,
+    partial_reference: Option<(String, u8)>,
+    partial_sample_every_six_words: bool,
 }
 
 struct DetectionWorker {
@@ -377,6 +443,448 @@ fn semantic_context(context: &VecDeque<(Instant, String)>) -> (String, usize) {
     let words = selected.split_whitespace().collect::<Vec<_>>();
     let start = words.len().saturating_sub(MAX_SEMANTIC_CONTEXT_WORDS);
     (words[start..].join(" "), segment_count)
+}
+
+fn normalize_voice_phrase(value: &str) -> String {
+    value
+        .to_ascii_lowercase()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn contains_voice_phrase(text: &str, phrase: &str) -> bool {
+    let padded_text = format!(" {text} ");
+    let padded_phrase = format!(" {phrase} ");
+    padded_text.contains(&padded_phrase)
+}
+
+struct VersionFamily {
+    /// Codes and phrases that identify this translation whether it is
+    /// installed as "KJV", "King James Version", or "NASB 2020".
+    keys: &'static [&'static str],
+    /// Everything an operator might say for this translation.
+    aliases: &'static [&'static str],
+}
+
+const VERSION_FAMILIES: &[VersionFamily] = &[
+    VersionFamily {
+        keys: &["kjv", "king james"],
+        aliases: &["king james", "king james version", "kjv"],
+    },
+    VersionFamily {
+        keys: &["nkjv", "new king james"],
+        aliases: &["new king james", "new king james version", "nkjv"],
+    },
+    VersionFamily {
+        keys: &["nlt", "new living"],
+        aliases: &["new living", "new living translation", "nlt"],
+    },
+    VersionFamily {
+        keys: &["amp", "ampc", "ampce", "amplified"],
+        aliases: &["amplified", "amplified bible", "amplified version", "amp"],
+    },
+    VersionFamily {
+        keys: &["niv", "new international"],
+        aliases: &["new international", "new international version", "niv"],
+    },
+    VersionFamily {
+        keys: &["esv", "english standard"],
+        aliases: &["english standard", "english standard version", "esv"],
+    },
+    VersionFamily {
+        keys: &["nasb", "nasb1995", "nasb2020", "new american standard"],
+        aliases: &[
+            "new american standard",
+            "new american standard bible",
+            "nasb",
+        ],
+    },
+    VersionFamily {
+        keys: &["rsv", "revised standard"],
+        aliases: &["revised standard", "revised standard version", "rsv"],
+    },
+    VersionFamily {
+        keys: &["nrsv", "nrsvue", "new revised standard"],
+        aliases: &[
+            "new revised standard",
+            "new revised standard version",
+            "nrsv",
+        ],
+    },
+    VersionFamily {
+        keys: &["csb", "christian standard"],
+        aliases: &["christian standard", "christian standard bible", "csb"],
+    },
+    VersionFamily {
+        keys: &["hcsb", "holman christian standard"],
+        aliases: &[
+            "holman christian standard",
+            "holman christian standard bible",
+            "hcsb",
+        ],
+    },
+    VersionFamily {
+        keys: &["msg", "message"],
+        aliases: &["the message", "message bible", "msg"],
+    },
+    VersionFamily {
+        keys: &["tpt", "passion"],
+        aliases: &["the passion", "passion translation", "tpt"],
+    },
+    VersionFamily {
+        keys: &["gnt", "good news"],
+        aliases: &["good news", "good news translation", "gnt"],
+    },
+    VersionFamily {
+        keys: &["cev", "contemporary english"],
+        aliases: &[
+            "contemporary english",
+            "contemporary english version",
+            "cev",
+        ],
+    },
+];
+
+fn version_voice_aliases(version: &str) -> Vec<String> {
+    let normalized = normalize_voice_phrase(version);
+    let compact = normalized.replace(' ', "");
+    let mut aliases = vec![normalized.clone()];
+    // Pick only the most specific family so "New King James Version" does not
+    // also inherit "King James" aliases from its suffix.
+    let mut best_family: Option<(&VersionFamily, usize)> = None;
+    for family in VERSION_FAMILIES {
+        for key in family.keys {
+            let key_compact = key.replace(' ', "");
+            let matches = compact == key_compact || contains_voice_phrase(&normalized, key);
+            if matches && best_family.is_none_or(|(_, length)| key.len() > length) {
+                best_family = Some((family, key.len()));
+            }
+        }
+    }
+    if let Some((family, _)) = best_family {
+        aliases.extend(family.aliases.iter().map(|alias| alias.to_string()));
+    }
+    aliases.sort();
+    aliases.dedup();
+    aliases.sort_by_key(|alias| std::cmp::Reverse(alias.len()));
+    aliases
+}
+
+fn resolve_spoken_version(text: &str, versions: &[String]) -> Option<String> {
+    versions
+        .iter()
+        .flat_map(|version| {
+            version_voice_aliases(version)
+                .into_iter()
+                .map(move |alias| (alias, version))
+        })
+        .filter(|(alias, _)| !alias.is_empty() && contains_voice_phrase(text, alias))
+        .max_by_key(|(alias, _)| alias.len())
+        .map(|(_, version)| version.clone())
+}
+
+fn detect_voice_directive(
+    transcript: &str,
+    versions: &[String],
+    has_explicit_reference: bool,
+) -> Option<VoiceDirective> {
+    let normalized = normalize_voice_phrase(transcript);
+    let word_count = normalized.split_whitespace().count();
+    let navigation = if word_count <= 16
+        && ["next verse", "following verse", "verse after that"]
+            .iter()
+            .any(|phrase| contains_voice_phrase(&normalized, phrase))
+    {
+        Some(VerseNavigation::Next)
+    } else if word_count <= 16
+        && ["previous verse", "verse before that", "go back one verse"]
+            .iter()
+            .any(|phrase| contains_voice_phrase(&normalized, phrase))
+    {
+        Some(VerseNavigation::Previous)
+    } else {
+        None
+    };
+    let has_version_marker = [
+        "give me",
+        "give us",
+        "gimme",
+        "show me",
+        "show us",
+        "bring me",
+        "bring up",
+        "put up",
+        "pull up",
+        "switch to",
+        "switch version",
+        "switch the version",
+        "switch translation",
+        "change to",
+        "change version",
+        "change the version",
+        "change translation",
+        "change the translation",
+        "use version",
+        "use the version",
+        "use translation",
+        "read it in",
+        "read that in",
+        "read from",
+        "read that from",
+        "see it in",
+        "see that in",
+        "put it in",
+        "let me have",
+        "let me see it in",
+    ]
+    .iter()
+    .any(|phrase| contains_voice_phrase(&normalized, phrase));
+    let version = (navigation.is_some() || has_version_marker || has_explicit_reference)
+        .then(|| resolve_spoken_version(&normalized, versions))
+        .flatten();
+
+    (navigation.is_some() || version.is_some()).then_some(VoiceDirective {
+        navigation,
+        version,
+    })
+}
+
+fn current_output_version(detection: &DetectionConfig) -> String {
+    detection
+        .output_version
+        .lock()
+        .map(|version| version.clone())
+        .unwrap_or_default()
+}
+
+fn set_navigation_anchor(detection: &DetectionConfig, verse: &Verse) {
+    if let Ok(mut anchor) = detection.navigation_anchor.lock() {
+        *anchor = Some(VerseAnchor {
+            book: verse.book.clone(),
+            chapter: verse.chapter,
+            verse: verse.verse,
+        });
+    }
+}
+
+fn emit_voice_command(
+    app: &AppHandle,
+    command: &str,
+    message: String,
+    version: Option<String>,
+    reference: Option<String>,
+) {
+    let _ = app.emit(
+        "ai-scripture-command",
+        VoiceCommandEvent {
+            command: command.into(),
+            message,
+            version,
+            reference,
+            timestamp: now_ms(),
+        },
+    );
+}
+
+fn apply_voice_version(
+    app: &AppHandle,
+    bible: &BibleStore,
+    detection: &DetectionConfig,
+    provider: AsrProvider,
+    version: &str,
+    evidence: &str,
+    preview_current_verse: bool,
+    source_transcript_timestamp: u64,
+) {
+    if let Ok(mut current) = detection.output_version.lock() {
+        *current = version.to_string();
+    }
+    bible.set_active_version(app, version);
+    let audio_device = runtime().lock().ok().and_then(|mut guard| {
+        let session = guard.session.as_mut()?;
+        session.version = version.to_string();
+        Some(session.audio_device.clone())
+    });
+    // "Give me the Amplified" usually means the verse already under discussion,
+    // not only the next lookup. Re-render the cursor verse as a manual card so
+    // the operator sees the new translation without changing live output.
+    let previewed_reference = preview_current_verse
+        .then(|| navigation_anchor(detection, app))
+        .flatten()
+        .and_then(|anchor| {
+            let verse = bible
+                .get_verse(&anchor.book, anchor.chapter, anchor.verse, version)
+                .ok()
+                .flatten()?;
+            let reference = format!("{} {}:{}", verse.book, verse.chapter, verse.verse);
+            let _ = app.emit(
+                "ai-scripture-suggestion",
+                ScriptureSuggestion {
+                    id: Uuid::new_v4().to_string(),
+                    detection: "command".into(),
+                    confidence: 0.99,
+                    evidence: evidence.to_string(),
+                    verse,
+                    timestamp: now_ms(),
+                    source_transcript_timestamp: Some(source_transcript_timestamp),
+                    group_id: None,
+                    rank: None,
+                    passage_start: None,
+                    passage_end: None,
+                    similarity: None,
+                    margin: None,
+                },
+            );
+            Some(reference)
+        });
+    let message = match previewed_reference.as_deref() {
+        Some(reference) => {
+            format!("Voice command: {reference} loaded in {version}. Review it before staging.")
+        }
+        None => format!("Voice command: Scripture translation changed to {version}."),
+    };
+    emit_status(
+        app,
+        provider,
+        "listening",
+        &message,
+        audio_device,
+        Some(version.to_string()),
+    );
+    emit_voice_command(
+        app,
+        "version",
+        message,
+        Some(version.to_string()),
+        previewed_reference,
+    );
+}
+
+fn navigation_anchor(detection: &DetectionConfig, app: &AppHandle) -> Option<VerseAnchor> {
+    if let Some(anchor) = detection
+        .navigation_anchor
+        .lock()
+        .ok()
+        .and_then(|anchor| anchor.clone())
+    {
+        return Some(anchor);
+    }
+    // When listening starts after the operator has already projected a verse,
+    // fall back to what the congregation is seeing, then to the staged preview.
+    let state = app.try_state::<AppState>()?;
+    let live = state
+        .presentation
+        .live_item
+        .lock()
+        .as_ref()
+        .and_then(|item| match item {
+            crate::store::DisplayItem::Verse(verse) => Some(verse.clone()),
+            _ => None,
+        });
+    let staged = state
+        .presentation
+        .staged_item
+        .lock()
+        .as_ref()
+        .and_then(|item| match item {
+            crate::store::DisplayItem::Verse(verse) => Some(verse.clone()),
+            _ => None,
+        });
+    live.or(staged).map(|verse| VerseAnchor {
+        book: verse.book,
+        chapter: verse.chapter,
+        verse: verse.verse,
+    })
+}
+
+fn handle_voice_navigation(
+    app: &AppHandle,
+    bible: &BibleStore,
+    detection: &DetectionConfig,
+    navigation: VerseNavigation,
+    evidence: &str,
+    source_transcript_timestamp: u64,
+) {
+    let Some(anchor) = navigation_anchor(detection, app) else {
+        emit_voice_command(
+            app,
+            "navigation",
+            "Say or stage a Scripture reference before asking for the next or previous verse."
+                .into(),
+            Some(current_output_version(detection)),
+            None,
+        );
+        return;
+    };
+    let version = current_output_version(detection);
+    let verse = match navigation {
+        VerseNavigation::Next => {
+            bible.get_next_verse(&anchor.book, anchor.chapter, anchor.verse, &version)
+        }
+        VerseNavigation::Previous => {
+            bible.get_prev_verse(&anchor.book, anchor.chapter, anchor.verse, &version)
+        }
+    }
+    .ok()
+    .flatten();
+    let Some(verse) = verse else {
+        emit_voice_command(
+            app,
+            "navigation",
+            "No adjacent verse is available in the selected translation.".into(),
+            Some(version),
+            None,
+        );
+        return;
+    };
+    set_navigation_anchor(detection, &verse);
+    let reference = format!("{} {}:{}", verse.book, verse.chapter, verse.verse);
+    crate::store::log_msg(
+        app,
+        &format!(
+            "[ai-scripture] voice navigation {} {} confidence=0.990",
+            match navigation {
+                VerseNavigation::Next => "next",
+                VerseNavigation::Previous => "previous",
+            },
+            reference,
+        ),
+    );
+    let _ = app.emit(
+        "ai-scripture-suggestion",
+        ScriptureSuggestion {
+            id: Uuid::new_v4().to_string(),
+            detection: "command".into(),
+            confidence: 0.99,
+            evidence: evidence.to_string(),
+            verse,
+            timestamp: now_ms(),
+            source_transcript_timestamp: Some(source_transcript_timestamp),
+            group_id: None,
+            rank: None,
+            passage_start: None,
+            passage_end: None,
+            similarity: None,
+            margin: None,
+        },
+    );
+    emit_voice_command(
+        app,
+        "navigation",
+        format!("Voice command found {reference} in {version}. Review it before staging."),
+        Some(version),
+        Some(reference),
+    );
 }
 
 fn key_path(app_data_dir: &Path, provider: AsrProvider) -> PathBuf {
@@ -581,13 +1089,23 @@ pub async fn ai_start(
     if audio_device.trim().is_empty() {
         return Err("Choose an audio input device.".into());
     }
-    if !state
+    let disabled_versions = state
+        .presentation
+        .settings
+        .lock()
+        .disabled_bible_versions
+        .clone();
+    let available_versions = state
         .store
         .get_available_versions()
+        .into_iter()
+        .filter(|candidate| !disabled_versions.contains(candidate))
+        .collect::<Vec<_>>();
+    if !available_versions
         .iter()
-        .any(|v| v == &version)
+        .any(|candidate| candidate == &version)
     {
-        return Err("Choose an installed Bible version.".into());
+        return Err("Choose an enabled installed Bible version.".into());
     }
     let api_key = load_api_key(&state.app_data_dir, provider)?;
     let relay = subscribe_feed(&audio_device)?;
@@ -641,6 +1159,7 @@ pub async fn ai_start(
                 provider,
                 audio_device: task_device.clone(),
                 version: task_version.clone(),
+                available_versions,
             },
             stop_rx,
         ))
@@ -839,6 +1358,7 @@ async fn run_asr_session(
         provider,
         audio_device,
         version,
+        available_versions,
     } = config;
     let semantic = semantic_scripture::engine(
         app.path()
@@ -897,8 +1417,10 @@ async fn run_asr_session(
     // a quotation. The winning canonical reference is converted back to the
     // operator-selected output translation before it reaches the UI.
     let detection = Arc::new(DetectionConfig {
-        output_version: version.clone(),
+        output_version: Arc::new(Mutex::new(version.clone())),
+        available_versions,
         books,
+        navigation_anchor: Arc::new(Mutex::new(None)),
     });
     let recently_suggested = Arc::new(Mutex::new(HashMap::new()));
     let detection_generation = Arc::new(AtomicU64::new(0));
@@ -922,9 +1444,10 @@ async fn run_asr_session(
         recently_suggested,
         generation: detection_generation,
         quote_tx,
-        assemblyai_turn_order: None,
-        assemblyai_partial_words: 0,
-        assemblyai_partial_reference: None,
+        partial_turn_order: None,
+        partial_words: 0,
+        partial_reference: None,
+        partial_sample_every_six_words: provider == AsrProvider::AssemblyAi,
     };
     let mut audio = vec![0u8; 3200];
 
@@ -1087,7 +1610,9 @@ async fn run_asr_session(
 fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Option<QuoteJob>>) {
     tauri::async_runtime::spawn(async move {
         let mut previous_semantic_passages = std::collections::HashSet::new();
-        let mut interim_quotes = std::collections::HashSet::new();
+        // Stable local verse candidate across two consecutive interim searches.
+        // This is intentionally separate from the final-turn cooldown.
+        let mut interim_quote = None;
         while quote_rx.changed().await.is_ok() {
             let Some(job) = quote_rx.borrow_and_update().clone() else {
                 continue;
@@ -1095,19 +1620,23 @@ fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Opt
             let worker_bible = worker.bible.clone();
             let worker_detection = worker.detection.clone();
             let worker_job = job.clone();
-            let suggestion = tokio::task::spawn_blocking(move || {
+            let mut suggestion = tokio::task::spawn_blocking(move || {
+                let output_version = current_output_version(&worker_detection);
                 detect_direct_quote(
                     &worker_bible,
                     &worker_job.rolling_text,
                     &worker_job.evidence,
-                    &worker_detection.output_version,
+                    &output_version,
                     worker_job.asr_confidence,
-                    worker_job.is_interim,
                 )
             })
             .await
             .ok()
             .flatten();
+
+            if let Some(suggestion) = suggestion.as_mut() {
+                suggestion.source_transcript_timestamp = Some(job.source_transcript_timestamp);
+            }
 
             // Quote retrieval is deliberately lower priority than explicit
             // references. If any newer final transcript arrived while this
@@ -1120,9 +1649,27 @@ fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Opt
             }
             if job.is_interim {
                 if let Some(suggestion) = suggestion {
-                    emit_interim_suggestion_if_new(&worker.app, &mut interim_quotes, suggestion);
+                    let key = suggestion_cooldown_key(&suggestion.detection, &suggestion.verse);
+                    if confirm_interim_reference(&mut interim_quote, Some(key)) {
+                        crate::store::log_msg(
+                            &worker.app,
+                            &format!(
+                                "[ai-scripture] stable interim quote {} {}:{} confidence={:.3}",
+                                suggestion.verse.book,
+                                suggestion.verse.chapter,
+                                suggestion.verse.verse,
+                                suggestion.confidence,
+                            ),
+                        );
+                        let _ = worker.app.emit("ai-scripture-suggestion", suggestion);
+                    }
+                } else {
+                    confirm_interim_reference(&mut interim_quote, None);
                 }
                 continue;
+            }
+            if let Some(suggestion) = suggestion.as_ref() {
+                set_navigation_anchor(&worker.detection, &suggestion.verse);
             }
             if suggestion.is_some_and(|suggestion| {
                 emit_suggestion_if_new(&worker.app, &worker.recently_suggested, suggestion)
@@ -1141,7 +1688,7 @@ fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Opt
             let semantic_engine = worker.semantic.clone();
             let semantic_bible = worker.bible.clone();
             let semantic_job = job.clone();
-            let output_version = worker.detection.output_version.clone();
+            let output_version = current_output_version(&worker.detection);
             let semantic_started = Instant::now();
             let semantic_result = tokio::task::spawn_blocking(move || {
                 semantic_engine.search(
@@ -1214,6 +1761,7 @@ fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Opt
                             evidence: job.semantic_text.clone(),
                             verse: found.verse,
                             timestamp: now_ms(),
+                            source_transcript_timestamp: Some(job.source_transcript_timestamp),
                             group_id: Some(group_id.clone()),
                             rank: Some(found.rank),
                             passage_start: Some(found.passage_start),
@@ -1255,28 +1803,6 @@ fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Opt
             }
         }
     });
-}
-
-fn emit_interim_suggestion_if_new(
-    app: &AppHandle,
-    emitted: &mut std::collections::HashSet<String>,
-    suggestion: ScriptureSuggestion,
-) {
-    let key = suggestion_cooldown_key(&suggestion.detection, &suggestion.verse);
-    if emitted.insert(key) {
-        crate::store::log_msg(
-            app,
-            &format!(
-                "[ai-scripture] interim suggestion {} {} {}:{} confidence={:.3}",
-                suggestion.detection,
-                suggestion.verse.book,
-                suggestion.verse.chapter,
-                suggestion.verse.verse,
-                suggestion.confidence,
-            ),
-        );
-        let _ = app.emit("ai-scripture-suggestion", suggestion);
-    }
 }
 
 fn semantic_passage_key(found: &semantic_scripture::SemanticMatch) -> String {
@@ -1326,8 +1852,8 @@ fn emit_suggestion_if_new(
 
 fn suggestion_cooldown_key(detection: &str, verse: &Verse) -> String {
     format!(
-        "{}:{}:{}:{}",
-        detection, verse.book, verse.chapter, verse.verse
+        "{}:{}:{}:{}:{}",
+        detection, verse.book, verse.chapter, verse.verse, verse.version
     )
 }
 
@@ -1353,6 +1879,7 @@ fn handle_provider_message(
     let is_final = provider_transcript.is_final;
     let confidence = provider_transcript.confidence;
     let turn_order = provider_transcript.turn_order;
+    let transcript_timestamp = now_ms();
     let segment = TranscriptSegment {
         id: provider_transcript
             .turn_order
@@ -1361,20 +1888,81 @@ fn handle_provider_message(
         text: transcript.to_string(),
         is_final,
         confidence,
-        timestamp: now_ms(),
+        timestamp: transcript_timestamp,
     };
     let _ = app.emit("ai-scripture-transcript", &segment);
     if !is_final {
-        if provider == AsrProvider::AssemblyAi {
-            handle_assemblyai_partial(
-                app, bible, detection, pipeline, transcript, confidence, turn_order,
-            );
-        }
+        // Both providers stream revisable interim text. Use it for local,
+        // manual-only reference/quote lookup so the operator sees a likely
+        // passage before an ASR turn closes. AssemblyAI is sampled every six
+        // words; Deepgram's shorter revisions are stability-gated instead.
+        handle_interim_transcript(
+            app,
+            bible,
+            detection,
+            pipeline,
+            transcript,
+            confidence,
+            turn_order,
+            transcript_timestamp,
+        );
         return Ok(());
     }
-    pipeline.assemblyai_turn_order = None;
-    pipeline.assemblyai_partial_words = 0;
-    pipeline.assemblyai_partial_reference = None;
+    pipeline.partial_turn_order = None;
+    pipeline.partial_words = 0;
+    pipeline.partial_reference = None;
+
+    let transcript_reference = detect_reference(transcript, &detection.books);
+    if let Some(directive) = detect_voice_directive(
+        transcript,
+        &detection.available_versions,
+        transcript_reference.is_some(),
+    ) {
+        // Cancel any quotation/semantic work queued from earlier turns before
+        // moving the cursor. Otherwise a stale quote job can finish after
+        // navigation and overwrite the new anchor back to the first verse,
+        // so a following "give me NLT" renders the initial verse again.
+        pipeline.generation.fetch_add(1, Ordering::AcqRel);
+        pipeline.quote_tx.send_replace(None);
+        if let Some(version) = directive.version.as_deref() {
+            if version != current_output_version(detection) {
+                apply_voice_version(
+                    app,
+                    bible,
+                    detection,
+                    provider,
+                    version,
+                    transcript,
+                    directive.navigation.is_none() && transcript_reference.is_none(),
+                    transcript_timestamp,
+                );
+            } else {
+                emit_voice_command(
+                    app,
+                    "version",
+                    format!("Scripture translation is already {version}."),
+                    Some(version.to_string()),
+                    None,
+                );
+            }
+        }
+        if let Some(navigation) = directive.navigation {
+            handle_voice_navigation(
+                app,
+                bible,
+                detection,
+                navigation,
+                transcript,
+                transcript_timestamp,
+            );
+            return Ok(());
+        }
+        // A translation-only command is operational speech, not sermon
+        // content. Do not feed it into quotation or semantic retrieval.
+        if transcript_reference.is_none() {
+            return Ok(());
+        }
+    }
 
     let now = Instant::now();
     pipeline.context.push_back((now, transcript.to_string()));
@@ -1414,10 +2002,12 @@ fn handle_provider_message(
         // Events are prepended in React. Emit a range in reverse so its first
         // verse remains the top card and is the only verse eligible for
         // automatic staging; the remaining range verses stay manual.
-        for verse in verses_for_reference(bible, &reference, &detection.output_version)
-            .into_iter()
-            .rev()
-        {
+        let output_version = current_output_version(detection);
+        let verses = verses_for_reference(bible, &reference, &output_version);
+        if let Some(last) = verses.last() {
+            set_navigation_anchor(detection, last);
+        }
+        for verse in verses.into_iter().rev() {
             let confidence = if verse.verse == reference.verse {
                 (0.92 + confidence * 0.07).clamp(0.0, 0.99)
             } else {
@@ -1433,6 +2023,7 @@ fn handle_provider_message(
                     evidence: transcript.to_string(),
                     verse,
                     timestamp: now_ms(),
+                    source_transcript_timestamp: Some(transcript_timestamp),
                     group_id: None,
                     rank: None,
                     passage_start: Some(reference.verse),
@@ -1454,11 +2045,12 @@ fn handle_provider_message(
         evidence: transcript.to_string(),
         asr_confidence: confidence,
         is_interim: false,
+        source_transcript_timestamp: transcript_timestamp,
     }));
     Ok(())
 }
 
-fn handle_assemblyai_partial(
+fn handle_interim_transcript(
     app: &AppHandle,
     bible: &BibleStore,
     detection: &DetectionConfig,
@@ -1466,29 +2058,31 @@ fn handle_assemblyai_partial(
     transcript: &str,
     asr_confidence: f32,
     turn_order: Option<u64>,
+    transcript_timestamp: u64,
 ) {
-    if pipeline.assemblyai_turn_order != turn_order {
-        pipeline.assemblyai_turn_order = turn_order;
-        pipeline.assemblyai_partial_words = 0;
-        pipeline.assemblyai_partial_reference = None;
+    if turn_order.is_some() && pipeline.partial_turn_order != turn_order {
+        pipeline.partial_turn_order = turn_order;
+        pipeline.partial_words = 0;
+        pipeline.partial_reference = None;
     }
 
     let words = quote_tokens(transcript).len();
-    if words < pipeline.assemblyai_partial_words {
+    if words < pipeline.partial_words {
         // A provider revision shortened the turn. Measure the next detection
         // interval from the revised snapshot rather than waiting indefinitely.
-        pipeline.assemblyai_partial_words = words;
-        pipeline.assemblyai_partial_reference = None;
+        pipeline.partial_words = words;
+        pipeline.partial_reference = None;
         return;
     }
-    if words
-        < pipeline
-            .assemblyai_partial_words
-            .saturating_add(ASSEMBLYAI_PARTIAL_DETECTION_STEP_WORDS)
+    if pipeline.partial_sample_every_six_words
+        && words
+            < pipeline
+                .partial_words
+                .saturating_add(ASSEMBLYAI_PARTIAL_DETECTION_STEP_WORDS)
     {
         return;
     }
-    pipeline.assemblyai_partial_words = words;
+    pipeline.partial_words = words;
 
     if let Some(reference) = detect_reference(transcript, &detection.books) {
         let key = format!(
@@ -1498,21 +2092,27 @@ fn handle_assemblyai_partial(
             reference.verse,
             reference.verse_end.unwrap_or(reference.verse)
         );
-        if confirm_interim_reference(&mut pipeline.assemblyai_partial_reference, Some(key)) {
-            for verse in verses_for_reference(bible, &reference, &detection.output_version)
+        if confirm_interim_reference(&mut pipeline.partial_reference, Some(key)) {
+            let output_version = current_output_version(detection);
+            for verse in verses_for_reference(bible, &reference, &output_version)
                 .into_iter()
                 .rev()
             {
                 let suggestion = ScriptureSuggestion {
                     id: Uuid::new_v4().to_string(),
                     detection: "reference".into(),
-                    // Interim references are useful immediately but remain
-                    // manual until the provider confirms the final turn.
-                    confidence: (0.82 + asr_confidence * 0.07)
-                        .clamp(0.0, MAX_SHORT_QUOTE_CONFIDENCE),
+                    // Two matching interim revisions are a sufficiently fast,
+                    // deterministic reference signal. Preserve the normal
+                    // range rule: only the first verse may be automated.
+                    confidence: if verse.verse == reference.verse {
+                        (0.92 + asr_confidence * 0.07).clamp(0.0, 0.99)
+                    } else {
+                        MAX_SHORT_QUOTE_CONFIDENCE
+                    },
                     evidence: latest_word_suffix(transcript, MAX_SEMANTIC_CONTEXT_WORDS),
                     verse,
                     timestamp: now_ms(),
+                    source_transcript_timestamp: Some(transcript_timestamp),
                     group_id: None,
                     rank: None,
                     passage_start: Some(reference.verse),
@@ -1534,7 +2134,7 @@ fn handle_assemblyai_partial(
             }
         }
     } else {
-        confirm_interim_reference(&mut pipeline.assemblyai_partial_reference, None);
+        confirm_interim_reference(&mut pipeline.partial_reference, None);
     }
 
     pipeline.quote_tx.send_replace(Some(QuoteJob {
@@ -1545,6 +2145,7 @@ fn handle_assemblyai_partial(
         evidence: latest_word_suffix(transcript, MAX_SEMANTIC_CONTEXT_WORDS),
         asr_confidence,
         is_interim: true,
+        source_transcript_timestamp: transcript_timestamp,
     }));
 }
 
@@ -1653,7 +2254,6 @@ fn detect_direct_quote(
     evidence: &str,
     output_version: &str,
     asr_confidence: f32,
-    is_interim: bool,
 ) -> Option<ScriptureSuggestion> {
     if quote_tokens(rolling_text).len() < MIN_DIRECT_QUOTE_WORDS {
         return None;
@@ -1678,10 +2278,7 @@ fn detect_direct_quote(
         )
         .ok()
         .flatten()?;
-    let mut confidence = quote_confidence(score, asr_confidence, quote_tokens(evidence).len());
-    if is_interim {
-        confidence = confidence.min(MAX_SHORT_QUOTE_CONFIDENCE);
-    }
+    let confidence = quote_confidence(score, asr_confidence, quote_tokens(evidence).len());
     Some(ScriptureSuggestion {
         id: Uuid::new_v4().to_string(),
         detection: "quote".into(),
@@ -1689,6 +2286,7 @@ fn detect_direct_quote(
         evidence: evidence.to_string(),
         verse,
         timestamp: now_ms(),
+        source_transcript_timestamp: None,
         group_id: None,
         rank: None,
         passage_start: None,
@@ -1755,6 +2353,16 @@ mod tests {
     }
 
     #[test]
+    fn preserves_deepgram_interim_results_for_fast_local_lookup() {
+        let transcript = parse_deepgram_transcript(
+            r#"{"type":"Results","is_final":false,"channel":{"alternatives":[{"transcript":"John chapter three verse sixteen","confidence":0.91}]}}"#,
+        )
+        .expect("interim result should produce a transcript");
+        assert!(!transcript.is_final);
+        assert_eq!(transcript.text, "John chapter three verse sixteen");
+    }
+
+    #[test]
     fn five_word_quotes_never_reach_auto_stage_confidence() {
         assert_eq!(quote_confidence(1.0, 1.0, 5), 0.89);
         assert_eq!(quote_confidence(1.0, 1.0, 6), 0.98);
@@ -1804,6 +2412,111 @@ mod tests {
         assert_ne!(
             suggestion_cooldown_key("paraphrase", &verse),
             suggestion_cooldown_key("reference", &verse)
+        );
+    }
+
+    #[test]
+    fn voice_commands_resolve_navigation_and_installed_version_aliases() {
+        let versions = vec!["AMP".into(), "KJV".into(), "NLT".into()];
+        assert_eq!(
+            detect_voice_directive("Give me Amplified", &versions, false),
+            Some(VoiceDirective {
+                navigation: None,
+                version: Some("AMP".into()),
+            })
+        );
+        assert_eq!(
+            detect_voice_directive("Next verse in NLT", &versions, false),
+            Some(VoiceDirective {
+                navigation: Some(VerseNavigation::Next),
+                version: Some("NLT".into()),
+            })
+        );
+        assert_eq!(
+            detect_voice_directive("Go back one verse", &versions, false),
+            Some(VoiceDirective {
+                navigation: Some(VerseNavigation::Previous),
+                version: None,
+            })
+        );
+    }
+
+    #[test]
+    fn version_aliases_match_full_installed_names_and_prefer_longest_family() {
+        let full_names = vec![
+            "Amplified Bible".into(),
+            "King James Version".into(),
+            "New King James Version".into(),
+            "New Living Translation".into(),
+        ];
+        assert_eq!(
+            detect_voice_directive("Give me amplified", &full_names, false)
+                .and_then(|directive| directive.version),
+            Some("Amplified Bible".into())
+        );
+        assert_eq!(
+            detect_voice_directive("Switch to King James", &full_names, false)
+                .and_then(|directive| directive.version),
+            Some("King James Version".into())
+        );
+        assert_eq!(
+            detect_voice_directive("Switch to New King James", &full_names, false)
+                .and_then(|directive| directive.version),
+            Some("New King James Version".into())
+        );
+        assert_eq!(
+            detect_voice_directive("Use version NLT", &full_names, false)
+                .and_then(|directive| directive.version),
+            Some("New Living Translation".into())
+        );
+    }
+
+    #[test]
+    fn explicit_reference_can_select_a_translation_in_the_same_utterance() {
+        let versions = vec!["KJV".into(), "NLT".into()];
+        assert_eq!(
+            detect_voice_directive("John 3:16 in King James", &versions, true),
+            Some(VoiceDirective {
+                navigation: None,
+                version: Some("KJV".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn incidental_translation_names_do_not_switch_versions() {
+        let versions = vec!["KJV".into(), "NLT".into()];
+        assert!(detect_voice_directive(
+            "King James commissioned an English translation",
+            &versions,
+            false
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn suggestion_cooldown_keeps_translations_distinct() {
+        let mut kjv = Verse {
+            book: "John".into(),
+            chapter: 3,
+            verse: 16,
+            text: "For God so loved the world".into(),
+            version: "KJV".into(),
+            split_index: None,
+            total_splits: None,
+            score: None,
+        };
+        let mut nlt = kjv.clone();
+        nlt.version = "NLT".into();
+        nlt.text = "For this is how God loved the world".into();
+        assert_ne!(
+            suggestion_cooldown_key("reference", &kjv),
+            suggestion_cooldown_key("reference", &nlt)
+        );
+        kjv.version = "NLT".into();
+        assert_eq!(
+            suggestion_cooldown_key("reference", &kjv),
+            suggestion_cooldown_key("reference", &nlt)
         );
     }
 
@@ -1884,8 +2597,13 @@ mod tests {
         let url = deepgram_url();
         assert!(url.contains("&keyterm=First%20Thessalonians"));
         assert!(url.contains("&keyterm=Ecclesiastes"));
+        assert!(url.contains("&keyterm=next%20verse"));
+        assert!(url.contains("&keyterm=New%20Living%20Translation"));
         assert!(!url.contains("keyterm=First Thessalonians"));
-        assert_eq!(url.matches("&keyterm=").count(), BIBLE_KEYTERMS.len());
+        assert_eq!(
+            url.matches("&keyterm=").count(),
+            BIBLE_KEYTERMS.len() + VOICE_COMMAND_KEYTERMS.len()
+        );
     }
 
     #[test]
@@ -1918,6 +2636,8 @@ mod tests {
         assert!(url.contains("min_turn_silence=300"));
         assert!(url.contains("max_turn_silence=900"));
         assert!(url.contains("keyterms_prompt=%5B%22Psalms%22"));
+        assert!(url.contains("next%20verse"));
+        assert!(url.contains("New%20Living%20Translation"));
         assert!(!url.contains("First Thessalonians"));
     }
 }

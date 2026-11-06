@@ -27,11 +27,51 @@ fn ffprobe_exe() -> &'static str {
 
 /// Register the bundled `bin/` directory at startup. Only adopted when it
 /// actually contains ffmpeg, so a missing binary silently keeps PATH behavior.
+///
+/// In `tauri dev` the installed layout (`{resource_dir}/bin`) doesn't exist:
+/// `resource_dir` is not the exe directory and has no `bin/` folder, so the
+/// bare `"ffmpeg.exe"` PATH fallback would fail on machines without a system
+/// ffmpeg and every audio picker (including Live Scripture Assistant) would
+/// show an empty list. Probe the exe directory and the repo `binaries/` folder
+/// as well so dev builds resolve the same binary as production.
 pub fn init(resource_dir: &Path) {
-    let dir = resource_dir.join("bin");
-    let _ = RESOURCE_BIN_DIR.set(dir.clone());
-    let present = dir.join(ffmpeg_exe()).exists();
-    let _ = BUNDLED_BIN_DIR.set(if present { Some(dir) } else { None });
+    let mut candidates: Vec<PathBuf> = vec![resource_dir.join("bin")];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("bin"));
+            candidates.push(dir.to_path_buf());
+            // `cargo test` / `cargo run` put the exe under `target/debug/` or
+            // `target/debug/deps/`; the repo binaries live next to `src-tauri/`.
+            for ancestor in dir.ancestors() {
+                let name = ancestor.file_name().and_then(|n| n.to_str());
+                if name == Some("debug") || name == Some("release") {
+                    if let Some(profile_parent) = ancestor.parent() {
+                        if let Some(src_tauri) = profile_parent.parent() {
+                            candidates.push(src_tauri.join("binaries"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("src-tauri").join("binaries"));
+        candidates.push(cwd.join("src-tauri").join("target").join("debug").join("bin"));
+        candidates.push(cwd.join("binaries"));
+        candidates.push(cwd.join("bin"));
+    }
+    let exe_name = ffmpeg_exe();
+    let found = candidates
+        .into_iter()
+        .find(|dir| dir.join(exe_name).is_file());
+    if let Some(dir) = found {
+        let _ = RESOURCE_BIN_DIR.set(dir.clone());
+        let _ = BUNDLED_BIN_DIR.set(Some(dir));
+    } else {
+        let dir = resource_dir.join("bin");
+        let _ = RESOURCE_BIN_DIR.set(dir);
+        let _ = BUNDLED_BIN_DIR.set(None);
+    }
 }
 
 /// Resolve an optional bundled runtime without falling back to PATH. Vendor

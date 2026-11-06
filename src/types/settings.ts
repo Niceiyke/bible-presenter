@@ -90,6 +90,12 @@ export interface PresentationSettings {
   highlight_color?: string;
   auto_clear_background_logo?: boolean;
   stage_uses_theme?: boolean;
+  /** Explicit operator opt-in for sending eligible AI Scripture suggestions live. */
+  ai_scripture_auto_live?: boolean;
+  ai_scripture_auto_live_references?: boolean;
+  ai_scripture_auto_live_quotes?: boolean;
+  ai_scripture_auto_live_paraphrases?: boolean;
+  ai_scripture_auto_live_voice_commands?: boolean;
 }
 
 export interface MonitorInfo {
@@ -112,6 +118,11 @@ export const DEFAULT_SETTINGS: PresentationSettings = {
   auto_clear_background_logo: true, stage_uses_theme: false,
   show_song_section_labels: false,
   reference_output_height: 1080,
+  ai_scripture_auto_live: false,
+  ai_scripture_auto_live_references: false,
+  ai_scripture_auto_live_quotes: false,
+  ai_scripture_auto_live_paraphrases: false,
+  ai_scripture_auto_live_voice_commands: false,
 };
 
 export const THEMES: Record<string, { label: string; colors: ThemeColors }> = {
