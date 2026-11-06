@@ -7,6 +7,7 @@ import type { SettingsCategory } from "./settings/shared";
 import { BibleAssetsSection } from "./settings/BibleAssetsSection";
 import { OutputSection } from "./settings/sections/OutputSection";
 import { ScriptureSection } from "./settings/sections/ScriptureSection";
+import { AiScriptureSection } from "./settings/sections/AiScriptureSection";
 import { ThemeSection } from "./settings/sections/ThemeSection";
 import { BrandingSection } from "./settings/sections/BrandingSection";
 import { BackgroundsSection } from "./settings/sections/BackgroundsSection";
@@ -21,6 +22,7 @@ const CATEGORIES: SettingsCategory[] = [
   { id: "assets", labelKey: "settings.category.assets", keywords: ["asset", "bible", "database", "download", "install", "core", "scriptures", "required"] },
   { id: "output", labelKey: "settings.category.output", keywords: ["font", "size", "transition", "blank", "fade", "slide", "verse font", "timing", "song label", "section label", "verse 1", "chorus"] },
   { id: "scripture", labelKey: "settings.category.scripture", keywords: ["reference", "position", "chapter", "verse", "split", "divine", "highlight", "auto split"] },
+  { id: "ai-scripture", labelKey: "settings.category.aiScripture", keywords: ["ai", "transcription", "deepgram", "assemblyai", "api key", "paraphrase", "embedding", "model", "speech"] },
   { id: "theme", labelKey: "settings.category.theme", keywords: ["color", "dark", "light", "navy", "maroon", "forest", "overrides", "background color"] },
   { id: "branding", labelKey: "settings.category.branding", keywords: ["logo", "splash", "corner", "watermark", "background logo", "brand"] },
   { id: "backgrounds", labelKey: "settings.category.backgrounds", keywords: ["background", "image", "video", "camera", "bible background", "media background", "preview"] },
@@ -92,6 +94,7 @@ export function SettingsTab({ onUpdateSettings, onUploadMedia }: SettingsTabProp
     if (category === "assets") return <BibleAssetsSection />;
     if (category === "output") return <OutputSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
     if (category === "scripture") return <ScriptureSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
+    if (category === "ai-scripture") return <AiScriptureSection />;
     if (category === "theme") return <ThemeSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
     if (category === "branding") return <BrandingSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
     if (category === "backgrounds") return <BackgroundsSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;

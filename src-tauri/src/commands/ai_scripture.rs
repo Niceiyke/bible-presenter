@@ -21,9 +21,12 @@ use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 use uuid::Uuid;
 
-const PROVIDER: &str = "deepgram";
-const KEY_FILE: &str = "deepgram-api-key.dpapi";
+const DEEPGRAM_PROVIDER: &str = "deepgram";
+const ASSEMBLYAI_PROVIDER: &str = "assemblyai";
+const DEEPGRAM_KEY_FILE: &str = "deepgram-api-key.dpapi";
+const ASSEMBLYAI_KEY_FILE: &str = "assemblyai-api-key.dpapi";
 const DEEPGRAM_BASE_URL: &str = "wss://api.deepgram.com/v1/listen?model=nova-3&language=en-US&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&punctuate=true&smart_format=true&utterance_end_ms=1200&vad_events=true&redact_usage=true";
+const ASSEMBLYAI_BASE_URL: &str = "wss://streaming.assemblyai.com/v3/ws";
 // Nova-3 keyterm prompting improves uncommon proper nouns. Avoid broad terms
 // such as "Mark", "Job", and "Acts", which could bias ordinary sermon speech.
 const BIBLE_KEYTERMS: &[&str] = &[
@@ -75,8 +78,51 @@ const MAX_SEMANTIC_SENTENCES: usize = 2;
 const MIN_COMPLETE_THOUGHT_WORDS: usize = 5;
 const SUGGESTION_COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_SHORT_QUOTE_CONFIDENCE: f32 = 0.89;
+const STRONG_SEMANTIC_SIMILARITY: f32 = 0.80;
+const STRONG_SEMANTIC_MARGIN: f32 = 0.08;
+const ASSEMBLYAI_PARTIAL_DETECTION_STEP_WORDS: usize = 6;
+const MAX_SPOKEN_REFERENCE_RANGE: i32 = 10;
 const MAX_AUDIO_RECOVERIES: usize = 2;
 const MAX_DECODER_ERROR_BYTES: usize = 8 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AsrProvider {
+    Deepgram,
+    AssemblyAi,
+}
+
+impl AsrProvider {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            DEEPGRAM_PROVIDER => Ok(Self::Deepgram),
+            ASSEMBLYAI_PROVIDER => Ok(Self::AssemblyAi),
+            _ => Err(format!(
+                "Unsupported transcription provider. Choose {DEEPGRAM_PROVIDER} or {ASSEMBLYAI_PROVIDER}."
+            )),
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Deepgram => DEEPGRAM_PROVIDER,
+            Self::AssemblyAi => ASSEMBLYAI_PROVIDER,
+        }
+    }
+
+    const fn display_name(self) -> &'static str {
+        match self {
+            Self::Deepgram => "Deepgram",
+            Self::AssemblyAi => "AssemblyAI",
+        }
+    }
+
+    const fn key_file(self) -> &'static str {
+        match self {
+            Self::Deepgram => DEEPGRAM_KEY_FILE,
+            Self::AssemblyAi => ASSEMBLYAI_KEY_FILE,
+        }
+    }
+}
 
 fn deepgram_url() -> String {
     let mut url = DEEPGRAM_BASE_URL.to_string();
@@ -87,6 +133,34 @@ fn deepgram_url() -> String {
         url.push_str(&keyterm.replace(' ', "%20"));
     }
     url
+}
+
+fn percent_encode(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+fn assemblyai_url() -> String {
+    let keyterms = serde_json::to_string(BIBLE_KEYTERMS).expect("Bible keyterms are serializable");
+    let language_codes = percent_encode(r#"["en"]"#);
+    format!(
+        "{ASSEMBLYAI_BASE_URL}?speech_model=universal-3-6-pro&mode=min_latency&encoding=pcm_s16le&sample_rate=16000&language_codes={language_codes}&include_partial_turns=true&session_heartbeat=true&min_turn_silence=300&max_turn_silence=900&keyterms_prompt={}",
+        percent_encode(&keyterms)
+    )
+}
+
+fn provider_url(provider: AsrProvider) -> String {
+    match provider {
+        AsrProvider::Deepgram => deepgram_url(),
+        AsrProvider::AssemblyAi => assemblyai_url(),
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -158,10 +232,28 @@ struct DeepgramAlternative {
     confidence: Option<f32>,
 }
 
+#[derive(Debug, Deserialize)]
+struct AssemblyAiResponse {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    transcript: Option<String>,
+    end_of_turn: Option<bool>,
+    turn_is_formatted: Option<bool>,
+    turn_order: Option<u64>,
+    words: Option<Vec<AssemblyAiWord>>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AssemblyAiWord {
+    confidence: Option<f32>,
+}
+
 struct ProviderTranscript {
     text: String,
     is_final: bool,
     confidence: f32,
+    turn_order: Option<u64>,
 }
 
 struct AiSessionControl {
@@ -169,11 +261,19 @@ struct AiSessionControl {
     stop: watch::Sender<bool>,
     audio_device: String,
     version: String,
+    provider: AsrProvider,
+}
+
+struct AsrSessionConfig {
+    provider: AsrProvider,
+    audio_device: String,
+    version: String,
 }
 
 struct AiRuntime {
     session: Option<AiSessionControl>,
     last_message: String,
+    last_provider: AsrProvider,
 }
 
 #[derive(Clone)]
@@ -190,6 +290,7 @@ struct QuoteJob {
     semantic_segments: usize,
     evidence: String,
     asr_confidence: f32,
+    is_interim: bool,
 }
 
 struct DetectionPipeline {
@@ -197,6 +298,9 @@ struct DetectionPipeline {
     recently_suggested: Arc<Mutex<HashMap<String, Instant>>>,
     generation: Arc<AtomicU64>,
     quote_tx: watch::Sender<Option<QuoteJob>>,
+    assemblyai_turn_order: Option<u64>,
+    assemblyai_partial_words: usize,
+    assemblyai_partial_reference: Option<(String, u8)>,
 }
 
 struct DetectionWorker {
@@ -224,6 +328,7 @@ fn runtime() -> &'static Mutex<AiRuntime> {
         Mutex::new(AiRuntime {
             session: None,
             last_message: "AI Scripture is stopped.".into(),
+            last_provider: AsrProvider::Deepgram,
         })
     })
 }
@@ -274,8 +379,8 @@ fn semantic_context(context: &VecDeque<(Instant, String)>) -> (String, usize) {
     (words[start..].join(" "), segment_count)
 }
 
-fn key_path(app_data_dir: &Path) -> PathBuf {
-    app_data_dir.join("secrets").join(KEY_FILE)
+fn key_path(app_data_dir: &Path, provider: AsrProvider) -> PathBuf {
+    app_data_dir.join("secrets").join(provider.key_file())
 }
 
 #[cfg(windows)]
@@ -317,7 +422,7 @@ mod key_storage {
                 CRYPTPROTECT_UI_FORBIDDEN,
                 &mut out,
             )
-            .map_err(|e| format!("Could not protect the Deepgram API key: {e}"))?;
+            .map_err(|e| format!("Could not protect the transcription API key: {e}"))?;
         }
         let result = collect(&out);
         free_blob(&out);
@@ -337,7 +442,7 @@ mod key_storage {
                 CRYPTPROTECT_UI_FORBIDDEN,
                 &mut out,
             )
-            .map_err(|e| format!("Could not decrypt the Deepgram API key: {e}"))?;
+            .map_err(|e| format!("Could not decrypt the transcription API key: {e}"))?;
         }
         let result = collect(&out);
         free_blob(&out);
@@ -360,33 +465,42 @@ mod key_storage {
     }
 }
 
-fn load_api_key(app_data_dir: &Path) -> Result<String, String> {
-    let encrypted = std::fs::read(key_path(app_data_dir))
-        .map_err(|_| "Deepgram API key is not configured.".to_string())?;
+fn load_api_key(app_data_dir: &Path, provider: AsrProvider) -> Result<String, String> {
+    let name = provider.display_name();
+    let encrypted = std::fs::read(key_path(app_data_dir, provider))
+        .map_err(|_| format!("{name} API key is not configured."))?;
     let clear = key_storage::unprotect(&encrypted)?;
-    let key =
-        String::from_utf8(clear).map_err(|_| "Stored Deepgram API key is invalid.".to_string())?;
+    let key = String::from_utf8(clear).map_err(|_| format!("Stored {name} API key is invalid."))?;
     if key.trim().is_empty() {
-        return Err("Deepgram API key is not configured.".into());
+        return Err(format!("{name} API key is not configured."));
     }
     Ok(key)
 }
 
 #[tauri::command]
-pub fn ai_key_status(state: State<'_, AppState>) -> AiKeyStatus {
+pub fn ai_key_status(state: State<'_, AppState>, provider: String) -> AiKeyStatus {
+    let provider = AsrProvider::parse(&provider).unwrap_or(AsrProvider::Deepgram);
     AiKeyStatus {
-        configured: load_api_key(&state.app_data_dir).is_ok(),
-        provider: PROVIDER.into(),
+        configured: load_api_key(&state.app_data_dir, provider).is_ok(),
+        provider: provider.as_str().into(),
     }
 }
 
 #[tauri::command]
-pub fn ai_set_api_key(state: State<'_, AppState>, api_key: String) -> Result<AiKeyStatus, String> {
+pub fn ai_set_api_key(
+    state: State<'_, AppState>,
+    provider: String,
+    api_key: String,
+) -> Result<AiKeyStatus, String> {
+    let provider = AsrProvider::parse(&provider)?;
     let key = api_key.trim();
     if key.len() < 16 || key.chars().any(char::is_whitespace) {
-        return Err("Enter a valid Deepgram API key.".into());
+        return Err(format!(
+            "Enter a valid {} API key.",
+            provider.display_name()
+        ));
     }
-    let path = key_path(&state.app_data_dir);
+    let path = key_path(&state.app_data_dir, provider);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -394,14 +508,15 @@ pub fn ai_set_api_key(state: State<'_, AppState>, api_key: String) -> Result<AiK
     std::fs::write(path, encrypted).map_err(|e| format!("Could not save the API key: {e}"))?;
     Ok(AiKeyStatus {
         configured: true,
-        provider: PROVIDER.into(),
+        provider: provider.as_str().into(),
     })
 }
 
 #[tauri::command]
-pub fn ai_clear_api_key(state: State<'_, AppState>) -> Result<(), String> {
+pub fn ai_clear_api_key(state: State<'_, AppState>, provider: String) -> Result<(), String> {
+    let provider = AsrProvider::parse(&provider)?;
     let _ = ai_stop();
-    let path = key_path(&state.app_data_dir);
+    let path = key_path(&state.app_data_dir, provider);
     if path.exists() {
         std::fs::remove_file(path).map_err(|e| format!("Could not remove the API key: {e}"))?;
     }
@@ -414,14 +529,14 @@ pub fn ai_status() -> AiRuntimeStatus {
     match guard.session.as_ref() {
         Some(session) => AiRuntimeStatus {
             state: "running".into(),
-            provider: PROVIDER.into(),
+            provider: session.provider.as_str().into(),
             audio_device: Some(session.audio_device.clone()),
             version: Some(session.version.clone()),
             message: guard.last_message.clone(),
         },
         None => AiRuntimeStatus {
             state: "stopped".into(),
-            provider: PROVIDER.into(),
+            provider: guard.last_provider.as_str().into(),
             audio_device: None,
             version: None,
             message: guard.last_message.clone(),
@@ -431,6 +546,7 @@ pub fn ai_status() -> AiRuntimeStatus {
 
 fn emit_status(
     app: &AppHandle,
+    provider: AsrProvider,
     state: &str,
     message: impl Into<String>,
     device: Option<String>,
@@ -445,7 +561,7 @@ fn emit_status(
         "ai-scripture-status",
         AiRuntimeStatus {
             state: state.into(),
-            provider: PROVIDER.into(),
+            provider: provider.as_str().into(),
             audio_device: device,
             version,
             message,
@@ -457,9 +573,11 @@ fn emit_status(
 pub async fn ai_start(
     app: AppHandle,
     state: State<'_, AppState>,
+    provider: String,
     audio_device: String,
     version: String,
 ) -> Result<AiRuntimeStatus, String> {
+    let provider = AsrProvider::parse(&provider)?;
     if audio_device.trim().is_empty() {
         return Err("Choose an audio input device.".into());
     }
@@ -471,7 +589,7 @@ pub async fn ai_start(
     {
         return Err("Choose an installed Bible version.".into());
     }
-    let api_key = load_api_key(&state.app_data_dir)?;
+    let api_key = load_api_key(&state.app_data_dir, provider)?;
     let relay = subscribe_feed(&audio_device)?;
     let semantic = semantic_scripture::engine(&state.app_data_dir);
     if semantic.was_prepared() && !semantic.is_ready() {
@@ -489,19 +607,22 @@ pub async fn ai_start(
             drop(relay);
             return Err("AI Scripture is already listening.".into());
         }
-        guard.last_message = "Connecting to Deepgram…".into();
+        guard.last_message = format!("Connecting to {}…", provider.display_name());
+        guard.last_provider = provider;
         guard.session = Some(AiSessionControl {
             id: session_id.clone(),
             stop: stop_tx,
             audio_device: audio_device.clone(),
             version: version.clone(),
+            provider,
         });
     }
 
     emit_status(
         &app,
+        provider,
         "connecting",
-        "Connecting to Deepgram…",
+        format!("Connecting to {}…", provider.display_name()),
         Some(audio_device.clone()),
         Some(version.clone()),
     );
@@ -511,13 +632,16 @@ pub async fn ai_start(
     let task_device = audio_device.clone();
     let task_version = version.clone();
     tauri::async_runtime::spawn(async move {
-        let result = AssertUnwindSafe(run_deepgram_session(
+        let result = AssertUnwindSafe(run_asr_session(
             task_app.clone(),
             bible,
             relay,
             api_key,
-            task_device.clone(),
-            task_version.clone(),
+            AsrSessionConfig {
+                provider,
+                audio_device: task_device.clone(),
+                version: task_version.clone(),
+            },
             stop_rx,
         ))
         .catch_unwind()
@@ -542,9 +666,17 @@ pub async fn ai_start(
         };
         if was_current {
             match result {
-                Ok(()) => emit_status(&task_app, "stopped", "AI Scripture stopped.", None, None),
+                Ok(()) => emit_status(
+                    &task_app,
+                    provider,
+                    "stopped",
+                    "AI Scripture stopped.",
+                    None,
+                    None,
+                ),
                 Err(error) => emit_status(
                     &task_app,
+                    provider,
                     "error",
                     error,
                     Some(task_device),
@@ -556,10 +688,10 @@ pub async fn ai_start(
 
     Ok(AiRuntimeStatus {
         state: "connecting".into(),
-        provider: PROVIDER.into(),
+        provider: provider.as_str().into(),
         audio_device: Some(audio_device),
         version: Some(version),
-        message: "Connecting to Deepgram…".into(),
+        message: format!("Connecting to {}…", provider.display_name()),
     })
 }
 
@@ -695,15 +827,19 @@ async fn spawn_pcm_decoder(relay: &AudioRelay) -> Result<PcmDecoder, String> {
     })
 }
 
-async fn run_deepgram_session(
+async fn run_asr_session(
     app: AppHandle,
     bible: Arc<BibleStore>,
     relay: AudioRelay,
     api_key: String,
-    audio_device: String,
-    version: String,
+    config: AsrSessionConfig,
     mut stop: watch::Receiver<bool>,
 ) -> Result<(), String> {
+    let AsrSessionConfig {
+        provider,
+        audio_device,
+        version,
+    } = config;
     let semantic = semantic_scripture::engine(
         app.path()
             .app_local_data_dir()
@@ -711,14 +847,21 @@ async fn run_deepgram_session(
             .map_err(|error| error.to_string())?
             .as_path(),
     );
-    let mut request = deepgram_url()
-        .into_client_request()
-        .map_err(|e| format!("Could not create the Deepgram request: {e}"))?;
+    let mut request = provider_url(provider).into_client_request().map_err(|e| {
+        format!(
+            "Could not create the {} request: {e}",
+            provider.display_name()
+        )
+    })?;
+    let authorization = match provider {
+        AsrProvider::Deepgram => format!("Token {api_key}"),
+        AsrProvider::AssemblyAi => api_key,
+    };
     request.headers_mut().insert(
         "Authorization",
-        format!("Token {api_key}")
+        authorization
             .parse()
-            .map_err(|_| "Invalid Deepgram API key header")?,
+            .map_err(|_| "Invalid transcription API key header")?,
     );
     let connection = tokio::time::timeout(
         Duration::from_secs(15),
@@ -730,18 +873,21 @@ async fn run_deepgram_session(
     };
     let (mut socket, _) = connection_result
         .map_err(|_| {
-            "Deepgram connection timed out after 15 seconds. Check the network and try again."
-                .to_string()
+            format!(
+                "{} connection timed out after 15 seconds. Check the network and try again.",
+                provider.display_name()
+            )
         })?
-        .map_err(|e| format!("Deepgram connection failed: {e}"))?;
+        .map_err(|e| format!("{} connection failed: {e}", provider.display_name()))?;
 
     let mut relay = Some(relay);
     let mut decoder = spawn_pcm_decoder(relay.as_ref().expect("audio relay initialized")).await?;
     let mut audio_recoveries = 0usize;
     emit_status(
         &app,
+        provider,
         "listening",
-        "Listening for Scripture…",
+        format!("Listening for Scripture via {}…", provider.display_name()),
         Some(audio_device.clone()),
         Some(version.clone()),
     );
@@ -776,6 +922,9 @@ async fn run_deepgram_session(
         recently_suggested,
         generation: detection_generation,
         quote_tx,
+        assemblyai_turn_order: None,
+        assemblyai_partial_words: 0,
+        assemblyai_partial_reference: None,
     };
     let mut audio = vec![0u8; 3200];
 
@@ -803,6 +952,7 @@ async fn run_deepgram_session(
                     audio_recoveries += 1;
                     emit_status(
                         &app,
+                        provider,
                         "connecting",
                         format!(
                             "Recovering transcription audio ({audio_recoveries}/{MAX_AUDIO_RECOVERIES})…"
@@ -821,8 +971,9 @@ async fn run_deepgram_session(
                     relay = Some(replacement);
                     emit_status(
                         &app,
+                        provider,
                         "listening",
-                        "Listening for Scripture…",
+                        format!("Listening for Scripture via {}…", provider.display_name()),
                         Some(audio_device.clone()),
                         Some(version.clone()),
                     );
@@ -830,41 +981,113 @@ async fn run_deepgram_session(
                 }
                 socket.send(Message::Binary(audio[..count].to_vec().into()))
                     .await
-                    .map_err(|e| format!("Could not send audio to Deepgram: {e}"))?;
+                    .map_err(|e| format!("Could not send audio to {}: {e}", provider.display_name()))?;
             }
             incoming = socket.next() => {
                 match incoming {
                     Some(Ok(Message::Text(text))) => {
-                        handle_deepgram_message(
+                        if provider == AsrProvider::AssemblyAi {
+                            if let Some(error) = parse_assemblyai_error(text.as_ref()) {
+                                return Err(format!("AssemblyAI rejected the session: {error}"));
+                            }
+                        }
+                        handle_provider_message(
                             &app,
                             &bible,
                             &detection,
+                            provider,
                             text.as_ref(),
                             &mut pipeline,
                         )?;
                     }
                     Some(Ok(Message::Close(frame))) => {
                         let reason = frame.map(|f| f.reason.to_string()).unwrap_or_else(|| "connection closed".into());
-                        return Err(format!("Deepgram closed the session: {reason}"));
+                        return Err(format!("{} closed the session: {reason}", provider.display_name()));
                     }
                     Some(Ok(_)) => {}
-                    Some(Err(error)) => return Err(format!("Deepgram stream failed: {error}")),
-                    None => return Err("Deepgram ended the transcription session.".into()),
+                    Some(Err(error)) => return Err(format!("{} stream failed: {error}", provider.display_name())),
+                    None => return Err(format!("{} ended the transcription session.", provider.display_name())),
                 }
             }
         }
     }
 
-    let _ = socket
-        .send(Message::Text(r#"{"type":"CloseStream"}"#.into()))
-        .await;
+    // Stop the local producer first so no audio follows the provider's close
+    // command. AssemblyAI finalizes its open turn only after `Terminate`, and
+    // sends that final Turn before `Termination`; keep reading so the last
+    // spoken reference or quotation is not silently discarded.
     decoder.stop().await;
     drop(relay.take());
+    match provider {
+        AsrProvider::Deepgram => {
+            let _ = socket
+                .send(Message::Text(r#"{"type":"CloseStream"}"#.into()))
+                .await;
+        }
+        AsrProvider::AssemblyAi => {
+            let _ = socket
+                .send(Message::Text(r#"{"type":"Terminate"}"#.into()))
+                .await;
+            let drain = async {
+                while let Some(incoming) = socket.next().await {
+                    match incoming {
+                        Ok(Message::Text(text)) => {
+                            let text = text.as_ref();
+                            if assemblyai_message_kind(text).as_deref() == Some("Termination") {
+                                break;
+                            }
+                            if let Some(error) = parse_assemblyai_error(text) {
+                                crate::store::log_msg(
+                                    &app,
+                                    &format!(
+                                        "[ai-scripture] AssemblyAI termination error: {error}"
+                                    ),
+                                );
+                                break;
+                            }
+                            handle_provider_message(
+                                &app,
+                                &bible,
+                                &detection,
+                                provider,
+                                text,
+                                &mut pipeline,
+                            )?;
+                        }
+                        Ok(Message::Close(_)) => break,
+                        Ok(_) => {}
+                        Err(error) => {
+                            crate::store::log_msg(
+                                &app,
+                                &format!(
+                                    "[ai-scripture] AssemblyAI termination drain ended: {error}"
+                                ),
+                            );
+                            break;
+                        }
+                    }
+                }
+                Ok::<(), String>(())
+            };
+            match tokio::time::timeout(Duration::from_secs(5), drain).await {
+                Ok(result) => result?,
+                Err(_) => crate::store::log_msg(
+                    &app,
+                    "[ai-scripture] AssemblyAI did not confirm termination within 5 seconds.",
+                ),
+            }
+            // Give the coalescing quotation worker a bounded chance to process
+            // the final turn before the session's activity guard is dropped.
+            tokio::time::sleep(Duration::from_millis(750)).await;
+        }
+    }
     Ok(())
 }
 
 fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Option<QuoteJob>>) {
     tauri::async_runtime::spawn(async move {
+        let mut previous_semantic_passages = std::collections::HashSet::new();
+        let mut interim_quotes = std::collections::HashSet::new();
         while quote_rx.changed().await.is_ok() {
             let Some(job) = quote_rx.borrow_and_update().clone() else {
                 continue;
@@ -879,6 +1102,7 @@ fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Opt
                     &worker_job.evidence,
                     &worker_detection.output_version,
                     worker_job.asr_confidence,
+                    worker_job.is_interim,
                 )
             })
             .await
@@ -890,8 +1114,14 @@ fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Opt
             // search ran, discard the stale result so it cannot replace a
             // newer auto-staged reference.
             if !worker.active.load(Ordering::Acquire)
-                || worker.generation.load(Ordering::Acquire) != job.generation
+                || (!job.is_interim && worker.generation.load(Ordering::Acquire) != job.generation)
             {
+                continue;
+            }
+            if job.is_interim {
+                if let Some(suggestion) = suggestion {
+                    emit_interim_suggestion_if_new(&worker.app, &mut interim_quotes, suggestion);
+                }
                 continue;
             }
             if suggestion.is_some_and(|suggestion| {
@@ -946,15 +1176,42 @@ fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Opt
                             outcome.diagnostic.reason,
                         ),
                     );
+                    if outcome.matches.is_empty() {
+                        previous_semantic_passages.clear();
+                        continue;
+                    }
+                    let current_passages = outcome
+                        .matches
+                        .iter()
+                        .map(semantic_passage_key)
+                        .collect::<std::collections::HashSet<_>>();
+                    let confirmed_matches = outcome
+                        .matches
+                        .into_iter()
+                        .filter(|found| {
+                            semantic_match_is_stable(found, &previous_semantic_passages)
+                        })
+                        .collect::<Vec<_>>();
+                    previous_semantic_passages = current_passages;
+
+                    if confirmed_matches.is_empty() {
+                        outcome.diagnostic.state = "waiting".into();
+                        outcome.diagnostic.reason = "Possible theme is not stable yet; waiting for the next complete thought to confirm it.".into();
+                        let _ = worker
+                            .app
+                            .emit("ai-scripture-diagnostic", &outcome.diagnostic);
+                        continue;
+                    }
+
                     let group_id = Uuid::new_v4().to_string();
                     // Events are prepended in React, so emit alternatives in
                     // reverse order and leave rank 1 at the top of the group.
-                    for found in outcome.matches.into_iter().rev() {
+                    for found in confirmed_matches.into_iter().rev() {
                         let suggestion = ScriptureSuggestion {
                             id: Uuid::new_v4().to_string(),
                             detection: "paraphrase".into(),
                             confidence: found.confidence,
-                            evidence: job.evidence.clone(),
+                            evidence: job.semantic_text.clone(),
                             verse: found.verse,
                             timestamp: now_ms(),
                             group_id: Some(group_id.clone()),
@@ -972,6 +1229,7 @@ fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Opt
                     }
                 }
                 Ok(Err(error)) => {
+                    previous_semantic_passages.clear();
                     let diagnostic = semantic_scripture::SemanticDiagnostic {
                         state: "error".into(),
                         reason: error.clone(),
@@ -999,6 +1257,41 @@ fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Opt
     });
 }
 
+fn emit_interim_suggestion_if_new(
+    app: &AppHandle,
+    emitted: &mut std::collections::HashSet<String>,
+    suggestion: ScriptureSuggestion,
+) {
+    let key = suggestion_cooldown_key(&suggestion.detection, &suggestion.verse);
+    if emitted.insert(key) {
+        crate::store::log_msg(
+            app,
+            &format!(
+                "[ai-scripture] interim suggestion {} {} {}:{} confidence={:.3}",
+                suggestion.detection,
+                suggestion.verse.book,
+                suggestion.verse.chapter,
+                suggestion.verse.verse,
+                suggestion.confidence,
+            ),
+        );
+        let _ = app.emit("ai-scripture-suggestion", suggestion);
+    }
+}
+
+fn semantic_passage_key(found: &semantic_scripture::SemanticMatch) -> String {
+    format!("{}:{}", found.verse.book, found.verse.chapter)
+}
+
+fn semantic_match_is_stable(
+    found: &semantic_scripture::SemanticMatch,
+    previous_passages: &std::collections::HashSet<String>,
+) -> bool {
+    let exceptionally_strong =
+        found.similarity >= STRONG_SEMANTIC_SIMILARITY && found.margin >= STRONG_SEMANTIC_MARGIN;
+    exceptionally_strong || previous_passages.contains(&semantic_passage_key(found))
+}
+
 fn emit_suggestion_if_new(
     app: &AppHandle,
     recently_suggested: &Mutex<HashMap<String, Instant>>,
@@ -1013,6 +1306,17 @@ fn emit_suggestion_if_new(
     if let std::collections::hash_map::Entry::Vacant(entry) = recent.entry(key) {
         entry.insert(now);
         drop(recent);
+        crate::store::log_msg(
+            app,
+            &format!(
+                "[ai-scripture] suggestion {} {} {}:{} confidence={:.3}",
+                suggestion.detection,
+                suggestion.verse.book,
+                suggestion.verse.chapter,
+                suggestion.verse.verse,
+                suggestion.confidence,
+            ),
+        );
         let _ = app.emit("ai-scripture-suggestion", suggestion);
         true
     } else {
@@ -1027,14 +1331,19 @@ fn suggestion_cooldown_key(detection: &str, verse: &Verse) -> String {
     )
 }
 
-fn handle_deepgram_message(
+fn handle_provider_message(
     app: &AppHandle,
     bible: &BibleStore,
     detection: &DetectionConfig,
+    provider: AsrProvider,
     json: &str,
     pipeline: &mut DetectionPipeline,
 ) -> Result<(), String> {
-    let Some(provider_transcript) = parse_deepgram_transcript(json) else {
+    let provider_transcript = match provider {
+        AsrProvider::Deepgram => parse_deepgram_transcript(json),
+        AsrProvider::AssemblyAi => parse_assemblyai_transcript(json),
+    };
+    let Some(provider_transcript) = provider_transcript else {
         return Ok(());
     };
     let transcript = provider_transcript.text.trim();
@@ -1043,8 +1352,12 @@ fn handle_deepgram_message(
     }
     let is_final = provider_transcript.is_final;
     let confidence = provider_transcript.confidence;
+    let turn_order = provider_transcript.turn_order;
     let segment = TranscriptSegment {
-        id: Uuid::new_v4().to_string(),
+        id: provider_transcript
+            .turn_order
+            .map(|turn| format!("assemblyai-turn-{turn}"))
+            .unwrap_or_else(|| Uuid::new_v4().to_string()),
         text: transcript.to_string(),
         is_final,
         confidence,
@@ -1052,8 +1365,16 @@ fn handle_deepgram_message(
     };
     let _ = app.emit("ai-scripture-transcript", &segment);
     if !is_final {
+        if provider == AsrProvider::AssemblyAi {
+            handle_assemblyai_partial(
+                app, bible, detection, pipeline, transcript, confidence, turn_order,
+            );
+        }
         return Ok(());
     }
+    pipeline.assemblyai_turn_order = None;
+    pipeline.assemblyai_partial_words = 0;
+    pipeline.assemblyai_partial_reference = None;
 
     let now = Instant::now();
     pipeline.context.push_back((now, transcript.to_string()));
@@ -1088,37 +1409,42 @@ fn handle_deepgram_message(
     // Explicit references are deterministic and take the fast path. Quotation
     // retrieval can scan every installed translation and therefore runs in a
     // coalescing background worker instead of blocking audio/WebSocket I/O.
-    let suggestion = detect_reference(&reference_text, &detection.books)
-        .and_then(|reference| {
-            bible
-                .get_verse(
-                    &reference.book,
-                    reference.chapter,
-                    reference.verse,
-                    &detection.output_version,
-                )
-                .ok()
-                .flatten()
-        })
-        .map(|verse| ScriptureSuggestion {
-            id: Uuid::new_v4().to_string(),
-            detection: "reference".into(),
-            confidence: (0.92 + confidence * 0.07).clamp(0.0, 0.99),
-            evidence: transcript.to_string(),
-            verse,
-            timestamp: now_ms(),
-            group_id: None,
-            rank: None,
-            passage_start: None,
-            passage_end: None,
-            similarity: None,
-            margin: None,
-        });
-
-    if suggestion.is_some_and(|suggestion| {
-        emit_suggestion_if_new(app, &pipeline.recently_suggested, suggestion)
-    }) {
-        return Ok(());
+    if let Some(reference) = detect_reference(&reference_text, &detection.books) {
+        let mut emitted = false;
+        // Events are prepended in React. Emit a range in reverse so its first
+        // verse remains the top card and is the only verse eligible for
+        // automatic staging; the remaining range verses stay manual.
+        for verse in verses_for_reference(bible, &reference, &detection.output_version)
+            .into_iter()
+            .rev()
+        {
+            let confidence = if verse.verse == reference.verse {
+                (0.92 + confidence * 0.07).clamp(0.0, 0.99)
+            } else {
+                MAX_SHORT_QUOTE_CONFIDENCE
+            };
+            emitted |= emit_suggestion_if_new(
+                app,
+                &pipeline.recently_suggested,
+                ScriptureSuggestion {
+                    id: Uuid::new_v4().to_string(),
+                    detection: "reference".into(),
+                    confidence,
+                    evidence: transcript.to_string(),
+                    verse,
+                    timestamp: now_ms(),
+                    group_id: None,
+                    rank: None,
+                    passage_start: Some(reference.verse),
+                    passage_end: reference.verse_end,
+                    similarity: None,
+                    margin: None,
+                },
+            );
+        }
+        if emitted {
+            return Ok(());
+        }
     }
     pipeline.quote_tx.send_replace(Some(QuoteJob {
         generation: current_generation,
@@ -1127,8 +1453,138 @@ fn handle_deepgram_message(
         semantic_segments,
         evidence: transcript.to_string(),
         asr_confidence: confidence,
+        is_interim: false,
     }));
     Ok(())
+}
+
+fn handle_assemblyai_partial(
+    app: &AppHandle,
+    bible: &BibleStore,
+    detection: &DetectionConfig,
+    pipeline: &mut DetectionPipeline,
+    transcript: &str,
+    asr_confidence: f32,
+    turn_order: Option<u64>,
+) {
+    if pipeline.assemblyai_turn_order != turn_order {
+        pipeline.assemblyai_turn_order = turn_order;
+        pipeline.assemblyai_partial_words = 0;
+        pipeline.assemblyai_partial_reference = None;
+    }
+
+    let words = quote_tokens(transcript).len();
+    if words < pipeline.assemblyai_partial_words {
+        // A provider revision shortened the turn. Measure the next detection
+        // interval from the revised snapshot rather than waiting indefinitely.
+        pipeline.assemblyai_partial_words = words;
+        pipeline.assemblyai_partial_reference = None;
+        return;
+    }
+    if words
+        < pipeline
+            .assemblyai_partial_words
+            .saturating_add(ASSEMBLYAI_PARTIAL_DETECTION_STEP_WORDS)
+    {
+        return;
+    }
+    pipeline.assemblyai_partial_words = words;
+
+    if let Some(reference) = detect_reference(transcript, &detection.books) {
+        let key = format!(
+            "{}:{}:{}:{}",
+            reference.book,
+            reference.chapter,
+            reference.verse,
+            reference.verse_end.unwrap_or(reference.verse)
+        );
+        if confirm_interim_reference(&mut pipeline.assemblyai_partial_reference, Some(key)) {
+            for verse in verses_for_reference(bible, &reference, &detection.output_version)
+                .into_iter()
+                .rev()
+            {
+                let suggestion = ScriptureSuggestion {
+                    id: Uuid::new_v4().to_string(),
+                    detection: "reference".into(),
+                    // Interim references are useful immediately but remain
+                    // manual until the provider confirms the final turn.
+                    confidence: (0.82 + asr_confidence * 0.07)
+                        .clamp(0.0, MAX_SHORT_QUOTE_CONFIDENCE),
+                    evidence: latest_word_suffix(transcript, MAX_SEMANTIC_CONTEXT_WORDS),
+                    verse,
+                    timestamp: now_ms(),
+                    group_id: None,
+                    rank: None,
+                    passage_start: Some(reference.verse),
+                    passage_end: reference.verse_end,
+                    similarity: None,
+                    margin: None,
+                };
+                crate::store::log_msg(
+                    app,
+                    &format!(
+                        "[ai-scripture] interim suggestion reference {} {}:{} confidence={:.3}",
+                        suggestion.verse.book,
+                        suggestion.verse.chapter,
+                        suggestion.verse.verse,
+                        suggestion.confidence,
+                    ),
+                );
+                let _ = app.emit("ai-scripture-suggestion", suggestion);
+            }
+        }
+    } else {
+        confirm_interim_reference(&mut pipeline.assemblyai_partial_reference, None);
+    }
+
+    pipeline.quote_tx.send_replace(Some(QuoteJob {
+        generation: pipeline.generation.load(Ordering::Acquire),
+        rolling_text: transcript.to_string(),
+        semantic_text: String::new(),
+        semantic_segments: 0,
+        evidence: latest_word_suffix(transcript, MAX_SEMANTIC_CONTEXT_WORDS),
+        asr_confidence,
+        is_interim: true,
+    }));
+}
+
+fn latest_word_suffix(text: &str, limit: usize) -> String {
+    let words = text.split_whitespace().collect::<Vec<_>>();
+    words[words.len().saturating_sub(limit)..].join(" ")
+}
+
+fn verses_for_reference(
+    bible: &BibleStore,
+    reference: &crate::ai_detection::ScriptureReference,
+    version: &str,
+) -> Vec<Verse> {
+    let requested_end = reference.verse_end.unwrap_or(reference.verse);
+    let end = requested_end.min(reference.verse + MAX_SPOKEN_REFERENCE_RANGE - 1);
+    (reference.verse..=end)
+        .filter_map(|verse| {
+            bible
+                .get_verse(&reference.book, reference.chapter, verse, version)
+                .ok()
+                .flatten()
+        })
+        .collect()
+}
+
+fn confirm_interim_reference(state: &mut Option<(String, u8)>, key: Option<String>) -> bool {
+    let Some(key) = key else {
+        *state = None;
+        return false;
+    };
+    match state {
+        Some((previous, confirmations)) if previous == &key => {
+            *confirmations = confirmations.saturating_add(1);
+            *confirmations == 2
+        }
+        _ => {
+            *state = Some((key, 1));
+            false
+        }
+    }
 }
 
 fn parse_deepgram_transcript(json: &str) -> Option<ProviderTranscript> {
@@ -1146,7 +1602,49 @@ fn parse_deepgram_transcript(json: &str) -> Option<ProviderTranscript> {
         text: alternative.transcript,
         is_final: response.is_final.unwrap_or(false),
         confidence: alternative.confidence.unwrap_or(0.0).clamp(0.0, 1.0),
+        turn_order: None,
     })
+}
+
+fn parse_assemblyai_transcript(json: &str) -> Option<ProviderTranscript> {
+    let response: AssemblyAiResponse = serde_json::from_str(json).ok()?;
+    if response.kind.as_deref() != Some("Turn") {
+        return None;
+    }
+    let words = response.words.unwrap_or_default();
+    let confidence = if words.is_empty() {
+        0.0
+    } else {
+        words
+            .iter()
+            .map(|word| word.confidence.unwrap_or(0.0).clamp(0.0, 1.0))
+            .sum::<f32>()
+            / words.len() as f32
+    };
+    Some(ProviderTranscript {
+        text: response.transcript.unwrap_or_default(),
+        // Universal-3.6 Pro sends one fully formatted final for each turn.
+        // Requiring formatting also avoids double-processing if this adapter
+        // is later used with a model that emits unformatted and formatted
+        // end-of-turn revisions.
+        is_final: response.end_of_turn.unwrap_or(false)
+            && response.turn_is_formatted.unwrap_or(true),
+        confidence,
+        turn_order: response.turn_order,
+    })
+}
+
+fn parse_assemblyai_error(json: &str) -> Option<String> {
+    let response: AssemblyAiResponse = serde_json::from_str(json).ok()?;
+    (response.kind.as_deref() == Some("Error")).then(|| {
+        response
+            .error
+            .unwrap_or_else(|| "Unknown provider error".into())
+    })
+}
+
+fn assemblyai_message_kind(json: &str) -> Option<String> {
+    serde_json::from_str::<AssemblyAiResponse>(json).ok()?.kind
 }
 
 fn detect_direct_quote(
@@ -1155,27 +1653,22 @@ fn detect_direct_quote(
     evidence: &str,
     output_version: &str,
     asr_confidence: f32,
+    is_interim: bool,
 ) -> Option<ScriptureSuggestion> {
-    let query_tokens = quote_tokens(rolling_text);
-    if query_tokens.len() < MIN_DIRECT_QUOTE_WORDS {
+    if quote_tokens(rolling_text).len() < MIN_DIRECT_QUOTE_WORDS {
         return None;
     }
-    let query = query_tokens
-        .iter()
-        .rev()
-        .take(24)
-        .rev()
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(" ");
-    let (matched_verse, score) = bible
-        .search_quote_candidates(&query)
-        .ok()?
-        .into_iter()
-        .filter_map(|verse| {
-            direct_quote_match_score(rolling_text, &verse.text).map(|score| (verse, score))
-        })
-        .max_by(|(_, a), (_, b)| a.total_cmp(b))?;
+    // Search the newest finalized turn first. This keeps a long rolling sermon
+    // window from diluting candidate retrieval when the speaker moves directly
+    // into a sustained quotation. Fall back to the rolling suffix to recover
+    // quotations split across ASR turn boundaries.
+    let evidence_query = quote_search_query(evidence);
+    let rolling_query = quote_search_query(rolling_text);
+    let mut best = best_direct_quote_candidate(bible, &evidence_query, evidence);
+    if best.is_none() && rolling_query != evidence_query {
+        best = best_direct_quote_candidate(bible, &rolling_query, rolling_text);
+    }
+    let (matched_verse, score) = best?;
     let verse = bible
         .get_verse(
             &matched_verse.book,
@@ -1185,7 +1678,10 @@ fn detect_direct_quote(
         )
         .ok()
         .flatten()?;
-    let confidence = quote_confidence(score, asr_confidence, quote_tokens(evidence).len());
+    let mut confidence = quote_confidence(score, asr_confidence, quote_tokens(evidence).len());
+    if is_interim {
+        confidence = confidence.min(MAX_SHORT_QUOTE_CONFIDENCE);
+    }
     Some(ScriptureSuggestion {
         id: Uuid::new_v4().to_string(),
         detection: "quote".into(),
@@ -1200,6 +1696,36 @@ fn detect_direct_quote(
         similarity: None,
         margin: None,
     })
+}
+
+fn quote_search_query(text: &str) -> String {
+    let tokens = quote_tokens(text);
+    tokens
+        .iter()
+        .rev()
+        .take(24)
+        .rev()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn best_direct_quote_candidate(
+    bible: &BibleStore,
+    query: &str,
+    scoring_text: &str,
+) -> Option<(Verse, f32)> {
+    if quote_tokens(query).len() < MIN_DIRECT_QUOTE_WORDS {
+        return None;
+    }
+    bible
+        .search_quote_candidates(query)
+        .ok()?
+        .into_iter()
+        .filter_map(|verse| {
+            direct_quote_match_score(scoring_text, &verse.text).map(|score| (verse, score))
+        })
+        .max_by(|(_, left), (_, right)| left.total_cmp(right))
 }
 
 fn quote_confidence(score: f32, asr_confidence: f32, evidence_words: usize) -> f32 {
@@ -1282,11 +1808,116 @@ mod tests {
     }
 
     #[test]
+    fn semantic_themes_require_strength_or_repeated_passage_support() {
+        let found = semantic_scripture::SemanticMatch {
+            verse: Verse {
+                book: "Daniel".into(),
+                chapter: 6,
+                verse: 11,
+                text: "Daniel praying and making supplication".into(),
+                version: "KJV".into(),
+                split_index: None,
+                total_splits: None,
+                score: None,
+            },
+            confidence: 0.60,
+            similarity: 0.754,
+            margin: 0.048,
+            rank: 1,
+            passage_start: 11,
+            passage_end: 11,
+        };
+        assert!(!semantic_match_is_stable(
+            &found,
+            &std::collections::HashSet::new()
+        ));
+        assert!(semantic_match_is_stable(
+            &found,
+            &std::collections::HashSet::from(["Daniel:6".into()])
+        ));
+
+        let strong = semantic_scripture::SemanticMatch {
+            similarity: STRONG_SEMANTIC_SIMILARITY,
+            margin: STRONG_SEMANTIC_MARGIN,
+            ..found
+        };
+        assert!(semantic_match_is_stable(
+            &strong,
+            &std::collections::HashSet::new()
+        ));
+    }
+
+    #[test]
+    fn assemblyai_interim_references_require_two_consistent_snapshots() {
+        let mut state = None;
+        assert!(!confirm_interim_reference(
+            &mut state,
+            Some("Psalms:149:6".into())
+        ));
+        assert!(confirm_interim_reference(
+            &mut state,
+            Some("Psalms:149:6".into())
+        ));
+        assert!(!confirm_interim_reference(
+            &mut state,
+            Some("Ephesians:6:17".into())
+        ));
+        assert!(confirm_interim_reference(
+            &mut state,
+            Some("Ephesians:6:17".into())
+        ));
+        assert!(!confirm_interim_reference(&mut state, None));
+        assert!(state.is_none());
+    }
+
+    #[test]
+    fn interim_evidence_is_bounded_to_the_latest_words() {
+        assert_eq!(
+            latest_word_suffix("one two three four five", 3),
+            "three four five"
+        );
+        assert_eq!(latest_word_suffix("one two", 3), "one two");
+    }
+
+    #[test]
     fn deepgram_url_uses_separate_encoded_bible_keyterms() {
         let url = deepgram_url();
         assert!(url.contains("&keyterm=First%20Thessalonians"));
         assert!(url.contains("&keyterm=Ecclesiastes"));
         assert!(!url.contains("keyterm=First Thessalonians"));
         assert_eq!(url.matches("&keyterm=").count(), BIBLE_KEYTERMS.len());
+    }
+
+    #[test]
+    fn assemblyai_turns_normalize_to_provider_transcripts() {
+        let transcript = parse_assemblyai_transcript(
+            r#"{"type":"Turn","turn_order":7,"turn_is_formatted":true,"transcript":"John 3:16","end_of_turn":true,"words":[{"text":"John","confidence":0.9},{"text":"3:16","confidence":0.8}]}"#,
+        )
+        .expect("turn message should produce a transcript");
+        assert_eq!(transcript.text, "John 3:16");
+        assert!(transcript.is_final);
+        assert_eq!(transcript.turn_order, Some(7));
+        assert!((transcript.confidence - 0.85).abs() < f32::EPSILON);
+        assert!(!parse_assemblyai_transcript(
+            r#"{"type":"Turn","turn_order":7,"turn_is_formatted":false,"transcript":"john 3 16","end_of_turn":true}"#
+        )
+        .expect("unformatted turn should remain an interim revision")
+        .is_final);
+        assert!(parse_assemblyai_transcript(r#"{"type":"Begin"}"#).is_none());
+        assert!(parse_assemblyai_transcript("not json").is_none());
+    }
+
+    #[test]
+    fn assemblyai_url_requests_pcm_english_streaming_and_encoded_keyterms() {
+        let url = assemblyai_url();
+        assert!(url.starts_with(ASSEMBLYAI_BASE_URL));
+        assert!(url.contains("speech_model=universal-3-6-pro"));
+        assert!(url.contains("mode=min_latency"));
+        assert!(url.contains("encoding=pcm_s16le"));
+        assert!(url.contains("language_codes=%5B%22en%22%5D"));
+        assert!(url.contains("min_turn_silence=300"));
+        assert!(url.contains("max_turn_silence=900"));
+        assert!(url.contains("keyterms_prompt=%5B%22Psalms%22"));
+        assert!(!url.contains("First Thessalonians"));
     }
 }

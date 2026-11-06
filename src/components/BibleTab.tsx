@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  BookOpen, ChevronUp, ChevronDown, Clock, Plus, Zap, List, Copy, Check,
+  BookOpen, BrainCircuit, ChevronUp, ChevronDown, Clock, Plus, Zap, List, Copy, Check,
   ChevronLeft, ChevronRight, Eye, Search,
 } from "lucide-react";
 import { useAppStore } from "../store";
@@ -11,6 +11,7 @@ import { Button, IconButton, SearchField, EmptyState } from "./ui";
 import { displayItemLabel } from "../utils";
 import { tierCapabilities } from "../system/tiers";
 import type { DisplayItem, Verse } from "../types";
+import { AiScriptureTab } from "./AiScriptureTab";
 
 interface BibleTabProps {
   onStage: (item: DisplayItem) => void;
@@ -63,6 +64,7 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
   });
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [aiOpen, setAiOpen] = useState(false);
 
   // Ref to track if we are programmatically updating dropdowns to avoid loops
   const isSyncingRef = useRef(false);
@@ -326,6 +328,19 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
           translation.
         </p>
       </div>
+
+      <hr className="border-console-border" />
+
+      <section className="rounded-lg border border-violet-900/50 bg-violet-950/10 p-3">
+        <button
+          onClick={() => setAiOpen((open) => !open)}
+          className="w-full flex items-center justify-between text-xs font-bold text-console-text-muted uppercase tracking-widest hover:text-console-text transition-colors"
+        >
+          <span className="flex items-center gap-1.5"><BrainCircuit size={11} />Live Scripture Assistant</span>
+          {aiOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+        </button>
+        {aiOpen && <div className="mt-3"><AiScriptureTab onStage={onStage} /></div>}
+      </section>
 
       <hr className="border-console-border" />
 

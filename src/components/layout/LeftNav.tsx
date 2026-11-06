@@ -2,7 +2,7 @@ import React from "react";
 import {
   BookOpen, CalendarDays, Image as ImageIcon, Layers, Mic, Monitor,
   MonitorSmartphone, Settings, Timer, Zap, Paintbrush, PanelLeftClose, PanelLeftOpen, Video,
-  CircleDot, Radio, Gauge, LayoutGrid, BrainCircuit,
+  CircleDot, Radio, Gauge, LayoutGrid,
 } from "lucide-react";
 import { useAppStore } from "../../store";
 import { tabAllowed, tierCapabilities } from "../../system/tiers";
@@ -28,7 +28,6 @@ const GROUPS: NavGroup[] = [
     label: "Content",
     entries: [
       { id: "bible", label: "Scripture", icon: BookOpen, tab: "bible", shortcut: "F1" },
-      { id: "ai-scripture", label: "AI Scripture", icon: BrainCircuit, tab: "ai-scripture" },
       { id: "songs", label: "Songs", icon: Mic, tab: "songs", shortcut: "F2" },
       { id: "media", label: "Media", icon: ImageIcon, tab: "media", shortcut: "F3" },
       { id: "studio", label: "Presentations", icon: Layers, tab: "studio", shortcut: "F4" },

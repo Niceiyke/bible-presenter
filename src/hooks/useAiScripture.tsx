@@ -6,6 +6,7 @@ import { useAppStore } from "../store";
 import type { Verse } from "../types";
 
 export const AI_AUTO_STAGE_CONFIDENCE = 0.9;
+export type AiProvider = "deepgram" | "assemblyai";
 
 export interface AiRuntimeStatus {
   state: "stopped" | "connecting" | "running" | "listening" | "error";
@@ -49,6 +50,8 @@ export function shouldAutoStageSuggestion(suggestion: ScriptureSuggestion): bool
 
 interface AiScriptureContextValue {
   status: AiRuntimeStatus;
+  provider: AiProvider;
+  setProvider: (provider: AiProvider) => void;
   transcript: TranscriptSegment[];
   interim: TranscriptSegment | null;
   suggestions: ScriptureSuggestion[];
@@ -81,11 +84,19 @@ export function AiScriptureProvider({
   onStageVerse: (verse: Verse) => Promise<boolean>;
 }) {
   const [status, setStatus] = useState<AiRuntimeStatus>(STOPPED);
+  const [provider, setProviderState] = useState<AiProvider>(() => (
+    localStorage.getItem("pref_aiProvider") === "assemblyai" ? "assemblyai" : "deepgram"
+  ));
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
   const [interim, setInterim] = useState<TranscriptSegment | null>(null);
   const [suggestions, setSuggestions] = useState<ScriptureSuggestion[]>([]);
   const onStageVerseRef = useRef(onStageVerse);
   const autoStagedSuggestionIds = useRef(new Set<string>());
+
+  const setProvider = useCallback((next: AiProvider) => {
+    setProviderState(next);
+    localStorage.setItem("pref_aiProvider", next);
+  }, []);
 
   useEffect(() => {
     onStageVerseRef.current = onStageVerse;
@@ -115,7 +126,18 @@ export function AiScriptureProvider({
       listen<ScriptureSuggestion>("ai-scripture-suggestion", (event) => {
         if (!mounted) return;
         const suggestion = event.payload;
-        setSuggestions((current) => [suggestion, ...current].slice(0, 30));
+        // AssemblyAI can surface a manual interim match before its formatted
+        // final turn. Replace the same canonical card instead of showing an
+        // interim/final duplicate; different detection paths remain distinct.
+        setSuggestions((current) => [
+          suggestion,
+          ...current.filter((existing) => !(
+            existing.detection === suggestion.detection
+            && existing.verse.book === suggestion.verse.book
+            && existing.verse.chapter === suggestion.verse.chapter
+            && existing.verse.verse === suggestion.verse.verse
+          )),
+        ].slice(0, 30));
         if (!shouldAutoStageSuggestion(suggestion) || autoStagedSuggestionIds.current.has(suggestion.id)) return;
 
         // Event registration can briefly overlap during development remounts.
@@ -151,9 +173,9 @@ export function AiScriptureProvider({
   }, []);
 
   const start = useCallback(async (audioDevice: string, version: string) => {
-    const next = await invoke<AiRuntimeStatus>("ai_start", { audioDevice, version });
+    const next = await invoke<AiRuntimeStatus>("ai_start", { audioDevice, version, provider });
     setStatus(next);
-  }, []);
+  }, [provider]);
 
   const stop = useCallback(async () => {
     await invoke("ai_stop");
@@ -169,8 +191,8 @@ export function AiScriptureProvider({
   }, []);
 
   const value = useMemo<AiScriptureContextValue>(
-    () => ({ status, transcript, interim, suggestions, start, stop, clearSession }),
-    [status, transcript, interim, suggestions, start, stop, clearSession],
+    () => ({ status, provider, setProvider, transcript, interim, suggestions, start, stop, clearSession }),
+    [status, provider, setProvider, transcript, interim, suggestions, start, stop, clearSession],
   );
 
   return <AiScriptureContext.Provider value={value}>{children}</AiScriptureContext.Provider>;

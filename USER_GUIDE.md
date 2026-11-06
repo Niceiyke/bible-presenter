@@ -32,9 +32,9 @@ In **Presentations**, choose **Import PPTX**. Wordlyte asks desktop Microsoft Po
 
 ## AI Scripture Assistant (beta)
 
-Open **AI Scripture**, enter a church-owned Deepgram API key, choose the mixer or microphone input, and choose the translation used for suggestion cards. Select **Start listening** only after obtaining any consent required by your church and local law.
+Open **Settings → AI Scripture** to choose Deepgram or AssemblyAI and save the church-owned API key for that provider. Then return to **Scripture**, expand **Live Scripture Assistant**, choose the mixer or microphone input and translation, and select **Start listening** only after obtaining any consent required by your church and local law.
 
-- Audio and transcript data are sent to Deepgram while listening. Stop listening when transcription is no longer needed.
+- Audio and transcript data are sent to the selected provider while listening. Stop listening when transcription is no longer needed. Provider keys are stored separately with Windows DPAPI and are never included in backups.
 - The API key is encrypted with Windows DPAPI for the current Windows user. It is excluded from Wordlyte backups.
 - The assistant detects spoken references and close direct quotations in English. Select **Prepare** under Local paraphrase matching to download the small local model once and load Wordlyte's compact index of installed English Bible text. Preparation runs in the background and is not required for normal projection, references, or quotations.
 - A paraphrased thought may produce up to three amber **Possible theme** cards. Adjacent high-scoring verses are shown as a passage signal, but **Stage** always uses the strongest verse printed on that card. Every possible theme remains manual-only.

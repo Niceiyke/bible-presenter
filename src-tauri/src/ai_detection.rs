@@ -1,12 +1,16 @@
 use std::collections::HashMap;
 
 pub(crate) const MIN_DIRECT_QUOTE_WORDS: usize = 5;
+const EMBEDDED_QUOTE_WINDOW_WORDS: usize = 8;
+const REPEATED_PHRASE_WORDS: usize = 4;
+const MIN_QUOTE_CONTENT_WORDS: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptureReference {
     pub book: String,
     pub chapter: i32,
     pub verse: i32,
+    pub verse_end: Option<i32>,
 }
 
 fn tokenize(text: &str) -> Vec<String> {
@@ -101,13 +105,21 @@ fn parse_number(tokens: &[String], start: usize) -> Option<(i32, usize)> {
     let mut index = start;
     let mut value = 0;
     let mut consumed = false;
+    let mut used_hundred = false;
     while index < tokens.len() {
         if tokens[index] == "and" && consumed {
-            index += 1;
-            continue;
+            // "and" continues a single number only after a hundreds value
+            // ("one hundred and five"). In "verses eleven and twelve" it
+            // separates two verse numbers and must remain unconsumed.
+            if used_hundred {
+                index += 1;
+                continue;
+            }
+            break;
         }
         if tokens[index] == "hundred" && consumed {
             value = value.max(1) * 100;
+            used_hundred = true;
             index += 1;
             continue;
         }
@@ -167,6 +179,7 @@ pub fn detect_reference(text: &str, books: &[String]) -> Option<ScriptureReferen
                                 book: canonical.clone(),
                                 chapter,
                                 verse,
+                                verse_end: None,
                             };
                             if latest
                                 .as_ref()
@@ -186,22 +199,44 @@ pub fn detect_reference(text: &str, books: &[String]) -> Option<ScriptureReferen
                 continue;
             };
             index = next;
-            if tokens
-                .get(index)
+            // Natural speech often inserts a conjunction between chapter and
+            // verse ("Hebrews chapter 2 and verse 1"). Treat it as filler only
+            // when an explicit verse marker follows, so compact references and
+            // hard negatives retain their existing behavior.
+            if tokens.get(index).is_some_and(|token| token == "and")
+                && tokens
+                    .get(index + 1)
+                    .is_some_and(|token| token == "verse" || token == "verses")
+            {
+                index += 1;
+            }
+            let verse_marker = tokens.get(index).cloned();
+            if verse_marker
+                .as_deref()
                 .is_some_and(|token| token == ":" || token == "verse" || token == "verses")
             {
                 index += 1;
             } else {
                 continue;
             }
-            let Some((verse, _)) = parse_number(&tokens, index) else {
+            let Some((verse, verse_next)) = parse_number(&tokens, index) else {
                 continue;
             };
+            let verse_end = tokens.get(verse_next).and_then(|separator| {
+                let is_range = separator == "-"
+                    || separator == "to"
+                    || (separator == "and" && verse_marker.as_deref() == Some("verses"));
+                is_range
+                    .then(|| parse_number(&tokens, verse_next + 1).map(|(end, _)| end))
+                    .flatten()
+                    .filter(|end| *end >= verse)
+            });
             if chapter > 0 && verse > 0 {
                 let candidate = ScriptureReference {
                     book: canonical.clone(),
                     chapter,
                     verse,
+                    verse_end,
                 };
                 if latest
                     .as_ref()
@@ -234,6 +269,17 @@ pub(crate) fn quote_tokens(text: &str) -> Vec<String> {
         .collect()
 }
 
+pub(crate) fn has_repeated_phrase(text: &str) -> bool {
+    let tokens = quote_tokens(text);
+    if tokens.len() < REPEATED_PHRASE_WORDS * 2 {
+        return false;
+    }
+    let mut seen = std::collections::HashSet::new();
+    tokens
+        .windows(REPEATED_PHRASE_WORDS)
+        .any(|phrase| !seen.insert(phrase.join(" ")))
+}
+
 fn lcs_len(left: &[String], right: &[String]) -> usize {
     let mut previous = vec![0usize; right.len() + 1];
     for a in left {
@@ -250,20 +296,139 @@ fn lcs_len(left: &[String], right: &[String]) -> usize {
     previous[right.len()]
 }
 
-fn direct_quote_score(spoken: &str, verse: &str) -> f32 {
-    let spoken = quote_tokens(spoken);
-    let verse = quote_tokens(verse);
+fn is_quote_content_word(token: &str) -> bool {
+    !matches!(
+        token,
+        "a" | "all"
+            | "also"
+            | "an"
+            | "and"
+            | "any"
+            | "are"
+            | "as"
+            | "at"
+            | "be"
+            | "been"
+            | "but"
+            | "by"
+            | "can"
+            | "could"
+            | "did"
+            | "do"
+            | "does"
+            | "for"
+            | "from"
+            | "he"
+            | "her"
+            | "him"
+            | "his"
+            | "how"
+            | "i"
+            | "if"
+            | "in"
+            | "into"
+            | "is"
+            | "it"
+            | "its"
+            | "like"
+            | "may"
+            | "me"
+            | "might"
+            | "must"
+            | "my"
+            | "nor"
+            | "not"
+            | "of"
+            | "on"
+            | "or"
+            | "our"
+            | "shall"
+            | "she"
+            | "should"
+            | "so"
+            | "that"
+            | "the"
+            | "their"
+            | "them"
+            | "then"
+            | "there"
+            | "they"
+            | "this"
+            | "to"
+            | "too"
+            | "us"
+            | "was"
+            | "were"
+            | "what"
+            | "when"
+            | "which"
+            | "who"
+            | "will"
+            | "with"
+            | "would"
+            | "you"
+            | "your"
+    )
+}
+
+fn content_words(tokens: &[String]) -> Vec<String> {
+    tokens
+        .iter()
+        .filter(|token| is_quote_content_word(token))
+        .cloned()
+        .collect()
+}
+
+fn content_overlap(spoken: &[String], verse: &[String]) -> usize {
+    let mut verse_counts: HashMap<&str, usize> = HashMap::new();
+    for token in verse.iter().filter(|token| is_quote_content_word(token)) {
+        *verse_counts.entry(token.as_str()).or_default() += 1;
+    }
+    spoken
+        .iter()
+        .filter(|token| is_quote_content_word(token))
+        .filter(|token| {
+            let Some(count) = verse_counts.get_mut(token.as_str()) else {
+                return false;
+            };
+            if *count == 0 {
+                return false;
+            }
+            *count -= 1;
+            true
+        })
+        .count()
+}
+
+fn longest_contiguous_run(spoken: &[String], verse: &[String]) -> usize {
+    let mut longest = 0;
+    for start in 0..spoken.len() {
+        for verse_start in 0..verse.len() {
+            let mut length = 0;
+            while start + length < spoken.len()
+                && verse_start + length < verse.len()
+                && spoken[start + length] == verse[verse_start + length]
+            {
+                length += 1;
+            }
+            longest = longest.max(length);
+        }
+    }
+    longest
+}
+
+fn token_quote_score(spoken: &[String], verse: &[String]) -> f32 {
     if spoken.len() < MIN_DIRECT_QUOTE_WORDS || verse.len() < MIN_DIRECT_QUOTE_WORDS {
         return 0.0;
     }
     let denominator = spoken.len().min(verse.len()) as f32;
-    let ordered = lcs_len(&spoken, &verse) as f32 / denominator;
+    let ordered = lcs_len(spoken, verse) as f32 / denominator;
     let mut verse_counts: HashMap<&str, usize> = HashMap::new();
-    for token in &verse {
+    for token in verse {
         *verse_counts.entry(token).or_default() += 1;
     }
     let mut overlap = 0usize;
-    for token in &spoken {
+    for token in spoken {
         if let Some(count) = verse_counts.get_mut(token.as_str()) {
             if *count > 0 {
                 *count -= 1;
@@ -277,8 +442,62 @@ fn direct_quote_score(spoken: &str, verse: &str) -> f32 {
     // later verses that repeat it inside a longer sentence. Non-prefix quotes
     // remain eligible; this small tie-break only resolves otherwise identical
     // lexical scores (for example Psalm 24:1 vs. 1 Corinthians 10:26).
-    let starts_verse = verse.starts_with(&spoken);
+    let starts_verse = verse.starts_with(spoken);
     base * if starts_verse { 1.0 } else { 0.98 }
+}
+
+fn quote_alignment_is_strong(spoken: &[String], verse: &[String]) -> bool {
+    let content = content_overlap(spoken, verse);
+    if content < MIN_QUOTE_CONTENT_WORDS {
+        return false;
+    }
+
+    let contiguous = longest_contiguous_run(spoken, verse);
+    let spoken_content = content_words(spoken);
+    let verse_content = content_words(verse);
+    let ordered_content = lcs_len(&spoken_content, &verse_content);
+
+    // Short quotations may be nearly exact while differing only by ASR or
+    // possessive punctuation (for example, "the earth is the Lord").
+    let nearly_exact_short = spoken.len() <= 8
+        && contiguous >= spoken.len().saturating_sub(1)
+        && content >= MIN_QUOTE_CONTENT_WORDS;
+
+    // Longer quotations need an unmistakable phrase anchor. This prevents
+    // common words from making unrelated commentary look like a quotation.
+    let strong_phrase = contiguous >= 5 && content >= 3;
+
+    // ASR can substitute a word inside an embedded quotation. Four exact
+    // words are sufficient only when at least three meaningful words also
+    // agree, as in "what manner of man" from James 1:24.
+    let embedded_phrase = contiguous >= 4 && content >= 3 && ordered_content >= 3;
+
+    // Permit a heavily punctuated/ASR-resegmented long quotation when many
+    // meaningful words remain in order, but never on function-word overlap
+    // alone.
+    let strong_ordered_alignment = spoken.len() >= 9 && ordered_content >= 5 && content >= 5;
+
+    nearly_exact_short || strong_phrase || embedded_phrase || strong_ordered_alignment
+}
+
+fn direct_quote_score(spoken: &str, verse: &str) -> f32 {
+    if has_repeated_phrase(spoken) {
+        return 0.0;
+    }
+    let spoken = quote_tokens(spoken);
+    let verse = quote_tokens(verse);
+    let mut best = token_quote_score(&spoken, &verse);
+    if !quote_alignment_is_strong(&spoken, &verse) {
+        best = 0.0;
+    }
+    if spoken.len() > EMBEDDED_QUOTE_WINDOW_WORDS {
+        for window in spoken.windows(EMBEDDED_QUOTE_WINDOW_WORDS) {
+            if quote_alignment_is_strong(window, &verse) {
+                best = best.max(token_quote_score(window, &verse));
+            }
+        }
+    }
+    best
 }
 
 /// Return the calibrated lexical-alignment score when `spoken` is close enough
@@ -316,7 +535,8 @@ mod tests {
             Some(ScriptureReference {
                 book: "John".into(),
                 chapter: 3,
-                verse: 16
+                verse: 16,
+                verse_end: None,
             })
         );
         assert_eq!(
@@ -324,7 +544,8 @@ mod tests {
             Some(ScriptureReference {
                 book: "1 Corinthians".into(),
                 chapter: 13,
-                verse: 4
+                verse: 4,
+                verse_end: None,
             })
         );
         assert_eq!(
@@ -335,7 +556,32 @@ mod tests {
             Some(ScriptureReference {
                 book: "Psalms".into(),
                 chapter: 119,
-                verse: 105
+                verse: 105,
+                verse_end: None,
+            })
+        );
+        assert_eq!(
+            detect_reference(
+                "Because if we go to Hebrews chapter 2 and verse 1, we'll see that this is scriptural.",
+                &books()
+            ),
+            Some(ScriptureReference {
+                book: "Hebrews".into(),
+                chapter: 2,
+                verse: 1,
+                verse_end: None,
+            })
+        );
+        assert_eq!(
+            detect_reference(
+                "First Corinthians chapter 10, verses eleven and twelve.",
+                &books()
+            ),
+            Some(ScriptureReference {
+                book: "1 Corinthians".into(),
+                chapter: 10,
+                verse: 11,
+                verse_end: Some(12),
             })
         );
     }
@@ -347,7 +593,8 @@ mod tests {
             Some(ScriptureReference {
                 book: "Revelation".into(),
                 chapter: 5,
-                verse: 11
+                verse: 11,
+                verse_end: None,
             })
         );
         assert_eq!(
@@ -355,7 +602,8 @@ mod tests {
             Some(ScriptureReference {
                 book: "Matthew".into(),
                 chapter: 6,
-                verse: 33
+                verse: 33,
+                verse_end: None,
             })
         );
         assert_eq!(detect_reference("Psalm twenty three", &books()), None);
@@ -364,7 +612,8 @@ mod tests {
             Some(ScriptureReference {
                 book: "Hebrews".into(),
                 chapter: 1,
-                verse: 6
+                verse: 6,
+                verse_end: None,
             })
         );
     }
@@ -379,6 +628,67 @@ mod tests {
         assert!(direct_quote_match_score(
             "The people crossed through the water and entered the land",
             verse
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn aligns_observed_hebrews_two_quotation_despite_asr_spelling() {
+        assert!(direct_quote_match_score(
+            "For if the word spoken by angels was steadfast, that every transgression disobedience received the just recompense of reward",
+            "For if the word spoken by angels was stedfast, and every transgression and disobedience received a just recompence of reward;"
+        )
+        .is_some());
+        assert!(direct_quote_match_score(
+            "How shall we escape if we neglect so great a salvation, which at first was spoken by the Lord, confirmed unto us by those that heard him",
+            "How shall we escape, if we neglect so great salvation; which at the first began to be spoken by the Lord, and was confirmed unto us by them that heard him;"
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn aligns_ephesians_five_eighteen_with_minor_asr_variation() {
+        assert!(direct_quote_match_score(
+            "Do not be drunk with wine wherein it excesses, but there is another substance that can enter into you.",
+            "And be not drunk with wine, wherein is excess; but be filled with the Spirit;"
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn finds_an_embedded_quote_but_rejects_repeated_self_correction() {
+        assert!(direct_quote_match_score(
+            "I used to look at myself in the mirror and have encounters with the word, and I go my way and forget what manner of man that I am.",
+            "For he beholdeth himself, and goeth his way, and straightway forgetteth what manner of man he was."
+        )
+        .is_some());
+        assert!(direct_quote_match_score(
+            "Daddy, look at that. I put my hand, I put my hand in my teeth.",
+            "Wherefore do I take my flesh in my teeth, and put my life in mine hand?"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn rejects_common_word_overlap_as_a_direct_quote() {
+        assert!(direct_quote_match_score(
+            "From the party, it was so bad. I never recall that we had met.",
+            "Therefore Daniel went in unto Arioch, whom the king had ordained to destroy the wise men of Babylon: he went and said thus unto him; Destroy not the wise men of Babylon: bring me in before the king, and I will shew unto the king the interpretation."
+        )
+        .is_none());
+        assert!(direct_quote_match_score(
+            "This is why when they say it is an explosion that brought the order to the world.",
+            "And he said, What meanest thou by all this drove which I met? And he said, These are to find grace in the sight of my lord."
+        )
+        .is_none());
+        assert!(direct_quote_match_score(
+            "People from different nations were hearing each one speak the language fluently.",
+            "And how hear we every man in our own tongue, wherein we were born?"
+        )
+        .is_none());
+        assert!(direct_quote_match_score(
+            "All that it might be fulfilled.",
+            "Now all this was done, that it might be fulfilled which was spoken of the Lord by the prophet, saying,"
         )
         .is_none());
     }
@@ -421,6 +731,7 @@ mod tests {
                     book: book.into(),
                     chapter: 1,
                     verse: 6,
+                    verse_end: None,
                 }),
                 "failed to parse {transcript}"
             );

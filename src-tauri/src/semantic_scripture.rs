@@ -1,3 +1,4 @@
+use crate::ai_detection::has_repeated_phrase;
 use crate::store::{BibleStore, SemanticCorpusVerse, Verse};
 use fastembed::{
     InitOptionsUserDefined, Pooling, QuantizationMode, TextEmbedding, TokenizerFiles,
@@ -377,6 +378,18 @@ impl SemanticScripture {
                 diagnostic: diagnostic(
                     "skipped",
                     "Waiting for at least five words in the current thought.",
+                    None,
+                    None,
+                    Vec::new(),
+                ),
+            });
+        }
+        if has_repeated_phrase(query) {
+            return Ok(SemanticSearchOutcome {
+                matches: Vec::new(),
+                diagnostic: diagnostic(
+                    "skipped",
+                    "Waiting for a stable thought after repeated speech.",
                     None,
                     None,
                     Vec::new(),
@@ -891,6 +904,16 @@ fn read_i32(reader: &mut impl Read) -> Result<i32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_self_corrections_are_not_semantic_queries() {
+        assert!(has_repeated_phrase(
+            "Daddy, look at that. I put my hand, I put my hand in my teeth."
+        ));
+        assert!(!has_repeated_phrase(
+            "Do not merely hear the word; put what it says into practice."
+        ));
+    }
 
     #[test]
     fn exact_search_ranks_normalized_vectors() {
