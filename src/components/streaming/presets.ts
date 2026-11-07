@@ -1,16 +1,14 @@
 import type { StreamDestination, StreamPlatform } from "../../types";
 
 /**
- * Streaming Hub platform presets. The operator picks a platform and the form
- * pre-fills the ingest server; only the stream key is needed from their
- * dashboard. Every platform here publishes over RTMP (`ffmpeg` -> FLV), which
- * is the native backend transport (Phase 6). `Custom RTMP` covers anything else
- * (Restream, SRS, MediaMTX, …).
+ * Streaming Hub platform presets. RTMP platforms publish through ffmpeg;
+ * NDI publishes the shared program video directly on the local network through
+ * the NDI SDK.
  */
 export interface PlatformPreset {
   platform: StreamPlatform;
   label: string;
-  mode: "rtmp";
+  mode: "rtmp" | "ndi";
   /** Ingest server URL (no stream key). */
   url: string;
   /** Where the operator finds their key. */
@@ -45,6 +43,13 @@ export const PLATFORM_PRESETS: PlatformPreset[] = [
     mode: "rtmp",
     url: "",
     hint: "Any RTMP ingest — e.g. a Restream URL or your own media server.",
+  },
+  {
+    platform: "ndi",
+    label: "NDI",
+    mode: "ndi",
+    url: "",
+    hint: "Publishes video as a local NDI source for OBS, vMix, ProPresenter, or another NDI receiver.",
   },
 ];
 

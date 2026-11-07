@@ -7273,6 +7273,7 @@ dependencies = [
  "futures-util",
  "hf-hub",
  "image",
+ "libloading 0.8.9",
  "log",
  "machine-uid",
  "once_cell",

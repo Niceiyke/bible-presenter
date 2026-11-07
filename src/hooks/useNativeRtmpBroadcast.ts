@@ -7,9 +7,9 @@ import type { StreamDestination } from "../types";
  *
  * One backend broadcast captures the dedicated off-screen `capture` window's
  * pixels (Windows Graphics Capture — the same program DOM surface as the
- * audience `output` window) and fans them out to N `ffmpeg` processes — one per
- * enabled RTMP destination — each encoding rawvideo -> libx264 -> FLV -> its
- * RTMP ingest. The operator starts/stops the whole broadcast at once; there is
+ * audience `output` window) and fans them out to enabled RTMP destinations
+ * through one ffmpeg tee and enabled NDI destinations through the native NDI
+ * sender. The operator starts/stops the whole broadcast at once; there is
  * no per-destination independent transport. Program audio (external mic /
  * line-in) is captured natively by ffmpeg and muxed into every enabled
  * destination when the broadcast is started with an `audioDevice` name.
@@ -115,10 +115,11 @@ export function useNativeRtmpBroadcast(): NativeRtmpBroadcast {
       try {
         const hasAudio = !!audioDevice && audioDevice.trim().length > 0;
         const payload = destinations
-          .filter((d) => d.enabled && d.mode === "rtmp")
+          .filter((d) => d.enabled && (d.mode === "rtmp" || d.mode === "ndi"))
           .map((d) => ({
             id: d.id,
             label: d.label,
+            mode: d.mode,
             url: d.url,
             streamKey: d.stream_key ?? null,
             enabled: true,

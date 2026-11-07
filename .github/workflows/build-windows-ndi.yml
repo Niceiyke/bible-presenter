@@ -1,0 +1,108 @@
+name: Build Windows NDI Exe
+
+on:
+  workflow_dispatch:
+
+# NDI's SDK is EULA-gated and is deliberately not downloaded by public CI.
+# Register a Windows self-hosted runner with the labels `self-hosted`,
+# `windows`, and `ndi-sdk`, and install the NDI 6 SDK at the default path or
+# set the runner-level NDI_SDK_DIR environment variable.
+concurrency:
+  group: build-windows-ndi
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: [self-hosted, windows, ndi-sdk]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: verify license endpoint is configured
+        shell: bash
+        run: |
+          if grep -q "YOUR_SUBDOMAIN" src-tauri/src/license.rs; then
+            echo "::error::License endpoint placeholder is still configured."
+            exit 1
+          fi
+
+      - name: verify NDI SDK runner
+        shell: pwsh
+        run: |
+          $sdk = $env:NDI_SDK_DIR
+          if ([string]::IsNullOrWhiteSpace($sdk)) {
+            $sdk = 'C:\Program Files\NDI\NDI 6 SDK'
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $sdk 'Include\Processing.NDI.Lib.h'))) {
+            throw "NDI 6 SDK headers were not found at '$sdk'. Install the EULA-accepted SDK or set runner-level NDI_SDK_DIR."
+          }
+          Write-Host "Using NDI SDK at $sdk"
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: install rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: install frontend dependencies
+        run: npm ci
+
+      - name: create data directories
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri\models | Out-Null
+          New-Item -ItemType Directory -Force -Path src-tauri\bible_data | Out-Null
+
+      - name: fetch ffmpeg binaries for bundling
+        shell: pwsh
+        run: ./scripts/fetch-ffmpeg.ps1
+
+      - name: stage NDI runtime
+        shell: pwsh
+        run: ./scripts/prepare-ndi.ps1
+
+      - name: verify bundled release resources
+        shell: pwsh
+        run: |
+          $required = @(
+            'src-tauri\binaries\ffmpeg.exe',
+            'src-tauri\binaries\ffprobe.exe',
+            'src-tauri\binaries\ndi\Processing.NDI.Lib.x64.dll',
+            'src-tauri\bible_data\hymns.json',
+            'src-tauri\bible_data\bible-semantic-bge-v1.index'
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+              throw "Required release resource is missing: $file"
+            }
+          }
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath 'src-tauri\bible_data\bible-semantic-bge-v1.index').Hash.ToLower()
+          if ($hash -ne 'a541018334369d5a41212e4bbccc8738dad472f64345d8c95e6bc7e0a22db4ec') {
+            throw "Bundled Bible semantic index failed its pinned SHA-256 check."
+          }
+
+      - name: test NDI feature
+        working-directory: src-tauri
+        run: cargo test --features ndi --lib
+
+      - name: build and publish NDI release
+        uses: tauri-apps/tauri-action@v0.5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RUSTFLAGS: "-C target-feature=-crt-static"
+          MSVC_RUNTIME_LIBRARY: "MultiThreadedDLL"
+        with:
+          args: --features ndi --config src-tauri/tauri.ndi.conf.json
+          tagName: v__VERSION__-ndi-${{ github.run_number }}
+          releaseName: Wordlyte v__VERSION__ NDI Build ${{ github.run_number }}
+          releaseBody: "NDI-enabled Windows build. Requires a supervised OBS, vMix, or ProPresenter receiver rehearsal before service use."
+          releaseDraft: false
+          prerelease: true

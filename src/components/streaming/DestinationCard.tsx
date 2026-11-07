@@ -45,6 +45,7 @@ export function DestinationCard({
   live,
 }: DestinationCardProps) {
   const preset = presetFor(dest.platform);
+  const isNdi = dest.mode === "ndi";
 
   return (
     <div
@@ -80,7 +81,7 @@ export function DestinationCard({
         </span>
       </div>
 
-      <div className="flex items-center gap-2">
+      {!isNdi && <div className="flex items-center gap-2">
         <Globe size={11} className="text-slate-500 shrink-0" />
         <input
           value={dest.url}
@@ -90,8 +91,8 @@ export function DestinationCard({
           disabled={live}
           className="flex-1 px-2 py-1.5 bg-slate-950 border border-slate-700 rounded text-slate-200 text-xs font-mono focus:outline-none focus:border-slate-500"
         />
-      </div>
-      <div className="flex items-center gap-2">
+      </div>}
+      {!isNdi && <div className="flex items-center gap-2">
         <KeyRound size={11} className="text-slate-500 shrink-0" />
         <input
           value={dest.stream_key ?? ""}
@@ -102,7 +103,7 @@ export function DestinationCard({
           disabled={live}
           className="flex-1 px-2 py-1.5 bg-slate-950 border border-slate-700 rounded text-slate-200 text-xs font-mono focus:outline-none focus:border-slate-500"
         />
-      </div>
+      </div>}
 
       <div className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-1.5 text-[10px] text-slate-400 cursor-pointer select-none">
@@ -137,7 +138,7 @@ export function DestinationCard({
           ? "This destination is actively streaming the broadcast feed."
           : blockedReason
             ? "Go Live is unavailable until this destination's requirements are met."
-            : `Transport is the master broadcast — Go Live All starts every enabled destination together. ${preset.hint}`}
+            : `${isNdi ? "NDI video output is sent on the local network; audio is not included yet. " : "Transport is the master broadcast — Go Live All starts every enabled destination together. "}${preset.hint}`}
       </p>
     </div>
   );

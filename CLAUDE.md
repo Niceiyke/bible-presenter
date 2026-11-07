@@ -104,6 +104,12 @@ The output manager is a configurable output-surface abstraction: every output (p
 
 Do not apply operator-console color tokens directly to projected output. Audience themes are persisted separately in `src/types/settings.ts`.
 
+> Current NDI status: the optional Windows build now has a native SDK-backed
+> video sender integrated into the shared Streaming Hub capture path. Build it
+> with `npm run build:ndi`; NDI audio and NDI input remain future work, and a
+> physical OBS/vMix/ProPresenter receiver rehearsal is still required before
+> calling the output production-ready.
+
 ## State management
 
 `src/store/index.ts` composes Zustand slices from `src/store/slices/`:

@@ -21,6 +21,8 @@ pub(crate) const STREAM_SINK_CAPACITY: usize = 8;
 pub struct StreamDest {
     pub id: String,
     pub label: String,
+    #[serde(default = "default_mode")]
+    pub mode: String,
     pub url: String,
     #[serde(default)]
     pub stream_key: Option<String>,
@@ -32,6 +34,10 @@ pub struct StreamDest {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_mode() -> String {
+    "rtmp".into()
 }
 
 /// Per-destination runtime status surfaced to the Streaming hub.
@@ -86,6 +92,7 @@ fn idle_status() -> StreamingStatus {
 pub struct StreamDestinationSession {
     pub id: String,
     pub label: String,
+    pub mode: String,
     pub url: String,
     /// Whether this destination expects program audio in its stream (== the
     /// broadcast-wide program-audio toggle; audio is all-or-none under tee).
@@ -108,8 +115,9 @@ pub struct BroadcastSession {
     pub started_ms: u64,
     pub destinations: Vec<StreamDestinationSession>,
     /// The single tee ffmpeg child shared by every destination.
-    pub child: Child,
+    pub child: Option<Child>,
     pub writer_thread: Option<std::thread::JoinHandle<()>>,
+    pub writer_finished: Arc<std::sync::atomic::AtomicBool>,
     pub frames: Arc<std::sync::atomic::AtomicU64>,
     pub bytes: Arc<std::sync::atomic::AtomicU64>,
     /// The directshow audio device name captured natively by ffmpeg (if any)
@@ -229,10 +237,25 @@ pub fn stream_rtmp_start(
             return Err("A broadcast is already live — stop it first.".into());
         }
     }
-    if !crate::binpaths::ffmpeg_available() {
-        return Err("ffmpeg was not found — install ffmpeg to stream.".into());
+    let enabled: Vec<StreamDest> = destinations.into_iter().filter(|d| d.enabled).collect();
+    if enabled.is_empty() {
+        return Err("No enabled destinations to stream to.".into());
+    }
+    let rtmp_enabled: Vec<&StreamDest> = enabled.iter().filter(|d| d.mode != "ndi").collect();
+    let ndi_enabled: Vec<&StreamDest> = enabled.iter().filter(|d| d.mode == "ndi").collect();
+    if !rtmp_enabled.is_empty() && !crate::binpaths::ffmpeg_available() {
+        return Err("ffmpeg was not found — RTMP destinations cannot start.".into());
+    }
+    if !ndi_enabled.is_empty() {
+        let status = crate::commands::ndi::ndi_status();
+        if !status.supported {
+            return Err(format!("NDI is unavailable: {}", status.reason));
+        }
     }
     let audio_device = audio_device.filter(|d| !d.trim().is_empty());
+    if audio_device.is_some() && rtmp_enabled.is_empty() {
+        return Err("Program audio is currently supported for RTMP destinations; disable it for an NDI-only broadcast.".into());
+    }
     // Capture the device ONCE via the shared AudioFeed, then open a private
     // relay for THIS broadcast.  Both this broadcast and a concurrent recording
     // subscribe to the same feed instead of opening dshow twice — two ffmpeg
@@ -245,11 +268,6 @@ pub fn stream_rtmp_start(
     };
     let audio_feed_port = relay.as_ref().map(|r| r.port());
 
-    let enabled: Vec<StreamDest> = destinations.into_iter().filter(|d| d.enabled).collect();
-    if enabled.is_empty() {
-        return Err("No enabled destinations to stream to.".into());
-    }
-
     let w = width.max(1);
     let h = height.max(1);
     let f = fps.clamp(1, 60);
@@ -257,7 +275,7 @@ pub fn stream_rtmp_start(
     // Resolve and validate every destination URL up front. Errors before any
     // side effects (no ffmpeg spawned) so a typo'd URL cannot orphan processes.
     let mut urls: Vec<String> = Vec::new();
-    for dest in &enabled {
+    for dest in &rtmp_enabled {
         let url = build_rtmp_url(&dest.url, dest.stream_key.as_deref());
         if !url.starts_with("rtmp://") {
             return Err(format!(
@@ -268,25 +286,54 @@ pub fn stream_rtmp_start(
         urls.push(url);
     }
 
+    #[cfg(feature = "ndi")]
+    let ndi_senders = ndi_enabled
+        .iter()
+        .map(|dest| {
+            crate::commands::ndi::NdiVideoSender::new(&format!("Wordlyte - {}", dest.label))
+                .map_err(|error| {
+                    format!("Could not create NDI destination '{}': {error}", dest.label)
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
     // One bounded (tx, rx) pair feeding the single tee ffmpeg. try_send
     // (drop-newest) under congestion never stalls capture or a concurrent
     // recording.
     let (tx, rx) = crate::capture::bounded_sink(STREAM_SINK_CAPACITY);
-    let encoder = crate::commands::recordings::pick_h264_encoder();
+    let encoder = if urls.is_empty() {
+        "ndi".to_string()
+    } else {
+        crate::commands::recordings::pick_h264_encoder()
+    };
     // Large-buffer stdin (Windows): std's `Stdio::piped()` is a 4 KB pipe; a raw
     // 1080p NV12 frame is ~4 MB, so the write end alone would churn ~1,000
     // partial writes (syscall + kernel copy each) per frame.
-    let (stdin_file, stdin_stdio) = crate::commands::recordings::encoder_stdin_stdio();
-    let args = stream_tee_args(w, h, f, &encoder, &urls, audio_feed_port);
-    let mut child = match Command::new(crate::binpaths::ffmpeg_path())
-        .args(&args)
-        .stdin(stdin_stdio)
-        .stderr(Stdio::piped())
-        .stdout(Stdio::null())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => return Err(format!("Failed to start ffmpeg: {e}")),
+    let (stdin_file, stdin_stdio) = if !urls.is_empty() {
+        let (file, stdio) = crate::commands::recordings::encoder_stdin_stdio();
+        (file, Some(stdio))
+    } else {
+        (None, None)
+    };
+    let mut child = if !urls.is_empty() {
+        let args = stream_tee_args(w, h, f, &encoder, &urls, audio_feed_port);
+        Some(
+            match Command::new(crate::binpaths::ffmpeg_path())
+                .args(&args)
+                .stdin(
+                    stdin_stdio
+                        .expect("RTMP stdin configuration is present when ffmpeg is spawned"),
+                )
+                .stderr(Stdio::piped())
+                .stdout(Stdio::null())
+                .spawn()
+            {
+                Ok(c) => c,
+                Err(e) => return Err(format!("Failed to start ffmpeg: {e}")),
+            },
+        )
+    } else {
+        None
     };
 
     // Prefer the audience `output` window as the WGC source while it is on
@@ -298,8 +345,10 @@ pub fn stream_rtmp_start(
         Err(e) => {
             // ffmpeg is already alive at this point; tear it down on a reveal
             // failure so it cannot linger.
-            let _ = child.kill();
-            let _ = child.wait();
+            if let Some(child) = child.as_mut() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
             return Err(e);
         }
     };
@@ -309,29 +358,30 @@ pub fn stream_rtmp_start(
     // window. When a recording is already capturing that window at the same
     // geometry, the broadcast joins that SAME session (one WGC readback);
     // otherwise it starts a fresh session.
-    let (capture_session_id, consumer) =
-        match crate::capture::start_for_consumer(
-            &state.capture,
-            &app,
-            capture_source.clone(),
-            w,
-            h,
-            f,
-            tx,
-            false,
-        ) {
-            Ok(joined) => joined,
-            Err(e) => {
+    let (capture_session_id, consumer) = match crate::capture::start_for_consumer(
+        &state.capture,
+        &app,
+        capture_source.clone(),
+        w,
+        h,
+        f,
+        tx,
+        false,
+    ) {
+        Ok(joined) => joined,
+        Err(e) => {
+            if let Some(child) = child.as_mut() {
                 let _ = child.kill();
                 let _ = child.wait();
-                // No session bound; restore the window (unless a recording still
-                // needs it) when the capture window was our source.
-                if capture_source == crate::commands::capture::CAPTURE_WINDOW {
-                    crate::commands::capture::maybe_hide_capture(&app, state.inner());
-                }
-                return Err(e);
             }
-        };
+            // No session bound; restore the window (unless a recording still
+            // needs it) when the capture window was our source.
+            if capture_source == crate::commands::capture::CAPTURE_WINDOW {
+                crate::commands::capture::maybe_hide_capture(&app, state.inner());
+            }
+            return Err(e);
+        }
+    };
 
     crate::store::log_msg(
         &app,
@@ -352,18 +402,24 @@ pub fn stream_rtmp_start(
     // The writer thread drains the bounded rx into ffmpeg's stdin. Detaching this
     // broadcast's consumer (on stop) closes the channel -> stdin EOF -> ffmpeg
     // finalizes every tee target.
-    let stdin: Box<dyn std::io::Write + Send> = match (child.stdin.take(), stdin_file) {
-        (Some(cs), _) => Box::new(cs),
-        (None, Some(wf)) => Box::new(wf),
-        (None, None) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("ffmpeg stdin was not available.".to_string());
-        }
+    let stdin: Option<Box<dyn std::io::Write + Send>> = match child.as_mut() {
+        Some(child) => match (child.stdin.take(), stdin_file) {
+            (Some(cs), _) => Some(Box::new(cs)),
+            (None, Some(wf)) => Some(Box::new(wf)),
+            (None, None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("ffmpeg stdin was not available.".to_string());
+            }
+        },
+        None => None,
     };
     // Drain stderr from the start: an undrained pipe can stall ffmpeg, and the
     // retained tail turns a bare exit code into ffmpeg's real message.
-    let stderr_tail = crate::commands::recordings::drain_stderr_tail(&mut child);
+    let stderr_tail = child
+        .as_mut()
+        .map(crate::commands::recordings::drain_stderr_tail)
+        .unwrap_or_else(|| Arc::new(parking_lot::Mutex::new(Vec::new())));
     let frames = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
     // The receiver lives behind a mutex so a mid-session source swap can hand
@@ -372,11 +428,17 @@ pub fn stream_rtmp_start(
         Arc::new(parking_lot::Mutex::new(rx));
     let fcounter = frames.clone();
     let bcounter = bytes.clone();
+    let writer_finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let writer_finished_thread = writer_finished.clone();
     let writer_rx = active_rx.clone();
+    #[cfg(feature = "ndi")]
+    let ndi_fps = f;
     let writer_thread = std::thread::Builder::new()
         .name("stream-writer".to_string())
         .spawn(move || {
             let mut stdin = stdin;
+            #[cfg(feature = "ndi")]
+            let ndi_senders = ndi_senders;
             let mut n = 0u64;
             let mut b = 0u64;
             loop {
@@ -388,29 +450,48 @@ pub fn stream_rtmp_start(
                         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
                     }
                 };
-                let Some(frame) = frame else { continue; };
+                let Some(frame) = frame else {
+                    continue;
+                };
                 let data: &[u8] = &frame.pixels;
-                if stdin.write_all(data).is_err() {
-                    break; // ffmpeg closed the pipe (crash / uplink failure)
+                if let Some(stdin) = stdin.as_mut() {
+                    if stdin.write_all(data).is_err() {
+                        break; // ffmpeg closed the pipe (crash / uplink failure)
+                    }
+                    let _ = stdin.flush();
                 }
-                let _ = stdin.flush();
+                #[cfg(feature = "ndi")]
+                for sender in &ndi_senders {
+                    sender.send_frame(&frame, ndi_fps);
+                }
                 n += 1;
                 b += data.len() as u64;
             }
-            let _ = stdin.flush();
+            if let Some(stdin) = stdin.as_mut() {
+                let _ = stdin.flush();
+            }
             fcounter.store(n, std::sync::atomic::Ordering::SeqCst);
             bcounter.store(b, std::sync::atomic::Ordering::SeqCst);
+            writer_finished_thread.store(true, std::sync::atomic::Ordering::SeqCst);
         })
         .map_err(|e| e.to_string())?;
 
+    let mut url_iter = urls.into_iter();
     let sessions: Vec<StreamDestinationSession> = enabled
         .into_iter()
-        .zip(urls)
-        .map(|(d, url)| StreamDestinationSession {
-            id: d.id,
-            label: d.label,
-            url,
-            audio: audio_device.is_some(),
+        .map(|d| {
+            let is_ndi = d.mode == "ndi";
+            StreamDestinationSession {
+                id: d.id,
+                label: d.label,
+                mode: d.mode,
+                url: if is_ndi {
+                    String::new()
+                } else {
+                    url_iter.next().unwrap_or_default()
+                },
+                audio: audio_device.is_some() && !is_ndi,
+            }
         })
         .collect();
 
@@ -428,6 +509,7 @@ pub fn stream_rtmp_start(
         destinations: sessions,
         child,
         writer_thread: Some(writer_thread),
+        writer_finished,
         frames,
         bytes,
         audio_device,
@@ -445,7 +527,9 @@ pub fn stream_rtmp_start(
 /// flight: when the single tee process has exited while the broadcast is live,
 /// every destination is reported as failed (active=false + stderr detail)
 /// instead of a stale "live".
-fn streaming_status_locked(guard: &mut parking_lot::MutexGuard<Option<BroadcastSession>>) -> StreamingStatus {
+fn streaming_status_locked(
+    guard: &mut parking_lot::MutexGuard<Option<BroadcastSession>>,
+) -> StreamingStatus {
     match guard.as_mut() {
         None => idle_status(),
         Some(b) => {
@@ -453,20 +537,31 @@ fn streaming_status_locked(guard: &mut parking_lot::MutexGuard<Option<BroadcastS
             let bytes = b.bytes.load(std::sync::atomic::Ordering::SeqCst);
             let audio_attached = b.audio_device.is_some();
             // None = ffmpeg still running (all destinations mirror it as live).
-            let shared_error: Option<String> = match b.child.try_wait() {
-                Ok(None) => None,
-                Ok(Some(st)) => {
-                    let detail = crate::commands::recordings::stderr_tail_text(&b.stderr_tail)
-                        .map(|t| format!(" — ffmpeg said: {t}"))
-                        .unwrap_or_default();
-                    Some(if st.success() {
-                        "ffmpeg stopped unexpectedly while live.".into()
-                    } else {
-                        format!("ffmpeg exited with {st}{detail}")
-                    })
-                }
-                Err(e) => Some(format!("Could not check ffmpeg state: {e}")),
+            let mut shared_error: Option<String> = match b.child.as_mut() {
+                None => None,
+                Some(child) => match child.try_wait() {
+                    Ok(None) => None,
+                    Ok(Some(st)) => {
+                        let detail = crate::commands::recordings::stderr_tail_text(&b.stderr_tail)
+                            .map(|t| format!(" — ffmpeg said: {t}"))
+                            .unwrap_or_default();
+                        Some(if st.success() {
+                            "ffmpeg stopped unexpectedly while live.".into()
+                        } else {
+                            format!("ffmpeg exited with {st}{detail}")
+                        })
+                    }
+                    Err(e) => Some(format!("Could not check ffmpeg state: {e}")),
+                },
             };
+            if shared_error.is_none() && b.writer_finished.load(std::sync::atomic::Ordering::SeqCst)
+            {
+                shared_error = Some(if b.child.is_some() {
+                    "The broadcast writer stopped unexpectedly while live.".into()
+                } else {
+                    "NDI sender stopped unexpectedly while live.".into()
+                });
+            }
             let destinations = b
                 .destinations
                 .iter()
@@ -474,11 +569,15 @@ fn streaming_status_locked(guard: &mut parking_lot::MutexGuard<Option<BroadcastS
                     id: d.id.clone(),
                     label: d.label.clone(),
                     active: shared_error.is_none(),
-                    url: Some(d.url.clone()),
+                    url: if d.mode == "ndi" {
+                        None
+                    } else {
+                        Some(d.url.clone())
+                    },
                     frames,
                     bytes,
                     error: shared_error.clone(),
-                    audio_attached,
+                    audio_attached: audio_attached && d.mode != "ndi",
                 })
                 .collect();
             StreamingStatus {
@@ -543,28 +642,31 @@ pub async fn stream_rtmp_stop(app: AppHandle, state: State<'_, AppState>) -> Res
 
     let timeout = std::time::Instant::now() + std::time::Duration::from_secs(5);
     // Only a child that exited ON ITS OWN with a failure counts: a
-    // timeout-kill below is our own doing and must stay silent.
+    // timeout-kill below is our own doing and must stay silent. NDI-only
+    // broadcasts have no ffmpeg child and simply finish after the writer joins.
     let mut natural_failure: Option<std::process::ExitStatus> = None;
-    loop {
-        match broadcast.child.try_wait() {
-            Ok(Some(st)) => {
-                if !st.success() {
-                    natural_failure = Some(st);
-                }
-                break;
-            }
-            Ok(None) => {
-                if std::time::Instant::now() >= timeout {
-                    let _ = broadcast.child.kill();
-                    let _ = broadcast.child.wait();
+    if let Some(child) = broadcast.child.as_mut() {
+        loop {
+            match child.try_wait() {
+                Ok(Some(st)) => {
+                    if !st.success() {
+                        natural_failure = Some(st);
+                    }
                     break;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            Err(_) => {
-                let _ = broadcast.child.kill();
-                let _ = broadcast.child.wait();
-                break;
+                Ok(None) => {
+                    if std::time::Instant::now() >= timeout {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break;
+                }
             }
         }
     }
@@ -596,7 +698,10 @@ mod tests {
 
     #[test]
     fn tee_args_are_video_only_multi_target() {
-        let urls = vec!["rtmp://host/a/key".to_string(), "rtmp://host/b/key".to_string()];
+        let urls = vec![
+            "rtmp://host/a/key".to_string(),
+            "rtmp://host/b/key".to_string(),
+        ];
         let args = stream_tee_args(1280, 720, 30, "libx264", &urls, None);
         let joined = args.join(" ");
         assert!(joined.contains("-f rawvideo") && joined.contains("-i pipe:0"));
@@ -640,8 +745,7 @@ mod tests {
                 let after_url = i + 2;
                 if after_url < args.len() {
                     assert_ne!(
-                        args[after_url],
-                        "-map",
+                        args[after_url], "-map",
                         "-map directly after an -i URL (token {after_url})"
                     );
                 }
@@ -676,11 +780,12 @@ mod tests {
         let broadcast = BroadcastSession {
             capture: crate::commands::capture::ActiveCapture {
                 session_id: "cap".into(),
-                consumer: crate::capture::ConsumerHandle { id: 1, strict: false },
+                consumer: crate::capture::ConsumerHandle {
+                    id: 1,
+                    strict: false,
+                },
                 source: crate::commands::capture::CAPTURE_WINDOW.to_string(),
-                rx: Arc::new(parking_lot::Mutex::new(
-                    crate::capture::bounded_sink(8).1,
-                )),
+                rx: Arc::new(parking_lot::Mutex::new(crate::capture::bounded_sink(8).1)),
             },
             width: 1280,
             height: 720,
@@ -690,18 +795,21 @@ mod tests {
                 StreamDestinationSession {
                     id: "d1".into(),
                     label: "A".into(),
+                    mode: "rtmp".into(),
                     url: "rtmp://host/a/key".into(),
                     audio: false,
                 },
                 StreamDestinationSession {
                     id: "d2".into(),
                     label: "B".into(),
+                    mode: "rtmp".into(),
                     url: "rtmp://host/b/key".into(),
                     audio: false,
                 },
             ],
-            child,
+            child: Some(child),
             writer_thread: None,
+            writer_finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             frames: Arc::new(std::sync::atomic::AtomicU64::new(42)),
             bytes: Arc::new(std::sync::atomic::AtomicU64::new(42)),
             audio_device: None,

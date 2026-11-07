@@ -16,6 +16,9 @@
     "test:e2e:headed": "playwright test --headed",
     "check:secrets": "node scripts/check-no-secrets.mjs",
     "check:p0": "npm run check:secrets && npm test -- --run && npm run build",
+    "prepare:ndi": "powershell -ExecutionPolicy Bypass -File scripts/prepare-ndi.ps1",
+    "check:ndi": "npm run prepare:ndi && cargo check --manifest-path src-tauri/Cargo.toml --features ndi",
+    "build:ndi": "npm run prepare:ndi && tauri build --features ndi --config src-tauri/tauri.ndi.conf.json",
     "ai:eval": "cargo run --manifest-path tools/ai-eval/Cargo.toml -- evaluation/ai-scripture/synthetic.jsonl",
     "tauri": "tauri",
     "convert-hymns": "node scripts/convert-gospel-hymns.mjs"

@@ -50,6 +50,7 @@ ed25519-dalek = "2"
 # paraphrase matching, then cached under Wordlyte's app-data directory.
 fastembed = { version = "7.5.0", default-features = false, features = ["onnx", "ort-download-binaries-rustls-tls"] }
 hf-hub = { version = "0.5.0", default-features = false, features = ["ureq"] }
+libloading = { version = "0.8", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Phase 0 native-capture probe + Phase 4 WGC capture pipeline.
@@ -82,7 +83,7 @@ crate-type = ["rlib"]
 # hardware receiver validation in TODO.md are complete.
 [features]
 default = []
-ndi = []
+ndi = ["dep:libloading"]
 
 [[bin]]
 name = "wordlyte"

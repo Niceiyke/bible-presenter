@@ -1,4 +1,7 @@
 name: Build Windows Exe
+# This is the standard RTMP/core release. The optional NDI release flavor is
+# built by build-windows-ndi.yml on a self-hosted runner with the EULA-accepted
+# NDI SDK installed; windows-latest cannot satisfy that build-time requirement.
 on:
   # Build only after the CI Check workflow completes successfully (or when
   # triggered manually). This gates the release build on frontend + backend

@@ -54,4 +54,6 @@ physical projector, microphone, or external streaming ingest has been tested.
 12. Force or observe one provider/output failure and confirm the operator sees a useful error and can retry or stop safely.
 
 No P0 release should enable AI Auto Live by default, expose a provider key, or
-ship an output integration that is only scaffolded.
+ship an output integration that is only scaffolded. If NDI is included in the
+release flavor, add a supervised receiver check to the rehearsal and confirm
+that the named source appears and carries the live Program output.

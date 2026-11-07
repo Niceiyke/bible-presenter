@@ -41,6 +41,7 @@ export function StreamerTab() {
   const { checks } = useSystemDiagnostics();
   const capabilities = checks?.capabilities;
   const rtmpBlockedReason = capabilities && !capabilities.rtmpAvailable ? capabilities.rtmpReason : null;
+  const ndiBlockedReason = capabilities && !capabilities.ndiAvailable ? capabilities.ndiReason : null;
   const programAudio = useProgramAudio();
 
   // Tier gating: streaming is Pro+.
@@ -138,11 +139,11 @@ export function StreamerTab() {
     [persistDestinations, streamingBlocked, streamCaps]
   );
 
-  // Hydrate destinations from the persisted stream-main config (RTMP only).
-  // Legacy WHIP/NDI destinations from before Phase 6 are dropped.
+  // Hydrate destinations from the persisted stream-main config. Unsupported
+  // legacy transports remain stored but are not offered to the live hub.
   useEffect(() => {
     if (!output) return;
-    const stored = (output.stream_destinations ?? []).filter((d) => d.mode === "rtmp");
+    const stored = (output.stream_destinations ?? []).filter((d) => d.mode === "rtmp" || d.mode === "ndi");
     if (stored.length > 0) {
       setDestinations(stored);
       return;
@@ -169,7 +170,14 @@ export function StreamerTab() {
       return;
     }
     if (rtmpBlockedReason) {
-      setToast(`RTMP is unavailable: ${rtmpBlockedReason}`);
+      if (destinations.some((destination) => destination.enabled && destination.mode === "rtmp")) {
+        setToast(`RTMP is unavailable: ${rtmpBlockedReason}`);
+        return;
+      }
+    }
+    const hasRtmp = destinations.some((destination) => destination.enabled && destination.mode === "rtmp");
+    if (ndiBlockedReason && destinations.some((destination) => destination.enabled && destination.mode === "ndi")) {
+      setToast(`NDI is unavailable: ${ndiBlockedReason}`);
       return;
     }
     await persistDestinations(destinations);
@@ -179,7 +187,7 @@ export function StreamerTab() {
       captureWidth,
       captureHeight,
       captureFps,
-      programAudio.enabled ? programAudio.device : null,
+        hasRtmp && programAudio.enabled ? programAudio.device : null,
     );
     } catch (e: any) {
       setToast(`Could not go live: ${e?.message ?? e}`);
@@ -195,8 +203,18 @@ export function StreamerTab() {
   };
 
   const enabledCount = destinations.filter((d) => d.enabled).length;
+  const enabledRtmp = destinations.some((d) => d.enabled && d.mode === "rtmp");
+  const enabledNdi = destinations.some((d) => d.enabled && d.mode === "ndi");
+  const blockedReason = enabledNdi && ndiBlockedReason
+    ? ndiBlockedReason
+    : enabledRtmp && rtmpBlockedReason
+      ? rtmpBlockedReason
+      : null;
   const destCapReached = destinations.length >= streamCaps.streamingDestinations;
-  const canGoLive = !live && !broadcast.pending && enabledCount > 0 && !rtmpBlockedReason && !streamingBlocked;
+  const canGoLive = !live && !broadcast.pending && enabledCount > 0
+    && !streamingBlocked
+    && !destinations.some((destination) => destination.enabled && destination.mode === "rtmp" && rtmpBlockedReason)
+    && !destinations.some((destination) => destination.enabled && destination.mode === "ndi" && ndiBlockedReason);
 
   return (
     <div className="flex flex-col gap-4">
@@ -222,7 +240,7 @@ export function StreamerTab() {
             {live && (
               <div className="absolute top-2 left-2 z-10 flex items-center gap-1.5 px-2 py-1 rounded bg-red-600 text-white text-[10px] font-black uppercase tracking-widest">
                 <span className="w-2 h-2 rounded-full bg-white animate-pulse" /> LIVE
-                {programAudio.enabled && programAudio.device && (
+                {enabledRtmp && programAudio.enabled && programAudio.device && (
                   <span className="ml-1 px-1 rounded bg-black/40 normal-case font-mono">+ AUD</span>
                 )}
               </div>
@@ -247,8 +265,8 @@ export function StreamerTab() {
                     ? "Streaming is a Pro feature"
                     : enabledCount === 0
                       ? "Enable at least one destination"
-                      : rtmpBlockedReason
-                        ? rtmpBlockedReason
+                      : blockedReason
+                        ? blockedReason
                         : !outputVisible
                           ? "Open the output window first so it can be captured"
                           : "Go live on every enabled destination"
@@ -266,13 +284,13 @@ export function StreamerTab() {
             </p>
           )}
 
-          {rtmpBlockedReason && (
+          {enabledRtmp && rtmpBlockedReason && (
             <p className="text-[10px] text-amber-400 bg-amber-900/20 border border-amber-800/60 rounded px-2 py-1.5">
               RTMP destinations are disabled: {rtmpBlockedReason}
             </p>
           )}
 
-          {!outputVisible && !rtmpBlockedReason && (
+          {enabledCount > 0 && !outputVisible && !blockedReason && (
             <p className="text-[10px] text-slate-600">
               The output window is hidden — open it (Windowed Output) so the broadcast can capture its pixels.
             </p>
@@ -313,7 +331,7 @@ export function StreamerTab() {
               ))}
             </select>
             <span className="text-[10px] text-slate-600">
-              The backend encodes the captured window with H.264 (libx264) — one encode per destination.
+              RTMP uses one shared H.264 encode; NDI sends the captured program video on the local network.
             </span>
           </div>
 
@@ -348,7 +366,8 @@ export function StreamerTab() {
               <span className="text-[10px] text-amber-400">Select an input device below</span>
             )}
             <span className="text-[10px] text-slate-600">
-              Captures an external mic / line-in natively (ffmpeg DirectShow) into every destination as AAC. Premium.
+              Captures an external mic / line-in natively (ffmpeg DirectShow) into RTMP destinations as AAC. NDI
+              audio is not included yet. Premium.
             </span>
           </div>
         </div>
@@ -369,8 +388,8 @@ export function StreamerTab() {
 
           {destinations.length === 0 && (
             <p className="text-[11px] text-slate-600 p-3 rounded-lg border border-dashed border-slate-700">
-              No destinations yet. Add YouTube, Facebook Live, Twitch, or a custom RTMP endpoint — the master
-              transport streams to every enabled destination at once.
+              No destinations yet. Add an RTMP endpoint or NDI — the master transport sends every enabled
+              destination at once.
             </p>
           )}
 
@@ -381,7 +400,7 @@ export function StreamerTab() {
               onChange={updateDestination}
               onRemove={() => removeDestination(d.id)}
               status={broadcast.destStatus[d.id]?.status ?? "idle"}
-              blockedReason={rtmpBlockedReason}
+              blockedReason={d.mode === "ndi" ? ndiBlockedReason : rtmpBlockedReason}
               live={live}
             />
           ))}
@@ -402,8 +421,8 @@ export function StreamerTab() {
       </div>
 
       <p className="text-[10px] text-slate-600">
-        One backend broadcast captures the output window and fans the frames out to ffmpeg per destination (H.264 →
-        FLV → RTMP). Program audio (external mic / line-in) is muxed as a second AAC input when enabled.
+        One backend broadcast captures the output window and fans the video out to RTMP and local NDI destinations.
+        Program audio (external mic / line-in) is currently available for RTMP destinations.
       </p>
     </div>
   );

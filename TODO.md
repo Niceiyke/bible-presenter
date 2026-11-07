@@ -3,12 +3,11 @@
 Status legend: `[ ]` todo · `[x]` done · `[b]` blocked (needs an action only the
 operator can take)
 
-The scaffold (committed `7feae56`) is live: `StreamDestination.mode`/`StreamPlatform`
-accept `"ndi"`, an NDI preset exists, `src-tauri/src/commands/ndi.rs` exposes
-`ndi_status`/`ndi_start`/`ndi_send`/`ndi_stop`, the `ndi` cargo feature is declared,
-`useNdiSender` encodes H.264 Annex-B and calls the send commands, and the
-`ndiAvailable` capability gates NDI cards in the Streaming hub + Diagnostics.
-The SDK-gated sender/input pipelines below are NOT implemented.
+The SDK-gated Windows NDI video sender is integrated with the shared
+capture/Preview→Program transport. The `ndi` cargo feature and
+`npm run build:ndi` release flavor require the staged EULA-provided runtime;
+Diagnostics and the Streaming Hub gate the destination on a real runtime probe.
+NDI audio and NDI input remain separate follow-up work.
 
 Full design: `docs/OUTPUT_MANAGER_DESIGN.md` §9.
 
@@ -26,7 +25,7 @@ steps on the dev machine.
 - [b] Developer installs to `C:\Program Files\NDI\NDI 6 SDK` (or sets `NDI_SDK_DIR`)
       — only needed to compile/test the sender on this machine.
 - [b] Developer installs LLVM/clang for bindgen: `winget install LLVM.LLVM`.
-- [ ] Re-run the check below; `ndi_status` should then report SDK present on the
+- [x] Re-run the check below; `ndi_status` reports SDK/runtime availability on the
       dev machine.
 
 ---
@@ -37,26 +36,20 @@ steps on the dev machine.
       and a staged runtime DLL are all required before the feature compiles.
 - [x] Add `scripts/prepare-ndi.ps1` and `tauri.ndi.conf.json` so the EULA-provided
       runtime can be staged and bundled without committing or downloading it.
-- [x] Extend `ndi_status` with compile/runtime diagnostics while keeping
-      `supported=false` until sender validation is complete.
-- [ ] Add `grafton-ndi` as an optional dependency wired to the `ndi` cargo feature
-      (`Cargo.toml`).
-- [ ] `ndi_status` (`#[cfg(feature = "ndi")]` in `commands/ndi.rs`): real probe —
-      `NDIlib_initialize`, `NDIlib_is_supported_CPU`, SDK version + license age
-      (<30 days at release). This is what flips `ndiAvailable` on.
-- [ ] `AppState.ndi`: `HashMap<String, NdiSession>` keyed by `session_id` (mirror
-      `AppState.rtmp`).
-- [ ] `ndi_start(session_id, name)`: `NDIlib_send_create_v2` announcing
-      `Wordlyte – <name>`, an `NDIlib_avsync_create`, store the session.
-- [ ] `ndi_send(session_id, data_base64)`: decode Annex-B access units →
-      `NDIlib_avsync_video` → `NDIlib_send_send_video_async_v2` (NDI|HX; avsync
-      derives PTS from the reference clock).
-- [ ] `ndi_stop(session_id)`: destroy avsync + sender; idempotent (unknown session
-      = no-op, matching `rtmp_stop`).
-- [ ] Build + verify: `cargo check --features ndi`, `cargo clippy --all-targets`,
-      `cargo test`, `npm run build`, `npx vitest run`.
-- [ ] End-to-end: Go Live an NDI destination in the hub, receive in OBS (obs-ndi),
-      confirm name/quality.
+- [x] Extend `ndi_status` with compile/runtime diagnostics and a real
+      `NDIlib_initialize` + CPU-support probe. This flips `ndiAvailable` on for
+      an NDI-enabled build.
+- [x] Implement the native sender using the NDI SDK's synchronous video API and
+      NV12 frames from the shared capture session.
+- [x] Start and stop NDI destinations as part of the Streaming Hub master
+      broadcast; mixed RTMP + NDI broadcasts share one capture readback.
+- [x] Bundle the staged runtime through `tauri.ndi.conf.json` and provide
+      `npm run check:ndi` / `npm run build:ndi` release commands.
+- [x] Add `.github/workflows/build-windows-ndi.yml` for a manually triggered
+      NDI release on a self-hosted Windows runner with the EULA-accepted SDK.
+- [ ] Build + verify: `cargo clippy --all-targets`, `cargo test`, `npm test`.
+- [b] End-to-end: Go Live an NDI destination in the hub, receive in OBS (obs-ndi),
+      vMix, or ProPresenter, and confirm source name, timing, and quality.
 
 ## 1.1 NDI audio (Phase 8.1)
 
@@ -67,12 +60,12 @@ steps on the dev machine.
 
 ## 1.2 Runtime bundling + attribution (end users download NOTHING)
 
-- [ ] Add `scripts/fetch-ndi.ps1` (mirror `scripts/fetch-ffmpeg.ps1`): downloads
+- [ ] Add `scripts/fetch-ndi.ps1` (vendor/EULA distribution policy permitting): downloads
       the current NDI SDK runtime, extracts `Processing.NDI.Lib.x64.dll` into
       `src-tauri/binaries/ndi/`, and prints the SDK build date for the license
       check. Run at each release.
-- [ ] Wire `Processing.NDI.Lib.x64.dll` into `bundle.resources` → `bin/`,
-      resolved by the binpaths-style lookup (same as ffmpeg).
+- [x] Wire `Processing.NDI.Lib.x64.dll` into the NDI release config's
+      `bundle.resources` → `bin/`, resolved by the binpaths-style lookup.
 - [ ] Add NDI® attribution + `https://ndi.video` link in the About box.
 - [ ] Release-time license check: fail/skip the release if the bundled DLL's build
       date is older than 30 days (NDI requirement).
@@ -100,9 +93,9 @@ steps on the dev machine.
 
 ## 3. Cross-cutting cleanup (after 1+2 land)
 
-- [ ] `src/system/capabilities.ts` + Diagnostics checklist: `ndiAvailable` already
+- [x] `src/system/capabilities.ts` + Diagnostics checklist: `ndiAvailable` already
       plumbed; confirm reason text reflects the real probe result.
-- [ ] StreamerTab NDI gating: cards auto-enable when `ndi_status` reports SDK
+- [x] StreamerTab NDI gating: cards auto-enable when `ndi_status` reports SDK
       present; update the empty-state + footnote text if it still says "SDK required".
-- [ ] Update `docs/OUTPUT_MANAGER_DESIGN.md` §9 and `CLAUDE.md` to mark the sender
-      + input implemented (replace "scaffold" wording).
+- [ ] Update the output design notes and `CLAUDE.md` to document the sender as
+      implemented while keeping NDI input marked as future work.

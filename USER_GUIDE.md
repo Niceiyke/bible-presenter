@@ -129,7 +129,13 @@ The first successful launch shows a short tour covering displays, staged/live op
 
 ## NDI status
 
-NDI remains disabled in normal builds. The integration has explicit SDK/runtime build gates and diagnostics, but it must not be treated as production-ready until the vendor SDK sender is compiled and validated against a real receiver. See `TODO.md` for the remaining developer-only qualification work.
+NDI is an optional Windows video output. An NDI-enabled release is built by the
+developer with the EULA-provided NDI runtime; church operators do not download
+the SDK. Run `npm run build:ndi` for that release flavor. Diagnostics reports
+whether the runtime initialized successfully, and the Streaming Hub keeps NDI
+destinations unavailable when the build or runtime is not ready. NDI currently
+carries program video only; validate the packaged build with the target OBS,
+vMix, or ProPresenter receiver before using it in a service.
 
 ## Recovery
 
