@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub(crate) const MIN_DIRECT_QUOTE_WORDS: usize = 5;
 const EMBEDDED_QUOTE_WINDOW_WORDS: usize = 8;
@@ -31,10 +31,18 @@ fn book_aliases(books: &[String]) -> Vec<(Vec<String>, String)> {
         if let Some(rest) = lower.strip_prefix("1 ") {
             for prefix in ["first", "one"] {
                 aliases.push((tokenize(&format!("{prefix} {rest}")), book.clone()));
+                if rest == "kings" {
+                    // Deepgram occasionally drops the plural ending from the
+                    // numbered Kings books (for example, "First King 3:5").
+                    aliases.push((tokenize(&format!("{prefix} king")), book.clone()));
+                }
             }
         } else if let Some(rest) = lower.strip_prefix("2 ") {
             for prefix in ["second", "two"] {
                 aliases.push((tokenize(&format!("{prefix} {rest}")), book.clone()));
+                if rest == "kings" {
+                    aliases.push((tokenize(&format!("{prefix} king")), book.clone()));
+                }
             }
         } else if let Some(rest) = lower.strip_prefix("3 ") {
             for prefix in ["third", "three"] {
@@ -55,6 +63,20 @@ fn book_aliases(books: &[String]) -> Vec<(Vec<String>, String)> {
         }
         if lower == "song of solomon" {
             aliases.push((tokenize("song of songs"), book.clone()));
+        }
+        // Keep these aliases deliberately narrow. They cover recurring ASR
+        // spellings of book names without turning ordinary sermon language
+        // into a Bible reference.
+        for alias in match lower.as_str() {
+            "esther" => &["ester"][..],
+            "revelation" => &["revelations"][..],
+            "philemon" => &["filemon"][..],
+            "zechariah" => &["zachariah"][..],
+            "zephaniah" => &["zephania"][..],
+            "habakkuk" => &["habakuk"][..],
+            _ => &[][..],
+        } {
+            aliases.push((tokenize(alias), book.clone()));
         }
     }
     aliases.sort_by_key(|(tokens, _)| std::cmp::Reverse(tokens.len()));
@@ -154,14 +176,42 @@ fn parse_compact_chapter(token: &str) -> Option<(i32, bool)> {
     }
 }
 
-pub fn detect_reference(text: &str, books: &[String]) -> Option<ScriptureReference> {
+fn single_number_token(token: &str) -> Option<i32> {
+    token.parse::<i32>().ok().or_else(|| number_word(token))
+}
+
+/// In continuous preaching, a range is commonly spoken without a separator:
+/// "Matthew six nine ten" means Matthew 6:9–10, not Matthew 6:19. Preserve
+/// regular compound numbers such as "thirty three" while treating two
+/// consecutive small numbers as a verse range.
+fn parse_compact_verse(tokens: &[String], start: usize) -> Option<(i32, usize, Option<i32>)> {
+    let first = tokens
+        .get(start)
+        .and_then(|token| single_number_token(token))?;
+    if (1..=19).contains(&first) {
+        if let Some(end) = tokens
+            .get(start + 1)
+            .and_then(|token| single_number_token(token))
+            .filter(|end| (1..=19).contains(end) && *end >= first)
+        {
+            return Some((first, start + 2, Some(end)));
+        }
+    }
+    parse_number(tokens, start).map(|(verse, next)| (verse, next, None))
+}
+
+/// Finds every unambiguous, explicit Scripture reference in a transcript
+/// update. This matters during a sermon: one ASR turn can contain a sequence
+/// such as "John 3:16, then Romans 8:1" and each reference should be ready in
+/// the operator's Preview queue rather than silently dropping all but the last.
+pub fn detect_references(text: &str, books: &[String]) -> Vec<ScriptureReference> {
     let tokens = tokenize(text);
     let aliases = book_aliases(books);
     // Rank by the end of the matched book name, not its start. Numbered books
     // can contain another canonical book as a suffix ("First John" contains
     // "John"). Both aliases end at the same token, so prefer the longer alias.
     // A genuinely later reference still has a later book-name endpoint.
-    let mut latest: Option<(usize, usize, ScriptureReference)> = None;
+    let mut matches: BTreeMap<usize, (usize, ScriptureReference)> = BTreeMap::new();
     for (alias, canonical) in aliases {
         if alias.is_empty() || alias.len() > tokens.len() {
             continue;
@@ -176,21 +226,23 @@ pub fn detect_reference(text: &str, books: &[String]) -> Option<ScriptureReferen
                     .get(index)
                     .and_then(|token| parse_compact_chapter(token))
                 {
-                    if let Some((verse, verse_end)) = parse_number(&tokens, index + 1) {
-                        let verse_is_compound = verse_end > index + 2;
+                    if let Some((verse, verse_next, verse_end)) =
+                        parse_compact_verse(&tokens, index + 1)
+                    {
+                        let verse_is_compound = verse_next > index + 2;
                         if !compound_verse_required || verse_is_compound {
                             let candidate = ScriptureReference {
                                 book: canonical.clone(),
                                 chapter,
                                 verse,
-                                verse_end: None,
+                                verse_end,
                             };
                             let book_end = start + alias.len();
-                            if latest.as_ref().is_none_or(|(position, length, _)| {
-                                book_end > *position
-                                    || (book_end == *position && alias.len() > *length)
-                            }) {
-                                latest = Some((book_end, alias.len(), candidate));
+                            if matches
+                                .get(&book_end)
+                                .is_none_or(|(length, _)| alias.len() > *length)
+                            {
+                                matches.insert(book_end, (alias.len(), candidate));
                             }
                             continue;
                         }
@@ -204,11 +256,14 @@ pub fn detect_reference(text: &str, books: &[String]) -> Option<ScriptureReferen
                 continue;
             };
             index = next;
-            // Natural speech often inserts a conjunction between chapter and
-            // verse ("Hebrews chapter 2 and verse 1"). Treat it as filler only
-            // when an explicit verse marker follows, so compact references and
-            // hard negatives retain their existing behavior.
-            if tokens.get(index).is_some_and(|token| token == "and")
+            // Natural speech often inserts a bridge between chapter and verse
+            // ("Hebrews chapter 2 and verse 1" / "John 16, on verse 13").
+            // Treat it as filler only when an explicit verse marker follows,
+            // so compact references and hard negatives retain their existing
+            // behavior.
+            if tokens
+                .get(index)
+                .is_some_and(|token| token == "and" || token == "on")
                 && tokens
                     .get(index + 1)
                     .is_some_and(|token| token == "verse" || token == "verses")
@@ -244,15 +299,25 @@ pub fn detect_reference(text: &str, books: &[String]) -> Option<ScriptureReferen
                     verse_end,
                 };
                 let book_end = start + alias.len();
-                if latest.as_ref().is_none_or(|(position, length, _)| {
-                    book_end > *position || (book_end == *position && alias.len() > *length)
-                }) {
-                    latest = Some((book_end, alias.len(), candidate));
+                if matches
+                    .get(&book_end)
+                    .is_none_or(|(length, _)| alias.len() > *length)
+                {
+                    matches.insert(book_end, (alias.len(), candidate));
                 }
             }
         }
     }
-    latest.map(|(_, _, reference)| reference)
+    matches
+        .into_values()
+        .map(|(_, reference)| reference)
+        .collect()
+}
+
+/// Compatibility helper for callers that need only the most recently spoken
+/// reference in a transcript.
+pub fn detect_reference(text: &str, books: &[String]) -> Option<ScriptureReference> {
+    detect_references(text, books).pop()
 }
 
 pub(crate) fn quote_tokens(text: &str) -> Vec<String> {
@@ -554,7 +619,11 @@ mod tests {
             "Matthew".into(),
             "Psalms".into(),
             "Revelation".into(),
+            "Esther".into(),
+            "Zechariah".into(),
             "1 Corinthians".into(),
+            "1 Kings".into(),
+            "2 Kings".into(),
             "1 John".into(),
             "2 John".into(),
             "3 John".into(),
@@ -612,6 +681,15 @@ mod tests {
             })
         );
         assert_eq!(
+            detect_reference("Now watch John 16, on verse 13.", &books()),
+            Some(ScriptureReference {
+                book: "John".into(),
+                chapter: 16,
+                verse: 13,
+                verse_end: None,
+            })
+        );
+        assert_eq!(
             detect_reference(
                 "First Corinthians chapter 10, verses eleven and twelve.",
                 &books()
@@ -643,6 +721,15 @@ mod tests {
                 chapter: 6,
                 verse: 33,
                 verse_end: None,
+            })
+        );
+        assert_eq!(
+            detect_reference("Matthew six nine ten", &books()),
+            Some(ScriptureReference {
+                book: "Matthew".into(),
+                chapter: 6,
+                verse: 9,
+                verse_end: Some(10),
             })
         );
         assert_eq!(detect_reference("Psalm twenty three", &books()), None);
@@ -689,6 +776,47 @@ mod tests {
                 verse_end: None,
             })
         );
+    }
+
+    #[test]
+    fn finds_each_reference_in_a_single_continuous_turn() {
+        assert_eq!(
+            detect_references("Turn to John 3:16, then Romans 8:1.", &books()),
+            vec![
+                ScriptureReference {
+                    book: "John".into(),
+                    chapter: 3,
+                    verse: 16,
+                    verse_end: None,
+                },
+                ScriptureReference {
+                    book: "Romans".into(),
+                    chapter: 8,
+                    verse: 1,
+                    verse_end: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn recognizes_narrow_common_asr_book_aliases() {
+        for (transcript, book, chapter, verse) in [
+            ("Ester 1:3", "Esther", 1, 3),
+            ("Revelations 5:11", "Revelation", 5, 11),
+            ("Zachariah 8:23", "Zechariah", 8, 23),
+        ] {
+            assert_eq!(
+                detect_reference(transcript, &books()),
+                Some(ScriptureReference {
+                    book: book.into(),
+                    chapter,
+                    verse,
+                    verse_end: None,
+                }),
+                "failed to recognize ASR spelling in {transcript}"
+            );
+        }
     }
 
     #[test]
@@ -814,6 +942,25 @@ mod tests {
                     book: book.into(),
                     chapter: 1,
                     verse: 6,
+                    verse_end: None,
+                }),
+                "failed to parse {transcript}"
+            );
+        }
+    }
+
+    #[test]
+    fn detects_singular_numbered_kings_aliases() {
+        for (transcript, book) in [
+            ("First King three five", "1 Kings"),
+            ("Second King six sixteen", "2 Kings"),
+        ] {
+            assert_eq!(
+                detect_reference(transcript, &books()),
+                Some(ScriptureReference {
+                    book: book.into(),
+                    chapter: if book == "1 Kings" { 3 } else { 6 },
+                    verse: if book == "1 Kings" { 5 } else { 16 },
                     verse_end: None,
                 }),
                 "failed to parse {transcript}"

@@ -1,10 +1,10 @@
 import React from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, CalendarDays, Clock3, Monitor, Repeat, Keyboard, X, Signal, EyeOff, MonitorSmartphone } from "lucide-react";
+import { AlertTriangle, CalendarDays, Clock3, Monitor, Repeat, Keyboard, X, Signal, EyeOff, MonitorSmartphone, ExternalLink, Save } from "lucide-react";
 import { useAppStore } from "../../store";
 import { IconButton, StatusBadge } from "../ui";
 
-export function AppHeader() {
+export function AppHeader({ onPersistSchedule }: { onPersistSchedule?: () => Promise<void> }) {
   const {
     isLogOpen, setIsLogOpen,
     showShortcuts, setShowShortcuts,
@@ -12,7 +12,7 @@ export function AppHeader() {
     backendError, setBackendError,
     busyActions, setBusyAction,
     settings,
-    services, activeServiceId,
+    services, activeServiceId, scheduleEntries,
     backendAvailable,
     setActiveTab,
     setBottomDeckOpen,
@@ -94,8 +94,8 @@ export function AppHeader() {
         >
           <CalendarDays size={12} className="shrink-0 text-action-primary" />
           <span className="min-w-0">
-            <span className="block text-[7px] font-black uppercase tracking-wider text-console-text-subtle">Active service</span>
-            <span className="block truncate text-[10px] font-black text-console-text">{activeService?.name ?? "No service selected"}</span>
+            <span className="block text-[7px] font-black uppercase tracking-wider text-console-text-subtle">Service rundown</span>
+            <span className="block truncate text-[10px] font-black text-console-text">{activeService?.name ?? "No service selected"} <span className="text-console-text-subtle">· {scheduleEntries.length}</span></span>
           </span>
         </button>
       </div>
@@ -156,6 +156,10 @@ export function AppHeader() {
       )}
 
       <div className="ml-auto flex shrink-0 items-center gap-1">
+        <div className="mr-1 hidden items-center gap-1 sm:flex">
+          {onPersistSchedule && <button onClick={() => void onPersistSchedule()} disabled={busyActions.includes("save")} className="flex h-7 items-center gap-1.5 rounded-lg border border-console-border bg-console-canvas px-2 text-[8px] font-black uppercase text-console-text-muted hover:bg-console-surface-strong hover:text-console-text disabled:opacity-40" title="Save service plan"><Save size={10} /> Save</button>}
+          <button onClick={() => { setBottomDeckOpen(false); setActiveTab("schedule"); }} className="flex h-7 items-center gap-1.5 rounded-lg border border-console-border bg-console-canvas px-2 text-[8px] font-black uppercase text-console-text-muted hover:border-action-primary/35 hover:text-action-primary" title="Open service plan"><ExternalLink size={10} /> Plan</button>
+        </div>
         <div className="mr-1 hidden items-center gap-1.5 rounded-lg border border-console-border bg-console-canvas/50 px-2.5 py-1.5 xl:flex" title={now.toLocaleDateString()}>
           <Clock3 size={11} className="text-console-text-subtle" />
           <span className="font-mono text-[11px] font-bold tabular-nums text-console-text">{now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>

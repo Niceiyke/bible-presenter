@@ -72,12 +72,12 @@ describe("AiScriptureProvider automatic staging", () => {
     expect(onStageVerse).toHaveBeenCalledWith(suggestion(0.9).verse);
   });
 
-  it("leaves suggestions below 90% for manual staging", async () => {
+  it("leaves direct references below the interim threshold for manual staging", async () => {
     const onStageVerse = vi.fn().mockResolvedValue(true);
     render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);
     await waitFor(() => expect(mocks.listeners.has("ai-scripture-suggestion")).toBe(true));
 
-    await emitSuggestion(suggestion(0.899));
+    await emitSuggestion(suggestion(0.889));
 
     expect(onStageVerse).not.toHaveBeenCalled();
   });
@@ -181,13 +181,25 @@ describe("AiScriptureProvider automatic staging", () => {
     expect(onStageVerse).toHaveBeenCalledOnce();
   });
 
+  it("uses an interim direct reference once and ignores its final upgrade", async () => {
+    const onStageVerse = vi.fn().mockResolvedValue(true);
+    render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);
+    await waitFor(() => expect(mocks.listeners.has("ai-scripture-suggestion")).toBe(true));
+
+    await emitSuggestion({ ...suggestion(0.89, "interim-reference"), timestamp: 1_000 });
+    await emitSuggestion({ ...suggestion(0.99, "final-reference"), timestamp: 1_500 });
+
+    expect(onStageVerse).toHaveBeenCalledOnce();
+    expect(onStageVerse).toHaveBeenCalledWith(suggestion(0.89, "interim-reference").verse);
+  });
+
   it("runs automation again for a fresh mention while reusing the same passage card", async () => {
     const onStageVerse = vi.fn().mockResolvedValue(true);
     render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);
     await waitFor(() => expect(mocks.listeners.has("ai-scripture-suggestion")).toBe(true));
 
-    await emitSuggestion(suggestion(0.97, "first-mention"));
-    await emitSuggestion(suggestion(0.98, "repeated-mention"));
+    await emitSuggestion({ ...suggestion(0.97, "first-mention"), timestamp: 1_000 });
+    await emitSuggestion({ ...suggestion(0.98, "repeated-mention"), timestamp: 10_000 });
 
     expect(onStageVerse).toHaveBeenCalledTimes(2);
     expect(onStageVerse).toHaveBeenNthCalledWith(1, suggestion(0.97, "first-mention").verse);

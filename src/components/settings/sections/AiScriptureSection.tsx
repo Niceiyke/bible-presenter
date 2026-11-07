@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Database, KeyRound } from "lucide-react";
+import { Database, KeyRound, Mic, RotateCcw } from "lucide-react";
 import { useAiScripture, type AiProvider } from "../../../hooks/useAiScripture";
+import { useProgramAudio } from "../../../hooks/useProgramAudio";
 import { useAppStore } from "../../../store";
 import type { PresentationSettings } from "../../../types";
 import { AiScripturePerformancePanel } from "./AiScripturePerformancePanel";
@@ -44,6 +45,7 @@ function formatBytes(bytes: number): string {
 
 export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (settings: PresentationSettings) => Promise<void> | void }) {
   const ai = useAiScripture();
+  const programAudio = useProgramAudio();
   const settings = useAppStore((state) => state.settings);
   const [selectedProvider, setSelectedProvider] = useState<AiProvider>(ai.provider);
   const [keyStatus, setKeyStatus] = useState<AiKeyStatus>({ configured: false, provider: ai.provider });
@@ -59,6 +61,10 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
   useEffect(() => {
     setSelectedProvider(ai.provider);
   }, [ai.provider]);
+
+  useEffect(() => {
+    void programAudio.refreshDevices();
+  }, [programAudio.refreshDevices]);
 
   useEffect(() => {
     let mounted = true;
@@ -137,6 +143,18 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
         <p className="text-xs text-console-text-muted font-bold uppercase mb-1">AI Scripture Assistant</p>
         <p className="text-[10px] text-console-text-subtle">Configure transcription providers and the optional local paraphrase model here. Normal Scripture search never depends on these services.</p>
       </div>
+
+      <section className="rounded-lg border border-console-border bg-console-surface-raised/40 p-3">
+        <div className="mb-3 flex items-center gap-1.5"><Mic size={12} className="text-violet-300" /><p className="text-[10px] font-black uppercase tracking-widest text-console-text-muted">AI Scripture microphone</p></div>
+        <div className="flex gap-2">
+          <select value={programAudio.device ?? ""} onChange={(event) => programAudio.setDevice(event.target.value || null)} disabled={active} className="min-w-0 flex-1 rounded-md border border-console-border bg-console-surface px-2.5 py-2 text-xs text-console-text disabled:opacity-50">
+            <option value="">Choose a mixer or microphone…</option>
+            {programAudio.devices.map((device) => <option key={device} value={device}>{device}</option>)}
+          </select>
+          <button type="button" onClick={() => void programAudio.refreshDevices()} disabled={active} title="Refresh microphone list" className="rounded-md border border-console-border bg-console-surface px-2 text-console-text-subtle hover:text-console-text disabled:opacity-50"><RotateCcw size={13} /></button>
+        </div>
+        <p className="mt-2 text-[10px] text-console-text-subtle">This input is also used for recording and streaming when program audio is enabled.</p>
+      </section>
 
       <section className="rounded-lg border border-console-border bg-console-surface-raised/40 p-3 flex flex-col gap-3">
         <div className="flex items-center justify-between gap-3">

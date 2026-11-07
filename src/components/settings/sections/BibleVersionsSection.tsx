@@ -6,11 +6,12 @@ import { tierCapabilities } from "../../../system/tiers";
 import type { SettingsSectionProps } from "../shared";
 
 export function BibleVersionsSection({ onUpdateSettings }: SettingsSectionProps) {
-  const { settings, availableVersions, license, setToast } = useAppStore();
+  const { settings, availableVersions, license, setToast, setBibleVersion } = useAppStore();
   const t = useT();
   const caps = tierCapabilities(license?.tier);
   const disabled = settings.disabled_bible_versions || [];
   const enabledCount = availableVersions.filter(v => !disabled.includes(v)).length;
+  const enabledVersions = availableVersions.filter(v => !disabled.includes(v));
   const versionCapReached = enabledCount >= caps.maxBibleVersions;
 
   const toggleVersion = (v: string) => {
@@ -32,6 +33,21 @@ export function BibleVersionsSection({ onUpdateSettings }: SettingsSectionProps)
     <div className="flex flex-col gap-6">
       <div>
         <p className="text-xs text-slate-400 font-bold uppercase mb-3">{t("settings.ver.title")}</p>
+        <label className="mb-5 block">
+          <span className="mb-1.5 block text-[10px] text-slate-500 uppercase font-bold">Default Bible translation</span>
+          <select
+            value={settings.default_bible_version && enabledVersions.includes(settings.default_bible_version) ? settings.default_bible_version : (enabledVersions[0] ?? "")}
+            onChange={(event) => {
+              const default_bible_version = event.target.value;
+              setBibleVersion(default_bible_version);
+              void onUpdateSettings({ ...settings, default_bible_version });
+            }}
+            className="w-full bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-2 cursor-pointer focus:outline-none focus:border-amber-500"
+          >
+            {enabledVersions.map((version) => <option key={version} value={version}>{version}</option>)}
+          </select>
+          <span className="mt-1 block text-[10px] text-slate-500">Scripture search, display, and AI Scripture use this translation.</span>
+        </label>
         <p className="text-[10px] text-slate-500 uppercase font-bold mb-2">{t("settings.ver.enableDisable")}</p>
         {caps.maxBibleVersions > 0 && versionCapReached && (
           <p className="text-[10px] text-amber-500 mb-2">

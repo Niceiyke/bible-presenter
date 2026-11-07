@@ -67,14 +67,14 @@ export function ServiceRundownBar({
   };
 
   return (
-    <section className="shrink-0 border-t border-console-border bg-console-surface shadow-[0_-10px_30px_rgba(0,0,0,.10)]" aria-label="Service rundown">
-      <header className="flex h-10 items-center gap-2 px-3">
+    <section className="z-10 shrink-0 border-b border-console-border bg-console-surface shadow-[0_8px_24px_rgba(0,0,0,.16)]" aria-label="Service rundown">
+      <header className="flex h-12 items-center gap-2 px-3">
         <button onClick={toggleCollapsed} className="flex h-7 w-7 items-center justify-center rounded-lg bg-action-primary/10 text-action-primary hover:bg-action-primary hover:text-black" aria-label={compact ? "Expand service rundown" : "Collapse service rundown"}>
           <ChevronDown size={13} className={`transition-transform ${compact ? "-rotate-90" : ""}`} />
         </button>
         <CalendarDays size={13} className="shrink-0 text-action-primary" />
         <div className="min-w-0">
-          <h2 className="text-[9px] font-black uppercase tracking-[0.13em] text-console-text">Service Rundown</h2>
+          <h2 className="text-[9px] font-black uppercase tracking-[0.13em] text-console-text">Service rundown</h2>
           <p className="truncate text-[7px] font-bold text-console-text-subtle">{activeService?.name ?? "Active service"} · {scheduleEntries.length} item{scheduleEntries.length === 1 ? "" : "s"}</p>
         </div>
 
@@ -97,7 +97,7 @@ export function ServiceRundownBar({
       </header>
 
       {!compact && (
-        <div className="custom-scrollbar flex h-[104px] items-stretch gap-2 overflow-x-auto border-t border-console-border/70 px-3 py-2">
+        <div className="custom-scrollbar flex h-[96px] items-stretch gap-2 overflow-x-auto border-t border-console-border/70 px-3 py-2">
           {scheduleEntries.map((entry, index) => {
             const uid = getItemUid(entry.item);
             const isLive = !!liveItem && getItemUid(liveItem) === uid;

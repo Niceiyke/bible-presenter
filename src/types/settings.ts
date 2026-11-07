@@ -79,6 +79,8 @@ export interface PresentationSettings {
   chapter_verse_font_family?: string;
   chapter_verse_color?: string;
   disabled_bible_versions: string[];
+  /** The single translation used by Scripture, AI Scripture, and output. */
+  default_bible_version?: string;
   version_font_family?: string;
   version_font_size?: number;
   version_color?: string;
@@ -114,7 +116,7 @@ export const DEFAULT_SETTINGS: PresentationSettings = {
   verse_font_family: "Georgia, serif", reference_font_size: 36,
   reference_color: "", reference_font_family: "Arial, sans-serif",
   chapter_verse_font_size: undefined, chapter_verse_font_family: undefined, chapter_verse_color: undefined,
-  disabled_bible_versions: [], auto_split_verses: true, verse_split_threshold: 200,
+  disabled_bible_versions: [], default_bible_version: "KJV", auto_split_verses: true, verse_split_threshold: 200,
   auto_clear_background_logo: true, stage_uses_theme: false,
   show_song_section_labels: false,
   reference_output_height: 1080,

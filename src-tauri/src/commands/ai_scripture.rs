@@ -1,5 +1,5 @@
 use crate::ai_detection::{
-    detect_reference, direct_quote_match_score, parse_number, quote_content_word_count,
+    detect_references, direct_quote_match_score, parse_number, quote_content_word_count,
     quote_tokens, MIN_DIRECT_QUOTE_WORDS,
 };
 use crate::commands::program_audio::{feed_diagnostics, subscribe_pcm_feed, AudioRelay};
@@ -104,7 +104,8 @@ const MAX_DIRECT_QUOTES_PER_TURN: usize = 3;
 const MIN_SHORT_WINDOW_CONTENT_WORDS: usize = 3;
 const STRONG_SEMANTIC_SIMILARITY: f32 = 0.80;
 const STRONG_SEMANTIC_MARGIN: f32 = 0.08;
-const ASSEMBLYAI_PARTIAL_DETECTION_STEP_WORDS: usize = 6;
+const PARTIAL_QUOTE_DETECTION_STEP_WORDS: usize = 6;
+const PROACTIVE_REFERENCE_FINALIZATION_WINDOW: Duration = Duration::from_secs(5);
 const MAX_SPOKEN_REFERENCE_RANGE: i32 = 10;
 const MAX_AUDIO_RECOVERIES: usize = 2;
 
@@ -320,6 +321,28 @@ struct ProviderTranscript {
     turn_order: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct AiAudioLevel {
+    /// RMS-normalized level from the active 16-bit PCM AI input, from 0 to 1.
+    level: f32,
+}
+
+fn pcm_level(bytes: &[u8]) -> f32 {
+    let mut sum_squares = 0.0f64;
+    let mut samples = 0usize;
+    for pair in bytes.chunks_exact(2) {
+        let sample = i16::from_le_bytes([pair[0], pair[1]]) as f64 / i16::MAX as f64;
+        sum_squares += sample * sample;
+        samples += 1;
+    }
+    if samples == 0 {
+        return 0.0;
+    }
+    // Lift quiet spoken-word RMS into a useful operator meter range without
+    // reporting an invented decibel value.
+    ((sum_squares / samples as f64).sqrt() * 4.0).clamp(0.0, 1.0) as f32
+}
+
 struct AiSessionControl {
     id: String,
     stop: watch::Sender<bool>,
@@ -491,8 +514,6 @@ struct DetectionPipeline {
     quote_tx: watch::Sender<Option<QuoteJob>>,
     partial_turn_order: Option<u64>,
     partial_words: usize,
-    partial_reference: Option<(String, u8)>,
-    partial_sample_every_six_words: bool,
 }
 
 struct DetectionWorker {
@@ -973,6 +994,51 @@ fn navigation_anchor(detection: &DetectionConfig, app: &AppHandle) -> Option<Ver
         chapter: verse.chapter,
         verse: verse.verse,
     })
+}
+
+/// Sermons commonly continue through a chapter with "verse seventeen and
+/// eighteen" after naming the book and chapter once. Resolve that concise form
+/// against the last verified reference instead of making the operator repeat
+/// the full citation.
+fn detect_contextual_verse_reference(
+    transcript: &str,
+    detection: &DetectionConfig,
+    app: &AppHandle,
+) -> Option<crate::ai_detection::ScriptureReference> {
+    let anchor = navigation_anchor(detection, app)?;
+    contextual_verse_reference_for_anchor(transcript, &anchor)
+}
+
+fn contextual_verse_reference_for_anchor(
+    transcript: &str,
+    anchor: &VerseAnchor,
+) -> Option<crate::ai_detection::ScriptureReference> {
+    let tokens = quote_tokens(transcript);
+    let mut latest = None;
+    for index in 0..tokens.len() {
+        if !matches!(tokens[index].as_str(), "verse" | "verses") {
+            continue;
+        }
+        let Some((verse, next)) = parse_number(&tokens, index + 1) else {
+            continue;
+        };
+        if !(1..=176).contains(&verse) {
+            continue;
+        }
+        let verse_end = tokens.get(next).and_then(|separator| {
+            matches!(separator.as_str(), "-" | "to" | "and")
+                .then(|| parse_number(&tokens, next + 1).map(|(end, _)| end))
+                .flatten()
+                .filter(|end| *end >= verse && *end <= 176)
+        });
+        latest = Some(crate::ai_detection::ScriptureReference {
+            book: anchor.book.clone(),
+            chapter: anchor.chapter,
+            verse,
+            verse_end,
+        });
+    }
+    latest
 }
 
 fn handle_voice_navigation(
@@ -1754,10 +1820,9 @@ async fn run_asr_session(
         quote_tx,
         partial_turn_order: None,
         partial_words: 0,
-        partial_reference: None,
-        partial_sample_every_six_words: provider == AsrProvider::AssemblyAi,
     };
     let mut audio = vec![0u8; 3200];
+    let mut last_audio_level_emit = Instant::now() - Duration::from_millis(100);
 
     loop {
         tokio::select! {
@@ -1807,6 +1872,12 @@ async fn run_asr_session(
                         Some(version.clone()),
                     );
                     continue;
+                }
+                if last_audio_level_emit.elapsed() >= Duration::from_millis(65) {
+                    let _ = app.emit("ai-scripture-audio-level", AiAudioLevel {
+                        level: pcm_level(&audio[..count]),
+                    });
+                    last_audio_level_emit = Instant::now();
                 }
                 socket.send(Message::Binary(audio[..count].to_vec().into()))
                     .await
@@ -2160,12 +2231,10 @@ fn emit_suggestion_if_new(
     }
 }
 
-/// Emit a finalized explicit reference even when the same passage was spoken
-/// recently. The cooldown is still refreshed so a reference merely carried in
-/// from the previous transcript segment cannot fire again. React deduplicates
-/// the card visually, while the new event ID permits the fresh mention to run
-/// the configured Stage or Auto Live action.
-fn emit_fresh_reference(
+/// Revisions for one spoken reference arrive within a few seconds. Surface the
+/// first valid reference in Preview immediately, then suppress only that short
+/// revision burst; a deliberate later mention remains proactive.
+fn emit_proactive_preview_reference(
     app: &AppHandle,
     recently_suggested: &Mutex<HashMap<String, Instant>>,
     suggestion: ScriptureSuggestion,
@@ -2174,7 +2243,32 @@ fn emit_fresh_reference(
         let now = Instant::now();
         recent.retain(|_, at| now.duration_since(*at) <= SUGGESTION_COOLDOWN);
         let key = suggestion_cooldown_key(&suggestion.detection, &suggestion.verse);
+        if recent
+            .get(&key)
+            .is_some_and(|at| now.duration_since(*at) <= PROACTIVE_REFERENCE_FINALIZATION_WINDOW)
+        {
+            return;
+        }
         recent.insert(key, now);
+    }
+    emit_suggestion(app, suggestion);
+}
+
+/// A finalized explicit reference upgrades the proactive Preview card. Its new
+/// event ID permits the established auto-stage/Auto Live settings to act on
+/// the provider's finalized transcript rather than an ASR revision.
+fn emit_fresh_reference(
+    app: &AppHandle,
+    recently_suggested: &Mutex<HashMap<String, Instant>>,
+    suggestion: ScriptureSuggestion,
+) {
+    if let Ok(mut recent) = recently_suggested.lock() {
+        let now = Instant::now();
+        recent.retain(|_, at| now.duration_since(*at) <= SUGGESTION_COOLDOWN);
+        recent.insert(
+            suggestion_cooldown_key(&suggestion.detection, &suggestion.verse),
+            now,
+        );
     }
     emit_suggestion(app, suggestion);
 }
@@ -2270,9 +2364,9 @@ fn handle_provider_message(
     }
     pipeline.partial_turn_order = None;
     pipeline.partial_words = 0;
-    pipeline.partial_reference = None;
 
-    let transcript_reference = detect_reference(transcript, &detection.books);
+    let direct_references = detect_references(transcript, &detection.books);
+    let transcript_reference = direct_references.last().cloned();
     if let Some(directive) = detect_voice_directive(
         transcript,
         &detection.available_versions,
@@ -2357,46 +2451,49 @@ fn handle_provider_message(
     // Explicit references are deterministic and take the fast path. Quotation
     // retrieval can scan every installed translation and therefore runs in a
     // coalescing background worker instead of blocking audio/WebSocket I/O.
-    let final_reference = transcript_reference
-        .clone()
-        .map(|reference| (reference, true))
-        .or_else(|| {
-            detect_reference(&reference_text, &detection.books).map(|reference| (reference, false))
-        });
-    if let Some((reference, fresh_in_final_turn)) = final_reference {
-        // Events are prepended in React. Emit a range in reverse so its first
-        // verse remains the top card and is the only verse eligible for
-        // automatic staging; the remaining range verses stay manual.
-        let output_version = current_output_version(detection);
-        let verses = verses_for_reference(bible, &reference, &output_version);
-        if let Some(last) = verses.last() {
-            set_navigation_anchor(detection, last);
+    let final_references = if direct_references.is_empty() {
+        if let Some(contextual) = detect_contextual_verse_reference(transcript, detection, app) {
+            (vec![contextual], true)
+        } else {
+            (detect_references(&reference_text, &detection.books), false)
         }
-        for verse in verses.into_iter().rev() {
-            let confidence = if verse.verse == reference.verse {
-                (0.92 + confidence * 0.07).clamp(0.0, 0.99)
-            } else {
-                MAX_SHORT_QUOTE_CONFIDENCE
-            };
-            let suggestion = ScriptureSuggestion {
-                id: Uuid::new_v4().to_string(),
-                detection: "reference".into(),
-                confidence,
-                evidence: transcript.to_string(),
-                verse,
-                timestamp: now_ms(),
-                source_transcript_timestamp: Some(transcript_timestamp),
-                group_id: None,
-                rank: None,
-                passage_start: Some(reference.verse),
-                passage_end: reference.verse_end,
-                similarity: None,
-                margin: None,
-            };
-            if fresh_in_final_turn {
-                emit_fresh_reference(app, &pipeline.recently_suggested, suggestion);
-            } else {
-                emit_suggestion_if_new(app, &pipeline.recently_suggested, suggestion);
+    } else {
+        (direct_references, true)
+    };
+    if !final_references.0.is_empty() {
+        // Events are prepended in React. Emit a range in reverse so its first
+        // verse and earliest spoken reference remain at the top of the list.
+        let output_version = current_output_version(detection);
+        for reference in final_references.0.into_iter().rev() {
+            let verses = verses_for_reference(bible, &reference, &output_version);
+            if let Some(last) = verses.last() {
+                set_navigation_anchor(detection, last);
+            }
+            for verse in verses.into_iter().rev() {
+                let suggestion = ScriptureSuggestion {
+                    id: Uuid::new_v4().to_string(),
+                    detection: "reference".into(),
+                    confidence: if verse.verse == reference.verse {
+                        (0.92 + confidence * 0.07).clamp(0.0, 0.99)
+                    } else {
+                        MAX_SHORT_QUOTE_CONFIDENCE
+                    },
+                    evidence: transcript.to_string(),
+                    verse,
+                    timestamp: now_ms(),
+                    source_transcript_timestamp: Some(transcript_timestamp),
+                    group_id: None,
+                    rank: None,
+                    passage_start: Some(reference.verse),
+                    passage_end: reference.verse_end,
+                    similarity: None,
+                    margin: None,
+                };
+                if final_references.1 {
+                    emit_fresh_reference(app, &pipeline.recently_suggested, suggestion);
+                } else {
+                    emit_suggestion_if_new(app, &pipeline.recently_suggested, suggestion);
+                }
             }
         }
         // A finalized ASR turn can contain both an explicit reference and
@@ -2429,84 +2526,65 @@ fn handle_interim_transcript(
     if turn_order.is_some() && pipeline.partial_turn_order != turn_order {
         pipeline.partial_turn_order = turn_order;
         pipeline.partial_words = 0;
-        pipeline.partial_reference = None;
     }
 
+    // References are the operator's real-time path. Search every provider
+    // revision as soon as it contains a complete, locally verifiable reference
+    // instead of waiting for a second revision, a word-count sample, or an ASR
+    // turn boundary. They remain Preview-only until the provider sends its
+    // final transcript: ASR can briefly revise a spoken number while the
+    // preacher is still speaking.
+    let references = {
+        let direct = detect_references(transcript, &detection.books);
+        if direct.is_empty() {
+            detect_contextual_verse_reference(transcript, detection, app)
+                .into_iter()
+                .collect()
+        } else {
+            direct
+        }
+    };
+    let output_version = current_output_version(detection);
+    for reference in references {
+        for verse in verses_for_reference(bible, &reference, &output_version)
+            .into_iter()
+            .rev()
+        {
+            let suggestion = ScriptureSuggestion {
+                id: Uuid::new_v4().to_string(),
+                detection: "reference".into(),
+                confidence: MAX_SHORT_QUOTE_CONFIDENCE,
+                evidence: latest_word_suffix(transcript, MAX_SEMANTIC_CONTEXT_WORDS),
+                verse,
+                timestamp: now_ms(),
+                source_transcript_timestamp: Some(transcript_timestamp),
+                group_id: None,
+                rank: None,
+                passage_start: Some(reference.verse),
+                passage_end: reference.verse_end,
+                similarity: None,
+                margin: None,
+            };
+            emit_proactive_preview_reference(app, &pipeline.recently_suggested, suggestion);
+        }
+    }
+
+    // Quote and semantic retrieval can be comparatively expensive. Throttle
+    // only that background work; it must never delay explicit references.
     let words = quote_tokens(transcript).len();
     if words < pipeline.partial_words {
-        // A provider revision shortened the turn. Measure the next detection
-        // interval from the revised snapshot rather than waiting indefinitely.
+        // A provider revision shortened the turn. Measure the next background
+        // quote-detection interval from the revised snapshot.
         pipeline.partial_words = words;
-        pipeline.partial_reference = None;
-        return;
     }
-    if pipeline.partial_sample_every_six_words
-        && words
-            < pipeline
-                .partial_words
-                .saturating_add(ASSEMBLYAI_PARTIAL_DETECTION_STEP_WORDS)
+    if words
+        < pipeline
+            .partial_words
+            .saturating_add(PARTIAL_QUOTE_DETECTION_STEP_WORDS)
     {
         return;
     }
     pipeline.partial_words = words;
-
-    if let Some(reference) = detect_reference(transcript, &detection.books) {
-        let key = format!(
-            "{}:{}:{}:{}",
-            reference.book,
-            reference.chapter,
-            reference.verse,
-            reference.verse_end.unwrap_or(reference.verse)
-        );
-        if confirm_interim_reference(&mut pipeline.partial_reference, Some(key)) {
-            let output_version = current_output_version(detection);
-            for verse in verses_for_reference(bible, &reference, &output_version)
-                .into_iter()
-                .rev()
-            {
-                let suggestion = ScriptureSuggestion {
-                    id: Uuid::new_v4().to_string(),
-                    detection: "reference".into(),
-                    // Two matching interim revisions are a sufficiently fast,
-                    // deterministic reference signal. Preserve the normal
-                    // range rule: only the first verse may be automated.
-                    // Interim cards are useful for operator preview but can
-                    // still be revised by the provider. Only the final event
-                    // may cross the 90% automation boundary.
-                    confidence: if verse.verse == reference.verse {
-                        (0.92 + asr_confidence * 0.07)
-                            .clamp(0.0, 0.99)
-                            .min(MAX_SHORT_QUOTE_CONFIDENCE)
-                    } else {
-                        MAX_SHORT_QUOTE_CONFIDENCE
-                    },
-                    evidence: latest_word_suffix(transcript, MAX_SEMANTIC_CONTEXT_WORDS),
-                    verse,
-                    timestamp: now_ms(),
-                    source_transcript_timestamp: Some(transcript_timestamp),
-                    group_id: None,
-                    rank: None,
-                    passage_start: Some(reference.verse),
-                    passage_end: reference.verse_end,
-                    similarity: None,
-                    margin: None,
-                };
-                crate::store::log_msg(
-                    app,
-                    &format!(
-                        "[ai-scripture] interim suggestion reference {} {}:{} confidence={:.3}",
-                        suggestion.verse.book,
-                        suggestion.verse.chapter,
-                        suggestion.verse.verse,
-                        suggestion.confidence,
-                    ),
-                );
-                emit_suggestion(app, suggestion);
-            }
-        }
-    } else {
-        confirm_interim_reference(&mut pipeline.partial_reference, None);
-    }
 
     pipeline.quote_tx.send_replace(Some(QuoteJob {
         generation: pipeline.generation.load(Ordering::Acquire),
@@ -2542,6 +2620,8 @@ fn verses_for_reference(
         .collect()
 }
 
+/// Quote candidates are probabilistic, unlike a complete explicit reference.
+/// Keep the two-update confirmation only for that background matching path.
 fn confirm_interim_reference(state: &mut Option<(String, u8)>, key: Option<String>) -> bool {
     let Some(key) = key else {
         *state = None;
@@ -3143,7 +3223,7 @@ mod tests {
     }
 
     #[test]
-    fn assemblyai_interim_references_require_two_consistent_snapshots() {
+    fn interim_quotes_require_two_consistent_snapshots() {
         let mut state = None;
         assert!(!confirm_interim_reference(
             &mut state,
@@ -3172,6 +3252,27 @@ mod tests {
             "three four five"
         );
         assert_eq!(latest_word_suffix("one two", 3), "one two");
+    }
+
+    #[test]
+    fn contextual_verses_follow_the_last_verified_chapter() {
+        let anchor = VerseAnchor {
+            book: "Matthew".into(),
+            chapter: 6,
+            verse: 10,
+        };
+        assert_eq!(
+            contextual_verse_reference_for_anchor(
+                "Verses seventeen and eighteen, when you fast.",
+                &anchor
+            ),
+            Some(crate::ai_detection::ScriptureReference {
+                book: "Matthew".into(),
+                chapter: 6,
+                verse: 17,
+                verse_end: Some(18),
+            })
+        );
     }
 
     #[test]

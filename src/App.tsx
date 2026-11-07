@@ -25,14 +25,12 @@ import { LeftNav } from "./components/layout/LeftNav";
 import { BottomDrawer } from "./components/layout/BottomDrawer";
 import { Cockpit } from "./components/layout/Cockpit";
 import { ContentBrowser } from "./components/layout/ContentBrowser";
-import { ServiceRundownBar } from "./components/layout/ServiceRundownBar";
 import { AddToServiceModal } from "./components/AddToServiceModal";
 
 import { Toast } from "./components/Toast";
 import { ShortcutsModal } from "./components/ShortcutsModal";
 import { LogViewer } from "./components/LogViewer";
 import { RecoveryModal } from "./components/RecoveryModal";
-import { MusicPlayer } from "./components/MusicPlayer";
 import { OnboardingTour } from "./components/OnboardingTour";
 
 import { OutputWindow, StageWindow } from "./windows";
@@ -61,6 +59,7 @@ export default function App() {
     showShortcuts,
     startupIssues, setStartupIssues,
     isLogOpen,
+    bottomDeckOpen,
     recentItems, setRecentItems,
     pastScheduleStates, futureScheduleStates,
     isInitialized,
@@ -73,7 +72,6 @@ export default function App() {
 
   const [editingPres, setEditingPres] = useState<CustomPresentation | null>(null);
   const [bottomDeckH, setBottomDeckH] = React.useState(() => Number(localStorage.getItem("pref_bottomDeckH") || 280));
-  const [cockpitWidth, setCockpitWidth] = React.useState(() => Math.max(340, Math.min(620, Number(localStorage.getItem("pref_cockpitWidth") || 460))));
   const [recovery, setRecovery] = useState<{ activeServiceId: string; scheduleEntries: ScheduleEntry[]; lastUpdate: number } | null>(null);
 
   useAppInitialization();
@@ -81,7 +79,7 @@ export default function App() {
   useFonts(); // P2.5: inject @font-face for user-installed fonts.
 
   const {
-    nextLiveItem, stageItem, stageVerse, goLive, sendLive, clearStaged, clearAll, undoClearAll, getNextItem,
+    stageItem, stageVerse, goLive, sendLive, clearStaged, clearAll,
     addToSchedule, addToService, persistSchedule, handleFileUpload, handleDeleteMedia,
     updateSettings, updateProps,
     loadScenes, saveScene, deleteScene, applyScene, captureScene,
@@ -224,7 +222,7 @@ export default function App() {
       <AiScriptureProvider onStageVerse={stageVerse} onSendLiveVerse={async (verse) => sendLive({ type: "Verse", data: verse })}>
       <div className="h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden select-none">
 
-      <AppHeader />
+       <AppHeader onPersistSchedule={persistSchedule} />
 
       {startupIssues.length > 0 && (
         <div className="bg-amber-900/90 border-b border-amber-600 px-4 py-2 flex items-start gap-2 text-sm text-amber-200 z-50">
@@ -236,66 +234,51 @@ export default function App() {
 
       <OfflineLicenseBanner />
 
-      <div className="flex-1 flex overflow-hidden">
+        <div className="flex-1 flex min-h-0 overflow-hidden">
+          <LeftNav />
 
-        <LeftNav />
+          <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-console-canvas">
+            <Cockpit
+              goLive={goLive}
+              clearStaged={clearStaged}
+              updateSettings={updateSettings}
+            />
 
-        <div className="flex-1 flex flex-col overflow-hidden bg-slate-950">
-          <ContentBrowser
-            stageItem={stageItem}
-            sendLive={sendLive}
-            addToSchedule={addToSchedule}
-            handleFileUpload={handleFileUpload}
-            handleDeleteMedia={handleDeleteMedia}
-            updateSettings={updateSettings}
-            updateProps={updateProps}
-            setEditingPres={setEditingPres}
-            persistSchedule={persistSchedule}
-            saveScene={saveScene}
-            deleteScene={deleteScene}
-            applyScene={applyScene}
-            captureScene={captureScene}
-          />
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              <ContentBrowser
+                stageItem={stageItem}
+                sendLive={sendLive}
+                addToSchedule={addToSchedule}
+                handleFileUpload={handleFileUpload}
+                handleDeleteMedia={handleDeleteMedia}
+                updateSettings={updateSettings}
+                updateProps={updateProps}
+                setEditingPres={setEditingPres}
+                persistSchedule={persistSchedule}
+                saveScene={saveScene}
+                deleteScene={deleteScene}
+                applyScene={applyScene}
+                captureScene={captureScene}
+              />
 
-          <ServiceRundownBar
-            nextLiveItem={nextLiveItem}
-            stageItem={stageItem}
-            sendLive={sendLive}
-            persistSchedule={persistSchedule}
-          />
-
-          <BottomDrawer
-            bottomDeckH={bottomDeckH}
-            setBottomDeckH={setBottomDeckH}
-            stageItem={stageItem}
-            sendLive={sendLive}
-            handleFileUpload={handleFileUpload}
-            updateSettings={updateSettings}
-            updateProps={updateProps}
-            saveScene={saveScene}
-            deleteScene={deleteScene}
-            applyScene={applyScene}
-            captureScene={captureScene}
-          />
+              {bottomDeckOpen && <BottomDrawer
+                bottomDeckH={bottomDeckH}
+                setBottomDeckH={setBottomDeckH}
+                stageItem={stageItem}
+                sendLive={sendLive}
+                handleFileUpload={handleFileUpload}
+                updateSettings={updateSettings}
+                updateProps={updateProps}
+                saveScene={saveScene}
+                deleteScene={deleteScene}
+                applyScene={applyScene}
+                captureScene={captureScene}
+              />}
+            </div>
+          </main>
         </div>
 
-        <Cockpit
-          nextLiveItem={nextLiveItem}
-          stageItem={stageItem}
-          goLive={goLive}
-          sendLive={sendLive}
-          clearStaged={clearStaged}
-          clearAll={clearAll}
-          undoClearAll={undoClearAll}
-          updateSettings={updateSettings}
-          cockpitWidth={cockpitWidth}
-          setCockpitWidth={setCockpitWidth}
-        />
-      </div>
-
-      <MusicPlayer />
-
-      <AnimatePresence>
+       <AnimatePresence>
         {toast && <Toast key={toast} message={toast} onDone={() => setToast(null)} />}
       </AnimatePresence>
 

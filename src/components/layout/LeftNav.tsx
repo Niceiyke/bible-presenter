@@ -47,10 +47,10 @@ export function LeftNav() {
     () => (localStorage.getItem("pref_navCollapsed") === "1" ? true : localStorage.getItem("pref_navCollapsed") === "0" ? false : null),
   );
   const [moreOpen, setMoreOpen] = React.useState(() => localStorage.getItem("pref_navMoreOpen") === "1");
-  const [narrow, setNarrow] = React.useState(() => window.innerWidth < 1280);
+  const [narrow, setNarrow] = React.useState(() => window.innerWidth < 1120);
 
   React.useEffect(() => {
-    const onResize = () => setNarrow(window.innerWidth < 1280);
+    const onResize = () => setNarrow(window.innerWidth < 1120);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);

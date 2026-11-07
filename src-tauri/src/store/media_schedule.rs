@@ -497,6 +497,8 @@ pub struct PresentationSettings {
     pub reference_font_family: String,
     #[serde(default)]
     pub disabled_bible_versions: Vec<String>,
+    #[serde(default = "default_bible_version")]
+    pub default_bible_version: String,
     #[serde(default = "default_version_font")]
     pub version_font_family: String,
     #[serde(default = "default_version_size")]
@@ -547,6 +549,9 @@ pub struct ThemeColors {
 
 fn default_auto_split_verses() -> bool {
     true
+}
+fn default_bible_version() -> String {
+    "KJV".to_string()
 }
 fn default_verse_split_threshold() -> usize {
     200
@@ -619,6 +624,7 @@ impl Default for PresentationSettings {
             reference_color: String::new(),
             reference_font_family: default_reference_font_family(),
             disabled_bible_versions: Vec::new(),
+            default_bible_version: default_bible_version(),
             version_font_family: default_version_font(),
             version_font_size: default_version_size(),
             version_color: String::new(),

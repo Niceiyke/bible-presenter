@@ -132,10 +132,16 @@ export function useAppInitialization() {
       const active = savedTpls.find(t => t.id === activeId) || savedTpls[0];
       setLtTemplate(active);
 
-      if (settingsRes) setSettings(settingsRes);
+       if (settingsRes) setSettings(settingsRes);
 
-      setAvailableVersions(versionsRes);
-      setBibleVersion(localStorage.getItem("pref_bibleVersion") || (versionsRes.length > 0 ? versionsRes[0] : ""));
+       setAvailableVersions(versionsRes);
+       const configuredVersion = settingsRes?.default_bible_version;
+       const enabledVersions = versionsRes.filter((version: string) => !settingsRes?.disabled_bible_versions?.includes(version));
+       setBibleVersion(
+         configuredVersion && enabledVersions.includes(configuredVersion)
+           ? configuredVersion
+           : (enabledVersions[0] || versionsRes[0] || ""),
+       );
 
       setPropItems(propsRes);
       setServices(servicesRes.length ? servicesRes : [{ id: "default", name: "Sunday Service", item_count: 0, updated_at: Date.now() }]);

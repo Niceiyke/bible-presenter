@@ -16,6 +16,9 @@ import {
 } from "../ai/scripturePerformance";
 
 export const AI_AUTO_STAGE_CONFIDENCE = 0.9;
+/** Direct references are deterministic enough to act on the backend's interim 89% result. */
+export const AI_INTERIM_REFERENCE_CONFIDENCE = 0.89;
+const AUTO_ACTION_UPGRADE_DEDUP_MS = 8_000;
 export type AiProvider = "deepgram" | "assemblyai";
 export type AiListeningMode = "service" | "operator";
 
@@ -76,15 +79,17 @@ export function shouldAutoStageSuggestion(suggestion: ScriptureSuggestion): bool
   // Paraphrase confidence is deliberately provisional until it is calibrated
   // against a representative sermon corpus. Keep a frontend safety boundary
   // in addition to the backend's 89% cap.
-  return (suggestion.detection === "reference" || suggestion.detection === "quote")
-    && Number.isFinite(suggestion.confidence)
-    && suggestion.confidence >= AI_AUTO_STAGE_CONFIDENCE;
+  if (!Number.isFinite(suggestion.confidence)) return false;
+  if (suggestion.detection === "reference") {
+    return suggestion.confidence >= AI_INTERIM_REFERENCE_CONFIDENCE;
+  }
+  return suggestion.detection === "quote" && suggestion.confidence >= AI_AUTO_STAGE_CONFIDENCE;
 }
 
 /**
  * Auto Live is deliberately a second, explicit opt-in beyond auto-staging.
- * References and quotations still need their normal final/high-confidence
- * eligibility. Paraphrases are only allowed for the confirmed best candidate
+   * Direct references can act on their deterministic interim threshold, while
+   * quotations retain their final/high-confidence eligibility. Paraphrases are only allowed for the confirmed best candidate
  * (rank 1), never its alternative cards. Voice command cards are final-turn,
  * locally verified Bible rows.
  */
@@ -117,6 +122,8 @@ interface AiScriptureContextValue {
   transcript: TranscriptSegment[];
   interim: TranscriptSegment | null;
   suggestions: ScriptureSuggestion[];
+  /** RMS-normalized level from the active transcription input, from 0 to 1. */
+  audioLevel: number;
   lastCommand: AiVoiceCommandEvent | null;
   performance: AiScripturePerformance;
   clearPerformance: () => void;
@@ -163,6 +170,7 @@ export function AiScriptureProvider({
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
   const [interim, setInterim] = useState<TranscriptSegment | null>(null);
   const [suggestions, setSuggestions] = useState<ScriptureSuggestion[]>([]);
+  const [audioLevel, setAudioLevel] = useState(0);
   const [lastCommand, setLastCommand] = useState<AiVoiceCommandEvent | null>(null);
   const metricsRef = useRef<PerformanceAccumulator>(loadPerformanceAccumulator());
   const [performance, setPerformance] = useState<AiScripturePerformance>(() => snapshotPerformance(metricsRef.current));
@@ -170,6 +178,7 @@ export function AiScriptureProvider({
   const onStageVerseRef = useRef(onStageVerse);
   const onSendLiveVerseRef = useRef(onSendLiveVerse);
   const autoHandledSuggestionIds = useRef(new Set<string>());
+  const autoHandledCanonicalActions = useRef(new Map<string, number>());
   const modeRef = useRef(mode);
   const operatorStopRequestedRef = useRef(false);
 
@@ -249,6 +258,7 @@ export function AiScriptureProvider({
     await invoke("ai_stop");
     setStatus(STOPPED);
     setInterim(null);
+    setAudioLevel(0);
   }, []);
 
   const stopOperatorAfterRecognition = useCallback(() => {
@@ -278,7 +288,12 @@ export function AiScriptureProvider({
 
     void Promise.all([
       listen<AiRuntimeStatus>("ai-scripture-status", (event) => {
-        if (mounted) setStatus(event.payload);
+        if (!mounted) return;
+        setStatus(event.payload);
+        if (!["connecting", "running", "listening"].includes(event.payload.state)) setAudioLevel(0);
+      }),
+      listen<{ level: number }>("ai-scripture-audio-level", (event) => {
+        if (mounted) setAudioLevel(Math.max(0, Math.min(1, event.payload.level || 0)));
       }),
       listen<TranscriptSegment>("ai-scripture-transcript", (event) => {
         if (!mounted) return;
@@ -318,9 +333,21 @@ export function AiScriptureProvider({
         if (suggestion.detection !== "paraphrase") stopOperatorAfterRecognition();
         if ((!autoLive && !autoStage) || autoHandledSuggestionIds.current.has(suggestion.id)) return;
 
+        // A direct reference is deliberately emitted once from interim ASR and
+        // again when that turn finalizes. Act on the interim result, then hold
+        // the final upgrade long enough to avoid staging/sending the same
+        // Scripture twice. A later spoken mention remains eligible.
+        const actionKey = `${autoLive ? "live" : "stage"}:${suggestion.detection}:${verseKey(suggestion.verse)}`;
+        const now = suggestion.timestamp || Date.now();
+        for (const [key, handledAt] of autoHandledCanonicalActions.current) {
+          if (now - handledAt > AUTO_ACTION_UPGRADE_DEDUP_MS) autoHandledCanonicalActions.current.delete(key);
+        }
+        if (autoHandledCanonicalActions.current.has(actionKey)) return;
+
         // Event registration can briefly overlap during development remounts.
         // Track IDs before awaiting so one suggestion can never be sent twice.
         autoHandledSuggestionIds.current.add(suggestion.id);
+        autoHandledCanonicalActions.current.set(actionKey, now);
         if (autoHandledSuggestionIds.current.size > 100) {
           const oldest = autoHandledSuggestionIds.current.values().next().value;
           if (oldest) autoHandledSuggestionIds.current.delete(oldest);
@@ -414,6 +441,7 @@ export function AiScriptureProvider({
       metricsRef.current.mode = modeRef.current;
     }
     observedSuggestionsRef.current.clear();
+    autoHandledCanonicalActions.current.clear();
     operatorStopRequestedRef.current = false;
     savePerformanceAccumulator(metricsRef.current);
     setPerformance(snapshotPerformance(metricsRef.current));
@@ -432,11 +460,12 @@ export function AiScriptureProvider({
     setSuggestions([]);
     setLastCommand(null);
     autoHandledSuggestionIds.current.clear();
+    autoHandledCanonicalActions.current.clear();
   }, []);
 
   const value = useMemo<AiScriptureContextValue>(
-    () => ({ status, provider, setProvider, mode, setMode, transcript, interim, suggestions, lastCommand, performance, clearPerformance, recordManualStage, start, stop, clearSession }),
-    [status, provider, setProvider, mode, setMode, transcript, interim, suggestions, lastCommand, performance, clearPerformance, recordManualStage, start, stop, clearSession],
+    () => ({ status, provider, setProvider, mode, setMode, transcript, interim, suggestions, audioLevel, lastCommand, performance, clearPerformance, recordManualStage, start, stop, clearSession }),
+    [status, provider, setProvider, mode, setMode, transcript, interim, suggestions, audioLevel, lastCommand, performance, clearPerformance, recordManualStage, start, stop, clearSession],
   );
 
   return <AiScriptureContext.Provider value={value}>{children}</AiScriptureContext.Provider>;

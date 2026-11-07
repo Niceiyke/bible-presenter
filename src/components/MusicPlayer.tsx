@@ -72,25 +72,27 @@ export function MusicPlayer() {
 
   const currentTrack = currentTrackIdx !== null ? audioFiles[currentTrackIdx] : null;
 
+  const hasTrack = !!currentTrack;
+
   return (
-    <div className="bg-slate-900 border-t border-slate-800 px-4 py-2 flex items-center gap-6 shadow-2xl h-14">
+    <div className={`bg-slate-900 border-t border-slate-800 px-4 flex items-center gap-6 shadow-2xl ${hasTrack ? "h-14 py-2" : "h-10 py-1.5"}`}>
       {/* Track Info */}
-      <div className="flex items-center gap-3 w-64 shrink-0 overflow-hidden">
-        <div className="w-10 h-10 bg-amber-500/10 rounded-lg flex items-center justify-center border border-amber-500/20">
-          <Music size={18} className="text-amber-500" />
+      <div className={`flex items-center gap-3 shrink-0 overflow-hidden ${hasTrack ? "w-64" : "flex-1"}`}>
+        <div className={`${hasTrack ? "w-10 h-10" : "w-7 h-7"} bg-amber-500/10 rounded-lg flex items-center justify-center border border-amber-500/20`}>
+          <Music size={hasTrack ? 18 : 13} className="text-amber-500" />
         </div>
         <div className="flex flex-col min-w-0">
-          <p className="text-xs font-bold text-slate-200 truncate">
+          <p className={`${hasTrack ? "text-xs" : "text-[10px]"} font-bold text-slate-200 truncate`}>
             {currentTrack?.name || "No track selected"}
           </p>
           <p className="text-[10px] text-slate-500 truncate">
-            {currentTrack ? "Background Audio" : "Select an audio file from library"}
+            {currentTrack ? "Background Audio" : "Audio stays hidden until selected"}
           </p>
         </div>
       </div>
 
       {/* Controls */}
-      <div className="flex-1 flex flex-col gap-1 max-w-xl">
+      {hasTrack ? <div className="flex-1 flex flex-col gap-1 max-w-xl">
         <div className="flex items-center justify-center gap-4">
           <button 
             onClick={() => setIsShuffle(!isShuffle)}
@@ -136,10 +138,10 @@ export function MusicPlayer() {
             {audioRef.current && isFinite(audioRef.current.duration) ? Math.floor(audioRef.current.duration / 60) : 0}:{String(Math.floor((audioRef.current?.duration || 0) % 60)).padStart(2, '0')}
           </span>
         </div>
-      </div>
+      </div> : <div className="hidden flex-1 text-[9px] font-bold uppercase tracking-wider text-slate-600 md:block">Select a track only when the service needs audio</div>}
 
       {/* Volume */}
-      <div className="flex items-center gap-2 w-32 shrink-0">
+      {hasTrack && <div className="flex items-center gap-2 w-32 shrink-0">
         <button onClick={() => setIsMuted(!isMuted)} className="text-slate-500 hover:text-white transition-colors">
           {isMuted || volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}
         </button>
@@ -152,7 +154,7 @@ export function MusicPlayer() {
           onChange={(e) => setVolume(parseFloat(e.target.value))}
           className="flex-1 h-1 bg-slate-800 accent-slate-400 rounded-full cursor-pointer"
         />
-      </div>
+      </div>}
 
       {/* Hidden Audio Element */}
       <audio
