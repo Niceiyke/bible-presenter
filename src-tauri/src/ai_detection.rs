@@ -95,7 +95,7 @@ fn number_word(word: &str) -> Option<i32> {
     })
 }
 
-fn parse_number(tokens: &[String], start: usize) -> Option<(i32, usize)> {
+pub(crate) fn parse_number(tokens: &[String], start: usize) -> Option<(i32, usize)> {
     if start >= tokens.len() {
         return None;
     }
@@ -157,7 +157,11 @@ fn parse_compact_chapter(token: &str) -> Option<(i32, bool)> {
 pub fn detect_reference(text: &str, books: &[String]) -> Option<ScriptureReference> {
     let tokens = tokenize(text);
     let aliases = book_aliases(books);
-    let mut latest: Option<(usize, ScriptureReference)> = None;
+    // Rank by the end of the matched book name, not its start. Numbered books
+    // can contain another canonical book as a suffix ("First John" contains
+    // "John"). Both aliases end at the same token, so prefer the longer alias.
+    // A genuinely later reference still has a later book-name endpoint.
+    let mut latest: Option<(usize, usize, ScriptureReference)> = None;
     for (alias, canonical) in aliases {
         if alias.is_empty() || alias.len() > tokens.len() {
             continue;
@@ -181,11 +185,12 @@ pub fn detect_reference(text: &str, books: &[String]) -> Option<ScriptureReferen
                                 verse,
                                 verse_end: None,
                             };
-                            if latest
-                                .as_ref()
-                                .is_none_or(|(position, _)| start > *position)
-                            {
-                                latest = Some((start, candidate));
+                            let book_end = start + alias.len();
+                            if latest.as_ref().is_none_or(|(position, length, _)| {
+                                book_end > *position
+                                    || (book_end == *position && alias.len() > *length)
+                            }) {
+                                latest = Some((book_end, alias.len(), candidate));
                             }
                             continue;
                         }
@@ -238,16 +243,16 @@ pub fn detect_reference(text: &str, books: &[String]) -> Option<ScriptureReferen
                     verse,
                     verse_end,
                 };
-                if latest
-                    .as_ref()
-                    .is_none_or(|(position, _)| start > *position)
-                {
-                    latest = Some((start, candidate));
+                let book_end = start + alias.len();
+                if latest.as_ref().is_none_or(|(position, length, _)| {
+                    book_end > *position || (book_end == *position && alias.len() > *length)
+                }) {
+                    latest = Some((book_end, alias.len(), candidate));
                 }
             }
         }
     }
-    latest.map(|(_, reference)| reference)
+    latest.map(|(_, _, reference)| reference)
 }
 
 pub(crate) fn quote_tokens(text: &str) -> Vec<String> {
@@ -379,6 +384,13 @@ fn content_words(tokens: &[String]) -> Vec<String> {
         .collect()
 }
 
+pub(crate) fn quote_content_word_count(text: &str) -> usize {
+    quote_tokens(text)
+        .iter()
+        .filter(|token| is_quote_content_word(token))
+        .count()
+}
+
 fn content_overlap(spoken: &[String], verse: &[String]) -> usize {
     let mut verse_counts: HashMap<&str, usize> = HashMap::new();
     for token in verse.iter().filter(|token| is_quote_content_word(token)) {
@@ -477,7 +489,20 @@ fn quote_alignment_is_strong(spoken: &[String], verse: &[String]) -> bool {
     // alone.
     let strong_ordered_alignment = spoken.len() >= 9 && ordered_content >= 5 && content >= 5;
 
-    nearly_exact_short || strong_phrase || embedded_phrase || strong_ordered_alignment
+    // ASR can preserve the structure and distinctive content of a short quote
+    // while replacing its opening clause (for example, "what shall we do" for
+    // "how shall we escape"). Keep this narrow and content-gated so ordinary
+    // sermon commentary cannot qualify on a few shared function words.
+    let close_short_quote = (7..=14).contains(&spoken.len())
+        && lcs_len(spoken, verse) >= 7
+        && ordered_content >= 3
+        && content >= 3;
+
+    nearly_exact_short
+        || strong_phrase
+        || embedded_phrase
+        || strong_ordered_alignment
+        || close_short_quote
 }
 
 fn direct_quote_score(spoken: &str, verse: &str) -> f32 {
@@ -503,9 +528,20 @@ fn direct_quote_score(spoken: &str, verse: &str) -> f32 {
 /// Return the calibrated lexical-alignment score when `spoken` is close enough
 /// to `verse` to qualify as a direct quotation suggestion.
 pub fn direct_quote_match_score(spoken: &str, verse: &str) -> Option<f32> {
+    let spoken_tokens = quote_tokens(spoken);
+    let verse_tokens = quote_tokens(verse);
     let score = direct_quote_score(spoken, verse);
-    let ordered_words = lcs_len(&quote_tokens(spoken), &quote_tokens(verse));
-    (score >= 0.72 && ordered_words >= MIN_DIRECT_QUOTE_WORDS).then_some(score)
+    let ordered_words = lcs_len(&spoken_tokens, &verse_tokens);
+    let close_short_quote = (7..=14).contains(&spoken_tokens.len())
+        && ordered_words >= 7
+        && lcs_len(
+            &content_words(&spoken_tokens),
+            &content_words(&verse_tokens),
+        ) >= 3
+        && content_overlap(&spoken_tokens, &verse_tokens) >= 3;
+    ((score >= 0.72 || (close_short_quote && score >= 0.66))
+        && ordered_words >= MIN_DIRECT_QUOTE_WORDS)
+        .then_some(score)
 }
 
 #[cfg(test)]
@@ -519,6 +555,9 @@ mod tests {
             "Psalms".into(),
             "Revelation".into(),
             "1 Corinthians".into(),
+            "1 John".into(),
+            "2 John".into(),
+            "3 John".into(),
             "Song of Solomon".into(),
             "Hebrews".into(),
             "Acts".into(),
@@ -619,6 +658,40 @@ mod tests {
     }
 
     #[test]
+    fn numbered_john_books_are_not_truncated_to_john() {
+        for (transcript, book, chapter, verse) in [
+            ("First John 5:18", "1 John", 5, 18),
+            ("Second John 1:2", "2 John", 1, 2),
+            ("Third John 1:3", "3 John", 1, 3),
+            ("1 John 1:5", "1 John", 1, 5),
+        ] {
+            assert_eq!(
+                detect_reference(transcript, &books()),
+                Some(ScriptureReference {
+                    book: book.into(),
+                    chapter,
+                    verse,
+                    verse_end: None,
+                }),
+                "failed to preserve the numbered book in {transcript}"
+            );
+        }
+    }
+
+    #[test]
+    fn later_reference_still_wins_after_numbered_book_disambiguation() {
+        assert_eq!(
+            detect_reference("First John 5:18, then John 1:5", &books()),
+            Some(ScriptureReference {
+                book: "John".into(),
+                chapter: 1,
+                verse: 5,
+                verse_end: None,
+            })
+        );
+    }
+
+    #[test]
     fn direct_quote_alignment_rejects_unrelated_text() {
         let verse = "For God so loved the world that he gave his only begotten Son";
         assert!(
@@ -653,6 +726,16 @@ mod tests {
             "And be not drunk with wine, wherein is excess; but be filled with the Spirit;"
         )
         .is_some());
+    }
+
+    #[test]
+    fn aligns_short_quote_when_asr_replaces_the_opening_clause() {
+        let score = direct_quote_match_score(
+            "What shall we do if we neglect this great a salvation?",
+            "How shall we escape, if we neglect so great salvation;",
+        )
+        .expect("the preserved quote structure and content should qualify");
+        assert!(score >= 0.66);
     }
 
     #[test]

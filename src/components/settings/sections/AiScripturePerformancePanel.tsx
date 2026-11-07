@@ -55,7 +55,7 @@ export function AiScripturePerformancePanel() {
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <p className="text-[10px] font-black uppercase tracking-widest text-console-text-muted flex items-center gap-1.5"><BarChart3 size={12} /> AI Scripture Performance</p>
-          <p className="mt-1 text-[10px] text-console-text-subtle">Local measurements for qualification and customer demos. Service restarts and repeat Operator calls accumulate here until Reset; a provider or mode change starts a fresh set. No audio, transcripts, Bible text, or credentials are retained.</p>
+          <p className="mt-1 text-[10px] text-console-text-subtle">Local measurements for qualification and customer demos. Service restarts and repeat Operator calls accumulate here until Reset; a provider or mode change starts a fresh set. Audio and credentials are not retained. Final transcripts and suggestion records are saved locally as reviewable sessions and can be deleted or exported from AI Scripture.</p>
         </div>
         <div className="flex items-center gap-1.5">
           <button type="button" onClick={() => void copyReport()} className="rounded border border-console-border px-2 py-1.5 text-[10px] font-bold text-console-text-muted hover:text-console-text flex items-center gap-1"><Copy size={10} /> {copied ? "Copied" : "Copy report"}</button>

@@ -1,4 +1,4 @@
-import React, { useRef, useState, useLayoutEffect, useEffect } from "react";
+import React, { useRef, useState, useLayoutEffect, useEffect, useMemo } from "react";
 import { X, PanelRightClose, PanelLeftOpen, ChevronLeft, ChevronRight } from "lucide-react";
 import { useSlideEditor } from "./slide/useSlideEditor";
 import { CustomSlideRenderer } from "../shared/Renderers";
@@ -10,6 +10,10 @@ import { PropertiesPanel } from "./slide/PropertiesPanel";
 import { ZoomControls } from "./slide/ZoomControls";
 import { SlideEditorModals } from "./slide/SlideEditorModals";
 import { AiSlideAssistantModal } from "../presentations/AiSlideAssistantModal";
+import { BrandKitModal } from "./slide/BrandKitModal";
+import { PresentationOutlinePanel } from "./slide/PresentationOutlinePanel";
+import { PreflightPanel } from "./slide/PreflightPanel";
+import { RehearsalMode } from "./slide/RehearsalMode";
 import { useReferenceHeight } from "../../hooks/useReferenceHeight";
 import type { CustomPresentation, CustomSlide, MediaItem, SlideTheme, DisplayItem } from "../../types";
 import {
@@ -21,6 +25,8 @@ import {
   type AiSlideEditAction,
   type AiSlideEditResult,
 } from "../../ai/presentations";
+import { analyzePresentation, type PresentationIssue } from "../../presentations/diagnostics";
+import { applyBrandKit, applySmartLayout, type PresentationBrandKit, type SmartLayout } from "../../presentations/editorFeatures";
 
 // ─── Main SlideEditor ────────────────────────────────────────────────────────
 // P1.4: this component is presentational. All state + mutation handlers live
@@ -39,7 +45,7 @@ interface SlideEditorProps {
 
 // P3: below this window width the inspector collapses to a reopen strip so the
 // canvas stays the visual priority on small operator windows.
-const INSPECTOR_COLLAPSE_BREAKPOINT = 1100;
+const INSPECTOR_COLLAPSE_BREAKPOINT = 1280;
 
 export function SlideEditor({ initialPres, media, mediaImages, onClose, onStageSlide, onAddToService }: SlideEditorProps) {
   const {
@@ -85,12 +91,18 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose, onStageS
     previewOpen, setPreviewOpen,
     // global / store data
     appDataDir, templates, stagedItem, bibleVersion,
-  } = useSlideEditor({ initialPres, onClose, onStageSlide });
+  } = useSlideEditor({ initialPres, onClose, onStageSlide, onAddToService });
 
   // P3: inspector collapsibility. Auto-collapse below the breakpoint so the
   // canvas never gets squeezed on a 1280×720 operator window with scaling.
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [aiAction, setAiAction] = useState<AiSlideEditAction | null>(null);
+  const [brandKitOpen, setBrandKitOpen] = useState(false);
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  const [preflightOpen, setPreflightOpen] = useState(false);
+  const [rehearsalOpen, setRehearsalOpen] = useState(false);
+  const preflightIssues = useMemo(() => analyzePresentation(pres), [pres]);
+  const currentSlideIssues = useMemo(() => preflightIssues.filter((issue) => issue.slideIndex === activeSlideIdx), [preflightIssues, activeSlideIdx]);
   useEffect(() => {
     const check = () => setInspectorOpen(window.innerWidth >= INSPECTOR_COLLAPSE_BREAKPOINT);
     check();
@@ -99,7 +111,7 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose, onStageS
   }, []);
 
   return (
-    <div className="fixed inset-0 z-[60] bg-console-canvas flex flex-col font-sans">
+    <div className="presentation-editor fixed inset-0 z-[60] bg-console-canvas flex flex-col font-sans text-console-text">
 
       {/* ══ TOP BAR ══════════════════════════════════════════════════════════ */}
       <AppHeader
@@ -128,7 +140,13 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose, onStageS
       <div className="flex-1 flex overflow-hidden">
 
         {/* ══ LEFT: SLIDE PANEL + TEMPLATES ════════════════════════════════════ */}
-        <SlideListPanel
+        {outlineOpen ? <PresentationOutlinePanel
+          slides={pres.slides}
+          activeSlideIdx={activeSlideIdx}
+          onSelect={(index) => { setActiveSlideIdx(index); setActiveElementIds([]); }}
+          onSetSection={(index, section) => setPres((current) => ({ ...current, slides: current.slides.map((item, slideIndex) => slideIndex === index ? { ...item, section } : item) }))}
+          onClose={() => setOutlineOpen(false)}
+        /> : <SlideListPanel
           slides={pres.slides}
           activeSlideIdx={activeSlideIdx}
           dragSlideIdx={dragSlideIdx}
@@ -149,10 +167,10 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose, onStageS
           canDeleteSlide={pres.slides.length > 1}
           appDataDir={appDataDir}
           theme={pres.theme}
-        />
+        />}
 
         {/* ══ CENTER: TOOLBAR + CANVAS ═══════════════════════════════════════ */}
-        <div className="flex-1 flex flex-col overflow-hidden relative">
+        <div className="flex-1 flex flex-col overflow-hidden relative bg-console-canvas">
           <EditorToolbar
             activeEl={activeEl}
             selectedCount={selectedCount}
@@ -177,6 +195,14 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose, onStageS
             onDuplicateSlide={handleDuplicateSlide}
             onDeleteSlide={handleDeleteSlide}
             onAiAction={setAiAction}
+            onApplySmartLayout={(layout: SmartLayout) => updateSlide(applySmartLayout(slide, layout))}
+            canApplySmartLayout={!editingMasterId}
+            onOpenBrandKit={() => setBrandKitOpen(true)}
+            onToggleOutline={() => setOutlineOpen((open) => !open)}
+            outlineOpen={outlineOpen}
+            onTogglePreflight={() => setPreflightOpen((open) => !open)}
+            preflightOpen={preflightOpen}
+            onOpenRehearsal={() => setRehearsalOpen(true)}
           />
 
           <SlideCanvas
@@ -192,6 +218,8 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose, onStageS
             gridSize={gridSize}
             guides={guides}
             theme={pres.theme}
+            showPreflight={preflightOpen}
+            preflightIssues={currentSlideIssues}
             onCanvasClick={handleCanvasClick}
             onElementClick={handleElementClick}
             onDblClick={handleDblClick}
@@ -205,6 +233,16 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose, onStageS
           <div className="absolute bottom-5 right-5 z-[70] pointer-events-auto">
             <ZoomControls zoom={zoom} onZoomChange={setZoom} />
           </div>
+          {preflightOpen && (
+            <PreflightPanel
+              issues={preflightIssues}
+              onClose={() => setPreflightOpen(false)}
+              onSelect={(issue: PresentationIssue) => {
+                setActiveSlideIdx(issue.slideIndex);
+                setActiveElementIds(issue.elementId ? [issue.elementId] : []);
+              }}
+            />
+          )}
         </div>
 
         {/* ══ RIGHT: PROPERTIES + NOTES PANEL ════════════════════════════════════ */}
@@ -248,7 +286,7 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose, onStageS
               onClick={() => setInspectorOpen(false)}
               aria-label="Collapse inspector"
               title="Collapse inspector"
-              className="w-5 border-l border-console-border bg-console-surface hover:bg-console-surface-strong flex items-center justify-center transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
+              className="w-6 border-l border-console-border bg-console-surface hover:bg-tool-design/10 flex items-center justify-center transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
             >
               <PanelRightClose size={14} className="text-console-text-muted" />
             </button>
@@ -258,7 +296,7 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose, onStageS
             onClick={() => setInspectorOpen(true)}
             aria-label="Expand inspector"
             title="Expand inspector"
-            className="w-10 border-l border-console-border bg-console-surface hover:bg-console-surface-strong flex flex-col items-center justify-center gap-2 transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
+            className="w-11 border-l border-console-border bg-console-surface hover:bg-tool-design/10 flex flex-col items-center justify-center gap-2 transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
           >
             <PanelLeftOpen size={15} className="text-console-text-muted" />
             <span className="text-[8px] font-bold text-console-text-subtle" style={{ writingMode: "vertical-rl" }}>
@@ -325,6 +363,21 @@ export function SlideEditor({ initialPres, media, mediaImages, onClose, onStageS
           updateSlide(applyAiRegeneratedSlide(slide, result.slide, theme, pres.name));
         }}
       />
+
+      <BrandKitModal
+        open={brandKitOpen}
+        onClose={() => setBrandKitOpen(false)}
+        onApply={(kit: PresentationBrandKit) => setPres((current) => applyBrandKit(current, kit))}
+      />
+
+      {rehearsalOpen && (
+        <RehearsalMode
+          presentation={pres}
+          initialIndex={activeSlideIdx}
+          appDataDir={appDataDir}
+          onClose={() => setRehearsalOpen(false)}
+        />
+      )}
 
       {/* ══ LIVE PREVIEW PIP (P4.7) ═══════════════════════════════════════ */}
       {previewOpen && (

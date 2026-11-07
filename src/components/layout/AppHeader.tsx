@@ -1,9 +1,8 @@
 import React from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, Monitor, Repeat, Keyboard, X, Signal, Video, User, EyeOff, MonitorSmartphone } from "lucide-react";
+import { AlertTriangle, CalendarDays, Clock3, Monitor, Repeat, Keyboard, X, Signal, EyeOff, MonitorSmartphone } from "lucide-react";
 import { useAppStore } from "../../store";
 import { IconButton, StatusBadge } from "../ui";
-import { displayItemLabel } from "../../utils";
 
 export function AppHeader() {
   const {
@@ -12,11 +11,11 @@ export function AppHeader() {
     outputVisible, setOutputVisible,
     backendError, setBackendError,
     busyActions, setBusyAction,
-    stagedItem,
     settings,
     services, activeServiceId,
     backendAvailable,
     setActiveTab,
+    setBottomDeckOpen,
     outputs, outputStates,
   } = useAppStore();
 
@@ -29,6 +28,12 @@ export function AppHeader() {
     outputVisible;
 
   const [remoteCount, setRemoteCount] = React.useState<number | null>(null);
+  const [now, setNow] = React.useState(() => new Date());
+
+  React.useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
 
   React.useEffect(() => {
     let alive = true;
@@ -71,37 +76,36 @@ export function AppHeader() {
   const activeService = services.find((s) => s.id === activeServiceId);
 
   return (
-    <header className="h-12 bg-console-surface border-b border-console-border flex items-center justify-between gap-3 px-3 shrink-0 z-30">
-      <div className="flex items-center gap-3 min-w-0">
+    <header className="z-30 flex h-14 shrink-0 items-center gap-3 border-b border-console-border bg-console-surface px-3 shadow-lg shadow-black/10">
+      <div className="flex min-w-0 items-center gap-3">
         <div className="flex items-center gap-2 shrink-0">
-          <div className="w-7 h-7 bg-action-primary rounded-md flex items-center justify-center text-black font-black text-xs shadow-lg shadow-action-primary/20 shrink-0">WL</div>
-          <span className="text-[11px] font-black uppercase tracking-[0.2em] text-console-text hidden md:block">Wordlyte</span>
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-action-primary text-[10px] font-black text-black shadow-lg shadow-action-primary/20">WL</div>
+          <div className="hidden md:block">
+            <span className="block text-[10px] font-black uppercase tracking-[0.18em] text-console-text">Wordlyte</span>
+            <span className="block text-[7px] font-black uppercase tracking-[0.16em] text-console-text-subtle">Operator</span>
+          </div>
         </div>
 
-        {/* Active service */}
-        {activeService && (
-          <div className="flex items-center gap-1.5 max-w-[180px] min-w-0 hidden sm:flex">
-            <User size={11} className="text-console-text-subtle shrink-0" />
-            <span className="text-[10px] font-black uppercase tracking-wider text-console-text truncate" title={activeService.name}>
-              {activeService.name}
-            </span>
-          </div>
-        )}
+        <div className="hidden h-6 w-px bg-console-border sm:block" />
+        <button
+          onClick={() => { setBottomDeckOpen(false); setActiveTab("schedule"); }}
+          className="hidden min-w-0 max-w-[220px] items-center gap-2 rounded-lg border border-console-border bg-console-canvas/60 px-2.5 py-1.5 text-left transition-colors hover:border-action-primary/40 hover:bg-console-surface-strong sm:flex"
+          title="Open Service Plan"
+        >
+          <CalendarDays size={12} className="shrink-0 text-action-primary" />
+          <span className="min-w-0">
+            <span className="block text-[7px] font-black uppercase tracking-wider text-console-text-subtle">Active service</span>
+            <span className="block truncate text-[10px] font-black text-console-text">{activeService?.name ?? "No service selected"}</span>
+          </span>
+        </button>
       </div>
 
-      {/* Live status cluster — text + icon, never color alone. */}
-      <div className="flex items-center gap-1.5 min-w-0">
+      <div className="flex min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden">
         <StatusBadge
           tone={outputOn ? "success" : "neutral"}
           icon={<Monitor size={10} />}
           label={outputOn ? "Output On" : "Output Off"}
           className="max-w-[110px]"
-        />
-        <StatusBadge
-          tone={stagedItem ? "stage" : "neutral"}
-          icon={<Video size={10} />}
-          label={stagedItem ? `Staged: ${displayItemLabel(stagedItem)}` : "Nothing staged"}
-          className={`max-w-[180px] ${stagedItem ? "" : "hidden sm:inline-flex"}`}
         />
         <StatusBadge
           tone={settings.is_blanked ? "warning" : "neutral"}
@@ -151,7 +155,11 @@ export function AppHeader() {
         </button>
       )}
 
-      <div className="flex items-center gap-1 shrink-0 ml-auto">
+      <div className="ml-auto flex shrink-0 items-center gap-1">
+        <div className="mr-1 hidden items-center gap-1.5 rounded-lg border border-console-border bg-console-canvas/50 px-2.5 py-1.5 xl:flex" title={now.toLocaleDateString()}>
+          <Clock3 size={11} className="text-console-text-subtle" />
+          <span className="font-mono text-[11px] font-bold tabular-nums text-console-text">{now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+        </div>
         <IconButton
           label="Toggle Output Window (Ctrl+O)"
           tone="success"

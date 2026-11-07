@@ -133,10 +133,6 @@ export function ProgramSurface({ frame, runtime, mode = "output", silent = false
     setFittedFontPt(best < maxPt ? Math.floor(best) : null);
   }, [item, settings.auto_split_verses, settings.font_size, settings.verse_font_family, windowScale, verseContainerRef]);
 
-  if (blanked) {
-    return <div className="fixed inset-0 bg-black cursor-none pointer-events-none select-none" />;
-  }
-
   const isTop = settings.reference_position === "top";
   const bgStyle = getEffectiveBackground(settings, item, colors, appDataDir);
 
@@ -162,6 +158,13 @@ export function ProgramSurface({ frame, runtime, mode = "output", silent = false
   const bgPhoneOrientation = usePhoneCameraOrientation(
     backgrounds.camera?.deviceId?.startsWith("phone-camera-") ? backgrounds.camera.deviceId : null
   );
+
+  // Keep every hook above this branch. Blackout can toggle while the shared
+  // Program preview and output surfaces remain mounted; returning before the
+  // camera hooks changes React's hook count and crashes the render tree.
+  if (blanked) {
+    return <div className={`${mode === "preview" ? "absolute" : "fixed"} inset-0 bg-black cursor-none pointer-events-none select-none`} />;
+  }
 
   const ReferenceTag = item?.type === "Verse" ? (
     <p
@@ -326,8 +329,12 @@ export function ProgramSurface({ frame, runtime, mode = "output", silent = false
             key={getItemUid(item)}
             className="absolute inset-0 z-10"
             {...getTransitionVariants(
-              settings.slide_transition ?? "fade",
-              settings.slide_transition_duration ?? 0.4
+              item.type === "CustomSlide" && item.data.transition
+                ? item.data.transition.type
+                : settings.slide_transition ?? "fade",
+              item.type === "CustomSlide" && item.data.transition
+                ? item.data.transition.duration / 1000
+                : settings.slide_transition_duration ?? 0.4
             )}
           >
             <ErrorBoundary fallback={<ProjectionErrorFallback />}>

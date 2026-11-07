@@ -392,6 +392,8 @@ export function buildCustomSlideItem(
       elements: slide.elements,
       notes: slide.notes,
       theme,
+      section: slide.section,
+      transition: slide.transition,
     },
   };
 }
@@ -570,6 +572,20 @@ export function getTransitionVariants(type: string, duration: number) {
         initial: { opacity: 0, x: 60 },
         animate: { opacity: 1, x: 0 },
         exit:    { opacity: 0, x: 60 },
+        transition: d,
+      };
+    case "push":
+      return {
+        initial: { opacity: 1, x: "100%" },
+        animate: { opacity: 1, x: 0 },
+        exit:    { opacity: 1, x: "-35%" },
+        transition: d,
+      };
+    case "dissolve":
+      return {
+        initial: { opacity: 0, filter: "blur(8px)" },
+        animate: { opacity: 1, filter: "blur(0px)" },
+        exit:    { opacity: 0, filter: "blur(8px)" },
         transition: d,
       };
     case "zoom":

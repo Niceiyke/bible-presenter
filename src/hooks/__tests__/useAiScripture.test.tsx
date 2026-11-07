@@ -181,6 +181,19 @@ describe("AiScriptureProvider automatic staging", () => {
     expect(onStageVerse).toHaveBeenCalledOnce();
   });
 
+  it("runs automation again for a fresh mention while reusing the same passage card", async () => {
+    const onStageVerse = vi.fn().mockResolvedValue(true);
+    render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);
+    await waitFor(() => expect(mocks.listeners.has("ai-scripture-suggestion")).toBe(true));
+
+    await emitSuggestion(suggestion(0.97, "first-mention"));
+    await emitSuggestion(suggestion(0.98, "repeated-mention"));
+
+    expect(onStageVerse).toHaveBeenCalledTimes(2);
+    expect(onStageVerse).toHaveBeenNthCalledWith(1, suggestion(0.97, "first-mention").verse);
+    expect(onStageVerse).toHaveBeenNthCalledWith(2, suggestion(0.98, "repeated-mention").verse);
+  });
+
   it("keeps Service mode listening after a recognized suggestion", async () => {
     const onStageVerse = vi.fn().mockResolvedValue(true);
     render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);

@@ -40,7 +40,7 @@ export interface ThemePickerProps {
 
 export function ThemePicker({ theme, onApplyPreset }: ThemePickerProps) {
   return (
-    <div className="grid grid-cols-3 gap-1.5">
+    <div className="grid grid-cols-2 gap-2">
       {THEME_PRESETS.map(p => {
         const isActive = (theme?.accentColor ?? "#f4b740") === p.accentColor && (theme?.textColor ?? "#f4f7fa") === p.textColor;
         return (
@@ -50,16 +50,19 @@ export function ThemePicker({ theme, onApplyPreset }: ThemePickerProps) {
             aria-pressed={isActive}
             aria-label={`Apply ${p.name} theme`}
             title={`Apply "${p.name}" theme`}
-            className={`relative rounded-lg overflow-hidden border-2 transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${
-              isActive ? "border-tool-design" : "border-console-border hover:border-console-border-strong"
+            className={`group relative rounded-xl overflow-hidden border-2 transition-all hover:-translate-y-px hover:shadow-lg hover:shadow-black/25 focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${
+              isActive ? "border-tool-design ring-2 ring-tool-design/15" : "border-console-border hover:border-tool-design/45"
             }`}
           >
-            <div className="h-8 flex flex-col justify-between p-1" style={{ background: p.background }}>
-              <div className="h-1.5 w-4 rounded-sm" style={{ background: p.accentColor }} />
-              <div className="h-1.5 w-7 rounded-sm" style={{ background: p.textColor, opacity: 0.85 }} />
+            <div className="relative h-14 overflow-hidden p-2" style={{ background: `linear-gradient(145deg, ${p.background} 58%, ${p.accentColor} 160%)` }}>
+              <div className="absolute -right-4 -top-4 h-12 w-12 rounded-full border" style={{ borderColor: `${p.accentColor}55` }} />
+              <div className="relative flex h-full items-end justify-between">
+                <span className="text-xl font-black leading-none" style={{ color: p.textColor, fontFamily: p.defaultFontFamily }}>Aa</span>
+                <span className="h-2.5 w-2.5 rounded-full shadow-lg" style={{ background: p.accentColor }} />
+              </div>
             </div>
-            <div className="flex items-center justify-between px-1.5 py-1 bg-console-surface-raised">
-              <span className="text-[9px] font-bold text-console-text truncate">{p.name}</span>
+            <div className="flex items-center justify-between px-2 py-1.5 bg-console-surface-raised">
+              <span className="text-[9px] font-black text-console-text truncate">{p.name}</span>
               {isActive && <Check size={10} className="text-tool-design shrink-0" />}
             </div>
           </button>

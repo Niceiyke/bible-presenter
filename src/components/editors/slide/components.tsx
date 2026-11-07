@@ -19,7 +19,7 @@ export function Btn({ onClick, icon, children, className = "" }: {
   return (
     <button
       onClick={onClick}
-      className={`flex items-center gap-1.5 min-h-[40px] px-3 bg-console-surface-raised hover:bg-console-surface-strong text-console-text-muted hover:text-console-text text-xs font-bold rounded-lg border border-console-border transition-all shrink-0 ${className}`}
+      className={`group flex items-center gap-2 min-h-[42px] px-3.5 bg-console-surface-raised hover:bg-console-surface-strong text-console-text-muted hover:text-console-text text-[11px] font-bold rounded-xl border border-console-border transition-all shrink-0 shadow-sm hover:shadow-md hover:-translate-y-px ${className}`}
     >
       {icon}{children}
     </button>
@@ -55,8 +55,8 @@ export function Div() {
 
 export function Panel({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="bg-console-surface-raised/40 rounded-xl border border-console-border p-3 flex flex-col gap-2.5">
-      <p className="text-[11px] font-bold text-console-text-subtle">{label}</p>
+    <div className="bg-console-canvas/35 rounded-xl border border-console-border/80 p-3 flex flex-col gap-2.5 shadow-inner shadow-black/5">
+      <p className="text-[9px] font-black uppercase tracking-[0.14em] text-console-text-subtle">{label}</p>
       {children}
     </div>
   );
@@ -128,6 +128,37 @@ export function EditorMenu<T extends string | number>({
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+
+  const updatePosition = React.useCallback(() => {
+    const triggerElement = triggerRef.current;
+    if (!triggerElement) return;
+    const triggerRect = triggerElement.getBoundingClientRect();
+    const menuRect = menuRef.current?.getBoundingClientRect();
+    const menuWidth = menuRect?.width || 188;
+    const menuHeight = menuRect?.height || Math.min(360, items.length * 42 + 12);
+    const gutter = 8;
+    let left = align === "right" ? triggerRect.right - menuWidth : triggerRect.left;
+    let top = triggerRect.bottom + gutter;
+    if (top + menuHeight > window.innerHeight - gutter && triggerRect.top - menuHeight - gutter >= gutter) {
+      top = triggerRect.top - menuHeight - gutter;
+    }
+    left = Math.max(gutter, Math.min(left, window.innerWidth - menuWidth - gutter));
+    top = Math.max(gutter, Math.min(top, window.innerHeight - menuHeight - gutter));
+    setPosition({ top, left });
+  }, [align, items.length]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open, updatePosition]);
 
   // P7: focus restoration — when the menu closes (Escape / outside click /
   // item select), return focus to the trigger so keyboard users aren't
@@ -137,7 +168,10 @@ export function EditorMenu<T extends string | number>({
     // Only restore when focus is inside the menu (closing transitions).
     // We schedule on next tick so the item-select click doesn't fight us.
     const t = setTimeout(() => {
-      if (rootRef.current && rootRef.current.contains(document.activeElement)) {
+      if (
+        (rootRef.current && rootRef.current.contains(document.activeElement))
+        || (menuRef.current && menuRef.current.contains(document.activeElement))
+      ) {
         triggerRef.current?.focus();
       }
     }, 0);
@@ -147,7 +181,9 @@ export function EditorMenu<T extends string | number>({
   useEffect(() => {
     if (!open) return;
     const onDocMouse = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (rootRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -178,7 +214,7 @@ export function EditorMenu<T extends string | number>({
         aria-haspopup="menu"
         aria-expanded={open}
         title={label}
-        className={`flex items-center gap-1.5 min-h-[40px] px-3 bg-console-surface-raised hover:bg-console-surface-strong text-console-text-muted hover:text-console-text text-xs font-bold rounded-lg border border-console-border transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${triggerClassName}`}
+         className={`flex items-center gap-2 min-h-[42px] px-3.5 bg-console-surface-raised hover:bg-console-surface-strong text-console-text-muted hover:text-console-text text-[11px] font-bold rounded-xl border border-console-border transition-all shadow-sm hover:shadow-md hover:-translate-y-px focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${triggerClassName}`}
       >
         {trigger}
         {activeLabel !== undefined && (
@@ -186,18 +222,20 @@ export function EditorMenu<T extends string | number>({
         )}
         <ChevronDown size={12} className={`transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
-      {open && (
+      {open && createPortal(
         <div
+          ref={menuRef}
           role="menu"
-          className="absolute z-[80] mt-1 rounded-lg border border-console-border-strong bg-console-surface shadow-2xl p-1 flex flex-col min-w-[150px]"
-          style={{ left: align === "left" ? 0 : undefined, right: align === "right" ? 0 : undefined }}
+          data-editor-menu
+          className="fixed z-[200] rounded-xl border border-console-border-strong bg-console-surface/98 shadow-2xl shadow-black/60 p-1.5 flex flex-col min-w-[188px] backdrop-blur-xl"
+          style={{ top: position.top, left: position.left }}
         >
           {items.map(it => (
             <button
               key={it.value}
               role="menuitem"
               onClick={() => { setOpen(false); onSelect(it.value); }}
-              className={`flex items-center justify-between gap-3 px-2.5 py-2 text-[11px] font-bold rounded text-left transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${
+              className={`flex min-h-9 items-center justify-between gap-3 px-3 py-2 text-[11px] font-bold rounded-lg text-left transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${
                 value === it.value
                   ? "bg-state-stage/15 text-state-stage"
                   : "text-console-text-muted hover:text-console-text hover:bg-console-surface-strong"
@@ -207,7 +245,8 @@ export function EditorMenu<T extends string | number>({
               {value === it.value && <Check size={12} />}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
@@ -280,6 +319,7 @@ export function FontPicker({
   value,
   inheritLabel = "— Inherit theme —",
   canInherit = false,
+  fullWidth = false,
   onSelect,
 }: {
   fonts: string[];
@@ -287,6 +327,8 @@ export function FontPicker({
   /** Show an "inherit" entry at the top? */
   canInherit?: boolean;
   inheritLabel?: string;
+  /** Expand the trigger to fill an inspector or form column. */
+  fullWidth?: boolean;
   onSelect: (family: string) => void;
 }) {
   const [open, setOpen] = React.useState(false);
@@ -294,15 +336,28 @@ export function FontPicker({
   const [anchorEl, setAnchorEl] = React.useState<HTMLButtonElement | null>(null);
   const [pos, setPos] = React.useState({ top: 0, left: 0 });
 
+  const updateFontPosition = React.useCallback(() => {
+    if (!anchorEl) return;
+    const rect = anchorEl.getBoundingClientRect();
+    const width = 240;
+    const height = Math.min(320, window.innerHeight - 16);
+    const gutter = 8;
+    const left = Math.max(gutter, Math.min(rect.left, window.innerWidth - width - gutter));
+    const below = rect.bottom + 6;
+    const top = below + height <= window.innerHeight - gutter
+      ? below
+      : Math.max(gutter, rect.top - height - 6);
+    setPos({ top, left });
+  }, [anchorEl]);
+
   // Measure the trigger once the popover opens so we can anchor a portal
   // with fixed coordinates — the toolbar list scrolls horizontally
   // (`overflow-x-auto`), which would otherwise clip an absolutely-positioned
   // child of the trigger.
   useLayoutEffect(() => {
     if (!open || !anchorEl) return;
-    const rect = anchorEl.getBoundingClientRect();
-    setPos({ top: rect.bottom + 4, left: rect.left });
-  }, [open, anchorEl]);
+    updateFontPosition();
+  }, [open, anchorEl, updateFontPosition]);
 
   // Close on outside click.
   React.useEffect(() => {
@@ -316,21 +371,18 @@ export function FontPicker({
     const onDocKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
     };
-    const onResize = () => {
-      if (open && anchorEl) {
-        const rect = anchorEl.getBoundingClientRect();
-        setPos({ top: rect.bottom + 4, left: rect.left });
-      }
-    };
+    const onResize = () => updateFontPosition();
     document.addEventListener("mousedown", onDocMouse);
     document.addEventListener("keydown", onDocKey);
     window.addEventListener("resize", onResize);
+    window.addEventListener("scroll", onResize, true);
     return () => {
       document.removeEventListener("mousedown", onDocMouse);
       document.removeEventListener("keydown", onDocKey);
       window.removeEventListener("resize", onResize);
+      window.removeEventListener("scroll", onResize, true);
     };
-  }, [open, anchorEl]);
+  }, [open, anchorEl, updateFontPosition]);
 
   // Reset the search each time the popover opens.
   React.useEffect(() => {
@@ -354,8 +406,8 @@ export function FontPicker({
         aria-label="Font family"
         aria-haspopup="listbox"
         aria-expanded={open}
-        className="min-h-[40px] bg-console-surface-raised hover:bg-console-surface-strong border border-console-border rounded-lg px-2 py-1 text-[11px] text-console-text outline-none max-w-[150px] shrink-0 truncate text-left transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
-        style={{ fontFamily: value && canInherit ? value : undefined }}
+        className={`min-h-[42px] bg-tool-design/10 hover:bg-tool-design/20 border border-tool-design/25 rounded-xl px-3 py-1 text-[11px] font-bold text-console-text outline-none truncate text-left transition-all shadow-sm focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${fullWidth ? "w-full max-w-none" : "max-w-[170px] shrink-0"}`}
+        style={{ fontFamily: value && value !== "inherit" ? value : undefined }}
       >
         {value}
       </button>
@@ -363,17 +415,17 @@ export function FontPicker({
       {open && createPortal(
         <div
           data-font-popover
-          className="fixed z-[90] w-52 max-h-72 overflow-hidden rounded-lg border border-console-border-strong bg-console-surface shadow-2xl flex flex-col"
+          className="fixed z-[200] w-60 max-h-80 overflow-hidden rounded-xl border border-console-border-strong bg-console-surface/98 shadow-2xl shadow-black/60 flex flex-col backdrop-blur-xl"
           style={{ top: pos.top, left: pos.left }}
         >
-          <div className="p-1.5 border-b border-console-border shrink-0">
+          <div className="p-2 border-b border-console-border shrink-0 bg-console-surface-raised/50">
             <input
               autoFocus
               value={query}
               onChange={e => setQuery(e.target.value)}
               onKeyDown={e => e.stopPropagation()}
               placeholder="Search fonts…"
-              className="w-full bg-console-surface-raised border border-console-border rounded-md px-2 py-1 text-[11px] text-console-text outline-none focus:border-console-border-strong transition-colors placeholder:text-console-text-subtle"
+              className="h-9 w-full bg-console-canvas border border-console-border rounded-lg px-3 text-[11px] text-console-text outline-none focus:border-tool-design/60 transition-colors placeholder:text-console-text-subtle"
             />
           </div>
           <div className="overflow-y-auto custom-scrollbar">
@@ -427,17 +479,19 @@ export function InspectorSection({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="rounded-xl border border-console-border bg-console-surface-raised/40 overflow-hidden">
+    <div className="shrink-0 rounded-xl border border-console-border/90 bg-console-surface-raised/35 overflow-hidden shadow-sm transition-colors hover:border-console-border-strong/80">
       <button
         onClick={() => setOpen(o => !o)}
         aria-expanded={open}
-        className="w-full flex items-center gap-2 px-3 py-2.5 transition-all hover:bg-console-surface-strong focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
+        className="w-full flex items-center gap-2 px-3 py-3 transition-all hover:bg-console-surface-strong/80 focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
       >
-        <ChevronRight size={13} className={`text-console-text-subtle transition-transform ${open ? "rotate-90" : ""}`} />
-        <span className="text-[11px] font-bold text-console-text flex-1 text-left">{label}</span>
-        {badge && <span className="text-[9px] text-console-text-subtle font-bold">{badge}</span>}
+        <span className={`flex h-6 w-6 items-center justify-center rounded-lg transition-colors ${open ? "bg-tool-design/15 text-tool-design" : "bg-console-canvas/60 text-console-text-subtle"}`}>
+          <ChevronRight size={12} className={`transition-transform ${open ? "rotate-90" : ""}`} />
+        </span>
+        <span className="text-[10px] font-black uppercase tracking-[0.1em] text-console-text flex-1 text-left">{label}</span>
+        {badge && <span className="rounded-full bg-console-canvas px-2 py-0.5 text-[9px] text-console-text-subtle font-bold">{badge}</span>}
       </button>
-      {open && <div className="px-3 pb-3 flex flex-col gap-2.5">{children}</div>}
+      {open && <div className="px-3 pb-3 flex flex-col gap-2.5 border-t border-console-border/40 pt-3">{children}</div>}
     </div>
   );
 }

@@ -1,16 +1,36 @@
-import React, { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import React, { useEffect, useMemo, useState } from "react";
 import { emit } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Plus, Presentation, Edit2, Trash2, Search, FileUp, Sparkles, FileText } from "lucide-react";
+import {
+  ArrowUpDown,
+  FileText,
+  FileUp,
+  Grid2X2,
+  LayoutTemplate,
+  List,
+  Loader2,
+  Plus,
+  Presentation,
+  Search,
+  Sparkles,
+} from "lucide-react";
 import { useAppStore } from "../store";
-import { StudioSlideCard } from "./StudioSlideCard";
-import { buildCustomSlideItem } from "../utils";
-import { ContentCard, ConfirmModal, StatusBadge, Button } from "./ui";
-import type { CustomPresentation, CustomSlide, DisplayItem, PresentationSummary } from "../types";
+import { Button, ConfirmModal } from "./ui";
+import type { CustomPresentation, DisplayItem, PresentationSummary } from "../types";
 import { AiPresentationModal } from "./presentations/AiPresentationModal";
 import { PrayerDocxImportModal } from "./presentations/PrayerDocxImportModal";
+import { PresentationDeckCard } from "./presentations/PresentationDeckCard";
+import { PresentationDetailPanel } from "./presentations/PresentationDetailPanel";
 import { compilePrayerGuide, type PrayerGuideImport } from "../imports/prayerGuide";
+import {
+  duplicatePresentation,
+  filterAndSortPresentations,
+  loadPresentationLibraryPreferences,
+  savePresentationLibraryPreferences,
+  type PresentationLibraryPreferences,
+} from "../presentations/library";
+import { tauriPresentationRepository } from "../presentations/repository";
+import { cn } from "./ui/cn";
 
 interface RenderedPptxImport {
   id: string;
@@ -28,21 +48,99 @@ interface StudioTabProps {
 
 export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNewPresentation }: StudioTabProps) {
   const {
-    studioList, setStudioList,
-    expandedStudioPresId, setExpandedStudioPresId,
-    studioSlides, setStudioSlides,
-    appDataDir, setToast, bibleVersion,
+    studioList,
+    setStudioList,
+    expandedStudioPresId,
+    setExpandedStudioPresId,
+    studioSlides,
+    setStudioSlides,
+    appDataDir,
+    setToast,
+    bibleVersion,
   } = useAppStore();
 
-  const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
+  const [preferences, setPreferences] = useState<PresentationLibraryPreferences>(loadPresentationLibraryPreferences);
+  const [loadedPresentations, setLoadedPresentations] = useState<Record<string, CustomPresentation>>({});
+  const [loadingDeckId, setLoadingDeckId] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [deletePres, setDeletePres] = useState<PresentationSummary | null>(null);
-  const [importing, setImporting] = useState(false);
+  const [workingAction, setWorkingAction] = useState<string | null>(null);
   const [showAiCreation, setShowAiCreation] = useState(false);
-  const [importingPrayer, setImportingPrayer] = useState(false);
   const [prayerImport, setPrayerImport] = useState<PrayerGuideImport | null>(null);
 
+  useEffect(() => savePresentationLibraryPreferences(preferences), [preferences]);
+
+  // Warm a small number of covers. The summary query stays lightweight while
+  // the most relevant decks gain real thumbnails without loading an unbounded
+  // library into memory.
+  useEffect(() => {
+    let cancelled = false;
+    const ids = [...studioList]
+      .sort((a, b) => b.updated_at - a.updated_at)
+      .slice(0, 8)
+      .filter((summary) => !loadedPresentations[summary.id])
+      .map((summary) => summary.id);
+    if (ids.length === 0) return;
+    Promise.allSettled(ids.map((id) => tauriPresentationRepository.load(id))).then((results) => {
+      if (cancelled) return;
+      const decks = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+      if (decks.length === 0) return;
+      setLoadedPresentations((current) => ({ ...current, ...Object.fromEntries(decks.map((deck) => [deck.id, deck])) }));
+      setStudioSlides((current) => ({ ...current, ...Object.fromEntries(decks.map((deck) => [deck.id, deck.slides])) }));
+    });
+    return () => { cancelled = true; };
+    // Loading results are deliberately excluded so this bounded warm-up runs
+    // once per changed library, rather than recursively after each cover.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [studioList]);
+
+  const filtered = useMemo(
+    () => filterAndSortPresentations(studioList, query, preferences.sort, preferences.favorites),
+    [studioList, query, preferences.sort, preferences.favorites],
+  );
+  const selectedSummary = studioList.find((presentation) => presentation.id === expandedStudioPresId) ?? null;
+  const selectedPresentation = expandedStudioPresId ? loadedPresentations[expandedStudioPresId] : undefined;
+  const selectedSlides = expandedStudioPresId
+    ? selectedPresentation?.slides ?? studioSlides[expandedStudioPresId] ?? []
+    : [];
+  const totalSlides = studioList.reduce((sum, presentation) => sum + presentation.slide_count, 0);
+  const favoriteCount = studioList.filter((presentation) => preferences.favorites.includes(presentation.id)).length;
+
+  const refreshList = async () => {
+    const list = await tauriPresentationRepository.list();
+    setStudioList(list);
+    await emit("studio-sync", list);
+    return list;
+  };
+
+  const loadPresentation = async (id: string): Promise<CustomPresentation> => {
+    const cached = loadedPresentations[id];
+    if (cached) return cached;
+    setLoadingDeckId(id);
+    setLoadError(null);
+    try {
+      const deck = await tauriPresentationRepository.load(id);
+      setLoadedPresentations((current) => ({ ...current, [id]: deck }));
+      setStudioSlides((current) => ({ ...current, [id]: deck.slides }));
+      return deck;
+    } catch (error) {
+      const message = `Could not load this presentation: ${error}`;
+      setLoadError(message);
+      throw error;
+    } finally {
+      setLoadingDeckId((current) => current === id ? null : current);
+    }
+  };
+
+  const selectPresentation = (id: string) => {
+    setExpandedStudioPresId(id);
+    setLoadError(null);
+    void loadPresentation(id).catch(() => undefined);
+  };
+
   const importPowerPoint = async () => {
-    setImporting(true);
+    setWorkingAction("pptx");
     try {
       const selected = await open({
         title: "Import PowerPoint as rendered slides",
@@ -52,6 +150,7 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
       });
       if (typeof selected !== "string") return;
       setToast("Rendering PowerPoint slides…");
+      const { invoke } = await import("@tauri-apps/api/core");
       const imported = await invoke<RenderedPptxImport>("import_pptx_rendered", { path: selected });
       const presentation: CustomPresentation = {
         id: imported.id,
@@ -64,26 +163,25 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
         })),
       };
       try {
-        await invoke("save_studio_presentation", { presentation });
+        await tauriPresentationRepository.save(presentation);
       } catch (error) {
         await invoke("discard_pptx_import", { id: imported.id }).catch(() => undefined);
         throw error;
       }
-      const list = await invoke<PresentationSummary[]>("list_studio_presentations");
-      setStudioList(list);
-      setStudioSlides({ ...studioSlides, [presentation.id]: presentation.slides });
+      await refreshList();
+      setLoadedPresentations((current) => ({ ...current, [presentation.id]: presentation }));
+      setStudioSlides((current) => ({ ...current, [presentation.id]: presentation.slides }));
       setExpandedStudioPresId(presentation.id);
-      await emit("studio-sync", list);
       setToast(`Imported ${presentation.slides.length} rendered PowerPoint slides`);
     } catch (error) {
       setToast(`PowerPoint import failed: ${error}`);
     } finally {
-      setImporting(false);
+      setWorkingAction(null);
     }
   };
 
   const importPrayerDocx = async () => {
-    setImportingPrayer(true);
+    setWorkingAction("prayer");
     try {
       const selected = await open({
         title: "Import daily prayer Word document",
@@ -93,31 +191,23 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
       });
       if (typeof selected !== "string") return;
       setToast("Reading prayer document and verifying Scripture…");
+      const { invoke } = await import("@tauri-apps/api/core");
       const imported = await invoke<PrayerGuideImport>("import_prayer_docx", { path: selected, version: bibleVersion });
       setPrayerImport(imported);
       setToast(`Found ${imported.days.length} daily prayer sections`);
     } catch (error) {
       setToast(`Prayer DOCX import failed: ${error}`);
     } finally {
-      setImportingPrayer(false);
+      setWorkingAction(null);
     }
   };
 
-  const handleDelete = async (id: string) => {
-    await invoke("delete_studio_presentation", { id });
-    const next = studioList.filter((p) => p.id !== id);
-    setStudioList(next);
-    emit("studio-sync", next);
-    if (expandedStudioPresId === id) setExpandedStudioPresId(null);
-  };
-
   const createAiPresentation = async (presentation: CustomPresentation) => {
-    await invoke("save_studio_presentation", { presentation });
-    const list = await invoke<PresentationSummary[]>("list_studio_presentations");
-    setStudioList(list);
-    setStudioSlides({ ...studioSlides, [presentation.id]: presentation.slides });
+    await tauriPresentationRepository.save(presentation);
+    await refreshList();
+    setLoadedPresentations((current) => ({ ...current, [presentation.id]: presentation }));
+    setStudioSlides((current) => ({ ...current, [presentation.id]: presentation.slides }));
     setExpandedStudioPresId(presentation.id);
-    await emit("studio-sync", list);
     setToast(`Created ${presentation.slides.length}-slide AI draft`);
     onOpenEditor(presentation.id);
   };
@@ -126,15 +216,11 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
     if (!prayerImport) return;
     const presentations = compilePrayerGuide(prayerImport);
     try {
-      await Promise.all(presentations.map((presentation) => invoke("save_studio_presentation", { presentation })));
-      const list = await invoke<PresentationSummary[]>("list_studio_presentations");
-      setStudioList(list);
-      setStudioSlides({
-        ...studioSlides,
-        ...Object.fromEntries(presentations.map((presentation) => [presentation.id, presentation.slides])),
-      });
+      await Promise.all(presentations.map((presentation) => tauriPresentationRepository.save(presentation)));
+      await refreshList();
+      setLoadedPresentations((current) => ({ ...current, ...Object.fromEntries(presentations.map((deck) => [deck.id, deck])) }));
+      setStudioSlides((current) => ({ ...current, ...Object.fromEntries(presentations.map((deck) => [deck.id, deck.slides])) }));
       if (presentations[0]) setExpandedStudioPresId(presentations[0].id);
-      await emit("studio-sync", list);
       setToast(`Created ${presentations.length} daily prayer decks`);
       setPrayerImport(null);
     } catch (error) {
@@ -142,157 +228,174 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
     }
   };
 
-  const handlePresentStudio = async (id: string) => {
-    if (expandedStudioPresId === id) {
-      setExpandedStudioPresId(null);
-      return;
-    }
-    if (!studioSlides[id]) {
-      try {
-        const data = await invoke<CustomPresentation>("load_studio_presentation", { id });
-        setStudioSlides({ ...studioSlides, [id]: data.slides });
-      } catch (err) {
-        setToast("Failed to load presentation slides");
-        return;
-      }
-    }
-    setExpandedStudioPresId(id);
+  const handleDelete = async (id: string) => {
+    await tauriPresentationRepository.remove(id);
+    const list = studioList.filter((presentation) => presentation.id !== id);
+    setStudioList(list);
+    await emit("studio-sync", list);
+    setLoadedPresentations((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    setStudioSlides((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    if (expandedStudioPresId === id) setExpandedStudioPresId(null);
+    setPreferences((current) => ({ ...current, favorites: current.favorites.filter((favoriteId) => favoriteId !== id) }));
+    setToast("Presentation deleted");
   };
 
-  const filtered: PresentationSummary[] = search.trim()
-    ? studioList.filter(p => p.name.toLowerCase().includes(search.toLowerCase()))
-    : studioList;
+  const handleDuplicate = async (id: string) => {
+    setWorkingAction("duplicate");
+    try {
+      const source = await loadPresentation(id);
+      const copy = duplicatePresentation(source);
+      await tauriPresentationRepository.save(copy);
+      await refreshList();
+      setLoadedPresentations((current) => ({ ...current, [copy.id]: copy }));
+      setStudioSlides((current) => ({ ...current, [copy.id]: copy.slides }));
+      setExpandedStudioPresId(copy.id);
+      setToast(`Created “${copy.name}”`);
+    } catch (error) {
+      setToast(`Could not duplicate presentation: ${error}`);
+    } finally {
+      setWorkingAction(null);
+    }
+  };
+
+  const toggleFavorite = (id: string) => {
+    setPreferences((current) => ({
+      ...current,
+      favorites: current.favorites.includes(id)
+        ? current.favorites.filter((favoriteId) => favoriteId !== id)
+        : [...current.favorites, id],
+    }));
+  };
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-bold text-slate-200">Presentations</h2>
-          <p className="text-[10px] text-slate-600">{studioList.length} {studioList.length === 1 ? "presentation" : "presentations"}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="md" onClick={() => setShowAiCreation(true)}>
-            <Sparkles size={13} /> Create with AI
-          </Button>
-          <Button variant="ghost" size="md" onClick={() => void importPrayerDocx()} loading={importingPrayer} disabled={importingPrayer}>
-            <FileText size={13} /> Prayer DOCX
-          </Button>
-          <Button variant="ghost" size="md" onClick={importPowerPoint} loading={importing} disabled={importing}>
-            <FileUp size={13} /> Import PPTX
-          </Button>
-          <button
-            onClick={onNewPresentation}
-            className="flex items-center gap-1.5 px-3 py-2 bg-purple-600 hover:bg-purple-500 text-white text-[11px] font-bold rounded-lg transition-all shadow-lg shadow-purple-900/30"
-          >
-            <Plus size={13} /> New
-          </button>
-        </div>
-      </div>
-
-      {studioList.length > 3 && (
-        <div className="relative">
-          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 pointer-events-none" />
-          <input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Search presentations..."
-            className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-8 pr-3 py-2 text-xs text-slate-300 placeholder-slate-600 outline-none focus:border-slate-600 transition-colors"
-          />
-        </div>
-      )}
-
-      <div className="flex flex-col gap-2">
-        {filtered.map((pres) => {
-          const isExpanded = expandedStudioPresId === pres.id;
-          return (
-            <ContentCard
-              key={pres.id}
-              className={isExpanded ? "border-tool-design/40 shadow-lg shadow-tool-design/10" : undefined}
-            >
-              <div className="flex items-center gap-3 p-3">
-                <div
-                  className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 transition-all ${
-                    isExpanded ? "bg-tool-design text-white" : "bg-console-surface-raised text-console-text-muted"
-                  }`}
-                >
-                  <Presentation size={18} />
-                </div>
-
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-console-text truncate leading-tight">{pres.name}</p>
-                  <div className="flex items-center gap-2 mt-1 flex-wrap">
-                    <StatusBadge tone={pres.slide_count > 0 ? "design" : "neutral"} label={`${pres.slide_count} slide${pres.slide_count === 1 ? "" : "s"}`} />
-                    {isExpanded && <StatusBadge tone="stage" label="Open" />}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                  <Button variant="ghost" size="sm" icon={<Edit2 size={12} />} onClick={() => onOpenEditor(pres.id)}>Edit</Button>
-                  <Button variant="bare" size="sm" icon={<Trash2 size={12} />} onClick={() => setDeletePres(pres)}>Delete</Button>
-                  <Button
-                    variant={isExpanded ? "primary" : "ghost"}
-                    size="sm"
-                    onClick={() => handlePresentStudio(pres.id)}
-                  >
-                    {isExpanded ? "Collapse" : "Show Slides"}
-                  </Button>
-                </div>
-              </div>
-
-              {isExpanded && studioSlides[pres.id] && (
-                <div className="px-3 pb-3 border-t border-console-border/50">
-                  <div className="flex items-center gap-2 mt-2 mb-2">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-console-text-muted">Slides</p>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    {studioSlides[pres.id].map((slide, idx) => {
-                      const displayItem = buildCustomSlideItem(pres, studioSlides[pres.id], idx);
-                      return (
-                        <StudioSlideCard
-                          key={slide.id}
-                          slide={slide}
-                          index={idx}
-                          onStage={onStage ? (() => onStage(displayItem)) : undefined}
-                          onLive={onLive ? (() => onLive(displayItem)) : undefined}
-                          onAddToSchedule={onAddToSchedule ? (() => onAddToSchedule(displayItem)) : undefined}
-                          appDataDir={appDataDir}
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </ContentCard>
-          );
-        })}
-
-        {filtered.length === 0 && search && (
-          <p className="text-slate-600 text-xs text-center py-8">No presentations match "{search}"</p>
-        )}
-
-        {studioList.length === 0 && (
-          <div className="flex flex-col items-center gap-3 py-12 text-center">
-            <div className="w-12 h-12 bg-console-surface-raised rounded-xl flex items-center justify-center border border-console-border">
-              <Presentation size={22} className="text-console-text-subtle" />
+    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-4 pb-6">
+      <section className="relative overflow-hidden rounded-2xl border border-console-border bg-[radial-gradient(circle_at_85%_10%,rgba(167,139,250,0.16),transparent_34%),linear-gradient(145deg,rgba(23,33,43,0.98),rgba(11,15,20,0.98))] p-5 shadow-xl shadow-black/10">
+        <div className="pointer-events-none absolute -right-16 -top-24 h-64 w-64 rounded-full border border-tool-design/10" />
+        <div className="relative flex flex-wrap items-start justify-between gap-5">
+          <div className="max-w-xl">
+            <div className="mb-2 flex items-center gap-2 text-[9px] font-black uppercase tracking-[0.2em] text-tool-design">
+              <LayoutTemplate size={12} /> Presentation workspace
             </div>
-            <div>
-              <p className="text-console-text-muted text-sm font-medium">No presentations yet</p>
-              <p className="text-console-text-subtle text-xs mt-1">Create a deck or import a .pptx as rendered slides</p>
+            <h1 className="text-xl font-black tracking-tight text-console-text">Create, refine, and rehearse every message.</h1>
+            <p className="mt-2 text-[11px] leading-relaxed text-console-text-muted">A focused workspace for authored decks, imported content, AI-assisted drafts, and safe handoff to the service plan.</p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button size="lg" onClick={onNewPresentation}><Plus size={15} /> New presentation</Button>
+              <Button variant="ghost" size="lg" onClick={() => setShowAiCreation(true)}><Sparkles size={15} className="text-tool-design" /> Create with AI</Button>
             </div>
           </div>
-        )}
+          <div className="grid min-w-[280px] grid-cols-3 gap-2">
+            <WorkspaceStat value={studioList.length} label="Decks" />
+            <WorkspaceStat value={totalSlides} label="Slides" />
+            <WorkspaceStat value={favoriteCount} label="Favorites" />
+          </div>
+        </div>
+      </section>
+
+      <section className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <CreationAction icon={<Plus size={15} />} title="Blank deck" detail="Start from a clean canvas" tone="primary" onClick={onNewPresentation} />
+        <CreationAction icon={<Sparkles size={15} />} title="AI draft" detail="Build an editable outline" tone="design" onClick={() => setShowAiCreation(true)} />
+        <CreationAction icon={workingAction === "prayer" ? <Loader2 size={15} className="animate-spin" /> : <FileText size={15} />} title="Prayer DOCX" detail="Verify and structure a guide" onClick={() => void importPrayerDocx()} disabled={workingAction !== null} />
+        <CreationAction icon={workingAction === "pptx" ? <Loader2 size={15} className="animate-spin" /> : <FileUp size={15} />} title="PowerPoint" detail="Import rendered slides" onClick={() => void importPowerPoint()} disabled={workingAction !== null} />
+      </section>
+
+      <section className="flex flex-wrap items-center gap-2 rounded-xl border border-console-border bg-console-surface/70 p-2.5">
+        <div className="relative min-w-[220px] flex-1">
+          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-console-text-subtle" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search presentations…"
+            aria-label="Search presentations"
+            className="h-10 w-full rounded-lg border border-console-border bg-console-canvas pl-9 pr-3 text-xs text-console-text outline-none transition-colors placeholder:text-console-text-subtle focus:border-tool-design/60"
+          />
+        </div>
+        <label className="relative flex h-10 items-center gap-2 rounded-lg border border-console-border bg-console-canvas px-3 text-[10px] font-bold text-console-text-muted">
+          <ArrowUpDown size={12} />
+          <span className="sr-only">Sort presentations</span>
+          <select
+            value={preferences.sort}
+            onChange={(event) => setPreferences((current) => ({ ...current, sort: event.target.value as PresentationLibraryPreferences["sort"] }))}
+            className="appearance-none bg-transparent pr-3 text-[10px] font-bold text-console-text outline-none"
+          >
+            <option value="updated">Recently updated</option>
+            <option value="name">Name</option>
+            <option value="slides">Most slides</option>
+          </select>
+        </label>
+        <div className="flex h-10 items-center rounded-lg border border-console-border bg-console-canvas p-1" aria-label="Presentation view">
+          <ViewButton active={preferences.view === "grid"} label="Grid view" onClick={() => setPreferences((current) => ({ ...current, view: "grid" }))}><Grid2X2 size={13} /></ViewButton>
+          <ViewButton active={preferences.view === "list"} label="List view" onClick={() => setPreferences((current) => ({ ...current, view: "list" }))}><List size={14} /></ViewButton>
+        </div>
+      </section>
+
+      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <section className="min-w-0">
+          <div className="mb-2 flex items-end justify-between px-0.5">
+            <div>
+              <h2 className="text-[11px] font-black uppercase tracking-[0.16em] text-console-text-muted">Your presentations</h2>
+              <p className="mt-1 text-[10px] text-console-text-subtle">{filtered.length} {filtered.length === 1 ? "deck" : "decks"}{query ? " matching your search" : ""}</p>
+            </div>
+          </div>
+
+          {filtered.length > 0 ? (
+            <div className={cn(
+              preferences.view === "grid"
+                ? "grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-3"
+                : "flex flex-col gap-2",
+            )}>
+              {filtered.map((summary) => (
+                <PresentationDeckCard
+                  key={summary.id}
+                  summary={summary}
+                  presentation={loadedPresentations[summary.id]}
+                  firstSlide={studioSlides[summary.id]?.[0]}
+                  appDataDir={appDataDir}
+                  selected={expandedStudioPresId === summary.id}
+                  favorite={preferences.favorites.includes(summary.id)}
+                  view={preferences.view}
+                  onSelect={() => selectPresentation(summary.id)}
+                  onEdit={() => onOpenEditor(summary.id)}
+                  onToggleFavorite={() => toggleFavorite(summary.id)}
+                />
+              ))}
+            </div>
+          ) : (
+            <LibraryEmptyState hasQuery={query.trim().length > 0} onCreate={onNewPresentation} />
+          )}
+        </section>
+
+        <PresentationDetailPanel
+          summary={selectedSummary}
+          presentation={selectedPresentation}
+          slides={selectedSlides}
+          appDataDir={appDataDir}
+          loading={!!selectedSummary && loadingDeckId === selectedSummary.id}
+          error={loadError}
+          onClose={() => setExpandedStudioPresId(null)}
+          onEdit={() => selectedSummary && onOpenEditor(selectedSummary.id)}
+          onDuplicate={() => selectedSummary && void handleDuplicate(selectedSummary.id)}
+          onDelete={() => selectedSummary && setDeletePres(selectedSummary)}
+          onStage={onStage}
+          onLive={onLive}
+          onAddToSchedule={onAddToSchedule}
+        />
       </div>
 
-      {/* Delete confirmation */}
       <ConfirmModal
         open={!!deletePres}
-        title={`Delete "${deletePres?.name ?? ""}"?`}
-        description="The presentation and all its slides will be removed. This cannot be undone."
-        confirmLabel="Delete Presentation"
+        title={`Delete “${deletePres?.name ?? ""}”?`}
+        description="The presentation and all of its slides will be removed. This cannot be undone."
+        confirmLabel="Delete presentation"
         confirmVariant="live"
-        onConfirm={async () => {
-          if (deletePres) await handleDelete(deletePres.id);
-        }}
+        onConfirm={async () => { if (deletePres) await handleDelete(deletePres.id); }}
         onClose={() => setDeletePres(null)}
       />
       <AiPresentationModal
@@ -301,11 +404,82 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
         onClose={() => setShowAiCreation(false)}
         onCreate={createAiPresentation}
       />
-      <PrayerDocxImportModal
-        imported={prayerImport}
-        onClose={() => setPrayerImport(null)}
-        onCreate={createPrayerDecks}
-      />
+      <PrayerDocxImportModal imported={prayerImport} onClose={() => setPrayerImport(null)} onCreate={createPrayerDecks} />
+    </div>
+  );
+}
+
+function WorkspaceStat({ value, label }: { value: number; label: string }) {
+  return (
+    <div className="rounded-xl border border-white/8 bg-black/15 px-3 py-3 backdrop-blur-sm">
+      <p className="text-lg font-black tabular-nums text-console-text">{value}</p>
+      <p className="mt-0.5 text-[8px] font-black uppercase tracking-[0.16em] text-console-text-subtle">{label}</p>
+    </div>
+  );
+}
+
+function CreationAction({
+  icon,
+  title,
+  detail,
+  tone = "neutral",
+  disabled,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  detail: string;
+  tone?: "primary" | "design" | "neutral";
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="group flex min-w-0 items-center gap-3 rounded-xl border border-console-border bg-console-surface p-3 text-left transition-all hover:-translate-y-0.5 hover:border-console-border-strong hover:bg-console-surface-raised disabled:pointer-events-none disabled:opacity-40"
+    >
+      <span className={cn(
+        "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors",
+        tone === "primary" && "bg-action-primary/15 text-action-primary group-hover:bg-action-primary group-hover:text-black",
+        tone === "design" && "bg-tool-design/15 text-tool-design group-hover:bg-tool-design group-hover:text-white",
+        tone === "neutral" && "bg-console-surface-strong text-console-text-muted group-hover:text-console-text",
+      )}>{icon}</span>
+      <span className="min-w-0">
+        <span className="block truncate text-[11px] font-black text-console-text">{title}</span>
+        <span className="mt-0.5 block truncate text-[9px] text-console-text-subtle">{detail}</span>
+      </span>
+    </button>
+  );
+}
+
+function ViewButton({ active, label, onClick, children }: { active: boolean; label: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      aria-pressed={active}
+      title={label}
+      className={cn("flex h-8 w-8 items-center justify-center rounded-md transition-colors", active ? "bg-console-surface-strong text-console-text" : "text-console-text-subtle hover:text-console-text")}
+    >
+      {children}
+    </button>
+  );
+}
+
+function LibraryEmptyState({ hasQuery, onCreate }: { hasQuery: boolean; onCreate: () => void }) {
+  return (
+    <div className="flex min-h-72 flex-col items-center justify-center rounded-2xl border border-dashed border-console-border bg-console-surface/30 px-6 text-center">
+      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-console-surface-raised text-console-text-subtle">
+        {hasQuery ? <Search size={20} /> : <Presentation size={20} />}
+      </div>
+      <p className="mt-4 text-sm font-bold text-console-text">{hasQuery ? "No matching presentations" : "Build your first presentation"}</p>
+      <p className="mt-1 max-w-sm text-[11px] leading-relaxed text-console-text-subtle">
+        {hasQuery ? "Try a different title or clear the search to see your full library." : "Start blank, generate an AI-assisted draft, or bring in an existing PowerPoint."}
+      </p>
+      {!hasQuery && <Button className="mt-4" onClick={onCreate}><Plus size={13} /> New presentation</Button>}
     </div>
   );
 }

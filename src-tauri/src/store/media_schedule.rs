@@ -1,13 +1,13 @@
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use std::fs;
-use anyhow::Result;
-use uuid::Uuid;
-use crate::store::Verse;
 use crate::store::data_db::DataDb;
+use crate::store::Verse;
+use anyhow::Result;
 use image::GenericImageView;
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::Emitter;
+use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Media types
@@ -54,10 +54,18 @@ pub struct MediaItem {
     pub volume: f64,
 }
 
-fn default_media_fit_mode() -> String { "contain".to_string() }
-fn default_loop_playback() -> bool { true }
-fn default_playback_rate() -> f64 { 1.0 }
-fn default_media_volume() -> f64 { 1.0 }
+fn default_media_fit_mode() -> String {
+    "contain".to_string()
+}
+fn default_loop_playback() -> bool {
+    true
+}
+fn default_playback_rate() -> f64 {
+    1.0
+}
+fn default_media_volume() -> f64 {
+    1.0
+}
 
 // ---------------------------------------------------------------------------
 // Custom studio slide types
@@ -204,9 +212,17 @@ pub struct CustomSlideData {
     pub background_image: Option<String>,
     #[serde(rename = "backgroundVideo", alias = "background_video", default)]
     pub background_video: Option<String>,
-    #[serde(rename = "backgroundVideoLoop", alias = "background_video_loop", default)]
+    #[serde(
+        rename = "backgroundVideoLoop",
+        alias = "background_video_loop",
+        default
+    )]
     pub background_video_loop: Option<bool>,
-    #[serde(rename = "backgroundVideoMuted", alias = "background_video_muted", default)]
+    #[serde(
+        rename = "backgroundVideoMuted",
+        alias = "background_video_muted",
+        default
+    )]
     pub background_video_muted: Option<bool>,
     #[serde(default)]
     pub header_enabled: Option<bool>,
@@ -227,6 +243,10 @@ pub struct CustomSlideData {
     pub theme: Option<serde_json::Value>,
     #[serde(default)]
     pub notes: Option<String>,
+    #[serde(default)]
+    pub section: Option<String>,
+    #[serde(default)]
+    pub transition: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -305,10 +325,19 @@ impl DisplayItem {
             DisplayItem::Verse(v) => format!("{} {}:{}", v.book, v.chapter, v.verse),
             DisplayItem::Media(m) => m.name.clone(),
             DisplayItem::Camera(_) => "Live Camera Feed".to_string(),
-            DisplayItem::CustomSlide(c) => format!("{} – slide {}", c.presentation_name, c.slide_index + 1),
-            DisplayItem::Timer(t) => t.label.as_ref().filter(|l| !l.is_empty()).cloned().unwrap_or_else(|| format!("Timer: {}", t.timer_type)),
+            DisplayItem::CustomSlide(c) => {
+                format!("{} – slide {}", c.presentation_name, c.slide_index + 1)
+            }
+            DisplayItem::Timer(t) => t
+                .label
+                .as_ref()
+                .filter(|l| !l.is_empty())
+                .cloned()
+                .unwrap_or_else(|| format!("Timer: {}", t.timer_type)),
             DisplayItem::Song(s) => format!("{} ({})", s.title, s.section_label),
-            DisplayItem::SceneComposition(c) => format!("Scene: {} ({} zones)", c.name, c.zones.len()),
+            DisplayItem::SceneComposition(c) => {
+                format!("Scene: {} ({} zones)", c.name, c.zones.len())
+            }
         }
     }
 }
@@ -339,9 +368,15 @@ pub struct VideoBackground {
     pub playback_rate: f32,
 }
 
-fn vbg_default_true() -> bool { true }
-fn vbg_default_cover() -> String { "cover".to_string() }
-fn vbg_default_one() -> f32 { 1.0 }
+fn vbg_default_true() -> bool {
+    true
+}
+fn vbg_default_cover() -> String {
+    "cover".to_string()
+}
+fn vbg_default_one() -> f32 {
+    1.0
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -384,8 +419,20 @@ impl<'de> serde::Deserialize<'de> for ImageBackground {
             Legacy(String),
         }
         match Repr::deserialize(d)? {
-            Repr::New { path, object_fit, opacity } => Ok(ImageBackground { path, object_fit, opacity }),
-            Repr::Legacy(path) => Ok(ImageBackground { path, object_fit: "cover".to_string(), opacity: 1.0 }),
+            Repr::New {
+                path,
+                object_fit,
+                opacity,
+            } => Ok(ImageBackground {
+                path,
+                object_fit,
+                opacity,
+            }),
+            Repr::Legacy(path) => Ok(ImageBackground {
+                path,
+                object_fit: "cover".to_string(),
+                opacity: 1.0,
+            }),
         }
     }
 }
@@ -498,42 +545,89 @@ pub struct ThemeColors {
     pub text: String,
 }
 
-fn default_auto_split_verses() -> bool { true }
-fn default_verse_split_threshold() -> usize { 200 }
-fn default_fit_mode() -> String { "contain".to_string() }
-fn default_highlight_divine_words() -> bool { false }
-fn default_highlight_color() -> String { "#ef4444".to_string() }
-fn default_auto_clear_background_logo() -> bool { true }
-fn default_version_font() -> String { "Arial, sans-serif".to_string() }
-fn default_version_size() -> f64 { 24.0 }
-fn default_font_size() -> f64 { 72.0 }
-fn default_reference_output_height() -> f64 { 1080.0 }
-fn default_transition() -> String { "fade".to_string() }
-fn default_transition_duration() -> f32 { 0.4 }
-fn default_verse_font_family() -> String { "Georgia, serif".to_string() }
-fn default_reference_font_size() -> f64 { 36.0 }
-fn default_reference_font_family() -> String { "Arial, sans-serif".to_string() }
+fn default_auto_split_verses() -> bool {
+    true
+}
+fn default_verse_split_threshold() -> usize {
+    200
+}
+fn default_fit_mode() -> String {
+    "contain".to_string()
+}
+fn default_highlight_divine_words() -> bool {
+    false
+}
+fn default_highlight_color() -> String {
+    "#ef4444".to_string()
+}
+fn default_auto_clear_background_logo() -> bool {
+    true
+}
+fn default_version_font() -> String {
+    "Arial, sans-serif".to_string()
+}
+fn default_version_size() -> f64 {
+    24.0
+}
+fn default_font_size() -> f64 {
+    72.0
+}
+fn default_reference_output_height() -> f64 {
+    1080.0
+}
+fn default_transition() -> String {
+    "fade".to_string()
+}
+fn default_transition_duration() -> f32 {
+    0.4
+}
+fn default_verse_font_family() -> String {
+    "Georgia, serif".to_string()
+}
+fn default_reference_font_size() -> f64 {
+    36.0
+}
+fn default_reference_font_family() -> String {
+    "Arial, sans-serif".to_string()
+}
 
 impl Default for PresentationSettings {
     fn default() -> Self {
         Self {
-            theme: "dark".to_string(), reference_position: "bottom".to_string(),
-            background: BackgroundSetting::default(), bible_background: BackgroundSetting::default(),
-            media_background: BackgroundSetting::default(), song_background: BackgroundSetting::default(), show_song_section_labels: false, reference_output_height: default_reference_output_height(), logo_path: None, background_logo_path: None,
-            show_background_logo: false, background_logo_fit: default_fit_mode(), is_blanked: false,
-            logo_text: None, logo_text_color: None,
-            background_logo_text: None, background_logo_text_color: None,
-            font_size: default_font_size(), slide_transition: default_transition(),
+            theme: "dark".to_string(),
+            reference_position: "bottom".to_string(),
+            background: BackgroundSetting::default(),
+            bible_background: BackgroundSetting::default(),
+            media_background: BackgroundSetting::default(),
+            song_background: BackgroundSetting::default(),
+            show_song_section_labels: false,
+            reference_output_height: default_reference_output_height(),
+            logo_path: None,
+            background_logo_path: None,
+            show_background_logo: false,
+            background_logo_fit: default_fit_mode(),
+            is_blanked: false,
+            logo_text: None,
+            logo_text_color: None,
+            background_logo_text: None,
+            background_logo_text_color: None,
+            font_size: default_font_size(),
+            slide_transition: default_transition(),
             slide_transition_duration: default_transition_duration(),
             verse_font_family: default_verse_font_family(),
-            reference_font_size: default_reference_font_size(), reference_color: String::new(),
+            reference_font_size: default_reference_font_size(),
+            reference_color: String::new(),
             reference_font_family: default_reference_font_family(),
-            disabled_bible_versions: Vec::new(), version_font_family: default_version_font(),
-            version_font_size: default_version_size(), version_color: String::new(),
+            disabled_bible_versions: Vec::new(),
+            version_font_family: default_version_font(),
+            version_font_size: default_version_size(),
+            version_color: String::new(),
             auto_split_verses: default_auto_split_verses(),
-            verse_split_threshold: default_verse_split_threshold(), preferred_monitor: None,
+            verse_split_threshold: default_verse_split_threshold(),
+            preferred_monitor: None,
             highlight_divine_words: default_highlight_divine_words(),
-            highlight_color: default_highlight_color(), custom_theme_colors: None,
+            highlight_color: default_highlight_color(),
+            custom_theme_colors: None,
             auto_clear_background_logo: default_auto_clear_background_logo(),
             stage_uses_theme: false,
             ai_scripture_auto_live: false,
@@ -663,7 +757,10 @@ mod song_tests {
         let json = serde_json::to_string(&song).expect("serialize");
         let again: Song = serde_json::from_str(&json).expect("round trip");
         assert_eq!(again.sections[0].id.as_deref(), Some("sec-a"));
-        assert_eq!(again.arrangement_steps.as_ref().unwrap()[1].section_id, "sec-a");
+        assert_eq!(
+            again.arrangement_steps.as_ref().unwrap()[1].section_id,
+            "sec-a"
+        );
     }
 
     #[test]
@@ -754,13 +851,22 @@ mod song_tests {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct LowerThirdNameplate { pub name: String, pub title: Option<String>, }
+pub struct LowerThirdNameplate {
+    pub name: String,
+    pub title: Option<String>,
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct LowerThirdLyrics { pub line1: String, pub line2: Option<String>, pub section_label: Option<String>, }
+pub struct LowerThirdLyrics {
+    pub line1: String,
+    pub line2: Option<String>,
+    pub section_label: Option<String>,
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct LowerThirdFreeText { pub text: String }
+pub struct LowerThirdFreeText {
+    pub text: String,
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "kind", content = "data")]
@@ -841,8 +947,12 @@ pub struct SceneZone {
     pub font_family: Option<String>,
 }
 
-fn zone_fit_default() -> String { "cover".to_string() }
-fn zone_opacity_default() -> f32 { 1.0 }
+fn zone_fit_default() -> String {
+    "cover".to_string()
+}
+fn zone_opacity_default() -> f32 {
+    1.0
+}
 
 /// A scene's multi-zone split-screen composition.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -890,10 +1000,19 @@ pub struct Scene {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Schedule { pub id: String, pub name: String, pub items: Vec<ScheduleEntry> }
+pub struct Schedule {
+    pub id: String,
+    pub name: String,
+    pub items: Vec<ScheduleEntry>,
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ServiceMeta { pub id: String, pub name: String, pub item_count: usize, pub updated_at: u64 }
+pub struct ServiceMeta {
+    pub id: String,
+    pub name: String,
+    pub item_count: usize,
+    pub updated_at: u64,
+}
 
 // ---------------------------------------------------------------------------
 // Props
@@ -906,8 +1025,12 @@ pub struct PropItem {
     pub path: Option<String>,
     pub text: Option<String>,
     pub color: Option<String>,
-    pub x: f64, pub y: f64, pub w: f64, pub h: f64,
-    pub opacity: f64, pub visible: bool,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    pub opacity: f64,
+    pub visible: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -924,15 +1047,27 @@ pub struct CustomSlide {
     /// it on load if it's missing.
     #[serde(default, rename = "background")]
     pub background: Option<serde_json::Value>,
-    #[serde(rename = "backgroundColor", alias = "background_color", default = "default_background_color")]
+    #[serde(
+        rename = "backgroundColor",
+        alias = "background_color",
+        default = "default_background_color"
+    )]
     pub background_color: String,
     #[serde(rename = "backgroundImage", alias = "background_image", default)]
     pub background_image: Option<String>,
     #[serde(rename = "backgroundVideo", alias = "background_video", default)]
     pub background_video: Option<String>,
-    #[serde(rename = "backgroundVideoLoop", alias = "background_video_loop", default)]
+    #[serde(
+        rename = "backgroundVideoLoop",
+        alias = "background_video_loop",
+        default
+    )]
     pub background_video_loop: Option<bool>,
-    #[serde(rename = "backgroundVideoMuted", alias = "background_video_muted", default)]
+    #[serde(
+        rename = "backgroundVideoMuted",
+        alias = "background_video_muted",
+        default
+    )]
     pub background_video_muted: Option<bool>,
     pub elements: Vec<SlideElement>,
     #[serde(default)]
@@ -952,12 +1087,20 @@ pub struct CustomSlide {
     /// slides back to their `SlideMaster` definition.
     #[serde(default, rename = "masterRef")]
     pub master_ref: Option<String>,
+    /// Optional editor outline grouping and per-slide transition. Values are
+    /// permissive for forward-compatible frontend evolution.
+    #[serde(default)]
+    pub section: Option<String>,
+    #[serde(default)]
+    pub transition: Option<serde_json::Value>,
 }
 
 /// `serde` default for the legacy `background_color` field. Empty string
 /// rather than the historical "#1a1a2e" because new presentations set
 /// the `background` union directly and never reach this fallback.
-fn default_background_color() -> String { String::new() }
+fn default_background_color() -> String {
+    String::new()
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CustomPresentation {
@@ -1007,9 +1150,9 @@ pub struct SlideTemplate {
 
 fn classify_extension(ext: &str) -> Option<MediaItemType> {
     match ext {
-        "jpg"|"jpeg"|"png"|"gif"|"webp"|"bmp"|"svg" => Some(MediaItemType::Image),
-        "mp4"|"webm"|"mov"|"mkv"|"avi" => Some(MediaItemType::Video),
-        "mp3"|"wav"|"ogg"|"m4a"|"aac"|"flac" => Some(MediaItemType::Audio),
+        "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "svg" => Some(MediaItemType::Image),
+        "mp4" | "webm" | "mov" | "mkv" | "avi" => Some(MediaItemType::Video),
+        "mp3" | "wav" | "ogg" | "m4a" | "aac" | "flac" => Some(MediaItemType::Audio),
         _ => None,
     }
 }
@@ -1041,7 +1184,39 @@ impl Clone for MediaScheduleStore {
 
 impl MediaScheduleStore {
     pub fn backup_database(&self, destination: &std::path::Path) -> Result<()> {
-        self.data_db.backup_to(destination).map_err(|e| anyhow::anyhow!(e))
+        self.data_db
+            .backup_to(destination)
+            .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    pub fn save_ai_scripture_session(&self, id: &str, value: &serde_json::Value) -> Result<()> {
+        let json = serde_json::to_string(value)?;
+        self.data_db
+            .hash_set("ai_scripture_sessions", id, &json)
+            .map_err(|error| anyhow::anyhow!(error))
+    }
+
+    pub fn list_ai_scripture_sessions(&self) -> Result<Vec<serde_json::Value>> {
+        self.data_db
+            .hash_list("ai_scripture_sessions")
+            .map_err(|error| anyhow::anyhow!(error))?
+            .into_iter()
+            .map(|(_, json)| serde_json::from_str(&json).map_err(anyhow::Error::from))
+            .collect()
+    }
+
+    pub fn load_ai_scripture_session(&self, id: &str) -> Result<Option<serde_json::Value>> {
+        self.data_db
+            .hash_get("ai_scripture_sessions", id)
+            .map_err(|error| anyhow::anyhow!(error))?
+            .map(|json| serde_json::from_str(&json).map_err(anyhow::Error::from))
+            .transpose()
+    }
+
+    pub fn delete_ai_scripture_session(&self, id: &str) -> Result<()> {
+        self.data_db
+            .hash_delete("ai_scripture_sessions", id)
+            .map_err(|error| anyhow::anyhow!(error))
     }
 
     pub fn app_data_dir(&self) -> &std::path::Path {
@@ -1052,13 +1227,21 @@ impl MediaScheduleStore {
         let media_dir = app_data_dir.join("media");
         let thumbnails_dir = app_data_dir.join("thumbnails");
         for d in [&media_dir, &thumbnails_dir] {
-            if !d.exists() { fs::create_dir_all(d)?; }
+            if !d.exists() {
+                fs::create_dir_all(d)?;
+            }
         }
 
         let db_path = app_data_dir.join("wordlyte_data.db");
         let data_db = Arc::new(DataDb::open(&db_path).map_err(|e| anyhow::anyhow!(e))?);
 
-        let store = Self { app_data_dir, media_dir, thumbnails_dir, data_db, startup_issues: parking_lot::Mutex::new(Vec::new()) };
+        let store = Self {
+            app_data_dir,
+            media_dir,
+            thumbnails_dir,
+            data_db,
+            startup_issues: parking_lot::Mutex::new(Vec::new()),
+        };
         store.try_migrate_from_json()?;
         Ok(store)
     }
@@ -1067,15 +1250,28 @@ impl MediaScheduleStore {
         let media_dir = app_data_dir.join("media");
         let thumbnails_dir = app_data_dir.join("thumbnails");
         for d in [&media_dir, &thumbnails_dir] {
-            if !d.exists() { fs::create_dir_all(d)?; }
+            if !d.exists() {
+                fs::create_dir_all(d)?;
+            }
         }
         let data_db = Arc::new(DataDb::open_in_memory().map_err(|e| anyhow::anyhow!(e))?);
-        Ok(Self { app_data_dir, media_dir, thumbnails_dir, data_db, startup_issues: parking_lot::Mutex::new(Vec::new()) })
+        Ok(Self {
+            app_data_dir,
+            media_dir,
+            thumbnails_dir,
+            data_db,
+            startup_issues: parking_lot::Mutex::new(Vec::new()),
+        })
     }
 
     fn try_migrate_from_json(&self) -> Result<()> {
-        let migrated = self.data_db.kv_get("__migrated__").map_err(|e| anyhow::anyhow!(e))?;
-        if migrated.as_deref() == Some("1") { return Ok(()); }
+        let migrated = self
+            .data_db
+            .kv_get("__migrated__")
+            .map_err(|e| anyhow::anyhow!(e))?;
+        if migrated.as_deref() == Some("1") {
+            return Ok(());
+        }
 
         // Migrate settings
         let settings_path = self.app_data_dir.join("settings.json");
@@ -1173,21 +1369,48 @@ impl MediaScheduleStore {
 
         // Migrate media: scan media dir for files and create records
         if self.media_dir.exists() {
-            let media_count = self.data_db.list_media().map_err(|e| anyhow::anyhow!(e))?.len();
+            let media_count = self
+                .data_db
+                .list_media()
+                .map_err(|e| anyhow::anyhow!(e))?
+                .len();
             if media_count == 0 {
                 if let Ok(entries) = fs::read_dir(&self.media_dir) {
                     for entry in entries.flatten() {
                         let path = entry.path();
                         if path.is_file() {
                             let name = path.file_name().unwrap_or_default().to_string_lossy();
-                            if name.starts_with('.') { continue; }
-                            let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
-                            if !name.contains(".mediaid") && !name.contains(".mediafit") && !name.contains(".description") && !name.contains(".tags") && !name.contains(".category") {
+                            if name.starts_with('.') {
+                                continue;
+                            }
+                            let ext = path
+                                .extension()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_lowercase();
+                            if !name.contains(".mediaid")
+                                && !name.contains(".mediafit")
+                                && !name.contains(".description")
+                                && !name.contains(".tags")
+                                && !name.contains(".category")
+                            {
                                 if let Some(mt) = classify_extension(&ext) {
                                     let id = Uuid::new_v4().to_string();
-                                    let media_type = match mt { MediaItemType::Image => "Image", MediaItemType::Video => "Video", MediaItemType::Audio => "Audio" };
-                                    let created_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-                                    let _ = self.data_db.insert_media(&id, &name, &path.to_string_lossy(), media_type, &created_at);
+                                    let media_type = match mt {
+                                        MediaItemType::Image => "Image",
+                                        MediaItemType::Video => "Video",
+                                        MediaItemType::Audio => "Audio",
+                                    };
+                                    let created_at = chrono::Local::now()
+                                        .format("%Y-%m-%d %H:%M:%S")
+                                        .to_string();
+                                    let _ = self.data_db.insert_media(
+                                        &id,
+                                        &name,
+                                        &path.to_string_lossy(),
+                                        media_type,
+                                        &created_at,
+                                    );
                                 }
                             }
                         }
@@ -1205,9 +1428,25 @@ impl MediaScheduleStore {
     pub fn list_media(&self) -> Result<Vec<MediaItem>> {
         let rows = self.data_db.list_media().map_err(|e| anyhow::anyhow!(e))?;
         let mut items = Vec::new();
-        for (id, filename, path, media_type, fit_mode, description, tags, category,
-             thumbnail_path, duration, width, height, content_hash, loop_playback,
-             playback_rate, volume) in rows {
+        for (
+            id,
+            filename,
+            path,
+            media_type,
+            fit_mode,
+            description,
+            tags,
+            category,
+            thumbnail_path,
+            duration,
+            width,
+            height,
+            content_hash,
+            loop_playback,
+            playback_rate,
+            volume,
+        ) in rows
+        {
             let media_type = match media_type.as_str() {
                 "Image" => MediaItemType::Image,
                 "Audio" => MediaItemType::Audio,
@@ -1221,13 +1460,18 @@ impl MediaScheduleStore {
             } else {
                 self.media_dir.join(&path).to_string_lossy().to_string()
             };
-            let thumb = if thumbnail_path.is_empty() { None } else {
+            let thumb = if thumbnail_path.is_empty() {
+                None
+            } else {
                 // Stored thumbnail paths are absolute; resolve legacy relative
                 // entries (pre-P4.8) against the thumbnails dir.
                 let p = if PathBuf::from(&thumbnail_path).is_absolute() {
                     thumbnail_path
                 } else {
-                    self.thumbnails_dir.join(&thumbnail_path).to_string_lossy().to_string()
+                    self.thumbnails_dir
+                        .join(&thumbnail_path)
+                        .to_string_lossy()
+                        .to_string()
                 };
                 Some(p)
             };
@@ -1239,12 +1483,24 @@ impl MediaScheduleStore {
                 thumbnail_path: thumb,
                 fit_mode,
                 tags,
-                description: if description.is_empty() { None } else { Some(description) },
-                category: if category.is_empty() { None } else { Some(category) },
+                description: if description.is_empty() {
+                    None
+                } else {
+                    Some(description)
+                },
+                category: if category.is_empty() {
+                    None
+                } else {
+                    Some(category)
+                },
                 duration,
                 width,
                 height,
-                content_hash: if content_hash.is_empty() { None } else { Some(content_hash) },
+                content_hash: if content_hash.is_empty() {
+                    None
+                } else {
+                    Some(content_hash)
+                },
                 loop_playback,
                 playback_rate,
                 volume,
@@ -1253,16 +1509,24 @@ impl MediaScheduleStore {
         Ok(items)
     }
 
-    fn get_or_create_thumbnail_static(thumb_dir: &Path, media_path: &str, id: &str) -> Option<String> {
+    fn get_or_create_thumbnail_static(
+        thumb_dir: &Path,
+        media_path: &str,
+        id: &str,
+    ) -> Option<String> {
         let thumb_path = thumb_dir.join(format!("{}.jpg", id));
-        if thumb_path.exists() { return Some(thumb_path.to_string_lossy().to_string()); }
+        if thumb_path.exists() {
+            return Some(thumb_path.to_string_lossy().to_string());
+        }
         if let Ok(img) = image::open(media_path) {
             let (w, h) = img.dimensions();
             let scale = 320.0 / (w.max(h) as f32);
             let nw = (w as f32 * scale) as u32;
             let nh = (h as f32 * scale) as u32;
             let thumb = img.resize(nw, nh, image::imageops::FilterType::Lanczos3);
-            if thumb.save(&thumb_path).is_ok() { return Some(thumb_path.to_string_lossy().to_string()); }
+            if thumb.save(&thumb_path).is_ok() {
+                return Some(thumb_path.to_string_lossy().to_string());
+            }
         }
         None
     }
@@ -1272,14 +1536,30 @@ impl MediaScheduleStore {
     /// "could not determine". ffmpeg is resolved bundled-first (with a PATH
     /// fallback); if it isn't available the whole probe degrades to
     /// (None, None, None, None) instead of erroring.
-    fn probe_video(thumb_dir: &Path, media_path: &str, id: &str) -> (Option<String>, Option<f64>, Option<i64>, Option<i64>) {
+    fn probe_video(
+        thumb_dir: &Path,
+        media_path: &str,
+        id: &str,
+    ) -> (Option<String>, Option<f64>, Option<i64>, Option<i64>) {
         use std::process::Command;
         let thumb_path = thumb_dir.join(format!("{}.jpg", id));
 
         // 1) Frame extraction (thumbnail). -y overwrite, scale to 320w.
         if !thumb_path.exists() {
             let ok = Command::new(crate::binpaths::ffmpeg_path())
-                .args(["-y", "-ss", "1", "-i", media_path, "-frames:v", "1", "-vf", "scale=320:-1", "-q:v", "4"])
+                .args([
+                    "-y",
+                    "-ss",
+                    "1",
+                    "-i",
+                    media_path,
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    "scale=320:-1",
+                    "-q:v",
+                    "4",
+                ])
                 .arg(&thumb_path)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
@@ -1290,21 +1570,37 @@ impl MediaScheduleStore {
                 let _ = fs::remove_file(&thumb_path);
             }
         }
-        let thumb = if thumb_path.exists() { Some(thumb_path.to_string_lossy().to_string()) } else { None };
+        let thumb = if thumb_path.exists() {
+            Some(thumb_path.to_string_lossy().to_string())
+        } else {
+            None
+        };
 
         // 2) Duration + dimensions via ffprobe (stream of first video track).
         let mut duration: Option<f64> = None;
         let mut width: Option<i64> = None;
         let mut height: Option<i64> = None;
         if let Ok(out) = Command::new(crate::binpaths::ffprobe_path())
-            .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "format=duration:stream=width,height", "-of", "json"])
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "format=duration:stream=width,height",
+                "-of",
+                "json",
+            ])
             .arg(media_path)
             .output()
         {
             if out.status.success() {
                 if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
-                    duration = json.pointer("/format/duration").and_then(|v| v.as_str())
-                        .and_then(|s| s.parse::<f64>().ok()).or(duration);
+                    duration = json
+                        .pointer("/format/duration")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .or(duration);
                     width = json.pointer("/streams/0/width").and_then(|v| v.as_i64());
                     height = json.pointer("/streams/0/height").and_then(|v| v.as_i64());
                 }
@@ -1317,20 +1613,33 @@ impl MediaScheduleStore {
     fn probe_audio_duration(media_path: &str) -> Option<f64> {
         use std::process::Command;
         if let Ok(out) = Command::new(crate::binpaths::ffprobe_path())
-            .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1"])
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+            ])
             .arg(media_path)
             .output()
         {
             if out.status.success() {
                 let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if let Ok(d) = s.parse::<f64>() { return Some(d); }
+                if let Ok(d) = s.parse::<f64>() {
+                    return Some(d);
+                }
             }
         }
         None
     }
 
     fn media_type_str(mt: &MediaItemType) -> &'static str {
-        match mt { MediaItemType::Image => "Image", MediaItemType::Video => "Video", MediaItemType::Audio => "Audio" }
+        match mt {
+            MediaItemType::Image => "Image",
+            MediaItemType::Video => "Video",
+            MediaItemType::Audio => "Audio",
+        }
     }
 
     /// Compute a content hash for the media file. This is the dedup key —
@@ -1347,7 +1656,9 @@ impl MediaScheduleStore {
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
-                Ok(n) => { hasher.update(&buf[..n]); }
+                Ok(n) => {
+                    hasher.update(&buf[..n]);
+                }
                 Err(_) => return None,
             }
         }
@@ -1356,20 +1667,40 @@ impl MediaScheduleStore {
 
     /// Resolve the destination path for an import with a unique name, then
     /// copy the source there (dedup on name handled by the caller loop).
-    fn copy_into_media_dir(&self, source_path: &std::path::Path) -> Result<(String, PathBuf), anyhow::Error> {
-        let original_name = source_path.file_name().ok_or_else(|| anyhow::anyhow!("Invalid source path"))?.to_string_lossy().to_string();
-        let stem = source_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
-        let dot_ext = source_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    fn copy_into_media_dir(
+        &self,
+        source_path: &std::path::Path,
+    ) -> Result<(String, PathBuf), anyhow::Error> {
+        let original_name = source_path
+            .file_name()
+            .ok_or_else(|| anyhow::anyhow!("Invalid source path"))?
+            .to_string_lossy()
+            .to_string();
+        let stem = source_path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let dot_ext = source_path
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy()))
+            .unwrap_or_default();
 
         let mut dest_path = self.media_dir.join(&original_name);
         let mut dest_name = original_name.clone();
         let mut counter = 2u32;
 
         let mut dest_file = loop {
-            match fs::OpenOptions::new().write(true).create_new(true).open(&dest_path) {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&dest_path)
+            {
                 Ok(f) => break f,
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    dest_name = format!("{}_{}{}", stem, counter, dot_ext); dest_path = self.media_dir.join(&dest_name); counter += 1;
+                    dest_name = format!("{}_{}{}", stem, counter, dot_ext);
+                    dest_path = self.media_dir.join(&dest_name);
+                    counter += 1;
                 }
                 Err(e) => return Err(e.into()),
             }
@@ -1387,7 +1718,14 @@ impl MediaScheduleStore {
     /// record the fresh copy is deleted and the existing item is returned
     /// (dedup) — otherwise a new record is inserted and a background probe
     /// (thumbnail + duration/dimensions) is spawned.
-    fn finalize_import(&self, app: Option<tauri::AppHandle>, dest_name: String, dest_path: PathBuf, media_type: MediaItemType, created_at: String) -> Result<MediaItem, anyhow::Error> {
+    fn finalize_import(
+        &self,
+        app: Option<tauri::AppHandle>,
+        dest_name: String,
+        dest_path: PathBuf,
+        media_type: MediaItemType,
+        created_at: String,
+    ) -> Result<MediaItem, anyhow::Error> {
         let id = Uuid::new_v4().to_string();
         let stored_path = dest_name.clone();
 
@@ -1398,42 +1736,87 @@ impl MediaScheduleStore {
                 let _ = self.data_db.set_media_hash(&existing_id, &hash);
                 return self.get_media(&existing_id);
             }
-            let _ = self.data_db.insert_media(&id, &dest_name, &stored_path, Self::media_type_str(&media_type), &created_at);
+            let _ = self.data_db.insert_media(
+                &id,
+                &dest_name,
+                &stored_path,
+                Self::media_type_str(&media_type),
+                &created_at,
+            );
             let _ = self.data_db.set_media_hash(&id, &hash);
-            if let Some(app) = app { self.spawn_probe(app, &id); }
+            if let Some(app) = app {
+                self.spawn_probe(app, &id);
+            }
             return self.get_media(&id);
         }
 
-        self.data_db.insert_media(&id, &dest_name, &stored_path, Self::media_type_str(&media_type), &created_at)
+        self.data_db
+            .insert_media(
+                &id,
+                &dest_name,
+                &stored_path,
+                Self::media_type_str(&media_type),
+                &created_at,
+            )
             .map_err(|e| anyhow::anyhow!(e))?;
-        if let Some(app) = app { self.spawn_probe(app, &id); }
+        if let Some(app) = app {
+            self.spawn_probe(app, &id);
+        }
         self.get_media(&id)
     }
 
     pub fn get_media(&self, id: &str) -> Result<MediaItem> {
         let rows = self.list_media()?;
-        rows.into_iter().find(|m| m.id == id)
+        rows.into_iter()
+            .find(|m| m.id == id)
             .ok_or_else(|| anyhow::anyhow!("Media '{}' not found", id))
     }
 
     pub fn set_media_fit(&self, id: &str, fit_mode: &str) -> Result<()> {
-        self.data_db.set_media_fit(id, fit_mode).map_err(|e| anyhow::anyhow!(e))
+        self.data_db
+            .set_media_fit(id, fit_mode)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
-    pub fn set_media_playback(&self, id: &str, loop_playback: bool, playback_rate: f64, volume: f64) -> Result<()> {
-        self.data_db.set_media_playback(id, loop_playback, playback_rate, volume).map_err(|e| anyhow::anyhow!(e))
+    pub fn set_media_playback(
+        &self,
+        id: &str,
+        loop_playback: bool,
+        playback_rate: f64,
+        volume: f64,
+    ) -> Result<()> {
+        self.data_db
+            .set_media_playback(id, loop_playback, playback_rate, volume)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
-    pub fn update_media_metadata(&self, id: &str, description: Option<String>, tags: Vec<String>, category: Option<String>) -> Result<()> {
+    pub fn update_media_metadata(
+        &self,
+        id: &str,
+        description: Option<String>,
+        tags: Vec<String>,
+        category: Option<String>,
+    ) -> Result<()> {
         let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
-        self.data_db.update_media_metadata(id, &description, &tags_json, &category).map_err(|e| anyhow::anyhow!(e))
+        self.data_db
+            .update_media_metadata(id, &description, &tags_json, &category)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     /// Relink a record to a new source file: copies the replacement in, updates
     /// the stored path/name, clears the stale thumbnail and regenerates it.
-    pub fn relink_media(&self, id: &str, source_path: &std::path::Path) -> Result<MediaItem, anyhow::Error> {
-        let ext_str = source_path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
-        let media_type = classify_extension(&ext_str).ok_or_else(|| anyhow::anyhow!("Unsupported media type: .{}", ext_str))?;
+    pub fn relink_media(
+        &self,
+        id: &str,
+        source_path: &std::path::Path,
+    ) -> Result<MediaItem, anyhow::Error> {
+        let ext_str = source_path
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase();
+        let media_type = classify_extension(&ext_str)
+            .ok_or_else(|| anyhow::anyhow!("Unsupported media type: .{}", ext_str))?;
         let (dest_name, dest_path) = self.copy_into_media_dir(source_path)?;
         let _ = self.data_db.relink_media(id, &dest_name, &dest_name);
         // Regenerate thumbnail: existing thumb was for the old file.
@@ -1441,13 +1824,30 @@ impl MediaScheduleStore {
         let _ = fs::remove_file(&thumb);
         let (thumb_path, duration, width, height) = match media_type {
             MediaItemType::Image => (
-                Self::get_or_create_thumbnail_static(&self.thumbnails_dir, dest_path.to_string_lossy().as_ref(), id),
-                None, None, None,
+                Self::get_or_create_thumbnail_static(
+                    &self.thumbnails_dir,
+                    dest_path.to_string_lossy().as_ref(),
+                    id,
+                ),
+                None,
+                None,
+                None,
             ),
-            MediaItemType::Video => Self::probe_video(&self.thumbnails_dir, dest_path.to_string_lossy().as_ref(), id),
-            MediaItemType::Audio => (None, Self::probe_audio_duration(dest_path.to_string_lossy().as_ref()), None, None),
+            MediaItemType::Video => Self::probe_video(
+                &self.thumbnails_dir,
+                dest_path.to_string_lossy().as_ref(),
+                id,
+            ),
+            MediaItemType::Audio => (
+                None,
+                Self::probe_audio_duration(dest_path.to_string_lossy().as_ref()),
+                None,
+                None,
+            ),
         };
-        let _ = self.data_db.set_media_probe(id, thumb_path.as_deref(), duration, width, height);
+        let _ = self
+            .data_db
+            .set_media_probe(id, thumb_path.as_deref(), duration, width, height);
         self.get_media(id)
     }
 
@@ -1464,13 +1864,25 @@ impl MediaScheduleStore {
                 let item = store.get_media(&id).map_err(|e| e.to_string())?;
                 let (thumb_path, duration, width, height) = match item.media_type {
                     MediaItemType::Image => (
-                        Self::get_or_create_thumbnail_static(&store.thumbnails_dir, &item.path, &id),
-                        None, None, None,
+                        Self::get_or_create_thumbnail_static(
+                            &store.thumbnails_dir,
+                            &item.path,
+                            &id,
+                        ),
+                        None,
+                        None,
+                        None,
                     ),
-                    MediaItemType::Video => Self::probe_video(&store.thumbnails_dir, &item.path, &id),
-                    MediaItemType::Audio => (None, Self::probe_audio_duration(&item.path), None, None),
+                    MediaItemType::Video => {
+                        Self::probe_video(&store.thumbnails_dir, &item.path, &id)
+                    }
+                    MediaItemType::Audio => {
+                        (None, Self::probe_audio_duration(&item.path), None, None)
+                    }
                 };
-                store.data_db.set_media_probe(&id, thumb_path.as_deref(), duration, width, height)
+                store
+                    .data_db
+                    .set_media_probe(&id, thumb_path.as_deref(), duration, width, height)
                     .map_err(|e| e.to_string())?;
                 Ok(())
             })();
@@ -1481,9 +1893,18 @@ impl MediaScheduleStore {
         });
     }
 
-    pub fn add_media(&self, app: Option<tauri::AppHandle>, source_path: PathBuf) -> Result<MediaItem> {
-        let ext_str = source_path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
-        let media_type = classify_extension(&ext_str).ok_or_else(|| anyhow::anyhow!("Unsupported media type: .{}", ext_str))?;
+    pub fn add_media(
+        &self,
+        app: Option<tauri::AppHandle>,
+        source_path: PathBuf,
+    ) -> Result<MediaItem> {
+        let ext_str = source_path
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase();
+        let media_type = classify_extension(&ext_str)
+            .ok_or_else(|| anyhow::anyhow!("Unsupported media type: .{}", ext_str))?;
         let (dest_name, dest_path) = self.copy_into_media_dir(&source_path)?;
         let created_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         self.finalize_import(app, dest_name, dest_path, media_type, created_at)
@@ -1499,20 +1920,48 @@ impl MediaScheduleStore {
         source_path: PathBuf,
         mut on_progress: F,
     ) -> Result<MediaItem> {
-        let ext_str = source_path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
-        let media_type = classify_extension(&ext_str).ok_or_else(|| anyhow::anyhow!("Unsupported media type: .{}", ext_str))?;
+        let ext_str = source_path
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase();
+        let media_type = classify_extension(&ext_str)
+            .ok_or_else(|| anyhow::anyhow!("Unsupported media type: .{}", ext_str))?;
 
-        let mut dest_path = self.media_dir.join(source_path.file_name().unwrap_or_default().to_string_lossy().to_string());
-        let mut dest_name = source_path.file_name().unwrap_or_default().to_string_lossy().to_string();
-        let stem = source_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
-        let dot_ext = source_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+        let mut dest_path = self.media_dir.join(
+            source_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string(),
+        );
+        let mut dest_name = source_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let stem = source_path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let dot_ext = source_path
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy()))
+            .unwrap_or_default();
         let mut counter = 2u32;
 
         let mut dest_file = loop {
-            match fs::OpenOptions::new().write(true).create_new(true).open(&dest_path) {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&dest_path)
+            {
                 Ok(f) => break f,
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    dest_name = format!("{}_{}{}", stem, counter, dot_ext); dest_path = self.media_dir.join(&dest_name); counter += 1;
+                    dest_name = format!("{}_{}{}", stem, counter, dot_ext);
+                    dest_path = self.media_dir.join(&dest_name);
+                    counter += 1;
                 }
                 Err(e) => return Err(e.into()),
             }
@@ -1536,7 +1985,11 @@ impl MediaScheduleStore {
                 return Err(e.into());
             }
             copied += n as u64;
-            let frac = if total > 0 { (copied as f64) / (total as f64) } else { 0.0 };
+            let frac = if total > 0 {
+                (copied as f64) / (total as f64)
+            } else {
+                0.0
+            };
             on_progress(frac.min(1.0));
         }
 
@@ -1558,7 +2011,11 @@ impl MediaScheduleStore {
                         // Extract a friendly label: name field for the record.
                         let name = serde_json::from_str::<serde_json::Value>(&data)
                             .ok()
-                            .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()))
+                            .and_then(|v| {
+                                v.get("name")
+                                    .and_then(|n| n.as_str())
+                                    .map(|s| s.to_string())
+                            })
                             .unwrap_or_else(|| table.to_string());
                         refs.push(format!("{} · {}", table, name));
                     }
@@ -1596,7 +2053,8 @@ impl MediaScheduleStore {
         if !candidate.starts_with(&self.media_dir) {
             return None;
         }
-        if let (Ok(can), Ok(media_can)) = (candidate.canonicalize(), self.media_dir.canonicalize()) {
+        if let (Ok(can), Ok(media_can)) = (candidate.canonicalize(), self.media_dir.canonicalize())
+        {
             if !can.starts_with(&media_can) {
                 return None;
             }
@@ -1610,7 +2068,11 @@ impl MediaScheduleStore {
     /// (inside the media dir) are ever deleted.
     pub fn delete_media_with_file(&self, id: String, remove_file: bool) -> Result<()> {
         if remove_file {
-            if let Some(path) = self.data_db.get_media_path(&id).map_err(|e| anyhow::anyhow!(e))? {
+            if let Some(path) = self
+                .data_db
+                .get_media_path(&id)
+                .map_err(|e| anyhow::anyhow!(e))?
+            {
                 if let Some(resolved) = self.app_owned_file(&path) {
                     let _ = fs::remove_file(&resolved);
                 }
@@ -1618,7 +2080,9 @@ impl MediaScheduleStore {
                 let _ = fs::remove_file(&thumb);
             }
         }
-        self.data_db.delete_media(&id).map_err(|e| anyhow::anyhow!(e))
+        self.data_db
+            .delete_media(&id)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     pub fn bulk_delete_media(&self, ids: Vec<String>) -> Result<()> {
@@ -1641,17 +2105,32 @@ impl MediaScheduleStore {
                 }
             }
         }
-        self.data_db.delete_media_bulk(&ids).map_err(|e| anyhow::anyhow!(e))
+        self.data_db
+            .delete_media_bulk(&ids)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
-    pub fn bulk_update_media(&self, ids: Vec<String>, tags_to_add: Vec<String>, tags_to_remove: Vec<String>, category: Option<String>) -> Result<()> {
+    pub fn bulk_update_media(
+        &self,
+        ids: Vec<String>,
+        tags_to_add: Vec<String>,
+        tags_to_remove: Vec<String>,
+        category: Option<String>,
+    ) -> Result<()> {
         for id in &ids {
             if let Ok(existing_tags) = self.data_db.get_media_tags(id) {
-                let mut tags: Vec<String> = serde_json::from_str(&existing_tags).unwrap_or_default();
-                for tag in &tags_to_add { if !tags.contains(tag) { tags.push(tag.clone()); } }
+                let mut tags: Vec<String> =
+                    serde_json::from_str(&existing_tags).unwrap_or_default();
+                for tag in &tags_to_add {
+                    if !tags.contains(tag) {
+                        tags.push(tag.clone());
+                    }
+                }
                 tags.retain(|t| !tags_to_remove.contains(t));
                 let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
-                let _ = self.data_db.update_media_metadata(id, &None, &tags_json, &category);
+                let _ = self
+                    .data_db
+                    .update_media_metadata(id, &None, &tags_json, &category);
             }
         }
         Ok(())
@@ -1660,7 +2139,11 @@ impl MediaScheduleStore {
     // ---- Settings ----
 
     pub fn load_settings(&self) -> Result<PresentationSettings> {
-        match self.data_db.kv_get("settings").map_err(|e| anyhow::anyhow!(e))? {
+        match self
+            .data_db
+            .kv_get("settings")
+            .map_err(|e| anyhow::anyhow!(e))?
+        {
             Some(json) => Ok(serde_json::from_str(&json).unwrap_or_default()),
             None => Ok(PresentationSettings::default()),
         }
@@ -1668,37 +2151,69 @@ impl MediaScheduleStore {
 
     pub fn save_settings(&self, settings: &PresentationSettings) -> Result<()> {
         let json = serde_json::to_string_pretty(settings)?;
-        self.data_db.kv_set("settings", &json).map_err(|e| anyhow::anyhow!(e))
+        self.data_db
+            .kv_set("settings", &json)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     // ---- Schedule ----
 
     pub fn save_schedule(&self, schedule: Schedule) -> Result<()> {
         let json = serde_json::to_string_pretty(&schedule)?;
-        self.data_db.kv_set("schedule", &json).map_err(|e| anyhow::anyhow!(e))
+        self.data_db
+            .kv_set("schedule", &json)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     pub fn load_schedule(&self) -> Result<Schedule> {
-        match self.data_db.kv_get("schedule").map_err(|e| anyhow::anyhow!(e))? {
+        match self
+            .data_db
+            .kv_get("schedule")
+            .map_err(|e| anyhow::anyhow!(e))?
+        {
             Some(json) => Ok(serde_json::from_str(&json)?),
-            None => Ok(Schedule { id: "default".to_string(), name: "Default Schedule".to_string(), items: vec![] }),
+            None => Ok(Schedule {
+                id: "default".to_string(),
+                name: "Default Schedule".to_string(),
+                items: vec![],
+            }),
         }
     }
 
     // ---- Services ----
 
     pub fn list_services(&self) -> Result<Vec<ServiceMeta>> {
-        let rows = self.data_db.hash_list("services").map_err(|e| anyhow::anyhow!(e))?;
+        let rows = self
+            .data_db
+            .hash_list("services")
+            .map_err(|e| anyhow::anyhow!(e))?;
         let mut out = Vec::new();
         for (_, data) in rows {
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
-                let id = val.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let name = val.get("name").and_then(|v| v.as_str()).unwrap_or("Untitled").to_string();
-                let item_count = val.get("items").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+                let id = val
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let name = val
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Untitled")
+                    .to_string();
+                let item_count = val
+                    .get("items")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
                 // Use a stored updated_at if present, otherwise fall back to 0
                 // rather than overwriting with now() on every read.
                 let updated_at = val.get("updated_at").and_then(|v| v.as_u64()).unwrap_or(0);
-                out.push(ServiceMeta { id, name, item_count, updated_at });
+                out.push(ServiceMeta {
+                    id,
+                    name,
+                    item_count,
+                    updated_at,
+                });
             }
         }
         out.sort_by_key(|a| a.name.to_lowercase());
@@ -1725,35 +2240,59 @@ impl MediaScheduleStore {
                 .unwrap_or(0),
         };
         let json = serde_json::to_string_pretty(&stamped)?;
-        self.data_db.hash_set("services", &schedule.id, &json).map_err(|e| anyhow::anyhow!(e))
+        self.data_db
+            .hash_set("services", &schedule.id, &json)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     pub fn load_service(&self, id: &str) -> Result<Schedule> {
-        match self.data_db.hash_get("services", id).map_err(|e| anyhow::anyhow!(e))? {
+        match self
+            .data_db
+            .hash_get("services", id)
+            .map_err(|e| anyhow::anyhow!(e))?
+        {
             Some(json) => Ok(serde_json::from_str(&json)?),
             None => Err(anyhow::anyhow!("Service '{}' not found", id)),
         }
     }
 
     pub fn delete_service(&self, id: &str) -> Result<()> {
-        self.data_db.hash_delete("services", id).map_err(|e| anyhow::anyhow!(e))
+        self.data_db
+            .hash_delete("services", id)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     // ---- Studio presentations ----
 
     pub fn list_studio_presentations(&self) -> Result<Vec<PresentationSummary>> {
-        let rows = self.data_db.hash_list("presentations").map_err(|e| anyhow::anyhow!(e))?;
+        let rows = self
+            .data_db
+            .hash_list("presentations")
+            .map_err(|e| anyhow::anyhow!(e))?;
         let mut items = Vec::new();
         for (id, data) in rows {
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
-                let name = val.get("name").and_then(|v| v.as_str()).unwrap_or("Untitled");
-                let slide_count = val.get("slides").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0) as u32;
+                let name = val
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Untitled");
+                let slide_count = val
+                    .get("slides")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0) as u32;
                 let version = val.get("version").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                 // Use a stored updated_at if present; otherwise 0. Previously
                 // this was set to now() on every read, which made the field
                 // meaningless for sorting.
                 let updated_at = val.get("updated_at").and_then(|v| v.as_u64()).unwrap_or(0);
-                items.push(PresentationSummary { id, name: name.to_string(), slide_count, version, updated_at });
+                items.push(PresentationSummary {
+                    id,
+                    name: name.to_string(),
+                    slide_count,
+                    version,
+                    updated_at,
+                });
             }
         }
         items.sort_by_key(|a| a.name.to_lowercase());
@@ -1784,18 +2323,26 @@ impl MediaScheduleStore {
                 .unwrap_or(0),
         };
         let json = serde_json::to_string_pretty(&stamped)?;
-        self.data_db.hash_set("presentations", &presentation.id, &json).map_err(|e| anyhow::anyhow!(e))
+        self.data_db
+            .hash_set("presentations", &presentation.id, &json)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     pub fn load_studio_presentation(&self, id: &str) -> Result<CustomPresentation> {
-        match self.data_db.hash_get("presentations", id).map_err(|e| anyhow::anyhow!(e))? {
+        match self
+            .data_db
+            .hash_get("presentations", id)
+            .map_err(|e| anyhow::anyhow!(e))?
+        {
             Some(json) => Ok(serde_json::from_str(&json)?),
             None => Err(anyhow::anyhow!("Presentation '{}' not found", id)),
         }
     }
 
     pub fn delete_studio_presentation(&self, id: &str) -> Result<()> {
-        self.data_db.hash_delete("presentations", id).map_err(|e| anyhow::anyhow!(e))?;
+        self.data_db
+            .hash_delete("presentations", id)
+            .map_err(|e| anyhow::anyhow!(e))?;
         // Rendered PPTX decks own a UUID-named folder beneath media. The UUID
         // check makes this cleanup path traversal-proof; authored decks simply
         // have no matching folder and remain unaffected.
@@ -1808,52 +2355,82 @@ impl MediaScheduleStore {
     // ---- Slide templates ----
 
     pub fn list_templates(&self) -> Result<Vec<SlideTemplate>> {
-        let rows = self.data_db.hash_list("slide_templates").map_err(|e| anyhow::anyhow!(e))?;
-        let mut templates: Vec<SlideTemplate> = rows.iter().filter_map(|(_, data)| serde_json::from_str(data).ok()).collect();
+        let rows = self
+            .data_db
+            .hash_list("slide_templates")
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let mut templates: Vec<SlideTemplate> = rows
+            .iter()
+            .filter_map(|(_, data)| serde_json::from_str(data).ok())
+            .collect();
         templates.sort_by_key(|a| a.name.to_lowercase());
         Ok(templates)
     }
 
     pub fn save_template(&self, mut template: SlideTemplate) -> Result<SlideTemplate> {
-        if template.id.is_empty() { template.id = Uuid::new_v4().to_string(); }
+        if template.id.is_empty() {
+            template.id = Uuid::new_v4().to_string();
+        }
         let json = serde_json::to_string_pretty(&template)?;
-        self.data_db.hash_set("slide_templates", &template.id, &json).map_err(|e| anyhow::anyhow!(e))?;
+        self.data_db
+            .hash_set("slide_templates", &template.id, &json)
+            .map_err(|e| anyhow::anyhow!(e))?;
         Ok(template)
     }
 
     pub fn delete_template(&self, id: &str) -> Result<()> {
-        self.data_db.hash_delete("slide_templates", id).map_err(|e| anyhow::anyhow!(e))
+        self.data_db
+            .hash_delete("slide_templates", id)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     // ---- Songs ----
 
     pub fn list_songs(&self) -> Result<Vec<Song>> {
-        let rows = self.data_db.hash_list("songs").map_err(|e| anyhow::anyhow!(e))?;
-        let mut songs: Vec<Song> = rows.iter().filter_map(|(_, data)| serde_json::from_str(data).ok()).collect();
+        let rows = self
+            .data_db
+            .hash_list("songs")
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let mut songs: Vec<Song> = rows
+            .iter()
+            .filter_map(|(_, data)| serde_json::from_str(data).ok())
+            .collect();
         songs.sort_by_key(|a| a.title.to_lowercase());
         Ok(songs)
     }
 
     pub fn save_song(&self, mut song: Song) -> Result<Song> {
-        if song.id.is_empty() { song.id = Uuid::new_v4().to_string(); }
+        if song.id.is_empty() {
+            song.id = Uuid::new_v4().to_string();
+        }
         let json = serde_json::to_string_pretty(&song)?;
-        self.data_db.hash_set("songs", &song.id, &json).map_err(|e| anyhow::anyhow!(e))?;
+        self.data_db
+            .hash_set("songs", &song.id, &json)
+            .map_err(|e| anyhow::anyhow!(e))?;
         Ok(song)
     }
 
     pub fn delete_song(&self, id: &str) -> Result<()> {
-        self.data_db.hash_delete("songs", id).map_err(|e| anyhow::anyhow!(e))
+        self.data_db
+            .hash_delete("songs", id)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     // ---- Props ----
 
     pub fn save_props(&self, props: &[PropItem]) -> Result<()> {
         let json = serde_json::to_string_pretty(props)?;
-        self.data_db.kv_set("props", &json).map_err(|e| anyhow::anyhow!(e))
+        self.data_db
+            .kv_set("props", &json)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     pub fn load_props(&self) -> Result<Vec<PropItem>> {
-        match self.data_db.kv_get("props").map_err(|e| anyhow::anyhow!(e))? {
+        match self
+            .data_db
+            .kv_get("props")
+            .map_err(|e| anyhow::anyhow!(e))?
+        {
             Some(json) => Ok(serde_json::from_str(&json).unwrap_or_default()),
             None => Ok(vec![]),
         }
@@ -1863,11 +2440,17 @@ impl MediaScheduleStore {
 
     pub fn save_lt_templates(&self, templates: &serde_json::Value) -> Result<()> {
         let json = serde_json::to_string_pretty(templates)?;
-        self.data_db.kv_set("lt_templates", &json).map_err(|e| anyhow::anyhow!(e))
+        self.data_db
+            .kv_set("lt_templates", &json)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     pub fn load_lt_templates(&self) -> Result<serde_json::Value> {
-        match self.data_db.kv_get("lt_templates").map_err(|e| anyhow::anyhow!(e))? {
+        match self
+            .data_db
+            .kv_get("lt_templates")
+            .map_err(|e| anyhow::anyhow!(e))?
+        {
             Some(json) => Ok(serde_json::from_str(&json).unwrap_or(serde_json::json!([]))),
             None => Ok(serde_json::json!([])),
         }
@@ -1876,7 +2459,11 @@ impl MediaScheduleStore {
     // ---- Lower third presets ----
 
     pub fn list_lt_presets(&self) -> Result<Vec<LtPreset>> {
-        match self.data_db.kv_get("lt_presets").map_err(|e| anyhow::anyhow!(e))? {
+        match self
+            .data_db
+            .kv_get("lt_presets")
+            .map_err(|e| anyhow::anyhow!(e))?
+        {
             Some(json) => Ok(serde_json::from_str(&json).unwrap_or_default()),
             None => Ok(vec![]),
         }
@@ -1890,7 +2477,9 @@ impl MediaScheduleStore {
             presets.push(preset);
         }
         let json = serde_json::to_string_pretty(&presets)?;
-        self.data_db.kv_set("lt_presets", &json).map_err(|e| anyhow::anyhow!(e))?;
+        self.data_db
+            .kv_set("lt_presets", &json)
+            .map_err(|e| anyhow::anyhow!(e))?;
         Ok(presets)
     }
 
@@ -1898,21 +2487,31 @@ impl MediaScheduleStore {
         let mut presets = self.list_lt_presets()?;
         presets.retain(|p| p.id != id);
         let json = serde_json::to_string_pretty(&presets)?;
-        self.data_db.kv_set("lt_presets", &json).map_err(|e| anyhow::anyhow!(e))?;
+        self.data_db
+            .kv_set("lt_presets", &json)
+            .map_err(|e| anyhow::anyhow!(e))?;
         Ok(presets)
     }
 
     // ---- Scenes ----
 
     pub fn list_scenes(&self) -> Result<Vec<Scene>> {
-        let rows = self.data_db.hash_list("scenes").map_err(|e| anyhow::anyhow!(e))?;
-        let mut scenes: Vec<Scene> = rows.iter().filter_map(|(_, data)| serde_json::from_str(data).ok()).collect();
+        let rows = self
+            .data_db
+            .hash_list("scenes")
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let mut scenes: Vec<Scene> = rows
+            .iter()
+            .filter_map(|(_, data)| serde_json::from_str(data).ok())
+            .collect();
         scenes.sort_by_key(|a| a.name.to_lowercase());
         Ok(scenes)
     }
 
     pub fn save_scene(&self, mut scene: Scene) -> Result<Scene> {
-        if scene.id.is_empty() { scene.id = Uuid::new_v4().to_string(); }
+        if scene.id.is_empty() {
+            scene.id = Uuid::new_v4().to_string();
+        }
         if scene.created_at == 0 {
             scene.created_at = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1920,12 +2519,16 @@ impl MediaScheduleStore {
                 .unwrap_or(0);
         }
         let json = serde_json::to_string_pretty(&scene)?;
-        self.data_db.hash_set("scenes", &scene.id, &json).map_err(|e| anyhow::anyhow!(e))?;
+        self.data_db
+            .hash_set("scenes", &scene.id, &json)
+            .map_err(|e| anyhow::anyhow!(e))?;
         Ok(scene)
     }
 
     pub fn delete_scene(&self, id: &str) -> Result<()> {
-        self.data_db.hash_delete("scenes", id).map_err(|e| anyhow::anyhow!(e))
+        self.data_db
+            .hash_delete("scenes", id)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     // ---- Operator workspace persistence (recents, schedule undo/redo) ----
@@ -1933,7 +2536,9 @@ impl MediaScheduleStore {
 
     pub fn save_workspace_blob(&self, key: &str, value: &serde_json::Value) -> Result<()> {
         let json = serde_json::to_string_pretty(value)?;
-        self.data_db.kv_set(key, &json).map_err(|e| anyhow::anyhow!(e))
+        self.data_db
+            .kv_set(key, &json)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     pub fn load_workspace_blob(&self, key: &str) -> Result<Option<serde_json::Value>> {
@@ -1978,7 +2583,9 @@ mod media_delete_tests {
         std::fs::create_dir_all(dir.join("media")).unwrap();
         // A path outside the media dir must never be deleted.
         assert!(store.app_owned_file("C:/Windows/win.ini").is_none());
-        assert!(store.app_owned_file(dir.to_string_lossy().as_ref()).is_none());
+        assert!(store
+            .app_owned_file(dir.to_string_lossy().as_ref())
+            .is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

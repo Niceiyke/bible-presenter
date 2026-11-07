@@ -1,5 +1,5 @@
-use rusqlite::{Connection, params};
 use parking_lot::Mutex;
+use rusqlite::{params, Connection};
 use std::path::PathBuf;
 
 pub struct DataDb {
@@ -69,8 +69,22 @@ fn classify_open_err(e: rusqlite::Error) -> OpenError {
 /// description, tags, category, thumbnail_path, duration, width, height,
 /// content_hash, loop_playback, playback_rate, volume).
 pub type MediaRow = (
-    String, String, String, String, String, String, String, String,
-    String, Option<f64>, Option<i64>, Option<i64>, String, bool, f64, f64,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    Option<f64>,
+    Option<i64>,
+    Option<i64>,
+    String,
+    bool,
+    f64,
+    f64,
 );
 
 impl DataDb {
@@ -99,7 +113,10 @@ impl DataDb {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
-                let _ = std::fs::rename(db_path, db_path.with_extension(format!("corrupt-{}", stamp)));
+                let _ = std::fs::rename(
+                    db_path,
+                    db_path.with_extension(format!("corrupt-{}", stamp)),
+                );
                 let _ = std::fs::rename(
                     db_path.with_extension("db-wal"),
                     db_path.with_extension(format!("corrupt-{}.db-wal", stamp)),
@@ -109,8 +126,12 @@ impl DataDb {
                     db_path.with_extension(format!("corrupt-{}.db-shm", stamp)),
                 );
                 Self::try_open(db_path).map_err(|e| match e {
-                    OpenError::Other(msg) => OpenError::Other(format!("{}; recovery failed: {}", first_err, msg)),
-                    OpenError::Corrupt(msg) => OpenError::Corrupt(format!("{}; recovery failed: {}", first_err, msg)),
+                    OpenError::Other(msg) => {
+                        OpenError::Other(format!("{}; recovery failed: {}", first_err, msg))
+                    }
+                    OpenError::Corrupt(msg) => {
+                        OpenError::Corrupt(format!("{}; recovery failed: {}", first_err, msg))
+                    }
                 })
             }
         }
@@ -123,7 +144,9 @@ impl DataDb {
         // mode is fine and more reliable here.
         conn.execute_batch("PRAGMA foreign_keys=ON;")
             .map_err(classify_open_err)?;
-        let db = Self { conn: Mutex::new(conn) };
+        let db = Self {
+            conn: Mutex::new(conn),
+        };
         db.migrate().map_err(classify_open_err)?;
         Ok(db)
     }
@@ -132,21 +155,23 @@ impl DataDb {
         let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")
             .map_err(|e| e.to_string())?;
-        let db = Self { conn: Mutex::new(conn) };
+        let db = Self {
+            conn: Mutex::new(conn),
+        };
         db.migrate().map_err(|e| e.to_string())?;
         Ok(db)
     }
 
     fn migrate(&self) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock();
-        let current_version: i64 = conn
-            .query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let current_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         // Every step is idempotent (`CREATE TABLE IF NOT EXISTS` / additive
         // columns), so running an older DB through all steps is safe. The
         // `user_version` pragma records the schema for future versioned
         // migrations (audit: forward migrations must be versioned, and the
         // slide_templates table the studio editor writes to must exist).
-        conn.execute_batch("
+        conn.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS media (
                 id TEXT PRIMARY KEY,
                 filename TEXT NOT NULL,
@@ -186,11 +211,16 @@ impl DataDb {
                 id TEXT PRIMARY KEY,
                 data TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS ai_scripture_sessions (
+                id TEXT PRIMARY KEY,
+                data TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS kv_store (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
-        ")?;
+        ",
+        )?;
 
         // Forward-migrate older DBs that predate the P4.8 media columns.
         // `PRAGMA table_info` is the portable existence check (there is no
@@ -199,28 +229,45 @@ impl DataDb {
             let mut stmt = conn.prepare("PRAGMA table_info(media)")?;
             let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
             let mut v = Vec::new();
-            for r in rows { v.push(r?); }
+            for r in rows {
+                v.push(r?);
+            }
             v
         };
         for (col, ddl) in [
-            ("thumbnail_path", "ALTER TABLE media ADD COLUMN thumbnail_path TEXT DEFAULT ''"),
+            (
+                "thumbnail_path",
+                "ALTER TABLE media ADD COLUMN thumbnail_path TEXT DEFAULT ''",
+            ),
             ("duration", "ALTER TABLE media ADD COLUMN duration REAL"),
             ("width", "ALTER TABLE media ADD COLUMN width INTEGER"),
             ("height", "ALTER TABLE media ADD COLUMN height INTEGER"),
-            ("content_hash", "ALTER TABLE media ADD COLUMN content_hash TEXT DEFAULT ''"),
-            ("loop_playback", "ALTER TABLE media ADD COLUMN loop_playback INTEGER DEFAULT 0"),
-            ("playback_rate", "ALTER TABLE media ADD COLUMN playback_rate REAL DEFAULT 1.0"),
-            ("volume", "ALTER TABLE media ADD COLUMN volume REAL DEFAULT 1.0"),
+            (
+                "content_hash",
+                "ALTER TABLE media ADD COLUMN content_hash TEXT DEFAULT ''",
+            ),
+            (
+                "loop_playback",
+                "ALTER TABLE media ADD COLUMN loop_playback INTEGER DEFAULT 0",
+            ),
+            (
+                "playback_rate",
+                "ALTER TABLE media ADD COLUMN playback_rate REAL DEFAULT 1.0",
+            ),
+            (
+                "volume",
+                "ALTER TABLE media ADD COLUMN volume REAL DEFAULT 1.0",
+            ),
         ] {
             if !cols.iter().any(|c| c == col) {
                 conn.execute_batch(ddl)?;
             }
         }
 
-        // Record the schema version (currently 1). Future migrations gate on
+        // Record the schema version (currently 2). Future migrations gate on
         // `current_version` and bump it here.
-        if current_version < 1 {
-            conn.execute_batch("PRAGMA user_version = 1;")?;
+        if current_version < 2 {
+            conn.execute_batch("PRAGMA user_version = 2;")?;
         }
         Ok(())
     }
@@ -229,7 +276,8 @@ impl DataDb {
 
     pub fn kv_get(&self, key: &str) -> Result<Option<String>, String> {
         let conn = self.conn.lock();
-        let mut stmt = conn.prepare("SELECT value FROM kv_store WHERE key = ?1")
+        let mut stmt = conn
+            .prepare("SELECT value FROM kv_store WHERE key = ?1")
             .map_err(|e| e.to_string())?;
         let result = stmt.query_row(params![key], |row| row.get::<_, String>(0));
         match result {
@@ -252,32 +300,36 @@ impl DataDb {
 
     pub fn list_media(&self) -> Result<Vec<MediaRow>, String> {
         let conn = self.conn.lock();
-        let mut stmt = conn.prepare(
-            "SELECT id, filename, path, media_type, fit_mode, description, tags, category,
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, filename, path, media_type, fit_mode, description, tags, category,
                     thumbnail_path, duration, width, height, content_hash,
                     loop_playback, playback_rate, volume
-             FROM media ORDER BY filename COLLATE NOCASE"
-        ).map_err(|e| e.to_string())?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, String>(8)?,
-                row.get::<_, Option<f64>>(9)?,
-                row.get::<_, Option<i64>>(10)?,
-                row.get::<_, Option<i64>>(11)?,
-                row.get::<_, String>(12)?,
-                row.get::<_, bool>(13)?,
-                row.get::<_, f64>(14)?,
-                row.get::<_, f64>(15)?,
-            ))
-        }).map_err(|e| e.to_string())?;
+             FROM media ORDER BY filename COLLATE NOCASE",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, Option<f64>>(9)?,
+                    row.get::<_, Option<i64>>(10)?,
+                    row.get::<_, Option<i64>>(11)?,
+                    row.get::<_, String>(12)?,
+                    row.get::<_, bool>(13)?,
+                    row.get::<_, f64>(14)?,
+                    row.get::<_, f64>(15)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         for row in rows {
             items.push(row.map_err(|e| e.to_string())?);
@@ -287,15 +339,20 @@ impl DataDb {
 
     pub fn media_exists(&self, path: &str) -> Result<bool, String> {
         let conn = self.conn.lock();
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM media WHERE path = ?1", params![path], |row| row.get(0)
-        ).map_err(|e| e.to_string())?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM media WHERE path = ?1",
+                params![path],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
         Ok(count > 0)
     }
 
     pub fn find_media_by_hash(&self, content_hash: &str) -> Result<Option<String>, String> {
         let conn = self.conn.lock();
-        let mut stmt = conn.prepare("SELECT id FROM media WHERE content_hash = ?1 LIMIT 1")
+        let mut stmt = conn
+            .prepare("SELECT id FROM media WHERE content_hash = ?1 LIMIT 1")
             .map_err(|e| e.to_string())?;
         match stmt.query_row(params![content_hash], |row| row.get::<_, String>(0)) {
             Ok(id) => Ok(Some(id)),
@@ -304,7 +361,14 @@ impl DataDb {
         }
     }
 
-    pub fn insert_media(&self, id: &str, filename: &str, path: &str, media_type: &str, created_at: &str) -> Result<(), String> {
+    pub fn insert_media(
+        &self,
+        id: &str,
+        filename: &str,
+        path: &str,
+        media_type: &str,
+        created_at: &str,
+    ) -> Result<(), String> {
         let conn = self.conn.lock();
         conn.execute(
             "INSERT INTO media (id, filename, path, media_type, fit_mode, description, tags, category, created_at) VALUES (?1,?2,?3,?4,'contain','','[]','',?5)",
@@ -315,8 +379,11 @@ impl DataDb {
 
     pub fn set_media_hash(&self, id: &str, content_hash: &str) -> Result<(), String> {
         let conn = self.conn.lock();
-        conn.execute("UPDATE media SET content_hash = ?1 WHERE id = ?2", params![content_hash, id])
-            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE media SET content_hash = ?1 WHERE id = ?2",
+            params![content_hash, id],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -336,12 +403,19 @@ impl DataDb {
         Ok(())
     }
 
-    pub fn set_media_playback(&self, id: &str, loop_playback: bool, playback_rate: f64, volume: f64) -> Result<(), String> {
+    pub fn set_media_playback(
+        &self,
+        id: &str,
+        loop_playback: bool,
+        playback_rate: f64,
+        volume: f64,
+    ) -> Result<(), String> {
         let conn = self.conn.lock();
         conn.execute(
             "UPDATE media SET loop_playback = ?1, playback_rate = ?2, volume = ?3 WHERE id = ?4",
             params![loop_playback, playback_rate, volume, id],
-        ).map_err(|e| e.to_string())?;
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -350,27 +424,32 @@ impl DataDb {
         conn.execute(
             "UPDATE media SET filename = ?1, path = ?2 WHERE id = ?3",
             params![filename, path, id],
-        ).map_err(|e| e.to_string())?;
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     pub fn delete_media(&self, id: &str) -> Result<(), String> {
         let conn = self.conn.lock();
-        conn.execute("DELETE FROM media WHERE id = ?1", params![id]).map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM media WHERE id = ?1", params![id])
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     pub fn delete_media_bulk(&self, ids: &[String]) -> Result<(), String> {
         let conn = self.conn.lock();
         for id in ids {
-            conn.execute("DELETE FROM media WHERE id = ?1", params![id]).map_err(|e| e.to_string())?;
+            conn.execute("DELETE FROM media WHERE id = ?1", params![id])
+                .map_err(|e| e.to_string())?;
         }
         Ok(())
     }
 
     pub fn get_media_path(&self, id: &str) -> Result<Option<String>, String> {
         let conn = self.conn.lock();
-        let mut stmt = conn.prepare("SELECT path FROM media WHERE id = ?1").map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT path FROM media WHERE id = ?1")
+            .map_err(|e| e.to_string())?;
         match stmt.query_row(params![id], |row| row.get::<_, String>(0)) {
             Ok(p) => Ok(Some(p)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -380,23 +459,41 @@ impl DataDb {
 
     pub fn set_media_fit(&self, id: &str, fit_mode: &str) -> Result<(), String> {
         let conn = self.conn.lock();
-        conn.execute("UPDATE media SET fit_mode = ?1 WHERE id = ?2", params![fit_mode, id]).map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE media SET fit_mode = ?1 WHERE id = ?2",
+            params![fit_mode, id],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
-    pub fn update_media_metadata(&self, id: &str, description: &Option<String>, tags: &str, category: &Option<String>) -> Result<(), String> {
+    pub fn update_media_metadata(
+        &self,
+        id: &str,
+        description: &Option<String>,
+        tags: &str,
+        category: &Option<String>,
+    ) -> Result<(), String> {
         let conn = self.conn.lock();
         conn.execute(
             "UPDATE media SET description = ?1, tags = ?2, category = ?3 WHERE id = ?4",
-            params![description.as_deref().unwrap_or(""), tags, category.as_deref().unwrap_or(""), id],
-        ).map_err(|e| e.to_string())?;
+            params![
+                description.as_deref().unwrap_or(""),
+                tags,
+                category.as_deref().unwrap_or(""),
+                id
+            ],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     pub fn get_media_tags(&self, id: &str) -> Result<String, String> {
         let conn = self.conn.lock();
-        conn.query_row("SELECT tags FROM media WHERE id = ?1", params![id], |row| row.get::<_, String>(0))
-            .map_err(|e| e.to_string())
+        conn.query_row("SELECT tags FROM media WHERE id = ?1", params![id], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|e| e.to_string())
     }
 
     // ---- Hash-backed operations (songs, presentations, scenes, services) ----
@@ -405,11 +502,15 @@ impl DataDb {
         let conn = self.conn.lock();
         let sql = format!("SELECT id, data FROM {} ORDER BY id", table);
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        }).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
-        for row in rows { items.push(row.map_err(|e| e.to_string())?); }
+        for row in rows {
+            items.push(row.map_err(|e| e.to_string())?);
+        }
         Ok(items)
     }
 
@@ -427,7 +528,8 @@ impl DataDb {
     pub fn hash_set(&self, table: &str, id: &str, data: &str) -> Result<(), String> {
         let conn = self.conn.lock();
         let sql = format!("INSERT INTO {} (id, data) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET data = excluded.data", table);
-        conn.execute(&sql, params![id, data]).map_err(|e| e.to_string())?;
+        conn.execute(&sql, params![id, data])
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -471,17 +573,46 @@ mod tests {
     }
 
     #[test]
+    fn ai_scripture_sessions_round_trip_through_migrated_table() {
+        let db = DataDb::open_in_memory().expect("database should migrate");
+        db.hash_set(
+            "ai_scripture_sessions",
+            "session-1",
+            r#"{"id":"session-1","transcript":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            db.hash_get("ai_scripture_sessions", "session-1").unwrap(),
+            Some(r#"{"id":"session-1","transcript":[]}"#.into())
+        );
+        assert_eq!(db.hash_list("ai_scripture_sessions").unwrap().len(), 1);
+        db.hash_delete("ai_scripture_sessions", "session-1")
+            .unwrap();
+        assert!(db
+            .hash_get("ai_scripture_sessions", "session-1")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
     fn corrupt_file_is_quarantined_and_recreated() {
         let dir = test_dir("c1");
         let path = dir.join("corrupt.db");
         // Write clearly-not-sqlite bytes so SQLite reports NOTADB / CORRUPT.
-        std::fs::write(&path, b"this is definitely not a sqlite database file......").unwrap();
+        std::fs::write(
+            &path,
+            b"this is definitely not a sqlite database file......",
+        )
+        .unwrap();
         let db = DataDb::open(&path).expect("corrupt DB should be quarantined and recreated");
         // The fresh database is usable.
         assert!(db.kv_set("k", "v").is_ok());
         assert_eq!(db.kv_get("k").unwrap().as_deref(), Some("v"));
         // The damaged file was preserved aside, never deleted.
-        assert!(corrupt_files_in(&dir), "damaged database must be quarantined, not deleted");
+        assert!(
+            corrupt_files_in(&dir),
+            "damaged database must be quarantined, not deleted"
+        );
         cleanup(&dir);
     }
 
@@ -501,7 +632,10 @@ mod tests {
             matches!(err, OpenError::Other(_)),
             "a non-corrupt open failure must be Other, got {err:?}"
         );
-        assert!(!corrupt_files_in(&dir), "a non-corrupt error must not quarantine the database");
+        assert!(
+            !corrupt_files_in(&dir),
+            "a non-corrupt error must not quarantine the database"
+        );
         cleanup(&dir);
     }
 

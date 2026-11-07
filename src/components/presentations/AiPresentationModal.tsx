@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, BookOpen, CheckCircle2, Sparkles, XCircle } from "lucide-react";
+import { AlertTriangle, BookOpen, CheckCircle2, History, Sparkles, XCircle } from "lucide-react";
 import { Button, Modal, StatusBadge } from "../ui";
 import {
   compileAiDeckPlan,
@@ -9,6 +9,7 @@ import {
   type AiPresentationRequest,
 } from "../../ai/presentations";
 import type { CustomPresentation } from "../../types";
+import { savedSessionTranscript, type SavedAiScriptureSession, type SavedAiScriptureSessionSummary } from "../../ai/scriptureSessions";
 
 interface AiPresentationModalProps {
   open: boolean;
@@ -33,6 +34,8 @@ export function AiPresentationModal({ open, defaultBibleVersion, onClose, onCrea
   const [slideCount, setSlideCount] = useState(8);
   const [bibleVersion, setBibleVersion] = useState(defaultBibleVersion || "KJV");
   const [versions, setVersions] = useState<string[]>([]);
+  const [savedSessions, setSavedSessions] = useState<SavedAiScriptureSessionSummary[]>([]);
+  const [savedSessionId, setSavedSessionId] = useState("");
   const [includeSpeakerNotes, setIncludeSpeakerNotes] = useState(true);
   const [highlightKeyPoints, setHighlightKeyPoints] = useState(true);
   const [configured, setConfigured] = useState<boolean | null>(null);
@@ -47,12 +50,25 @@ export function AiPresentationModal({ open, defaultBibleVersion, onClose, onCrea
     void Promise.all([
       invoke<KeyStatus>("ai_presentation_key_status"),
       invoke<string[]>("get_bible_versions"),
-    ]).then(([key, available]) => {
+      invoke<SavedAiScriptureSessionSummary[]>("ai_sessions_list"),
+    ]).then(([key, available, sessions]) => {
       setConfigured(key.configured);
       setVersions(available);
+      setSavedSessions(sessions.filter((session) => session.transcriptSegments > 0));
       if (!available.includes(bibleVersion)) setBibleVersion(available[0] || defaultBibleVersion || "KJV");
     }).catch((reason) => setError(`Could not initialize AI creation: ${reason}`));
   }, [open, defaultBibleVersion]);
+
+  useEffect(() => {
+    if (!open) return;
+    const refreshSavedSessions = () => {
+      void invoke<SavedAiScriptureSessionSummary[]>("ai_sessions_list")
+        .then((sessions) => setSavedSessions(sessions.filter((session) => session.transcriptSegments > 0)))
+        .catch(() => undefined);
+    };
+    const interval = window.setInterval(refreshSavedSessions, 3_000);
+    return () => window.clearInterval(interval);
+  }, [open]);
 
   const model = useMemo(() => localStorage.getItem("pref_aiPresentationModel") || "gpt-6-astra", [open]);
 
@@ -95,6 +111,25 @@ export function AiPresentationModal({ open, defaultBibleVersion, onClose, onCrea
         jobIdRef.current = null;
         setGenerating(false);
       }
+    }
+  };
+
+  const useSavedTranscript = async () => {
+    if (!savedSessionId) return;
+    setError("");
+    try {
+      const session = await invoke<SavedAiScriptureSession>("ai_session_get", { id: savedSessionId });
+      const transcript = savedSessionTranscript(session);
+      if (!transcript) {
+        setError("That session has no finalized transcript text.");
+        return;
+      }
+      setNotes(transcript.slice(0, 23_000));
+      if (transcript.length > 23_000) {
+        setError("The saved transcript exceeded the 23,000-character generation limit and was trimmed. Review the ending before generating.");
+      }
+    } catch (reason) {
+      setError(`Could not load the saved transcript: ${reason}`);
     }
   };
 
@@ -186,8 +221,19 @@ export function AiPresentationModal({ open, defaultBibleVersion, onClose, onCrea
             </div>
             <div className="md:col-span-2">
               <label className="block text-[10px] font-black uppercase tracking-widest text-console-text-muted mb-1">Notes or manuscript <span className="font-normal normal-case">(optional)</span></label>
+              {savedSessions.length > 0 && (
+                <div className="mb-2 flex gap-2 rounded-lg border border-console-border bg-console-surface-raised/40 p-2">
+                  <History size={14} className="mt-2 text-violet-400 shrink-0" />
+                  <select value={savedSessionId} onChange={(event) => setSavedSessionId(event.target.value)} className="min-w-0 flex-1 rounded-md border border-console-border bg-console-canvas px-2 py-1.5 text-[10px] text-console-text">
+                    <option value="">Choose a saved AI Scripture transcript…</option>
+                    {savedSessions.map((session) => <option key={session.id} value={session.id}>{session.endedAt == null ? "IN PROGRESS · " : ""}{new Date(session.startedAt).toLocaleString()} · {session.transcriptSegments} segments · {session.suggestions} suggestions</option>)}
+                  </select>
+                  <Button variant="ghost" onClick={() => void useSavedTranscript()} disabled={!savedSessionId}>Use latest snapshot</Button>
+                </div>
+              )}
               <textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Paste sermon notes, an outline, or source material…" maxLength={23_000} className="w-full h-40 resize-y rounded-lg border border-console-border bg-console-canvas px-3 py-2.5 text-xs text-console-text placeholder:text-console-text-subtle outline-none focus:border-action-primary/60 custom-scrollbar" />
               <p className="text-right text-[9px] text-console-text-subtle mt-1">{notes.length.toLocaleString()} / 23,000</p>
+              {savedSessionId && savedSessions.find((session) => session.id === savedSessionId)?.endedAt == null && <p className="mt-1 text-[9px] text-state-stage">This listening session is still in progress. Use latest snapshot again to include newer finalized speech; an active generation request is never changed silently.</p>}
             </div>
             <Field label="Audience">
               <input value={audience} onChange={(event) => setAudience(event.target.value)} maxLength={150} className={FIELD_CLASS} />

@@ -33,6 +33,13 @@ const KIND_ICON = {
   shape: Square,
 } as const;
 
+const KIND_STYLE = {
+  text: "bg-tool-design/15 text-tool-design",
+  image: "bg-fuchsia-500/15 text-fuchsia-300",
+  video: "bg-teal-500/15 text-teal-300",
+  shape: "bg-orange-500/15 text-orange-300",
+} as const;
+
 /** "Text 1" / "Image 2" — the 1-based index of `el` among siblings of the
  *  same kind on the slide. Falls back to the kind title-cased when none. */
 export function generatedLayerName(el: SlideElement, elements: SlideElement[]): string {
@@ -56,7 +63,7 @@ export function LayersPanel({
   const activeSet = new Set(activeElementIds);
 
   return (
-    <div className="flex flex-col gap-1 max-h-64 overflow-y-auto custom-scrollbar -mx-1 px-1">
+    <div className="flex flex-col gap-1.5 max-h-72 overflow-y-auto custom-scrollbar -mx-1 px-1">
       {ordered.length === 0 && (
         <p className="text-[10px] text-console-text-subtle text-center py-3">No elements on this slide.</p>
       )}
@@ -108,7 +115,7 @@ function LayerRow({
 
   if (editing) {
     return (
-      <div className="flex items-center gap-1 px-1.5 py-1 rounded-lg bg-console-surface-strong border border-tool-design/50">
+      <div className="flex items-center gap-1 px-2 py-1.5 rounded-xl bg-console-surface-strong border border-tool-design/50">
         <Icon size={13} className="text-console-text-subtle shrink-0" />
         <input
           autoFocus
@@ -137,18 +144,18 @@ function LayerRow({
       aria-label={`Layer ${name}${el.locked ? ", locked" : ""}${el.hidden ? ", hidden" : ""}`}
       onClick={e => onSelectElement(el.id, e.ctrlKey || e.metaKey)}
       onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelectElement(el.id, e.ctrlKey || e.metaKey); } }}
-      className={`group flex items-center gap-1.5 px-1.5 py-1.5 rounded-lg border cursor-pointer transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${
+      className={`group flex items-center gap-2 px-2 py-2 rounded-xl border cursor-pointer transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${
         isActive
-          ? "bg-tool-design/15 border-tool-design/50"
-          : "bg-console-surface-raised/60 border-transparent hover:bg-console-surface-strong"
+          ? "bg-tool-design/15 border-tool-design/50 shadow-sm"
+          : "bg-console-canvas/35 border-transparent hover:bg-console-surface-strong hover:border-console-border"
       } ${el.hidden ? "opacity-50" : ""}`}
     >
-      <Icon size={13} className={`shrink-0 ${isActive ? "text-tool-design" : "text-console-text-subtle"}`} />
+      <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${KIND_STYLE[el.kind]}`}><Icon size={13} /></span>
       <span className="flex-1 min-w-0 text-[11px] font-semibold text-console-text truncate" onDoubleClick={e => { e.stopPropagation(); setDraft(name); setEditing(true); }} title={name}>
         {name}
       </span>
-      <button onClick={e => { e.stopPropagation(); onZOrderElement(el.id, "forward"); }} disabled={!canMoveUp} aria-label={`Move ${name} up`} title="Bring forward" className="p-1 text-console-text-muted hover:text-console-text rounded disabled:opacity-20 transition-all"><ChevronUp size={12} /></button>
-      <button onClick={e => { e.stopPropagation(); onZOrderElement(el.id, "backward"); }} disabled={!canMoveDown} aria-label={`Move ${name} down`} title="Send backward" className="p-1 text-console-text-muted hover:text-console-text rounded disabled:opacity-20 transition-all"><ChevronDown size={12} /></button>
+      <button onClick={e => { e.stopPropagation(); onZOrderElement(el.id, "forward"); }} disabled={!canMoveUp} aria-label={`Move ${name} up`} title="Bring forward" className="p-1 text-console-text-muted hover:text-console-text rounded disabled:opacity-20 transition-all opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"><ChevronUp size={12} /></button>
+      <button onClick={e => { e.stopPropagation(); onZOrderElement(el.id, "backward"); }} disabled={!canMoveDown} aria-label={`Move ${name} down`} title="Send backward" className="p-1 text-console-text-muted hover:text-console-text rounded disabled:opacity-20 transition-all opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"><ChevronDown size={12} /></button>
       <button
         onClick={e => { e.stopPropagation(); onToggleHide(el.id); }}
         aria-label={el.hidden ? `Show ${name}` : `Hide ${name}`}

@@ -12,12 +12,14 @@ import {
   Type, Image as ImageIcon, Copy, Square,
   AlignCenter, AlignLeft, AlignRight, Trash2,
   BookOpen, Layers, Video, Grid3x3, Sparkles,
+  WandSparkles, ShieldCheck, Palette, ListTree, Presentation,
 } from "lucide-react";
 import { Btn, ToggleBtn, Div, FontPicker, EditorMenu } from "./components";
 import type { SlideElement } from "../../../types";
 import type { AiSlideEditAction } from "../../../ai/presentations";
 import { useFonts } from "../../../hooks/useFonts";
 import { FONT_SIZE_MAX, FONT_SIZE_MIN, FONT_SIZE_STEP, stepFontSize } from "./textStyleSystem";
+import type { SmartLayout } from "../../../presentations/editorFeatures";
 
 export interface EditorToolbarProps {
   activeEl: SlideElement | null;
@@ -44,6 +46,14 @@ export interface EditorToolbarProps {
   onDuplicateSlide: () => void;
   onDeleteSlide: () => void;
   onAiAction?: (action: AiSlideEditAction) => void;
+  onApplySmartLayout: (layout: SmartLayout) => void;
+  canApplySmartLayout: boolean;
+  onOpenBrandKit: () => void;
+  onToggleOutline: () => void;
+  outlineOpen: boolean;
+  onTogglePreflight: () => void;
+  preflightOpen: boolean;
+  onOpenRehearsal: () => void;
 }
 
 const SHAPES: { value: "rect" | "rounded" | "circle" | "line" | "triangle"; label: string }[] = [
@@ -85,30 +95,39 @@ export function EditorToolbar({
   onDuplicateSlide,
   onDeleteSlide,
   onAiAction,
+  onApplySmartLayout,
+  canApplySmartLayout,
+  onOpenBrandKit,
+  onToggleOutline,
+  outlineOpen,
+  onTogglePreflight,
+  preflightOpen,
+  onOpenRehearsal,
 }: EditorToolbarProps) {
   // P2.5: merge user-installed @font-face families with the built-in list.
   const { availableFonts } = useFonts();
   return (
-    <div className="h-12 border-b border-console-border flex items-center px-3 gap-1 bg-console-surface shrink-0 overflow-x-auto">
+    <div className="h-[60px] border-b border-console-border flex items-center px-3 gap-1.5 bg-console-surface/90 shrink-0 overflow-x-auto custom-scrollbar shadow-md shadow-black/10 relative z-[80]">
 
       {/* ── No selection: Insert tools ── */}
       {selectedCount === 0 && <>
-        <span className="op-control-label text-console-text-subtle mr-1 shrink-0">Insert</span>
-        <Btn onClick={onAddText} icon={<Type size={14} />}>Text</Btn>
-        <Btn onClick={onOpenImgPicker} icon={<ImageIcon size={14} />}>Image</Btn>
-        <Btn onClick={onOpenVideoPicker} icon={<Video size={14} />}>Video</Btn>
+        <span className="mr-1 rounded-lg bg-console-canvas px-2 py-1 text-[8px] font-black uppercase tracking-[0.18em] text-console-text-subtle shrink-0">Add</span>
+        <Btn onClick={onAddText} icon={<Type size={14} />} className="bg-tool-design/10 text-tool-design border-tool-design/25 hover:bg-tool-design hover:text-white">Text</Btn>
+        <Btn onClick={onOpenImgPicker} icon={<ImageIcon size={14} />} className="bg-fuchsia-500/10 text-fuchsia-300 border-fuchsia-400/20 hover:bg-fuchsia-500 hover:text-white">Image</Btn>
+        <Btn onClick={onOpenVideoPicker} icon={<Video size={14} />} className="bg-teal-500/10 text-teal-300 border-teal-400/20 hover:bg-teal-500 hover:text-white">Video</Btn>
         <EditorMenu
           label="Insert shape"
           trigger={<><Square size={14} /> Shape</>}
+          triggerClassName="bg-orange-500/10 text-orange-300 border-orange-400/20 hover:bg-orange-500 hover:text-white"
           items={SHAPES}
           onSelect={onAddShape}
         />
         <Div />
-        <Btn onClick={onOpenBiblePicker} icon={<BookOpen size={14} />} className="bg-tool-design/15 hover:bg-tool-design/25 text-tool-design border-tool-design/30">
+        <Btn onClick={onOpenBiblePicker} icon={<BookOpen size={14} />} className="bg-state-stage/10 hover:bg-state-stage text-state-stage hover:text-slate-950 border-state-stage/30">
           Bible
         </Btn>
         {insertVerseEnabled && (
-          <Btn onClick={onInsertVerse} icon={<BookOpen size={14} />} className="text-tool-design bg-tool-design/10 hover:bg-tool-design/20">
+          <Btn onClick={onInsertVerse} icon={<BookOpen size={14} />} className="text-state-stage bg-state-stage/10 hover:bg-state-stage hover:text-slate-950 border-state-stage/30">
             Insert Verse
           </Btn>
         )}
@@ -203,7 +222,7 @@ export function EditorToolbar({
         <EditorMenu<AiSlideEditAction>
           label="AI slide assistant"
           trigger={<><Sparkles size={14} /> AI</>}
-          triggerClassName="text-action-primary border-action-primary/40 bg-action-primary/10"
+          triggerClassName="text-action-primary border-action-primary/40 bg-action-primary/10 hover:bg-action-primary hover:text-black"
           items={[
             ...(activeEl?.kind === "text" && !activeEl.locked && selectedCount === 1 ? [
               { value: "shorten" as const, label: "Shorten for projection" },
@@ -218,8 +237,29 @@ export function EditorToolbar({
         />
       </>}
 
+      <Div />
+      {canApplySmartLayout && (
+        <EditorMenu<SmartLayout>
+          label="Smart layout"
+          trigger={<><WandSparkles size={14} /> Layout</>}
+          triggerClassName="text-fuchsia-300 border-fuchsia-400/30 bg-fuchsia-500/10 hover:bg-fuchsia-500 hover:text-white"
+          items={[
+            { value: "balanced", label: "Balanced" },
+            { value: "hero", label: "Full-bleed hero" },
+            { value: "split-left", label: "Media left" },
+            { value: "split-right", label: "Media right" },
+            { value: "stack", label: "Vertical stack" },
+          ]}
+          onSelect={onApplySmartLayout}
+        />
+      )}
+      <Btn onClick={onOpenBrandKit} icon={<Palette size={14} />} className="text-orange-300 border-orange-400/25 bg-orange-500/10 hover:bg-orange-500 hover:text-white">Brand</Btn>
+      <Btn onClick={onToggleOutline} icon={<ListTree size={14} />} className={outlineOpen ? "text-white border-tool-design bg-tool-design" : "text-tool-design border-tool-design/25 bg-tool-design/10 hover:bg-tool-design hover:text-white"}>Outline</Btn>
+      <Btn onClick={onTogglePreflight} icon={<ShieldCheck size={14} />} className={preflightOpen ? "text-black border-state-warning bg-state-warning" : "text-state-warning border-state-warning/25 bg-state-warning/10 hover:bg-state-warning hover:text-black"}>Check</Btn>
+      <Btn onClick={onOpenRehearsal} icon={<Presentation size={14} />} className="text-state-success border-state-success/25 bg-state-success/10 hover:bg-state-success hover:text-slate-950">Rehearse</Btn>
+
       <div className="flex-1" />
-      <div className="flex items-center gap-1 border-l border-console-border pl-2 shrink-0">
+      <div className="flex items-center gap-1.5 border-l border-console-border pl-2 shrink-0">
         <EditorMenu
           label="Snap to grid"
           align="right"

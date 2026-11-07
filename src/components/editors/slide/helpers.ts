@@ -192,7 +192,20 @@ export function migrateSlide(raw: any): CustomSlide {
     elements,
     notes: raw.notes,
     masterRef: raw.masterRef,
+    section: typeof raw.section === "string" ? raw.section : undefined,
+    transition: normalizeSlideTransition(raw.transition),
   };
+}
+
+function normalizeSlideTransition(value: unknown): CustomSlide["transition"] {
+  if (!value || typeof value !== "object") return undefined;
+  const transition = value as Record<string, unknown>;
+  const supported = ["none", "fade", "dissolve", "slide-up", "slide-left", "push", "zoom"] as const;
+  if (!supported.includes(transition.type as (typeof supported)[number])) return undefined;
+  const duration = typeof transition.duration === "number" && Number.isFinite(transition.duration)
+    ? Math.min(2000, Math.max(0, transition.duration))
+    : 350;
+  return { type: transition.type as (typeof supported)[number], duration };
 }
 
 function buildBackgroundFromLegacy(s: any): SlideBackground {

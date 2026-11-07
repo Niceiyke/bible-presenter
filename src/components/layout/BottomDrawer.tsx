@@ -1,5 +1,5 @@
 import React from "react";
-import { X } from "lucide-react";
+import { Captions, Clock3, LayoutGrid, Shapes, Video, X } from "lucide-react";
 import { useAppStore } from "../../store";
 import { LowerThirdTab } from "../LowerThirdTab";
 import { TimersTab } from "../TimersTab";
@@ -25,11 +25,11 @@ interface BottomDrawerProps {
 }
 
 const TOOL_TABS = [
-  { id: "live-lt", label: "Lower Third" },
-  { id: "timer", label: "Timers" },
-  { id: "props", label: "Props" },
-  { id: "camera", label: "Camera" },
-  { id: "scenes", label: "Scenes" },
+  { id: "live-lt", label: "Lower Third", icon: Captions },
+  { id: "timer", label: "Timers", icon: Clock3 },
+  { id: "props", label: "Props", icon: Shapes },
+  { id: "camera", label: "Camera", icon: Video },
+  { id: "scenes", label: "Scenes", icon: LayoutGrid },
 ] as const;
 
 export function BottomDrawer({
@@ -57,14 +57,43 @@ export function BottomDrawer({
     scenes,
   } = useAppStore();
 
-  if (!bottomDeckOpen) return null;
-
   const liveTone: StatusTone = liveItem ? "live" : "neutral";
   const liveLabel = liveItem ? displayItemLabel(liveItem) : "Nothing live";
+  const toolActive = (id: (typeof TOOL_TABS)[number]["id"]) => {
+    if (id === "live-lt") return ltVisible;
+    if (id === "timer") return timerRunning;
+    if (id === "props") return propItems.length > 0;
+    if (id === "camera") return liveItem?.type === "Camera";
+    return false;
+  };
+
+  if (!bottomDeckOpen) {
+    return (
+      <section className="flex h-12 shrink-0 items-center gap-2 border-t border-console-border bg-console-surface px-3 shadow-[0_-10px_30px_rgba(0,0,0,.12)]" aria-label="Live tools dock">
+        <span className="mr-1 hidden text-[8px] font-black uppercase tracking-[0.18em] text-console-text-subtle lg:block">Live Tools</span>
+        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto custom-scrollbar">
+          {TOOL_TABS.map(({ id, label, icon: Icon }) => {
+            const active = toolActive(id);
+            return (
+              <button
+                key={id}
+                onClick={() => { setBottomDeckMode(id); setBottomDeckOpen(true); }}
+                className="relative flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-transparent px-2.5 text-[9px] font-bold text-console-text-muted transition-all hover:border-console-border hover:bg-console-surface-strong hover:text-console-text"
+              >
+                <Icon size={13} /> {label}
+                {active && <span className="h-1.5 w-1.5 rounded-full bg-state-live shadow-[0_0_7px_rgba(255,82,82,.65)]" aria-label="Active" />}
+              </button>
+            );
+          })}
+        </div>
+        <StatusBadge tone={liveTone} label={liveItem ? `On air: ${liveLabel}` : "Program clear"} pulsing={!!liveItem} className="hidden max-w-[220px] md:inline-flex" />
+      </section>
+    );
+  }
 
   return (
-    <section className="bg-slate-900 border-t border-slate-800 flex flex-col shrink-0 z-40 relative" style={{ height: bottomDeckH }}>
-      <div className="h-1 bg-slate-800 hover:bg-amber-500/40 cursor-row-resize transition-colors absolute top-0 left-0 right-0 z-10"
+    <section className="relative z-40 flex shrink-0 flex-col border-t border-console-border bg-console-surface shadow-[0_-18px_50px_rgba(0,0,0,.25)]" style={{ height: bottomDeckH }}>
+      <div className="absolute left-0 right-0 top-0 z-10 h-1 cursor-row-resize bg-console-border hover:bg-action-primary/60 transition-colors"
         onMouseDown={(e) => {
           const startY = e.clientY; const startH = bottomDeckH;
           const move = (em: MouseEvent) => {
@@ -75,15 +104,16 @@ export function BottomDrawer({
           document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
         }}
       />
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-console-border bg-console-canvas/40 shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-black uppercase tracking-widest text-console-text-muted hidden sm:block">Live Tools</span>
-          <div className="flex gap-0.5 rounded-md overflow-hidden border border-console-border bg-console-canvas/60 p-0.5">
-            {TOOL_TABS.map(({ id, label: lbl }) => (
+      <div className="flex shrink-0 items-center justify-between border-b border-console-border bg-console-canvas/45 px-3 py-2.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="hidden text-[9px] font-black uppercase tracking-[0.16em] text-console-text-muted sm:block">Live Tools</span>
+          <div className="flex min-w-0 gap-1 overflow-x-auto rounded-xl border border-console-border bg-console-canvas/60 p-1 custom-scrollbar">
+            {TOOL_TABS.map(({ id, label: lbl, icon: Icon }) => (
               <button key={id} onClick={() => setBottomDeckMode(id)}
                 aria-pressed={bottomDeckMode === id}
-                className={`px-3 py-1 text-[9px] font-black uppercase tracking-widest rounded transition-all focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)] ${bottomDeckMode === id ? "bg-action-primary text-black shadow" : "text-console-text-subtle hover:text-console-text-muted"}`}>
-                {lbl}
+                className={`relative flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[9px] font-black transition-all focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)] ${bottomDeckMode === id ? "bg-action-primary text-black shadow" : "text-console-text-subtle hover:bg-console-surface-strong hover:text-console-text"}`}>
+                <Icon size={12} /> {lbl}
+                {toolActive(id) && <span className={`h-1.5 w-1.5 rounded-full ${bottomDeckMode === id ? "bg-black" : "bg-state-live"}`} />}
               </button>
             ))}
           </div>
@@ -94,7 +124,7 @@ export function BottomDrawer({
       </div>
 
       {/* Current-state status bar */}
-      <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-console-border bg-console-canvas/20 overflow-x-auto custom-scrollbar shrink-0 flex-wrap">
+      <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-console-border bg-console-canvas/20 px-3 py-1.5 custom-scrollbar">
         <StatusBadge tone={liveTone} label={liveLabel} pulsing={!!liveItem} />
         <StatusBadge tone={ltVisible ? "live" : "neutral"} label={ltVisible ? "Lower Third on" : "Lower Third off"} pulsing={ltVisible} />
         <StatusBadge tone={timerRunning ? "live" : "neutral"} label={timerRunning ? "Timer running" : "Timer stopped"} pulsing={timerRunning} />

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { EditorToolbar } from "../EditorToolbar";
-import { EditorMenu } from "../components";
+import { EditorMenu, FontPicker } from "../components";
 import type { SlideElement } from "../../../../types";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -35,6 +35,14 @@ const baseProps = {
   onUpdateElement: vi.fn(),
   onDuplicateSlide: vi.fn(),
   onDeleteSlide: vi.fn(),
+  onApplySmartLayout: vi.fn(),
+  canApplySmartLayout: true,
+  onOpenBrandKit: vi.fn(),
+  onToggleOutline: vi.fn(),
+  outlineOpen: false,
+  onTogglePreflight: vi.fn(),
+  preflightOpen: false,
+  onOpenRehearsal: vi.fn(),
 };
 
 describe("EditorToolbar (Phase 2)", () => {
@@ -106,6 +114,12 @@ describe("EditorToolbar (Phase 2)", () => {
 });
 
 describe("EditorMenu (Phase 2)", () => {
+  it("renders in a body portal so scrolling toolbars cannot clip it", () => {
+    render(<EditorMenu label="Pick" trigger={<span>Pick</span>} items={[{ value: "a", label: "A" }]} onSelect={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Pick" }));
+    expect(screen.getByRole("menu").parentElement).toBe(document.body);
+  });
+
   it("closes on outside click", () => {
     const onSelect = vi.fn();
     render(
@@ -129,5 +143,18 @@ describe("EditorMenu (Phase 2)", () => {
     const trigger = screen.getByRole("button", { name: "Pick" });
     fireEvent.keyDown(trigger, { key: "Enter" });
     expect(screen.getByRole("menuitem", { name: "A" })).toBeTruthy();
+  });
+});
+
+describe("FontPicker", () => {
+  it("opens a searchable portal and selects a font family", () => {
+    const onSelect = vi.fn();
+    render(<FontPicker fonts={["Arial", "Georgia"]} value="Arial" fullWidth onSelect={onSelect} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Font family" }));
+    expect(screen.getByPlaceholderText("Search fonts…")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Georgia" }));
+
+    expect(onSelect).toHaveBeenCalledWith("Georgia");
   });
 });

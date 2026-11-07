@@ -75,6 +75,18 @@ describe("Phase 5 — layouts, migration, theme, templates, media", () => {
     expect(shape.fillColor).toBe("#ff0000");
   });
 
+  it("single-slide migration preserves sections and normalizes transitions", () => {
+    const migrated = migrateSlide({
+      id: "s",
+      background: { type: "color", value: "#111111" },
+      elements: [],
+      section: "Message",
+      transition: { type: "push", duration: 5000 },
+    });
+    expect(migrated.section).toBe("Message");
+    expect(migrated.transition).toEqual({ type: "push", duration: 2000 });
+  });
+
   it("a theme preset supplies explicit theme fields; explicit per-element overrides are conceptual but not stamped", () => {
     // THEME_PRESETS cover the documented set; applying one sets theme-level
     // color/font fields. The renderer resolves "inherit"/undefined against the

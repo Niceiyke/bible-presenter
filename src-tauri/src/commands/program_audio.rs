@@ -2,12 +2,12 @@
 //!
 //! When the operator enables audio on a broadcast and/or recording, the chosen
 //! DirectShow device is captured **once** by a dedicated `AudioFeed` ffmpeg
-//! subprocess and distributed over a local TCP socket to every consumer (the
-//! streaming ffmpeg and the recording ffmpeg each connect with `-f aac` — the
-//! raw-ADTS demuxer name).  This avoids two ffmpeg processes competing for the
-//! same dshow device pin — under sustained QSV load that contention disrupted
-//! both audio pipelines and caused `h264_qsv Invalid FrameType:0` kills in both
-//! encoders.
+//! subprocess and distributed over local TCP sockets. Recording and streaming
+//! receive the existing 48 kHz stereo AAC/ADTS feed, while AI transcription
+//! receives lossless 16 kHz mono PCM directly from the same capture process.
+//! This avoids both an AAC round trip before ASR and multiple ffmpeg processes
+//! competing for the same dshow device pin — under sustained QSV load that
+//! contention disrupted audio and caused encoder failures.
 //!
 //! The feed is ref-counted: `start_feed` starts it on the first consumer and
 //! increments; `stop_feed` decrements and tears it down when the last consumer
@@ -23,7 +23,7 @@ use std::io::{BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
 // Device enumeration
@@ -61,7 +61,15 @@ pub fn audio_devices() -> Vec<String> {
         return Vec::new();
     }
     let out = Command::new(crate::binpaths::ffmpeg_path())
-        .args(["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"])
+        .args([
+            "-hide_banner",
+            "-list_devices",
+            "true",
+            "-f",
+            "dshow",
+            "-i",
+            "dummy",
+        ])
         .output();
     match out {
         Ok(o) => parse_devices(&String::from_utf8_lossy(&o.stderr)),
@@ -74,11 +82,24 @@ pub fn audio_devices() -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 struct FeedInner {
-    port: u16,
+    aac_port: u16,
+    pcm_port: u16,
     consumers: u32,
     device: String,
     child: Child,
     stderr_tail: Arc<Mutex<VecDeque<u8>>>,
+}
+
+#[derive(Clone, Copy)]
+struct FeedPorts {
+    aac: u16,
+    pcm: u16,
+}
+
+#[derive(Clone, Copy)]
+enum FeedFormat {
+    Aac,
+    Pcm,
 }
 
 static FEED: OnceLock<Mutex<Option<FeedInner>>> = OnceLock::new();
@@ -120,19 +141,108 @@ fn fan_client_feed(c: &mut FanClient, data: &[u8]) -> bool {
     c.pending.len() <= FAN_MAX_PENDING
 }
 
-/// Start (or join) the shared audio feed.  Returns the TCP port that consumers
-/// connect to (`-f aac -i tcp://127.0.0.1:{port}`).
+fn spawn_fanout<R>(listener: TcpListener, reader: R, name: &'static str)
+where
+    R: Read + Send + 'static,
+{
+    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(8);
+    std::thread::Builder::new()
+        .name(format!("{name}-reader"))
+        .spawn(move || {
+            let mut reader = BufReader::new(reader);
+            let mut buf = vec![0u8; 8192];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let _ = tx.try_send(buf[..n].to_vec());
+                    }
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            || error.kind() == std::io::ErrorKind::Interrupted =>
+                    {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(_) => break,
+                }
+            }
+        })
+        .ok();
+
+    let clients: Arc<Mutex<Vec<FanClient>>> = Arc::new(Mutex::new(Vec::new()));
+    std::thread::Builder::new()
+        .name(format!("{name}-fanout"))
+        .spawn(move || {
+            listener.set_nonblocking(true).ok();
+            loop {
+                if let Ok((stream, _)) = listener.accept() {
+                    stream.set_nodelay(true).ok();
+                    stream.set_nonblocking(true).ok();
+                    clients.lock().unwrap().push(FanClient {
+                        stream,
+                        pending: Vec::new(),
+                    });
+                }
+                match rx.recv_timeout(Duration::from_millis(5)) {
+                    Ok(data) => {
+                        let mut guard = clients.lock().unwrap();
+                        guard.retain_mut(|client| fan_client_feed(client, &data));
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        })
+        .ok();
+}
+
+fn feed_ffmpeg_args(device: &str, pcm_ingest_port: u16) -> Vec<String> {
+    vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-f".into(),
+        "dshow".into(),
+        "-audio_buffer_size".into(),
+        "100".into(),
+        "-i".into(),
+        format!("audio={device}"),
+        "-map".into(),
+        "0:a:0".into(),
+        "-c:a".into(),
+        "aac".into(),
+        "-ar".into(),
+        "48000".into(),
+        "-ac".into(),
+        "2".into(),
+        "-b:a".into(),
+        "128k".into(),
+        "-f".into(),
+        "adts".into(),
+        "pipe:1".into(),
+        "-map".into(),
+        "0:a:0".into(),
+        "-c:a".into(),
+        "pcm_s16le".into(),
+        "-ar".into(),
+        "16000".into(),
+        "-ac".into(),
+        "1".into(),
+        "-f".into(),
+        "s16le".into(),
+        format!("tcp://127.0.0.1:{pcm_ingest_port}"),
+    ]
+}
+
+/// Start (or join) the shared audio feed. Returns the AAC and PCM fan-out ports.
 ///
-/// The feed spawns a single ffmpeg that captures the DirectShow device, encodes
-/// AAC at 48 kHz / 128 kbps, and writes ADTS to stdout.  A reader thread
-/// buffers those packets and a fan-out thread broadcasts them over TCP to every
-/// connected consumer.  Each consumer's ffmpeg reads the same AAC stream
-/// without re-encoding (`-c:a copy`).
+/// The feed captures DirectShow once and creates two outputs: AAC/ADTS at
+/// 48 kHz stereo for recording/streaming, plus PCM16 at 16 kHz mono for ASR.
 ///
 /// * Same device, second caller → increments refcount, returns same port.
 /// * Different device → tears down the old feed and starts a new one.
 /// * Feed ffmpeg crashed → tears down and restarts transparently.
-pub fn start_feed(device: &str) -> Result<u16, String> {
+fn start_feed(device: &str) -> Result<FeedPorts, String> {
     let mut guard = feed_ref().lock().map_err(|e| e.to_string())?;
 
     // Reuse the existing feed when the child is still alive and the device matches.
@@ -144,7 +254,11 @@ pub fn start_feed(device: &str) -> Result<u16, String> {
     };
     if reuse {
         guard.as_mut().unwrap().consumers += 1;
-        return Ok(guard.as_ref().unwrap().port);
+        let inner = guard.as_ref().unwrap();
+        return Ok(FeedPorts {
+            aac: inner.aac_port,
+            pcm: inner.pcm_port,
+        });
     }
 
     // Tear down any stale / mismatched feed.
@@ -153,36 +267,25 @@ pub fn start_feed(device: &str) -> Result<u16, String> {
         let _ = old.child.wait();
     }
 
-    // Bind the TCP listener *first* so the port is ready before ffmpeg starts.
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .map_err(|e| format!("Audio feed bind failed: {e}"))?;
-    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    // Bind every socket before ffmpeg starts. The PCM ingest socket receives
+    // ffmpeg's lossless ASR branch; the other two are consumer fan-outs.
+    let aac_listener =
+        TcpListener::bind("127.0.0.1:0").map_err(|e| format!("AAC audio feed bind failed: {e}"))?;
+    let aac_port = aac_listener.local_addr().map_err(|e| e.to_string())?.port();
+    let pcm_listener =
+        TcpListener::bind("127.0.0.1:0").map_err(|e| format!("PCM audio feed bind failed: {e}"))?;
+    let pcm_port = pcm_listener.local_addr().map_err(|e| e.to_string())?.port();
+    let pcm_ingest_listener =
+        TcpListener::bind("127.0.0.1:0").map_err(|e| format!("PCM ingest bind failed: {e}"))?;
+    let pcm_ingest_port = pcm_ingest_listener
+        .local_addr()
+        .map_err(|e| e.to_string())?
+        .port();
 
-    // Start ffmpeg: dshow → AAC → ADTS → stdout.
+    // Start ffmpeg: one dshow capture → AAC stdout + PCM loopback output.
     let ffmpeg = crate::binpaths::ffmpeg_path();
     let mut child = Command::new(&ffmpeg)
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "dshow",
-            "-audio_buffer_size",
-            "100",
-            "-i",
-            &format!("audio={device}"),
-            "-c:a",
-            "aac",
-            "-ar",
-            "48000",
-            "-ac",
-            "2",
-            "-b:a",
-            "128k",
-            "-f",
-            "adts",
-            "pipe:1",
-        ])
+        .args(feed_ffmpeg_args(device, pcm_ingest_port))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null())
@@ -213,64 +316,53 @@ pub fn start_feed(device: &str) -> Result<u16, String> {
         })
         .ok();
 
-    // --- reader thread: ffmpeg stdout → bounded channel ---
-    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(8);
-    std::thread::Builder::new()
-        .name("audio-feed-reader".into())
-        .spawn(move || {
-            let mut reader = BufReader::new(stdout);
-            let mut buf = vec![0u8; 8192];
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let _ = tx.try_send(buf[..n].to_vec());
-                    }
-                    Err(_) => break,
+    pcm_ingest_listener.set_nonblocking(true).ok();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let pcm_source = loop {
+        match pcm_ingest_listener.accept() {
+            Ok((stream, _)) => {
+                // Windows can inherit nonblocking mode from the listener. The
+                // PCM source reader is dedicated and must wait for audio rather
+                // than treating its first WouldBlock as a dead FFmpeg branch.
+                if let Err(error) = stream.set_nonblocking(false) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("Could not configure PCM ingest: {error}"));
                 }
+                stream.set_read_timeout(None).ok();
+                break stream;
             }
-        })
-        .ok();
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if child.try_wait().ok().flatten().is_some() || Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("Audio feed could not start its PCM transcription branch.".into());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("PCM transcription feed failed: {error}"));
+            }
+        }
+    };
 
-    // --- fan-out thread: TCP accept + nonblocking broadcast ---
-    let clients: Arc<Mutex<Vec<FanClient>>> = Arc::new(Mutex::new(Vec::new()));
-    let clients2 = clients;
-    std::thread::Builder::new()
-        .name("audio-feed-fanout".into())
-        .spawn(move || {
-            listener.set_nonblocking(true).ok();
-            loop {
-                if let Ok((stream, _)) = listener.accept() {
-                    stream.set_nodelay(true).ok();
-                    stream.set_nonblocking(true).ok();
-                    clients2.lock().unwrap().push(FanClient {
-                        stream,
-                        pending: Vec::new(),
-                    });
-                }
-                match rx.recv_timeout(Duration::from_millis(5)) {
-                    Ok(data) => {
-                        let mut guard = clients2.lock().unwrap();
-                        // Nonblocking per-client writes; prune dead/overflowed
-                        // consumers so no single slow reader can stall the
-                        // fan-out for everyone else.
-                        guard.retain_mut(|c| fan_client_feed(c, &data));
-                    }
-                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                }
-            }
-        })
-        .ok();
+    spawn_fanout(aac_listener, stdout, "audio-feed-aac");
+    spawn_fanout(pcm_listener, pcm_source, "audio-feed-pcm");
 
     *guard = Some(FeedInner {
-        port,
+        aac_port,
+        pcm_port,
         consumers: 1,
         device: device.to_string(),
         child,
         stderr_tail,
     });
-    Ok(port)
+    Ok(FeedPorts {
+        aac: aac_port,
+        pcm: pcm_port,
+    })
 }
 
 /// Return a bounded, credential-free snapshot of the shared capture process.
@@ -322,9 +414,9 @@ pub fn stop_feed() {
 
 /// A per-consumer bridge to the shared feed.
 ///
-/// `subscribe_feed` connects one TCP socket to the feed's fan-out broadcast and
+/// A subscription connects one TCP socket to the selected fan-out and
 /// relays it into a private listener port that the consumer's ffmpeg reads
-/// (`-f aac -i tcp://127.0.0.1:{port()}`).  Dropping the relay closes that
+/// (`-f aac` for AAC consumers; raw `s16le` for AI). Dropping the relay closes that
 /// private socket — the consumer's ffmpeg sees a clean audio EOF and can
 /// finalize its mux (MP4 footer / RTMP teardown) even while OTHER consumers
 /// (e.g. a concurrent recording) keep the feed itself alive.  The relay also
@@ -355,35 +447,42 @@ impl Drop for AudioRelay {
     }
 }
 
-/// Start (or join) the shared feed and open a private relay for ONE consumer.
-/// Returns the relay whose private port the caller's ffmpeg connects to.  On
-/// success the caller owns the relay; dropping it unsubscribes this consumer.
-pub fn subscribe_feed(device: &str) -> Result<AudioRelay, String> {
-    let feed_port = start_feed(device)?;
+fn subscribe_format(device: &str, format: FeedFormat) -> Result<AudioRelay, String> {
+    let ports = start_feed(device)?;
+    let feed_port = match format {
+        FeedFormat::Aac => ports.aac,
+        FeedFormat::Pcm => ports.pcm,
+    };
 
     // Every failure after this point must release the refcount taken above.
-    let listener = TcpListener::bind("127.0.0.1:0")
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| {
+        stop_feed();
+        format!("Audio relay bind failed: {e}")
+    })?;
+    listener.set_nonblocking(true).ok();
+    let relay_port = listener
+        .local_addr()
         .map_err(|e| {
             stop_feed();
-            format!("Audio relay bind failed: {e}")
-        })?;
-    listener.set_nonblocking(true).ok();
-    let relay_port = listener.local_addr().map_err(|e| {
-        stop_feed();
-        e.to_string()
-    })?.port();
+            e.to_string()
+        })?
+        .port();
 
-    let subscription =
-        TcpStream::connect(("127.0.0.1", feed_port)).map_err(|e| {
-            stop_feed();
-            format!("Audio feed connect failed: {e}")
-        })?;
+    let subscription = TcpStream::connect(("127.0.0.1", feed_port)).map_err(|e| {
+        stop_feed();
+        format!("Audio feed connect failed: {e}")
+    })?;
     subscription.set_nodelay(true).ok();
-    subscription.set_read_timeout(Some(Duration::from_millis(20))).ok();
+    subscription
+        .set_read_timeout(Some(Duration::from_millis(20)))
+        .ok();
 
     let (ctrl_tx, ctrl_rx) = mpsc::sync_channel::<()>(1);
     let thread = std::thread::Builder::new()
-        .name("audio-relay".into())
+        .name(match format {
+            FeedFormat::Aac => "audio-relay-aac".into(),
+            FeedFormat::Pcm => "audio-relay-pcm".into(),
+        })
         .spawn(move || {
             // Accept exactly one consumer (the session's ffmpeg). Non-blocking
             // accept + ctrl poll so Drop can always join without deadlock.
@@ -431,6 +530,16 @@ pub fn subscribe_feed(device: &str) -> Result<AudioRelay, String> {
     })
 }
 
+/// Subscribe a recording or streaming consumer to AAC/ADTS audio.
+pub fn subscribe_feed(device: &str) -> Result<AudioRelay, String> {
+    subscribe_format(device, FeedFormat::Aac)
+}
+
+/// Subscribe AI Scripture to raw PCM16, 16 kHz, mono audio.
+pub fn subscribe_pcm_feed(device: &str) -> Result<AudioRelay, String> {
+    subscribe_format(device, FeedFormat::Pcm)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,6 +573,19 @@ mod tests {
     }
 
     #[test]
+    fn shared_capture_builds_aac_and_lossless_pcm_outputs() {
+        let args = feed_ffmpeg_args("Church Mixer", 43123);
+        let joined = args.join(" ");
+        assert!(joined.contains("-i audio=Church Mixer"));
+        assert!(joined.contains("-c:a aac -ar 48000 -ac 2 -b:a 128k -f adts pipe:1"));
+        assert!(joined.contains("-c:a pcm_s16le -ar 16000 -ac 1 -f s16le tcp://127.0.0.1:43123"));
+        assert_eq!(
+            args.iter().filter(|argument| *argument == "0:a:0").count(),
+            2
+        );
+    }
+
+    #[test]
     fn fan_client_feed_flushes_when_reader_consumes() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let mut c = FanClient {
@@ -473,7 +595,10 @@ mod tests {
         c.stream.set_nonblocking(true).unwrap();
         let (mut reader, _) = listener.accept().unwrap();
         assert!(fan_client_feed(&mut c, b"hello"));
-        assert!(c.pending.is_empty(), "app data must flush on a draining reader");
+        assert!(
+            c.pending.is_empty(),
+            "app data must flush on a draining reader"
+        );
         let mut out = [0u8; 5];
         reader.read_exact(&mut out).unwrap();
         assert_eq!(&out, b"hello");

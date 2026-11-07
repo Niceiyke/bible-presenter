@@ -981,6 +981,8 @@ pub async fn dispatch(
                                 elements: slide.elements.clone(),
                                 theme: pres.theme.clone(),
                                 notes: slide.notes.clone(),
+                                section: slide.section.clone(),
+                                transition: slide.transition.clone(),
                             });
                             if command.r#type == RemoteCommandType::StudioGoLive {
                                 op_go_live_item(app, state, item, source.clone());
@@ -1487,6 +1489,8 @@ mod tests {
             header: None,
             body: None,
             master_ref: None,
+            section: None,
+            transition: None,
         }
     }
 

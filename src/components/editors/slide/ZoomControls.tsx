@@ -21,17 +21,17 @@ export const ZOOM_STEP = 0.1;
 
 export function ZoomControls({ zoom, onZoomChange }: ZoomControlsProps) {
   return (
-    <div className="flex items-center gap-0.5 bg-console-surface/80 backdrop-blur border border-console-border rounded-full px-1.5 py-1">
+    <div className="flex items-center gap-0.5 bg-console-surface/85 backdrop-blur-xl border border-console-border-strong rounded-xl px-1.5 py-1 shadow-xl shadow-black/30">
       <button
         onClick={() => onZoomChange(Math.max(MIN_ZOOM, Math.round((zoom - ZOOM_STEP) * 100) / 100))}
         disabled={zoom <= MIN_ZOOM}
         aria-label="Zoom out"
         title="Zoom out"
-        className="w-8 h-8 flex items-center justify-center rounded-full text-console-text-muted hover:text-console-text hover:bg-console-surface-strong disabled:opacity-20 transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
+        className="w-8 h-8 flex items-center justify-center rounded-lg text-console-text-muted hover:text-state-stage hover:bg-state-stage/10 disabled:opacity-20 transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
       >
         <ZoomOut size={15} />
       </button>
-      <span className="text-[11px] font-bold text-console-text-muted tabular-nums w-12 text-center" aria-live="polite">
+      <span className="text-[10px] font-black text-console-text tabular-nums w-12 text-center" aria-live="polite">
         {Math.round(zoom * 100)}%
       </span>
       <button
@@ -39,7 +39,7 @@ export function ZoomControls({ zoom, onZoomChange }: ZoomControlsProps) {
         disabled={zoom >= MAX_ZOOM}
         aria-label="Zoom in"
         title="Zoom in"
-        className="w-8 h-8 flex items-center justify-center rounded-full text-console-text-muted hover:text-console-text hover:bg-console-surface-strong disabled:opacity-20 transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
+        className="w-8 h-8 flex items-center justify-center rounded-lg text-console-text-muted hover:text-state-stage hover:bg-state-stage/10 disabled:opacity-20 transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
       >
         <ZoomIn size={15} />
       </button>
@@ -49,7 +49,7 @@ export function ZoomControls({ zoom, onZoomChange }: ZoomControlsProps) {
         disabled={zoom === 1}
         aria-label="Fit canvas"
         title="Fit canvas (100%)"
-        className="w-8 h-8 flex items-center justify-center rounded-full text-console-text-muted hover:text-console-text hover:bg-console-surface-strong disabled:opacity-20 transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
+        className="w-8 h-8 flex items-center justify-center rounded-lg text-console-text-muted hover:text-tool-design hover:bg-tool-design/10 disabled:opacity-20 transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
       >
         <Maximize size={14} />
       </button>

@@ -34,6 +34,16 @@ test("does not consume a one-shot service item when send-live fails", async ({ p
   await expect.poll(() => page.evaluate(() => window.__WORDLYTE_E2E__.live?.data?.verse)).toBe(16);
 });
 
+test("toggles blackout without crashing the always-mounted Program preview", async ({ page }) => {
+  const blackout = page.getByRole("button", { name: "Blackout", exact: true });
+  await blackout.click();
+  await expect(page.getByRole("button", { name: "Restore", exact: true })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Workspaces" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Restore", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Blackout", exact: true })).toBeVisible();
+});
+
 declare global {
   interface Window {
     __WORDLYTE_E2E__: {

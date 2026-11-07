@@ -11,6 +11,7 @@ import { InlineTextEditor } from "./InlineTextEditor";
 import type { Handle } from "./useElementDragResize";
 import type { GuideLine } from "./useElementDragResize";
 import type { CustomSlide, SlideElement, ProseMirrorJSON, SlideBackground, SlideTheme } from "../../../types";
+import type { PresentationIssue } from "../../../presentations/diagnostics";
 
 /**
  * Resolve the canvas backing colour — used for the editor surface behind
@@ -59,6 +60,8 @@ export interface SlideCanvasProps {
   guides: GuideLine[] | null;
   /** P4.3: cascade theme used for the paragraph-style dropdown. */
   theme?: SlideTheme;
+  showPreflight?: boolean;
+  preflightIssues?: PresentationIssue[];
   onCanvasClick: (e: React.MouseEvent) => void;
   onElementClick: (id: string, e: React.MouseEvent) => void;
   onDblClick: (id: string, e: React.MouseEvent) => void;
@@ -82,6 +85,8 @@ export function SlideCanvas({
   gridSize,
   guides,
   theme,
+  showPreflight = false,
+  preflightIssues = [],
   onCanvasClick,
   onElementClick,
   onDblClick,
@@ -129,11 +134,19 @@ export function SlideCanvas({
     <div
       ref={viewportRef}
       className={`flex-1 flex items-center justify-center p-10 overflow-hidden relative ${editingElementId ? '' : 'select-none'}`}
-      style={{ background: "radial-gradient(circle, #252540 1px, transparent 1px)", backgroundSize: "22px 22px", backgroundColor: "#0b0b18" }}
+      style={{
+        backgroundImage: "radial-gradient(circle at 18% 12%, rgba(167,139,250,.14), transparent 28%), radial-gradient(circle at 84% 82%, rgba(56,189,248,.10), transparent 30%), radial-gradient(circle, rgba(125,141,157,.20) 1px, transparent 1px)",
+        backgroundSize: "auto, auto, 24px 24px",
+        backgroundColor: "#090d13",
+      }}
       onClick={onCanvasClick}
     >
-      <div ref={canvasRef} className="relative shadow-2xl shadow-black/80 ring-1 ring-console-border" style={{ aspectRatio: "16/9", backgroundColor: backingBackgroundColor(slide.background), width: canvasWidth }}>
-        <CustomSlideRenderer slide={slide} scale={canvasScale} appDataDir={appDataDir} hiddenElementIds={editingElementId ? [editingElementId] : []} />
+      <div className="absolute left-4 top-4 flex items-center gap-2 rounded-lg border border-console-border/80 bg-console-surface/75 px-2.5 py-1.5 backdrop-blur-xl">
+        <span className="h-1.5 w-1.5 rounded-full bg-tool-design shadow-[0_0_8px_rgba(167,139,250,.8)]" />
+        <span className="text-[8px] font-black uppercase tracking-[0.16em] text-console-text-subtle">Canvas · 16:9</span>
+      </div>
+      <div ref={canvasRef} className="relative overflow-hidden rounded-sm shadow-[0_30px_90px_rgba(0,0,0,.65),0_0_0_1px_rgba(125,141,157,.35),0_0_50px_rgba(167,139,250,.08)]" style={{ aspectRatio: "16/9", backgroundColor: backingBackgroundColor(slide.background), width: canvasWidth }}>
+        <CustomSlideRenderer slide={slide} scale={canvasScale} appDataDir={appDataDir} theme={theme} hiddenElementIds={editingElementId ? [editingElementId] : []} />
 
         {/* P3.2: visual grid overlay — shown only when snapping is on.
             Pointer-events:none so it never intercepts canvas clicks. */}
@@ -147,6 +160,18 @@ export function SlideCanvas({
               backgroundSize: `${gridSize}% ${gridSize}%`,
             }}
           />
+        )}
+
+        {showPreflight && (
+          <>
+            <div className="pointer-events-none absolute inset-[5%] z-[202] border border-dashed border-state-stage/55" title="Action-safe area" />
+            <div className="pointer-events-none absolute inset-[10%] z-[202] border border-dashed border-tool-design/45" title="Title-safe area" />
+            {preflightIssues.filter((issue) => issue.elementId).map((issue, index) => {
+              const element = slide.elements.find((candidate) => candidate.id === issue.elementId);
+              if (!element) return null;
+              return <div key={`${issue.code}-${issue.elementId}-${index}`} className={`pointer-events-none absolute z-[203] border-2 ${issue.severity === "error" ? "border-state-error bg-state-error/10" : "border-state-warning bg-state-warning/10"}`} style={{ left: `${element.x}%`, top: `${element.y}%`, width: `${element.w}%`, height: `${element.h}%` }}><span className={`absolute -top-5 left-0 rounded px-1.5 py-0.5 text-[7px] font-black uppercase ${issue.severity === "error" ? "bg-state-error text-white" : "bg-state-warning text-black"}`}>{issue.code.replace("-", " ")}</span></div>;
+            })}
+          </>
         )}
 
         {/* P3.1: smart-guide overlay — dashed red lines drawn while the
@@ -187,7 +212,7 @@ export function SlideCanvas({
                   left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`,
                   zIndex: el.z_index + 100,
                   opacity: isHidden ? 0.3 : 1,
-                  outline: isHidden ? "2px dashed #a8b5c1" : isEditing ? "2px solid #34d399" : isActive ? "2px solid #818cf8" : isGroupedSelected ? "2px dashed #818cf8" : "2px solid transparent",
+                   outline: isHidden ? "2px dashed #a8b5c1" : isEditing ? "2px solid #35c98b" : isActive ? "2px solid #38bdf8" : isGroupedSelected ? "2px dashed #a78bfa" : "2px solid transparent",
                   outlineOffset: "1px",
                 }}
                 onClick={e => onElementClick(el.id, e)}
@@ -198,8 +223,8 @@ export function SlideCanvas({
                   <span className="absolute inset-0 flex items-center justify-center text-[7px] font-bold text-console-text-subtle pointer-events-none">Hidden</span>
                 )}
                 {isEditing && el.kind === "text" && <InlineTextEditor el={el} canvasScale={canvasScale} theme={theme} onCommit={doc => onCommit(el.id, doc)} />}
-                {isActive && !isEditing && !isHidden && Object.entries(HANDLES).map(([h, style]) => (
-                  <div key={h} onPointerDown={e => onResize(el.id, e, h as Handle)} className="absolute w-2.5 h-2.5 bg-white border-2 border-indigo-400 rounded-full shadow-md" style={{ position: "absolute", ...style }} />
+                 {isActive && !isEditing && !isHidden && Object.entries(HANDLES).map(([h, style]) => (
+                   <div key={h} onPointerDown={e => onResize(el.id, e, h as Handle)} className="absolute w-2.5 h-2.5 bg-white border-2 border-state-stage rounded-[3px] shadow-[0_0_0_2px_rgba(0,0,0,.35)]" style={{ position: "absolute", ...style }} />
                 ))}
                 {/* P3.4: rotation grabber — a circular handle mounted
                     above the element's top-center, slightly away from
@@ -213,7 +238,7 @@ export function SlideCanvas({
                   />
                 )}
                 {isActive && !isEditing && !isHidden && el.kind === "text" && (
-                  <span className="absolute top-full left-0 mt-1 px-1.5 py-0.5 bg-tool-design text-console-text text-[7px] font-bold rounded whitespace-nowrap pointer-events-none z-[200]">↕ drag · double-click to edit</span>
+                   <span className="absolute top-full left-0 mt-1 px-2 py-1 bg-state-stage text-slate-950 text-[7px] font-black uppercase tracking-wide rounded-md whitespace-nowrap pointer-events-none z-[200] shadow-lg">Drag · double-click to edit</span>
                 )}
               </div>
             );
@@ -221,7 +246,7 @@ export function SlideCanvas({
         </div>
       </div>
 
-      <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-console-surface/80 backdrop-blur border border-console-border rounded-full px-3 py-1.5 z-[70]">
+      <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-console-surface/85 backdrop-blur-xl border border-console-border-strong rounded-xl px-2 py-1.5 z-[70] shadow-xl shadow-black/30">
         <button disabled={slideIndex === 0} onClick={e => { e.stopPropagation(); onNavigate(-1); }} aria-label="Previous slide" title="Previous slide" className="text-console-text-muted hover:text-console-text disabled:opacity-20 transition-all"><ChevronLeft size={16} /></button>
         <span className="text-xs text-console-text font-bold tabular-nums min-w-[40px] text-center">{slideIndex + 1} / {slideCount}</span>
         <button disabled={slideIndex === slideCount - 1} onClick={e => { e.stopPropagation(); onNavigate(1); }} aria-label="Next slide" title="Next slide" className="text-console-text-muted hover:text-console-text disabled:opacity-20 transition-all"><ChevronRight size={16} /></button>

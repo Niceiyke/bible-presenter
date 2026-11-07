@@ -417,7 +417,12 @@ export function AiScriptureProvider({
     operatorStopRequestedRef.current = false;
     savePerformanceAccumulator(metricsRef.current);
     setPerformance(snapshotPerformance(metricsRef.current));
-    const next = await invoke<AiRuntimeStatus>("ai_start", { audioDevice, version, provider });
+    const next = await invoke<AiRuntimeStatus>("ai_start", {
+      audioDevice,
+      version,
+      provider,
+      mode: modeRef.current,
+    });
     setStatus(next);
   }, [provider]);
 

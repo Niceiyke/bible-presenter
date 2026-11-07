@@ -10,10 +10,12 @@ import {
   AlignLeft, AlignCenter, AlignRight,
   ArrowUp, ArrowDown, MoveUp, MoveDown,
   Lock, Unlock, Copy, Trash2, Library, Layers,
+  SlidersHorizontal,
 } from "lucide-react";
-import { Panel, IconBtn, TextBtn, TextInputModal, InspectorSection } from "./components";
+import { Panel, IconBtn, TextBtn, TextInputModal, InspectorSection, FontPicker } from "./components";
 import { LayersPanel, generatedLayerName } from "./LayersPanel";
 import { ThemePicker, type ThemePreset } from "./ThemePicker";
+import { useFonts } from "../../../hooks/useFonts";
 import type { AlignmentAxis, ZDirection } from "./helpers";
 import type { CustomSlide, SlideElement, SlideBackground, SlideTheme, SlideMaster } from "../../../types";
 
@@ -86,6 +88,7 @@ export function PropertiesPanel({
 }: PropertiesPanelProps) {
   const bg = slide.background;
   const [masterNameOpen, setMasterNameOpen] = useState(false);
+  const { availableFonts } = useFonts();
   const hasElement = selectedCount === 1 && !!activeEl;
   const headerName = activeEl ? generatedLayerName(activeEl, slide.elements) : selectedCount > 1 ? `${selectedCount} elements` : "Slide";
 
@@ -100,11 +103,17 @@ export function PropertiesPanel({
   const renameEl = (id: string, name: string) => onUpdateElement(id, name ? { name } : { name: undefined });
 
   return (
-    <aside className="w-60 border-l border-console-border bg-console-surface flex flex-col overflow-hidden shrink-0">
-      <div className="px-3 py-2.5 border-b border-console-border-strong flex items-center justify-between shrink-0">
-        <span className="op-control-label text-console-text-subtle">
-          {editingMasterId ? "Master layout" : headerName}
-        </span>
+    <aside className="w-72 border-l border-console-border bg-console-surface/95 flex flex-col overflow-hidden shrink-0 shadow-2xl shadow-black/15 relative z-[70]">
+      <div className="px-3 py-3 border-b border-console-border-strong flex items-center justify-between shrink-0 bg-gradient-to-l from-tool-design/10 to-transparent">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-tool-design/15 text-tool-design"><SlidersHorizontal size={13} /></span>
+          <div className="min-w-0">
+            <span className="block text-[8px] font-black uppercase tracking-[0.16em] text-console-text-subtle">Inspector</span>
+            <span className="block truncate text-[11px] font-black text-console-text">
+              {editingMasterId ? "Master layout" : headerName}
+            </span>
+          </div>
+        </div>
         {selectedCount > 1 && <span className="text-[8px] text-tool-design font-bold">Ctrl+G to group</span>}
       </div>
 
@@ -124,7 +133,7 @@ export function PropertiesPanel({
           equal-width tab bar (§5.6). Sections auto-open by context so the
           operator lands on the relevant controls and advanced options stay
           collapsed by default. */}
-      <div className="flex-1 overflow-y-auto p-2.5 flex flex-col gap-2.5 custom-scrollbar">
+      <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-3 custom-scrollbar bg-console-canvas/15">
 
         <InspectorSection label="Layers" badge={`${slide.elements.length}`} defaultOpen={!hasElement}>
           <LayersPanel
@@ -154,10 +163,15 @@ export function PropertiesPanel({
             </div>
 
             {bg.type === "color" && (
-              <div className="flex items-center gap-3 mt-1">
-                <input type="color" value={bg.value} onChange={e => onSetBackground({ type: "color", value: e.target.value })} className="w-9 h-9 rounded-lg cursor-pointer border border-console-border bg-transparent shrink-0" />
-                <span className="text-xs text-console-text-muted font-mono">{bg.value}</span>
-              </div>
+              <label className="group mt-1 flex cursor-pointer items-center gap-3 rounded-xl border border-console-border bg-console-surface-raised p-2 transition-colors hover:border-tool-design/50">
+                <span className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg border-2 border-white/15 shadow-lg" style={{ backgroundColor: bg.value }}>
+                  <input type="color" value={bg.value} onChange={e => onSetBackground({ type: "color", value: e.target.value })} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" aria-label="Slide background color" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-[8px] font-black uppercase tracking-wider text-console-text-subtle">Canvas color</span>
+                  <span className="mt-0.5 block text-[11px] font-bold uppercase text-console-text font-mono">{bg.value}</span>
+                </span>
+              </label>
             )}
 
             {bg.type === "image" && <>
@@ -264,16 +278,14 @@ export function PropertiesPanel({
           </Panel>
 
           <Panel label="Theme">
-            <label className="text-[9px] text-console-text-muted uppercase font-bold">Default font</label>
-            <input
-              type="text"
-              value={theme?.defaultFontFamily ?? ""}
-              onChange={e => onUpdateTheme({ defaultFontFamily: e.target.value })}
-              onKeyDown={e => e.stopPropagation()}
-              placeholder="Arial"
-              className="w-full bg-console-surface-raised border border-console-border rounded-lg px-2 py-1 text-[11px] text-console-text outline-none focus:border-tool-design/60 transition-colors"
+            <label className="text-[8px] text-console-text-muted uppercase tracking-[0.12em] font-black">Default font</label>
+            <FontPicker
+              fonts={availableFonts}
+              value={theme?.defaultFontFamily ?? "Arial"}
+              fullWidth
+              onSelect={(defaultFontFamily) => onUpdateTheme({ defaultFontFamily })}
             />
-            <label className="text-[9px] text-console-text-muted uppercase font-bold mt-1">Default size</label>
+            <label className="text-[8px] text-console-text-muted uppercase tracking-[0.12em] font-black mt-1">Default size</label>
             <input
               type="number"
               min={8}
@@ -281,27 +293,11 @@ export function PropertiesPanel({
               value={theme?.defaultFontSize ?? 32}
               onChange={e => onUpdateTheme({ defaultFontSize: Number(e.target.value) })}
               onKeyDown={e => e.stopPropagation()}
-              className="w-full bg-console-surface-raised border border-console-border rounded-lg px-2 py-1 text-[11px] text-console-text outline-none focus:border-tool-design/60 transition-colors"
+              className="h-10 w-full bg-console-surface-raised border border-console-border rounded-xl px-3 text-[11px] font-bold text-console-text outline-none focus:border-tool-design/60 transition-colors"
             />
-            <div className="flex items-center gap-3 mt-1">
-              <div className="flex items-center gap-1.5">
-                <span className="text-[9px] text-console-text-muted">{`Text`}</span>
-                <input
-                  type="color"
-                  value={theme?.textColor ?? "#ffffff"}
-                  onChange={e => onUpdateTheme({ textColor: e.target.value })}
-                  className="w-7 h-7 rounded-lg cursor-pointer border border-console-border bg-transparent"
-                />
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-[9px] text-console-text-muted">Accent</span>
-                <input
-                  type="color"
-                  value={theme?.accentColor ?? "#f59e0b"}
-                  onChange={e => onUpdateTheme({ accentColor: e.target.value })}
-                  className="w-7 h-7 rounded-lg cursor-pointer border border-console-border bg-transparent"
-                />
-              </div>
+            <div className="grid grid-cols-2 gap-2 mt-1">
+              <ThemeColorControl label="Text" value={theme?.textColor ?? "#ffffff"} onChange={(value) => onUpdateTheme({ textColor: value })} />
+              <ThemeColorControl label="Accent" value={theme?.accentColor ?? "#f59e0b"} onChange={(value) => onUpdateTheme({ accentColor: value })} />
             </div>
           </Panel>
 
@@ -311,6 +307,28 @@ export function PropertiesPanel({
               Presets set theme colors &amp; fonts — elements using "inherit" update; explicit overrides are kept.
             </p>
           </Panel>
+
+          {!editingMasterId && <Panel label="Slide transition">
+            <select
+              value={slide.transition?.type ?? "fade"}
+              onChange={(event) => onUpdateSlide({ ...slide, transition: { type: event.target.value as NonNullable<CustomSlide["transition"]>["type"], duration: slide.transition?.duration ?? 350 } })}
+              onKeyDown={(event) => event.stopPropagation()}
+              className="w-full rounded-xl border border-console-border bg-console-surface-raised px-3 text-[11px] font-bold text-console-text outline-none"
+            >
+              <option value="none">Cut</option>
+              <option value="fade">Fade</option>
+              <option value="dissolve">Dissolve</option>
+              <option value="slide-up">Slide up</option>
+              <option value="slide-left">Slide left</option>
+              <option value="push">Push</option>
+              <option value="zoom">Zoom</option>
+            </select>
+            <label className="flex items-center gap-2">
+              <span className="w-16 text-[9px] font-bold text-console-text-muted">Duration</span>
+              <input type="range" min={0} max={2000} step={50} value={slide.transition?.duration ?? 350} onChange={(event) => onUpdateSlide({ ...slide, transition: { type: slide.transition?.type ?? "fade", duration: Number(event.target.value) } })} className="flex-1" />
+              <span className="w-10 text-right text-[9px] font-mono text-console-text-subtle">{slide.transition?.duration ?? 350}ms</span>
+            </label>
+          </Panel>}
 
           <Panel label="Speaker Notes">
             <textarea
@@ -757,5 +775,19 @@ export function PropertiesPanel({
         )}
       </div>
     </aside>
+  );
+}
+
+function ThemeColorControl({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="group flex cursor-pointer items-center gap-2 rounded-xl border border-console-border bg-console-surface-raised p-2 transition-colors hover:border-tool-design/50">
+      <span className="relative h-8 w-8 shrink-0 overflow-hidden rounded-lg border-2 border-white/15 shadow-md" style={{ backgroundColor: value }}>
+        <input type="color" value={value} onChange={(event) => onChange(event.target.value)} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" aria-label={`${label} color`} />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[8px] font-black uppercase tracking-wider text-console-text-subtle">{label}</span>
+        <span className="block truncate text-[9px] font-bold uppercase text-console-text">{value}</span>
+      </span>
+    </label>
   );
 }

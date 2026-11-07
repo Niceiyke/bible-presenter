@@ -9,7 +9,7 @@
 import React, { useRef } from "react";
 import {
   Plus, Library, Type, Heading1, Quote, Image as ImageIcon, Megaphone, Square, BookOpen,
-  ChevronUp, ChevronDown, Copy, Trash2, GripVertical,
+  ChevronUp, ChevronDown, Copy, Trash2, GripVertical, PanelsTopLeft,
 } from "lucide-react";
 import { SlideThumbnail } from "../../shared/SlideThumbnail";
 import { EditorMenu } from "./components";
@@ -76,10 +76,16 @@ export function SlideListPanel({
   const slidePanelRef = useRef<HTMLDivElement>(null);
 
   return (
-    <aside className="w-48 border-r border-console-border bg-console-surface flex flex-col overflow-hidden shrink-0">
-      <div className="px-3 py-2 border-b border-console-border flex items-center justify-between shrink-0">
-        <span className="op-control-label text-console-text-subtle">Slides</span>
-        <span className="text-[10px] font-bold text-console-text-subtle">{slides.length}</span>
+    <aside className="w-56 border-r border-console-border bg-console-surface/95 flex flex-col overflow-hidden shrink-0 shadow-xl shadow-black/10 relative z-[70]">
+      <div className="px-3 py-3 border-b border-console-border flex items-center justify-between shrink-0 bg-gradient-to-r from-tool-design/10 to-transparent">
+        <div className="flex items-center gap-2">
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-tool-design/15 text-tool-design"><PanelsTopLeft size={13} /></span>
+          <div>
+            <span className="block text-[10px] font-black uppercase tracking-[0.12em] text-console-text">Slides</span>
+            <span className="block text-[8px] text-console-text-subtle">Drag to reorder</span>
+          </div>
+        </div>
+        <span className="rounded-full bg-console-canvas px-2 py-1 text-[9px] font-black text-console-text-muted">{slides.length}</span>
       </div>
 
       <div
@@ -87,7 +93,7 @@ export function SlideListPanel({
         tabIndex={0}
         onFocus={() => onFocusChange(true)}
         onBlur={() => onFocusChange(false)}
-        className="flex-1 overflow-y-auto py-2 px-2 flex flex-col gap-2 custom-scrollbar outline-none"
+        className="flex-1 overflow-y-auto py-3 px-2.5 flex flex-col gap-3 custom-scrollbar outline-none bg-console-canvas/20"
       >
         {slides.map((s, i) => {
           const isActive = i === activeSlideIdx;
@@ -111,22 +117,22 @@ export function SlideListPanel({
               onClick={() => onSelect(i)}
               className={`relative aspect-video rounded-xl overflow-hidden border-2 transition-all shrink-0 group cursor-grab focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${
                 isActive
-                  ? "border-tool-design shadow-lg shadow-tool-design/20"
+                  ? "border-tool-design shadow-xl shadow-tool-design/25 ring-2 ring-tool-design/10"
                   : dragOverSlideIdx === i
                     ? "border-tool-design border-dashed shadow-lg shadow-tool-design/20"
                     : dragSlideIdx === i
                       ? "border-console-border-strong opacity-50"
-                      : "border-console-border hover:border-console-border-strong"
+                      : "border-console-border hover:border-tool-design/50 hover:-translate-y-px hover:shadow-lg hover:shadow-black/25"
               } ${dragSlideIdx !== null ? "cursor-grabbing" : ""}`}
             >
               <SlideThumbnail slide={s} className="absolute inset-0 w-full h-full" appDataDir={appDataDir} theme={theme} alt={`Slide ${i + 1}`} />
-              <span className={`absolute top-1.5 left-1.5 w-5 h-5 rounded flex items-center justify-center text-[9px] font-black ${
-                isActive ? "bg-tool-design text-console-canvas" : "bg-black/60 text-console-text-subtle"
+               <span className={`absolute top-1.5 left-1.5 min-w-5 h-5 px-1 rounded-md border border-white/10 flex items-center justify-center text-[9px] font-black backdrop-blur-sm ${
+                 isActive ? "bg-tool-design text-white" : "bg-black/65 text-white/75"
               }`}>
                 {i + 1}
               </span>
               {isActive && (
-                <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 bg-tool-design text-console-canvas text-[7px] font-black uppercase rounded">
+                 <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 bg-tool-design text-white text-[7px] font-black uppercase tracking-wider rounded-md shadow-lg">
                   Editing
                 </span>
               )}
@@ -153,14 +159,14 @@ export function SlideListPanel({
         })}
       </div>
 
-      <div className="border-t border-console-border p-2 flex flex-col gap-1.5 shrink-0">
+      <div className="border-t border-console-border p-2.5 flex flex-col gap-1.5 shrink-0 bg-console-surface">
         <EditorMenu
           label="Add slide"
           trigger={<span className="flex items-center gap-1.5"><Plus size={13} /> Add slide</span>}
           items={ADD_MENU_ITEMS}
           onSelect={v => (v === "template" ? onOpenTemplates() : onAddSlide(v))}
           className="w-full"
-          triggerClassName="w-full justify-center bg-tool-design/15 hover:bg-tool-design/25 text-tool-design hover:text-tool-design border-tool-design/30"
+          triggerClassName="w-full justify-center bg-gradient-to-r from-tool-design to-indigo-500 text-white border-tool-design/40 hover:brightness-110 shadow-lg shadow-tool-design/15"
         />
       </div>
     </aside>

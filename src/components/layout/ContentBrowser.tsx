@@ -1,8 +1,9 @@
 import React, { lazy, Suspense, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { useAppStore } from "../../store";
-import { stableId, newDefaultSlide } from "../../utils";
+import { stableId } from "../../utils";
+import { createBlankPresentation } from "../../presentations/library";
+import { tauriPresentationRepository } from "../../presentations/repository";
 import { CameraTab } from "../CameraTab";
 import { PropsTab } from "../PropsTab";
 import { ScenesTab } from "../ScenesTab";
@@ -149,39 +150,18 @@ return (
           <StudioTab
             onStage={stageItem} onLive={sendLive} onAddToSchedule={addToSchedule}
             onOpenEditor={(id) => {
-              invoke("load_studio_presentation", { id }).then((data: any) => {
-                const pres = data as CustomPresentation;
+              tauriPresentationRepository.load(id).then((pres) => {
                 setStudioSlides({ ...studioSlides, [id]: pres.slides });
                 setEditingPres(pres);
               }).catch((e) => setToast(`Failed to open presentation: ${e}`));
             }}
             onNewPresentation={() => {
-              const id = stableId();
-              // P2.4: new presentations get a synthesized default theme so
-              // text elements authored with `font_family: "inherit"` resolve
-              // against the cascade from the very first save.
-              const newPres: CustomPresentation = {
-                id,
-                name: "New Presentation",
-                slides: [newDefaultSlide()],
-                version: 2,
-                theme: {
-                  id: stableId(),
-                  name: "Default",
-                  defaultFontFamily: "Arial",
-                  defaultFontSize: 32,
-                  titleStyle: { font_family: "Arial", font_size: 60, color: "#ffffff", bold: true },
-                  bodyStyle: { font_family: "Arial", font_size: 32, color: "#ffffff" },
-                  textColor: "#ffffff",
-                  accentColor: "#f59e0b",
-                  background: { type: "color", value: "#1a1a2e" },
-                },
-              };
-              invoke("save_studio_presentation", { presentation: newPres }).then(() => {
-                const nextList = [...studioList, { id, name: newPres.name, slide_count: 1, version: 2, updated_at: Date.now() }];
+              const newPres = createBlankPresentation();
+              tauriPresentationRepository.save(newPres).then(() => {
+                const nextList = [...studioList, { id: newPres.id, name: newPres.name, slide_count: 1, version: 2, updated_at: Date.now() }];
                 setStudioList(nextList);
                 emit("studio-sync", nextList);
-                setStudioSlides({ ...studioSlides, [id]: newPres.slides });
+                setStudioSlides({ ...studioSlides, [newPres.id]: newPres.slides });
                 setEditingPres(newPres);
               }).catch((e) => setToast(`Failed to create presentation: ${e}`));
             }}

@@ -1,8 +1,8 @@
 import React from "react";
 import {
-  BookOpen, CalendarDays, Image as ImageIcon, Layers, Mic, Monitor,
-  MonitorSmartphone, Settings, Timer, Zap, Paintbrush, PanelLeftClose, PanelLeftOpen, Video,
-  CircleDot, Radio, Gauge, LayoutGrid,
+  BookOpen, CalendarDays, ChevronDown, Image as ImageIcon, Layers, Mic,
+  MonitorSmartphone, Settings, Paintbrush, PanelLeftClose, PanelLeftOpen,
+  CircleDot, Radio, Gauge, LayoutGrid, SlidersHorizontal, MoreHorizontal,
 } from "lucide-react";
 import { useAppStore } from "../../store";
 import { tabAllowed, tierCapabilities } from "../../system/tiers";
@@ -14,71 +14,39 @@ interface NavEntry {
   label: string;
   icon: React.ElementType;
   shortcut?: string;
-  tab?: TabId;
-  openDeck?: "live-lt" | "timer" | "props" | "camera" | "scenes";
+  tab: TabId;
 }
 
-interface NavGroup {
-  label: string;
-  entries: NavEntry[];
-}
+const PRIMARY: NavEntry[] = [
+  { id: "bible", label: "Scripture", icon: BookOpen, tab: "bible", shortcut: "F1" },
+  { id: "songs", label: "Songs", icon: Mic, tab: "songs", shortcut: "F2" },
+  { id: "media", label: "Media", icon: ImageIcon, tab: "media", shortcut: "F3" },
+  { id: "studio", label: "Presentations", icon: Layers, tab: "studio", shortcut: "F4" },
+  { id: "schedule", label: "Service Plan", icon: CalendarDays, tab: "schedule", shortcut: "F6" },
+];
 
-const GROUPS: NavGroup[] = [
-  {
-    label: "Content",
-    entries: [
-      { id: "bible", label: "Scripture", icon: BookOpen, tab: "bible", shortcut: "F1" },
-      { id: "songs", label: "Songs", icon: Mic, tab: "songs", shortcut: "F2" },
-      { id: "media", label: "Media", icon: ImageIcon, tab: "media", shortcut: "F3" },
-      { id: "studio", label: "Presentations", icon: Layers, tab: "studio", shortcut: "F4" },
-    ],
-  },
-  {
-    label: "Service",
-    entries: [
-      { id: "schedule", label: "Service Plan", icon: CalendarDays, tab: "schedule", shortcut: "F6" },
-    ],
-  },
-  {
-    label: "Live Tools",
-    entries: [
-      { id: "lt", label: "Lower Third", icon: Zap, openDeck: "live-lt" },
-      { id: "timers", label: "Timers", icon: Timer, openDeck: "timer" },
-      { id: "props", label: "Props", icon: Monitor, openDeck: "props" },
-      { id: "camera", label: "Camera", icon: Video, openDeck: "camera" },
-      { id: "scenes", label: "Scenes", icon: Zap, openDeck: "scenes" },
-      { id: "lt-designer", label: "LT Designer", icon: Paintbrush, tab: "lt-designer", shortcut: "F5" },
-      { id: "scene-builder", label: "Scene Builder", icon: LayoutGrid, tab: "scene-builder" },
-    ],
-  },
-  {
-    label: "System",
-    entries: [
-      { id: "recordings", label: "Recordings", icon: CircleDot, tab: "recordings" },
-      { id: "streaming", label: "Streaming", icon: Radio, tab: "streaming" },
-      { id: "diagnostics", label: "Diagnostics", icon: Gauge, tab: "diagnostics" },
-      { id: "remote", label: "Remote", icon: MonitorSmartphone, tab: "remote" },
-      { id: "settings", label: "Settings", icon: Settings, tab: "settings", shortcut: "F9" },
-    ],
-  },
+const MORE: NavEntry[] = [
+  { id: "lt-designer", label: "LT Designer", icon: Paintbrush, tab: "lt-designer", shortcut: "F5" },
+  { id: "scene-builder", label: "Scene Builder", icon: LayoutGrid, tab: "scene-builder" },
+  { id: "recordings", label: "Recordings", icon: CircleDot, tab: "recordings" },
+  { id: "streaming", label: "Streaming", icon: Radio, tab: "streaming" },
+  { id: "remote", label: "Remote", icon: MonitorSmartphone, tab: "remote" },
+  { id: "diagnostics", label: "Diagnostics", icon: Gauge, tab: "diagnostics" },
+  { id: "settings", label: "Settings", icon: Settings, tab: "settings", shortcut: "F9" },
 ];
 
 export function LeftNav() {
   const {
     activeTab, setActiveTab,
     bottomDeckOpen, setBottomDeckOpen,
-    bottomDeckMode, setBottomDeckMode,
     license,
   } = useAppStore();
-
-  // Plans without recording/streaming/remote cannot use those workspaces —
-  // hide their nav entries entirely (the ContentBrowser also redirects away).
   const caps = tierCapabilities(license?.tier);
-  const allowedEntries = (entries: NavEntry[]) => entries.filter((e) => !e.tab || tabAllowed(e.tab, caps));
 
   const [userCollapsed, setUserCollapsed] = React.useState<boolean | null>(
-    () => (localStorage.getItem("pref_navCollapsed") === "1" ? true : localStorage.getItem("pref_navCollapsed") === "0" ? false : null)
+    () => (localStorage.getItem("pref_navCollapsed") === "1" ? true : localStorage.getItem("pref_navCollapsed") === "0" ? false : null),
   );
+  const [moreOpen, setMoreOpen] = React.useState(() => localStorage.getItem("pref_navMoreOpen") === "1");
   const [narrow, setNarrow] = React.useState(() => window.innerWidth < 1280);
 
   React.useEffect(() => {
@@ -87,92 +55,100 @@ export function LeftNav() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  const collapsed = userCollapsed !== null ? userCollapsed : narrow;
+  const allowedMore = MORE.filter((entry) => tabAllowed(entry.tab, caps));
+  const moreActive = allowedMore.some((entry) => activeTab === entry.tab);
+
   const toggleCollapsed = () => {
     const target = !collapsed;
     setUserCollapsed(target);
     localStorage.setItem("pref_navCollapsed", target ? "1" : "0");
   };
 
-  const collapsed = userCollapsed !== null ? userCollapsed : narrow;
-
-  const isActive = (e: NavEntry) =>
-    e.tab ? activeTab === e.tab : bottomDeckOpen && bottomDeckMode === e.openDeck;
-
-  const select = (e: NavEntry) => {
-    if (e.tab) {
-      setActiveTab(e.tab);
-      if (e.tab === "schedule" || e.tab === "scenes" || e.tab === "scene-builder") setBottomDeckOpen(false);
-    } else if (e.openDeck) {
-      setBottomDeckMode(e.openDeck);
-      setBottomDeckOpen(true);
-    }
+  const selectTab = (entry: NavEntry) => {
+    setActiveTab(entry.tab);
+    if (entry.tab === "schedule" || entry.tab === "scene-builder") setBottomDeckOpen(false);
   };
 
-  const width = collapsed ? "w-12" : "w-44";
+  const navButton = (entry: NavEntry) => {
+    const Icon = entry.icon;
+    const active = activeTab === entry.tab;
+    return (
+      <button
+        key={entry.id}
+        onClick={() => selectTab(entry)}
+        title={entry.shortcut ? `${entry.label} (${entry.shortcut})` : entry.label}
+        aria-label={collapsed ? entry.label : undefined}
+        aria-current={active ? "page" : undefined}
+        className={`group relative flex h-10 w-full items-center gap-2.5 rounded-xl px-2.5 transition-all focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)] ${
+          active
+            ? "bg-action-primary/12 text-action-primary shadow-sm"
+            : "text-console-text-muted hover:bg-console-surface-strong hover:text-console-text"
+        } ${collapsed ? "justify-center" : ""}`}
+      >
+        {active && <span className="absolute -left-1 h-5 w-1 rounded-r-full bg-action-primary shadow-[0_0_10px_rgba(244,183,64,.55)]" />}
+        <Icon size={16} className="shrink-0" />
+        {!collapsed && <>
+          <span className="min-w-0 flex-1 truncate text-left text-[11px] font-bold">{entry.label}</span>
+          {entry.shortcut && <span className="text-[8px] font-bold text-console-text-subtle">{entry.shortcut}</span>}
+        </>}
+      </button>
+    );
+  };
 
   return (
     <nav
-      className={`${width} bg-console-surface border-r border-console-border flex flex-col py-2 gap-0.5 shrink-0 z-20 transition-[width] duration-150 overflow-hidden`}
+      className={`${collapsed ? "w-14" : "w-48"} z-20 flex shrink-0 flex-col overflow-hidden border-r border-console-border bg-console-surface px-2 py-2 transition-[width] duration-150`}
       aria-label="Workspaces"
     >
-      {GROUPS.map((group) => (
-        <div key={group.label} className="px-1.5 mb-1">
-          {!collapsed && (
-            <p className="px-2 pt-1.5 pb-1 text-[9px] font-black uppercase tracking-widest text-console-text-subtle">
-              {group.label}
-            </p>
-          )}
-          {allowedEntries(group.entries).map((entry) => {
-            const Icon = entry.icon;
-            const active = isActive(entry);
-            return (
-              <button
-                key={entry.id}
-                onClick={() => select(entry)}
-                title={entry.shortcut ? `${entry.label} (${entry.shortcut})` : entry.label}
-                aria-label={collapsed ? entry.label : undefined}
-                aria-current={active ? "page" : undefined}
-                className={`w-full flex items-center gap-2 h-9 rounded-md transition-all focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)] ${
-                  active
-                    ? "bg-action-primary/10 text-action-primary border-l-2 border-action-primary"
-                    : "text-console-text-muted hover:text-console-text hover:bg-console-surface-strong"
-                } px-2`}
-              >
-                <Icon size={15} className="shrink-0" />
-                {!collapsed && (
-                  <>
-                    <span className="text-[11px] font-bold truncate flex-1 text-left">{entry.label}</span>
-                    {entry.shortcut && (
-                      <span className="text-[9px] font-bold text-console-text-subtle">{entry.shortcut}</span>
-                    )}
-                  </>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      ))}
+      {!collapsed && <p className="mb-1 px-2 pt-1 text-[8px] font-black uppercase tracking-[0.18em] text-console-text-subtle">Prepare</p>}
+      <div className="space-y-0.5">{PRIMARY.map(navButton)}</div>
+
+      <div className="my-2 h-px bg-console-border/80" />
+
+      <button
+        onClick={() => setBottomDeckOpen(!bottomDeckOpen)}
+        aria-pressed={bottomDeckOpen}
+        title="Live Tools"
+        className={`relative flex h-11 w-full items-center gap-2.5 rounded-xl px-2.5 transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${
+          bottomDeckOpen
+            ? "bg-tool-design/15 text-tool-design ring-1 ring-tool-design/25"
+            : "bg-console-canvas/50 text-console-text-muted hover:bg-console-surface-strong hover:text-console-text"
+        } ${collapsed ? "justify-center" : ""}`}
+      >
+        {bottomDeckOpen && <span className="absolute -left-1 h-5 w-1 rounded-r-full bg-tool-design" />}
+        <SlidersHorizontal size={17} className="shrink-0" />
+        {!collapsed && <span className="flex-1 text-left text-[11px] font-black">Live Tools</span>}
+        {!collapsed && bottomDeckOpen && <span className="h-1.5 w-1.5 rounded-full bg-state-live animate-pulse" />}
+      </button>
+
+      <div className="mt-2">
+        <button
+          onClick={() => {
+            const next = !moreOpen;
+            setMoreOpen(next);
+            localStorage.setItem("pref_navMoreOpen", next ? "1" : "0");
+          }}
+          aria-expanded={moreOpen}
+          title="More workspaces"
+          className={`flex h-9 w-full items-center gap-2.5 rounded-xl px-2.5 transition-colors hover:bg-console-surface-strong hover:text-console-text ${moreActive ? "text-action-primary" : "text-console-text-subtle"} ${collapsed ? "justify-center" : ""}`}
+        >
+          <MoreHorizontal size={16} />
+          {!collapsed && <><span className="flex-1 text-left text-[10px] font-black uppercase tracking-wider">More</span><ChevronDown size={12} className={`transition-transform ${moreOpen ? "rotate-180" : ""}`} /></>}
+          {collapsed && moreActive && <span className="absolute ml-5 mt-5 h-1.5 w-1.5 rounded-full bg-action-primary" />}
+        </button>
+        {(moreOpen || moreActive) && <div className="mt-1 space-y-0.5">{allowedMore.map(navButton)}</div>}
+      </div>
 
       <div className="flex-1" />
-
-      {/* Collapse / expand toggle */}
-      <div className="px-1.5">
-        <button
-          onClick={toggleCollapsed}
-          title={collapsed ? "Expand navigation" : "Collapse to icons"}
-          aria-label={collapsed ? "Expand navigation (icons + labels)" : "Collapse to icons only"}
-          className={`w-full flex items-center gap-2 h-9 rounded-md transition-all text-console-text-subtle hover:text-console-text hover:bg-console-surface-strong px-2 ${
-            collapsed ? "justify-center" : ""
-          }`}
-        >
-          {collapsed ? <PanelLeftOpen size={15} /> : (
-            <>
-              <PanelLeftClose size={15} className="shrink-0" />
-              <span className="text-[11px] font-bold truncate text-left">Collapse</span>
-            </>
-          )}
-        </button>
-      </div>
+      <button
+        onClick={toggleCollapsed}
+        title={collapsed ? "Expand navigation" : "Collapse navigation"}
+        aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
+        className={`flex h-9 w-full items-center gap-2.5 rounded-xl px-2.5 text-console-text-subtle transition-colors hover:bg-console-surface-strong hover:text-console-text ${collapsed ? "justify-center" : ""}`}
+      >
+        {collapsed ? <PanelLeftOpen size={15} /> : <><PanelLeftClose size={15} /><span className="text-[10px] font-bold">Collapse</span></>}
+      </button>
     </nav>
   );
 }

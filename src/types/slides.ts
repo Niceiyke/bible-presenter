@@ -233,6 +233,17 @@ export interface CustomSlide {
   /** Optional reference to a master layout this slide was cloned from
    *  (P2.4). Editing the master propagates through the cascade. */
   masterRef?: string;
+  /** Optional narrative section used by the editor outline. Slides without a
+   * section remain in the ungrouped part of the deck. */
+  section?: string;
+  /** Per-slide transition override. Output falls back to global settings when
+   * this is absent. Duration is stored in milliseconds. */
+  transition?: SlideTransition;
+}
+
+export interface SlideTransition {
+  type: "none" | "fade" | "dissolve" | "slide-up" | "slide-left" | "push" | "zoom";
+  duration: number;
 }
 
 /**
@@ -355,4 +366,6 @@ export interface CustomSlideDisplayData {
    * the renderer's hardcoded defaults.
    */
   theme?: SlideTheme;
+  section?: string;
+  transition?: SlideTransition;
 }

@@ -16,6 +16,7 @@ import { SystemDiagnosticsProvider } from "./system/SystemDiagnosticsContext";
 import { RecordingProvider } from "./hooks/useRecordingProvider";
 import { ProgramAudioProvider } from "./hooks/useProgramAudio";
 import { AiScriptureProvider } from "./hooks/useAiScripture";
+import { tauriPresentationRepository } from "./presentations/repository";
 import { LicenseGate, OfflineLicenseBanner } from "./components/LicenseGate";
 import { isLicenseBlocked } from "./types/license";
 
@@ -24,6 +25,7 @@ import { LeftNav } from "./components/layout/LeftNav";
 import { BottomDrawer } from "./components/layout/BottomDrawer";
 import { Cockpit } from "./components/layout/Cockpit";
 import { ContentBrowser } from "./components/layout/ContentBrowser";
+import { ServiceRundownBar } from "./components/layout/ServiceRundownBar";
 import { AddToServiceModal } from "./components/AddToServiceModal";
 
 import { Toast } from "./components/Toast";
@@ -71,7 +73,7 @@ export default function App() {
 
   const [editingPres, setEditingPres] = useState<CustomPresentation | null>(null);
   const [bottomDeckH, setBottomDeckH] = React.useState(() => Number(localStorage.getItem("pref_bottomDeckH") || 280));
-  const [cockpitWidth, setCockpitWidth] = React.useState(() => Number(localStorage.getItem("pref_cockpitWidth") || 340));
+  const [cockpitWidth, setCockpitWidth] = React.useState(() => Math.max(340, Math.min(620, Number(localStorage.getItem("pref_cockpitWidth") || 460))));
   const [recovery, setRecovery] = useState<{ activeServiceId: string; scheduleEntries: ScheduleEntry[]; lastUpdate: number } | null>(null);
 
   useAppInitialization();
@@ -255,6 +257,13 @@ export default function App() {
             captureScene={captureScene}
           />
 
+          <ServiceRundownBar
+            nextLiveItem={nextLiveItem}
+            stageItem={stageItem}
+            sendLive={sendLive}
+            persistSchedule={persistSchedule}
+          />
+
           <BottomDrawer
             bottomDeckH={bottomDeckH}
             setBottomDeckH={setBottomDeckH}
@@ -278,7 +287,6 @@ export default function App() {
           clearStaged={clearStaged}
           clearAll={clearAll}
           undoClearAll={undoClearAll}
-          persistSchedule={persistSchedule}
           updateSettings={updateSettings}
           cockpitWidth={cockpitWidth}
           setCockpitWidth={setCockpitWidth}
@@ -318,11 +326,11 @@ export default function App() {
             onAddToService={addToSchedule}
             onClose={(saved) => {
               if (saved) {
-                invoke("list_studio_presentations").then((list: any) => {
+                tauriPresentationRepository.list().then((list) => {
                   useAppStore.getState().setStudioList(list);
                   emit("studio-sync", list);
                 });
-                invoke("load_studio_presentation", { id: editingPres.id }).then((data: any) => {
+                tauriPresentationRepository.load(editingPres.id).then((data) => {
                   const slides = data.slides;
                   useAppStore.getState().setStudioSlides({ ...studioSlides, [editingPres.id]: slides });
                   emit("studio-slides-sync", { id: editingPres.id, slides });
