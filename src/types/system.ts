@@ -70,3 +70,19 @@ export interface SystemChecks {
   capabilities: SystemCapabilities;
   checkedAt: number;
 }
+
+export type ReleaseCheckStatus = "pass" | "warn" | "fail";
+
+/** One operator-facing P0 release gate. */
+export interface ReleaseCheck {
+  id: string;
+  label: string;
+  status: ReleaseCheckStatus;
+  detail: string;
+}
+
+/** Runtime release-readiness snapshot, separate from hardware capabilities. */
+export interface ReleaseReadiness {
+  checks: ReleaseCheck[];
+  checkedAt: number;
+}

@@ -3,6 +3,7 @@ import {
   Activity,
   AlertTriangle,
   CheckCircle2,
+  Clipboard,
   Cpu,
   Gauge,
   HardDrive,
@@ -15,7 +16,7 @@ import {
   MemoryStick,
 } from "lucide-react";
 import { useSystemDiagnostics } from "../system/SystemDiagnosticsContext";
-import type { SystemChecks, SystemMetrics } from "../types/system";
+import type { ReleaseReadiness, SystemChecks, SystemMetrics } from "../types/system";
 
 /**
  * `SystemTab` — System → Diagnostics workspace (Phase 7).
@@ -26,7 +27,7 @@ import type { SystemChecks, SystemMetrics } from "../types/system";
  * RTMP sessions).
  */
 export function SystemTab() {
-  const { checks, metrics, monitorActive, setMonitorActive, loading, refresh, lastError } =
+  const { checks, metrics, readiness, monitorActive, setMonitorActive, loading, refresh, lastError } =
     useSystemDiagnostics();
 
   React.useEffect(() => {
@@ -62,12 +63,84 @@ export function SystemTab() {
       ) : (
         <>
           <HardwareSummary checks={checks} />
+          <ReleaseGate readiness={readiness} onRun={refresh} />
           <ReadinessChecklist checks={checks} />
           <CapabilityReport checks={checks} />
           <PerformanceMonitor checks={checks} metrics={metrics} monitoring={monitorActive} />
         </>
       )}
     </div>
+  );
+}
+
+function ReleaseGate({ readiness, onRun }: { readiness: ReleaseReadiness | null; onRun: () => Promise<void> }) {
+  const [running, setRunning] = React.useState(false);
+  const [copied, setCopied] = React.useState(false);
+  const failed = readiness?.checks.filter((check) => check.status === "fail").length ?? 0;
+  const warnings = readiness?.checks.filter((check) => check.status === "warn").length ?? 0;
+  const overall = failed > 0 ? "fail" : warnings > 0 ? "warn" : "pass";
+
+  const run = async () => {
+    setRunning(true);
+    try {
+      await onRun();
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const copyReport = async () => {
+    if (!readiness) return;
+    const report = [
+      "Wordlyte P0 release readiness",
+      `Checked: ${new Date(readiness.checkedAt).toLocaleString()}`,
+      ...readiness.checks.map((check) => `[${check.status.toUpperCase()}] ${check.label}: ${check.detail}`),
+    ].join("\n");
+    try {
+      await navigator.clipboard.writeText(report);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <Card title="P0 release gate">
+      {!readiness ? (
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-[10px] text-slate-500">Run the release gate before a live service.</p>
+          <button onClick={() => void run()} disabled={running} className="rounded-md border border-cyan-700/60 px-2.5 py-1.5 text-[10px] font-bold uppercase text-cyan-300 disabled:opacity-50">
+            {running ? "Checking…" : "Run gate"}
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className={`flex items-center gap-2 text-[11px] font-black uppercase ${overall === "pass" ? "text-green-400" : overall === "warn" ? "text-amber-400" : "text-red-400"}`}>
+              {overall === "pass" ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
+              {overall === "pass" ? "Ready for controlled beta service" : overall === "warn" ? "Ready with warnings" : "Do not start service yet"}
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => void copyReport()} className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500 hover:text-slate-300"><Clipboard size={10} /> {copied ? "Copied" : "Copy report"}</button>
+              <button onClick={() => void run()} disabled={running} className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500 hover:text-slate-300 disabled:opacity-50"><RefreshCw size={10} className={running ? "animate-spin" : ""} /> Run again</button>
+            </div>
+          </div>
+          <ul className="flex flex-col gap-1.5">
+            {readiness.checks.map((check) => (
+              <li key={check.id} className="flex items-start gap-2">
+                {check.status === "pass" ? <CheckCircle2 size={13} className="mt-0.5 shrink-0 text-green-500" /> : <AlertTriangle size={13} className={`mt-0.5 shrink-0 ${check.status === "fail" ? "text-red-500" : "text-amber-500"}`} />}
+                <div className="min-w-0">
+                  <p className={`text-[10px] font-bold ${check.status === "pass" ? "text-slate-300" : check.status === "fail" ? "text-red-400" : "text-amber-400"}`}>{check.label}</p>
+                  <p className="text-[10px] leading-relaxed text-slate-600">{check.detail}</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-3 text-[9px] text-slate-600">This gate checks the current machine and active transport state. It does not replace a supervised rehearsal or physical output/stream smoke test.</p>
+        </>
+      )}
+    </Card>
   );
 }
 

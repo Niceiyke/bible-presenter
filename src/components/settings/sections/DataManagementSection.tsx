@@ -5,7 +5,7 @@ import { Archive, Download, RefreshCw, ShieldCheck, Upload } from "lucide-react"
 import { Button, ConfirmModal } from "../../ui";
 import { useAppStore } from "../../../store";
 
-interface BackupResult { path: string; files: number }
+interface BackupResult { path: string; files: number; verified: boolean }
 
 export function DataManagementSection() {
   const setToast = useAppStore((s) => s.setToast);
@@ -23,7 +23,7 @@ export function DataManagementSection() {
     setBusy("backup");
     try {
       const result = await invoke<BackupResult>("backup_create", { path: selected });
-      setToast(`Backup created (${result.files} files)`);
+      setToast(result.verified ? `Backup created and verified (${result.files} files)` : `Backup created (${result.files} files)`);
     } catch (error) {
       setToast(`Backup failed: ${error}`);
     } finally {

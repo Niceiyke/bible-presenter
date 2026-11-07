@@ -33,6 +33,7 @@ struct PendingRestore {
 pub struct BackupResult {
     pub path: String,
     pub files: usize,
+    pub verified: bool,
 }
 
 fn validate_backup_path(raw: &str, must_exist: bool) -> Result<PathBuf, String> {
@@ -113,6 +114,41 @@ fn add_dir(
     Ok(())
 }
 
+/// Re-open a completed archive before reporting success. This catches truncated
+/// ZIPs and missing core entries immediately, rather than during a Sunday
+/// morning restore. Full database integrity is checked again by
+/// `backup_stage_restore` after extraction.
+fn verify_backup_archive(path: &Path) -> Result<(), String> {
+    let file = File::open(path).map_err(|e| format!("Could not reopen backup: {e}"))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("Backup verification failed: {e}"))?;
+    {
+        let mut manifest = archive
+            .by_name(MANIFEST_NAME)
+            .map_err(|_| "Backup verification failed: manifest is missing".to_string())?;
+        let mut json = String::new();
+        manifest
+            .read_to_string(&mut json)
+            .map_err(|e| format!("Backup verification failed reading manifest: {e}"))?;
+        let manifest: BackupManifest = serde_json::from_str(&json)
+            .map_err(|e| format!("Backup verification failed parsing manifest: {e}"))?;
+        if manifest.product != "Wordlyte" || manifest.schema > BACKUP_SCHEMA {
+            return Err("Backup verification failed: unsupported manifest".into());
+        }
+    }
+    let mut database = archive
+        .by_name(DB_ENTRY)
+        .map_err(|_| "Backup verification failed: database is missing".to_string())?;
+    let mut database_bytes = Vec::new();
+    database
+        .read_to_end(&mut database_bytes)
+        .map_err(|e| format!("Backup verification failed reading database: {e}"))?;
+    if database_bytes.is_empty() {
+        return Err("Backup verification failed: database is empty".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn backup_create(
     state: State<'_, AppState>,
@@ -176,9 +212,11 @@ pub async fn backup_create(
             }
         }
         zip.finish().map_err(|e| e.to_string())?;
+        verify_backup_archive(&destination)?;
         Ok(BackupResult {
             path: destination.to_string_lossy().to_string(),
             files: count,
+            verified: true,
         })
     })();
     let _ = fs::remove_file(temp_db);
@@ -382,9 +420,39 @@ mod tests {
     }
 
     #[test]
+    fn completed_backup_archive_can_be_reopened_and_verified() {
+        let path = std::env::temp_dir().join(format!(
+            "wordlyte_backup_verify_{}.wordlyte-backup",
+            Uuid::new_v4()
+        ));
+        let file = File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        zip.start_file(MANIFEST_NAME, SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(
+            serde_json::to_string(&BackupManifest {
+                product: "Wordlyte".into(),
+                schema: BACKUP_SCHEMA,
+                app_version: "test".into(),
+                created_at: 0,
+                includes: vec!["database".into()],
+            })
+            .unwrap()
+            .as_bytes(),
+        )
+        .unwrap();
+        zip.start_file(DB_ENTRY, SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(b"SQLite format 3\0test").unwrap();
+        zip.finish().unwrap();
+
+        assert!(verify_backup_archive(&path).is_ok());
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn pending_restore_replaces_data_and_preserves_previous_installation() {
-        let root =
-            std::env::temp_dir().join(format!("wordlyte_restore_test_{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("wordlyte_restore_test_{}", Uuid::new_v4()));
         let staging_name = format!("restore-{}", Uuid::new_v4());
         let staging = root.join("restore-staging").join(&staging_name);
         fs::create_dir_all(staging.join("media")).unwrap();
@@ -406,10 +474,7 @@ mod tests {
         let previous = apply_pending_restore(&root).unwrap().unwrap();
         assert_eq!(fs::read(root.join("wordlyte_data.db")).unwrap(), b"new");
         assert!(root.join("media/new.txt").is_file());
-        assert_eq!(
-            fs::read(previous.join("wordlyte_data.db")).unwrap(),
-            b"old"
-        );
+        assert_eq!(fs::read(previous.join("wordlyte_data.db")).unwrap(), b"old");
         assert!(previous.join("wordlyte_data.db-wal").is_file());
         assert!(previous.join("media/old.txt").is_file());
         assert!(!root.join(PENDING_MARKER).exists());

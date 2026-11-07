@@ -10,7 +10,12 @@ import {
   type ReactNode,
 } from "react";
 import { computeCapabilities } from "./capabilities";
-import type { SystemChecks, SystemMetrics } from "../types/system";
+import type {
+  ReleaseCheck,
+  ReleaseReadiness,
+  SystemChecks,
+  SystemMetrics,
+} from "../types/system";
 
 /**
  * System diagnostics provider (Phase 7).
@@ -33,6 +38,7 @@ interface MonitorInfo {
 interface SystemDiagnosticsValue {
   checks: SystemChecks | null;
   metrics: SystemMetrics | null;
+  readiness: ReleaseReadiness | null;
   monitorActive: boolean;
   setMonitorActive: (active: boolean) => void;
   loading: boolean;
@@ -128,9 +134,136 @@ ffmpeg_available: backendInfo.ffmpeg_available,
   };
 }
 
+interface StartupStatus {
+  db_ok: boolean;
+  issues: string[];
+}
+
+interface AiKeyStatus {
+  configured: boolean;
+  provider: string;
+}
+
+interface OutputConfigProbe {
+  id: string;
+  enabled: boolean;
+  visible: boolean;
+  window_label?: string;
+}
+
+interface OutputStateProbe {
+  id: string;
+  rendering: boolean;
+  error?: string;
+}
+
+interface RecordingStatusProbe {
+  active: boolean;
+  error?: string | null;
+}
+
+interface StreamingStatusProbe {
+  active: boolean;
+  destinations: Array<{ label: string; active: boolean; error?: string | null }>;
+}
+
+function fulfilled<T>(result: PromiseSettledResult<T>): T | null {
+  return result.status === "fulfilled" ? result.value : null;
+}
+
+function createReadinessCheck(
+  id: string,
+  label: string,
+  status: ReleaseCheck["status"],
+  detail: string,
+): ReleaseCheck {
+  return { id, label, status, detail };
+}
+
+async function runReadinessChecks(systemChecks: SystemChecks | null): Promise<ReleaseReadiness> {
+  if (!isTauri()) {
+    return {
+      checkedAt: Date.now(),
+      checks: [createReadinessCheck("desktop", "Desktop backend", "warn", "Run this gate inside the Wordlyte desktop app.")],
+    };
+  }
+
+  const results = await Promise.allSettled([
+    invoke<StartupStatus>("get_startup_status"),
+    invoke<string[]>("get_bible_versions"),
+    invoke<string[]>("audio_devices"),
+    invoke<AiKeyStatus>("ai_key_status", { provider: "deepgram" }),
+    invoke<AiKeyStatus>("ai_key_status", { provider: "assemblyai" }),
+    invoke<OutputConfigProbe[]>("outputs_list"),
+    invoke<OutputStateProbe[]>("outputs_states"),
+    invoke<RecordingStatusProbe>("recording_status"),
+    invoke<StreamingStatusProbe>("stream_rtmp_status"),
+  ]);
+
+  const startup = fulfilled(results[0]);
+  const versions = fulfilled(results[1]);
+  const audioDevices = fulfilled(results[2]);
+  const deepgram = fulfilled(results[3]);
+  const assembly = fulfilled(results[4]);
+  const outputConfigs = fulfilled(results[5]);
+  const outputStates = fulfilled(results[6]);
+  const recording = fulfilled(results[7]);
+  const streaming = fulfilled(results[8]);
+  const checks: ReleaseCheck[] = [];
+
+  checks.push(startup
+    ? startup.db_ok && startup.issues.length === 0
+      ? createReadinessCheck("storage", "Persistent app storage", "pass", "Database opened successfully with no startup issues.")
+      : createReadinessCheck("storage", "Persistent app storage", "fail", startup.issues.join(" ") || "The Bible database is unavailable.")
+    : createReadinessCheck("storage", "Persistent app storage", "fail", "Could not query startup storage status."));
+
+  checks.push(versions
+    ? versions.length > 0
+      ? createReadinessCheck("bible", "Bible library", "pass", `${versions.length} Bible version${versions.length === 1 ? "" : "s"} available.`)
+      : createReadinessCheck("bible", "Bible library", "fail", "No Bible versions are available. Download or restore the Bible database before service.")
+    : createReadinessCheck("bible", "Bible library", "fail", "Could not query Bible versions."));
+
+  checks.push(audioDevices
+    ? audioDevices.length > 0
+      ? createReadinessCheck("audio", "Audio input", "pass", `${audioDevices.length} DirectShow audio input${audioDevices.length === 1 ? "" : "s"} detected.`)
+      : createReadinessCheck("audio", "Audio input", "warn", "No DirectShow audio input detected. AI Scripture, recording, and stream audio need a selected device.")
+    : createReadinessCheck("audio", "Audio input", "warn", "Could not enumerate audio inputs."));
+
+  const configuredProviders = [deepgram, assembly].filter((status) => status?.configured).map((status) => status?.provider).filter(Boolean);
+  checks.push(configuredProviders.length > 0
+    ? createReadinessCheck("ai-provider", "AI Scripture provider", "pass", `${configuredProviders.join(" and ")} credential${configuredProviders.length === 1 ? "" : "s"} configured in secure storage.`)
+    : createReadinessCheck("ai-provider", "AI Scripture provider", "warn", "No transcription provider credential is configured. AI Scripture will not start until one is added."));
+
+  const outputIds = new Set((outputConfigs ?? []).map((output) => output.id));
+  const outputStateErrors = (outputStates ?? []).filter((state) => state.error).map((state) => `${state.id}: ${state.error}`);
+  const outputConfigured = outputIds.has("output") && outputIds.has("stage");
+  const outputVisible = outputConfigs?.find((output) => output.id === "output")?.visible === true;
+  checks.push(outputConfigured && outputStateErrors.length === 0
+    ? createReadinessCheck("output", "Preview / Program output path", outputVisible ? "pass" : "warn", outputVisible ? "Output and stage surfaces are configured and the output window is open." : "Output and stage surfaces are configured. Open the output window before service.")
+    : createReadinessCheck("output", "Preview / Program output path", "fail", outputStateErrors.join(" ") || "Output or stage surface configuration is missing."));
+
+  const captureReady = systemChecks?.info?.ffmpeg_available && systemChecks.info.windows_graphics_capture_supported;
+  checks.push(captureReady
+    ? createReadinessCheck("capture", "Recording / streaming capture", "pass", `ffmpeg and native capture are ready (${systemChecks.info?.h264_encoder ?? "H.264"}).`)
+    : createReadinessCheck("capture", "Recording / streaming capture", "fail", systemChecks?.info?.windows_graphics_capture_reason || "ffmpeg or native output capture is unavailable."));
+
+  const recordingError = recording?.error;
+  checks.push(recordingError
+    ? createReadinessCheck("recording", "Recording transport", "fail", `Recording reports an error: ${recordingError}`)
+    : createReadinessCheck("recording", "Recording transport", "pass", recording?.active ? "Recording is active and has not reported an error." : "Recording transport is idle and ready."));
+
+  const streamErrors = streaming?.destinations?.filter((destination) => destination.error || (streaming.active && !destination.active)).map((destination) => `${destination.label}: ${destination.error || "inactive"}`) ?? [];
+  checks.push(streamErrors.length > 0
+    ? createReadinessCheck("streaming", "RTMP transport", "fail", streamErrors.join(" "))
+    : createReadinessCheck("streaming", "RTMP transport", "pass", streaming?.active ? "RTMP broadcast is active and destinations report healthy." : "RTMP transport is idle and ready."));
+
+  return { checks, checkedAt: Date.now() };
+}
+
 export function SystemDiagnosticsProvider({ children }: { children: ReactNode }) {
   const [checks, setChecks] = useState<SystemChecks | null>(null);
   const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
+  const [readiness, setReadiness] = useState<ReleaseReadiness | null>(null);
   const [monitorActive, setMonitorActive] = useState(false);
   const [loading, setLoading] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
@@ -148,7 +281,10 @@ export function SystemDiagnosticsProvider({ children }: { children: ReactNode })
     setLastError(null);
     try {
       const result = await runChecks();
-      if (mountedRef.current) setChecks(result);
+      if (mountedRef.current) {
+        setChecks(result);
+        setReadiness(await runReadinessChecks(result));
+      }
     } catch (err) {
       if (mountedRef.current) setLastError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -184,13 +320,14 @@ export function SystemDiagnosticsProvider({ children }: { children: ReactNode })
     () => ({
       checks,
       metrics,
+      readiness,
       monitorActive,
       setMonitorActive,
       loading,
       refresh,
       lastError,
     }),
-    [checks, metrics, monitorActive, loading, refresh, lastError],
+    [checks, metrics, readiness, monitorActive, loading, refresh, lastError],
   );
 
   return <SystemDiagnosticsContext.Provider value={value}>{children}</SystemDiagnosticsContext.Provider>;
