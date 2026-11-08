@@ -58,12 +58,52 @@ fn number_word(word: &str) -> Option<i32> {
     })
 }
 
+/// Some ASR engines spell a numeric reference digit by digit: "one one nine"
+/// rather than "one hundred and nineteen". Keep this deliberately limited to
+/// cardinal digits so ordinary phrases and book ordinals retain their meaning.
+fn spoken_digit(word: &str) -> Option<i32> {
+    match word {
+        "zero" => Some(0),
+        "one" => Some(1),
+        "two" => Some(2),
+        "three" => Some(3),
+        "four" => Some(4),
+        "five" => Some(5),
+        "six" => Some(6),
+        "seven" => Some(7),
+        "eight" => Some(8),
+        "nine" => Some(9),
+        _ => word
+            .parse::<i32>()
+            .ok()
+            .filter(|number| (0..=9).contains(number)),
+    }
+}
+
+fn parse_spoken_digit_sequence(tokens: &[String], start: usize) -> Option<(i32, usize)> {
+    let mut index = start;
+    let mut value = 0;
+    let mut digits = 0;
+    while digits < 3 {
+        let Some(digit) = tokens.get(index).and_then(|token| spoken_digit(token)) else {
+            break;
+        };
+        value = value * 10 + digit;
+        digits += 1;
+        index += 1;
+    }
+    (digits >= 2).then_some((value, index))
+}
+
 pub(crate) fn parse_number(tokens: &[String], start: usize) -> Option<(i32, usize)> {
     if start >= tokens.len() {
         return None;
     }
     if let Ok(number) = tokens[start].parse::<i32>() {
         return Some((number, start + 1));
+    }
+    if let Some(number) = parse_spoken_digit_sequence(tokens, start) {
+        return Some(number);
     }
     let mut index = start;
     let mut value = 0;
@@ -97,6 +137,29 @@ pub(crate) fn parse_number(tokens: &[String], start: usize) -> Option<(i32, usiz
         }
     }
     consumed.then_some((value, index))
+}
+
+/// Compact references omit the `verse` marker ("John three sixteen"). When
+/// the marker exists, use the explicit parser instead: it handles digit-by-
+/// digit ASR numbers such as "Psalm one one nine verse one one one".
+fn has_explicit_verse_marker(tokens: &[String], start: usize) -> bool {
+    let mut index = start;
+    let mut consumed_number = false;
+    while index < tokens.len() && index < start + 8 {
+        match tokens[index].as_str() {
+            "verse" | "verses" => return consumed_number,
+            "hundred" | "and" => {
+                consumed_number = true;
+                index += 1;
+            }
+            token if token.parse::<i32>().is_ok() || number_word(token).is_some() => {
+                consumed_number = true;
+                index += 1;
+            }
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// Parse the chapter token in a compact spoken reference. A spoken tens value
@@ -162,7 +225,9 @@ pub fn detect_references(text: &str, books: &[String]) -> Vec<ScriptureReference
                 continue;
             }
             let mut index = start + alias.len();
-            if tokens.get(index).is_some_and(|token| token != "chapter") {
+            if tokens.get(index).is_some_and(|token| token != "chapter")
+                && !has_explicit_verse_marker(&tokens, index)
+            {
                 if let Some((chapter, compound_verse_required)) = tokens
                     .get(index)
                     .and_then(|token| parse_compact_chapter(token))
@@ -608,6 +673,29 @@ mod tests {
                 verse: 105,
                 verse_end: None,
             })
+        );
+        assert_eq!(
+            detect_references("Psalm one one nine verse one one one", &books()),
+            vec![ScriptureReference {
+                book: "Psalms".into(),
+                chapter: 119,
+                verse: 111,
+                verse_end: None,
+            }],
+            "digit-by-digit ASR references must not become a Psalm 1 range"
+        );
+        assert_eq!(
+            detect_reference(
+                "Psalm one one nine verses one one one and one one two",
+                &books()
+            ),
+            Some(ScriptureReference {
+                book: "Psalms".into(),
+                chapter: 119,
+                verse: 111,
+                verse_end: Some(112),
+            }),
+            "digit-by-digit ASR ranges must retain their end verse"
         );
         assert_eq!(
             detect_reference(
