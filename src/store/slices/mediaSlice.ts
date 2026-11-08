@@ -24,8 +24,8 @@ export interface MediaSlice {
       tagsToRemove: string[],
           category: string | undefined
         ) => Promise<void>;
-        mediaFilter: "image" | "video" | "audio" | "camera";
-        setMediaFilter: (v: "image" | "video" | "audio" | "camera") => void;
+        mediaFilter: "all" | "image" | "video" | "audio" | "camera";
+        setMediaFilter: (v: "all" | "image" | "video" | "audio" | "camera") => void;
         showLogoPicker: boolean;
 
   setShowLogoPicker: (v: boolean) => void;
@@ -123,7 +123,7 @@ export const createMediaSlice: StateCreator<AppStore, [], [], MediaSlice> = (set
       console.error("Failed to bulk update media:", error);
     }
   },
-  mediaFilter: "image",
+  mediaFilter: "all",
   setMediaFilter: (v) => set({ mediaFilter: v }),
   showLogoPicker: false,
   setShowLogoPicker: (v) => set({ showLogoPicker: v }),

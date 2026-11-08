@@ -1,7 +1,7 @@
 import React from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Upload, Trash2, Tag, BookOpen, X, Camera, Search, RotateCcw, Repeat, Volume2, Eye } from "lucide-react";
+import { Upload, Trash2, Tag, BookOpen, X, Camera, Search, RotateCcw, LibraryBig, ListPlus, Radio, Send } from "lucide-react";
 import { useAppStore } from "../store";
 import type { DisplayItem, MediaFitMode, MediaItem } from "../types";
 import { EditMediaModal } from "./EditMediaModal";
@@ -9,6 +9,7 @@ import { CameraTab } from "./CameraTab";
 import { MediaThumb, MediaTypeIcon, formatDuration } from "./MediaThumb";
 import { DeleteMediaModal } from "./DeleteMediaModal";
 import { ContentCard, Button, ConfirmModal } from "./ui";
+import { MediaDetailPanel } from "./MediaDetailPanel";
 
 interface MediaTabProps {
   onStage: (item: DisplayItem) => void;
@@ -20,13 +21,7 @@ interface MediaTabProps {
   onSetAsBackgroundLogo: (path: string) => void;
 }
 
-const FIT_OPTIONS: { mode: MediaFitMode; label: string; title: string }[] = [
-  { mode: "contain", label: "FIT",    title: "Fit — show entire image, letterbox if needed" },
-  { mode: "cover",   label: "CROP",   title: "Crop — fill frame, clip edges to maintain ratio" },
-  { mode: "fill",    label: "STRETCH",title: "Stretch — fill frame, ignore aspect ratio" },
-];
-
-type MediaFilter = "image" | "video" | "audio" | "camera";
+type MediaFilter = "all" | "image" | "video" | "audio" | "camera";
 type SortKey = "name" | "newest" | "type" | "duration";
 
 export function MediaTab({
@@ -40,6 +35,7 @@ export function MediaTab({
 }: MediaTabProps) {
   const [showEditModal, setShowEditModal] = React.useState(false);
   const [selectedMediaItem, setSelectedMediaItem] = React.useState<MediaItem | null>(null);
+  const [inspectedMediaId, setInspectedMediaId] = React.useState<string | null>(null);
   const [deleteItem, setDeleteItem] = React.useState<MediaItem | null>(null);
   const [bulkDeleteOpen, setBulkDeleteOpen] = React.useState(false);
   const [bulkRefsUsed, setBulkRefsUsed] = React.useState(false);
@@ -151,6 +147,7 @@ export function MediaTab({
   }
 
   const applyFilter = (f: MediaFilter) => (m: MediaItem) => {
+    if (f === "all") return true;
     if (f === "image") return m.media_type === "Image";
     if (f === "video") return m.media_type === "Video";
     if (f === "audio") return m.media_type === "Audio";
@@ -178,35 +175,30 @@ export function MediaTab({
       default: return copy.sort((a, b) => a.name.localeCompare(b.name));
     }
   }, [media, mediaFilter, search, sortKey]);
+  const inspectedMedia = media.find((item) => item.id === inspectedMediaId) ?? null;
 
   const FILTER_TABS: { f: MediaFilter; label: string }[] = [
+    { f: "all", label: `All (${media.length})` },
     { f: "image", label: `Images (${media.filter((m) => m.media_type === "Image").length})` },
     { f: "video", label: `Videos (${media.filter((m) => m.media_type === "Video").length})` },
     { f: "audio", label: `Audio (${media.filter((m) => m.media_type === "Audio").length})` },
     { f: "camera", label: "Camera" },
   ];
 
-  const isAudio = mediaFilter === "audio";
-
   return (
     <div className="flex flex-col gap-3">
-      {/* Header + upload */}
-      <div className="flex justify-between items-center">
-        <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Media Library</h2>
-        {mediaFilter !== "camera" && (
-          <button onClick={onLoadMedia} className="text-[10px] bg-amber-500 hover:bg-amber-600 text-black font-bold px-3 py-1.5 rounded transition-all flex items-center gap-1.5">
-            <Upload size={11} /> UPLOAD
-          </button>
-        )}
-      </div>
-
-      {/* Filter tabs */}
-      <div className="flex gap-0.5 bg-slate-900/60 rounded-lg p-0.5 border border-slate-800">
+      <section className="flex flex-wrap items-center gap-2 rounded-xl border border-console-border bg-console-surface/80 px-3 py-2.5 shadow-lg shadow-black/10">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-tool-design/12 text-tool-design"><LibraryBig size={15} /></span>
+          <div className="min-w-0"><h1 className="truncate text-sm font-black text-console-text">Media library</h1><p className="text-[9px] font-medium text-console-text-subtle">{media.length} items · images, video, and audio</p></div>
+        </div>
+        <div className="ml-auto flex flex-wrap items-center gap-1.5">
+          <div className="flex gap-0.5 rounded-lg border border-console-border bg-console-canvas/70 p-0.5">
         {FILTER_TABS.map(({ f, label }) => (
           <button
             key={f}
             onClick={() => setMediaFilter(f)}
-            className={`flex-1 py-1.5 rounded text-[9px] font-bold uppercase tracking-wide transition-all flex items-center justify-center gap-1.5 ${
+            className={`h-7 px-2 rounded text-[8px] font-bold uppercase tracking-wide transition-all flex items-center justify-center gap-1 ${
               mediaFilter === f
                 ? "bg-amber-500 text-black shadow"
                 : "text-slate-500 hover:text-slate-300"
@@ -215,7 +207,10 @@ export function MediaTab({
             {f === "camera" ? <><Camera size={10} /> Camera</> : label}
           </button>
         ))}
-      </div>
+          </div>
+          {mediaFilter !== "camera" && <Button size="sm" onClick={onLoadMedia}><Upload size={12} /> Upload</Button>}
+        </div>
+      </section>
 
       {/* Search + sort (image/video/audio views) */}
       {mediaFilter !== "camera" && (
@@ -251,69 +246,20 @@ export function MediaTab({
 
       {/* Bulk action bar */}
       {selectedMediaItems.length > 0 && mediaFilter !== "camera" && (
-        <div className="flex flex-col gap-2 p-2 bg-slate-800/50 border border-slate-700 rounded-lg">
-          <p className="text-xs text-slate-400 font-bold">Selected: {selectedMediaItems.length} items</p>
-          <div className="flex gap-2">
-            <button
-              onClick={handleDeleteSelected}
-              className="flex-1 bg-red-900/50 hover:bg-red-800 text-red-300 text-[9px] font-bold py-2 rounded transition-all flex items-center justify-center gap-1"
-            >
-              <Trash2 size={11} /> DELETE SELECTED
-            </button>
-            <button
-              onClick={() => setSelectedMediaItems([])}
-              className="flex-1 bg-slate-700 hover:bg-slate-600 text-slate-300 text-[9px] font-bold py-2 rounded transition-all flex items-center justify-center gap-1"
-            >
-              <X size={11} /> CLEAR SELECTION
-            </button>
+        <details className="rounded-xl border border-console-border bg-console-surface/75">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-[10px] font-bold text-console-text-muted"><span className="flex h-5 min-w-5 items-center justify-center rounded bg-action-primary/15 px-1 text-[9px] font-black text-action-primary">{selectedMediaItems.length}</span><span className="flex-1">Selected media</span><span className="text-[8px] uppercase tracking-wide text-console-text-subtle">Manage</span></summary>
+          <div className="flex flex-wrap items-center gap-2 border-t border-console-border p-2">
+            <button onClick={handleDeleteSelected} className="flex h-7 items-center gap-1 rounded bg-state-live-soft px-2 text-[9px] font-bold text-state-live hover:bg-state-live hover:text-white"><Trash2 size={11} /> Delete</button>
+            <button onClick={() => setSelectedMediaItems([])} className="flex h-7 items-center gap-1 rounded bg-console-surface-raised px-2 text-[9px] font-bold text-console-text-muted hover:text-console-text"><X size={11} /> Clear</button>
+            <span className="hidden h-5 w-px bg-console-border sm:block" />
+            <input type="text" placeholder="Tags, comma-separated" value={bulkTagInput} onChange={(e) => setBulkTagInput(e.target.value)} className="h-7 min-w-40 flex-1 rounded bg-console-canvas px-2 text-[9px] text-console-text outline-none placeholder:text-console-text-subtle" />
+            <button onClick={handleAddBulkTags} className="flex h-7 items-center gap-1 rounded bg-tool-design/15 px-2 text-[9px] font-bold text-tool-design"><Tag size={11} /> Add tags</button>
+            <button onClick={handleRemoveBulkTags} className="flex h-7 items-center gap-1 rounded bg-console-surface-raised px-2 text-[9px] font-bold text-console-text-muted"><X size={11} /> Remove</button>
+            <input type="text" placeholder="Category" value={bulkCategoryInput} onChange={(e) => setBulkCategoryInput(e.target.value)} className="h-7 w-28 rounded bg-console-canvas px-2 text-[9px] text-console-text outline-none placeholder:text-console-text-subtle" />
+            <button onClick={handleSetBulkCategory} className="flex h-7 items-center gap-1 rounded bg-tool-design/15 px-2 text-[9px] font-bold text-tool-design"><BookOpen size={11} /> Set</button>
+            <button onClick={handleClearBulkCategory} className="flex h-7 items-center gap-1 rounded bg-console-surface-raised px-2 text-[9px] font-bold text-console-text-muted" title="Clear category"><X size={11} /></button>
           </div>
-          <div className="flex gap-2 items-center">
-            <input
-              type="text"
-              placeholder="Tags (comma-separated)"
-              value={bulkTagInput}
-              onChange={(e) => setBulkTagInput(e.target.value)}
-              className="flex-1 rounded-md bg-slate-700 border-transparent text-white focus:border-amber-500 focus:ring-amber-500 text-sm h-8"
-            />
-            <button
-              onClick={handleAddBulkTags}
-              className="bg-blue-900/50 hover:bg-blue-700 text-blue-300 text-[9px] font-bold px-3 py-1.5 rounded transition-all flex items-center gap-1"
-              title="Add tags to selected"
-            >
-              <Tag size={11} /> ADD
-            </button>
-            <button
-              onClick={handleRemoveBulkTags}
-              className="bg-purple-900/50 hover:bg-purple-700 text-purple-300 text-[9px] font-bold px-3 py-1.5 rounded transition-all flex items-center gap-1"
-              title="Remove tags from selected"
-            >
-              <X size={11} /> REMOVE
-            </button>
-          </div>
-          <div className="flex gap-2 items-center">
-            <input
-              type="text"
-              placeholder="Set category"
-              value={bulkCategoryInput}
-              onChange={(e) => setBulkCategoryInput(e.target.value)}
-              className="flex-1 rounded-md bg-slate-700 border-transparent text-white focus:border-amber-500 focus:ring-amber-500 text-sm h-8"
-            />
-            <button
-              onClick={handleSetBulkCategory}
-              className="bg-green-900/50 hover:bg-green-700 text-green-300 text-[9px] font-bold px-3 py-1.5 rounded transition-all flex items-center gap-1"
-              title="Set category for selected"
-            >
-              <BookOpen size={11} /> SET
-            </button>
-            <button
-              onClick={handleClearBulkCategory}
-              className="bg-orange-900/50 hover:bg-orange-700 text-orange-300 text-[9px] font-bold px-3 py-1.5 rounded transition-all flex items-center gap-1"
-              title="Clear category for selected"
-            >
-              <X size={11} /> CLEAR
-            </button>
-          </div>
-        </div>
+        </details>
       )}
 
       {/* Grid (image / video / audio views) */}
@@ -323,128 +269,40 @@ export function MediaTab({
             {search ? "No media matches your search." : "No items here yet. Click + UPLOAD to add."}
           </p>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
-            {sorted.map((item) => {
-              const missing = missingIds.has(item.id);
-              return (
-                <ContentCard
-                  key={item.id}
-                  selected={selectedMediaItems.includes(item.id)}
-                  missing={missing}
-                >
-                  {/* Checkbox overlay */}
-                  <input
-                    type="checkbox"
-                    className="absolute top-2 left-2 z-20 w-4 h-4 text-action-primary bg-console-surface-raised border-console-border rounded focus:ring-action-primary focus:ring-2 cursor-pointer"
-                    checked={selectedMediaItems.includes(item.id)}
-                    onChange={() => handleToggleSelect(item.id)}
-                  />
-                  {/* Type badge */}
-                  {!missing && (
-                    <span className="absolute top-2 right-2 z-20 px-1.5 py-0.5 rounded-md bg-black/50 backdrop-blur-sm text-console-text text-[8px] font-black uppercase tracking-wide flex items-center gap-1">
-                      <MediaTypeIcon item={item} />
-                      {item.media_type}
-                    </span>
-                  )}
-                  <div className="aspect-video overflow-hidden bg-console-canvas shrink-0 relative">
-                    <MediaThumb item={item} className="w-full h-full transition-transform duration-300 group-hover:scale-105" dimmed={missing} />
-                    {/* Permanent quick actions */}
-                    {!missing && (
-                      <div className="absolute inset-x-0 bottom-0 z-10 flex items-center justify-center gap-1.5 p-2 bg-gradient-to-t from-black/70 to-transparent">
-                        <Button variant="ghost" size="sm" onClick={() => onStage({ type: "Media", data: item })}>Stage</Button>
-                        <Button variant="primary" size="sm" icon={<Eye size={11} />} onClick={() => onLive({ type: "Media", data: item })}>Live</Button>
-                        <Button variant="bare" size="sm" onClick={() => onAddToSchedule({ type: "Media", data: item })}>Service</Button>
-                      </div>
-                    )}
-                    {missing && (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-state-live-soft/30">
-                        <X className="text-state-error" size={24} />
-                        <span className="text-[8px] font-black text-state-error uppercase tracking-tighter bg-black/60 px-1 rounded">FILE MISSING</span>
-                      </div>
-                    )}
-                  </div>
-                  <div className="px-2.5 py-2 flex flex-col gap-1.5 flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-[10px] font-bold text-console-text truncate flex-1" title={item.name}>
-                        {item.name}
-                      </p>
-                      {item.duration != null && !missing && (
-                        <span className="text-[8px] text-console-text-subtle font-mono shrink-0">{formatDuration(item.duration)}</span>
-                      )}
+          <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <section className="min-w-0 rounded-2xl border border-console-border bg-console-surface/55 p-3">
+              <div className="mb-3 flex items-center justify-between gap-3 px-1"><div><p className="text-[9px] font-black uppercase tracking-[0.16em] text-console-text-muted">{mediaFilter === "all" ? "All media" : `${mediaFilter}s`}</p><p className="mt-0.5 text-[10px] text-console-text-subtle">{sorted.length} {sorted.length === 1 ? "item" : "items"} · Select one to inspect</p></div></div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+                {sorted.map((item) => {
+                  const missing = missingIds.has(item.id);
+                  const display = { type: "Media" as const, data: item };
+                  return <ContentCard key={item.id} selected={inspectedMediaId === item.id || selectedMediaItems.includes(item.id)} missing={missing} className="group overflow-hidden">
+                    <input type="checkbox" className="absolute left-2 top-2 z-20 h-4 w-4 cursor-pointer rounded border-console-border bg-console-surface-raised text-action-primary focus:ring-2 focus:ring-action-primary" checked={selectedMediaItems.includes(item.id)} onChange={() => handleToggleSelect(item.id)} aria-label={`Select ${item.name}`} />
+                    <button type="button" onClick={() => setInspectedMediaId(item.id)} className="relative block aspect-video w-full overflow-hidden bg-console-canvas text-left focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-action-primary" aria-label={`Inspect ${item.name}`}><MediaThumb item={item} className="h-full w-full transition-transform duration-300 group-hover:scale-105" dimmed={missing} />{!missing && <span className="absolute right-2 top-2 flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-console-text backdrop-blur-sm"><MediaTypeIcon item={item} />{item.media_type}</span>}{missing && <span className="absolute inset-0 flex items-center justify-center bg-state-live-soft/40 text-[9px] font-black text-state-error">FILE MISSING</span>}</button>
+                    <div className="flex min-w-0 flex-col gap-1.5 p-2">
+                      <div className="flex items-center gap-2"><button type="button" onClick={() => setInspectedMediaId(item.id)} className="min-w-0 flex-1 truncate text-left text-[10px] font-bold text-console-text">{item.name}</button>{item.duration != null && !missing && <span className="shrink-0 font-mono text-[8px] text-console-text-subtle">{formatDuration(item.duration)}</span>}</div>
+                      <p className="truncate text-[8px] text-console-text-subtle">{item.category || item.tags.slice(0, 2).join(" · ") || "No category or tags"}</p>
+                      {missing ? <button type="button" onClick={() => handleRelink(item)} className="flex h-6 items-center justify-center gap-1 rounded bg-state-live-soft text-[8px] font-black text-state-live"><RotateCcw size={10} /> RELINK</button> : <div className="flex h-7 items-center gap-1 border-t border-console-border pt-1"><button type="button" onClick={() => onStage(display)} className="flex h-5 flex-1 items-center justify-center gap-1 rounded bg-state-stage px-1 text-[7px] font-black text-slate-950"><Send size={8} /> STAGE</button><button type="button" onClick={() => onLive(display)} className="flex h-5 flex-1 items-center justify-center gap-1 rounded bg-action-primary px-1 text-[7px] font-black text-black"><Radio size={8} /> LIVE</button><button type="button" onClick={() => onAddToSchedule(display)} className="flex h-5 w-5 items-center justify-center rounded bg-console-surface-raised text-console-text-muted" title="Add to service plan" aria-label={`Add ${item.name} to service plan`}><ListPlus size={9} /></button></div>}
                     </div>
-                    {/* Metadata chips */}
-                    <div className="flex flex-wrap gap-1 min-h-0">
-                      {item.category && (
-                        <span className="px-1.5 py-0.5 rounded bg-tool-design/10 text-tool-design text-[7px] font-bold truncate max-w-full">{item.category}</span>
-                      )}
-                      {item.tags && item.tags.length > 0 && (
-                        <span className="px-1.5 py-0.5 rounded bg-tool-audio/10 text-tool-audio text-[7px] font-bold truncate max-w-full">{item.tags.slice(0, 2).join(', ')}{item.tags.length > 2 ? "+" : ""}</span>
-                      )}
-                    </div>
-
-                    {/* Fit mode selector (image/video) */}
-                    {!isAudio && (
-                      <div className="flex gap-0.5">
-                        {FIT_OPTIONS.map(({ mode, label, title }) => (
-                          <button
-                            key={mode}
-                            onClick={() => handleSetFit(item.id, mode)}
-                            title={title}
-                            className={`flex-1 text-[7px] font-bold py-1 rounded transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${
-                              (item.fit_mode ?? "contain") === mode
-                                ? "bg-tool-design text-white"
-                                : "bg-console-surface-strong text-console-text-muted hover:text-console-text"
-                            }`}
-                          >{label}</button>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Playback config (video/audio): loop + rate + volume */}
-                    {!missing && (item.media_type === "Video" || item.media_type === "Audio") && (
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => setMediaPlayback(item.id, !(item.loop_playback ?? true), item.playback_rate ?? 1, item.volume ?? 1)}
-                          title={item.loop_playback ?? true ? "Loop enabled — click to play once" : "Play once — click to loop"}
-                          className={`flex items-center gap-0.5 text-[7px] font-bold px-1.5 py-0.5 rounded transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${item.loop_playback ?? true ? "bg-action-primary/20 text-action-primary" : "bg-console-surface-strong text-console-text-muted"}`}
-                        >
-                          <Repeat size={8} /> {item.loop_playback ?? true ? "LOOP" : "ONCE"}
-                        </button>
-                        <select
-                          value={item.playback_rate ?? 1}
-                          onChange={(e) => setMediaPlayback(item.id, item.loop_playback ?? true, parseFloat(e.target.value), item.volume ?? 1)}
-                          className="bg-console-surface-strong text-[8px] text-console-text-muted rounded px-1 py-0.5 outline-none"
-                          title="Playback speed"
-                        >
-                          {[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => <option key={r} value={r}>{r}×</option>)}
-                        </select>
-                        <button
-                          onClick={() => setMediaPlayback(item.id, item.loop_playback ?? true, item.playback_rate ?? 1, (item.volume ?? 1) > 0 ? 0 : 1)}
-                          title={item.volume ?? 1 > 0 ? "Mute (persisted)" : "Unmute"}
-                          className="flex items-center gap-0.5 text-[7px] font-bold px-1.5 py-0.5 rounded transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] bg-console-surface-strong text-console-text-muted"
-                        >
-                          <Volume2 size={8} /> {(item.volume ?? 1) > 0 ? "MUTE" : "UNMUTE"}
-                        </button>
-                      </div>
-                    )}
-
-                    {/* Bottom action row */}
-                    {missing ? (
-                      <button onClick={() => handleRelink(item)} className="w-full bg-state-live hover:bg-state-live/90 text-white text-[7px] font-black py-1.5 rounded-lg transition-all flex items-center justify-center gap-1 focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]">
-                        <RotateCcw size={10} /> RELINK MISSING FILE
-                      </button>
-                    ) : (
-                      <div className="grid grid-cols-4 gap-1 border-t border-console-border pt-1.5 mt-auto">
-                        <button onClick={() => { setSelectedMediaItem(item); setShowEditModal(true); }} className="bg-tool-design/25 hover:bg-tool-design text-tool-design text-[7px] font-bold py-1.5 rounded-lg transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]" title="Edit Metadata">EDIT</button>
-                        <button onClick={() => onSetAsBackgroundLogo(item.path)} className="bg-tool-design/25 hover:bg-tool-design text-tool-design text-[7px] font-bold py-1.5 rounded-lg transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]" title="Set as Background Logo">BG LOGO</button>
-                        <button onClick={() => onSetAsLogo(item.path)} className="bg-tool-audio/25 hover:bg-tool-audio text-tool-audio text-[7px] font-bold py-1.5 rounded-lg transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]" title="Set as Corner Logo">CORNER</button>
-                        <button onClick={() => handleDeleteOne(item)} className="bg-state-live/25 hover:bg-state-live text-state-live text-[7px] font-bold py-1.5 rounded-lg transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]" title="Delete">DEL</button>
-                      </div>
-                    )}
-                  </div>
-                </ContentCard>
-              );
-            })}
+                  </ContentCard>;
+                })}
+              </div>
+            </section>
+            <MediaDetailPanel
+              item={inspectedMedia}
+              missing={inspectedMedia ? missingIds.has(inspectedMedia.id) : false}
+              onClose={() => setInspectedMediaId(null)}
+              onStage={onStage}
+              onLive={onLive}
+              onAddToSchedule={onAddToSchedule}
+              onEdit={() => { if (inspectedMedia) { setSelectedMediaItem(inspectedMedia); setShowEditModal(true); } }}
+              onDelete={() => { if (inspectedMedia) handleDeleteOne(inspectedMedia); }}
+              onRelink={() => { if (inspectedMedia) void handleRelink(inspectedMedia); }}
+              onSetFit={(fitMode) => { if (inspectedMedia) void handleSetFit(inspectedMedia.id, fitMode); }}
+              onSetPlayback={(loop, rate, volume) => { if (inspectedMedia) void setMediaPlayback(inspectedMedia.id, loop, rate, volume); }}
+              onSetAsLogo={() => { if (inspectedMedia) onSetAsLogo(inspectedMedia.path); }}
+              onSetAsBackgroundLogo={() => { if (inspectedMedia) onSetAsBackgroundLogo(inspectedMedia.path); }}
+            />
           </div>
         )
       )}
