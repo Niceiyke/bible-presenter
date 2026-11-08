@@ -100,7 +100,6 @@
     ],
     "resources": {
       "bible_data/hymns.json": "bible_data/hymns.json",
-      "bible_data/bible-semantic-bge-v1.index": "bible_data/bible-semantic-bge-v1.index",
       "../dist": "dist",
       "binaries/ffmpeg.exe": "bin/ffmpeg.exe",
       "binaries/ffprobe.exe": "bin/ffprobe.exe"

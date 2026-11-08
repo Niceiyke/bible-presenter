@@ -1,3 +1,4 @@
+use crate::scripture_catalog::aliases_for_books;
 use std::collections::{BTreeMap, HashMap};
 
 pub(crate) const MIN_DIRECT_QUOTE_WORDS: usize = 5;
@@ -21,66 +22,6 @@ fn tokenize(text: &str) -> Vec<String> {
         .filter(|word| !word.is_empty())
         .map(ToString::to_string)
         .collect()
-}
-
-fn book_aliases(books: &[String]) -> Vec<(Vec<String>, String)> {
-    let mut aliases = Vec::new();
-    for book in books {
-        let lower = book.to_lowercase();
-        aliases.push((tokenize(&lower), book.clone()));
-        if let Some(rest) = lower.strip_prefix("1 ") {
-            for prefix in ["first", "one"] {
-                aliases.push((tokenize(&format!("{prefix} {rest}")), book.clone()));
-                if rest == "kings" {
-                    // Deepgram occasionally drops the plural ending from the
-                    // numbered Kings books (for example, "First King 3:5").
-                    aliases.push((tokenize(&format!("{prefix} king")), book.clone()));
-                }
-            }
-        } else if let Some(rest) = lower.strip_prefix("2 ") {
-            for prefix in ["second", "two"] {
-                aliases.push((tokenize(&format!("{prefix} {rest}")), book.clone()));
-                if rest == "kings" {
-                    aliases.push((tokenize(&format!("{prefix} king")), book.clone()));
-                }
-            }
-        } else if let Some(rest) = lower.strip_prefix("3 ") {
-            for prefix in ["third", "three"] {
-                aliases.push((tokenize(&format!("{prefix} {rest}")), book.clone()));
-            }
-        }
-        let singular_alias = match lower.as_str() {
-            "psalms" => Some("psalm"),
-            "numbers" => Some("number"),
-            "judges" => Some("judge"),
-            "acts" => Some("act"),
-            "romans" => Some("roman"),
-            "hebrews" => Some("hebrew"),
-            _ => None,
-        };
-        if let Some(alias) = singular_alias {
-            aliases.push((vec![alias.into()], book.clone()));
-        }
-        if lower == "song of solomon" {
-            aliases.push((tokenize("song of songs"), book.clone()));
-        }
-        // Keep these aliases deliberately narrow. They cover recurring ASR
-        // spellings of book names without turning ordinary sermon language
-        // into a Bible reference.
-        for alias in match lower.as_str() {
-            "esther" => &["ester"][..],
-            "revelation" => &["revelations"][..],
-            "philemon" => &["filemon"][..],
-            "zechariah" => &["zachariah"][..],
-            "zephaniah" => &["zephania"][..],
-            "habakkuk" => &["habakuk"][..],
-            _ => &[][..],
-        } {
-            aliases.push((tokenize(alias), book.clone()));
-        }
-    }
-    aliases.sort_by_key(|(tokens, _)| std::cmp::Reverse(tokens.len()));
-    aliases
 }
 
 fn number_word(word: &str) -> Option<i32> {
@@ -206,7 +147,7 @@ fn parse_compact_verse(tokens: &[String], start: usize) -> Option<(i32, usize, O
 /// the operator's Preview queue rather than silently dropping all but the last.
 pub fn detect_references(text: &str, books: &[String]) -> Vec<ScriptureReference> {
     let tokens = tokenize(text);
-    let aliases = book_aliases(books);
+    let aliases = aliases_for_books(books);
     // Rank by the end of the matched book name, not its start. Numbered books
     // can contain another canonical book as a suffix ("First John" contains
     // "John"). Both aliases end at the same token, so prefer the longer alias.

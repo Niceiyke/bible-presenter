@@ -34,7 +34,11 @@ export function AiScriptureTab({ onStage, onLive }: { onStage: (item: DisplayIte
     }
   };
 
-  const referenceOf = (suggestion: ScriptureSuggestion) => `${suggestion.verse.book} ${suggestion.verse.chapter}:${suggestion.verse.verse}`;
+  const referenceOf = (suggestion: ScriptureSuggestion) => {
+    const start = suggestion.passageStart ?? suggestion.verse.verse;
+    const end = suggestion.passageEnd ?? start;
+    return `${suggestion.verse.book} ${suggestion.verse.chapter}:${start}${end > start ? `–${end}` : ""}`;
+  };
   const stageSuggestion = async (suggestion: ScriptureSuggestion) => {
     try {
       const staged = await onStage({ type: "Verse", data: suggestion.verse });

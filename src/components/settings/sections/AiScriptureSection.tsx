@@ -261,9 +261,9 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
           )}
         </div>
         {semanticStatus.state === "preparing" && semanticStatus.total > 0 && <div className="h-1.5 overflow-hidden rounded-full bg-console-surface-strong"><div className="h-full bg-action-primary" style={{ width: `${Math.min(100, (semanticStatus.indexed / semanticStatus.total) * 100)}%` }} /></div>}
-        <p className="text-[10px] text-console-text-subtle">Downloads the pinned local embedding model and loads Wordlyte's verified Bible meaning index. Theme suggestions remain manual unless explicitly selected under Auto Live above.</p>
+        <p className="text-[10px] text-console-text-subtle">Downloads the pinned local embedding model and builds a local KJV verse-and-passage index. Your selected translation is resolved only when a suggestion is shown. Theme suggestions remain manual unless explicitly selected under Auto Live above.</p>
         <div className="flex flex-wrap items-center justify-between gap-2 text-[9px] text-console-text-subtle">
-          <span>{semanticStatus.model} · {formatBytes(semanticStatus.diskBytes)} local storage{semanticStatus.verified ? " · integrity verified" : ""}</span>
+          <span>{semanticStatus.model} · {formatBytes(semanticStatus.diskBytes)} local storage{semanticStatus.verified ? " · model verified" : ""}</span>
           {semanticStatus.diskBytes > 0 && semanticStatus.state !== "preparing" && <button onClick={() => void removeModel()} disabled={active || removingModel} className="text-console-text-muted font-bold disabled:opacity-40">{removingModel ? "Removing…" : "Remove model"}</button>}
         </div>
       </section>

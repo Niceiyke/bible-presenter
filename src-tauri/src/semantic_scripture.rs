@@ -9,18 +9,15 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
-use std::io::{BufReader, Read};
-#[cfg(test)]
-use std::io::{BufWriter, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
-const INDEX_MAGIC: &[u8; 8] = b"WLYSEM02";
+const INDEX_MAGIC: &[u8; 8] = b"WLYSEM03";
 const INDEX_FILE: &str = "bible-semantic-bge-v1.index";
-const INDEX_SHA256: &str = "a541018334369d5a41212e4bbccc8738dad472f64345d8c95e6bc7e0a22db4ec";
 const READY_MARKER: &str = "prepared-v1";
 const MODEL_ID: &str = "BAAI/bge-small-en-v1.5-quantized";
 const MODEL_REPOSITORY: &str = "Xenova/bge-small-en-v1.5";
@@ -117,6 +114,12 @@ struct IndexEntry {
     book: String,
     chapter: i32,
     verse: i32,
+    verse_end: i32,
+}
+
+struct SemanticDocument {
+    entry: IndexEntry,
+    text: String,
 }
 
 struct SemanticIndex {
@@ -162,7 +165,9 @@ impl SemanticIndex {
                 .filter(|neighbor| *neighbor < self.entries.len())
             {
                 let neighbor = &self.entries[neighbor_index];
-                if neighbor.book == entry.book
+                if entry.verse == entry.verse_end
+                    && neighbor.verse == neighbor.verse_end
+                    && neighbor.book == entry.book
                     && neighbor.chapter == entry.chapter
                     && (neighbor.verse - entry.verse).abs() == 1
                 {
@@ -257,25 +262,21 @@ impl SemanticScripture {
         let _ = app.emit("ai-semantic-status", status);
     }
 
-    fn prepare(
-        &self,
-        app: &AppHandle,
-        bible: &BibleStore,
-        bundled_index: &Path,
-    ) -> Result<(), String> {
+    fn prepare(&self, app: &AppHandle, bible: &BibleStore) -> Result<(), String> {
         self.update_status(
             app,
             "preparing",
-            "Reading installed English Bible translations…",
+            "Reading the canonical KJV semantic corpus…",
             0,
             0,
         );
         let corpus = bible.semantic_corpus().map_err(|error| error.to_string())?;
         if corpus.is_empty() {
-            return Err("No installed English Bible translations are available.".into());
+            return Err("The canonical KJV Bible corpus is not installed.".into());
         }
         let fingerprint = corpus_fingerprint(&corpus);
-        let total = corpus.len();
+        let documents = semantic_documents(&corpus);
+        let total = documents.len();
 
         fs::create_dir_all(&self.root).map_err(|error| error.to_string())?;
         self.update_status(
@@ -317,22 +318,37 @@ impl SemanticScripture {
         self.update_status(
             app,
             "preparing",
-            "Loading the compact local Bible meaning index…",
+            "Checking the local Bible meaning index…",
             0,
             total,
         );
         let local_index = self.root.join(INDEX_FILE);
-        let index = [local_index.as_path(), bundled_index]
-            .into_iter()
-            .find_map(|path| load_verified_index(path).ok())
-            .filter(|index| {
-                index.fingerprint == fingerprint
+        let index = match load_index(&local_index) {
+            Ok(index)
+                if index.fingerprint == fingerprint
                     && index.dimension == EMBEDDING_DIMENSION
-                    && index.entries.len() == total
-            })
-            .ok_or_else(|| {
-                "The bundled paraphrase index does not match the installed Bible data. Update Wordlyte or reinstall the supported Bible asset.".to_string()
-            })?;
+                    && index.entries.len() == total =>
+            {
+                index
+            }
+            _ => {
+                let index = build_index(&mut model, &documents, fingerprint, |indexed| {
+                    if self.cancel_requested.load(Ordering::Acquire) {
+                        return Err(PREPARATION_CANCELLED.to_string());
+                    }
+                    self.update_status(
+                        app,
+                        "preparing",
+                        format!("Indexing canonical Bible passages… {indexed}/{total}"),
+                        indexed,
+                        total,
+                    );
+                    Ok(())
+                })?;
+                save_index(&local_index, &index)?;
+                index
+            }
+        };
         *self.model.lock() = Some(model);
         *self.index.lock() = Some(index);
         let _ = fs::write(self.root.join(READY_MARKER), MODEL_REVISION);
@@ -461,7 +477,7 @@ impl SemanticScripture {
             }
             let entry = &index.entries[candidate_index];
             let mut passage_start = entry.verse;
-            let mut passage_end = entry.verse;
+            let mut passage_end = entry.verse_end;
             for &(neighbor_index, neighbor_similarity) in &ranked {
                 let neighbor = &index.entries[neighbor_index];
                 if same_passage_neighborhood(entry, neighbor)
@@ -469,7 +485,7 @@ impl SemanticScripture {
                 {
                     consumed.insert(neighbor_index);
                     passage_start = passage_start.min(neighbor.verse);
-                    passage_end = passage_end.max(neighbor.verse);
+                    passage_end = passage_end.max(neighbor.verse_end);
                 }
             }
             let reference = if passage_start == passage_end {
@@ -584,7 +600,8 @@ impl SemanticScripture {
 fn same_passage_neighborhood(left: &IndexEntry, right: &IndexEntry) -> bool {
     left.book == right.book
         && left.chapter == right.chapter
-        && (left.verse - right.verse).abs() <= 1
+        && left.verse <= right.verse_end + 1
+        && right.verse <= left.verse_end + 1
 }
 
 fn accepts_semantic_candidates(similarity: f32, margin: f32, candidate_count: usize) -> bool {
@@ -617,19 +634,8 @@ pub fn prepare_in_background(
         0,
     );
     let worker_engine = engine.clone();
-    let bundled_index = app
-        .path()
-        .resource_dir()
-        .map(|directory| directory.join("bible_data").join(INDEX_FILE))
-        .unwrap_or_else(|_| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("bible_data")
-                .join(INDEX_FILE)
-        });
     tauri::async_runtime::spawn_blocking(move || {
-        match catch_unwind(AssertUnwindSafe(|| {
-            worker_engine.prepare(&app, &bible, &bundled_index)
-        })) {
+        match catch_unwind(AssertUnwindSafe(|| worker_engine.prepare(&app, &bible))) {
             Ok(Ok(())) => {}
             Ok(Err(error)) if error == PREPARATION_CANCELLED => worker_engine.update_status(
                 &app,
@@ -659,6 +665,112 @@ fn normalize(vector: &mut [f32]) {
             *value /= magnitude;
         }
     }
+}
+
+/// Keeps precise verse retrieval while also representing sermon-sized thoughts.
+/// Four-verse windows overlap by two verses and never cross a chapter boundary.
+fn semantic_documents(corpus: &[SemanticCorpusVerse]) -> Vec<SemanticDocument> {
+    let mut documents = corpus
+        .iter()
+        .map(|verse| SemanticDocument {
+            entry: IndexEntry {
+                book: verse.book.clone(),
+                chapter: verse.chapter,
+                verse: verse.verse,
+                verse_end: verse.verse,
+            },
+            text: verse.text.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    let mut chapter_start = 0;
+    while chapter_start < corpus.len() {
+        let first = &corpus[chapter_start];
+        let mut chapter_end = chapter_start + 1;
+        while chapter_end < corpus.len()
+            && corpus[chapter_end].book == first.book
+            && corpus[chapter_end].chapter == first.chapter
+        {
+            chapter_end += 1;
+        }
+        let chapter = &corpus[chapter_start..chapter_end];
+        for start in (0..chapter.len()).step_by(2) {
+            let end = (start + 4).min(chapter.len());
+            let window = &chapter[start..end];
+            if window.len() < 2
+                || !window
+                    .iter()
+                    .enumerate()
+                    .all(|(offset, verse)| verse.verse == window[0].verse + offset as i32)
+            {
+                continue;
+            }
+            documents.push(SemanticDocument {
+                entry: IndexEntry {
+                    book: first.book.clone(),
+                    chapter: first.chapter,
+                    verse: window[0].verse,
+                    verse_end: window
+                        .last()
+                        .map(|verse| verse.verse)
+                        .unwrap_or(window[0].verse),
+                },
+                text: window
+                    .iter()
+                    .map(|verse| verse.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            });
+        }
+        chapter_start = chapter_end;
+    }
+    documents
+}
+
+fn build_index(
+    model: &mut TextEmbedding,
+    documents: &[SemanticDocument],
+    fingerprint: [u8; 32],
+    mut progress: impl FnMut(usize) -> Result<(), String>,
+) -> Result<SemanticIndex, String> {
+    const BATCH_SIZE: usize = 32;
+    let mut entries = Vec::with_capacity(documents.len());
+    let mut vectors = Vec::with_capacity(documents.len() * EMBEDDING_DIMENSION);
+    for batch in documents.chunks(BATCH_SIZE) {
+        let inputs = batch
+            .iter()
+            .map(|document| document.text.as_str())
+            .collect::<Vec<_>>();
+        let mut embeddings = model
+            .embed(inputs, Some(BATCH_SIZE))
+            .map_err(|error| format!("Could not index canonical Bible passages: {error}"))?;
+        if embeddings.len() != batch.len() {
+            return Err(
+                "The local embedding model returned an incomplete Bible index batch.".into(),
+            );
+        }
+        for (document, mut embedding) in batch.iter().zip(embeddings.drain(..)) {
+            if embedding.len() != EMBEDDING_DIMENSION {
+                return Err(
+                    "The local embedding model returned an unsupported vector dimension.".into(),
+                );
+            }
+            normalize(&mut embedding);
+            entries.push(document.entry.clone());
+            vectors.extend(
+                embedding
+                    .into_iter()
+                    .map(|value| (value * 127.0).round().clamp(-127.0, 127.0) as i8),
+            );
+        }
+        progress(entries.len())?;
+    }
+    Ok(SemanticIndex {
+        fingerprint,
+        dimension: EMBEDDING_DIMENSION,
+        entries,
+        vectors,
+    })
 }
 
 fn prepared_marker_matches(root: &Path) -> bool {
@@ -771,7 +883,6 @@ fn corpus_fingerprint(corpus: &[SemanticCorpusVerse]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-#[cfg(test)]
 fn save_index(path: &Path, index: &SemanticIndex) -> Result<(), String> {
     let temp = path.with_extension("index.part");
     let file = File::create(&temp).map_err(|error| error.to_string())?;
@@ -800,6 +911,7 @@ fn save_index(path: &Path, index: &SemanticIndex) -> Result<(), String> {
             .and_then(|_| writer.write_all(book))
             .and_then(|_| writer.write_all(&entry.chapter.to_le_bytes()))
             .and_then(|_| writer.write_all(&entry.verse.to_le_bytes()))
+            .and_then(|_| writer.write_all(&entry.verse_end.to_le_bytes()))
             .map_err(|error| error.to_string())?;
         for value in vector {
             writer
@@ -831,7 +943,7 @@ fn load_index(path: &Path) -> Result<SemanticIndex, String> {
         .map_err(|error| error.to_string())?;
     let dimension = read_u32(&mut reader)? as usize;
     let count = read_u32(&mut reader)? as usize;
-    if dimension != EMBEDDING_DIMENSION || count == 0 || count > 40_000 {
+    if dimension != EMBEDDING_DIMENSION || count == 0 || count > 80_000 {
         return Err("Semantic index header is invalid.".into());
     }
     let mut entries = Vec::with_capacity(count);
@@ -852,10 +964,15 @@ fn load_index(path: &Path) -> Result<SemanticIndex, String> {
         let book = String::from_utf8(book).map_err(|error| error.to_string())?;
         let chapter = read_i32(&mut reader)?;
         let verse = read_i32(&mut reader)?;
+        let verse_end = read_i32(&mut reader)?;
+        if verse <= 0 || verse_end < verse {
+            return Err("Semantic index contains an invalid passage range.".into());
+        }
         entries.push(IndexEntry {
             book,
             chapter,
             verse,
+            verse_end,
         });
         for _ in 0..dimension {
             let mut bytes = [0u8; 1];
@@ -871,18 +988,6 @@ fn load_index(path: &Path) -> Result<SemanticIndex, String> {
         entries,
         vectors,
     })
-}
-
-fn load_verified_index(path: &Path) -> Result<SemanticIndex, String> {
-    let bytes = fs::read(path).map_err(|error| error.to_string())?;
-    let actual_hash = format!("{:x}", Sha256::digest(&bytes));
-    if actual_hash != INDEX_SHA256 {
-        return Err(format!(
-            "Bible meaning index integrity check failed at {}.",
-            path.display()
-        ));
-    }
-    load_index(path)
 }
 
 fn read_u32(reader: &mut impl Read) -> Result<u32, String> {
@@ -925,16 +1030,19 @@ mod tests {
                     book: "John".into(),
                     chapter: 3,
                     verse: 16,
+                    verse_end: 16,
                 },
                 IndexEntry {
                     book: "Psalms".into(),
                     chapter: 23,
                     verse: 1,
+                    verse_end: 1,
                 },
                 IndexEntry {
                     book: "Isaiah".into(),
                     chapter: 40,
                     verse: 31,
+                    verse_end: 31,
                 },
             ],
             vectors: vec![127, 0, 0, 0, 127, 0, 102, 25, 0],
@@ -956,6 +1064,7 @@ mod tests {
                 book: "Romans".into(),
                 chapter: 8,
                 verse: 28,
+                verse_end: 30,
             }],
             vectors: (0..EMBEDDING_DIMENSION)
                 .map(|index| (index % 127) as i8)
@@ -966,6 +1075,7 @@ mod tests {
         assert_eq!(loaded.fingerprint, [9; 32]);
         assert_eq!(loaded.entries[0].book, "Romans");
         assert_eq!(loaded.entries[0].chapter, 8);
+        assert_eq!(loaded.entries[0].verse_end, 30);
         assert_eq!(loaded.vectors, index.vectors);
         let _ = fs::remove_dir_all(root);
     }
@@ -987,15 +1097,23 @@ mod tests {
     }
 
     #[test]
-    fn bundled_index_has_pinned_integrity() {
-        let index = load_verified_index(
-            &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("bible_data")
-                .join(INDEX_FILE),
-        )
-        .unwrap();
-        assert_eq!(index.dimension, EMBEDDING_DIMENSION);
-        assert_eq!(index.entries.len(), 31_105);
+    fn semantic_documents_include_overlapping_passages() {
+        let corpus = (1..=5)
+            .map(|verse| SemanticCorpusVerse {
+                book: "Romans".into(),
+                chapter: 8,
+                verse,
+                text: format!("Verse {verse}"),
+            })
+            .collect::<Vec<_>>();
+        let documents = semantic_documents(&corpus);
+        assert_eq!(documents.len(), 7); // five verses plus 1-4 and 3-5.
+        assert!(documents
+            .iter()
+            .any(|document| { document.entry.verse == 1 && document.entry.verse_end == 4 }));
+        assert!(documents
+            .iter()
+            .any(|document| { document.entry.verse == 3 && document.entry.verse_end == 5 }));
     }
 
     #[test]

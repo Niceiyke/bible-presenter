@@ -1,3 +1,4 @@
+use crate::scripture_catalog::{alias_map_for_books, resolve_book_name};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -202,79 +203,7 @@ impl BibleStore {
 
         let default_version = available_versions.first().cloned().unwrap_or_else(|| "KJV".to_string());
 
-        let mut book_map = HashMap::new();
-        let alias_books = vec![
-            ("genesis", "Genesis"), ("gen", "Genesis"), ("gn", "Genesis"),
-            ("exodus", "Exodus"), ("exod", "Exodus"), ("ex", "Exodus"),
-            ("leviticus", "Leviticus"), ("lev", "Leviticus"), ("lv", "Leviticus"),
-            ("numbers", "Numbers"), ("num", "Numbers"), ("nm", "Numbers"),
-            ("deuteronomy", "Deuteronomy"), ("deut", "Deuteronomy"), ("dt", "Deuteronomy"),
-            ("joshua", "Joshua"), ("josh", "Joshua"), ("jos", "Joshua"),
-            ("judges", "Judges"), ("judg", "Judges"), ("jdg", "Judges"),
-            ("ruth", "Ruth"), ("rth", "Ruth"),
-            ("1 samuel", "1 Samuel"), ("1samuel", "1 Samuel"), ("1sam", "1 Samuel"), ("1sm", "1 Samuel"),
-            ("2 samuel", "2 Samuel"), ("2samuel", "2 Samuel"), ("2sam", "2 Samuel"), ("2sm", "2 Samuel"),
-            ("1 kings", "1 Kings"), ("1kings", "1 Kings"), ("1kgs", "1 Kings"), ("1kg", "1 Kings"),
-            ("2 kings", "2 Kings"), ("2kings", "2 Kings"), ("2kgs", "2 Kings"), ("2kg", "2 Kings"),
-            ("1 chronicles", "1 Chronicles"), ("1chronicles", "1 Chronicles"), ("1chr", "1 Chronicles"),
-            ("2 chronicles", "2 Chronicles"), ("2chronicles", "2 Chronicles"), ("2chr", "2 Chronicles"),
-            ("ezra", "Ezra"), ("ezr", "Ezra"),
-            ("nehemiah", "Nehemiah"), ("neh", "Nehemiah"),
-            ("esther", "Esther"), ("esth", "Esther"), ("est", "Esther"),
-            ("job", "Job"), ("jb", "Job"),
-            ("psalms", "Psalms"), ("psalm", "Psalms"), ("ps", "Psalms"), ("psa", "Psalms"),
-            ("proverbs", "Proverbs"), ("prov", "Proverbs"), ("prv", "Proverbs"),
-            ("ecclesiastes", "Ecclesiastes"), ("eccl", "Ecclesiastes"), ("ecc", "Ecclesiastes"),
-            ("song of solomon", "Song of Solomon"), ("song", "Song of Solomon"), ("sos", "Song of Solomon"),
-            ("isaiah", "Isaiah"), ("isa", "Isaiah"), ("is", "Isaiah"),
-            ("jeremiah", "Jeremiah"), ("jer", "Jeremiah"),
-            ("lamentations", "Lamentations"), ("lam", "Lamentations"),
-            ("ezekiel", "Ezekiel"), ("ezek", "Ezekiel"), ("ezk", "Ezekiel"),
-            ("daniel", "Daniel"), ("dan", "Daniel"), ("dn", "Daniel"),
-            ("hosea", "Hosea"), ("hos", "Hosea"),
-            ("joel", "Joel"), ("jl", "Joel"),
-            ("amos", "Amos"), ("am", "Amos"),
-            ("obadiah", "Obadiah"), ("obad", "Obadiah"), ("ob", "Obadiah"),
-            ("jonah", "Jonah"), ("jon", "Jonah"),
-            ("micah", "Micah"), ("mic", "Micah"),
-            ("nahum", "Nahum"), ("nah", "Nahum"), ("na", "Nahum"),
-            ("habakkuk", "Habakkuk"), ("hab", "Habakkuk"),
-            ("zephaniah", "Zephaniah"), ("zeph", "Zephaniah"), ("zep", "Zephaniah"),
-            ("haggai", "Haggai"), ("hag", "Haggai"),
-            ("zechariah", "Zechariah"), ("zech", "Zechariah"), ("zec", "Zechariah"),
-            ("malachi", "Malachi"), ("mal", "Malachi"),
-            ("matthew", "Matthew"), ("matt", "Matthew"), ("mt", "Matthew"),
-            ("mark", "Mark"), ("mrk", "Mark"), ("mk", "Mark"),
-            ("luke", "Luke"), ("lk", "Luke"),
-            ("john", "John"), ("jn", "John"),
-            ("acts", "Acts"), ("act", "Acts"),
-            ("romans", "Romans"), ("rom", "Romans"), ("rm", "Romans"),
-            ("1 corinthians", "1 Corinthians"), ("1corinthians", "1 Corinthians"), ("1cor", "1 Corinthians"),
-            ("2 corinthians", "2 Corinthians"), ("2corinthians", "2 Corinthians"), ("2cor", "2 Corinthians"),
-            ("galatians", "Galatians"), ("gal", "Galatians"),
-            ("ephesians", "Ephesians"), ("eph", "Ephesians"),
-            ("philippians", "Philippians"), ("phil", "Philippians"), ("php", "Philippians"),
-            ("colossians", "Colossians"), ("col", "Colossians"),
-            ("1 thessalonians", "1 Thessalonians"), ("1thessalonians", "1 Thessalonians"), ("1thess", "1 Thessalonians"),
-            ("2 thessalonians", "2 Thessalonians"), ("2thessalonians", "2 Thessalonians"), ("2thess", "2 Thessalonians"),
-            ("1 timothy", "1 Timothy"), ("1timothy", "1 Timothy"), ("1tim", "1 Timothy"),
-            ("2 timothy", "2 Timothy"), ("2timothy", "2 Timothy"), ("2tim", "2 Timothy"),
-            ("titus", "Titus"), ("tit", "Titus"),
-            ("philemon", "Philemon"), ("philem", "Philemon"), ("phm", "Philemon"),
-            ("hebrews", "Hebrews"), ("heb", "Hebrews"),
-            ("james", "James"), ("jas", "James"), ("jm", "James"),
-            ("1 peter", "1 Peter"), ("1peter", "1 Peter"), ("1pet", "1 Peter"),
-            ("2 peter", "2 Peter"), ("2peter", "2 Peter"), ("2pet", "2 Peter"),
-            ("1 john", "1 John"), ("1john", "1 John"), ("1jn", "1 John"),
-            ("2 john", "2 John"), ("2john", "2 John"), ("2jn", "2 John"),
-            ("3 john", "3 John"), ("3john", "3 John"), ("3jn", "3 John"),
-            ("jude", "Jude"), ("jud", "Jude"),
-            ("revelation", "Revelation"), ("rev", "Revelation"), ("rv", "Revelation"),
-        ];
-
-        for (alias, full) in alias_books {
-            book_map.insert(alias.to_string(), full.to_string());
-        }
+        let book_map = alias_map_for_books(&books);
 
         let patterns = RegexSet::new([
             r"(?i)((?:[1-3]?\s*|1st\s+|2nd\s+|3rd\s+|first\s+|second\s+|third\s+)?[a-z]+(?:\s+[a-z]+)*)\s+(\d+)[:\s]+(\d+)",
@@ -402,8 +331,7 @@ impl BibleStore {
     }
 
     fn normalize_book(&self, raw: &str) -> String {
-        let clean = raw.to_lowercase().trim().to_string();
-        self.book_map.get(&clean).cloned().unwrap_or(raw.to_string())
+        resolve_book_name(raw, &self.books).unwrap_or_else(|| raw.trim().to_string())
     }
 
     pub fn detect_verses_by_ref(&self, text: &str, version: &str) -> Vec<Verse> {
