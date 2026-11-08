@@ -105,7 +105,6 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
     ? selectedPresentation?.slides ?? studioSlides[expandedStudioPresId] ?? []
     : [];
   const totalSlides = studioList.reduce((sum, presentation) => sum + presentation.slide_count, 0);
-  const favoriteCount = studioList.filter((presentation) => preferences.favorites.includes(presentation.id)).length;
 
   const refreshList = async () => {
     const list = await tauriPresentationRepository.list();
@@ -277,33 +276,20 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
 
   return (
     <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-4 pb-6">
-      <section className="relative overflow-hidden rounded-2xl border border-console-border bg-[radial-gradient(circle_at_85%_10%,rgba(167,139,250,0.16),transparent_34%),linear-gradient(145deg,rgba(23,33,43,0.98),rgba(11,15,20,0.98))] p-5 shadow-xl shadow-black/10">
-        <div className="pointer-events-none absolute -right-16 -top-24 h-64 w-64 rounded-full border border-tool-design/10" />
-        <div className="relative flex flex-wrap items-start justify-between gap-5">
-          <div className="max-w-xl">
-            <div className="mb-2 flex items-center gap-2 text-[9px] font-black uppercase tracking-[0.2em] text-tool-design">
-              <LayoutTemplate size={12} /> Presentation workspace
-            </div>
-            <h1 className="text-xl font-black tracking-tight text-console-text">Create, refine, and rehearse every message.</h1>
-            <p className="mt-2 text-[11px] leading-relaxed text-console-text-muted">A focused workspace for authored decks, imported content, AI-assisted drafts, and safe handoff to the service plan.</p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Button size="lg" onClick={onNewPresentation}><Plus size={15} /> New presentation</Button>
-              <Button variant="ghost" size="lg" onClick={() => setShowAiCreation(true)}><Sparkles size={15} className="text-tool-design" /> Create with AI</Button>
-            </div>
-          </div>
-          <div className="grid min-w-[280px] grid-cols-3 gap-2">
-            <WorkspaceStat value={studioList.length} label="Decks" />
-            <WorkspaceStat value={totalSlides} label="Slides" />
-            <WorkspaceStat value={favoriteCount} label="Favorites" />
+      <section className="flex flex-wrap items-center gap-2 rounded-xl border border-console-border bg-console-surface/80 px-3 py-2.5 shadow-lg shadow-black/10">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-tool-design/12 text-tool-design"><LayoutTemplate size={15} /></span>
+          <div className="min-w-0">
+            <h1 className="truncate text-sm font-black text-console-text">Presentation workspace</h1>
+            <p className="text-[9px] font-medium text-console-text-subtle">{studioList.length} decks · {totalSlides} slides</p>
           </div>
         </div>
-      </section>
-
-      <section className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <CreationAction icon={<Plus size={15} />} title="Blank deck" detail="Start from a clean canvas" tone="primary" onClick={onNewPresentation} />
-        <CreationAction icon={<Sparkles size={15} />} title="AI draft" detail="Build an editable outline" tone="design" onClick={() => setShowAiCreation(true)} />
-        <CreationAction icon={workingAction === "prayer" ? <Loader2 size={15} className="animate-spin" /> : <FileText size={15} />} title="Prayer DOCX" detail="Verify and structure a guide" onClick={() => void importPrayerDocx()} disabled={workingAction !== null} />
-        <CreationAction icon={workingAction === "pptx" ? <Loader2 size={15} className="animate-spin" /> : <FileUp size={15} />} title="PowerPoint" detail="Import rendered slides" onClick={() => void importPowerPoint()} disabled={workingAction !== null} />
+        <div className="ml-auto flex flex-wrap items-center gap-1.5">
+          <Button size="sm" onClick={onNewPresentation}><Plus size={13} /> New</Button>
+          <Button variant="ghost" size="sm" onClick={() => setShowAiCreation(true)}><Sparkles size={13} className="text-tool-design" /> AI draft</Button>
+          <button type="button" onClick={() => void importPrayerDocx()} disabled={workingAction !== null} className="flex h-8 items-center gap-1.5 rounded-lg border border-console-border bg-console-canvas px-2 text-[9px] font-bold text-console-text-muted hover:text-console-text disabled:opacity-50" title="Import a prayer Word document">{workingAction === "prayer" ? <Loader2 size={13} className="animate-spin" /> : <FileText size={13} />} Prayer DOCX</button>
+          <button type="button" onClick={() => void importPowerPoint()} disabled={workingAction !== null} className="flex h-8 items-center gap-1.5 rounded-lg border border-console-border bg-console-canvas px-2 text-[9px] font-bold text-console-text-muted hover:text-console-text disabled:opacity-50" title="Import a PowerPoint presentation">{workingAction === "pptx" ? <Loader2 size={13} className="animate-spin" /> : <FileUp size={13} />} PowerPoint</button>
+        </div>
       </section>
 
       <section className="flex flex-wrap items-center gap-2 rounded-xl border border-console-border bg-console-surface/70 p-2.5">
@@ -406,51 +392,6 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
       />
       <PrayerDocxImportModal imported={prayerImport} onClose={() => setPrayerImport(null)} onCreate={createPrayerDecks} />
     </div>
-  );
-}
-
-function WorkspaceStat({ value, label }: { value: number; label: string }) {
-  return (
-    <div className="rounded-xl border border-white/8 bg-black/15 px-3 py-3 backdrop-blur-sm">
-      <p className="text-lg font-black tabular-nums text-console-text">{value}</p>
-      <p className="mt-0.5 text-[8px] font-black uppercase tracking-[0.16em] text-console-text-subtle">{label}</p>
-    </div>
-  );
-}
-
-function CreationAction({
-  icon,
-  title,
-  detail,
-  tone = "neutral",
-  disabled,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  detail: string;
-  tone?: "primary" | "design" | "neutral";
-  disabled?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="group flex min-w-0 items-center gap-3 rounded-xl border border-console-border bg-console-surface p-3 text-left transition-all hover:-translate-y-0.5 hover:border-console-border-strong hover:bg-console-surface-raised disabled:pointer-events-none disabled:opacity-40"
-    >
-      <span className={cn(
-        "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors",
-        tone === "primary" && "bg-action-primary/15 text-action-primary group-hover:bg-action-primary group-hover:text-black",
-        tone === "design" && "bg-tool-design/15 text-tool-design group-hover:bg-tool-design group-hover:text-white",
-        tone === "neutral" && "bg-console-surface-strong text-console-text-muted group-hover:text-console-text",
-      )}>{icon}</span>
-      <span className="min-w-0">
-        <span className="block truncate text-[11px] font-black text-console-text">{title}</span>
-        <span className="mt-0.5 block truncate text-[9px] text-console-text-subtle">{detail}</span>
-      </span>
-    </button>
   );
 }
 
