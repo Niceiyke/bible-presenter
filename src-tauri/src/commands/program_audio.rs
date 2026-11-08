@@ -22,7 +22,10 @@ use std::collections::VecDeque;
 use std::io::{BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc, Arc, Mutex, OnceLock,
+};
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
@@ -88,6 +91,10 @@ struct FeedInner {
     device: String,
     child: Child,
     stderr_tail: Arc<Mutex<VecDeque<u8>>>,
+    /// A live FFmpeg process alone is not enough: its PCM TCP output can close
+    /// while the AAC stdout branch remains alive. Reusing that feed would give
+    /// a new ASR subscriber an immediate EOF.
+    pcm_healthy: Arc<AtomicBool>,
 }
 
 #[derive(Clone, Copy)]
@@ -141,7 +148,7 @@ fn fan_client_feed(c: &mut FanClient, data: &[u8]) -> bool {
     c.pending.len() <= FAN_MAX_PENDING
 }
 
-fn spawn_fanout<R>(listener: TcpListener, reader: R, name: &'static str)
+fn spawn_fanout<R>(listener: TcpListener, reader: R, name: &'static str, healthy: Arc<AtomicBool>)
 where
     R: Read + Send + 'static,
 {
@@ -166,6 +173,7 @@ where
                     Err(_) => break,
                 }
             }
+            healthy.store(false, Ordering::Release);
         })
         .ok();
 
@@ -248,7 +256,7 @@ fn start_feed(device: &str) -> Result<FeedPorts, String> {
     // Reuse the existing feed when the child is still alive and the device matches.
     let reuse = if let Some(inner) = guard.as_mut() {
         let alive = inner.child.try_wait().ok().flatten().is_none();
-        alive && inner.device == device
+        alive && inner.device == device && inner.pcm_healthy.load(Ordering::Acquire)
     } else {
         false
     };
@@ -348,8 +356,19 @@ fn start_feed(device: &str) -> Result<FeedPorts, String> {
         }
     };
 
-    spawn_fanout(aac_listener, stdout, "audio-feed-aac");
-    spawn_fanout(pcm_listener, pcm_source, "audio-feed-pcm");
+    let pcm_healthy = Arc::new(AtomicBool::new(true));
+    spawn_fanout(
+        aac_listener,
+        stdout,
+        "audio-feed-aac",
+        Arc::new(AtomicBool::new(true)),
+    );
+    spawn_fanout(
+        pcm_listener,
+        pcm_source,
+        "audio-feed-pcm",
+        pcm_healthy.clone(),
+    );
 
     *guard = Some(FeedInner {
         aac_port,
@@ -358,6 +377,7 @@ fn start_feed(device: &str) -> Result<FeedPorts, String> {
         device: device.to_string(),
         child,
         stderr_tail,
+        pcm_healthy,
     });
     Ok(FeedPorts {
         aac: aac_port,
@@ -379,6 +399,11 @@ pub fn feed_diagnostics() -> String {
         Ok(None) => "shared audio feed is still running".into(),
         Err(error) => format!("shared audio feed status failed: {error}"),
     };
+    let pcm_state = if inner.pcm_healthy.load(Ordering::Acquire) {
+        "PCM branch active"
+    } else {
+        "PCM branch ended"
+    };
     let stderr = inner
         .stderr_tail
         .lock()
@@ -387,9 +412,9 @@ pub fn feed_diagnostics() -> String {
         .unwrap_or_default();
     let stderr = stderr.trim();
     if stderr.is_empty() {
-        state
+        format!("{state}; {pcm_state}")
     } else {
-        format!("{state}; ffmpeg: {stderr}")
+        format!("{state}; {pcm_state}; ffmpeg: {stderr}")
     }
 }
 

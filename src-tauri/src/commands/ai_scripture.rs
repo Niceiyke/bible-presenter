@@ -1720,6 +1720,37 @@ async fn connect_pcm_relay(relay: &AudioRelay) -> Result<tokio::net::TcpStream, 
     Ok(connection)
 }
 
+/// DirectShow can need a short cooldown after a capture process has released
+/// its device pin. Retry the complete subscription (not just the local TCP
+/// connection) so a transient PCM branch restart does not end a live listener.
+async fn recover_pcm_relay(
+    audio_device: &str,
+) -> Result<(AudioRelay, tokio::net::TcpStream), String> {
+    const ATTEMPTS: usize = 3;
+    let mut failures = Vec::with_capacity(ATTEMPTS);
+    for attempt in 0..ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(750 * attempt as u64)).await;
+        }
+        let relay = match subscribe_pcm_feed(audio_device) {
+            Ok(relay) => relay,
+            Err(error) => {
+                failures.push(error);
+                continue;
+            }
+        };
+        match connect_pcm_relay(&relay).await {
+            Ok(pcm) => return Ok((relay, pcm)),
+            Err(error) => {
+                // Dropping releases the refcount before the next attempt.
+                drop(relay);
+                failures.push(error);
+            }
+        }
+    }
+    Err(failures.join("; "))
+}
+
 async fn run_asr_session(
     app: AppHandle,
     bible: Arc<BibleStore>,
@@ -1855,13 +1886,10 @@ async fn run_asr_session(
                         Some(version.clone()),
                     );
                     drop(relay.take());
-                    tokio::time::sleep(Duration::from_millis(250)).await;
-                    let replacement = subscribe_pcm_feed(&audio_device).map_err(|error| {
+                    let (replacement, replacement_pcm) = recover_pcm_relay(&audio_device).await.map_err(|error| {
                         format!("Could not recover transcription audio: {error}")
                     })?;
-                    pcm = connect_pcm_relay(&replacement).await.map_err(|error| {
-                        format!("Could not recover transcription audio: {error}")
-                    })?;
+                    pcm = replacement_pcm;
                     relay = Some(replacement);
                     emit_status(
                         &app,
