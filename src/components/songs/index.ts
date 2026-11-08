@@ -14,3 +14,4 @@ export { SongMetadataForm } from "./SongMetadataForm";
 export { SongSectionEditorList } from "./SongSectionEditor";
 export { SongArrangementEditor } from "./SongArrangementEditor";
 export { SongUsePanel } from "./SongUsePanel";
+export { SongDetailPanel } from "./SongDetailPanel";

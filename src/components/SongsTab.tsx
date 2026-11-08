@@ -15,6 +15,7 @@ import {
 import { Button, ConfirmModal, EmptyState } from "./ui";
 import {
   SongCard,
+  SongDetailPanel,
   SongEditorModal,
   SongFilters,
   SongImportWizard,
@@ -56,6 +57,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
   const [deleteSong, setDeleteSong] = React.useState<Song | null>(null);
   const [previewSong, setPreviewSong] = React.useState<Song | null>(null);
   const [useSong, setUseSong] = React.useState<Song | null>(null);
+  const [selectedSongId, setSelectedSongId] = React.useState<string | null>(null);
   const [busyId, setBusyId] = React.useState<string | null>(null);
   const [reloading, setReloading] = React.useState(false);
 
@@ -70,6 +72,24 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
     if (metadata === "needs-metadata" && !songNeedsMetadata(s)) return false;
     return true;
   });
+  const selectedSong = collection.find((song) => song.id === selectedSongId) ?? null;
+
+  const createSong = () => setEditingSong({
+    id: "",
+    title: "",
+    author: "",
+    sections: [{ label: "Verse 1", lines: [""] }],
+    arrangement: [],
+    style: "LowerThird",
+  });
+
+  const changeSource = (nextSource: SongSource) => {
+    setSource(nextSource);
+    setSelectedSongId(null);
+    setSearch("");
+    setMode("all");
+    setMetadata("all");
+  };
 
   const reload = async () => {
     setReloading(true);
@@ -103,6 +123,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
     const next = [...songs, saved].sort((a, b) => a.title.localeCompare(b.title));
     setSongs(next);
     emit("songs-sync", next);
+    setSelectedSongId(saved.id);
     setShowSongImport(false);
   };
 
@@ -114,6 +135,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
     else { next = [...songs, saved].sort((a, b) => a.title.localeCompare(b.title)); }
     setSongs(next);
     emit("songs-sync", next);
+    setSelectedSongId(saved.id);
     setEditingSong(null);
   };
 
@@ -125,6 +147,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
     const next = songs.filter((s) => s.id !== saved.id);
     setSongs(next);
     emit("songs-sync", next);
+    setSelectedSongId((current) => current === saved.id ? null : current);
   };
 
   /** Copy a song (user song duplicate or "Add to My Songs" for a hymn) with a
@@ -139,6 +162,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
       setSongs(next);
       emit("songs-sync", next);
       setSource("mine");
+      setSelectedSongId(saved.id);
     } catch (err: any) {
       setBackendError(`Copy failed: ${err?.message ?? err}`);
     } finally {
@@ -152,16 +176,9 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
     <div className="flex flex-col gap-4">
       <SongLibraryToolbar
         source={source}
-        onChangeSource={setSource}
+        onChangeSource={changeSource}
         onOpenImport={() => setShowSongImport((v) => !v)}
-        onNewSong={() => setEditingSong({
-          id: "",
-          title: "",
-          author: "",
-          sections: [{ label: "Verse 1", lines: [""] }],
-          arrangement: [],
-          style: "LowerThird",
-        })}
+        onNewSong={createSong}
         mineCount={mineCount}
         hymnCount={hymnCount}
       />
@@ -228,16 +245,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
               </Button>
             ) : source === "mine" ? (
               <div className="flex gap-2">
-                <Button variant="primary" size="md" onClick={() =>
-                  setEditingSong({
-                    id: "",
-                    title: "",
-                    author: "",
-                    sections: [{ label: "Verse 1", lines: [""] }],
-                    arrangement: [],
-                    style: "LowerThird",
-                  })
-                }>{t("songs.newSong")}</Button>
+                <Button variant="primary" size="md" onClick={createSong}>{t("songs.newSong")}</Button>
                 <Button variant="ghost" size="md" onClick={() => setShowSongImport(true)}>{t("songs.import")}</Button>
               </div>
             ) : (
@@ -248,34 +256,61 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
           }
         />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          {filteredSongs.map((song) => (
-            <SongCard
-              key={song.id}
-              song={song}
+        <div className={useSong ? "min-w-0" : "grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]"}>
+          {useSong ? (
+            <SongUsePanel
+              song={useSong}
               source={source}
-              onPreview={() => setPreviewSong(song)}
-              onUse={() => setUseSong(song)}
-              onAddToSchedule={() => onAddToSchedule(buildSongDisplayItem(song, 0))}
-              onEdit={allowEditing ? () => setEditingSong(cloneSong(song)) : undefined}
-              onDuplicate={allowEditing ? () => handleCopySong(song) : undefined}
-              onDelete={allowEditing ? () => setDeleteSong(song) : undefined}
-              onAddToMySongs={!allowEditing ? () => handleCopySong(song) : undefined}
+              onClose={() => setUseSong(null)}
+              onStage={onStage}
+              onLive={onLive}
+              onAddToSchedule={onAddToSchedule}
             />
-          ))}
+          ) : (
+          <section className="min-w-0 rounded-2xl border border-console-border bg-console-surface/55 p-3">
+            <div className="mb-3 flex items-center justify-between gap-3 px-1">
+              <div>
+                <p className="text-[9px] font-black uppercase tracking-[0.16em] text-console-text-muted">{source === "mine" ? "My songs" : "Hymn library"}</p>
+                <p className="mt-0.5 text-[10px] text-console-text-subtle">{filteredSongs.length} {filteredSongs.length === 1 ? "song" : "songs"} · Select one to review</p>
+              </div>
+              <span className="hidden text-[9px] text-console-text-subtle md:block">Open Cue before Stage or Live</span>
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-3">
+              {filteredSongs.map((song) => (
+                <SongCard
+                  key={song.id}
+                  song={song}
+                  source={source}
+                  selected={selectedSong?.id === song.id}
+                  onSelect={() => setSelectedSongId(song.id)}
+                  onPreview={() => setPreviewSong(song)}
+                  onUse={() => { setSelectedSongId(song.id); setUseSong(song); }}
+                  onAddToSchedule={() => onAddToSchedule(buildSongDisplayItem(song, 0))}
+                  onEdit={allowEditing ? () => setEditingSong(cloneSong(song)) : undefined}
+                  onDuplicate={allowEditing ? () => handleCopySong(song) : undefined}
+                  onDelete={allowEditing ? () => setDeleteSong(song) : undefined}
+                  onAddToMySongs={!allowEditing ? () => handleCopySong(song) : undefined}
+                />
+              ))}
+            </div>
+          </section>
+          )}
+          {!useSong && <SongDetailPanel
+            song={selectedSong}
+            source={source}
+            onClose={() => setSelectedSongId(null)}
+            onOpenCue={() => selectedSong && setUseSong(selectedSong)}
+            onPreview={() => selectedSong && setPreviewSong(selectedSong)}
+            onAddToSchedule={() => selectedSong && onAddToSchedule(buildSongDisplayItem(selectedSong, 0))}
+            onEdit={allowEditing && selectedSong ? () => setEditingSong(cloneSong(selectedSong)) : undefined}
+            onDuplicate={allowEditing && selectedSong ? () => handleCopySong(selectedSong) : undefined}
+            onDelete={allowEditing && selectedSong ? () => setDeleteSong(selectedSong) : undefined}
+            onAddToMySongs={!allowEditing && selectedSong ? () => handleCopySong(selectedSong) : undefined}
+          />}
         </div>
       )}
 
       <SongPreviewModal song={previewSong} onClose={() => setPreviewSong(null)} />
-
-      <SongUsePanel
-        song={useSong}
-        source={source}
-        onClose={() => setUseSong(null)}
-        onStage={(item) => onStage(item)}
-        onLive={(item) => onLive(item)}
-        onAddToSchedule={(item) => onAddToSchedule(item)}
-      />
 
       <ConfirmModal
         open={!!deleteSong}

@@ -39,8 +39,9 @@ export function SongFilters({
 }: SongFiltersProps) {
   const t = useT();
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-console-border bg-console-surface/45 p-2">
       <SearchField
+        className="min-w-[220px] flex-1"
         placeholder={source === "mine" ? t("songs.search.mine") : t("songs.search.library")}
         value={search}
         onChange={(e) => onSearch(e.target.value)}

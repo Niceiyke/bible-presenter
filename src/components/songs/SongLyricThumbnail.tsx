@@ -7,6 +7,7 @@ import { SongSlideRenderer } from "../shared/Renderers";
 
 interface SongLyricThumbnailProps {
   song: Song;
+  compact?: boolean;
 }
 
 /** Small 16:9 lyric snapshot for song cards. Renders the first sequence
@@ -16,7 +17,7 @@ interface SongLyricThumbnailProps {
  *  fits in the measured box drives the font scale — so cards, the preview
  *  card, and the editor previews all agree regardless of operator window
  *  size or DPI scaling. Never stages or broadcasts. */
-export function SongLyricThumbnail({ song }: SongLyricThumbnailProps) {
+export function SongLyricThumbnail({ song, compact = false }: SongLyricThumbnailProps) {
   const showSectionLabel = useAppStore((s) => !!s.settings.show_song_section_labels);
   const [boxRef, fit] = useSlideFit();
   const fitReady = fit.width > 0 && fit.height > 0;
@@ -41,7 +42,7 @@ export function SongLyricThumbnail({ song }: SongLyricThumbnailProps) {
   return (
     <div
       ref={boxRef}
-      className="relative w-full aspect-video rounded-lg overflow-hidden flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 border border-console-border"
+      className={`relative w-full ${compact ? "aspect-[16/7]" : "aspect-video"} rounded-lg overflow-hidden flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 border border-console-border`}
     >
       {fitReady && data.lines.length > 0 ? (
         <div style={{ width: fit.width, height: fit.height }} aria-hidden>
