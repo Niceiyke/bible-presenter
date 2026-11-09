@@ -182,6 +182,7 @@ pub async fn ai_generate_presentation(
     state: State<'_, AppState>,
     request: AiPresentationRequest,
 ) -> Result<AiDeckPlan, String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     validate_request(&request)?;
     let api_key = load_api_key(&state.app_data_dir)?;
     let bible = state.store.clone();
@@ -208,6 +209,7 @@ pub async fn ai_edit_presentation_slide(
     state: State<'_, AppState>,
     request: AiSlideEditRequest,
 ) -> Result<AiSlideEditResult, String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     validate_edit_request(&request)?;
     let api_key = load_api_key(&state.app_data_dir)?;
     let bible = state.store.clone();

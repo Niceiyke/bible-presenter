@@ -54,17 +54,33 @@ pub fn publish_capture_active(app: &AppHandle, state: &AppState) {
 fn position_output_on_preferred(app: &AppHandle, state: &AppState) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("output") {
         let preferred = state.presentation.settings.lock().preferred_monitor.clone();
-        let monitors = window.available_monitors().map_err(|e: tauri::Error| e.to_string())?;
+        let monitors = window
+            .available_monitors()
+            .map_err(|e: tauri::Error| e.to_string())?;
         if monitors.len() > 1 {
-            if let Some(primary) = window.primary_monitor().map_err(|e: tauri::Error| e.to_string())? {
-                let target = monitors.iter().find(|m| {
-                    preferred.as_deref().is_some_and(|p| m.name().is_some_and(|n| n == p))
-                }).or_else(|| monitors.iter().find(|m| m.name() != primary.name()));
+            if let Some(primary) = window
+                .primary_monitor()
+                .map_err(|e: tauri::Error| e.to_string())?
+            {
+                let target = monitors
+                    .iter()
+                    .find(|m| {
+                        preferred
+                            .as_deref()
+                            .is_some_and(|p| m.name().is_some_and(|n| n == p))
+                    })
+                    .or_else(|| monitors.iter().find(|m| m.name() != primary.name()));
                 if let Some(mon) = target {
                     let pos = mon.position();
-                    window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos.x, y: pos.y }))
+                    window
+                        .set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                            x: pos.x,
+                            y: pos.y,
+                        }))
                         .map_err(|e: tauri::Error| e.to_string())?;
-                    window.set_fullscreen(true).map_err(|e: tauri::Error| e.to_string())?;
+                    window
+                        .set_fullscreen(true)
+                        .map_err(|e: tauri::Error| e.to_string())?;
                 }
             }
         }
@@ -72,12 +88,10 @@ fn position_output_on_preferred(app: &AppHandle, state: &AppState) -> Result<(),
     Ok(())
 }
 
-/// Free plan: only one on-air window at a time. Called before revealing.
-fn enforce_free_window_cap(app: &AppHandle, state: &AppState, this_label: &str) -> Result<(), String> {
+/// Enforce the signed on-air-window capacity before revealing an output.
+fn enforce_window_cap(app: &AppHandle, state: &AppState, this_label: &str) -> Result<(), String> {
     let info = state.license.status();
-    if info.status == crate::license::LicenseStatus::Active
-        && info.tier == crate::license::LicenseTier::Free
-    {
+    if info.status == crate::license::LicenseStatus::Active {
         let other_visible = ["output", "stage", "design", "studio"]
             .iter()
             .filter(|l| **l != this_label)
@@ -87,10 +101,12 @@ fn enforce_free_window_cap(app: &AppHandle, state: &AppState, this_label: &str) 
                     .unwrap_or(false)
             })
             .count();
-        if other_visible >= 1 {
+        if other_visible >= info.limits.max_outputs as usize {
             return Err(
-                "The Free plan supports one on-air window at a time. See Settings → License to upgrade."
-                    .to_owned(),
+                format!(
+                    "Your Wordlyte plan supports {} on-air window(s) at a time. Ask your organization owner to upgrade for more.",
+                    info.limits.max_outputs
+                ),
             );
         }
     }
@@ -105,10 +121,14 @@ pub(crate) fn rebroadcast_presentation(app: &AppHandle, state: &AppState) {
     let settings = state.presentation.settings.lock().clone();
     emit_checked(app, "settings-changed", &settings);
     let live = state.presentation.live_item.lock().clone();
-    emit_checked(app, "live-item-update", &crate::events::LiveItemUpdate {
-        detected_item: live,
-        revision: Some(state.presentation.current_revision()),
-    });
+    emit_checked(
+        app,
+        "live-item-update",
+        &crate::events::LiveItemUpdate {
+            detected_item: live,
+            revision: Some(state.presentation.current_revision()),
+        },
+    );
     let lt = state.presentation.lower_third.lock().clone();
     emit_checked(app, "lower-third-update", &lt);
     let props = state.presentation.props_layer.lock().clone();
@@ -125,29 +145,39 @@ pub(crate) fn rebroadcast_presentation(app: &AppHandle, state: &AppState) {
 /// runtime are updated, and finally the authoritative config/state is
 /// broadcast. This guarantees the UI, the runtime `OutputState`, the persisted
 /// `outputs.json`, and the actual window can never disagree.
-pub fn set_output_visible(app: &AppHandle, state: &AppState, id: &str, visible: bool) -> Result<(), String> {
+pub fn set_output_visible(
+    app: &AppHandle,
+    state: &AppState,
+    id: &str,
+    visible: bool,
+) -> Result<(), String> {
     // Revealing a window/recorder/streamer is a broadcast action; hiding is
     // always allowed so an operator can always take content off-air.
     if visible {
         crate::license::ensure_allowed(state)?;
     }
-    let cfg = state.outputs.get(id).ok_or_else(|| format!("Output '{}' not found", id))?;
+    let cfg = state
+        .outputs
+        .get(id)
+        .ok_or_else(|| format!("Output '{}' not found", id))?;
 
-    // Free plan: one on-air *window* output at a time (recorders/streamers are
-    // software surfaces and are gated in the frontend).
+    // Signed entitlement limits on-air window capacity (recorders/streamers
+    // have separate backend gates).
     if visible && cfg.window_label.is_some() {
         let info = state.license.status();
-        if info.tier == crate::license::LicenseTier::Free {
+        if info.status == crate::license::LicenseStatus::Active {
             let visible_windows = state
                 .outputs
                 .list()
                 .iter()
                 .filter(|o| o.window_label.is_some() && o.id != id && o.visible)
                 .count();
-            if visible_windows >= 1 {
+            if visible_windows >= info.limits.max_outputs as usize {
                 return Err(
-                    "The Free plan supports one on-air window at a time. See Settings → License to upgrade."
-                        .to_owned(),
+                    format!(
+                        "Your Wordlyte plan supports {} on-air window(s) at a time. Ask your organization owner to upgrade for more.",
+                        info.limits.max_outputs
+                    ),
                 );
             }
         }
@@ -159,21 +189,22 @@ pub fn set_output_visible(app: &AppHandle, state: &AppState, id: &str, visible: 
             .get_webview_window(label)
             .ok_or_else(|| format!("No window bound to output '{}'", id))?;
         if visible {
-            enforce_free_window_cap(app, state, label)?;
+            enforce_window_cap(app, state, label)?;
             if label == "output" {
                 position_output_on_preferred(app, state)?;
             }
             let _ = window.set_ignore_cursor_events(true);
             window.show().map_err(|e: tauri::Error| e.to_string())?;
-            window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
+            window
+                .set_focus()
+                .map_err(|e: tauri::Error| e.to_string())?;
             rebroadcast_presentation(app, state);
             // A live session should capture the real projector window now that
             // it is present. This must NOT fail the toggle (the session keeps
             // recording/streaming from the capture window), so log-then-continue.
             if label == "output" {
                 let source = crate::commands::capture::output_window_visible(app);
-                if let Err(e) = crate::commands::capture::sync_capture_sources(app, state, source)
-                {
+                if let Err(e) = crate::commands::capture::sync_capture_sources(app, state, source) {
                     crate::store::log_msg(
                         app,
                         &format!("Capture source could not follow the projector: {e}"),
@@ -196,7 +227,9 @@ pub fn set_output_visible(app: &AppHandle, state: &AppState, id: &str, visible: 
     // 2) Persist + mutate the in-memory config ONLY after the window op
     //    succeeded, so a failed operation never leaves disk/runtime/UI diverged.
     state.outputs.set_visible(id, visible)?;
-    state.outputs.update_state(id, visible, cfg.enabled, 0, None);
+    state
+        .outputs
+        .update_state(id, visible, cfg.enabled, 0, None);
     publish_configs(app);
     if let Some(s) = state.outputs.state(id) {
         publish_state(app, &s);
@@ -247,7 +280,13 @@ pub async fn outputs_set_visible(
 /// Internal helper for recorder/streamer surfaces to report runtime changes.
 pub fn report_output_state(app: &AppHandle, state: &OutputState) {
     if let Some(manager) = app.try_state::<AppState>() {
-        manager.outputs.update_state(&state.id, state.visible, state.rendering, state.fps, state.error.clone());
+        manager.outputs.update_state(
+            &state.id,
+            state.visible,
+            state.rendering,
+            state.fps,
+            state.error.clone(),
+        );
     }
     publish_state(app, state);
 }

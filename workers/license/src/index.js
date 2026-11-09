@@ -1,675 +1,552 @@
 /**
- * Wordlyte license server — Cloudflare Worker.
+ * Wordlyte account and entitlement service.
  *
- * Endpoints
- * ---------
- *   POST /validate   Called by the desktop app (Rust `license.rs`). Body:
- *                    { license_key, machine_id, app_name, app_version }.
- *                    Registers a machine against a key (up to `max_machines`)
- *                    and returns authoritative status/expiry/server time —
- *                    Ed25519-signed over the fields the desktop client
- *                    persists, so forged local records and stubbed endpoints
- *                    are rejected (see `signValidation` / `generate-keypair.mjs`).
- *
- *   POST /issue      Admin only. Bearer token. Issues a new key:
- *                    { church_name, email, duration_days, max_machines, tier, note }
- *                    tier is free|pro|premium (default free) and clamps
- *                    max_machines (free=1, pro=3, premium=50).
- *
- *   POST /extend     Admin only. { license_key, days?, tier? } — add days
- *                    and/or change tier (upgrades + clamps max_machines).
- *
- *   POST /revoke     Admin only. { license_key, revoked?: bool }
- *
- *   GET  /licenses   Admin only. Lists every issued key + machine slots.
- *
- * The app talks to /validate from the Rust backend (reqwest), never from the
- * webview, so there is no CORS concern for the desktop app itself.
+ * This clean v3 service establishes permanent Free core activation at the
+ * organization/device level. Pro and Premium are expiring entitlements layered
+ * on top; the desktop app always degrades an activated organization to Free.
+ * AI Add-on status and AI Unit balances are organization data. Actual AI
+ * requests remain the responsibility of a future managed AI Gateway; this
+ * Worker never accepts provider credentials or exposes a client-side charge API.
  */
 
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
-    const path = url.pathname;
-
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          "access-control-allow-origin": "*",
-          "access-control-allow-methods": "POST, GET, OPTIONS",
-          "access-control-allow-headers": "content-type, authorization",
-        },
-      });
-    }
-
-    // ── Admin web UI (page is public; every action on it needs the token) ──
-    if (path === "/admin") {
-      return new Response(ADMIN_HTML, {
-        status: 200,
-        headers: {
-          "content-type": "text/html; charset=utf-8",
-          "cache-control": "no-store",
-          "access-control-allow-origin": "*",
-        },
-      });
-    }
-
-    if (!env.LICENSES) {
-      return json(
-        {
-          status: "error",
-          message:
-            "KV binding 'LICENSES' is not attached to this worker. Add it in Settings → Variables → KV namespace bindings (variable name must be LICENSES).",
-        },
-        500
-      );
-    }
-
-    const now = () => Math.floor(Date.now() / 1000);
-
-    const tierOf = (rec) => TIERS.includes(rec.tier) ? rec.tier : "free";
-
-    // ── /validate ─────────────────────────────────────────────────────────
-    if (path === "/validate" && request.method === "POST") {
-      let body;
-      try {
-        body = await request.json();
-      } catch {
-        return json({ status: "invalid", message: "Bad request" }, 400);
-      }
-
-      const key = String(body.license_key || "")
-        .trim()
-        .toUpperCase()
-        .replace(/\s+/g, "");
-      const machineId = String(body.machine_id || "").trim();
-      if (!key) return json({ status: "invalid", message: "Missing license key" }, 400);
-      if (!/^[0-9a-f]{64}$/i.test(machineId))
-        return json({ status: "invalid", message: "Missing or malformed machine id" }, 400);
-
-      let rec = await env.LICENSES.get(key, "json");
-      const serverTime = now();
-      if (!rec)
-        return json({
-          status: "invalid",
-          message: "Unknown license key. Check the key or contact the Wordlyte team.",
-        });
-
-      // Signed response builder for a known record. The signature covers the
-      // authoritative fields the desktop client persists (`license.json` v2),
-      // so a hand-edited local record or a stubbed `WORDLYTE_LICENSE_URL`
-      // endpoint can never pass the client's Ed25519 verification.
-      const signed = async (status, message, machinesUsed) => {
-        const tier = tierOf(rec);
-        const sig = await signValidation(env, {
-          key,
-          machine_id: machineId,
-          status,
-          issued_at: rec.issued_at,
-          expires_at: rec.expires_at,
-          tier,
-          max_machines: rec.max_machines,
-          machines_used: machinesUsed,
-          server_time: serverTime,
-        });
-        return json({
-          status,
-          message,
-          license_key: key,
-          machine_id: machineId,
-          issued_at: rec.issued_at,
-          expires_at: rec.expires_at,
-          church_name: rec.church_name,
-          email: rec.email,
-          tier,
-          max_machines: rec.max_machines,
-          machines_used: machinesUsed,
-          server_time: serverTime,
-          ...(sig ? { sig } : {}),
-        });
-      };
-      const used = (r) => (r.machines || []).length;
-
-      if (rec.revoked)
-        return signed("revoked", "This license has been revoked by the administrator.", used(rec));
-
-      if (serverTime >= rec.expires_at) return signed("expired", "This license has expired.", used(rec));
-
-      let machines = rec.machines || [];
-      if (!machines.includes(machineId)) {
-        // Route the slot check + push through the LicenseRegistry Durable
-        // Object so two concurrent /validate calls from two machines cannot
-        // both read `length < max_machines` and over-commit the device cap
-        // (audit #11). The DO serializes mutations per license key.
-        const stub = env.LICENSE_REGISTRY.get(env.LICENSE_REGISTRY.idFromName(key));
-        const res = await stub.fetch("https://registry/register", {
-          method: "POST",
-          body: JSON.stringify({ key, machineId }),
-        });
-        const data = await res.json();
-        if (data.status !== "active") {
-          return signed("invalid", data.message, used(rec));
-        }
-        rec = data.rec;
-        machines = rec.machines || [];
-      }
-
-      return signed("active", "ok", used(rec));
-    }
-
-    // ── Admin (Authorization: Bearer <ADMIN_TOKEN>) ────────────────────────
-    const isAdmin = () => {
-      const header = request.headers.get("authorization") || "";
-      const token = header.replace(/^Bearer\s+/i, "");
-      return token.length > 0 && token === env.ADMIN_TOKEN;
-    };
-
-    if (path === "/issue" && request.method === "POST") {
-      if (!isAdmin()) return json({ status: "error", message: "Unauthorized" }, 401);
-      let body;
-      try {
-        body = await request.json();
-      } catch {
-        return json({ status: "error", message: "Bad request" }, 400);
-      }
-      const church = String(body.church_name || "").trim();
-      const email = String(body.email || "").trim().toLowerCase();
-      const days = Math.max(1, Math.min(3650, parseInt(body.duration_days, 10) || 30));
-      const tier = normalizeTier(body.tier);
-      const maxMachines = clampMachines(tier, body.max_machines);
-      if (!church) return json({ status: "error", message: "church_name is required" }, 400);
-
-      const key = generateKey();
-      const issuedAt = now();
-      const rec = {
-        key,
-        church_name: church,
-        email,
-        issued_at: issuedAt,
-        expires_at: issuedAt + days * 86400,
-        tier,
-        max_machines: maxMachines,
-        machines: [],
-        revoked: false,
-        note: String(body.note || ""),
-        created_at: issuedAt,
-      };
-      await env.LICENSES.put(key, JSON.stringify(rec));
-      return json({ status: "ok", license_key: key, ...rec });
-    }
-
-    if (path === "/revoke" && request.method === "POST") {
-      if (!isAdmin()) return json({ status: "error", message: "Unauthorized" }, 401);
-      let body;
-      try {
-        body = await request.json();
-      } catch {
-        return json({ status: "error", message: "Bad request" }, 400);
-      }
-      const key = String(body.license_key || "").trim().toUpperCase();
-      if (!key) return json({ status: "error", message: "Missing license key" }, 400);
-      // Route through the per-key Durable Object so a warm instance's in-memory
-      // cache can never write stale tier/expiry/machine data back over an admin
-      // change (audit: admin mutations must be serialized with registration).
-      const res = await mutateViaRegistry(env, key, { revoked: body.revoked !== false });
-      return res;
-    }
-
-    if (path === "/extend" && request.method === "POST") {
-      if (!isAdmin()) return json({ status: "error", message: "Unauthorized" }, 401);
-      let body;
-      try {
-        body = await request.json();
-      } catch {
-        return json({ status: "error", message: "Bad request" }, 400);
-      }
-      const key = String(body.license_key || "").trim().toUpperCase();
-      if (!key) return json({ status: "error", message: "Missing license key" }, 400);
-      const days = Math.max(0, Math.min(3650, parseInt(body.days, 10) || 0));
-      const tier = body.tier !== undefined ? normalizeTier(body.tier) : null;
-      if (days <= 0 && !tier)
-        return json({ status: "error", message: "Provide days and/or a tier" }, 400);
-      // Route through the per-key Durable Object (same reason as /revoke).
-      const res = await mutateViaRegistry(env, key, { days, tier });
-      return res;
-    }
-
-    if (path === "/licenses" && request.method === "GET") {
-      if (!isAdmin()) return json({ status: "error", message: "Unauthorized" }, 401);
-      return json({ status: "ok", licenses: await collectLicenses(env) });
-    }
-
-    if (path === "/expiring" && request.method === "GET") {
-      if (!isAdmin()) return json({ status: "error", message: "Unauthorized" }, 401);
-      const days = Math.max(0, Math.min(365, parseInt(url.searchParams.get("days"), 10) || 30));
-      const nowSec = now();
-      const cutoff = nowSec + days * 86400;
-      const expiring = (await collectLicenses(env))
-        .filter((l) => !l.revoked && l.expires_at < cutoff)
-        .map((l) => ({
-          key: l.key,
-          church_name: l.church_name,
-          email: l.email,
-          tier: tierOf(l),
-          expires_at: l.expires_at,
-          machines_used: (l.machines || []).length,
-        }));
-      return json({ status: "ok", within_days: days, server_time: nowSec, expiring });
-    }
-
-    return json({ status: "error", message: "Not found" }, 404);
-  },
-
-  // Daily cron (see [triggers] in wrangler.toml): report licenses expiring soon.
-  // Post to a Slack/Discord/Teams webhook if EXPIRY_WEBHOOK_URL is set, else log.
-  async scheduled(event, env, ctx) {
-    if (!env.LICENSES) return;
-    const days = parseInt(env.EXPIRY_NOTIFY_DAYS || "14", 10);
-    const nowSec = Math.floor(Date.now() / 1000);
-    const cutoff = nowSec + days * 86400;
-    const all = await collectLicenses(env);
-    const expiring = all.filter((l) => !l.revoked && l.expires_at > nowSec && l.expires_at < cutoff);
-    const expired = all.filter((l) => !l.revoked && l.expires_at <= nowSec);
-
-    const webhook = env.EXPIRY_WEBHOOK_URL;
-    if (!webhook) {
-      console.log(
-        `[scheduled] ${expiring.length} expiring within ${days}d, ${expired.length} expired (no webhook configured)`
-      );
-      return;
-    }
-
-    const line = (l) =>
-      `• ${l.church_name} (${l.email}) — ${new Date(l.expires_at * 1000).toISOString().slice(0, 10)}`;
-    const text = [
-      `License reminders (within ${days}d):`,
-      ...expiring.map(line),
-      ...(expired.length ? [`Expired:`] : []),
-      ...expired.map(line),
-    ].join("\n");
-    await fetch(webhook, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-  },
-};
-
-async function collectLicenses(env) {
-  const licenses = [];
-  let cursor;
-  let page;
-  do {
-    page = await env.LICENSES.list({ cursor });
-    for (const { name } of page.keys) {
-      const rec = await env.LICENSES.get(name, "json");
-      if (rec) licenses.push({ key: name, ...rec });
-    }
-    cursor = page.cursor;
-  } while (!page.list_complete);
-  return licenses;
-}
-
-/// Applies an admin mutation (revoke / extend) through the per-key Durable
-/// Object so the mutation is serialized with registration and the DO's
-/// in-memory cache cannot later overwrite the change. Returns the worker-style
-/// JSON response.
-async function mutateViaRegistry(env, key, ops) {
-  const stub = env.LICENSE_REGISTRY.get(env.LICENSE_REGISTRY.idFromName(key));
-  const res = await stub.fetch("https://registry/mutate", {
-    method: "POST",
-    body: JSON.stringify({ key, ops }),
-  });
-  return new Response(res.body, { status: res.status, headers: jsonHeaders });
-}
-
+const PLANS = ["free", "pro", "premium"];
+const PLAN_DEVICE_CAPS = { free: 1, pro: 3, premium: 50 };
 const jsonHeaders = {
   "content-type": "application/json",
   "cache-control": "no-store",
   "access-control-allow-origin": "*",
 };
 
-const json = (data, status = 200) =>
-  new Response(JSON.stringify(data), { status, headers: jsonHeaders });
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          ...jsonHeaders,
+          "access-control-allow-methods": "POST, GET, OPTIONS",
+          "access-control-allow-headers": "content-type, authorization",
+        },
+      });
+    }
+    // The account service retains the lightweight browser console from the
+    // previous license service. Every data request it makes is still protected
+    // by ADMIN_TOKEN; the page itself contains no organization data.
+    if (url.pathname === "/admin" && request.method === "GET") {
+      return new Response(ADMIN_HTML, {
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+          "content-security-policy": "default-src 'none'; connect-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+        },
+      });
+    }
+    if (!env.ORGANIZATIONS) return json({ status: "error", message: "ORGANIZATIONS KV binding is missing." }, 500);
 
-/**
- * Per-key serialization point for license record mutations (audit #11).
- *
- * Cloudflare KV is eventually consistent and has no compare-and-set, so a
- * bare `get` + `put` in /validate would let two concurrent registrations both
- * observe `machines.length < max_machines` and over-commit the device cap.
- * Every license key maps to a deterministic DO id (idFromName), and a Durable
- * Object processes its requests one at a time, so slot allocation is atomic
- * per key. The record is cached in-memory for the life of the instance and
- * written back to KV on every mutation; a fresh instance re-reads from KV.
- */
-export class LicenseRegistry {
+    if ((url.pathname === "/" || url.pathname === "/health") && request.method === "GET") {
+      return json({ status: "ok" });
+    }
+
+    if (url.pathname === "/activate" && request.method === "POST") {
+      const body = await request.json().catch(() => null);
+      const activationCode = String(body?.activation_code || "").trim().toUpperCase();
+      const machineId = String(body?.machine_id || "").trim();
+      const deviceName = cleanDeviceName(body?.device_name);
+      if (!activationCode || !validMachineId(machineId)) {
+        return json({ status: "invalid", message: "A valid activation code and machine id are required." }, 400);
+      }
+      const codeHash = await sha256(activationCode);
+      const organization = await findOrganizationByActivationCode(env, codeHash);
+      if (!organization) return json({ status: "invalid", message: "This activation code is invalid or has expired." }, 200);
+      const stub = env.ORGANIZATION_REGISTRY.get(env.ORGANIZATION_REGISTRY.idFromName(organization.id));
+      return forward(await stub.fetch("https://registry/activate", {
+        method: "POST",
+        body: JSON.stringify({ organization_id: organization.id, code_hash: codeHash, machine_id: machineId, device_name: deviceName }),
+      }));
+    }
+
+    if (url.pathname === "/entitlement" && request.method === "POST") {
+      const body = await request.json().catch(() => null);
+      const organizationId = String(body?.organization_id || "").trim();
+      const machineId = String(body?.machine_id || "").trim();
+      const deviceToken = String(body?.device_token || "").trim();
+      if (!validOrganizationId(organizationId) || !validMachineId(machineId) || !validDeviceToken(deviceToken)) {
+        return json({ status: "invalid", message: "Invalid device entitlement request." }, 400);
+      }
+      const stub = env.ORGANIZATION_REGISTRY.get(env.ORGANIZATION_REGISTRY.idFromName(organizationId));
+      return forward(await stub.fetch("https://registry/entitlement", {
+        method: "POST",
+        body: JSON.stringify({ organization_id: organizationId, machine_id: machineId, device_token: deviceToken }),
+      }));
+    }
+
+    if (url.pathname === "/admin/organizations" && request.method === "POST") {
+      if (!(await isAdmin(request, env))) return unauthorized();
+      const body = await request.json().catch(() => null);
+      const name = String(body?.church_name || "").trim();
+      const email = String(body?.email || "").trim().toLowerCase();
+      const plan = normalizePlan(body?.plan);
+      if (!name || !email) return json({ status: "error", message: "church_name and email are required." }, 400);
+      const now = epoch();
+      const id = `org_${crypto.randomUUID().replaceAll("-", "")}`;
+      const deviceLimit = clampDevices(plan, body?.device_limit);
+      const planDurationDays = Math.max(0, Math.min(3650, Number.parseInt(body?.plan_duration_days, 10) || 0));
+      const activationCode = activationCodeFor();
+      const activation = {
+        code_hash: await sha256(activationCode),
+        expires_at: now + 14 * 86_400,
+        claimed_by_machine_id: null,
+      };
+      const organization = {
+        id,
+        church_name: name,
+        owner_email: email,
+        plan,
+        plan_expires_at: plan === "free" ? null : now + Math.max(1, planDurationDays || 30) * 86_400,
+        device_limit: deviceLimit,
+        devices: [],
+        activation_codes: [activation],
+        revoked: false,
+        created_at: now,
+        updated_at: now,
+      };
+      await env.ORGANIZATIONS.put(orgKey(id), JSON.stringify(organization));
+      return json({ status: "ok", organization: publicOrganization(organization), activation_code: activationCode });
+    }
+
+    if (url.pathname === "/admin/organizations" && request.method === "GET") {
+      if (!(await isAdmin(request, env))) return unauthorized();
+      return json({ status: "ok", organizations: await listOrganizations(env) });
+    }
+
+    const organizationMatch = url.pathname.match(/^\/admin\/organizations\/(org_[a-f0-9]+)$/);
+    if (organizationMatch && request.method === "GET") {
+      if (!(await isAdmin(request, env))) return unauthorized();
+      const organization = await env.ORGANIZATIONS.get(orgKey(organizationMatch[1]), "json");
+      if (!organization) return json({ status: "error", message: "Organization not found." }, 404);
+      return json({ status: "ok", organization: publicOrganization(organization) });
+    }
+
+    const match = url.pathname.match(/^\/admin\/organizations\/(org_[a-f0-9]+)\/(plan|activation-code|revoke|ai)$/);
+    if (match && request.method === "POST") {
+      if (!(await isAdmin(request, env))) return unauthorized();
+      const [, organizationId, action] = match;
+      const body = await request.json().catch(() => ({}));
+      const stub = env.ORGANIZATION_REGISTRY.get(env.ORGANIZATION_REGISTRY.idFromName(organizationId));
+      return forward(await stub.fetch(`https://registry/admin/${action}`, {
+        method: "POST",
+        body: JSON.stringify({ organization_id: organizationId, ...body }),
+      }));
+    }
+
+    return json({ status: "error", message: "Not found" }, 404);
+  },
+};
+
+/** Serializes activation and entitlement changes for one organization. */
+export class OrganizationRegistry {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.cache = null;
+    this.organization = null;
   }
 
   async fetch(request) {
-    const url = new URL(request.url);
-    // A request body is consumable — parse it ONCE and reuse both fields
-    // (audit: parsing twice made the second call return `{}`, so `machineId`
-    // was `undefined` and the registry stored a phantom machine entry).
+    const path = new URL(request.url).pathname;
     const body = await request.json().catch(() => ({}));
-    const key = String(body.key || "").trim().toUpperCase();
-    if (url.pathname === "/register") {
-      if (!key) return json({ status: "invalid", message: "Missing license key" }, 400);
-      const machineId = String(body.machineId || "").trim();
-      // Defense in depth: the outer /validate checks the shape, but the DO is
-      // the last line of defense before a slot is consumed.
-      if (!/^[0-9a-f]{64}$/i.test(machineId))
-        return json({ status: "invalid", message: "Missing or malformed machine id" }, 400);
-      return this.register(key, machineId);
-    }
-    if (url.pathname === "/mutate") {
-      if (!key) return json({ status: "error", message: "Missing license key" }, 400);
-      return this.mutate(key, body.ops || {});
-    }
+    const organizationId = String(body.organization_id || "").trim();
+    if (!validOrganizationId(organizationId)) return json({ status: "invalid", message: "Invalid organization." }, 400);
+    const organization = await this.load(organizationId);
+    if (!organization) return json({ status: "invalid", message: "Organization not found." }, 404);
+    if (path === "/activate") return this.activate(organization, body);
+    if (path === "/entitlement") return this.entitlement(organization, body);
+    if (path === "/admin/plan") return this.updatePlan(organization, body);
+    if (path === "/admin/activation-code") return this.createActivationCode(organization);
+    if (path === "/admin/revoke") return this.revoke(organization, body);
+    if (path === "/admin/ai") return this.updateAi(organization, body);
     return json({ status: "error", message: "Not found" }, 404);
   }
 
-  async load(key) {
-    if (this.cache) return this.cache;
-    this.cache = await this.env.LICENSES.get(key, "json");
-    return this.cache;
+  async load(organizationId) {
+    if (this.organization) return this.organization;
+    this.organization = await this.env.ORGANIZATIONS.get(orgKey(organizationId), "json");
+    return this.organization;
   }
 
-  async save(key, rec) {
-    this.cache = rec;
-    await this.env.LICENSES.put(key, JSON.stringify(rec));
+  async save(organization) {
+    organization.updated_at = epoch();
+    this.organization = organization;
+    await this.env.ORGANIZATIONS.put(orgKey(organization.id), JSON.stringify(organization));
   }
 
-  async register(key, machineId) {
-    const rec = await this.load(key);
-    if (!rec) return json({ status: "invalid", message: "Unknown license key" });
-    if (rec.revoked) return json({ status: "revoked", message: "revoked" });
-    const serverTime = Math.floor(Date.now() / 1000);
-    if (serverTime >= rec.expires_at) return json({ status: "expired", message: "expired" });
-    const machines = rec.machines || [];
-    if (machines.includes(machineId)) return json({ status: "active", message: "ok", rec });
-    if (machines.length >= rec.max_machines) {
-      return json({
-        status: "invalid",
-        message: `This key is already activated on ${machines.length} device(s) (limit ${rec.max_machines}). Contact the Wordlyte team to add more.`,
-        rec,
-      });
+  async activate(organization, body) {
+    const machineId = String(body.machine_id || "").trim();
+    const codeHash = String(body.code_hash || "").trim();
+    if (!validMachineId(machineId) || !/^[a-f0-9]{64}$/i.test(codeHash)) {
+      return json({ status: "invalid", message: "Invalid activation request." }, 400);
     }
-    machines.push(machineId);
-    rec.machines = machines;
-    await this.save(key, rec);
-    return json({ status: "active", message: "ok", rec });
+    if (organization.revoked) return signedResponse(this.env, organization, machineId, "revoked", null);
+    const now = epoch();
+    const code = (organization.activation_codes || []).find((entry) => entry.code_hash === codeHash);
+    if (!code || now >= code.expires_at || (code.claimed_by_machine_id && code.claimed_by_machine_id !== machineId)) {
+      return json({ status: "invalid", message: "This activation code is invalid, expired, or already used." }, 200);
+    }
+    let device = (organization.devices || []).find((entry) => entry.machine_id === machineId);
+    const deviceToken = tokenFor();
+    if (!device) {
+      const deviceLimit = effectiveDeviceLimit(organization, now);
+      if ((organization.devices || []).length >= deviceLimit) {
+        return json({ status: "invalid", message: `This organization has reached its ${deviceLimit}-computer limit.` }, 200);
+      }
+      device = {
+        machine_id: machineId,
+        device_name: cleanDeviceName(body.device_name),
+        token_hash: await sha256(deviceToken),
+        activated_at: now,
+        last_seen_at: now,
+        revoked: false,
+      };
+      organization.devices.push(device);
+    } else {
+      device.last_seen_at = now;
+      device.device_name = cleanDeviceName(body.device_name) || device.device_name;
+      device.revoked = false;
+      // A user who deliberately re-enters the same one-time pairing code on
+      // this computer receives a rotated device credential; KV never retains
+      // a usable plaintext device token.
+      device.token_hash = await sha256(deviceToken);
+    }
+    code.claimed_by_machine_id = machineId;
+    await this.save(organization);
+    return signedResponse(this.env, organization, machineId, "active", deviceToken);
   }
 
-  /// Admin mutation (revoke / extend) applied through the same per-key instance
-  /// so the in-memory cache stays authoritative and a subsequent registration
-  /// can never write stale tier/expiry/revoke data back over it (audit #9).
-  async mutate(key, ops) {
-    const rec = await this.load(key);
-    if (!rec) return json({ status: "error", message: "Unknown license key" }, 404);
-    if (ops.revoked !== undefined) {
-      rec.revoked = ops.revoked === true;
+  async entitlement(organization, body) {
+    const machineId = String(body.machine_id || "").trim();
+    const token = String(body.device_token || "").trim();
+    const device = (organization.devices || []).find((entry) => entry.machine_id === machineId);
+    if (!device || !(await constantTimeEqual(await sha256(token), device.token_hash))) {
+      return json({ status: "invalid", message: "This computer is not activated for the organization." }, 200);
     }
-    const days = Math.max(0, Math.min(3650, parseInt(ops.days, 10) || 0));
-    if (days > 0) {
-      rec.expires_at = Math.max(Math.floor(Date.now() / 1000), rec.expires_at) + days * 86400;
+    if (organization.revoked || device.revoked) return signedResponse(this.env, organization, machineId, "revoked", null);
+    device.last_seen_at = epoch();
+    await this.save(organization);
+    return signedResponse(this.env, organization, machineId, "active", null);
+  }
+
+  async updatePlan(organization, body) {
+    const plan = normalizePlan(body.plan);
+    const days = Math.max(0, Math.min(3650, Number.parseInt(body.plan_duration_days, 10) || 0));
+    organization.plan = plan;
+    organization.device_limit = clampDevices(plan, body.device_limit ?? organization.device_limit);
+    organization.plan_expires_at = plan === "free" ? null : epoch() + Math.max(1, days || 30) * 86_400;
+    await this.save(organization);
+    return json({ status: "ok", organization: publicOrganization(organization) });
+  }
+
+  async createActivationCode(organization) {
+    const code = activationCodeFor();
+    organization.activation_codes = (organization.activation_codes || []).filter((entry) => entry.expires_at > epoch() && !entry.claimed_by_machine_id);
+    organization.activation_codes.push({ code_hash: await sha256(code), expires_at: epoch() + 14 * 86_400, claimed_by_machine_id: null });
+    await this.save(organization);
+    return json({ status: "ok", activation_code: code, expires_at: organization.activation_codes.at(-1).expires_at });
+  }
+
+  async revoke(organization, body) {
+    organization.revoked = body.revoked !== false;
+    await this.save(organization);
+    return json({ status: "ok", organization: publicOrganization(organization) });
+  }
+
+  /**
+   * Transitional provisioning for the future billing webhook and Dashboard.
+   * `monthly_units` replaces the included allowance, while `topup_units` only
+   * grants additional non-expiring purchased Units. Values are stored in
+   * milli-Units so per-second transcription can be settled exactly later.
+   */
+  async updateAi(organization, body) {
+    const now = epoch();
+    const wallet = aiWallet(organization);
+    const duration = optionalWhole(body.addon_duration_days, 0, 3650);
+    if (duration !== null) {
+      wallet.addon_expires_at = duration === 0 ? null : now + duration * 86_400;
     }
-    if (ops.tier) {
-      rec.tier = normalizeTier(ops.tier);
-      rec.max_machines = clampMachines(rec.tier, rec.max_machines);
+
+    const monthlyUnits = optionalWhole(body.monthly_units, 0, 1_000_000);
+    if (monthlyUnits !== null) {
+      wallet.monthly_units_allowance_millis = monthlyUnits * 1000;
+      wallet.monthly_units_remaining_millis = monthlyUnits * 1000;
+      const resetDays = optionalWhole(body.monthly_reset_days, 1, 366) ?? 30;
+      wallet.monthly_cycle_days = resetDays;
+      wallet.monthly_reset_at = now + resetDays * 86_400;
+      recordWalletEvent(wallet, now, "monthly_allowance_set", monthlyUnits * 1000);
     }
-    await this.save(key, rec);
-    return json({ status: "ok", ...rec });
+
+    const topupUnits = optionalWhole(body.topup_units, 0, 1_000_000);
+    if (topupUnits !== null && topupUnits > 0) {
+      wallet.topup_units_remaining_millis += topupUnits * 1000;
+      recordWalletEvent(wallet, now, "topup_granted", topupUnits * 1000);
+    }
+
+    await this.save(organization);
+    return json({
+      status: "ok",
+      organization: publicOrganization(organization),
+      ai: aiBalance(organization, now),
+    });
   }
 }
 
-/// ── Ed25519 response signing (license anti-tamper) ───────────────────
-/// The worker signs every `/validate` response over the authoritative fields
-/// the desktop client persists. The client embeds the matching Ed25519 public
-/// key and refuses any record whose signature does not verify, so a forged or
-/// hand-edited `license.json` and any stubbed `WORDLYTE_LICENSE_URL` endpoint
-/// are both rejected. Generate the keypair with `scripts/generate-keypair.mjs`
-/// and deploy the private JWK as the `LICENSE_SIGN_PRIVATE_KEY` secret.
-async function getSignKey(env) {
-  if (env.__wordlyteSignKey) return env.__wordlyteSignKey;
-  if (!env.LICENSE_SIGN_PRIVATE_KEY) return null;
-  const jwk = JSON.parse(env.LICENSE_SIGN_PRIVATE_KEY);
-  const key = await crypto.subtle
-    .importKey("jwk", jwk, { name: "Ed25519" }, false, ["sign"])
-    .catch(() => null);
-  if (key) env.__wordlyteSignKey = key;
-  return key || null;
+async function signedResponse(env, organization, machineId, status, deviceToken) {
+  const now = epoch();
+  const plan = effectivePlan(organization, now);
+  const fields = {
+    organization_id: organization.id,
+    machine_id: machineId,
+    status,
+    core_activated_at: organization.created_at,
+    // Expired paid subscriptions are signed as Free. A desktop must never keep
+    // using Pro/Premium capacity merely because it holds an older snapshot.
+    plan,
+    plan_expires_at: organization.plan_expires_at || 0,
+    max_machines: effectiveDeviceLimit(organization, now),
+    machines_used: (organization.devices || []).length,
+    server_time: now,
+    limits: planLimits(plan),
+    ai: aiEntitlement(organization, now),
+  };
+  const sig = await signEntitlement(env, fields);
+  return json({
+    status,
+    message: status === "active" ? "ok" : "This device or organization has been revoked.",
+    ...fields,
+    plan_expires_at: organization.plan_expires_at ?? null,
+    church_name: organization.church_name,
+    email: organization.owner_email,
+    ...(deviceToken ? { device_token: deviceToken } : {}),
+    ...(sig ? { sig } : {}),
+  });
 }
 
-/// Canonical string MUST match `canonical_license` in `src-tauri/src/license.rs`.
-/// Field order is significant and never changes.
-async function signValidation(env, f) {
-  const canonical = [
-    "wl2",
-    f.key,
-    f.machine_id,
-    f.status,
-    String(f.issued_at),
-    String(f.expires_at),
-    f.tier,
-    String(f.max_machines),
-    String(f.machines_used),
-    String(f.server_time),
+function publicOrganization(organization) {
+  const now = epoch();
+  const subscriptionPlan = normalizePlan(organization.plan);
+  const plan = effectivePlan(organization, now);
+  return {
+    id: organization.id,
+    church_name: organization.church_name,
+    email: organization.owner_email,
+    // `plan` is the currently effective entitlement. The subscription value is
+    // included for staff/support display but is never used for authorization.
+    plan,
+    subscription_plan: subscriptionPlan,
+    plan_active: subscriptionPlan === "free" || plan === subscriptionPlan,
+    plan_expires_at: organization.plan_expires_at,
+    device_limit: effectiveDeviceLimit(organization, now),
+    devices_used: (organization.devices || []).length,
+    revoked: organization.revoked === true,
+    ai: aiEntitlement(organization),
+    created_at: organization.created_at,
+  };
+}
+
+async function listOrganizations(env) {
+  const result = [];
+  let cursor;
+  do {
+    const page = await env.ORGANIZATIONS.list({ prefix: "org:", cursor });
+    for (const key of page.keys) {
+      const organization = await env.ORGANIZATIONS.get(key.name, "json");
+      if (organization) result.push(publicOrganization(organization));
+    }
+    cursor = page.cursor;
+  } while (cursor);
+  return result.sort((a, b) => a.church_name.localeCompare(b.church_name));
+}
+
+async function findOrganizationByActivationCode(env, codeHash) {
+  let cursor;
+  do {
+    const page = await env.ORGANIZATIONS.list({ prefix: "org:", cursor });
+    for (const key of page.keys) {
+      const organization = await env.ORGANIZATIONS.get(key.name, "json");
+      if ((organization?.activation_codes || []).some((entry) => entry.code_hash === codeHash)) return organization;
+    }
+    cursor = page.cursor;
+  } while (cursor);
+  return null;
+}
+
+async function isAdmin(request, env) {
+  const supplied = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+  return constantTimeEqual(supplied, env.ADMIN_TOKEN || "");
+}
+
+async function constantTimeEqual(left, right) {
+  const a = new TextEncoder().encode(String(left));
+  const b = new TextEncoder().encode(String(right));
+  if (a.byteLength !== b.byteLength) return false;
+  const leftHash = await crypto.subtle.digest("SHA-256", a);
+  const rightHash = await crypto.subtle.digest("SHA-256", b);
+  const x = new Uint8Array(leftHash);
+  const y = new Uint8Array(rightHash);
+  let difference = 0;
+  for (let index = 0; index < x.length; index += 1) difference |= x[index] ^ y[index];
+  return difference === 0;
+}
+
+async function signEntitlement(env, fields) {
+  if (!env.LICENSE_SIGN_PRIVATE_KEY) return "";
+  const key = await crypto.subtle.importKey("jwk", JSON.parse(env.LICENSE_SIGN_PRIVATE_KEY), { name: "Ed25519" }, false, ["sign"]);
+  const signature = await crypto.subtle.sign({ name: "Ed25519" }, key, new TextEncoder().encode(canonicalEntitlement(fields)));
+  return base64(new Uint8Array(signature));
+}
+
+function canonicalEntitlement(fields) {
+  return [
+    "wl3",
+    fields.organization_id,
+    fields.machine_id,
+    fields.status,
+    String(fields.core_activated_at),
+    fields.plan,
+    String(fields.plan_expires_at || 0),
+    String(fields.max_machines),
+    String(fields.machines_used),
+    String(fields.server_time),
+    String(fields.limits.maxBibleVersions),
+    String(fields.limits.maxOutputs),
+    String(fields.limits.maxCameras),
+    String(fields.limits.maxScenes),
+    String(fields.limits.streamDestinations),
+    fields.limits.sharedAudioInput ? "1" : "0",
+    fields.ai.addonActive ? "1" : "0",
+    String(fields.ai.addonExpiresAt || 0),
   ].join("|");
-  const sigKey = await getSignKey(env);
-  if (!sigKey) return "";
-  const sig = await crypto.subtle.sign({ name: "Ed25519" }, sigKey, new TextEncoder().encode(canonical));
-  return b64(new Uint8Array(sig));
 }
 
-function b64(bytes) {
-  let s = "";
-  for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s);
+function activationCodeFor() {
+  // Human-entered pairing codes are intentionally case-insensitive. Device
+  // credentials remain high-entropy base64url values and are never typed.
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = new Uint8Array(20);
+  crypto.getRandomValues(bytes);
+  return `WACT-${[...bytes].map((byte) => alphabet[byte % alphabet.length]).join("")}`;
 }
-
-function generateKey() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no I, O, 0, 1
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes); // audit #6: Web Crypto, never Math.random
-  let out = "";
-  for (const b of bytes) out += alphabet[b % alphabet.length];
-  return `WORDLYTE-${out.slice(0, 4)}-${out.slice(4, 8)}-${out.slice(8, 12)}-${out.slice(12, 16)}`;
+function tokenFor() { return tokenWithPrefix("wdv"); }
+function tokenWithPrefix(prefix) {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return `${prefix}_${base64url(bytes)}`;
 }
-
-const TIERS = ["free", "pro", "premium"];
-const TIER_MAX_MACHINES = { free: 1, pro: 3, premium: 50 };
-
-function normalizeTier(v) {
-  const t = String(v || "").trim().toLowerCase();
-  return TIERS.includes(t) ? t : "free";
+function base64(bytes) { let value = ""; for (const byte of bytes) value += String.fromCharCode(byte); return btoa(value); }
+function base64url(bytes) { return base64(bytes).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", ""); }
+async function sha256(value) { const bytes = new TextEncoder().encode(value); const digest = await crypto.subtle.digest("SHA-256", bytes); return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join(""); }
+function epoch() { return Math.floor(Date.now() / 1000); }
+function orgKey(id) { return `org:${id}`; }
+function validOrganizationId(id) { return /^org_[a-f0-9]{32}$/.test(id); }
+function validMachineId(id) { return /^[a-f0-9]{64}$/i.test(id); }
+function validDeviceToken(token) { return /^wdv_[A-Za-z0-9_-]{20,}$/.test(token); }
+function normalizePlan(value) { const plan = String(value || "").trim().toLowerCase(); return PLANS.includes(plan) ? plan : "free"; }
+function clampDevices(plan, requested) { return Math.max(1, Math.min(PLAN_DEVICE_CAPS[plan], Number.parseInt(requested, 10) || PLAN_DEVICE_CAPS[plan])); }
+function effectivePlan(organization, now = epoch()) {
+  const plan = normalizePlan(organization.plan);
+  return plan === "free" || (Number(organization.plan_expires_at) || 0) > now ? plan : "free";
 }
-
-function clampMachines(tier, requested) {
-  const cap = TIER_MAX_MACHINES[normalizeTier(tier)] || 50;
-  const n = Math.max(1, Math.min(50, parseInt(requested, 10) || 1));
-  return Math.min(n, cap);
+function effectiveDeviceLimit(organization, now = epoch()) {
+  const plan = effectivePlan(organization, now);
+  return clampDevices(plan, organization.device_limit);
 }
+function planLimits(value) {
+  switch (normalizePlan(value)) {
+    case "premium":
+      return { maxBibleVersions: 1000, maxOutputs: 10, maxCameras: 10, maxScenes: 1000, streamDestinations: 5, sharedAudioInput: true };
+    case "pro":
+      return { maxBibleVersions: 1000, maxOutputs: 2, maxCameras: 3, maxScenes: 1000, streamDestinations: 1, sharedAudioInput: false };
+    default:
+      return { maxBibleVersions: 1000, maxOutputs: 1, maxCameras: 1, maxScenes: 3, streamDestinations: 0, sharedAudioInput: false };
+  }
+}
+function aiWallet(organization) {
+  if (!organization.ai || typeof organization.ai !== "object") organization.ai = {};
+  const wallet = organization.ai;
+  wallet.addon_expires_at = positiveEpoch(wallet.addon_expires_at);
+  wallet.monthly_units_allowance_millis = nonNegativeInt(wallet.monthly_units_allowance_millis);
+  wallet.monthly_units_remaining_millis = nonNegativeInt(wallet.monthly_units_remaining_millis);
+  wallet.topup_units_remaining_millis = nonNegativeInt(wallet.topup_units_remaining_millis);
+  wallet.monthly_reset_at = positiveEpoch(wallet.monthly_reset_at);
+  if (!Array.isArray(wallet.ledger)) wallet.ledger = [];
+  return wallet;
+}
+function aiEntitlement(organization, now = epoch()) {
+  const wallet = aiWallet(organization);
+  const expiresAt = wallet.addon_expires_at;
+  return {
+    addonActive: Boolean(expiresAt && now < expiresAt),
+    addonExpiresAt: expiresAt,
+  };
+}
+function aiBalance(organization, now = epoch()) {
+  const wallet = aiWallet(organization);
+  refreshMonthlyAllowance(wallet, now);
+  const monthly = wallet.monthly_units_remaining_millis;
+  const topup = wallet.topup_units_remaining_millis;
+  return {
+    addon_active: aiEntitlement(organization, now).addonActive,
+    monthly_units_remaining: monthly / 1000,
+    topup_units_remaining: topup / 1000,
+    total_units_remaining: (monthly + topup) / 1000,
+    monthly_reset_at: wallet.monthly_reset_at,
+    rates: { transcription_units_per_minute: 1, standard_llm_request_units: 10 },
+  };
+}
+function recordWalletEvent(wallet, at, type, deltaMillis) {
+  wallet.ledger.push({ at, type, delta_millis: deltaMillis });
+  if (wallet.ledger.length > 200) wallet.ledger.splice(0, wallet.ledger.length - 200);
+}
+function refreshMonthlyAllowance(wallet, now) {
+  const cycleDays = optionalWhole(wallet.monthly_cycle_days, 1, 366) ?? 30;
+  if (!wallet.monthly_reset_at || wallet.monthly_reset_at > now || !wallet.monthly_units_allowance_millis) return;
+  // An extended outage should result in one current billing allowance, not an
+  // accumulation of missed monthly allocations.
+  wallet.monthly_units_remaining_millis = wallet.monthly_units_allowance_millis;
+  wallet.monthly_reset_at = now + cycleDays * 86_400;
+  recordWalletEvent(wallet, now, "monthly_allowance_reset", wallet.monthly_units_allowance_millis);
+}
+function positiveEpoch(value) { const number = Number.parseInt(value, 10); return Number.isSafeInteger(number) && number > 0 ? number : null; }
+function nonNegativeInt(value) { const number = Number.parseInt(value, 10); return Number.isSafeInteger(number) && number >= 0 ? number : 0; }
+function optionalWhole(value, min, max) {
+  if (value === undefined || value === null || value === "") return null;
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= min && number <= max ? number : null;
+}
+function cleanDeviceName(value) { return String(value || "").trim().replace(/[\u0000-\u001f]/g, "").slice(0, 80) || "Wordlyte computer"; }
+function json(data, status = 200) { return new Response(JSON.stringify(data), { status, headers: jsonHeaders }); }
+function unauthorized() { return json({ status: "error", message: "Unauthorized" }, 401); }
+function forward(response) { return new Response(response.body, { status: response.status, headers: jsonHeaders }); }
 
 const ADMIN_HTML = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Wordlyte License Admin</title>
-<style>
-:root{--bg:#0f1115;--panel:#171a21;--border:#2a2f3a;--text:#e6e8ee;--muted:#9aa1ae;--accent:#f59e0b;--green:#34d399;--red:#f87171}
-*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text)}
-header{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border)}
-header h1{font-size:16px;margin:0}header .spacer{flex:1}main{max-width:1100px;margin:20px auto;padding:0 20px;display:grid;gap:16px}
-.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-input,select,button{font:inherit}input,select,textarea{background:#0d0f13;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px}
-button{background:#232838;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 12px;cursor:pointer}button:hover{border-color:var(--accent)}
-button.primary{background:var(--accent);color:#0f1115;font-weight:600}button.danger{color:var(--red)}
-table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border)}
-th{color:var(--muted);font-weight:500}.badge{padding:2px 8px;border-radius:999px;font-size:11px}.badge.active{background:#0f2e24;color:var(--green)}.badge.revoked{background:#3a1418;color:var(--red)}.badge.expired{background:#3a2c10;color:var(--accent)}
-.stats{display:flex;gap:24px}.stat b{font-size:22px;display:block}.muted{color:var(--muted)}.error{color:var(--red)}
-#login{max-width:400px;margin:80px auto}.hidden{display:none}.key{font-family:ui-monospace,monospace}.toast{position:fixed;bottom:16px;right:16px;background:#232838;border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:13px;z-index:9}
-</style>
-</head>
-<body>
-<div id="login" class="panel">
-  <h1>Wordlyte License Admin</h1>
-  <p class="muted">Enter the admin token to manage license keys.</p>
-  <div class="row">
-    <input id="tokenInput" type="password" placeholder="ADMIN_TOKEN" style="flex:1">
-    <button class="primary" onclick="login()">Sign in</button>
-  </div>
-  <p id="loginError" class="error"></p>
-</div>
-
-<div id="app" class="hidden">
-  <header>
-    <h1>Wordlyte License Admin</h1>
-    <span class="muted" id="statusDot"></span>
-    <div class="spacer"></div>
-    <button onclick="load()">Refresh</button>
-    <button onclick="logout()">Sign out</button>
-  </header>
-  <main>
-    <div class="panel stats" id="stats"></div>
-      <div class="panel">
-      <h3>Issue a key</h3>
-      <div class="row">
-        <input id="fChurch" placeholder="Church name" style="flex:2">
-        <input id="fEmail" placeholder="Email" style="flex:2">
-        <input id="fDays" type="number" value="90" title="days" style="width:80px">
-        <input id="fMachines" type="number" value="3" title="machines" style="width:80px">
-        <select id="fTier" title="tier" style="width:100px">
-          <option value="free">Free</option>
-          <option value="pro" selected>Pro</option>
-          <option value="premium">Premium</option>
-        </select>
-        <button class="primary" onclick="issue()">Issue</button>
-      </div>
-    </div>
-    <div class="panel">
-      <h3>Bulk issue (CSV: church_name,email,duration_days,max_machines,tier)</h3>
-      <textarea id="fCsv" rows="4" placeholder="First Baptist Church,pastor@fbc.org,90,3" style="width:100%"></textarea>
-      <div class="row" style="margin-top:8px"><button onclick="bulkIssue()">Issue all rows</button><span class="muted" id="bulkResult"></span></div>
-    </div>
-    <div class="panel">
-      <div class="row">
-        <h3 style="margin:0">Licenses</h3>
-        <div class="spacer"></div>
-        <label class="muted" style="font-size:13px">Show expiring within
-          <input id="fExpiring" type="number" value="30" style="width:64px" onchange="load()"> days
-        </label>
-      </div>
-<table>
-          <thead><tr><th>Key</th><th>Church</th><th>Email</th><th>Expires</th><th>Machines</th><th>Tier</th><th>Status</th><th></th></tr></thead>
-          <tbody id="rows"></tbody>
-        </table>
-    </div>
-  </main>
-</div>
-<div id="toast" class="toast hidden"></div>
-
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wordlyte Account Admin</title><style>
+:root{color-scheme:dark;--bg:#10131a;--panel:#191e29;--border:#30394a;--text:#edf2f7;--muted:#a5b0c0;--accent:#77b7ff;--danger:#fb7185;--ok:#5eead4}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px system-ui,-apple-system,Segoe UI,Roboto,sans-serif}header{padding:16px 22px;border-bottom:1px solid var(--border);display:flex;gap:12px;align-items:center}h1,h2{margin:0}h1{font-size:17px}h2{font-size:15px}.spacer{flex:1}main{max-width:1200px;margin:22px auto;padding:0 18px;display:grid;gap:16px}.panel{padding:16px;background:var(--panel);border:1px solid var(--border);border-radius:10px}.hidden{display:none}.muted{color:var(--muted)}.row{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin-top:12px}input,select,button{font:inherit;border-radius:6px;padding:8px 10px;border:1px solid var(--border);background:#10141c;color:var(--text)}input{min-width:130px}button{cursor:pointer}button:hover{border-color:var(--accent)}button.primary{background:var(--accent);color:#07111f;border-color:var(--accent);font-weight:700}button.danger{color:var(--danger)}table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--border);vertical-align:middle}th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em}.badge{border:1px solid var(--border);border-radius:999px;padding:2px 7px;font-size:11px;font-weight:700}.free{color:#cbd5e1}.pro{color:#7dd3fc}.premium{color:#d8b4fe}.revoked{color:var(--danger)}.code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.notice{min-height:20px;margin-top:10px;color:var(--muted)}.error{color:var(--danger)}@media(max-width:800px){table{display:block;overflow:auto}}
+</style></head><body>
+<section id="login"><main><div class="panel"><h1>Wordlyte Account Admin</h1><p class="muted">Sign in with the server administrator token. The token is held only in this browser tab.</p><div class="row"><input id="token" type="password" autocomplete="current-password" placeholder="ADMIN_TOKEN" style="flex:1"><button class="primary" id="signIn">Sign in</button></div><p class="notice" id="loginNotice"></p></div></main></section>
+<section id="app" class="hidden"><header><h1>Wordlyte Account Admin</h1><span class="muted" id="summary"></span><span class="spacer"></span><button id="refresh">Refresh</button><button id="signOut">Sign out</button></header><main>
+<div class="panel"><h2>Create organization</h2><div class="row"><input id="church" placeholder="Church name" style="flex:2"><input id="email" type="email" placeholder="Owner email" style="flex:2"><select id="createPlan"><option value="free">Free</option><option value="pro">Pro</option><option value="premium">Premium</option></select><input id="createDays" type="number" min="1" max="3650" value="30" title="Paid plan duration in days"><input id="createDevices" type="number" min="1" value="1" title="Device limit"><button class="primary" id="create">Create</button></div><p class="notice" id="createNotice"></p></div>
+<div class="panel"><h2>Organizations</h2><p class="notice" id="notice"></p><table><thead><tr><th>Church</th><th>Owner</th><th>Plan</th><th>Devices</th><th>Paid expiry</th><th>Status</th><th>Actions</th></tr></thead><tbody id="rows"></tbody></table></div>
+</main></section>
 <script>
-var token = sessionStorage.getItem("admin_token");
-var licenses = [];
-
-function esc(s){return String(s == null ? "" : s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
-function toast(msg, isError){var t=document.getElementById("toast");t.textContent=msg;t.className="toast"+(isError?" error":"");setTimeout(function(){t.className="toast hidden";},3000);}
-async function api(path, opts){opts=opts||{};opts.headers=opts.headers||{};opts.headers["content-type"]="application/json";opts.headers.authorization="Bearer "+token;var res=await fetch(path,opts);var data=await res.json().catch(function(){return null;});return {status:res.status,data:data};}
-function fmt(ts){return new Date(ts*1000).toISOString().slice(0,10);}
-function statusBadge(l){var now=Math.floor(Date.now()/1000);if(l.revoked)return '<span class="badge revoked">revoked</span>';if(now>=l.expires_at)return '<span class="badge expired">expired</span>';return '<span class="badge active">active</span>';}
-function tierBadge(l){var t=l.tier||"free";var c=t==="premium"?"#a78bfa":t==="pro"?"#38bdf8":"#9aa1ae";return '<span class="badge" style="color:'+c+';border:1px solid '+c+'">'+esc(t)+'</span>';}
-
-function login(){token=document.getElementById("tokenInput").value.trim();if(!token)return;sessionStorage.setItem("admin_token",token);showApp();}
-function logout(){token="";sessionStorage.removeItem("admin_token");document.getElementById("login").classList.remove("hidden");document.getElementById("app").classList.add("hidden");}
-async function showApp(){document.getElementById("login").classList.add("hidden");document.getElementById("app").classList.remove("hidden");await load();}
-
-async function load(){
-  var r=await api("/licenses");
-  if(r.status===401){toast("Unauthorized — check the token",true);return;}
-  if(!r.data||r.data.status!=="ok"){toast("Failed to load licenses",true);return;}
-  licenses=r.data.licenses;
-  var now=Math.floor(Date.now()/1000);
-  var days=parseInt(document.getElementById("fExpiring").value,10)||30;
-  var cutoff=now+days*86400;
-  var active=licenses.filter(function(l){return !l.revoked&&l.expires_at>now;}).length;
-  var revoked=licenses.filter(function(l){return l.revoked;}).length;
-  var expiring=licenses.filter(function(l){return !l.revoked&&l.expires_at<cutoff;}).length;
-  document.getElementById("statusDot").textContent=licenses.length+" key(s)";
-  document.getElementById("stats").innerHTML=
-    '<div class="stat"><b>'+licenses.length+'</b>total</div>'+
-    '<div class="stat"><b>'+active+'</b>active</div>'+
-    '<div class="stat"><b>'+revoked+'</b>revoked</div>'+
-    '<div class="stat"><b>'+expiring+'</b>expiring ≤ '+days+'d</div>';
-  renderRows();
-}
-
-function renderRows(){
-  var days=parseInt(document.getElementById("fExpiring").value,10)||30;
-  var cutoff=Math.floor(Date.now()/1000)+days*86400;
-  var list=licenses.slice().sort(function(a,b){return a.expires_at-b.expires_at;});
-  var tbody=document.getElementById("rows");
-  if(list.length===0){tbody.innerHTML='<tr><td colspan="8" class="muted">No licenses yet.</td></tr>';return;}
-  tbody.innerHTML=list.map(function(l){
-    var soon=l.expires_at<cutoff?' <span class="badge active">soon</span>':'';
-    var used=(l.machines||[]).length;
-    return '<tr>'+
-      '<td class="key">'+esc(l.key)+' <button data-action="copy" data-key="'+esc(l.key)+'" title="copy">copy</button></td>'+
-      '<td>'+esc(l.church_name)+'</td>'+
-      '<td>'+esc(l.email)+'</td>'+
-      '<td>'+fmt(l.expires_at)+soon+'</td>'+
-      '<td>'+used+'/'+l.max_machines+'</td>'+
-      '<td>'+tierBadge(l)+'</td>'+
-      '<td>'+statusBadge(l)+'</td>'+
-      '<td><button data-action="extend" data-key="'+esc(l.key)+'">Extend</button> <button data-action="tier" data-key="'+esc(l.key)+'">Tier</button> <button class="danger" data-action="revoke" data-key="'+esc(l.key)+'">'+(l.revoked?'Restore':'Revoke')+'</button></td>'+
-    '</tr>';
-  }).join("");
-}
-
-async function issue(){
-  var church=document.getElementById("fChurch").value.trim();
-  var email=document.getElementById("fEmail").value.trim();
-  if(!church||!email){toast("Church name and email required",true);return;}
-  var r=await api("/issue",{method:"POST",body:JSON.stringify({church_name:church,email:email,duration_days:parseInt(document.getElementById("fDays").value,10)||90,max_machines:parseInt(document.getElementById("fMachines").value,10)||3,tier:document.getElementById("fTier").value,note:"ui"})});
-  if(r.data&&r.data.status==="ok"){toast("Issued "+r.data.license_key);document.getElementById("fChurch").value="";document.getElementById("fEmail").value="";await load();}
-  else toast("Issue failed: "+(r.data&&r.data.message||r.status),true);
-}
-
-async function bulkIssue(){
-  var lines=document.getElementById("fCsv").value.split(/\\r?\\n/).map(function(s){return s.trim();}).filter(Boolean).filter(function(s){return !/^church/i.test(s);});
-  var ok=0,fail=0,out=[];
-  for(var i=0;i<lines.length;i++){
-    var parts=lines[i].split(",").map(function(s){return s.trim();});
-    var r=await api("/issue",{method:"POST",body:JSON.stringify({church_name:parts[0],email:parts[1],duration_days:parseInt(parts[2],10)||90,max_machines:parts[3]?parseInt(parts[3],10):3,tier:parts[4]||"pro",note:"bulk-ui"})});
-    if(r.data&&r.data.status==="ok"){ok++;out.push(r.data.license_key);}else{fail++;out.push("FAIL "+parts[0]);}
-  }
-  document.getElementById("bulkResult").textContent=ok+" issued, "+fail+" failed";
-  document.getElementById("fCsv").value=out.join("\\n");
-  await load();
-}
-
-async function extend(key){var days=window.prompt("Extend "+key+" by how many days?","14");if(!days)return;var r=await api("/extend",{method:"POST",body:JSON.stringify({license_key:key,days:parseInt(days,10)})});if(r.data&&r.data.status==="ok"){toast("Extended to "+fmt(r.data.expires_at));await load();}else toast("Extend failed",true);}
-async function changeTier(key){var l=licenses.find(function(x){return x.key===key;});var cur=l.tier||"free";var tier=window.prompt("Tier for "+key+" (free/pro/premium) — current: "+cur,cur);if(!tier)return;var r=await api("/extend",{method:"POST",body:JSON.stringify({license_key:key,tier:tier})});if(r.data&&r.data.status==="ok"){toast("Tier set to "+r.data.tier+" (max "+r.data.max_machines+" machines)");await load();}else toast("Tier change failed",true);}
-async function toggleRevoke(key){var l=licenses.find(function(x){return x.key===key;});var want=!l.revoked;if(want&&!window.confirm("Revoke "+key+"?"))return;var r=await api("/revoke",{method:"POST",body:JSON.stringify({license_key:key,revoked:want})});if(r.data&&r.data.status==="ok"){toast((want?"Revoked":"Restored")+" "+key);await load();}else toast("Revoke failed",true);}
-function copyKey(key){navigator.clipboard&&navigator.clipboard.writeText(key).then(function(){toast("Copied "+key);});}
-
-document.getElementById("rows").addEventListener("click",function(e){
-  var btn=e.target.closest("button[data-action]");
-  if(!btn)return;
-  var key=btn.dataset.key, action=btn.dataset.action;
-  if(action==="copy")copyKey(key);
-  else if(action==="extend")extend(key);
-  else if(action==="tier")changeTier(key);
-  else if(action==="revoke")toggleRevoke(key);
-});
-
-if(token){document.getElementById("tokenInput").value=token;showApp();}
-</script>
-</body>
-</html>`;
+let token=sessionStorage.getItem('wordlyte_admin_token')||'', organizations=[];
+const $=id=>document.getElementById(id); const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const date=ts=>ts?new Date(ts*1000).toLocaleDateString():'—';
+async function api(path,options={}){const headers={'content-type':'application/json',authorization:'Bearer '+token,...(options.headers||{})};const response=await fetch(path,{...options,headers});return {status:response.status,data:await response.json().catch(()=>null)}}
+function showNotice(id,text,error=false){const e=$(id);e.textContent=text;e.className='notice'+(error?' error':'')}
+function showApp(){ $('login').classList.add('hidden');$('app').classList.remove('hidden');load(); }
+function showLogin(message=''){ $('app').classList.add('hidden');$('login').classList.remove('hidden');$('token').value=token;showNotice('loginNotice',message,true); }
+async function load(){showNotice('notice','Loading…');const r=await api('/admin/organizations');if(r.status===401){showLogin('Unauthorized — check the administrator token.');return}if(r.status!==200||!r.data?.organizations){showNotice('notice',r.data?.message||'Could not load organizations.',true);return}organizations=r.data.organizations;$('summary').textContent=organizations.length+' organization'+(organizations.length===1?'':'s');showNotice('notice','');render()}
+function render(){const body=$('rows');if(!organizations.length){body.innerHTML='<tr><td colspan="7" class="muted">No organizations yet.</td></tr>';return}body.innerHTML=organizations.map(o=>'<tr><td><b>'+esc(o.church_name)+'</b><br><span class="muted code">'+esc(o.id)+'</span></td><td>'+esc(o.email)+'</td><td><span class="badge '+esc(o.plan)+'">'+esc(o.plan)+'</span></td><td>'+esc(o.devices_used)+' / '+esc(o.device_limit)+'</td><td>'+date(o.plan_expires_at)+'</td><td>'+(o.revoked?'<span class="badge revoked">revoked</span>':'<span class="badge">active</span>')+'</td><td><button data-action="code" data-id="'+esc(o.id)+'">Pair code</button> <button data-action="plan" data-id="'+esc(o.id)+'">Plan</button> <button class="danger" data-action="revoke" data-id="'+esc(o.id)+'">'+(o.revoked?'Restore':'Revoke')+'</button></td></tr>').join('')}
+async function create(){const church_name=$('church').value.trim(),email=$('email').value.trim(),plan=$('createPlan').value;if(!church_name||!email){showNotice('createNotice','Church name and owner email are required.',true);return}const r=await api('/admin/organizations',{method:'POST',body:JSON.stringify({church_name,email,plan,plan_duration_days:+$('createDays').value,device_limit:+$('createDevices').value})});if(r.status!==200){showNotice('createNotice',r.data?.message||'Could not create organization.',true);return}showNotice('createNotice','Created. Activation code: '+r.data.activation_code);$('church').value='';$('email').value='';load()}
+async function action(event){const button=event.target.closest('button[data-action]');if(!button)return;const id=button.dataset.id,kind=button.dataset.action;if(kind==='code'){const r=await api('/admin/organizations/'+id+'/activation-code',{method:'POST',body:'{}'});showNotice('notice',r.status===200?'Device activation code: '+r.data.activation_code:(r.data?.message||'Could not create pairing code.'),r.status!==200);return}if(kind==='revoke'){const organization=organizations.find(o=>o.id===id);if(!organization||!confirm((organization.revoked?'Restore':'Revoke')+' '+organization.church_name+'?'))return;const r=await api('/admin/organizations/'+id+'/revoke',{method:'POST',body:JSON.stringify({revoked:!organization.revoked})});if(r.status!==200)showNotice('notice',r.data?.message||'Update failed.',true);else load();return}const organization=organizations.find(o=>o.id===id);const plan=prompt('Plan: free, pro, or premium',organization?.plan||'free');if(!plan)return;const days=prompt('Plan duration in days (paid plans)', '30');const devices=prompt('Device limit',String(organization?.device_limit||1));const r=await api('/admin/organizations/'+id+'/plan',{method:'POST',body:JSON.stringify({plan,plan_duration_days:+days,device_limit:+devices})});if(r.status!==200)showNotice('notice',r.data?.message||'Plan update failed.',true);else load()}
+$('signIn').onclick=()=>{token=$('token').value.trim();if(!token){showNotice('loginNotice','Enter the administrator token.',true);return}sessionStorage.setItem('wordlyte_admin_token',token);showApp()};$('signOut').onclick=()=>{token='';sessionStorage.removeItem('wordlyte_admin_token');showLogin('')};$('refresh').onclick=load;$('create').onclick=create;$('rows').onclick=action;if(token)showApp();
+</script></body></html>`;

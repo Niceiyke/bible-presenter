@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "dialog:default",
+    "shell:allow-open",
     "core:window:allow-show",
     "core:window:allow-hide",
     "core:webview:allow-internal-toggle-devtools"

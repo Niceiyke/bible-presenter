@@ -1,5 +1,5 @@
 use crate::commands::rtmp::build_rtmp_url;
-use crate::license::{ensure_active_tier, LicenseTier};
+use crate::license::{ensure_shared_audio_input, ensure_stream_destination_capacity};
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -228,10 +228,6 @@ pub fn stream_rtmp_start(
     fps: u32,
     audio_device: Option<String>,
 ) -> Result<StreamingStatus, String> {
-    ensure_active_tier(&state, LicenseTier::Pro)?;
-    if audio_device.is_some() {
-        ensure_active_tier(&state, LicenseTier::Premium)?;
-    }
     {
         if state.streaming.lock().is_some() {
             return Err("A broadcast is already live — stop it first.".into());
@@ -240,6 +236,10 @@ pub fn stream_rtmp_start(
     let enabled: Vec<StreamDest> = destinations.into_iter().filter(|d| d.enabled).collect();
     if enabled.is_empty() {
         return Err("No enabled destinations to stream to.".into());
+    }
+    ensure_stream_destination_capacity(&state, enabled.len())?;
+    if audio_device.is_some() {
+        ensure_shared_audio_input(&state)?;
     }
     let rtmp_enabled: Vec<&StreamDest> = enabled.iter().filter(|d| d.mode != "ndi").collect();
     let ndi_enabled: Vec<&StreamDest> = enabled.iter().filter(|d| d.mode == "ndi").collect();
@@ -431,6 +431,7 @@ pub fn stream_rtmp_start(
     let writer_finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let writer_finished_thread = writer_finished.clone();
     let writer_rx = active_rx.clone();
+    let entitlement = state.license.clone();
     #[cfg(feature = "ndi")]
     let ndi_fps = f;
     let writer_thread = std::thread::Builder::new()
@@ -441,7 +442,20 @@ pub fn stream_rtmp_start(
             let ndi_senders = ndi_senders;
             let mut n = 0u64;
             let mut b = 0u64;
+            let mut last_entitlement_check = std::time::Instant::now();
             loop {
+                // Do not let a broadcast begun shortly before a paid-plan
+                // expiry continue indefinitely. The effective local license
+                // computes expiry as Free even before the next network refresh.
+                if last_entitlement_check.elapsed() >= std::time::Duration::from_secs(1) {
+                    let info = entitlement.status();
+                    if info.status != crate::license::LicenseStatus::Active
+                        || info.tier < crate::license::LicenseTier::Pro
+                    {
+                        break;
+                    }
+                    last_entitlement_check = std::time::Instant::now();
+                }
                 let frame = {
                     let guard = writer_rx.lock();
                     match guard.recv_timeout(std::time::Duration::from_millis(20)) {

@@ -119,7 +119,7 @@ export function resolveOutputFrame(input: ResolveOutputFrameInput): ResolvedOutp
   };
 
   const watermark =
-    license?.status === "active" ? tierCapabilities(license.tier).watermark : false;
+    license?.status === "active" ? tierCapabilities(license.tier, license.limits).watermark : false;
 
   return {
     item: resolvedItem,

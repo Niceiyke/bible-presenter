@@ -68,7 +68,7 @@ jobs:
             exit 0
           fi
           for i in $(seq 1 10); do
-            if curl -sf "$WORKER_URL/licenses" -H "authorization: Bearer $ADMIN_TOKEN" | grep -q '"status":"ok"'; then
+            if curl -sf "$WORKER_URL/admin/organizations" -H "authorization: Bearer $ADMIN_TOKEN" | grep -q '"status":"ok"'; then
               echo "Smoke test passed."
               exit 0
             fi

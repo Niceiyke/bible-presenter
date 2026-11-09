@@ -1,9 +1,9 @@
 import React, { useCallback, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-shell";
 import {
   AlertTriangle,
   CheckCircle2,
-  Clock,
   KeyRound,
   RefreshCcw,
   ShieldAlert,
@@ -25,11 +25,6 @@ const STATUS_META: Record<LicenseStatus, { title: string; icon: React.ReactNode;
     icon: <KeyRound size={20} className="text-amber-400" />,
     accent: "bg-amber-500/15 border-amber-500/30",
   },
-  expired: {
-    title: "License expired",
-    icon: <Clock size={20} className="text-red-400" />,
-    accent: "bg-red-500/15 border-red-500/30",
-  },
   revoked: {
     title: "License revoked",
     icon: <ShieldAlert size={20} className="text-red-400" />,
@@ -49,7 +44,7 @@ const STATUS_META: Record<LicenseStatus, { title: string; icon: React.ReactNode;
 
 export function LicenseGate() {
   const { license, setLicense } = useAppStore();
-  const [key, setKey] = useState("");
+  const [activationCode, setActivationCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -69,13 +64,13 @@ export function LicenseGate() {
     setBusy(true);
     setError(null);
     try {
-      apply(await invoke<LicenseInfo>("license_activate", { key: key.trim() }));
+      apply(await invoke<LicenseInfo>("license_activate", { activationCode: activationCode.trim() }));
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(false);
     }
-  }, [key, apply]);
+  }, [activationCode, apply]);
 
   const refresh = useCallback(async () => {
     setBusy(true);
@@ -94,7 +89,7 @@ export function LicenseGate() {
     setError(null);
     try {
       apply(await invoke<LicenseInfo>("license_deactivate"));
-      setKey("");
+      setActivationCode("");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -102,7 +97,15 @@ export function LicenseGate() {
     }
   }, [apply]);
 
-  const needsKeyInput = status === "unactivated";
+  const openDashboard = useCallback(async () => {
+    try {
+      await open("https://dashboard.wordlyte.com");
+    } catch (e) {
+      setError(`Could not open the Wordlyte Dashboard: ${String(e)}`);
+    }
+  }, []);
+
+  const needsActivationInput = status === "unactivated";
 
   return (
     <div className="h-screen bg-slate-950 text-slate-200 flex items-center justify-center select-none">
@@ -122,45 +125,52 @@ export function LicenseGate() {
           </div>
 
           <p className="text-xs text-slate-400 leading-relaxed mt-1">
-            {license?.message ||
-              "Enter the license key issued to your church during the Wordlyte beta."}
-          </p>
+              {license?.message ||
+               "Ask your Wordlyte organization owner for a device activation code for this computer."}
+            </p>
 
-          {needsKeyInput && (
+           {needsActivationInput && (
             <div className="mt-4 flex flex-col gap-2">
               {license?.offline && (
                 <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
                   <WifiOff size={12} className="text-amber-400 shrink-0 mt-0.5" />
                   <p className="text-[11px] text-amber-200/90 leading-relaxed">
                     This computer is offline and cannot reach the license server.
-                    Activating a key requires an internet connection. Check the
+                     Activating this computer requires an internet connection. Check the
                     connection (or the license server), then retry.
                   </p>
                 </div>
               )}
               <input
                 autoFocus
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
+                value={activationCode}
+                onChange={(e) => setActivationCode(e.target.value.toUpperCase())}
                 onKeyDown={(e) => { if (e.key === "Enter") activate(); }}
-                placeholder="WORDLYTE-XXXX-XXXX-XXXX-XXXX"
+                placeholder="WACT-XXXXXXXXXXXXXXXXXXXX"
                 spellCheck={false}
                 className="w-full bg-slate-900 text-slate-100 text-sm rounded-lg px-3 py-2.5 border border-slate-700 focus:border-amber-500 focus:outline-none focus-visible:outline-2 focus-visible:outline-amber-500/50 uppercase tracking-wider"
               />
               <button
                 onClick={activate}
-                disabled={busy || !key.trim()}
+                disabled={busy || !activationCode.trim()}
                 className="mt-1 w-full py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-black text-xs font-black uppercase tracking-widest transition-all"
               >
-                {busy ? "Activating…" : "Activate"}
+                {busy ? "Activating…" : "Activate this computer"}
               </button>
               <p className="text-[11px] text-slate-500 text-center">
-                Need a key? Contact the Wordlyte team — keys are issued per church during the beta.
+                Need a code? Ask the owner of your Wordlyte organization to create one for this computer.
               </p>
+              <button
+                type="button"
+                onClick={openDashboard}
+                className="text-[11px] font-bold text-amber-400 hover:text-amber-300 underline underline-offset-2 transition-colors"
+              >
+                New to Wordlyte? Sign up in the Dashboard
+              </button>
             </div>
           )}
 
-          {!needsKeyInput && (
+           {!needsActivationInput && (
             <div className="mt-4 flex flex-col gap-2">
               {status === "clock_tampered" && (
                 <p className="text-[11px] text-slate-500">
@@ -182,7 +192,7 @@ export function LicenseGate() {
                   disabled={busy}
                   className="flex-1 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 text-xs font-black uppercase tracking-widest border border-slate-700 transition-all"
                 >
-                  Use a different key
+                    Use a different account
                 </button>
               </div>
             </div>
@@ -207,7 +217,7 @@ export function LicenseGate() {
           {license?.status === "active" && (
             <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-400/90">
               <CheckCircle2 size={12} /> {license.church_name}
-              {license.expires_at ? ` · valid until ${new Date(license.expires_at * 1000).toLocaleDateString()}` : ""}
+              {license.plan_expires_at ? ` · ${license.tier} plan until ${new Date(license.plan_expires_at * 1000).toLocaleDateString()}` : " · Activated"}
             </span>
           )}
           <span className="text-[10px] text-slate-600 font-mono">

@@ -154,6 +154,7 @@ pub async fn backup_create(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<BackupResult, String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     let destination = validate_backup_path(&path, false)?;
     if destination.starts_with(&state.app_data_dir) {
         return Err("Save backups outside Wordlyte's app-data directory".into());
@@ -228,6 +229,7 @@ pub async fn backup_create(
 
 #[tauri::command]
 pub async fn backup_stage_restore(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     if state.app_data_dir.join(PENDING_MARKER).exists() {
         return Err("A validated restore is already pending. Restart Wordlyte before choosing another backup.".into());
     }

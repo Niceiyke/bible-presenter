@@ -1,57 +1,33 @@
 #!/usr/bin/env node
-// Issue a beta license key for a church against the deployed Worker.
-//
-// Usage:
-//   set WORDLYTE_LICENSE_URL=https://wordlyte-license.<your-subdomain>.workers.dev
-//   set WORDLYTE_ADMIN_TOKEN=<the ADMIN_TOKEN secret>
-//   node scripts/issue.mjs "First Baptist Church" pastor@church.org 90 3
-//
-// Args: church_name email duration_days max_machines tier(free|pro|premium)
+// Create an organization and its first one-time desktop activation code.
+// Usage: node scripts/issue.mjs "First Church" owner@example.org [free|pro|premium] [duration_days] [device_limit]
 
 const base = process.env.WORDLYTE_LICENSE_URL;
 const token = process.env.WORDLYTE_ADMIN_TOKEN;
-if (!base || !token) {
-  console.error(
-    "Set WORDLYTE_LICENSE_URL and WORDLYTE_ADMIN_TOKEN environment variables first."
-  );
+const [church, email, plan = "free", durationDays = "0", deviceLimit] = process.argv.slice(2);
+if (!base || !token || !church || !email) {
+  console.error("Usage: WORDLYTE_LICENSE_URL=... WORDLYTE_ADMIN_TOKEN=... node scripts/issue.mjs <church_name> <email> [plan=free] [duration_days=0] [device_limit]");
   process.exit(1);
 }
 
-const [church, email, days = "90", machines = "3", tier = "pro"] = process.argv.slice(2);
-if (!church || !email) {
-  console.error(
-    "Usage: issue.mjs <church_name> <email> [duration_days=90] [max_machines=3] [tier=pro]"
-  );
-  process.exit(1);
-}
-
-const res = await fetch(`${base.replace(/\/$/, "")}/issue`, {
+const response = await fetch(`${base.replace(/\/$/, "")}/admin/organizations`, {
   method: "POST",
-  headers: {
-    "content-type": "application/json",
-    authorization: `Bearer ${token}`,
-  },
+  headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
   body: JSON.stringify({
     church_name: church,
     email,
-    duration_days: Number(days),
-    max_machines: Number(machines),
-    tier,
-    note: "beta",
+    plan,
+    plan_duration_days: Number(durationDays),
+    ...(deviceLimit ? { device_limit: Number(deviceLimit) } : {}),
   }),
 });
-
-const data = await res.json();
-if (!res.ok || data.status !== "ok") {
-  console.error("Issue failed:", JSON.stringify(data));
+const data = await response.json();
+if (!response.ok || data.status !== "ok") {
+  console.error("Organization creation failed:", JSON.stringify(data));
   process.exit(1);
 }
-
-console.log("\nIssued license:\n");
-console.log(`  Key:        ${data.license_key}`);
-console.log(`  Church:     ${data.church_name}`);
-console.log(`  Email:      ${data.email}`);
-console.log(`  Tier:       ${data.tier}`);
-console.log(`  Valid until ${new Date(data.expires_at * 1000).toISOString().slice(0, 10)}`);
-console.log(`  Machines:   ${data.max_machines}`);
-console.log("\nSend the key to the church; they paste it into Settings → License.");
+console.log(`\nOrganization: ${data.organization.church_name}`);
+console.log(`ID:           ${data.organization.id}`);
+console.log(`Plan:         ${data.organization.plan}`);
+console.log(`Activation:   ${data.activation_code}`);
+console.log("\nGive the activation code to the operator for Settings → License. It is valid for 14 days and activates one computer.");

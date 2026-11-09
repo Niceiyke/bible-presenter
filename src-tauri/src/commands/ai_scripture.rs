@@ -1330,6 +1330,7 @@ pub async fn ai_start(
     version: String,
     mode: String,
 ) -> Result<AiRuntimeStatus, String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     let provider = AsrProvider::parse(&provider)?;
     let mode = match mode.trim().to_ascii_lowercase().as_str() {
         "service" => "service".to_string(),
@@ -1680,8 +1681,13 @@ pub fn ai_semantic_status(state: State<'_, AppState>) -> semantic_scripture::Sem
 pub fn ai_prepare_semantic(
     app: AppHandle,
     state: State<'_, AppState>,
-) -> semantic_scripture::SemanticStatus {
-    semantic_scripture::prepare_in_background(app, state.store.clone(), state.app_data_dir.clone())
+) -> Result<semantic_scripture::SemanticStatus, String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
+    Ok(semantic_scripture::prepare_in_background(
+        app,
+        state.store.clone(),
+        state.app_data_dir.clone(),
+    ))
 }
 
 #[tauri::command]

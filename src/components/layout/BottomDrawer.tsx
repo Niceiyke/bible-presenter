@@ -9,6 +9,7 @@ import { ScenesTab } from "../ScenesTab";
 import { IconButton, StatusBadge, type StatusTone } from "../ui";
 import { displayItemLabel } from "../../utils";
 import type { DisplayItem, PresentationSettings, PropItem, Scene } from "../../types";
+import { tierCapabilities } from "../../system/tiers";
 
 interface BottomDrawerProps {
   bottomDeckH: number;
@@ -55,7 +56,16 @@ export function BottomDrawer({
     selectedCameraId,
     availableCameras,
     scenes,
+    license,
   } = useAppStore();
+  const caps = tierCapabilities(license?.tier, license?.limits);
+  const allowedToolTabs = TOOL_TABS.filter((tab) =>
+    (tab.id !== "live-lt" || caps.lowerThird) && (tab.id !== "scenes" || caps.scenes),
+  );
+
+  React.useEffect(() => {
+    if (!allowedToolTabs.some((tab) => tab.id === bottomDeckMode)) setBottomDeckMode("timer");
+  }, [bottomDeckMode, caps.lowerThird, caps.scenes, setBottomDeckMode]);
 
   const liveTone: StatusTone = liveItem ? "live" : "neutral";
   const liveLabel = liveItem ? displayItemLabel(liveItem) : "Nothing live";
@@ -72,7 +82,7 @@ export function BottomDrawer({
       <section className="flex h-12 shrink-0 items-center gap-2 border-t border-console-border bg-console-surface px-3 shadow-[0_-10px_30px_rgba(0,0,0,.12)]" aria-label="Live tools dock">
         <span className="mr-1 hidden text-[8px] font-black uppercase tracking-[0.18em] text-console-text-subtle lg:block">Live Tools</span>
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto custom-scrollbar">
-          {TOOL_TABS.map(({ id, label, icon: Icon }) => {
+          {allowedToolTabs.map(({ id, label, icon: Icon }) => {
             const active = toolActive(id);
             return (
               <button
@@ -108,7 +118,7 @@ export function BottomDrawer({
         <div className="flex min-w-0 items-center gap-2">
           <span className="hidden text-[9px] font-black uppercase tracking-[0.16em] text-console-text-muted sm:block">Live Tools</span>
           <div className="flex min-w-0 gap-1 overflow-x-auto rounded-xl border border-console-border bg-console-canvas/60 p-1 custom-scrollbar">
-            {TOOL_TABS.map(({ id, label: lbl, icon: Icon }) => (
+            {allowedToolTabs.map(({ id, label: lbl, icon: Icon }) => (
               <button key={id} onClick={() => setBottomDeckMode(id)}
                 aria-pressed={bottomDeckMode === id}
                 className={`relative flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[9px] font-black transition-all focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)] ${bottomDeckMode === id ? "bg-action-primary text-black shadow" : "text-console-text-subtle hover:bg-console-surface-strong hover:text-console-text"}`}>

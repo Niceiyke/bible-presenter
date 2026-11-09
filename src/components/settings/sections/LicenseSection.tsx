@@ -18,7 +18,6 @@ import type { SettingsSectionProps } from "../shared";
 const STATUS_LABEL: Record<LicenseStatus, string> = {
   unactivated: "Not activated",
   active: "Active",
-  expired: "Expired",
   revoked: "Revoked",
   invalid: "Invalid",
   clock_tampered: "Clock issue",
@@ -103,9 +102,17 @@ export function LicenseSection(_props: SettingsSectionProps) {
         <Row label="Plan" value={TIER_LABELS[license.tier]} />
         <Row label="Church" value={license.church_name || "—"} />
         {license.email ? <Row label="Email" value={license.email} /> : null}
-        {license.license_key ? <Row label="Key" value={<span className="font-mono">{license.license_key}</span>} /> : null}
-        <Row label="Issued" value={fmtDate(license.issued_at)} />
-        <Row label="Expires" value={fmtDate(license.expires_at)} />
+        {license.organization_id ? <Row label="Organization" value={<span className="font-mono">{license.organization_id}</span>} /> : null}
+        <Row label="Core activated" value={fmtDate(license.core_activated_at)} />
+        {license.plan_expires_at ? <Row label="Paid plan expires" value={fmtDate(license.plan_expires_at)} /> : null}
+        <Row
+          label="AI Add-on"
+          value={
+            license.ai.addonActive
+              ? `Active${license.ai.addonExpiresAt ? ` · expires ${fmtDate(license.ai.addonExpiresAt)}` : ""}`
+              : "Not active"
+          }
+        />
         <Row
           label="Machines"
           value={`${license.machines_used} of ${license.max_machines} registered`}
@@ -166,14 +173,14 @@ export function LicenseSection(_props: SettingsSectionProps) {
 
         {active && license.tier === "free" && (
           <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
-            <p className="text-[11px] font-bold uppercase tracking-widest text-amber-300 mb-1">Free plan</p>
+              <p className="text-[11px] font-bold uppercase tracking-widest text-amber-300 mb-1">Activated Free plan</p>
             <p className="text-[11px] text-console-text-muted leading-relaxed">
-              You're on the Free plan: one Bible version, one on-air window, and a small Wordlyte
+              You're on the Free plan: Scripture, songs, basic Studio, and one on-air window, with a small Wordlyte
               watermark on the output. Upgrade to Pro for remote control, recording, streaming, NDI,
               unlimited scenes and templates, and more.
             </p>
             <p className="text-[11px] text-amber-300 mt-1.5">
-              Contact the Wordlyte team to upgrade your license key.
+              Ask your Wordlyte organization owner to upgrade the plan.
             </p>
           </div>
         )}
@@ -185,10 +192,11 @@ export function LicenseSection(_props: SettingsSectionProps) {
           <h3 className="op-control-label text-console-text uppercase tracking-widest">How it works</h3>
         </div>
         <ul className="text-[11px] text-console-text-muted leading-relaxed flex flex-col gap-1.5">
-          <li>· Wordlyte verifies your key online on launch and periodically while running.</li>
-          <li>· If the internet is unavailable, Wordlyte keeps working for {TIER_CAPABILITIES[license.tier].offlineGraceDays} days, then locks until you reconnect and refresh.</li>
-          <li>· Each key allows a fixed number of computers ({license.max_machines}); copying the app to another PC will not activate it.</li>
-          <li>· If your key expires, Wordlyte continues on the Free plan (or locks, if you're already on Free) until the Wordlyte team renews or upgrades it.</li>
+          <li>· Every church activates each Wordlyte computer once through its account.</li>
+          <li>· Activated Free remains available permanently. Paid plans can use their signed entitlement offline for {TIER_CAPABILITIES[license.tier].offlineGraceDays} days before returning to Free.</li>
+          <li>· Your organization allows {license.max_machines} registered computer{license.max_machines === 1 ? "" : "s"}; copying Wordlyte to another PC does not activate it.</li>
+          <li>· If a Pro or Premium plan expires, Wordlyte continues on the activated Free plan until it is renewed in the Dashboard.</li>
+          <li>· AI Add-on access and AI Unit balances always require an online Wordlyte service check.</li>
         </ul>
         <div className="flex items-center gap-1.5 mt-3 text-[10px] text-console-text-muted">
           <Monitor size={11} /> Machine fingerprint {license.machine_id_hash}

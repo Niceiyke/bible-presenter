@@ -4,6 +4,7 @@ use tauri::State;
 
 #[tauri::command]
 pub async fn save_schedule(state: State<'_, AppState>, schedule: store::Schedule) -> Result<(), String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     state.media_schedule.save_schedule(schedule).map_err(|e| e.to_string())
 }
 
@@ -14,6 +15,7 @@ pub async fn load_schedule(state: State<'_, AppState>) -> Result<store::Schedule
 
 #[tauri::command]
 pub async fn save_recovery(state: State<'_, AppState>, data: serde_json::Value) -> Result<(), String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     let path = state.app_data_dir.join("recovery.json");
     if let Ok(json) = serde_json::to_string_pretty(&data) {
         let tmp = path.with_extension("tmp");
@@ -46,6 +48,7 @@ pub async fn list_services(state: State<'_, AppState>) -> Result<Vec<store::Serv
 
 #[tauri::command]
 pub async fn save_service(state: State<'_, AppState>, schedule: store::Schedule) -> Result<(), String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     state.media_schedule.save_service(&schedule).map_err(|e| e.to_string())
 }
 

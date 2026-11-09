@@ -45,7 +45,7 @@ export function StreamerTab() {
   const programAudio = useProgramAudio();
 
   // Tier gating: streaming is Pro+.
-  const streamCaps = tierCapabilities(license?.tier);
+  const streamCaps = tierCapabilities(license?.tier, license?.limits);
   const streamingBlocked = !!license && license.status === "active" && !streamCaps.streaming;
 
   const [destinations, setDestinations] = useState<StreamDestination[]>([]);

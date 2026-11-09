@@ -1,4 +1,4 @@
-import type { LicenseTier } from "../types/license";
+import type { LicenseLimits, LicenseTier } from "../types/license";
 
 /**
  * Tier capability matrix (free / pro / premium).
@@ -31,13 +31,16 @@ export interface TierCapabilities {
   remoteControl: boolean;
   ndi: boolean;
   sharedAudioInput: boolean;
+  lowerThird: boolean;
+  scenes: boolean;
+  designerHub: boolean;
   customTemplates: boolean;
 }
 
 export const TIER_CAPABILITIES: Record<LicenseTier, TierCapabilities> = {
   free: {
     maxMachines: 1,
-    maxBibleVersions: 1,
+    maxBibleVersions: 1000,
     maxOutputs: 1,
     maxCameras: 1,
     maxScenes: 3,
@@ -49,6 +52,9 @@ export const TIER_CAPABILITIES: Record<LicenseTier, TierCapabilities> = {
     remoteControl: false,
     ndi: false,
     sharedAudioInput: false,
+    lowerThird: false,
+    scenes: false,
+    designerHub: false,
     customTemplates: false,
   },
   pro: {
@@ -65,6 +71,9 @@ export const TIER_CAPABILITIES: Record<LicenseTier, TierCapabilities> = {
     remoteControl: true,
     ndi: true,
     sharedAudioInput: false,
+    lowerThird: true,
+    scenes: true,
+    designerHub: true,
     customTemplates: true,
   },
   premium: {
@@ -81,12 +90,25 @@ export const TIER_CAPABILITIES: Record<LicenseTier, TierCapabilities> = {
     remoteControl: true,
     ndi: true,
     sharedAudioInput: true,
+    lowerThird: true,
+    scenes: true,
+    designerHub: true,
     customTemplates: true,
   },
 };
 
-export function tierCapabilities(tier?: LicenseTier | null): TierCapabilities {
-  return TIER_CAPABILITIES[tier ?? "free"] ?? TIER_CAPABILITIES.free;
+export function tierCapabilities(tier?: LicenseTier | null, limits?: LicenseLimits | null): TierCapabilities {
+  const base = TIER_CAPABILITIES[tier ?? "free"] ?? TIER_CAPABILITIES.free;
+  if (!limits) return base;
+  return {
+    ...base,
+    maxBibleVersions: limits.maxBibleVersions,
+    maxOutputs: limits.maxOutputs,
+    maxCameras: limits.maxCameras,
+    maxScenes: limits.maxScenes,
+    streamingDestinations: limits.streamDestinations,
+    sharedAudioInput: limits.sharedAudioInput,
+  };
 }
 
 /**
@@ -102,6 +124,11 @@ export function tabAllowed(tab: string, caps: TierCapabilities): boolean {
       return caps.recording;
     case "streaming":
       return caps.streaming;
+    case "lt-designer":
+      return caps.designerHub;
+    case "scene-builder":
+    case "scenes":
+      return caps.scenes;
     default:
       return true;
   }

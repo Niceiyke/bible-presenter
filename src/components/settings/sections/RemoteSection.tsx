@@ -53,7 +53,7 @@ function formatRemaining(expires_at?: number, now = Date.now()): string | null {
 export function RemoteSection(_props: SettingsSectionProps) {
   const t = useT();
   const { license } = useAppStore();
-  const remoteBlocked = !!license && license.status === "active" && !tierCapabilities(license.tier).remoteControl;
+  const remoteBlocked = !!license && license.status === "active" && !tierCapabilities(license.tier, license.limits).remoteControl;
   const [status, setStatus] = useState<RemoteStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);

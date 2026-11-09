@@ -1,28 +1,44 @@
 /**
- * License state mirrored from the Rust `license.rs` module. `license_status`,
- * `license_activate`, `license_refresh` and `license_deactivate` return this
- * shape; the backend also broadcasts it on `license-updated`.
+ * Account/device activation state mirrored from Rust `license.rs`.
  */
 export type LicenseStatus =
   | "unactivated"
   | "active"
-  | "expired"
   | "revoked"
   | "invalid"
   | "clock_tampered";
 
 export type LicenseTier = "free" | "pro" | "premium";
 
+/** Quantitative limits signed by the Wordlyte entitlement service. */
+export interface LicenseLimits {
+  maxBibleVersions: number;
+  maxOutputs: number;
+  maxCameras: number;
+  maxScenes: number;
+  streamDestinations: number;
+  sharedAudioInput: boolean;
+}
+
+/** Signed AI Add-on availability. AI Unit balances are always fetched online. */
+export interface AiEntitlement {
+  addonActive: boolean;
+  addonExpiresAt?: number;
+}
+
 export interface LicenseInfo {
   status: LicenseStatus;
-  /** Effective plan after degradation (a lapsed paid plan reports `free`). */
+  /** Effective plan after degradation (lapsed paid access reports `free`). */
   tier: LicenseTier;
-  /** Masked key, e.g. `WORD…5678`. Never the full key. */
-  license_key?: string;
+  organization_id?: string;
   church_name?: string;
   email?: string;
-  issued_at?: number;
-  expires_at?: number;
+  /** Permanent first activation time for this organization/device. */
+  core_activated_at?: number;
+  /** The paid Pro/Premium entitlement expiry, if one exists. */
+  plan_expires_at?: number;
+  limits: LicenseLimits;
+  ai: AiEntitlement;
   /** SHA-256 hex of this machine's fingerprint. */
   machine_id_hash: string;
   max_machines: number;
@@ -37,7 +53,6 @@ export interface LicenseInfo {
 
 export const BLOCKING_LICENSE_STATUSES: LicenseStatus[] = [
   "unactivated",
-  "expired",
   "revoked",
   "invalid",
   "clock_tampered",

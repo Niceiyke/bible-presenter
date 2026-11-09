@@ -9,6 +9,7 @@ pub async fn list_studio_presentations(state: State<'_, AppState>) -> Result<Vec
 
 #[tauri::command]
 pub async fn save_studio_presentation(state: State<'_, AppState>, presentation: store::CustomPresentation) -> Result<(), String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     state.media_schedule.save_studio_presentation(&presentation).map_err(|e| e.to_string())
 }
 
@@ -19,6 +20,7 @@ pub async fn load_studio_presentation(state: State<'_, AppState>, id: String) ->
 
 #[tauri::command]
 pub async fn delete_studio_presentation(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     state.media_schedule.delete_studio_presentation(&id).map_err(|e| e.to_string())
 }
 
@@ -29,10 +31,12 @@ pub async fn list_slide_templates(state: State<'_, AppState>) -> Result<Vec<stor
 
 #[tauri::command]
 pub async fn save_slide_template(state: State<'_, AppState>, template: store::SlideTemplate) -> Result<store::SlideTemplate, String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     state.media_schedule.save_template(template).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn delete_slide_template(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     state.media_schedule.delete_template(&id).map_err(|e| e.to_string())
 }

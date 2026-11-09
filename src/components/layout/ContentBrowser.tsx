@@ -121,12 +121,12 @@ export function ContentBrowser({
   // Plans without recording/streaming/remote are redirected off those
   // workspaces (they are also hidden from the nav). Guards against a stale
   // tab or a live downgrade while the operator is on one.
-  const caps = tierCapabilities(license?.tier);
+  const caps = tierCapabilities(license?.tier, license?.limits);
   useEffect(() => {
     if (!tabAllowed(activeTab, caps)) {
       setActiveTab("bible");
     }
-  }, [activeTab, caps.remoteControl, caps.recording, caps.streaming, setActiveTab]);
+  }, [activeTab, caps.remoteControl, caps.recording, caps.streaming, caps.designerHub, caps.scenes, setActiveTab]);
 
 return (
     <div className={activeTab === "lt-designer" || activeTab === "scenes" || activeTab === "scene-builder"
@@ -150,12 +150,20 @@ return (
           <StudioTab
             onStage={stageItem} onLive={sendLive} onAddToSchedule={addToSchedule}
             onOpenEditor={(id) => {
+              if (!caps.designerHub) {
+                setToast("Designer Hub is a Pro feature. Upgrade in Settings → License.");
+                return;
+              }
               tauriPresentationRepository.load(id).then((pres) => {
                 setStudioSlides({ ...studioSlides, [id]: pres.slides });
                 setEditingPres(pres);
               }).catch((e) => setToast(`Failed to open presentation: ${e}`));
             }}
             onNewPresentation={() => {
+              if (!caps.designerHub) {
+                setToast("Designer Hub is a Pro feature. Upgrade in Settings → License.");
+                return;
+              }
               const newPres = createBlankPresentation();
               tauriPresentationRepository.save(newPres).then(() => {
                 const nextList = [...studioList, { id: newPres.id, name: newPres.name, slide_count: 1, version: 2, updated_at: Date.now() }];

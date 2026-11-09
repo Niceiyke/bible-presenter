@@ -41,7 +41,7 @@ export function LeftNav() {
     bottomDeckOpen, setBottomDeckOpen,
     license,
   } = useAppStore();
-  const caps = tierCapabilities(license?.tier);
+  const caps = tierCapabilities(license?.tier, license?.limits);
 
   const [userCollapsed, setUserCollapsed] = React.useState<boolean | null>(
     () => (localStorage.getItem("pref_navCollapsed") === "1" ? true : localStorage.getItem("pref_navCollapsed") === "0" ? false : null),

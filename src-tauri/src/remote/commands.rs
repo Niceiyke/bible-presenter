@@ -689,12 +689,11 @@ pub async fn dispatch(
     // Mutating commands must pass the revision + permission gates before
     // touching authoritative state. Read-only commands skip the lease check.
     if is_mutating(command.r#type.clone()) {
-        // License re-check on EVERY mutation, not just when remote control is
-        // enabled: a revoked/expired license stops an already-connected phone
-        // from continuing to broadcast (audit #10). This is the license
-        // server's kill switch for the remote surface.
-        if let Err(e) = crate::license::ensure_allowed(state) {
-            return err_result(&command.command_id, control.hub.current_revision(), "license_required", &e);
+        // Re-check Pro entitlement on EVERY mutation, not merely at enable
+        // time. A paid-plan expiry, revocation, or stale entitlement stops an
+        // already-connected phone from continuing to control the broadcast.
+        if let Err(e) = crate::license::ensure_active_tier(state, crate::license::LicenseTier::Pro) {
+            return err_result(&command.command_id, control.hub.current_revision(), "plan_required", &e);
         }
         if !camera_register {
             if let Err(e) = check_revision(control, command.expected_revision) {

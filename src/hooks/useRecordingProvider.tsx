@@ -131,7 +131,7 @@ export function RecordingProvider({ children }: { children: ReactNode }) {
 
   const start = useCallback(async (audioDevice?: string | null) => {
     if (recording) return;
-    if (license && license.status === "active" && !tierCapabilities(license.tier).recording) {
+    if (license && license.status === "active" && !tierCapabilities(license.tier, license.limits).recording) {
       setToast("Recording is a Pro feature. Upgrade in Settings → License.");
       return;
     }

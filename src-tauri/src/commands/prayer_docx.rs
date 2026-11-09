@@ -58,6 +58,9 @@ pub async fn import_prayer_docx(
     path: String,
     version: String,
 ) -> Result<PrayerGuideImport, String> {
+    // Importing a prayer guide creates new Studio presentation content and is
+    // therefore part of Designer Hub authoring, not Free playback.
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     let path = validate_docx_path(&path)?;
     let source_name = path
         .file_stem()

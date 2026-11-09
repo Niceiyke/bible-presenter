@@ -8,7 +8,7 @@ import type { SettingsSectionProps } from "../shared";
 export function BibleVersionsSection({ onUpdateSettings }: SettingsSectionProps) {
   const { settings, availableVersions, license, setToast, setBibleVersion } = useAppStore();
   const t = useT();
-  const caps = tierCapabilities(license?.tier);
+  const caps = tierCapabilities(license?.tier, license?.limits);
   const disabled = settings.disabled_bible_versions || [];
   const enabledCount = availableVersions.filter(v => !disabled.includes(v)).length;
   const enabledVersions = availableVersions.filter(v => !disabled.includes(v));

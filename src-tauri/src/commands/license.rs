@@ -13,18 +13,25 @@ pub(crate) fn publish_license(app: &AppHandle, info: &LicenseStatusInfo) {
 
 /// Current license status. Local evaluation only — no network.
 #[tauri::command]
-pub async fn license_status(app: AppHandle, state: State<'_, AppState>) -> Result<LicenseStatusInfo, String> {
+pub async fn license_status(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<LicenseStatusInfo, String> {
     let info = state.license.status();
     publish_license(&app, &info);
     Ok(info)
 }
 
-/// Activate Wordlyte with a license key. Contacts the license server; the key
-/// becomes bound to this machine on success.
+/// Activate this computer with the one-time device code created in a Wordlyte
+/// account. The resulting permanent core activation is bound to this machine.
 #[tauri::command]
-pub async fn license_activate(app: AppHandle, state: State<'_, AppState>, key: String) -> Result<LicenseStatusInfo, String> {
-    let info = state.license.activate(&key).await?;
-    crate::store::log_msg(&app, "License activated");
+pub async fn license_activate(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    activation_code: String,
+) -> Result<LicenseStatusInfo, String> {
+    let info = state.license.activate(&activation_code).await?;
+    crate::store::log_msg(&app, "Wordlyte computer activated");
     publish_license(&app, &info);
     Ok(info)
 }
@@ -32,7 +39,10 @@ pub async fn license_activate(app: AppHandle, state: State<'_, AppState>, key: S
 /// Re-validate the stored license against the server. Applies authoritative
 /// expiry/revocation and refreshes the offline grace anchor.
 #[tauri::command]
-pub async fn license_refresh(app: AppHandle, state: State<'_, AppState>) -> Result<LicenseStatusInfo, String> {
+pub async fn license_refresh(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<LicenseStatusInfo, String> {
     let info = state.license.refresh().await?;
     publish_license(&app, &info);
     Ok(info)
@@ -40,7 +50,10 @@ pub async fn license_refresh(app: AppHandle, state: State<'_, AppState>) -> Resu
 
 /// Remove the local license record so a different key can be activated.
 #[tauri::command]
-pub async fn license_deactivate(app: AppHandle, state: State<'_, AppState>) -> Result<LicenseStatusInfo, String> {
+pub async fn license_deactivate(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<LicenseStatusInfo, String> {
     let info = state.license.deactivate();
     crate::store::log_msg(&app, "License deactivated on this computer");
     publish_license(&app, &info);

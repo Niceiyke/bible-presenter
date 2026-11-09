@@ -41,7 +41,8 @@ pub async fn toggle_stage_window(app: AppHandle, state: State<'_, AppState>) -> 
 }
 
 #[tauri::command]
-pub async fn toggle_studio_window(app: AppHandle) -> Result<(), String> {
+pub async fn toggle_studio_window(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     if let Some(window) = app.get_webview_window("studio") {
         if window.is_visible().unwrap_or(false) {
             window.hide().map_err(|e: tauri::Error| e.to_string())?;

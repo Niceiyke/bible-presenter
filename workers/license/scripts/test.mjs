@@ -1,16 +1,11 @@
 #!/usr/bin/env node
-// Hermetic worker tests. Spawns `wrangler dev --local` against a throwaway KV
-// persistence dir and exercises the whole license API surface. Never talks to
-// Cloudflare or the real namespace.
-//
-//   npm test
-//
-// Requires Node >= 18 (global fetch) and the `wrangler` devDependency installed.
+// Hermetic v3 account/device entitlement tests. Runs against Wrangler local
+// storage and a throwaway Ed25519 signing key; it never contacts production.
 
 import { spawn, spawnSync } from "node:child_process";
-import { generateKeyPairSync, verify as verifySig } from "node:crypto";
+import { generateKeyPairSync, verify as verifySignature } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,322 +13,158 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("../", import.meta.url)).replace(/[\\/]$/, "");
 const PORT = 8797;
 const BASE = `http://127.0.0.1:${PORT}`;
+const ADMIN_TOKEN = "local-test-token";
+const M1 = "a".repeat(64);
+const M2 = "b".repeat(64);
 
-let adminToken = process.env.TEST_ADMIN_TOKEN;
-if (!adminToken) {
-  try {
-    const devVars = readFileSync(join(ROOT, ".dev.vars"), "utf8")
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .find((l) => l.startsWith("ADMIN_TOKEN="));
-    adminToken = devVars?.slice("ADMIN_TOKEN=".length);
-  } catch {
-    // No .dev.vars (e.g. CI) — fall back to the default below.
-  }
-}
-const ADMIN_TOKEN = adminToken || "local-test-token";
-
-// ── License-signing key for the local worker ──────────────────────────
-// Generate a throwaway Ed25519 keypair and drop it into `.dev.vars` so
-// wrangler dev signs every /validate response, then verify the signatures on
-// the client side (same shape the Rust client uses). The original `.dev.vars`
-// contents are restored afterwards.
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-const SIGN_PRIV = JSON.stringify(privateKey.export({ format: "jwk" }));
-const SIGN_PUB = publicKey;
+const privateJwk = JSON.stringify(privateKey.export({ format: "jwk" }));
 const devVarsPath = join(ROOT, ".dev.vars");
-const hadDevVars = (() => {
-  try {
-    readFileSync(devVarsPath, "utf8");
-    return true;
-  } catch {
-    return false;
-  }
-})();
-const originalDevVars = hadDevVars ? readFileSync(devVarsPath, "utf8") : null;
+let originalDevVars = null;
+try { originalDevVars = readFileSync(devVarsPath, "utf8"); } catch {}
 
-/// Canonical string must match the worker's `signValidation` and the Rust
-/// client's `canonical_license`. Field order is significant.
-function canonicalOf(d) {
+function canonical(payload) {
   return [
-    "wl2",
-    d.license_key,
-    d.machine_id,
-    d.status,
-    String(d.issued_at),
-    String(d.expires_at),
-    d.tier,
-    String(d.max_machines),
-    String(d.machines_used),
-    String(d.server_time),
+    "wl3", payload.organization_id, payload.machine_id, payload.status,
+    String(payload.core_activated_at), payload.plan,
+    String(payload.plan_expires_at || 0), String(payload.max_machines),
+    String(payload.machines_used), String(payload.server_time),
+    String(payload.limits.maxBibleVersions), String(payload.limits.maxOutputs),
+    String(payload.limits.maxCameras), String(payload.limits.maxScenes),
+    String(payload.limits.streamDestinations), payload.limits.sharedAudioInput ? "1" : "0",
+    payload.ai.addonActive ? "1" : "0", String(payload.ai.addonExpiresAt || 0),
   ].join("|");
 }
 
-function sigValid(d) {
-  if (!d || typeof d.sig !== "string" || !d.sig) return false;
-  try {
-    return verifySig(null, canonicalOf(d), SIGN_PUB, Buffer.from(d.sig, "base64"));
-  } catch {
-    return false;
-  }
+function validSignature(payload) {
+  return typeof payload?.sig === "string" && verifySignature(
+    null,
+    canonical(payload),
+    publicKey,
+    Buffer.from(payload.sig, "base64")
+  );
 }
 
 const results = [];
-function check(name, cond) {
-  results.push({ name, ok: !!cond });
-  console.log(`${cond ? "ok  " : "FAIL"} ${name}`);
+function check(name, value) {
+  results.push({ name, ok: Boolean(value) });
+  console.log(`${value ? "ok  " : "FAIL"} ${name}`);
 }
 
 async function call(path, { method = "GET", token, body } = {}) {
   const headers = { "content-type": "application/json" };
   if (token) headers.authorization = `Bearer ${token}`;
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  return { status: res.status, data: await res.json().catch(() => null) };
+  const response = await fetch(`${BASE}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  return { status: response.status, data: await response.json().catch(() => null) };
 }
 
-async function waitForServer(url, timeoutMs = 90000) {
-  const deadline = Date.now() + timeoutMs;
-  let lastErr;
+async function waitForServer() {
+  const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
-    try {
-      const res = await fetch(url);
-      if (res.status >= 200) return;
-    } catch (e) {
-      lastErr = e;
-    }
-    await new Promise((r) => setTimeout(r, 1000));
+    try { if ((await fetch(`${BASE}/health`)).ok) return; } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  throw new Error(`Server did not come up within ${timeoutMs}ms: ${lastErr}`);
+  throw new Error("Worker did not start in time");
 }
 
-const persist = await mkdtemp(join(tmpdir(), "license-test-"));
-const wranglerJs = join(ROOT, "node_modules", "wrangler", "bin", "wrangler.js");
-const signingLine = `LICENSE_SIGN_PRIVATE_KEY=${SIGN_PRIV}`;
-// Inject the signing secret into `.dev.vars` (keeps ADMIN_TOKEN intact).
-if (hadDevVars) {
-  const lines = originalDevVars.split(/\r?\n/).filter((l) => !l.startsWith("LICENSE_SIGN_PRIVATE_KEY="));
-  lines.push(signingLine);
-  writeFileSync(devVarsPath, lines.join("\n"));
-} else {
-  writeFileSync(devVarsPath, `ADMIN_TOKEN=${ADMIN_TOKEN}\n${signingLine}\n`);
-}
-const proc = spawn(process.execPath, [wranglerJs, "dev", "--local", "--port", String(PORT), "--persist-to", persist], {
+const persist = await mkdtemp(join(tmpdir(), "wordlyte-account-test-"));
+const wrangler = join(ROOT, "node_modules", "wrangler", "bin", "wrangler.js");
+writeFileSync(devVarsPath, `ADMIN_TOKEN=${ADMIN_TOKEN}\nLICENSE_SIGN_PRIVATE_KEY=${privateJwk}\n`);
+const worker = spawn(process.execPath, [wrangler, "dev", "--local", "--port", String(PORT), "--persist-to", persist], {
   cwd: ROOT,
-  stdio: ["ignore", "ignore", "pipe"],
+  stdio: ["ignore", "pipe", "pipe"],
 });
 let stderr = "";
-proc.stderr.on("data", (d) => (stderr += d.toString()));
+let stdout = "";
+worker.stdout.on("data", (chunk) => { stdout += chunk; });
+worker.stderr.on("data", (chunk) => { stderr += chunk; });
 
 try {
-  await waitForServer(`${BASE}/license`);
+  await waitForServer();
+  let response = await call("/");
+  check("root health endpoint is available", response.status === 200 && response.data?.status === "ok");
+  const adminPage = await fetch(`${BASE}/admin`);
+  check("browser administrator console is available", adminPage.status === 200 && (await adminPage.text()).includes("Wordlyte Account Admin"));
+  response = await call("/admin/organizations");
+  check("admin organization creation requires authentication", response.status === 401);
 
-  const admin = await fetch(`${BASE}/admin`);
-  const adminHtml = await admin.text();
-  check(
-    "GET /admin serves the admin UI",
-    admin.status === 200 && (admin.headers.get("content-type") || "").includes("text/html")
-  );
-  check("admin UI uses delegated row actions", adminHtml.includes('data-action'));
-  check("admin UI has tier selector + badges", adminHtml.includes('id="fTier"') && adminHtml.includes('value="premium"') && adminHtml.includes('tierBadge'));
-  const scriptMatch = adminHtml.match(/<script>([\s\S]*)<\/script>/);
-  if (scriptMatch) {
-    const checkFile = join(tmpdir(), `license-admin-${process.pid}.js`);
-    await writeFile(checkFile, scriptMatch[1]);
-    const chk = spawnSync(process.execPath, ["--check", checkFile], { encoding: "utf8" });
-    check("admin page JS parses cleanly", chk.status === 0);
-    await rm(checkFile, { force: true }).catch(() => {});
-  } else {
-    check("admin page JS parses cleanly", false);
-  }
-
-  const M1 = "a".repeat(64);
-  const M2 = "b".repeat(64);
-  const M3 = "c".repeat(64);
-
-  // auth gating
-  let r = await call("/licenses");
-  check("GET /licenses without token → 401", r.status === 401);
-  r = await call("/licenses", { token: "wrong-token" });
-  check("GET /licenses with wrong token → 401", r.status === 401);
-  r = await call("/issue", { method: "POST", body: {} });
-  check("POST /issue without token → 401", r.status === 401);
-
-  // empty list
-  r = await call("/licenses", { token: ADMIN_TOKEN });
-  check("GET /licenses empty → status ok", r.status === 200 && r.data.status === "ok" && r.data.licenses.length === 0);
-
-  // issue
-  r = await call("/issue", {
+  response = await call("/admin/organizations", {
     method: "POST",
     token: ADMIN_TOKEN,
-    body: { church_name: "Test Church", email: "test@example.com", duration_days: 30, max_machines: 2, tier: "pro" },
+    body: { church_name: "Free Church", email: "owner@example.test", plan: "free" },
   });
-  check("issue → status ok", r.status === 200 && r.data.status === "ok");
-  const key = r.data.license_key;
-  check("issued key format WORDLYTE-XXXX-XXXX-XXXX-XXXX", /^WORDLYTE-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(key || ""));
-  const expiresAt = r.data.expires_at;
-  check("issue stores tier", r.data.tier === "pro" && r.data.max_machines === 2);
+  check("admin creates a Free organization", response.status === 200 && response.data.status === "ok" && response.data.organization.plan === "free");
+  const freeOrganization = response.data.organization;
+  const freeCode = response.data.activation_code;
+  check("organization receives a one-time activation code", /^WACT-[A-Z2-9]{20}$/.test(freeCode || ""));
 
-  // listing
-  r = await call("/licenses", { token: ADMIN_TOKEN });
-  check("list shows 1 license", r.status === 200 && r.data.licenses.length === 1 && r.data.licenses[0].key === key);
+  response = await call("/activate", { method: "POST", body: { activation_code: freeCode, machine_id: M1, device_name: "Sanctuary PC" } });
+  check("Free activation succeeds", response.status === 200 && response.data.status === "active" && response.data.plan === "free");
+  check("activation response is signed", validSignature(response.data));
+  check("Free entitlement carries server-signed output capacity", response.data.limits?.maxOutputs === 1 && response.data.limits?.streamDestinations === 0);
+  check("activation returns a device-only credential", /^wdv_[A-Za-z0-9_-]{20,}$/.test(response.data.device_token || ""));
+  const freeDeviceToken = response.data.device_token;
+  const tampered = { ...response.data, plan: "premium" };
+  check("tampered entitlement fails signature verification", !validSignature(tampered));
 
-  // validate: unknown
-  r = await call("/validate", {
-    method: "POST",
-    body: { license_key: "WORDLYTE-AAAA-BBBB-CCCC-DDDD", machine_id: M1 },
+  response = await call("/entitlement", { method: "POST", body: { organization_id: freeOrganization.id, machine_id: M1, device_token: freeDeviceToken } });
+  check("device refresh succeeds", response.status === 200 && response.data.status === "active" && response.data.plan === "free" && validSignature(response.data));
+  check("refresh never returns a device token", !Object.hasOwn(response.data, "device_token"));
+
+  response = await call("/activate", { method: "POST", body: { activation_code: freeCode, machine_id: M2, device_name: "Second PC" } });
+  check("activation code cannot consume a second computer", response.status === 200 && response.data.status === "invalid");
+
+  response = await call(`/admin/organizations/${freeOrganization.id}/activation-code`, { method: "POST", token: ADMIN_TOKEN });
+  const replacementCode = response.data.activation_code;
+  check("admin can create a replacement pairing code", response.status === 200 && /^WACT-/.test(replacementCode || ""));
+  response = await call("/activate", { method: "POST", body: { activation_code: replacementCode, machine_id: M2, device_name: "Second PC" } });
+  check("Free device limit is enforced", response.status === 200 && response.data.status === "invalid");
+
+  response = await call(`/admin/organizations/${freeOrganization.id}/plan`, {
+    method: "POST", token: ADMIN_TOKEN, body: { plan: "premium", plan_duration_days: 30, device_limit: 5 },
   });
-  check("validate unknown key → invalid", r.status === 200 && r.data.status === "invalid");
+  check("admin updates plan and capacity", response.status === 200 && response.data.organization.plan === "premium" && response.data.organization.device_limit === 5);
+  response = await call("/activate", { method: "POST", body: { activation_code: replacementCode, machine_id: M2, device_name: "Second PC" } });
+  check("Premium capacity permits second device", response.status === 200 && response.data.plan === "premium" && response.data.machines_used === 2);
+  check("Premium entitlement carries scaled production limits", response.data.limits?.maxOutputs === 10 && response.data.limits?.sharedAudioInput === true);
 
-  // validate: bad machine id
-  r = await call("/validate", {
-    method: "POST",
-    body: { license_key: key, machine_id: "not-hex" },
+  response = await call(`/admin/organizations/${freeOrganization.id}/ai`, {
+    method: "POST", token: ADMIN_TOKEN,
+    body: { addon_duration_days: 30, monthly_units: 120, topup_units: 25 },
   });
-  check("validate malformed machine id → invalid (400)", r.status === 400 && r.data.status === "invalid");
+  check("admin provisions the AI Add-on and Unit wallet", response.status === 200
+    && response.data.ai?.addon_active === true
+    && response.data.ai?.monthly_units_remaining === 120
+    && response.data.ai?.topup_units_remaining === 25
+    && response.data.ai?.total_units_remaining === 145);
+  response = await call("/entitlement", { method: "POST", body: { organization_id: freeOrganization.id, machine_id: M1, device_token: freeDeviceToken } });
+  check("AI Add-on entitlement is signed", response.status === 200
+    && response.data.ai?.addonActive === true
+    && typeof response.data.ai?.addonExpiresAt === "number"
+    && validSignature(response.data));
 
-  // validate: activate machines up to cap
-  r = await call("/validate", { method: "POST", body: { license_key: key, machine_id: M1 } });
-  check("validate machine 1 → active, machines_used 1", r.status === 200 && r.data.status === "active" && r.data.machines_used === 1);
-  check("validate response is Ed25519-signed", sigValid(r.data));
-  const tampered = { ...r.data, tier: "premium" };
-  check("tampered tier fails signature verification", !sigValid(tampered));
-  check("validate echoes the machine_id it signed", r.data.machine_id === M1);
-  r = await call("/validate", { method: "POST", body: { license_key: key, machine_id: M2 } });
-  check("validate machine 2 → active, machines_used 2", r.status === 200 && r.data.status === "active" && r.data.machines_used === 2);
-  r = await call("/validate", { method: "POST", body: { license_key: key, machine_id: M3 } });
-  check("validate machine 3 → invalid (slot cap)", r.status === 200 && r.data.status === "invalid");
-  r = await call("/validate", { method: "POST", body: { license_key: key, machine_id: M1 } });
-  check("validate machine 1 again → active (idempotent)", r.status === 200 && r.data.status === "active" && r.data.machines_used === 2);
+  response = await call(`/admin/organizations/${freeOrganization.id}/revoke`, { method: "POST", token: ADMIN_TOKEN, body: { revoked: true } });
+  check("admin revokes organization", response.status === 200 && response.data.organization.revoked === true);
+  response = await call("/entitlement", { method: "POST", body: { organization_id: freeOrganization.id, machine_id: M1, device_token: freeDeviceToken } });
+  check("revoked entitlement remains signed", response.status === 200 && response.data.status === "revoked" && validSignature(response.data));
 
-  // stored record integrity: the machines array must hold the real fingerprints,
-  // never a phantom null/undefined entry (audit: the DO body was parsed twice).
-  r = await call("/licenses", { token: ADMIN_TOKEN });
-  const storedRec = r.data.licenses.find((l) => l.key === key);
-  check(
-    "stored machines are exactly M1 + M2 (no phantom entries)",
-    r.status === 200 && Array.isArray(storedRec?.machines) &&
-      storedRec.machines.length === 2 &&
-      storedRec.machines.includes(M1) && storedRec.machines.includes(M2) &&
-      storedRec.machines.every((m) => typeof m === "string" && /^[0-9a-f]{64}$/.test(m))
-  );
-
-  // extend
-  r = await call("/extend", {
-    method: "POST",
-    token: ADMIN_TOKEN,
-    body: { license_key: key, days: 10 },
-  });
-  check("extend +10 days", r.status === 200 && r.data.status === "ok" && r.data.expires_at === expiresAt + 10 * 86400);
-
-  // tier: validate returns tier
-  r = await call("/validate", { method: "POST", body: { license_key: key, machine_id: M1 } });
-  check("validate returns tier", r.status === 200 && r.data.status === "active" && r.data.tier === "pro");
-
-  // tier: free issue clamps machines to 1
-  r = await call("/issue", {
-    method: "POST",
-    token: ADMIN_TOKEN,
-    body: { church_name: "Free Church", email: "free@example.com", duration_days: 30, max_machines: 5 },
-  });
-  check("issue defaults to free + clamps machines to 1", r.status === 200 && r.data.status === "ok" && r.data.tier === "free" && r.data.max_machines === 1);
-
-  // tier: premium issue keeps machines
-  r = await call("/issue", {
-    method: "POST",
-    token: ADMIN_TOKEN,
-    body: { church_name: "Premium Church", email: "prem@example.com", duration_days: 30, max_machines: 20, tier: "premium" },
-  });
-  check("issue premium tier keeps 20 machines", r.status === 200 && r.data.status === "ok" && r.data.tier === "premium" && r.data.max_machines === 20);
-
-  // tier: unknown tier value falls back to free
-  r = await call("/issue", {
-    method: "POST",
-    token: ADMIN_TOKEN,
-    body: { church_name: "Bad Tier", email: "bad@example.com", duration_days: 30, tier: "ultimate" },
-  });
-  check("unknown tier falls back to free", r.status === 200 && r.data.status === "ok" && r.data.tier === "free");
-
-  // tier: extend can change tier without days (keeps 2 machines on upgrade)
-  r = await call("/extend", { method: "POST", token: ADMIN_TOKEN, body: { license_key: key, tier: "premium" } });
-  check("extend changes tier (no days) → premium, machines 2", r.status === 200 && r.data.status === "ok" && r.data.tier === "premium" && r.data.max_machines === 2);
-  // tier: downgrade re-clamps machines
-  r = await call("/extend", { method: "POST", token: ADMIN_TOKEN, body: { license_key: key, tier: "free" } });
-  check("extend downgrade to free re-clamps machines to 1", r.status === 200 && r.data.status === "ok" && r.data.tier === "free" && r.data.max_machines === 1);
-
-  // extend with no days and no tier → 400
-  r = await call("/extend", { method: "POST", token: ADMIN_TOKEN, body: { license_key: key, days: 0 } });
-  check("extend with days 0 and no tier → 400", r.status === 400);
-
-  // audit #9: an admin mutation followed by a new-device registration must not
-  // be overwritten by a warm Durable Object cache (stale tier/expiry/machines).
-  r = await call("/issue", {
-    method: "POST",
-    token: ADMIN_TOKEN,
-    body: { church_name: "Registry Test", email: "reg@example.com", duration_days: 30, max_machines: 2, tier: "pro" },
-  });
-  const key2 = r.data.license_key;
-  r = await call("/validate", { method: "POST", body: { license_key: key2, machine_id: M1 } });
-  check("registry key M1 → active", r.status === 200 && r.data.status === "active");
-  const expiryBefore = (await call("/licenses", { token: ADMIN_TOKEN })).data.licenses.find((l) => l.key === key2).expires_at;
-  r = await call("/extend", { method: "POST", token: ADMIN_TOKEN, body: { license_key: key2, days: 15 } });
-  check("registry key extend +15d", r.status === 200 && r.data.status === "ok" && r.data.expires_at === expiryBefore + 15 * 86400);
-  r = await call("/validate", { method: "POST", body: { license_key: key2, machine_id: M2 } });
-  check(
-    "registry key M2 after admin mutation → active, expiry preserved",
-    r.status === 200 && r.data.status === "active" && r.data.expires_at === expiryBefore + 15 * 86400
-  );
-  r = await call("/validate", { method: "POST", body: { license_key: key2, machine_id: M3 } });
-  check("registry key M3 → invalid (2-slot cap after admin mutation)", r.status === 200 && r.data.status === "invalid");
-  const stored2 = (await call("/licenses", { token: ADMIN_TOKEN })).data.licenses.find((l) => l.key === key2);
-  check(
-    "registry key stored machines have no phantom entries",
-    Array.isArray(stored2?.machines) && stored2.machines.length === 2 &&
-      stored2.machines.includes(M1) && stored2.machines.includes(M2) &&
-      stored2.machines.every((m) => typeof m === "string" && /^[0-9a-f]{64}$/.test(m))
-  );
-  r = await call("/revoke", { method: "POST", token: ADMIN_TOKEN, body: { license_key: key2, revoked: true } });
-  check("registry key revoke after registration", r.status === 200 && r.data.status === "ok" && r.data.revoked === true);
-  r = await call("/validate", { method: "POST", body: { license_key: key2, machine_id: M1 } });
-  check("registry key revoked → revoked", r.status === 200 && r.data.status === "revoked");
-  check("revoked response is Ed25519-signed", sigValid(r.data));
-
-  // expiring
-  r = await call("/expiring?days=365", { token: ADMIN_TOKEN });
-  check("expiring lists the key", r.status === 200 && r.data.status === "ok" && r.data.expiring.some((l) => l.key === key));
-
-  // revoke
-  r = await call("/revoke", { method: "POST", token: ADMIN_TOKEN, body: { license_key: key, revoked: true } });
-  check("revoke → ok, revoked true", r.status === 200 && r.data.status === "ok" && r.data.revoked === true);
-  r = await call("/validate", { method: "POST", body: { license_key: key, machine_id: M1 } });
-  check("validate revoked key → revoked", r.status === 200 && r.data.status === "revoked");
-
-  // unknown key admin ops
-  r = await call("/revoke", { method: "POST", token: ADMIN_TOKEN, body: { license_key: "WORDLYTE-AAAA-BBBB-CCCC-DDDD" } });
-  check("revoke unknown key → 404", r.status === 404);
-  r = await call("/extend", { method: "POST", token: ADMIN_TOKEN, body: { license_key: "WORDLYTE-AAAA-BBBB-CCCC-DDDD", days: 5 } });
-  check("extend unknown key → 404", r.status === 404);
-} catch (err) {
-  check(`unexpected error: ${err.message}`, false);
+  response = await call("/admin/organizations", { token: ADMIN_TOKEN });
+  check("admin lists organizations", response.status === 200 && response.data.organizations.length === 1);
+} catch (error) {
+  check(`unexpected error: ${error.message}`, false);
 } finally {
-  proc.kill();
-  await new Promise((r) => setTimeout(r, 300));
+  worker.kill();
+  await new Promise((resolve) => setTimeout(resolve, 300));
   await rm(persist, { recursive: true, force: true }).catch(() => {});
-  if (hadDevVars && originalDevVars !== null) {
-    writeFileSync(devVarsPath, originalDevVars);
-  } else if (!hadDevVars) {
-    await rm(devVarsPath, { force: true }).catch(() => {});
-  }
+  if (originalDevVars === null) await rm(devVarsPath, { force: true }).catch(() => {});
+  else writeFileSync(devVarsPath, originalDevVars);
 }
 
-const failures = results.filter((r) => !r.ok);
+const failures = results.filter((result) => !result.ok);
 if (failures.length) {
   console.error(`\n${failures.length} test(s) failed.`);
-  if (stderr) console.error("--- wrangler stderr (last 40 lines) ---\n" + stderr.split("\n").slice(-40).join("\n"));
+  if (stderr) console.error(stderr.split("\n").slice(-40).join("\n"));
+  if (stdout) console.error(stdout.split("\n").slice(-40).join("\n"));
   process.exit(1);
 }
 console.log(`\nAll ${results.length} tests passed.`);

@@ -17,7 +17,7 @@ export function BiblePickerModal({ onSelect, onClose }: BiblePickerModalProps) {
   const [searchResults, setSearchResults] = useState<Verse[]>([]);
   const [searchMode, setSearchMode] = useState<"quick" | "semantic">("quick");
 
-  const versionCap = tierCapabilities(license?.tier).maxBibleVersions;
+  const versionCap = tierCapabilities(license?.tier, license?.limits).maxBibleVersions;
   const enabledVersionsAll = availableVersions.filter(v => !(settings.disabled_bible_versions || []).includes(v));
   const enabledVersions = versionCap < enabledVersionsAll.length
     ? enabledVersionsAll.slice(0, versionCap)

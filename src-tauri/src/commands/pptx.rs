@@ -125,6 +125,7 @@ pub async fn import_pptx_rendered(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<RenderedPptxImport, String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     let source = validate_source(&path)?;
     let app_data = state.app_data_dir.clone();
     let id = Uuid::new_v4().to_string();

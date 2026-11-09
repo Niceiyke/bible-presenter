@@ -252,7 +252,7 @@ export function LtDesignerTab({ onSetToast, onLoadMedia }: LtDesignerTabProps) {
     license,
   } = useAppStore();
   const customTemplatesBlocked =
-    !!license && license.status === "active" && !tierCapabilities(license.tier).customTemplates;
+    !!license && license.status === "active" && !tierCapabilities(license.tier, license.limits).customTemplates;
 
   const ltFlatLines = useLtFlatLines();
 

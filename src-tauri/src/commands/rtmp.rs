@@ -1,4 +1,6 @@
-use crate::license::{ensure_active_tier, LicenseTier};
+use crate::license::{
+    ensure_active_tier, ensure_shared_audio_input, ensure_stream_destination_capacity, LicenseTier,
+};
 use crate::state::AppState;
 use base64::Engine as _;
 use parking_lot::Mutex;
@@ -67,7 +69,11 @@ const MAX_PACKET_BYTES: usize = 8 * 1024 * 1024;
 /// e.g. `rtmp://host/live` + `mykey` -> `rtmp://host/live/mykey`.
 pub fn build_rtmp_url(server_url: &str, stream_key: Option<&str>) -> String {
     let base = server_url.trim().trim_end_matches('/').to_string();
-    let key = stream_key.unwrap_or("").trim().trim_start_matches('/').to_string();
+    let key = stream_key
+        .unwrap_or("")
+        .trim()
+        .trim_start_matches('/')
+        .to_string();
     if key.is_empty() {
         base
     } else {
@@ -115,12 +121,7 @@ fn ffmpeg_args(url: &str, audio_port: Option<u16>) -> Vec<String> {
             "aac_adtstoasc".into(),
         ]);
     } else {
-        args.extend([
-            "-map".into(),
-            "0:v:0".into(),
-            "-c:v".into(),
-            "copy".into(),
-        ]);
+        args.extend(["-map".into(), "0:v:0".into(), "-c:v".into(), "copy".into()]);
     }
     args.extend([
         "-f".into(),
@@ -135,7 +136,12 @@ fn ffmpeg_args(url: &str, audio_port: Option<u16>) -> Vec<String> {
 /// Spawn the writer thread that drains the channel into ffmpeg's stdin.
 /// Returns the sender plus a live packet counter the caller bumps before send
 /// so `rtmp_send` can apply bounded (drop-newest) backpressure.
-fn spawn_writer(mut stdin: ChildStdin) -> (mpsc::Sender<Vec<u8>>, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+fn spawn_writer(
+    mut stdin: ChildStdin,
+) -> (
+    mpsc::Sender<Vec<u8>>,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
     let queued = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counter = queued.clone();
@@ -155,7 +161,12 @@ fn spawn_writer(mut stdin: ChildStdin) -> (mpsc::Sender<Vec<u8>>, std::sync::Arc
 /// Spawn the audio writer thread: accept ffmpeg's loopback TCP connection (non
 /// blocking, up to ~5s, buffering anything that arrives before the handshake)
 /// then drain the channel into the socket. Closing the channel tears it down.
-fn spawn_audio_writer(listener: TcpListener) -> (mpsc::Sender<Vec<u8>>, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+fn spawn_audio_writer(
+    listener: TcpListener,
+) -> (
+    mpsc::Sender<Vec<u8>>,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
     let queued = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counter = queued.clone();
@@ -268,6 +279,10 @@ pub fn rtmp_start(
     // Streaming is a paid feature (audit: tier enforcement must live on the
     // backend, not just in the UI).
     ensure_active_tier(&state, LicenseTier::Pro)?;
+    ensure_stream_destination_capacity(&state, state.rtmp.lock().len().saturating_add(1))?;
+    if with_audio {
+        ensure_shared_audio_input(&state)?;
+    }
     let mut guard = state.rtmp.lock();
     if guard.contains_key(&session_id) {
         return Err("This RTMP destination is already live — stop it first.".into());
@@ -337,6 +352,9 @@ pub fn rtmp_send(
     session_id: String,
     data_base64: String,
 ) -> Result<(), String> {
+    // Re-check on every packet so a session opened before a plan downgrade
+    // cannot continue broadcasting through this legacy ingest path.
+    ensure_active_tier(&state, LicenseTier::Pro)?;
     let mut guard = state.rtmp.lock();
     let session = guard
         .get_mut(&session_id)
@@ -360,8 +378,7 @@ pub fn rtmp_send_audio(
     session_id: String,
     data_base64: String,
 ) -> Result<(), String> {
-    // Shared audio input is a Premium feature.
-    ensure_active_tier(&state, LicenseTier::Premium)?;
+    ensure_shared_audio_input(&state)?;
     let mut guard = state.rtmp.lock();
     let session = guard
         .get_mut(&session_id)
@@ -388,7 +405,9 @@ pub fn rtmp_send_audio(
 #[tauri::command]
 pub async fn rtmp_stop(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
     let session = state.rtmp.lock().remove(&session_id);
-    let Some(session) = session else { return Ok(()) };
+    let Some(session) = session else {
+        return Ok(());
+    };
     drop(session.stdin_tx); // EOF to ffmpeg -> flush + finalize the stream
     drop(session.audio_tx); // close the audio socket -> ffmpeg finishes the AAC stream
     tauri::async_runtime::spawn_blocking(move || {
@@ -433,14 +452,23 @@ mod tests {
 
     #[test]
     fn build_rtmp_url_joins_server_and_key() {
-        assert_eq!(build_rtmp_url("rtmp://host/live", Some("abc")), "rtmp://host/live/abc");
-        assert_eq!(build_rtmp_url("rtmp://host/live/", Some("/abc")), "rtmp://host/live/abc");
+        assert_eq!(
+            build_rtmp_url("rtmp://host/live", Some("abc")),
+            "rtmp://host/live/abc"
+        );
+        assert_eq!(
+            build_rtmp_url("rtmp://host/live/", Some("/abc")),
+            "rtmp://host/live/abc"
+        );
     }
 
     #[test]
     fn build_rtmp_url_without_key_keeps_server_url() {
         assert_eq!(build_rtmp_url("rtmp://host/live", None), "rtmp://host/live");
-        assert_eq!(build_rtmp_url("rtmp://host/live", Some("")), "rtmp://host/live");
+        assert_eq!(
+            build_rtmp_url("rtmp://host/live", Some("")),
+            "rtmp://host/live"
+        );
     }
 
     #[test]

@@ -1,42 +1,23 @@
 #!/usr/bin/env node
-// Revoke (or un-revoke) a license key against the deployed Worker.
-//
-// Usage:
-//   set WORDLYTE_LICENSE_URL=https://wordlyte-license.<your-subdomain>.workers.dev
-//   set WORDLYTE_ADMIN_TOKEN=<the ADMIN_TOKEN secret>
-//   node scripts/revoke.mjs WORDLYTE-XXXX-XXXX-XXXX-XXXX        # revoke
-//   node scripts/revoke.mjs WORDLYTE-XXXX-XXXX-XXXX-XXXX false  # un-revoke
+// Revoke or restore an organization.
+// Usage: node scripts/revoke.mjs org_<id> [true|false]
 
 const base = process.env.WORDLYTE_LICENSE_URL;
 const token = process.env.WORDLYTE_ADMIN_TOKEN;
-if (!base || !token) {
-  console.error(
-    "Set WORDLYTE_LICENSE_URL and WORDLYTE_ADMIN_TOKEN environment variables first."
-  );
-  process.exit(1);
-}
-
-const [key, state] = process.argv.slice(2);
-if (!key) {
-  console.error("Usage: revoke.mjs <license_key> [revoked=true|false]");
+const [organizationId, state] = process.argv.slice(2);
+if (!base || !token || !organizationId) {
+  console.error("Usage: WORDLYTE_LICENSE_URL=... WORDLYTE_ADMIN_TOKEN=... node scripts/revoke.mjs <organization_id> [revoked=true|false]");
   process.exit(1);
 }
 const revoked = state === undefined ? true : !["false", "0", "no", "n"].includes(state.toLowerCase());
-
-const res = await fetch(`${base.replace(/\/$/, "")}/revoke`, {
+const response = await fetch(`${base.replace(/\/$/, "")}/admin/organizations/${encodeURIComponent(organizationId)}/revoke`, {
   method: "POST",
-  headers: {
-    "content-type": "application/json",
-    authorization: `Bearer ${token}`,
-  },
-  body: JSON.stringify({ license_key: key, revoked }),
+  headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+  body: JSON.stringify({ revoked }),
 });
-
-const data = await res.json();
-if (!res.ok || data.status !== "ok") {
+const data = await response.json();
+if (!response.ok || data.status !== "ok") {
   console.error("Revoke failed:", JSON.stringify(data));
   process.exit(1);
 }
-
-console.log(`\n${revoked ? "Revoked" : "Un-revoked"} ${data.key} (${data.church_name}).`);
-console.log(`  Expires ${new Date(data.expires_at * 1000).toISOString().slice(0, 10)}`);
+console.log(`${revoked ? "Revoked" : "Restored"} ${data.organization.church_name} (${data.organization.id}).`);

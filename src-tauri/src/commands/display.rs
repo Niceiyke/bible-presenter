@@ -33,7 +33,9 @@ pub struct StageVerseResult {
 }
 
 #[tauri::command]
-pub async fn presentation_snapshot(state: State<'_, AppState>) -> Result<PresentationSnapshot, String> {
+pub async fn presentation_snapshot(
+    state: State<'_, AppState>,
+) -> Result<PresentationSnapshot, String> {
     // Read the whole presentation under the mutation lock so the snapshot is
     // consistent: no event can be half-way applied when we capture it.
     let _guard = state.presentation.lock.lock();
@@ -48,8 +50,12 @@ pub async fn presentation_snapshot(state: State<'_, AppState>) -> Result<Present
 }
 
 #[tauri::command]
-pub async fn stage_item(app: AppHandle, state: State<'_, AppState>, item: store::DisplayItem) -> Result<(), String> {
-    crate::license::ensure_allowed(&state)?;
+pub async fn stage_item(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    item: store::DisplayItem,
+) -> Result<(), String> {
+    crate::license::ensure_display_item_allowed(&state, &item)?;
     remote_stage(&app, &state, item, None, 0);
     Ok(())
 }
@@ -65,7 +71,7 @@ pub async fn stage_verse(
     auto_split: bool,
     threshold: Option<usize>,
 ) -> Result<StageVerseResult, String> {
-    crate::license::ensure_allowed(&state)?;
+    crate::license::ensure_core_activated(&state)?;
     let splits = if auto_split {
         crate::commands::bible::split_verse(verse.clone(), threshold)
     } else {
@@ -82,8 +88,15 @@ pub async fn stage_verse(
 /// re-acquiring the live lock, opening a TOCTOU window). Returns the new
 /// live item so callers can confirm the commit succeeded.
 #[tauri::command]
-pub async fn commit_staged(app: AppHandle, state: State<'_, AppState>) -> Result<Option<store::DisplayItem>, String> {
-    crate::license::ensure_allowed(&state)?;
+pub async fn commit_staged(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<store::DisplayItem>, String> {
+    if let Some(item) = state.presentation.staged_item.lock().clone() {
+        crate::license::ensure_display_item_allowed(&state, &item)?;
+    } else {
+        crate::license::ensure_core_activated(&state)?;
+    }
     Ok(remote_commit_staged(&app, &state, None))
 }
 
@@ -92,7 +105,11 @@ pub async fn commit_staged(app: AppHandle, state: State<'_, AppState>) -> Result
 /// (matching historical behaviour).
 #[tauri::command]
 pub async fn go_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    crate::license::ensure_allowed(&state)?;
+    if let Some(item) = state.presentation.staged_item.lock().clone() {
+        crate::license::ensure_display_item_allowed(&state, &item)?;
+    } else {
+        crate::license::ensure_core_activated(&state)?;
+    }
     remote_commit_staged(&app, &state, None);
     Ok(())
 }
@@ -102,14 +119,22 @@ pub async fn go_live(app: AppHandle, state: State<'_, AppState>) -> Result<(), S
 /// commit a different item in between. The frontend `sendLive` uses this
 /// instead of two separate IPC invokes (audit: concurrent stage/send-live).
 #[tauri::command]
-pub async fn send_live_item(app: AppHandle, state: State<'_, AppState>, item: store::DisplayItem) -> Result<store::DisplayItem, String> {
-    crate::license::ensure_allowed(&state)?;
+pub async fn send_live_item(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    item: store::DisplayItem,
+) -> Result<store::DisplayItem, String> {
+    crate::license::ensure_display_item_allowed(&state, &item)?;
     op_send_live(&app, &state, item, None)
 }
 
 #[tauri::command]
-pub async fn go_live_item(app: AppHandle, state: State<'_, AppState>, item: store::DisplayItem) -> Result<(), String> {
-    crate::license::ensure_allowed(&state)?;
+pub async fn go_live_item(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    item: store::DisplayItem,
+) -> Result<(), String> {
+    crate::license::ensure_display_item_allowed(&state, &item)?;
     op_go_live_item(&app, &state, item, None);
     Ok(())
 }
@@ -143,7 +168,11 @@ pub async fn clear_all(app: AppHandle, state: State<'_, AppState>) -> Result<(),
 }
 
 #[tauri::command]
-pub async fn update_timer(app: AppHandle, state: State<'_, AppState>, started_at: Option<u64>) -> Result<(), String> {
+pub async fn update_timer(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    started_at: Option<u64>,
+) -> Result<(), String> {
     let _guard = state.presentation.lock.lock();
     state.presentation.bump_revision();
     let mut live = state.presentation.live_item.lock();
@@ -166,41 +195,59 @@ pub async fn update_timer(app: AppHandle, state: State<'_, AppState>, started_at
 }
 
 #[tauri::command]
-pub async fn get_current_item(state: State<'_, AppState>) -> Result<Option<store::DisplayItem>, String> {
+pub async fn get_current_item(
+    state: State<'_, AppState>,
+) -> Result<Option<store::DisplayItem>, String> {
     Ok(state.presentation.live_item.lock().clone())
 }
 
 #[tauri::command]
-pub async fn get_staged_item(state: State<'_, AppState>) -> Result<Option<store::DisplayItem>, String> {
+pub async fn get_staged_item(
+    state: State<'_, AppState>,
+) -> Result<Option<store::DisplayItem>, String> {
     Ok(state.presentation.staged_item.lock().clone())
 }
 
 #[tauri::command]
-pub async fn get_settings(state: State<'_, AppState>) -> Result<store::PresentationSettings, String> {
+pub async fn get_settings(
+    state: State<'_, AppState>,
+) -> Result<store::PresentationSettings, String> {
     Ok(state.presentation.settings.lock().clone())
 }
 
 #[tauri::command]
-pub async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: store::PresentationSettings) -> Result<(), String> {
-    // Free plan: at most one enabled Bible version. Enforced on the backend so
-    // a modified frontend or direct `invoke` cannot unlock more versions.
+pub async fn save_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: store::PresentationSettings,
+) -> Result<(), String> {
+    // Entitlement service controls the enabled-translation capacity. Enforce it
+    // here so a modified frontend or direct IPC cannot bypass plan limits.
     let info = state.license.status();
-    if info.status == crate::license::LicenseStatus::Active
-        && info.tier == crate::license::LicenseTier::Free
-    {
+    if info.status == crate::license::LicenseStatus::Active {
         let available = state.store.get_available_versions();
-        let disabled = settings.disabled_bible_versions.iter()
+        let disabled = settings
+            .disabled_bible_versions
+            .iter()
             .map(|s| s.as_str())
             .collect::<std::collections::HashSet<_>>();
-        let enabled = available.iter().filter(|v| !disabled.contains(v.as_str())).count();
-        if enabled > 1 {
+        let enabled = available
+            .iter()
+            .filter(|v| !disabled.contains(v.as_str()))
+            .count();
+        if enabled > info.limits.max_bible_versions as usize {
             return Err(
-                "The Free plan enables one Bible version at a time. Disable the current version first or upgrade in Settings → License."
-                    .to_owned(),
+                format!(
+                    "Your Wordlyte plan enables up to {} Bible version(s). Disable another version first or ask your organization owner to upgrade.",
+                    info.limits.max_bible_versions
+                ),
             );
         }
     }
-    state.media_schedule.save_settings(&settings).map_err(|e| e.to_string())?;
+    state
+        .media_schedule
+        .save_settings(&settings)
+        .map_err(|e| e.to_string())?;
     let (prev_blanked, prev_logo) = {
         let guard = state.presentation.settings.lock();
         (guard.is_blanked, guard.show_background_logo)

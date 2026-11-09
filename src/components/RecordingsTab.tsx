@@ -57,7 +57,7 @@ export function RecordingsTab() {
   const [recordings, setRecordings] = useState<RecordingFile[]>([]);
   const [loading, setLoading] = useState(false);
   const license = useAppStore((s) => s.license);
-  const recordingBlocked = !!license && license.status === "active" && !tierCapabilities(license.tier).recording;
+  const recordingBlocked = !!license && license.status === "active" && !tierCapabilities(license.tier, license.limits).recording;
 
   const refreshList = useCallback(async () => {
     setLoading(true);

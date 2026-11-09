@@ -665,13 +665,31 @@ pub fn recording_start(
     let active_rx: Arc<parking_lot::Mutex<crate::capture::FrameSinkRx>> = Arc::new(Mutex::new(rx));
     let wstatus = status.clone();
     let writer_rx = active_rx.clone();
+    let entitlement = state.license.clone();
     let writer_thread = std::thread::Builder::new()
         .name("recording-writer".to_string())
         .spawn(move || {
             let mut stdin = stdin;
             let mut bytes = 0u64;
             let mut frames = 0u64;
+            let mut last_entitlement_check = std::time::Instant::now();
             loop {
+                // A paid entitlement can expire while a recording is already
+                // running. Stop feeding ffmpeg promptly; closing stdin lets it
+                // finalize the MP4, while the Free presentation remains live.
+                if last_entitlement_check.elapsed() >= std::time::Duration::from_secs(1) {
+                    let info = entitlement.status();
+                    if info.status != crate::license::LicenseStatus::Active
+                        || info.tier < LicenseTier::Pro
+                    {
+                        wstatus.lock().error = Some(
+                            "Recording stopped because the Pro entitlement is no longer active."
+                                .to_string(),
+                        );
+                        break;
+                    }
+                    last_entitlement_check = std::time::Instant::now();
+                }
                 let frame = {
                     let guard = writer_rx.lock();
                     match guard.recv_timeout(std::time::Duration::from_millis(20)) {

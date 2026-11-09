@@ -10,6 +10,7 @@ pub async fn show_lower_third(
     data: store::LowerThirdData,
     template: serde_json::Value,
 ) -> Result<(), String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     // Route through the same authoritative helper the remote path uses so the
     // presentation revision bumps and connected phones receive LowerThirdChanged.
     op_show_lower_third(&app, &state, data, Some(template), None);
@@ -24,6 +25,7 @@ pub async fn hide_lower_third(app: AppHandle, state: State<'_, AppState>) -> Res
 
 #[tauri::command]
 pub async fn save_lt_templates(state: State<'_, AppState>, templates: Vec<serde_json::Value>) -> Result<(), String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     state.media_schedule.save_lt_templates(&serde_json::Value::Array(templates)).map_err(|e| e.to_string())
 }
 
@@ -44,11 +46,13 @@ pub async fn list_lt_presets(state: State<'_, AppState>) -> Result<Vec<store::Lt
 
 #[tauri::command]
 pub async fn save_lt_preset(state: State<'_, AppState>, preset: store::LtPreset) -> Result<Vec<store::LtPreset>, String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     state.media_schedule.save_lt_preset(preset).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn delete_lt_preset(state: State<'_, AppState>, id: String) -> Result<Vec<store::LtPreset>, String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     state.media_schedule.delete_lt_preset(&id).map_err(|e| e.to_string())
 }
 
@@ -59,6 +63,7 @@ pub async fn show_lt_preset(
     id: String,
     template: Option<serde_json::Value>,
 ) -> Result<(), String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     let presets = state.media_schedule.list_lt_presets().map_err(|e| e.to_string())?;
     let preset = presets.into_iter().find(|p| p.id == id)
         .ok_or_else(|| format!("Preset '{}' not found", id))?;

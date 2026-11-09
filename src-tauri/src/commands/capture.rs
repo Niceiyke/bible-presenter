@@ -216,6 +216,7 @@ pub fn program_capture_start(
     height: Option<u32>,
     fps: Option<u32>,
 ) -> Result<String, String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
     crate::capture::start(
         &state.capture,
         &app,

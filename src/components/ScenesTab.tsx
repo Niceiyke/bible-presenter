@@ -46,7 +46,7 @@ export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: 
   const t = useT();
   const [newName, setNewName] = useState("");
   const [pendingApply, setPendingApply] = useState<Scene | null>(null);
-  const sceneCap = tierCapabilities(license?.tier).maxScenes;
+  const sceneCap = tierCapabilities(license?.tier, license?.limits).maxScenes;
   const sceneCapReached = scenes.length >= sceneCap;
 
   const handleCapture = async () => {
