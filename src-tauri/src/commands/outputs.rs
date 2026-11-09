@@ -2,6 +2,7 @@ use crate::events::emit_checked;
 use crate::outputs::{OutputConfig, OutputState};
 use crate::remote::protocol::RemoteEventKind;
 use crate::state::AppState;
+use serde::Serialize;
 use serde_json::json;
 use tauri::{AppHandle, Manager, State};
 
@@ -51,9 +52,19 @@ pub fn publish_capture_active(app: &AppHandle, state: &AppState) {
 
 /// Position the output window on the operator's preferred monitor (used when a
 /// multi-monitor layout is detected).
-fn position_output_on_preferred(app: &AppHandle, state: &AppState) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("output") {
-        let preferred = state.presentation.settings.lock().preferred_monitor.clone();
+fn position_window_on_assigned_monitor(
+    app: &AppHandle,
+    state: &AppState,
+    cfg: &OutputConfig,
+    label: &str,
+) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(label) {
+        let configured = cfg.monitor_name.clone();
+        let preferred = configured.or_else(|| {
+            (label == "output")
+                .then(|| state.presentation.settings.lock().preferred_monitor.clone())
+                .flatten()
+        });
         let monitors = window
             .available_monitors()
             .map_err(|e: tauri::Error| e.to_string())?;
@@ -62,12 +73,33 @@ fn position_output_on_preferred(app: &AppHandle, state: &AppState) -> Result<(),
                 .primary_monitor()
                 .map_err(|e: tauri::Error| e.to_string())?
             {
-                let target = monitors
-                    .iter()
-                    .find(|m| {
-                        preferred
-                            .as_deref()
-                            .is_some_and(|p| m.name().is_some_and(|n| n == p))
+                // Never place a newly opened auxiliary program over another
+                // visible output unless every secondary display is already in
+                // use. An explicit `monitor_name` always wins.
+                let occupied: std::collections::HashSet<String> = state
+                    .outputs
+                    .list()
+                    .into_iter()
+                    .filter(|output| {
+                        output.visible && output.window_label.as_deref() != Some(label)
+                    })
+                    .filter_map(|output| output.window_label)
+                    .filter_map(|other_label| app.get_webview_window(&other_label))
+                    .filter_map(|other| other.current_monitor().ok().flatten())
+                    .filter_map(|monitor| monitor.name().map(ToOwned::to_owned))
+                    .collect();
+                let target = preferred
+                    .as_deref()
+                    .and_then(|name| {
+                        monitors
+                            .iter()
+                            .find(|m| m.name().is_some_and(|monitor_name| monitor_name == name))
+                    })
+                    .or_else(|| {
+                        monitors.iter().find(|m| {
+                            m.name() != primary.name()
+                                && !m.name().is_some_and(|name| occupied.contains(name))
+                        })
                     })
                     .or_else(|| monitors.iter().find(|m| m.name() != primary.name()));
                 if let Some(mon) = target {
@@ -92,7 +124,7 @@ fn position_output_on_preferred(app: &AppHandle, state: &AppState) -> Result<(),
 fn enforce_window_cap(app: &AppHandle, state: &AppState, this_label: &str) -> Result<(), String> {
     let info = state.license.status();
     if info.status == crate::license::LicenseStatus::Active {
-        let other_visible = ["output", "stage", "design", "studio"]
+        let other_visible = ["output", "overflow", "stage", "design", "studio"]
             .iter()
             .filter(|l| **l != this_label)
             .filter(|l| {
@@ -161,6 +193,13 @@ pub fn set_output_visible(
         .get(id)
         .ok_or_else(|| format!("Output '{}' not found", id))?;
 
+    // A secondary program surface is a Pro production capability, even when
+    // the primary projector is currently hidden and the signed Free output
+    // capacity would otherwise leave a slot available.
+    if visible && cfg.program_bus != crate::output_buses::PRIMARY_BUS_ID {
+        crate::license::ensure_active_tier(state, crate::license::LicenseTier::Pro)?;
+    }
+
     // Signed entitlement limits on-air window capacity (recorders/streamers
     // have separate backend gates).
     if visible && cfg.window_label.is_some() {
@@ -190,9 +229,7 @@ pub fn set_output_visible(
             .ok_or_else(|| format!("No window bound to output '{}'", id))?;
         if visible {
             enforce_window_cap(app, state, label)?;
-            if label == "output" {
-                position_output_on_preferred(app, state)?;
-            }
+            position_window_on_assigned_monitor(app, state, &cfg, label)?;
             let _ = window.set_ignore_cursor_events(true);
             window.show().map_err(|e: tauri::Error| e.to_string())?;
             window
@@ -248,6 +285,15 @@ pub async fn outputs_states(state: State<'_, AppState>) -> Result<Vec<OutputStat
     Ok(state.outputs.all_states())
 }
 
+/// Lists logical presentation buses available for output targeting. The caller
+/// cannot invent a bus id: it must be backed by a configured window output.
+#[tauri::command]
+pub async fn output_buses_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::output_buses::OutputBusInfo>, String> {
+    Ok(state.output_buses.list())
+}
+
 /// Replace-all config update (idempotent, like `save_lt_templates`). Persists
 /// and broadcasts the authoritative list to all windows.
 #[tauri::command]
@@ -257,6 +303,10 @@ pub async fn outputs_update(
     configs: Vec<OutputConfig>,
 ) -> Result<(), String> {
     state.outputs.set_configs(configs)?;
+    state.output_buses.sync(
+        &state.outputs.list(),
+        &state.presentation.settings.lock().clone(),
+    );
     publish_configs(&app);
     for s in state.outputs.all_states() {
         publish_state(&app, &s);
@@ -275,6 +325,46 @@ pub async fn outputs_set_visible(
     visible: bool,
 ) -> Result<(), String> {
     set_output_visible(&app, state.inner(), &id, visible)
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputMonitorInfo {
+    pub name: String,
+    pub primary: bool,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Enumerate physical displays for the per-output monitor assignment control.
+#[tauri::command]
+pub async fn outputs_monitors(app: AppHandle) -> Result<Vec<OutputMonitorInfo>, String> {
+    let window = app
+        .get_webview_window("main")
+        .or_else(|| app.get_webview_window("output"))
+        .ok_or_else(|| "No application window is available to enumerate monitors.".to_string())?;
+    let primary_name = window
+        .primary_monitor()
+        .map_err(|e: tauri::Error| e.to_string())?
+        .and_then(|monitor| monitor.name().map(ToOwned::to_owned));
+    Ok(window
+        .available_monitors()
+        .map_err(|e: tauri::Error| e.to_string())?
+        .into_iter()
+        .map(|monitor| {
+            let size = monitor.size();
+            let name = monitor
+                .name()
+                .cloned()
+                .unwrap_or_else(|| "Unnamed display".to_string());
+            OutputMonitorInfo {
+                primary: primary_name.as_deref() == Some(name.as_str()),
+                name,
+                width: size.width,
+                height: size.height,
+            }
+        })
+        .collect::<Vec<_>>())
 }
 
 /// Internal helper for recorder/streamer surfaces to report runtime changes.

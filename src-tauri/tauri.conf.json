@@ -44,6 +44,18 @@
         "create": false
       },
       {
+        "title": "Wordlyte - Overflow",
+        "label": "overflow",
+        "width": 1920,
+        "height": 1080,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "fullscreen": false,
+        "visible": false,
+        "create": false
+      },
+      {
         "title": "Wordlyte - Stage",
         "label": "stage",
         "width": 1280,

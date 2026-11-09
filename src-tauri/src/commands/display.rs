@@ -15,7 +15,7 @@ use tauri::{AppHandle, State};
 /// `presentation_snapshot` after registering their event listeners and replay
 /// their buffered events on top of it, so a reopening window converges to the
 /// same state as the operator console.
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct PresentationSnapshot {
     pub live: Option<store::DisplayItem>,
     pub staged: Option<store::DisplayItem>,
@@ -23,6 +23,55 @@ pub struct PresentationSnapshot {
     pub lower_third: Option<serde_json::Value>,
     pub props: Vec<store::PropItem>,
     pub revision: u64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OutputBusItemUpdate {
+    bus_id: String,
+    item: Option<store::DisplayItem>,
+    revision: u64,
+}
+
+fn snapshot_for(presentation: &crate::state::PresentationState) -> PresentationSnapshot {
+    let _guard = presentation.lock.lock();
+    PresentationSnapshot {
+        live: presentation.live_item.lock().clone(),
+        staged: presentation.staged_item.lock().clone(),
+        settings: presentation.settings.lock().clone(),
+        lower_third: presentation.lower_third.lock().clone(),
+        props: presentation.props_layer.lock().clone(),
+        revision: presentation.current_revision(),
+    }
+}
+
+fn auxiliary_bus(
+    state: &AppState,
+    bus_id: &str,
+) -> Result<crate::state::PresentationState, String> {
+    if bus_id == crate::output_buses::PRIMARY_BUS_ID {
+        return Err("Use the primary presentation commands for the primary output bus.".into());
+    }
+    state
+        .output_buses
+        .auxiliary_presentation(bus_id)
+        .ok_or_else(|| format!("Output bus '{bus_id}' is not configured."))
+}
+
+/// The first multi-output slice intentionally supports only self-contained
+/// program content. Cameras, scenes, timers, and lower-thirds still depend on
+/// primary-only transport/overlay systems and must not silently appear on a
+/// secondary projection.
+fn ensure_auxiliary_item_supported(item: &store::DisplayItem) -> Result<(), String> {
+    match item {
+        store::DisplayItem::Verse(_)
+        | store::DisplayItem::Media(_)
+        | store::DisplayItem::CustomSlide(_) => Ok(()),
+        store::DisplayItem::Song(song) if song.style.as_deref() != Some("LowerThird") => Ok(()),
+        _ => Err(
+            "Independent outputs currently support Bible, full-slide songs, local media, and Studio presentations. Lower thirds, cameras, scenes, and timers remain on the primary output.".into(),
+        ),
+    }
 }
 
 #[derive(Serialize)]
@@ -36,17 +85,197 @@ pub struct StageVerseResult {
 pub async fn presentation_snapshot(
     state: State<'_, AppState>,
 ) -> Result<PresentationSnapshot, String> {
-    // Read the whole presentation under the mutation lock so the snapshot is
-    // consistent: no event can be half-way applied when we capture it.
-    let _guard = state.presentation.lock.lock();
-    Ok(PresentationSnapshot {
-        live: state.presentation.live_item.lock().clone(),
-        staged: state.presentation.staged_item.lock().clone(),
-        settings: state.presentation.settings.lock().clone(),
-        lower_third: state.presentation.lower_third.lock().clone(),
-        props: state.presentation.props_layer.lock().clone(),
-        revision: state.presentation.current_revision(),
-    })
+    Ok(snapshot_for(&state.presentation))
+}
+
+/// Hydrate an auxiliary output window from its own live/staged state. The
+/// primary bus deliberately continues using `presentation_snapshot` so existing
+/// output, stage, capture, remote, and recording paths stay compatible.
+#[tauri::command]
+pub async fn output_bus_snapshot(
+    state: State<'_, AppState>,
+    bus_id: String,
+) -> Result<PresentationSnapshot, String> {
+    Ok(snapshot_for(&auxiliary_bus(&state, &bus_id)?))
+}
+
+#[tauri::command]
+pub async fn output_bus_stage_item(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    bus_id: String,
+    item: store::DisplayItem,
+) -> Result<(), String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
+    crate::license::ensure_display_item_allowed(&state, &item)?;
+    ensure_auxiliary_item_supported(&item)?;
+    let presentation = auxiliary_bus(&state, &bus_id)?;
+    let _guard = presentation.lock.lock();
+    *presentation.staged_item.lock() = Some(item.clone());
+    let revision = presentation.bump_revision();
+    emit_checked(
+        &app,
+        "output-bus-item-staged",
+        &OutputBusItemUpdate {
+            bus_id,
+            item: Some(item),
+            revision,
+        },
+    );
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn output_bus_commit_staged(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    bus_id: String,
+) -> Result<Option<store::DisplayItem>, String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
+    let presentation = auxiliary_bus(&state, &bus_id)?;
+    let _guard = presentation.lock.lock();
+    let item = presentation.staged_item.lock().clone();
+    if let Some(item) = &item {
+        crate::license::ensure_display_item_allowed(&state, item)?;
+        ensure_auxiliary_item_supported(item)?;
+    }
+    *presentation.live_item.lock() = item.clone();
+    *presentation.staged_item.lock() = None;
+    let revision = presentation.bump_revision();
+    emit_checked(
+        &app,
+        "output-bus-live-item-update",
+        &OutputBusItemUpdate {
+            bus_id: bus_id.clone(),
+            item: item.clone(),
+            revision,
+        },
+    );
+    emit_checked(
+        &app,
+        "output-bus-item-staged",
+        &OutputBusItemUpdate {
+            bus_id,
+            item: None,
+            revision,
+        },
+    );
+    Ok(item)
+}
+
+#[tauri::command]
+pub async fn output_bus_send_live_item(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    bus_id: String,
+    item: store::DisplayItem,
+) -> Result<store::DisplayItem, String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
+    crate::license::ensure_display_item_allowed(&state, &item)?;
+    ensure_auxiliary_item_supported(&item)?;
+    let presentation = auxiliary_bus(&state, &bus_id)?;
+    let _guard = presentation.lock.lock();
+    *presentation.live_item.lock() = Some(item.clone());
+    *presentation.staged_item.lock() = None;
+    let revision = presentation.bump_revision();
+    emit_checked(
+        &app,
+        "output-bus-live-item-update",
+        &OutputBusItemUpdate {
+            bus_id: bus_id.clone(),
+            item: Some(item.clone()),
+            revision,
+        },
+    );
+    emit_checked(
+        &app,
+        "output-bus-item-staged",
+        &OutputBusItemUpdate {
+            bus_id,
+            item: None,
+            revision,
+        },
+    );
+    Ok(item)
+}
+
+#[tauri::command]
+pub async fn output_bus_clear(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    bus_id: String,
+) -> Result<(), String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
+    let presentation = auxiliary_bus(&state, &bus_id)?;
+    let _guard = presentation.lock.lock();
+    *presentation.live_item.lock() = None;
+    *presentation.staged_item.lock() = None;
+    let revision = presentation.bump_revision();
+    emit_checked(
+        &app,
+        "output-bus-live-item-update",
+        &OutputBusItemUpdate {
+            bus_id: bus_id.clone(),
+            item: None,
+            revision,
+        },
+    );
+    emit_checked(
+        &app,
+        "output-bus-item-staged",
+        &OutputBusItemUpdate {
+            bus_id,
+            item: None,
+            revision,
+        },
+    );
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn output_bus_clear_staged(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    bus_id: String,
+) -> Result<(), String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
+    let presentation = auxiliary_bus(&state, &bus_id)?;
+    let _guard = presentation.lock.lock();
+    *presentation.staged_item.lock() = None;
+    let revision = presentation.bump_revision();
+    emit_checked(
+        &app,
+        "output-bus-item-staged",
+        &OutputBusItemUpdate {
+            bus_id,
+            item: None,
+            revision,
+        },
+    );
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn output_bus_clear_live(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    bus_id: String,
+) -> Result<(), String> {
+    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
+    let presentation = auxiliary_bus(&state, &bus_id)?;
+    let _guard = presentation.lock.lock();
+    *presentation.live_item.lock() = None;
+    let revision = presentation.bump_revision();
+    emit_checked(
+        &app,
+        "output-bus-live-item-update",
+        &OutputBusItemUpdate {
+            bus_id,
+            item: None,
+            revision,
+        },
+    );
+    Ok(())
 }
 
 #[tauri::command]

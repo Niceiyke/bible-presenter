@@ -117,6 +117,23 @@ export function useItemActions() {
     if (reqId !== stageReqRef.current) return false;
 
     setBusyAction("stage", true);
+    const busId = useAppStore.getState().selectedOutputBusId;
+    if (busId !== "primary") {
+      const previous = useAppStore.getState().outputBusItems[busId]?.stagedItem ?? null;
+      useAppStore.getState().setOutputBusStagedItem(busId, finalItem);
+      try {
+        await invoke("output_bus_stage_item", { busId, item: finalItem });
+        return true;
+      } catch (err: any) {
+        if (reqId === stageReqRef.current) {
+          useAppStore.getState().setOutputBusStagedItem(busId, previous);
+          setBackendError(`Failed to stage on independent output: ${err?.message ?? err}`);
+        }
+        return false;
+      } finally {
+        if (reqId === stageReqRef.current) setBusyAction("stage", false);
+      }
+    }
     setStagedItem(finalItem);
     try {
       await invoke("stage_item", { item: finalItem });
@@ -133,6 +150,9 @@ export function useItemActions() {
   }, [setStagedItem, settings, setBackendError, setBusyAction]);
 
   const stageVerse = useCallback(async (verse: Verse): Promise<boolean> => {
+    if (useAppStore.getState().selectedOutputBusId !== "primary") {
+      return stageItem({ type: "Verse", data: verse });
+    }
     const reqId = ++stageReqRef.current;
     const prevStaged = useAppStore.getState().stagedItem;
     const key = getVerseKey(verse, settings.verse_split_threshold);
@@ -170,6 +190,29 @@ export function useItemActions() {
   }, [buildLookup]);
 
   const goLive = useCallback(async (): Promise<boolean> => {
+    const busId = useAppStore.getState().selectedOutputBusId;
+    if (busId !== "primary") {
+      const staged = useAppStore.getState().outputBusItems[busId]?.stagedItem ?? null;
+      setBusyAction("goLive", true);
+      try {
+        const committed = await invoke<DisplayItem | null>("output_bus_commit_staged", { busId });
+        if (!committed) {
+          setBackendError("Nothing staged to take live on this output");
+          return false;
+        }
+        useAppStore.getState().setOutputBusLiveItem(busId, committed);
+        useAppStore.getState().setOutputBusStagedItem(busId, null);
+        return true;
+      } catch (err: any) {
+        // Keep the local preview in sync with the backend when a stale click
+        // races another operator action.
+        useAppStore.getState().setOutputBusStagedItem(busId, staged);
+        setBackendError(`Failed to take independent output live: ${err?.message ?? err}`);
+        return false;
+      } finally {
+        setBusyAction("goLive", false);
+      }
+    }
     const current = useAppStore.getState().liveItem;
     const staged = useAppStore.getState().stagedItem;
     let committed: DisplayItem | null = null;
@@ -254,6 +297,25 @@ export function useItemActions() {
       }
     }
 
+    const busId = useAppStore.getState().selectedOutputBusId;
+    if (busId !== "primary") {
+      const previous = useAppStore.getState().outputBusItems[busId] ?? { liveItem: null, stagedItem: null };
+      setBusyAction("goLive", true);
+      try {
+        const committed = await invoke<DisplayItem>("output_bus_send_live_item", { busId, item: finalItem });
+        useAppStore.getState().setOutputBusLiveItem(busId, committed);
+        useAppStore.getState().setOutputBusStagedItem(busId, null);
+        return true;
+      } catch (err: any) {
+        useAppStore.getState().setOutputBusLiveItem(busId, previous.liveItem);
+        useAppStore.getState().setOutputBusStagedItem(busId, previous.stagedItem);
+        setBackendError(`Failed to send independent output live: ${err?.message ?? err}`);
+        return false;
+      } finally {
+        setBusyAction("goLive", false);
+      }
+    }
+
     // Stage and commit in ONE backend round trip so the audience can never
     // observe a window where a new item is staged but not yet live, and a
     // failed commit restores the previous staged item server-side.
@@ -319,6 +381,22 @@ export function useItemActions() {
   }, [stageItem, setStagedItem, setRecentItems, getNextItem, setPreviousItem, setLiveItem, settings, ltTemplate, ltSavedTemplates, ltLinesPerDisplay, songs, setLtVisible, updateSettings, setBackendError, setBusyAction]);
 
   const clearStaged = useCallback(async (): Promise<boolean> => {
+    const busId = useAppStore.getState().selectedOutputBusId;
+    if (busId !== "primary") {
+      const previous = useAppStore.getState().outputBusItems[busId]?.stagedItem ?? null;
+      setBusyAction("clear", true);
+      try {
+        await invoke("output_bus_clear_staged", { busId });
+        useAppStore.getState().setOutputBusStagedItem(busId, null);
+        return true;
+      } catch (err: any) {
+        useAppStore.getState().setOutputBusStagedItem(busId, previous);
+        setBackendError(`Failed to clear independent preview: ${err?.message ?? err}`);
+        return false;
+      } finally {
+        setBusyAction("clear", false);
+      }
+    }
     const prev = useAppStore.getState().stagedItem;
     setBusyAction("clear", true);
     try {
@@ -333,6 +411,38 @@ export function useItemActions() {
     setStagedItem(null);
     return true;
   }, [setStagedItem, setBackendError, setBusyAction]);
+
+  const clearLive = useCallback(async (): Promise<boolean> => {
+    const busId = useAppStore.getState().selectedOutputBusId;
+    if (busId !== "primary") {
+      const previous = useAppStore.getState().outputBusItems[busId]?.liveItem ?? null;
+      setBusyAction("clearLive", true);
+      try {
+        await invoke("output_bus_clear_live", { busId });
+        useAppStore.getState().setOutputBusLiveItem(busId, null);
+        return true;
+      } catch (err: any) {
+        useAppStore.getState().setOutputBusLiveItem(busId, previous);
+        setBackendError(`Failed to clear independent output: ${err?.message ?? err}`);
+        return false;
+      } finally {
+        setBusyAction("clearLive", false);
+      }
+    }
+    const previous = useAppStore.getState().liveItem;
+    setBusyAction("clearLive", true);
+    try {
+      await invoke("clear_live");
+      setLiveItem(null);
+      return true;
+    } catch (err: any) {
+      setLiveItem(previous);
+      setBackendError(`Clear failed: ${err?.message ?? err}`);
+      return false;
+    } finally {
+      setBusyAction("clearLive", false);
+    }
+  }, [setLiveItem, setBackendError, setBusyAction]);
 
   const clearAll = useCallback(async (): Promise<ClearSnapshot | null> => {
     const snapshot: ClearSnapshot = {
@@ -564,6 +674,7 @@ export function useItemActions() {
     goLive,
     sendLive,
     clearStaged,
+    clearLive,
     clearAll,
     undoClearAll,
     getNextItem,

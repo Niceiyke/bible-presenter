@@ -1,8 +1,8 @@
 use crate::store::DisplayItem;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 /// A configurable output surface subscribing to a program source. Outputs never
 /// mutate engine state — they only subscribe. Persisted to `outputs.json`
@@ -15,6 +15,14 @@ pub struct OutputConfig {
     pub enabled: bool,
     pub visible: bool,
     pub source: OutputSource,
+    /// Presentation bus rendered by this surface. Existing `outputs.json`
+    /// files deserialize to `primary`, preserving current installations.
+    #[serde(default = "primary_program_bus")]
+    pub program_bus: String,
+    /// Optional physical monitor assignment for a window output. When absent,
+    /// Wordlyte chooses a sensible secondary display automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitor_name: Option<String>,
     pub geometry: OutputGeometry,
     /// Recorder/streamer capture frame rate. Window outputs ignore it; when
     /// absent the frontend falls back to 30.
@@ -34,6 +42,10 @@ pub struct OutputConfig {
     /// Streamer-specific: multi-destination hub config (one entry per platform).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_destinations: Option<Vec<StreamDestination>>,
+}
+
+fn primary_program_bus() -> String {
+    crate::output_buses::PRIMARY_BUS_ID.to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -173,6 +185,17 @@ impl OutputManager {
                 configs.push(d);
             }
         }
+        // The previous overflow entry was an unbound placeholder. Promote it
+        // to the first routable auxiliary output during migration.
+        if let Some(overflow) = configs.iter_mut().find(|config| config.id == "overflow") {
+            overflow.enabled = true;
+            if overflow.window_label.is_none() {
+                overflow.window_label = Some("overflow".to_string());
+            }
+            if overflow.program_bus == crate::output_buses::PRIMARY_BUS_ID {
+                overflow.program_bus = "aux-overflow".to_string();
+            }
+        }
         Ok(configs)
     }
 
@@ -231,7 +254,14 @@ impl OutputManager {
         Ok(())
     }
 
-    pub fn update_state(&self, id: &str, visible: bool, rendering: bool, fps: u32, error: Option<String>) {
+    pub fn update_state(
+        &self,
+        id: &str,
+        visible: bool,
+        rendering: bool,
+        fps: u32,
+        error: Option<String>,
+    ) {
         let mut guard = self.runtime.write();
         let entry = guard.entry(id.to_string()).or_insert_with(|| OutputState {
             id: id.to_string(),
@@ -267,10 +297,19 @@ pub fn default_outputs() -> Vec<OutputConfig> {
             enabled: true,
             visible: false,
             source: OutputSource::Live,
-            geometry: OutputGeometry { width: 1920, height: 1080 },
+            program_bus: primary_program_bus(),
+            monitor_name: None,
+            geometry: OutputGeometry {
+                width: 1920,
+                height: 1080,
+            },
             capture_fps: None,
             presentation: None,
-            overlays: OutputOverlays { props: true, lower_third: true, logo: true },
+            overlays: OutputOverlays {
+                props: true,
+                lower_third: true,
+                logo: true,
+            },
             window_label: Some("output".into()),
             recording: None,
             streaming: None,
@@ -283,10 +322,19 @@ pub fn default_outputs() -> Vec<OutputConfig> {
             enabled: true,
             visible: false,
             source: OutputSource::Live,
-            geometry: OutputGeometry { width: 1280, height: 720 },
+            program_bus: primary_program_bus(),
+            monitor_name: None,
+            geometry: OutputGeometry {
+                width: 1280,
+                height: 720,
+            },
             capture_fps: None,
             presentation: None,
-            overlays: OutputOverlays { props: false, lower_third: true, logo: false },
+            overlays: OutputOverlays {
+                props: false,
+                lower_third: true,
+                logo: false,
+            },
             window_label: Some("stage".into()),
             recording: None,
             streaming: None,
@@ -296,14 +344,23 @@ pub fn default_outputs() -> Vec<OutputConfig> {
             id: "overflow".into(),
             kind: OutputKind::Window,
             label: "Overflow".into(),
-            enabled: false,
+            enabled: true,
             visible: false,
             source: OutputSource::Live,
-            geometry: OutputGeometry { width: 1920, height: 1080 },
+            program_bus: "aux-overflow".into(),
+            monitor_name: None,
+            geometry: OutputGeometry {
+                width: 1920,
+                height: 1080,
+            },
             capture_fps: None,
             presentation: None,
-            overlays: OutputOverlays { props: true, lower_third: true, logo: true },
-            window_label: None,
+            overlays: OutputOverlays {
+                props: true,
+                lower_third: true,
+                logo: true,
+            },
+            window_label: Some("overflow".into()),
             recording: None,
             streaming: None,
             stream_destinations: None,
@@ -315,12 +372,24 @@ pub fn default_outputs() -> Vec<OutputConfig> {
             enabled: false,
             visible: false,
             source: OutputSource::Live,
-            geometry: OutputGeometry { width: 1920, height: 1080 },
+            program_bus: primary_program_bus(),
+            monitor_name: None,
+            geometry: OutputGeometry {
+                width: 1920,
+                height: 1080,
+            },
             capture_fps: Some(30),
             presentation: None,
-            overlays: OutputOverlays { props: true, lower_third: true, logo: true },
+            overlays: OutputOverlays {
+                props: true,
+                lower_third: true,
+                logo: true,
+            },
             window_label: None,
-            recording: Some(OutputRecording { format: "webm".into(), directory: None }),
+            recording: Some(OutputRecording {
+                format: "webm".into(),
+                directory: None,
+            }),
             streaming: None,
             stream_destinations: None,
         },
@@ -331,13 +400,26 @@ pub fn default_outputs() -> Vec<OutputConfig> {
             enabled: false,
             visible: false,
             source: OutputSource::Live,
-            geometry: OutputGeometry { width: 1920, height: 1080 },
+            program_bus: primary_program_bus(),
+            monitor_name: None,
+            geometry: OutputGeometry {
+                width: 1920,
+                height: 1080,
+            },
             capture_fps: Some(30),
             presentation: None,
-            overlays: OutputOverlays { props: true, lower_third: true, logo: true },
+            overlays: OutputOverlays {
+                props: true,
+                lower_third: true,
+                logo: true,
+            },
             window_label: None,
             recording: None,
-            streaming: Some(OutputStreaming { mode: "whip".into(), url: String::new(), stream_key: None }),
+            streaming: Some(OutputStreaming {
+                mode: "whip".into(),
+                url: String::new(),
+                stream_key: None,
+            }),
             stream_destinations: None,
         },
     ]
@@ -368,7 +450,8 @@ mod tests {
 
         // The candidate is on disk ...
         let disk: Vec<OutputConfig> =
-            serde_json::from_str(&std::fs::read_to_string(dir.join("outputs.json")).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(dir.join("outputs.json")).unwrap())
+                .unwrap();
         assert_eq!(disk.len(), modified.len());
         assert_eq!(disk[0].label, "Changed");
         // ... and in memory.
@@ -401,7 +484,10 @@ mod tests {
         std::fs::write(&blocker, b"file").unwrap();
         let manager = OutputManager::new(&blocker);
         let before = manager.list();
-        let first = before.iter().find(|c| c.id == "output").expect("has output");
+        let first = before
+            .iter()
+            .find(|c| c.id == "output")
+            .expect("has output");
         assert!(manager.set_visible("output", !first.visible).is_err());
         let after_list = manager.list();
         let after = after_list.iter().find(|c| c.id == "output").unwrap();

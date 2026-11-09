@@ -79,7 +79,7 @@ export default function App() {
   useFonts(); // P2.5: inject @font-face for user-installed fonts.
 
   const {
-    stageItem, stageVerse, goLive, sendLive, clearStaged, clearAll,
+    stageItem, stageVerse, goLive, sendLive, clearStaged, clearLive, clearAll,
     addToSchedule, addToService, persistSchedule, handleFileUpload, handleDeleteMedia,
     updateSettings, updateProps,
     loadScenes, saveScene, deleteScene, applyScene, captureScene,
@@ -152,6 +152,7 @@ export default function App() {
   }, [isInitialized, loadScenes]);
 
   if (label === "output") return <ErrorBoundary windowLabel="output"><OutputWindow /></ErrorBoundary>;
+  if (label === "overflow") return <ErrorBoundary windowLabel="overflow"><OutputWindow /></ErrorBoundary>;
   if (label === "capture") return <ErrorBoundary windowLabel="capture"><OutputWindow /></ErrorBoundary>;
   if (label === "stage") return <ErrorBoundary windowLabel="stage"><StageWindow /></ErrorBoundary>;
 
@@ -241,6 +242,7 @@ export default function App() {
             <Cockpit
               goLive={goLive}
               clearStaged={clearStaged}
+              clearLive={clearLive}
               updateSettings={updateSettings}
             />
 

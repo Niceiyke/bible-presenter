@@ -8,7 +8,7 @@ import { normalizeSong } from "../utils/song";
 import {
   MediaItem, Song, LowerThirdTemplate,
   PresentationSettings, PropItem, ServiceMeta,
-  DisplayItem, OutputConfig, OutputState,
+  DisplayItem, OutputBusInfo, OutputConfig, OutputState,
   PresentationSnapshot,
 } from "../types";
 import type { LicenseInfo } from "../types/license";
@@ -30,14 +30,15 @@ export function useAppInitialization() {
     setAppDataDir, setRecentItems,
     setBackendError, addLog, setScenes,
     setBackendAvailable, setToast,
-    setOutputs, setOutputState,
+    setOutputs, setOutputState, setOutputBuses, setOutputBusItems,
+    setOutputBusLiveItem, setOutputBusStagedItem,
     setLicense, setBibleIndexing,
   } = useAppStore();
 
   useEffect(() => {
     const windowLabel = getCurrentWindow().label;
     setLabel(windowLabel);
-    if (windowLabel === "output" || windowLabel === "capture") {
+    if (windowLabel === "output" || windowLabel === "overflow" || windowLabel === "capture") {
       setIsInitialized(true);
       return;
     }
@@ -72,7 +73,7 @@ export function useAppInitialization() {
         unlistenLtUpdate, unlistenLtSync, unlistenSongsSync, unlistenStudioSync,
         unlistenStudioSlidesSync, unlistenLog, unlistenOpWarn, unlistenRemoteDeviceEvent,
         unlistenMediaProbed, unlistenMediaUpdated, unlistenOutputConfig, unlistenOutputState,
-        unlistenLicense, unlistenBibleIndex,
+        unlistenLicense, unlistenBibleIndex, unlistenBusLive, unlistenBusStaged,
       ]).catch(() => {});
       let ready = false;
       let startupIssues: string[] = [];
@@ -184,9 +185,26 @@ export function useAppInitialization() {
 
       // Output manager — load configs + runtime states.
       invoke<OutputConfig[]>("outputs_list").then(setOutputs).catch((e) => signalOperatorWarning(`Failed to load outputs: ${e}`));
-      invoke<OutputState[]>("outputs_states").then((states) => {
-        states.forEach((s) => setOutputState(s));
-      }).catch((e) => signalOperatorWarning(`Failed to load output states: ${e}`));
+       invoke<OutputState[]>("outputs_states").then((states) => {
+         states.forEach((s) => setOutputState(s));
+       }).catch((e) => signalOperatorWarning(`Failed to load output states: ${e}`));
+       invoke<OutputBusInfo[]>("output_buses_list").then(async (buses) => {
+         setOutputBuses(buses);
+         const snapshots = await Promise.all(
+           buses
+             .filter((bus) => !bus.primary)
+             .map(async (bus) => ({
+               busId: bus.id,
+               snapshot: await invoke<PresentationSnapshot | null>("output_bus_snapshot", { busId: bus.id }).catch(() => null),
+             })),
+         );
+         snapshots.forEach(({ busId, snapshot }) => {
+           setOutputBusItems(busId, {
+             liveItem: snapshot?.live ?? null,
+             stagedItem: snapshot?.staged ?? null,
+           });
+         });
+       }).catch((e) => signalOperatorWarning(`Failed to load output buses: ${e}`));
 
       // License — hydrate before the operator shell is revealed so the first
       // frame is either the gated activation screen or an active license.
@@ -288,9 +306,18 @@ export function useAppInitialization() {
     // Output manager — authoritative config list + per-output runtime state.
     const unlistenOutputConfig = listen<OutputConfig[]>("output-config-changed", (ev) => {
       setOutputs(ev.payload);
+      invoke<OutputBusInfo[]>("output_buses_list")
+        .then(setOutputBuses)
+        .catch((e) => signalOperatorWarning(`Failed to refresh output buses: ${e}`));
     });
     const unlistenOutputState = listen<OutputState>("output-state-changed", (ev) => {
       setOutputState(ev.payload);
+    });
+    const unlistenBusLive = listen<{ busId: string; item: DisplayItem | null }>("output-bus-live-item-update", (ev) => {
+      if (ev.payload?.busId) setOutputBusLiveItem(ev.payload.busId, ev.payload.item ?? null);
+    });
+    const unlistenBusStaged = listen<{ busId: string; item: DisplayItem | null }>("output-bus-item-staged", (ev) => {
+      if (ev.payload?.busId) setOutputBusStagedItem(ev.payload.busId, ev.payload.item ?? null);
     });
 
     // License — activation/refresh/deactivation broadcast the authoritative
@@ -325,6 +352,8 @@ export function useAppInitialization() {
       unlistenMediaUpdated.then(f => f());
       unlistenOutputConfig.then(f => f());
       unlistenOutputState.then(f => f());
+      unlistenBusLive.then(f => f());
+      unlistenBusStaged.then(f => f());
       unlistenLicense.then(f => f());
       unlistenBibleIndex.then(f => f());
     };

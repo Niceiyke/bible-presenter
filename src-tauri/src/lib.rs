@@ -4,6 +4,7 @@ pub mod events;
 pub mod commands;
 pub mod remote;
 pub mod outputs;
+pub mod output_buses;
 pub mod binpaths;
 pub mod license;
 pub mod capture;

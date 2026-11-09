@@ -84,6 +84,10 @@ export interface OutputConfig {
   enabled: boolean;
   visible: boolean;
   source: OutputSource;
+  /** Logical presentation bus rendered by this output. */
+  program_bus?: string;
+  /** Optional physical monitor selected for this window output. */
+  monitor_name?: string;
   geometry: OutputGeometry;
   /** Recorder/streamer capture frame rate. Window outputs ignore it; when
    *  absent the surfaces fall back to 30. */
@@ -117,4 +121,17 @@ export interface OutputState {
   rendering: boolean;
   fps: number;
   error?: string;
+}
+
+/** A logical, independently controlled presentation program. */
+export interface OutputBusInfo {
+  id: string;
+  label: string;
+  primary: boolean;
+}
+
+/** Live and preview content held by an independently controlled bus. */
+export interface OutputBusItems {
+  liveItem: DisplayItem | null;
+  stagedItem: DisplayItem | null;
 }

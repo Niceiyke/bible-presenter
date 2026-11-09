@@ -13,6 +13,12 @@ import { resolveOutputFrame } from "../outputs/resolveOutputFrame";
 import { ProgramSurface } from "../components/outputs/ProgramSurface";
 
 export function OutputWindow() {
+  const windowLabel = getCurrentWindow().label;
+  // The overflow window seeds the first auxiliary bus, then adopts its
+  // persisted OutputConfig binding during hydration. This keeps the renderer
+  // bus-aware if an operator later changes the configured bus identity.
+  const [outputBusId, setOutputBusId] = useState(() => windowLabel === "overflow" ? "aux-overflow" : "primary");
+  const isPrimaryBus = outputBusId === "primary";
   useFonts(); // P2.5: inject @font-face for user-installed fonts.
   const [liveItem, setLiveItem] = useState<DisplayItem | null>(null);
   const [stagedItem, setStagedItem] = useState<DisplayItem | null>(null);
@@ -98,24 +104,39 @@ export function OutputWindow() {
     };
 
     const unlistenTrans = listen("live-item-update", (event: any) => {
+      if (!isPrimaryBus) return;
       const { detected_item } = event.payload;
       applyOrBuffer(() => setLiveItem(detected_item ?? null));
     });
 
     const unlistenSettings = listen("settings-changed", (event: any) => {
+      if (!isPrimaryBus) return;
       applyOrBuffer(() => setSettings(event.payload as PresentationSettings));
     });
 
     const unlistenStaged = listen("item-staged", (event: any) => {
+      if (!isPrimaryBus) return;
       applyOrBuffer(() => setStagedItem(event.payload as DisplayItem | null));
+    });
+
+    const unlistenBusLive = listen("output-bus-live-item-update", (event: any) => {
+      if (event.payload?.busId !== outputBusId) return;
+      applyOrBuffer(() => setLiveItem(event.payload.item ?? null));
+    });
+    const unlistenBusStaged = listen("output-bus-item-staged", (event: any) => {
+      if (event.payload?.busId !== outputBusId) return;
+      applyOrBuffer(() => setStagedItem(event.payload.item ?? null));
     });
 
     const unlistenOutputConfig = listen("output-config-changed", (event: any) => {
       const configs = event.payload as OutputConfig[];
-      setOutputConfig(configs.find((c) => c.window_label === "output") ?? null);
+      const config = configs.find((c) => c.window_label === windowLabel) ?? null;
+      setOutputConfig(config);
+      if (config?.program_bus && config.program_bus !== outputBusId) setOutputBusId(config.program_bus);
     });
 
     const unlistenLt = listen("lower-third-update", (event: any) => {
+      if (!isPrimaryBus) return;
       applyOrBuffer(() => {
         if (event.payload) {
           setLowerThird({ data: event.payload.data as LowerThirdData, template: event.payload.template as LowerThirdTemplate });
@@ -126,6 +147,7 @@ export function OutputWindow() {
     });
 
     const unlistenMedia = listen("media-control", (event: any) => {
+      if (!isPrimaryBus) return;
       const { action, volume, currentTime, rate } = event.payload as { action: string; volume?: number; currentTime?: number; rate?: number };
       const liveAudio = (window as any).__liveAudio as HTMLAudioElement | undefined;
       if (action === "video-play-pause") {
@@ -193,6 +215,7 @@ export function OutputWindow() {
     emit("media-state", null);
 
     const unlistenProps = listen("props-update", (event: any) => {
+      if (!isPrimaryBus) return;
       applyOrBuffer(() => setPropItems((event.payload as PropItem[]) ?? []));
     });
 
@@ -211,10 +234,10 @@ export function OutputWindow() {
     // (audit #2: hydration listener-registration race).
     (async () => {
       await Promise.all([
-        unlistenTrans, unlistenSettings, unlistenStaged, unlistenOutputConfig,
+        unlistenTrans, unlistenSettings, unlistenStaged, unlistenBusLive, unlistenBusStaged, unlistenOutputConfig,
         unlistenLt, unlistenMedia, unlistenProps, unlistenMonitorTest, unlistenLicense,
       ]).catch(() => {});
-      invoke<PresentationSnapshot | null>("presentation_snapshot")
+      invoke<PresentationSnapshot | null>(isPrimaryBus ? "presentation_snapshot" : "output_bus_snapshot", isPrimaryBus ? {} : { busId: outputBusId })
         .then((snap) => {
           if (snap) {
             setLiveItem(snap.live ?? null);
@@ -234,7 +257,9 @@ export function OutputWindow() {
       Promise.all([
         invoke<string>("get_app_data_dir").then(setAppDataDir).catch((e: any) => signalOperatorWarning(`Output hydrate (appdir): ${e?.message ?? e}`)),
         invoke<OutputConfig[]>("outputs_list").then((configs) => {
-          setOutputConfig(configs.find((c) => c.window_label === "output") ?? null);
+          const config = configs.find((c) => c.window_label === windowLabel) ?? null;
+          setOutputConfig(config);
+          if (config?.program_bus && config.program_bus !== outputBusId) setOutputBusId(config.program_bus);
         }).catch((e: any) => signalOperatorWarning(`Output hydrate (config): ${e?.message ?? e}`)),
         invoke<LicenseInfo>("license_status").then(setLicense).catch((e: any) => signalOperatorWarning(`Output hydrate (license): ${e?.message ?? e}`)),
       ]);
@@ -245,6 +270,8 @@ export function OutputWindow() {
       unlistenTrans.then((f) => f());
       unlistenSettings.then((f) => f());
       unlistenStaged.then((f) => f());
+      unlistenBusLive.then((f) => f());
+      unlistenBusStaged.then((f) => f());
       unlistenLt.then((f) => f());
       unlistenMedia.then((f) => f());
       unlistenProps.then((f) => f());
@@ -252,7 +279,7 @@ export function OutputWindow() {
       unlistenOutputConfig.then((f) => f());
       unlistenLicense.then((f) => f());
     };
-  }, []);
+  }, [isPrimaryBus, outputBusId, windowLabel]);
 
   // Lower Third Auto-Hide Logic
   const remainingScrolls = useRef<number>(0);
@@ -312,14 +339,13 @@ export function OutputWindow() {
   // and hosted phone peers are torn down, so a hidden projector or an idle
   // capture window costs no camera encode or WebRTC decode.
   const captureActive = useCaptureActive();
-  const windowLabel = getCurrentWindow().label;
-  const isOutputWindow = windowLabel === "output";
+  const isOutputWindow = windowLabel === "output" || windowLabel === "overflow";
   const isCaptureWindow = windowLabel === "capture";
   // Which phone WebRTC "target" this window answers: the audience "output"
   // window hosts the "output" peer; the off-screen "capture" window hosts the
   // "capture" peer; anything else hosts neither (the operation-preview
   // "operator" peer belongs to the main window).
-  const phonePeerTarget = isOutputWindow ? "output" : isCaptureWindow ? "capture" : null;
+  const phonePeerTarget = windowLabel === "output" ? "output" : isCaptureWindow ? "capture" : null;
   const [bootOutputVisible, setBootOutputVisible] = useState(false);
   useEffect(() => {
     getCurrentWindow().isVisible().then((v) => setBootOutputVisible(v)).catch(() => {});

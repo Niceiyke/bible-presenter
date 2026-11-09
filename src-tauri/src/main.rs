@@ -179,6 +179,7 @@ fn main() {
             let remote_control = Arc::new(remote::RemoteControl::new(remote_files_dir, &app_data_dir));
 
             let outputs = Arc::new(wordlyte_lib::outputs::OutputManager::new(&app_data_dir));
+            let output_buses = Arc::new(wordlyte_lib::output_buses::OutputBusManager::new(&outputs.list(), &initial_settings));
 
             let license = Arc::new(wordlyte_lib::license::LicenseManager::new(&app_data_dir));
             let license_info = license.status();
@@ -193,6 +194,7 @@ fn main() {
                 startup_issues: Arc::new(Mutex::new(Vec::new())),
                 remote: remote_control,
                 outputs,
+                output_buses,
                 rtmp: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 cpu_sampler: Arc::new(Mutex::new(None)),
                 license,
@@ -351,6 +353,13 @@ fn main() {
             wordlyte_lib::commands::display::clear_staged,
             wordlyte_lib::commands::display::clear_all,
             wordlyte_lib::commands::display::presentation_snapshot,
+            wordlyte_lib::commands::display::output_bus_snapshot,
+            wordlyte_lib::commands::display::output_bus_stage_item,
+            wordlyte_lib::commands::display::output_bus_commit_staged,
+            wordlyte_lib::commands::display::output_bus_send_live_item,
+            wordlyte_lib::commands::display::output_bus_clear,
+            wordlyte_lib::commands::display::output_bus_clear_staged,
+            wordlyte_lib::commands::display::output_bus_clear_live,
             wordlyte_lib::commands::display::update_timer,
             wordlyte_lib::commands::display::get_current_item,
             wordlyte_lib::commands::display::get_staged_item,
@@ -397,8 +406,10 @@ fn main() {
             wordlyte_lib::commands::scenes::capture_scene,
             wordlyte_lib::commands::outputs::outputs_list,
             wordlyte_lib::commands::outputs::outputs_states,
+            wordlyte_lib::commands::outputs::output_buses_list,
             wordlyte_lib::commands::outputs::outputs_update,
             wordlyte_lib::commands::outputs::outputs_set_visible,
+            wordlyte_lib::commands::outputs::outputs_monitors,
             wordlyte_lib::commands::recordings::recordings_list,
             wordlyte_lib::commands::recordings::recording_save,
             wordlyte_lib::commands::recordings::recording_delete,
