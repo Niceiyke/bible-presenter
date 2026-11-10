@@ -57,6 +57,10 @@ fn render_with_powerpoint(source: &Path, output: &Path, script_path: &Path) -> R
     // The source and output paths are positional arguments, never interpolated
     // into the script, so quotes or PowerShell metacharacters in church folder
     // names cannot become executable input.
+    //
+    // Every COM step wraps its failure with the step name + HRESULT so a failed
+    // import tells the desktop report exactly which operation could not run,
+    // instead of a bare COMException trace back to the generated .ps1.
     const SCRIPT: &str = r#"param(
   [Parameter(Mandatory=$true)][string]$Source,
   [Parameter(Mandatory=$true)][string]$Output
@@ -64,15 +68,62 @@ fn render_with_powerpoint(source: &Path, output: &Path, script_path: &Path) -> R
 $ErrorActionPreference = 'Stop'
 $powerpoint = $null
 $presentation = $null
+$clean = $null
+
+function Report-Failure {
+  param([string]$Step, [string]$Guidance, [System.Exception]$Underlying)
+  $hresult = if ($null -ne $Underlying) { ("0x{0:X8}" -f $Underlying.HResult) } else { "" }
+  Write-Error ("[Wordlyte pptx] {0} failed (hresult={1}) source={2}: {3} {4}" -f $Step, $hresult, $Source, $Underlying.Message, $Guidance) -ErrorAction Stop
+}
+
 try {
-  $powerpoint = New-Object -ComObject PowerPoint.Application
-  $presentation = $powerpoint.Presentations.Open($Source, $true, $true, $false)
-  $presentation.Export($Output, 'PNG', 1920, 1080)
+  # PowerPoint COM launches a fresh POWERPNT.EXE; the first launch can
+  # transiently refuse right after boot or after an Office update, so it
+  # retries once before reporting a failure.
+  $createError = $null
+  for ($attempt = 1; $attempt -le 2; $attempt++) {
+    try {
+      $powerpoint = New-Object -ComObject PowerPoint.Application
+      break
+    } catch {
+      $createError = $_
+      $powerpoint = $null
+      Start-Sleep -Seconds 2
+    }
+  }
+  if ($null -eq $powerpoint) {
+    Report-Failure 'start PowerPoint' 'Is desktop Microsoft PowerPoint installed and activated?' $createError.Exception
+  }
+
+  # Decks emailed or downloaded to the church carry a Mark-of-the-Web zone and
+  # some Office zone policies refuse those files in automation. Convert from
+  # the converter's own unzoned copy so the operator file stays untouched.
+  try {
+    $clean = Join-Path ([System.IO.Path]::GetTempPath()) ("pptx-import-" + [Guid]::NewGuid().ToString() + ".pptx")
+    Copy-Item -LiteralPath $Source -Destination $clean -Force
+    Unblock-File -LiteralPath $clean
+  } catch {
+    Report-Failure 'prepare conversion copy' 'Check the deck file is readable and not locked by another program.' $_.Exception
+  }
+
+  # ReadOnly: never modify the operator deck. Untitled: converts an opened
+  # copy. WithWindow=false keeps the conversion window hidden.
+  try {
+    $presentation = $powerpoint.Presentations.Open($clean, $true, $true, $false)
+  } catch {
+    Report-Failure 'open presentation' 'Try closing PowerPoint and importing again.' $_.Exception
+  }
+  try {
+    $presentation.Export($Output, 'PNG', 1920, 1080)
+  } catch {
+    Report-Failure 'render slides' 'Try closing PowerPoint and importing again.' $_.Exception
+  }
 } finally {
-  if ($null -ne $presentation) { $presentation.Close() }
-  if ($null -ne $powerpoint) { $powerpoint.Quit() }
-  if ($null -ne $presentation) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($presentation) }
-  if ($null -ne $powerpoint) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($powerpoint) }
+  if ($null -ne $presentation) { try { $presentation.Close() } catch { } }
+  if ($null -ne $powerpoint) { try { $powerpoint.Quit() } catch { } }
+  if ($null -ne $presentation) { try { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($presentation) } catch { } }
+  if ($null -ne $powerpoint) { try { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($powerpoint) } catch { } }
+  if ($null -ne $clean -and (Test-Path -LiteralPath $clean)) { Remove-Item -LiteralPath $clean -Force -ErrorAction SilentlyContinue }
   [GC]::Collect()
   [GC]::WaitForPendingFinalizers()
 }
@@ -99,13 +150,11 @@ try {
     }
     let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
     let detail = if stderr.is_empty() {
-        "Microsoft PowerPoint could not render this deck".into()
+        "no error detail was reported".into()
     } else {
         stderr
     };
-    Err(format!(
-        "PowerPoint import failed. Install desktop Microsoft PowerPoint and try again. {detail}"
-    ))
+    Err(format!("PowerPoint could not convert this deck. {detail}"))
 }
 
 #[cfg(not(target_os = "windows"))]
