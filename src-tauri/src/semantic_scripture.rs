@@ -510,10 +510,7 @@ impl SemanticScripture {
             };
 
             let rank = matches.len() + 1;
-            let confidence =
-                (0.55 + (candidate_similarity - MIN_SIMILARITY) * 0.65 + margin * 0.35
-                    - (rank.saturating_sub(1) as f32 * 0.04))
-                    .clamp(0.55, MAX_PARAPHRASE_CONFIDENCE);
+            let confidence = semantic_confidence(candidate_similarity, margin, rank);
             matches.push(SemanticMatch {
                 verse,
                 confidence,
@@ -602,6 +599,15 @@ fn same_passage_neighborhood(left: &IndexEntry, right: &IndexEntry) -> bool {
         && left.chapter == right.chapter
         && left.verse <= right.verse_end + 1
         && right.verse <= left.verse_end + 1
+}
+
+/// Production confidence for a semantic match. Kept as one function so the
+/// guarantee that paraphrase confidence stays below the auto-stage threshold
+/// is enforced by an assertion on *this* formula, not on a re-typed copy.
+fn semantic_confidence(similarity: f32, margin: f32, rank: usize) -> f32 {
+    (0.55 + (similarity - MIN_SIMILARITY) * 0.65 + margin * 0.35
+        - (rank.saturating_sub(1) as f32 * 0.04))
+        .clamp(0.55, MAX_PARAPHRASE_CONFIDENCE)
 }
 
 fn accepts_semantic_candidates(similarity: f32, margin: f32, candidate_count: usize) -> bool {
@@ -1082,10 +1088,21 @@ mod tests {
 
     #[test]
     fn paraphrase_confidence_cannot_reach_auto_stage_threshold() {
-        let confidence = (0.55 + (1.0 - MIN_SIMILARITY) * 0.65 + 1.0 * 0.35)
-            .clamp(0.55, MAX_PARAPHRASE_CONFIDENCE);
-        assert_eq!(confidence, 0.89);
-        assert!(confidence < 0.90);
+        // The ceiling must hold even for a perfect, unanimous rank-1 match.
+        assert_eq!(
+            semantic_confidence(1.0, 1.0, 1),
+            MAX_PARAPHRASE_CONFIDENCE,
+            "semantic_confidence must stay capped below the auto-stage threshold"
+        );
+        // The floor holds at the minimum qualifying similarity with no margin.
+        assert_eq!(semantic_confidence(MIN_SIMILARITY, 0.0, 1), 0.55);
+    }
+
+    #[test]
+    fn semantic_confidence_penalizes_lower_ranks() {
+        let winner = semantic_confidence(0.80, 0.05, 1);
+        assert!(semantic_confidence(0.80, 0.05, 2) < winner);
+        assert!(semantic_confidence(0.80, 0.05, 3) < semantic_confidence(0.80, 0.05, 2));
     }
 
     #[test]
@@ -1284,5 +1301,18 @@ mod tests {
             "conservative gate emitted hard negatives: {accepted_negatives:?}"
         );
         assert!(p95 < 3_000.0, "semantic debug p95 exceeded 3 seconds");
+        // Recalled-hit floors, calibrated on the pinned model + bundled index
+        // (top1=9/22, top3=13/22 late 2026). They sit one fixture below the
+        // calibrated values so a ranking, model, or index change that degrades
+        // a single fixture fails loudly, while small numeric drift does not.
+        assert!(top_three_hits >= top_one_hits, "top-3 recall fell below top-1 recall");
+        assert!(
+            top_one_hits >= 8,
+            "semantic top-1 recall regressed: {top_one_hits}/{positives}"
+        );
+        assert!(
+            top_three_hits >= 12,
+            "semantic top-3 recall regressed: {top_three_hits}/{positives}"
+        );
     }
 }

@@ -1017,21 +1017,23 @@ fn contextual_verse_reference_for_anchor(
     let tokens = quote_tokens(transcript);
     let mut latest = None;
     for index in 0..tokens.len() {
-        if !matches!(tokens[index].as_str(), "verse" | "verses") {
+        let plural_marker = tokens[index].as_str() == "verses";
+        if !plural_marker && tokens[index].as_str() != "verse" {
             continue;
         }
-        let Some((verse, next)) = parse_number(&tokens, index + 1) else {
+        // The anchor's contextual parser must agree with the explicit
+        // `ai_detection` reference parser on the same range policy, including
+        // that a singular "verse" marker does not extend a range with "and".
+        let Some((verse, _next, verse_end)) =
+            crate::ai_detection::parse_verse_number(&tokens, index + 1, plural_marker)
+        else {
             continue;
         };
+        // Speech navigates within a chapter's verse numbers only.
         if !(1..=176).contains(&verse) {
             continue;
         }
-        let verse_end = tokens.get(next).and_then(|separator| {
-            matches!(separator.as_str(), "-" | "to" | "and")
-                .then(|| parse_number(&tokens, next + 1).map(|(end, _)| end))
-                .flatten()
-                .filter(|end| *end >= verse && *end <= 176)
-        });
+        let verse_end = verse_end.filter(|end| *end <= 176);
         latest = Some(crate::ai_detection::ScriptureReference {
             book: anchor.book.clone(),
             chapter: anchor.chapter,
@@ -2235,7 +2237,13 @@ fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Opt
 }
 
 fn semantic_passage_key(found: &semantic_scripture::SemanticMatch) -> String {
-    format!("{}:{}", found.verse.book, found.verse.chapter)
+    // Anchor on the winning verse, not the chapter. Two different passages in
+    // the same chapter are not the "same thought stabilizing"; a coarse key
+    // would compound a coincidental match into a confirmation.
+    format!(
+        "{}:{}:{}",
+        found.verse.book, found.verse.chapter, found.verse.verse
+    )
 }
 
 fn semantic_match_is_stable(
@@ -3102,6 +3110,45 @@ mod tests {
     }
 
     #[test]
+    fn semantic_stability_requires_the_same_specific_passage() {
+        let verse_fixture = |book: &str, chapter: i32, verse: i32| Verse {
+            book: book.into(),
+            chapter,
+            verse,
+            text: String::new(),
+            version: "KJV".into(),
+            split_index: None,
+            total_splits: None,
+            score: None,
+        };
+        let previous = ["John:3:16".to_string()].into_iter().collect();
+        let confirmed = semantic_scripture::SemanticMatch {
+            verse: verse_fixture("John", 3, 16),
+            confidence: 0.7,
+            similarity: 0.72,
+            margin: 0.03,
+            rank: 1,
+            passage_start: 16,
+            passage_end: 16,
+        };
+        assert!(semantic_match_is_stable(&confirmed, &previous));
+        // A different verse in the same chapter is a different passage: the
+        // former chapter-level key confirmed it by coincidence.
+        let drifted = semantic_scripture::SemanticMatch {
+            verse: verse_fixture("John", 3, 2),
+            ..confirmed.clone()
+        };
+        assert!(!semantic_match_is_stable(&drifted, &previous));
+        // Only an exceptionally strong match may skip the stability window.
+        let exceptional = semantic_scripture::SemanticMatch {
+            similarity: STRONG_SEMANTIC_SIMILARITY,
+            margin: STRONG_SEMANTIC_MARGIN,
+            ..drifted.clone()
+        };
+        assert!(semantic_match_is_stable(&exceptional, &previous));
+    }
+
+    #[test]
     fn voice_commands_resolve_navigation_and_installed_version_aliases() {
         let versions = vec!["AMP".into(), "KJV".into(), "NLT".into()];
         assert_eq!(
@@ -3246,7 +3293,8 @@ mod tests {
         ));
         assert!(semantic_match_is_stable(
             &found,
-            &std::collections::HashSet::from(["Daniel:6".into()])
+            // The stability key anchors on the winning verse, not the chapter.
+            &std::collections::HashSet::from(["Daniel:6:11".into()])
         ));
 
         let strong = semantic_scripture::SemanticMatch {

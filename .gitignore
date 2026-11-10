@@ -11,6 +11,8 @@ src-tauri/models/*.onnx
 # Large data files — must be provided separately (not stored in git)
 src-tauri/bible_data/*.db
 src-tauri/bible_data/*.npy
+# Generated semantic index fixture for the manual paraphrase quality probe
+src-tauri/bible_data/bible-semantic-bge-v1.index
 
 # Bundled media binaries — fetched via scripts/fetch-ffmpeg.ps1 (not committed)
 src-tauri/binaries/*.exe

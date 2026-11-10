@@ -184,6 +184,29 @@ fn single_number_token(token: &str) -> Option<i32> {
     token.parse::<i32>().ok().or_else(|| number_word(token))
 }
 
+/// Parse a verse number that follows an explicit `verse`/`verses` marker,
+/// along with an optional spoken range end. `-` and `to` always extend the
+/// range; `and` extends it only after the plural marker ("verses eleven and
+/// twelve"), so "verse 5 and then we go" keeps the sentence flowing. Shared
+/// with the anchor's contextual parser so both paths agree on the policy.
+pub(crate) fn parse_verse_number(
+    tokens: &[String],
+    start: usize,
+    plural_marker: bool,
+) -> Option<(i32, usize, Option<i32>)> {
+    let (verse, next) = parse_number(tokens, start)?;
+    let verse_end = tokens.get(next).and_then(|separator| {
+        let is_range = separator == "-"
+            || separator == "to"
+            || (separator == "and" && plural_marker);
+        is_range
+            .then(|| parse_number(tokens, next + 1).map(|(end, _)| end))
+            .flatten()
+            .filter(|end| *end >= verse)
+    });
+    Some((verse, next, verse_end))
+}
+
 /// In continuous preaching, a range is commonly spoken without a separator:
 /// "Matthew six nine ten" means Matthew 6:9–10, not Matthew 6:19. Preserve
 /// regular compound numbers such as "thirty three" while treating two
@@ -285,18 +308,12 @@ pub fn detect_references(text: &str, books: &[String]) -> Vec<ScriptureReference
             } else {
                 continue;
             }
-            let Some((verse, verse_next)) = parse_number(&tokens, index) else {
+            let plural_marker = verse_marker.as_deref() == Some("verses");
+            let Some((verse, _verse_next, verse_end)) =
+                parse_verse_number(&tokens, index, plural_marker)
+            else {
                 continue;
             };
-            let verse_end = tokens.get(verse_next).and_then(|separator| {
-                let is_range = separator == "-"
-                    || separator == "to"
-                    || (separator == "and" && verse_marker.as_deref() == Some("verses"));
-                is_range
-                    .then(|| parse_number(&tokens, verse_next + 1).map(|(end, _)| end))
-                    .flatten()
-                    .filter(|end| *end >= verse)
-            });
             if chapter > 0 && verse > 0 {
                 let candidate = ScriptureReference {
                     book: canonical.clone(),
@@ -734,6 +751,27 @@ mod tests {
                 verse_end: Some(12),
             })
         );
+    }
+
+    #[test]
+    fn verse_range_policy_agrees_between_marker_variants() {
+        // Shared helper: "and" continues a range only for the plural marker.
+        let plural = parse_verse_number(&tokenize("verses eleven and twelve"), 1, true);
+        assert_eq!(
+            plural,
+            Some((11, 2, Some(12))),
+            "verses eleven and twelve should parse as an inclusive range"
+        );
+        let singular = parse_verse_number(&tokenize("verse ten and twelve"), 1, false);
+        assert_eq!(
+            singular,
+            Some((10, 2, None)),
+            "a singular marker must not treat 'and' as a range separator"
+        );
+        let spoken_range = parse_verse_number(&tokenize("verses 5 to 6"), 1, true);
+        assert_eq!(spoken_range, Some((5, 2, Some(6))));
+        let descending = parse_verse_number(&tokenize("verses ten to eight"), 1, true);
+        assert_eq!(descending, Some((10, 2, None)), "end must be >= start");
     }
 
     #[test]
