@@ -28,11 +28,20 @@ operator's database exactly.
 
 ## Running it
 
-1. Open [colab.research.google.com](https://colab.research.google.com), create
-   a notebook, and set *Runtime → Change runtime type → T4 GPU* (CPU works but
-   is ~10× slower).
-2. Paste the whole `build_prebuilt_indexes.py` into **one cell** and run it.
-   The script handles pip installs, model download, and checksum verification.
+Two equivalent entry points; the notebook is generated from the script by
+`make_notebook.py`, so the pins cannot drift:
+
+- **Notebook (recommended)**: upload `build_prebuilt_indexes.ipynb` to
+  [colab.research.google.com](https://colab.research.google.com) and use
+  *Runtime → Run all*. It splits the script into one cell per step for
+  incremental output.
+- **Script**: create a notebook and paste all of `build_prebuilt_indexes.py`
+  into one cell and run it.
+
+Either way:
+
+1. Set *Runtime → Change runtime type → T4 GPU* (CPU works but is ~10× slower).
+2. The script handles pip installs, model download, and checksum verification.
 3. Bible source (in order of preference):
    - the `wordlyte_bible.zip` release asset, downloaded automatically;
    - otherwise a file-upload prompt for `wordlyte_bible.db`.
@@ -60,9 +69,13 @@ bundles over 512 MB.
 - The pinned model revision in `src-tauri/src/semantic_scripture.rs` changes
   (fingerprints include the revision, so old bundles stop matching).
 - The corpus pipeline changes (`semantic_documents`, the fingerprint layout,
-  `WLYSEM04` format, `EMBEDDING_DIMENSION`).
+  `WLYSEM04` format, or the builder's `EMBEDDING_DIMENSION`).
 - A translation's text in the shipped `wordlyte_bible.db` changes.
 
 Keep the pins at the top of the script in sync with
 `src-tauri/src/semantic_scripture.rs`; the script asserts the model-file
 SHA-256 hashes so a drift is caught immediately.
+
+`build_prebuilt_indexes.ipynb` is generated — edit the `.py` and run
+`python tools/semantic-index-builder/make_notebook.py` (it fails if the
+generated cells do not reconstruct the script exactly).
