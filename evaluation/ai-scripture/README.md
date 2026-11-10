@@ -42,7 +42,25 @@ Dense retrieval is no longer the shipped ranking path: production adds lexical F
 cargo test --lib evaluates_reranker_candidates -- --ignored --nocapture
 ```
 
-It mirrors production candidate assembly, blending (`BLEND_DENSE_WEIGHT`), and the `MIN_RERANK_SIMILARITY` gate, and asserts hybrid coverage, reranked top-1, and zero hard-negative accepts. Current measured baseline: coverage 21/22, top-1 17/22 (dense-only 13/22), top-3 21/22, 16 correct suggestions, 3 close alternatives, 0 hard negatives.
+It mirrors production candidate assembly, blending (`BLEND_DENSE_WEIGHT`), and the `MIN_RERANK_SIMILARITY` gate, and asserts proportional coverage, reranked top-1 and top-3 floors plus zero hard-negative accepts. Current measured baseline on the 100-record set (71 positives / 29 negatives): coverage 66/71, top-1 51/71 (dense-only 43/71), top-3 60/71, 0 hard negatives accepted.
+
+Two optional environment overrides support embedder comparisons without disturbing the default fixture:
+
+- `WORDLYTE_TEST_INDEX_PATH` — evaluate a different index (for example a 384-dim bge-small build) while `WORDLYTE_TEST_BGE_MODEL` points at the matching flat model files. Index headers are dimension-agnostic; production validates the header dimension against the warmed embedder.
+- `WORDLYTE_TEST_BLEND_WEIGHT` — sweep the dense weight (`0.0` is rerank-only, `1.0` is dense-only) instead of the compiled `BLEND_DENSE_WEIGHT`.
+
+### Embedder comparison (original 22-positive set)
+
+`Xenova/bge-small-en-v1.5` (revision `ea104dacec62c0de699686887e3f920caeb4f3e3`) was measured as a smaller alternative: 384 dims, 17.8 MB index, 34 MB ONNX instead of 768 dims, 34.9 MB and 120 MB.
+
+| Configuration | Coverage | Dense top-1 | Reranked top-1 | Top-3 | Accepted wrong | False accepts |
+| --- | --- | --- | --- | --- | --- | --- |
+| bge-small, blend 0.0 | 21/22 | 12/22 | 15/22 | 20/22 | 5 | 0 |
+| bge-small, blend 0.25 | 21/22 | 12/22 | 16/22 | 19/22 | 5 | 0 |
+| bge-small, blend 0.40 | 21/22 | 12/22 | 13/22 | 18/22 | 6 | 0 |
+| **bge-base, blend 0.25 (shipped)** | 21/22 | 13/22 | **17/22** | **21/22** | **3** | 0 |
+
+bge-small keeps every hard negative out and loses nothing in hybrid coverage, but it gives up two reranked top-1s and two top-3s, and admits two more near-miss suggestions. Dense latency improves roughly 33% (925 ms vs 1370 ms dense p95). It is therefore documented as a fallback for download-size pressure, not the shipped default.
 
 ## Private sermon corpus
 

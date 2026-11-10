@@ -60,7 +60,6 @@ const MODEL_FILES: &[(&str, &str)] = &[
 /// translation the operator is projecting, so the spoken paraphrase and the
 /// indexed text share one language register.
 const SEMANTIC_INDEX_VERSIONS: &[&str] = &["NKJV", "ASV", "WEB", "NIV", "AMP"];
-const EMBEDDING_DIMENSION: usize = 768;
 const MIN_QUERY_WORDS: usize = 5;
 /// Minimum cosine similarity for the *dense* retrieval health probe. Ranking
 /// in production is decided by a cross-encoder, so raw cosine is now only a
@@ -283,12 +282,12 @@ struct IndexCache {
 impl IndexCache {
     /// Ensures the version's index is resident, loading (and validating) it
     /// from disk on first use. Evicts the oldest entry beyond two caches.
-    fn load(&mut self, root: &Path, version: &str) -> Result<(), String> {
+    fn load(&mut self, root: &Path, version: &str, dimension: usize) -> Result<(), String> {
         if self.loaded.iter().any(|(cached, _)| cached == version) {
             return Ok(());
         }
         let index = load_index(&root.join(index_file(version)))?;
-        if index.dimension != EMBEDDING_DIMENSION {
+        if index.dimension != dimension {
             return Err(format!(
                 "The {version} paraphrase index was built with a different model. Run preparation again."
             ));
@@ -435,9 +434,13 @@ impl SemanticScripture {
             file_total,
         );
         let warmup = format!("{QUERY_PREFIX}local Bible passage retrieval");
-        model
+        let model_dimension = model
             .embed(vec![warmup.as_str()], Some(1))
-            .map_err(|error| format!("Could not warm the local paraphrase model: {error}"))?;
+            .map_err(|error| format!("Could not warm the local paraphrase model: {error}"))?
+            .pop()
+            .map(|embedding| embedding.len())
+            .filter(|dimension| *dimension > 0)
+            .ok_or_else(|| "The local paraphrase model returned no query vector.".to_string())?;
 
         let mut reranker = load_pinned_reranker(&self.root, |completed, file| {
             if self.cancel_requested.load(Ordering::Acquire) {
@@ -465,7 +468,7 @@ impl SemanticScripture {
         // CPU embedding on the operator's machine into one download. Versions
         // missing from the bundle (or whose fingerprint differs from the
         // installed Bible text) still build locally below.
-        match self.try_prebuilt_bundle(app, &jobs) {
+        match self.try_prebuilt_bundle(app, &jobs, model_dimension) {
             Ok(installed) if installed > 0 => {
                 self.update_status(
                     app,
@@ -506,7 +509,7 @@ impl SemanticScripture {
             let _ = match load_index(&local_index) {
                 Ok(index)
                     if index.fingerprint == *fingerprint
-                        && index.dimension == EMBEDDING_DIMENSION
+                        && index.dimension == model_dimension
                         && index.entries.len() == *total =>
                 {
                     index
@@ -558,6 +561,7 @@ impl SemanticScripture {
         &self,
         app: &AppHandle,
         jobs: &[(String, Vec<SemanticDocument>, [u8; 32], usize)],
+        model_dimension: usize,
     ) -> Result<usize, String> {
         if self.cancel_requested.load(Ordering::Acquire) {
             return Err(PREPARATION_CANCELLED.into());
@@ -571,7 +575,7 @@ impl SemanticScripture {
                 match load_index(&self.root.join(index_file(version))) {
                     Ok(index) => {
                         !(index.fingerprint == *fingerprint
-                            && index.dimension == EMBEDDING_DIMENSION
+                            && index.dimension == model_dimension
                             && index.entries.len() == *total)
                     }
                     Err(_) => true,
@@ -658,7 +662,7 @@ impl SemanticScripture {
                 continue;
             };
             if index.fingerprint != *fingerprint
-                || index.dimension != EMBEDDING_DIMENSION
+                || index.dimension != model_dimension
                 || index.entries.len() != *total
             {
                 continue;
@@ -776,7 +780,10 @@ impl SemanticScripture {
             });
         };
         let mut indexes = self.indexes.lock();
-        if indexes.load(&self.root, index_version).is_err() {
+        if indexes
+            .load(&self.root, index_version, query_vector.len())
+            .is_err()
+        {
             return Ok(SemanticSearchOutcome {
                 matches: Vec::new(),
                 diagnostic: diagnostic(
@@ -1105,6 +1112,16 @@ fn min_max_normalized(values: &[f32]) -> Vec<f32> {
 /// cross-encoder logit. Lexical-only candidates take the worst dense score, so
 /// they still win when the reranker is confident.
 fn blended_order(candidates: &[RerankCandidate], logits: &[f32]) -> Vec<usize> {
+    blended_order_with(candidates, logits, BLEND_DENSE_WEIGHT)
+}
+
+/// Same ordering with an explicit dense weight, so the calibration harness can
+/// sweep weights without recompiling.
+fn blended_order_with(
+    candidates: &[RerankCandidate],
+    logits: &[f32],
+    dense_weight: f32,
+) -> Vec<usize> {
     let worst_dense = candidates
         .iter()
         .filter_map(|candidate| candidate.dense)
@@ -1117,9 +1134,8 @@ fn blended_order(candidates: &[RerankCandidate], logits: &[f32]) -> Vec<usize> {
     let rerank = min_max_normalized(logits);
     let mut order = (0..candidates.len()).collect::<Vec<_>>();
     order.sort_unstable_by(|left, right| {
-        let score = |index: usize| {
-            BLEND_DENSE_WEIGHT * dense[index] + (1.0 - BLEND_DENSE_WEIGHT) * rerank[index]
-        };
+        let score =
+            |index: usize| dense_weight * dense[index] + (1.0 - dense_weight) * rerank[index];
         score(*right).total_cmp(&score(*left))
     });
     order
@@ -1269,7 +1285,8 @@ fn build_index(
 ) -> Result<SemanticIndex, String> {
     const BATCH_SIZE: usize = 32;
     let mut entries = Vec::with_capacity(documents.len());
-    let mut vectors = Vec::with_capacity(documents.len() * EMBEDDING_DIMENSION);
+    let mut vectors = Vec::new();
+    let mut dimension = 0_usize;
     for batch in documents.chunks(BATCH_SIZE) {
         let inputs = batch
             .iter()
@@ -1284,7 +1301,10 @@ fn build_index(
             );
         }
         for (document, mut embedding) in batch.iter().zip(embeddings.drain(..)) {
-            if embedding.len() != EMBEDDING_DIMENSION {
+            if dimension == 0 {
+                dimension = embedding.len();
+            }
+            if embedding.len() != dimension {
                 return Err(
                     "The local embedding model returned an unsupported vector dimension.".into(),
                 );
@@ -1299,9 +1319,12 @@ fn build_index(
         }
         progress(entries.len())?;
     }
+    if dimension == 0 {
+        return Err("The local embedding model returned no vectors for the Bible index.".into());
+    }
     Ok(SemanticIndex {
         fingerprint,
-        dimension: EMBEDDING_DIMENSION,
+        dimension,
         entries,
         vectors,
     })
@@ -1432,12 +1455,22 @@ fn directory_size(path: &Path) -> u64 {
         .sum()
 }
 
+/// Upper bound for ONNX intra-op threads. Four left half of an 8-thread CPU
+/// idle during index builds, which dominate preparation time; six lets
+/// embedding and reranking use most of a typical laptop while still leaving
+/// headroom for the live audio and WebSocket workers.
+const MAX_INFERENCE_THREADS: usize = 6;
+
+fn inference_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|count| count.get().min(MAX_INFERENCE_THREADS))
+        .unwrap_or(2)
+}
+
 fn create_model(
     mut files: std::collections::HashMap<&str, Vec<u8>>,
 ) -> Result<TextEmbedding, String> {
-    let inference_threads = std::thread::available_parallelism()
-        .map(|count| count.get().min(4))
-        .unwrap_or(2);
+    let threads = inference_threads();
     let take = |files: &mut std::collections::HashMap<&str, Vec<u8>>, name: &str| {
         files
             .remove(name)
@@ -1457,7 +1490,7 @@ fn create_model(
     TextEmbedding::try_new_from_user_defined(
         model,
         InitOptionsUserDefined::new()
-            .with_intra_threads(inference_threads)
+            .with_intra_threads(threads)
             .with_max_length(256),
     )
     .map_err(|error| format!("Could not load the local paraphrase model: {error}"))
@@ -1466,9 +1499,7 @@ fn create_model(
 fn create_reranker(
     mut files: std::collections::HashMap<&str, Vec<u8>>,
 ) -> Result<TextRerank, String> {
-    let inference_threads = std::thread::available_parallelism()
-        .map(|count| count.get().min(4))
-        .unwrap_or(2);
+    let threads = inference_threads();
     let take = |files: &mut std::collections::HashMap<&str, Vec<u8>>, name: &str| {
         files
             .remove(name)
@@ -1486,7 +1517,7 @@ fn create_reranker(
     TextRerank::try_new_from_user_defined(
         model,
         RerankInitOptionsUserDefined::new()
-            .with_intra_threads(inference_threads)
+            .with_intra_threads(threads)
             .with_max_length(RERANK_MAX_LENGTH),
     )
     .map_err(|error| format!("Could not load the local reranker: {error}"))
@@ -1575,7 +1606,7 @@ fn parse_index(reader: impl Read) -> Result<SemanticIndex, String> {
         .map_err(|error| error.to_string())?;
     let dimension = read_u32(&mut reader)? as usize;
     let count = read_u32(&mut reader)? as usize;
-    if dimension != EMBEDDING_DIMENSION || count == 0 || count > 80_000 {
+    if !(64..=4096).contains(&dimension) || count == 0 || count > 80_000 {
         return Err("Semantic index header is invalid.".into());
     }
     let mut entries = Vec::with_capacity(count);
@@ -1648,6 +1679,33 @@ mod tests {
     /// `src-tauri/bible_data/`.
     const PROBE_INDEX_VERSION: &str = "WEB";
 
+    /// Output dimension of the pinned `bge-base-en-v1.5` revision. Index
+    /// building is dimension-agnostic (the header records whatever the model
+    /// emitted), so this only documents and checks the shipped model; the
+    /// calibration harness can point at a different embedder.
+    const PINNED_EMBEDDING_DIMENSION: usize = 768;
+
+    /// Fixture index used by the probe and the rerank harness. `WORDLYTE_TEST_INDEX_PATH`
+    /// overrides it so an alternative embedder's index can be evaluated without
+    /// clobbering the checked default fixture.
+    fn probe_index_path() -> PathBuf {
+        std::env::var_os("WORDLYTE_TEST_INDEX_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("bible_data")
+                    .join(index_file(PROBE_INDEX_VERSION))
+            })
+    }
+
+    /// Optional blend-weight override for calibration sweeps.
+    fn harness_blend_weight() -> f32 {
+        std::env::var("WORDLYTE_TEST_BLEND_WEIGHT")
+            .ok()
+            .and_then(|value| value.trim().parse::<f32>().ok())
+            .unwrap_or(BLEND_DENSE_WEIGHT)
+    }
+
     #[test]
     fn repeated_self_corrections_are_not_semantic_queries() {
         assert!(has_repeated_phrase(
@@ -1695,22 +1753,22 @@ mod tests {
         let root = std::env::temp_dir().join(format!("wordlyte-semantic-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let path = root.join("test.index");
+        let dimension = 64_usize;
         let index = SemanticIndex {
             fingerprint: [9; 32],
-            dimension: EMBEDDING_DIMENSION,
+            dimension,
             entries: vec![IndexEntry {
                 book: "Romans".into(),
                 chapter: 8,
                 verse: 28,
                 verse_end: 30,
             }],
-            vectors: (0..EMBEDDING_DIMENSION)
-                .map(|index| (index % 127) as i8)
-                .collect(),
+            vectors: (0..dimension).map(|index| (index % 127) as i8).collect(),
         };
         save_index(&path, &index).unwrap();
         let loaded = load_index(&path).unwrap();
         assert_eq!(loaded.fingerprint, [9; 32]);
+        assert_eq!(loaded.dimension, dimension);
         assert_eq!(loaded.entries[0].book, "Romans");
         assert_eq!(loaded.entries[0].chapter, 8);
         assert_eq!(loaded.entries[0].verse_end, 30);
@@ -1848,7 +1906,7 @@ mod tests {
             .embed(vec!["God gives strength to the weak"], Some(1))
             .unwrap();
         assert_eq!(embeddings.len(), 1);
-        assert_eq!(embeddings[0].len(), EMBEDDING_DIMENSION);
+        assert_eq!(embeddings[0].len(), PINNED_EMBEDDING_DIMENSION);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1920,9 +1978,7 @@ mod tests {
             },
         )
         .expect("index build failed");
-        let target = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("bible_data")
-            .join(index_file(PROBE_INDEX_VERSION));
+        let target = probe_index_path();
         fs::create_dir_all(target.parent().unwrap()).unwrap();
         save_index(&target, &index).unwrap();
         eprintln!(
@@ -1967,12 +2023,7 @@ mod tests {
             files.insert(*name, fs::read(model_dir.join(local_name)).unwrap());
         }
         let mut model = create_model(files).unwrap();
-        let index = load_index(
-            &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("bible_data")
-                .join(index_file(PROBE_INDEX_VERSION)),
-        )
-        .unwrap();
+        let index = load_index(&probe_index_path()).unwrap();
         let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
@@ -2144,7 +2195,8 @@ mod tests {
     /// flat pinned embedder (`WORDLYTE_TEST_BGE_MODEL`), the flat pinned
     /// reranker (`WORDLYTE_TEST_RERANKER_MODEL`), and the operator database
     /// (`WORDLYTE_TEST_BIBLE_DB`). Not a CI gate; run it after any model,
-    /// index, blend-weight, or threshold change:
+    /// index, blend-weight, or threshold change. It asserts proportional
+    /// coverage / top-1 / top-3 floors and zero hard-negative accepts:
     /// `cargo test --lib evaluates_reranker_candidates -- --ignored --nocapture`
     #[test]
     #[ignore = "evaluates the hybrid retrieval pipeline against local model fixtures"]
@@ -2193,12 +2245,7 @@ mod tests {
             files.insert(*name, fs::read(embed_dir.join(local_name)).unwrap());
         }
         let mut model = create_model(files).unwrap();
-        let index = load_index(
-            &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("bible_data")
-                .join(index_file(PROBE_INDEX_VERSION)),
-        )
-        .unwrap();
+        let index = load_index(&probe_index_path()).unwrap();
         let bible = BibleStore::open_for_tests(&db_path).expect("open Bible database");
 
         let mut reranker_files = std::collections::HashMap::new();
@@ -2343,7 +2390,7 @@ mod tests {
             for result in &reranked {
                 logits[result.index] = result.score;
             }
-            let order = blended_order(&candidates, &logits);
+            let order = blended_order_with(&candidates, &logits, harness_blend_weight());
             let top_similarity = sigmoid(logits[order[0]]);
             let runner = order
                 .iter()
@@ -2451,18 +2498,30 @@ mod tests {
                 .min(values.len() - 1)]
         };
         eprintln!(
-            "rerank summary: positives={positives} dense_top1={dense_top1} covered={covered} hit_top1={hit_top1} hit_top3={hit_top3} accepted_correct={accepted_correct} accepted_wrong={accepted_wrong} false_accepts={false_accepts} dense_accepted_correct={dense_accepted_correct} dense_accepted_wrong={dense_accepted_wrong} dense_p95_ms={:.1} rerank_p95_ms={:.1}",
+            "rerank summary: dimension={} blend={:.2} positives={positives} dense_top1={dense_top1} covered={covered} hit_top1={hit_top1} hit_top3={hit_top3} accepted_correct={accepted_correct} accepted_wrong={accepted_wrong} false_accepts={false_accepts} dense_accepted_correct={dense_accepted_correct} dense_accepted_wrong={dense_accepted_wrong} dense_p95_ms={:.1} rerank_p95_ms={:.1}",
+            index.dimension,
+            harness_blend_weight(),
             p95(&dense_latency),
             p95(&rerank_latency),
         );
 
+        // Floors are proportional so the assertions survive fixture growth; they
+        // sit a few points below the measured baseline (coverage 66/71, top-1
+        // 51/71, top-3 60/71) to catch real regressions rather than noise.
+        let coverage_floor = positives * 88 / 100;
+        let top_one_floor = positives * 65 / 100;
+        let top_three_floor = positives * 78 / 100;
         assert!(
-            covered >= 20,
+            covered >= coverage_floor,
             "hybrid retrieval coverage regressed: {covered}/{positives}"
         );
         assert!(
-            hit_top1 >= 15,
+            hit_top1 >= top_one_floor,
             "reranked top-1 regressed: {hit_top1}/{positives}"
+        );
+        assert!(
+            hit_top3 >= top_three_floor,
+            "reranked top-3 regressed: {hit_top3}/{positives}"
         );
         assert_eq!(
             false_accepts, 0,

@@ -36,3 +36,65 @@
 {"id":"observed-god-gave-son-latest","transcript":"For God to show his love, he have to give his son to come and die.","expected":[{"book":"John","chapter":3,"verse":16},{"book":"1 John","chapter":4,"verse":9}]}
 {"id":"observed-god-gave-son-core","transcript":"God showed his love by giving his son.","expected":[{"book":"John","chapter":3,"verse":16},{"book":"1 John","chapter":4,"verse":9}]}
 {"id":"observed-repeated-hand-teeth-noise","transcript":"Daddy, look at that. I put my hand, I put my hand in my teeth.","expected":[]}
+{"id":"creation-beginning","transcript":"Everything that exists started when God made the heavens and the earth.","expected":[{"book":"Genesis","chapter":1,"verse":1}]}
+{"id":"image-of-god","transcript":"Every person carries the image of God and deserves to be treated with dignity.","expected":[{"book":"Genesis","chapter":1,"verse":27}]}
+{"id":"abraham-blessing","transcript":"God told Abraham that every family on the earth would be blessed through him.","expected":[{"book":"Genesis","chapter":12,"verse":3}]}
+{"id":"plans-peace","transcript":"God's plans for his people are for peace and a future, not for disaster.","expected":[{"book":"Jeremiah","chapter":29,"verse":11}]}
+{"id":"new-heart","transcript":"God promises to take away hearts of stone and give hearts that are alive.","expected":[{"book":"Ezekiel","chapter":36,"verse":26}]}
+{"id":"shepherd-care","transcript":"The Lord watches over us and provides what we need, like a shepherd cares for his sheep.","expected":[{"book":"Psalms","chapter":23,"verse":1}]}
+{"id":"east-west-forgiveness","transcript":"God removes our wrongdoing from us as far as the east is removed from the west.","expected":[{"book":"Psalms","chapter":103,"verse":12}]}
+{"id":"children-gift","transcript":"Children are a gift and a reward that comes from the Lord.","expected":[{"book":"Psalms","chapter":127,"verse":3}]}
+{"id":"wonderfully-made","transcript":"Each of us was made in a wonderful and fearful way by God.","expected":[{"book":"Psalms","chapter":139,"verse":14}]}
+{"id":"commit-works","transcript":"Hand your work over to the Lord and your plans will be established.","expected":[{"book":"Proverbs","chapter":16,"verse":3}]}
+{"id":"friend-loves","transcript":"A true friend keeps loving through every season, including the hard ones.","expected":[{"book":"Proverbs","chapter":17,"verse":17}]}
+{"id":"pride-fall","transcript":"Pride goes before destruction, and a haughty attitude comes before a fall.","expected":[{"book":"Proverbs","chapter":16,"verse":18}]}
+{"id":"slow-anger","transcript":"Be quick to listen and slow to get angry, because human anger does not produce the righteousness God wants.","expected":[{"book":"James","chapter":1,"verse":19},{"book":"James","chapter":1,"verse":20}]}
+{"id":"salt-light","transcript":"Followers of Jesus are meant to be salt and light in a broken world.","expected":[{"book":"Matthew","chapter":5,"verse":13},{"book":"Matthew","chapter":5,"verse":14}]}
+{"id":"golden-rule","transcript":"Treat other people the same way you would want them to treat you.","expected":[{"book":"Matthew","chapter":7,"verse":12}]}
+{"id":"mustard-faith","transcript":"Even faith as small as a mustard seed can move a mountain.","expected":[{"book":"Matthew","chapter":17,"verse":20}]}
+{"id":"greatest-commands","transcript":"Love the Lord with all your heart, and love your neighbor the way you love yourself.","expected":[{"book":"Matthew","chapter":22,"verse":37},{"book":"Matthew","chapter":22,"verse":39}]}
+{"id":"lost-sheep","transcript":"The shepherd leaves the ninety-nine sheep to go and find the one that wandered away.","expected":[{"book":"Luke","chapter":15,"verse":4}]}
+{"id":"prodigal-father","transcript":"The father sees his son coming from far away, runs to him, and welcomes him home.","expected":[{"book":"Luke","chapter":15,"verse":20}]}
+{"id":"good-neighbor","transcript":"Our neighbor is anyone who is in need, even someone we would never expect.","expected":[{"book":"Luke","chapter":10,"verse":36}]}
+{"id":"abide-vine","transcript":"Stay connected to Christ, because apart from him we can do nothing.","expected":[{"book":"John","chapter":15,"verse":5}]}
+{"id":"new-creation","transcript":"Anyone who belongs to Christ is a new creation; the old life has passed away.","expected":[{"book":"2 Corinthians","chapter":5,"verse":17}]}
+{"id":"temptation-way-out","transcript":"God will not let you be tested beyond what you can endure, and he will provide a way out.","expected":[{"book":"1 Corinthians","chapter":10,"verse":13}]}
+{"id":"love-patient","transcript":"Love is patient and kind; it does not envy or boast.","expected":[{"book":"1 Corinthians","chapter":13,"verse":4}]}
+{"id":"spirit-helps","transcript":"When we are weak and do not know how to pray, the Holy Spirit helps us.","expected":[{"book":"Romans","chapter":8,"verse":26}]}
+{"id":"nothing-separates","transcript":"Nothing in all creation can separate us from the love of God in Christ Jesus.","expected":[{"book":"Romans","chapter":8,"verse":39}]}
+{"id":"living-sacrifice","transcript":"Offer your whole life to God as a living sacrifice, which is true worship.","expected":[{"book":"Romans","chapter":12,"verse":1}]}
+{"id":"serve-in-love","transcript":"Use your freedom to serve one another in love.","expected":[{"book":"Galatians","chapter":5,"verse":13}]}
+{"id":"sow-reap","transcript":"Whatever a person plants in life is exactly what they will harvest.","expected":[{"book":"Galatians","chapter":6,"verse":7}]}
+{"id":"others-first","transcript":"Think of others as more important than yourself.","expected":[{"book":"Philippians","chapter":2,"verse":3}]}
+{"id":"rejoice-always","transcript":"Rejoice in the Lord no matter what is happening around you.","expected":[{"book":"Philippians","chapter":4,"verse":4}]}
+{"id":"contentment","transcript":"I have learned to be satisfied whatever situation I find myself in.","expected":[{"book":"Philippians","chapter":4,"verse":11}]}
+{"id":"no-condemnation","transcript":"There is no condemnation left for those who belong to Christ Jesus.","expected":[{"book":"Romans","chapter":8,"verse":1}]}
+{"id":"faith-assurance","transcript":"Faith is being sure of what we hope for and certain about what we cannot see.","expected":[{"book":"Hebrews","chapter":11,"verse":1}]}
+{"id":"word-alive","transcript":"The word of God is alive and powerful, sharper than any double-edged sword.","expected":[{"book":"Hebrews","chapter":4,"verse":12}]}
+{"id":"throne-grace","transcript":"Come boldly to the throne of grace so you can receive mercy when you need it.","expected":[{"book":"Hebrews","chapter":4,"verse":16}]}
+{"id":"heavens-declare","transcript":"The skies tell the story of God's glory.","expected":[{"book":"Psalms","chapter":19,"verse":1}]}
+{"id":"be-still","transcript":"Be still and remember that I am God.","expected":[{"book":"Psalms","chapter":46,"verse":10}]}
+{"id":"weary-rest","transcript":"Come to me if you are tired and carrying heavy burdens, and I will give you rest.","expected":[{"book":"Matthew","chapter":11,"verse":28}]}
+{"id":"servant-first","transcript":"Whoever wants to be first must become the servant of everyone.","expected":[{"book":"Mark","chapter":9,"verse":35}]}
+{"id":"seek-save-lost","transcript":"The Son of Man came to look for and rescue people who are lost.","expected":[{"book":"Luke","chapter":19,"verse":10}]}
+{"id":"spirit-power","transcript":"You will receive power when the Holy Spirit comes on you and you will be my witnesses.","expected":[{"book":"Acts","chapter":1,"verse":8}]}
+{"id":"no-other-name","transcript":"Salvation is found in no one else; there is no other name that can save us.","expected":[{"book":"Acts","chapter":4,"verse":12}]}
+{"id":"living-hope","transcript":"God has given us a new birth into a living hope through the resurrection of Jesus.","expected":[{"book":"1 Peter","chapter":1,"verse":3}]}
+{"id":"cast-anxiety","transcript":"Throw all your worries on God because he cares about you.","expected":[{"book":"1 Peter","chapter":5,"verse":7}]}
+{"id":"resist-devil","transcript":"Stand against the devil and he will run away from you.","expected":[{"book":"James","chapter":4,"verse":7}]}
+{"id":"confess-forgive","transcript":"If we admit our sins, God is faithful and just and will forgive us.","expected":[{"book":"1 John","chapter":1,"verse":9}]}
+{"id":"greater-in-you","transcript":"The one who lives in you is greater than the one who is in the world.","expected":[{"book":"1 John","chapter":4,"verse":4}]}
+{"id":"wipe-tears","transcript":"God will wipe every tear from our eyes, and death and sorrow will be gone.","expected":[{"book":"Revelation","chapter":21,"verse":4}]}
+{"id":"usher-briefing","transcript":"Ushers should stand at the doors fifteen minutes before the service starts.","expected":[]}
+{"id":"communion-prep","transcript":"The communion trays need to be refilled and placed on the table before we begin.","expected":[]}
+{"id":"parking-repaving","transcript":"The east parking lot will be repaved on Monday and Tuesday next week.","expected":[]}
+{"id":"mission-deadline","transcript":"Registration for the summer mission trip closes at the end of the month.","expected":[]}
+{"id":"childcare-rooms","transcript":"Childcare for children under five is available in rooms one oh four and one oh five.","expected":[]}
+{"id":"budget-meeting","transcript":"The finance team will present the revised budget during the quarterly meeting.","expected":[]}
+{"id":"soundcheck","transcript":"Please run a sound check on all the wireless microphones before the band arrives.","expected":[]}
+{"id":"fire-inspection","transcript":"The fire inspection is scheduled for Wednesday morning at nine.","expected":[]}
+{"id":"prayer-chain","transcript":"Send your prayer requests to the office by Friday so they can go in the bulletin.","expected":[]}
+{"id":"livestream-issue","transcript":"The livestream froze twice during the last service because of the upload speed.","expected":[]}
+{"id":"volunteer-thanks","transcript":"We want to thank everyone who helped set up chairs for the community dinner.","expected":[]}
+{"id":"earn-your-breakthrough","transcript":"If you work hard enough, everything will eventually work out for you.","expected":[]}
+{"id":"church-history-proverb","transcript":"A church that forgets its history is bound to repeat its mistakes.","expected":[]}
