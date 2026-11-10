@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -100,6 +100,10 @@ const MAX_SHORT_QUOTE_CONFIDENCE: f32 = 0.89;
 const QUOTE_SEARCH_WINDOW_WORDS: usize = 24;
 const QUOTE_SEARCH_WINDOW_OVERLAP: usize = 8;
 const MAX_QUOTE_SEARCH_WINDOWS: usize = 24;
+/// Two neighbouring sentences are searched together while their combined span
+/// stays this small (two search windows); continuous speech produces long
+/// sentences that a quotation can straddle.
+const MAX_PAIRED_SENTENCE_WORDS: usize = QUOTE_SEARCH_WINDOW_WORDS * 2;
 const MAX_DIRECT_QUOTES_PER_TURN: usize = 3;
 /// Limits how many FTS-retrieved candidates are lexically aligned per search
 /// window; tier results arrive bm25-ordered, so the front is the strongest.
@@ -108,6 +112,20 @@ const MIN_SHORT_WINDOW_CONTENT_WORDS: usize = 3;
 const STRONG_SEMANTIC_SIMILARITY: f32 = 0.80;
 const STRONG_SEMANTIC_MARGIN: f32 = 0.08;
 const PARTIAL_QUOTE_DETECTION_STEP_WORDS: usize = 6;
+/// Words of already-submitted text repeated in the next interim quote job so a
+/// quotation straddling two submissions stays inside one search window.
+const QUOTE_SCAN_LOOKBACK_WORDS: usize = 12;
+/// Upper bound on words of unseen text in one interim quote job. The cursor
+/// only advances over words actually submitted, so a slow worker catches up
+/// across several jobs instead of dropping the middle of a long turn.
+const MAX_INTERIM_QUOTE_SCAN_WORDS: usize = 192;
+/// Tail of each recent finalized turn prefixed to interim evidence so a
+/// quotation split across an ASR turn boundary is still covered.
+const QUOTE_CROSS_TURN_WORDS: usize = 16;
+/// Interim submissions widen to this step when the quote worker falls behind,
+/// trading preview freshness for coverage during continuous speech.
+const PARTIAL_QUOTE_DETECTION_BACKLOG_STEP_WORDS: usize = 12;
+const QUOTE_WORKER_BACKLOG_MILLIS: u64 = 1200;
 const PROACTIVE_REFERENCE_FINALIZATION_WINDOW: Duration = Duration::from_secs(5);
 const MAX_SPOKEN_REFERENCE_RANGE: i32 = 10;
 const MAX_AUDIO_RECOVERIES: usize = 2;
@@ -508,6 +526,10 @@ struct QuoteJob {
     asr_confidence: f32,
     is_interim: bool,
     source_transcript_timestamp: u64,
+    /// Interim word cursor this job had examined when submitted. The worker
+    /// publishes it back so dropped (coalesced) jobs are rescanned rather than
+    /// skipped.
+    scanned_words: usize,
 }
 
 struct DetectionPipeline {
@@ -517,6 +539,14 @@ struct DetectionPipeline {
     quote_tx: watch::Sender<Option<QuoteJob>>,
     partial_turn_order: Option<u64>,
     partial_words: usize,
+    /// Furthest word of the current interim turn submitted for quote lookup
+    /// (a high-water mark; the worker cursor may trail it).
+    partial_scanned_words: usize,
+    /// Word cursor the quote worker has actually processed; lags the
+    /// submission cursor when jobs are coalesced away.
+    quote_processed_words: Arc<AtomicUsize>,
+    /// Worker turnaround in milliseconds; widens the submission step under load.
+    quote_latency_millis: Arc<AtomicU64>,
 }
 
 struct DetectionWorker {
@@ -527,6 +557,8 @@ struct DetectionWorker {
     active: Arc<AtomicBool>,
     recently_suggested: Arc<Mutex<HashMap<String, Instant>>>,
     semantic: Arc<SemanticScripture>,
+    quote_processed_words: Arc<AtomicUsize>,
+    quote_latency_millis: Arc<AtomicU64>,
 }
 
 struct ActiveDetectionSession(Arc<AtomicBool>);
@@ -1845,6 +1877,8 @@ async fn run_asr_session(
     let detection_generation = Arc::new(AtomicU64::new(0));
     let detection_active = Arc::new(AtomicBool::new(true));
     let _active_detection_session = ActiveDetectionSession(detection_active.clone());
+    let quote_processed_words = Arc::new(AtomicUsize::new(0));
+    let quote_latency_millis = Arc::new(AtomicU64::new(0));
     let (quote_tx, quote_rx) = watch::channel(None::<QuoteJob>);
     spawn_quote_worker(
         DetectionWorker {
@@ -1855,6 +1889,8 @@ async fn run_asr_session(
             active: detection_active,
             recently_suggested: recently_suggested.clone(),
             semantic,
+            quote_processed_words: quote_processed_words.clone(),
+            quote_latency_millis: quote_latency_millis.clone(),
         },
         quote_rx,
     );
@@ -1865,6 +1901,9 @@ async fn run_asr_session(
         quote_tx,
         partial_turn_order: None,
         partial_words: 0,
+        partial_scanned_words: 0,
+        quote_processed_words,
+        quote_latency_millis,
     };
     let mut audio = vec![0u8; 3200];
     let mut last_audio_level_emit = Instant::now() - Duration::from_millis(100);
@@ -2039,6 +2078,8 @@ fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Opt
             let worker_bible = worker.bible.clone();
             let worker_detection = worker.detection.clone();
             let worker_job = job.clone();
+            let is_interim = worker_job.is_interim;
+            let started = Instant::now();
             let mut suggestions = tokio::task::spawn_blocking(move || {
                 let output_version = current_output_version(&worker_detection);
                 detect_direct_quotes(
@@ -2047,10 +2088,23 @@ fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Opt
                     &worker_job.evidence,
                     &output_version,
                     worker_job.asr_confidence,
+                    // Interim evidence already walks the whole turn with a
+                    // cursor, so the expensive full-turn rescan is reserved
+                    // for finalized turns where cross-turn context matters.
+                    !is_interim,
                 )
             })
             .await
             .unwrap_or_default();
+            // Publish both metrics before emitting: the interim submitter
+            // widens its step when turnaround grows and rescans any span the
+            // watch channel coalesced away.
+            worker
+                .quote_latency_millis
+                .store(started.elapsed().as_millis() as u64, Ordering::Relaxed);
+            worker
+                .quote_processed_words
+                .store(job.scanned_words, Ordering::Relaxed);
 
             for suggestion in &mut suggestions {
                 suggestion.source_transcript_timestamp = Some(job.source_transcript_timestamp);
@@ -2412,6 +2466,7 @@ fn handle_provider_message(
     }
     pipeline.partial_turn_order = None;
     pipeline.partial_words = 0;
+    pipeline.partial_scanned_words = 0;
 
     let direct_references = detect_references(transcript, &detection.books);
     let transcript_reference = direct_references.last().cloned();
@@ -2548,12 +2603,15 @@ fn handle_provider_message(
         // other quotations. Keep the deterministic reference fast path, but
         // still queue the same turn for quotation/semantic analysis.
     }
+    let final_evidence = transcript.to_string();
+    let final_scanned_words = quote_tokens(&final_evidence).len();
     pipeline.quote_tx.send_replace(Some(QuoteJob {
         generation: current_generation,
+        scanned_words: final_scanned_words,
         rolling_text,
         semantic_text,
         semantic_segments,
-        evidence: transcript.to_string(),
+        evidence: final_evidence,
         asr_confidence: confidence,
         is_interim: false,
         source_transcript_timestamp: transcript_timestamp,
@@ -2575,6 +2633,7 @@ fn handle_interim_transcript(
     if turn_order.is_some() && pipeline.partial_turn_order != turn_order {
         pipeline.partial_turn_order = turn_order;
         pipeline.partial_words = 0;
+        pipeline.partial_scanned_words = 0;
     }
 
     // References are the operator's real-time path. Search every provider
@@ -2620,31 +2679,104 @@ fn handle_interim_transcript(
 
     // Quote and semantic retrieval can be comparatively expensive. Throttle
     // only that background work; it must never delay explicit references.
-    let words = quote_tokens(transcript).len();
+    let tokens = quote_tokens(transcript);
+    let words = tokens.len();
     if words < pipeline.partial_words {
-        // A provider revision shortened the turn. Measure the next background
-        // quote-detection interval from the revised snapshot.
+        // A provider revision shortened the turn. Rescan from the revised
+        // timeline rather than trusting a cursor past the new text.
         pipeline.partial_words = words;
+        pipeline.partial_scanned_words = pipeline.partial_scanned_words.min(words);
     }
+    // The worker coalesces jobs through a watch channel, so some submissions
+    // are never scored. Measure new text from the last *processed* cursor and
+    // rescan whatever it missed instead of leaving a silent gap in a
+    // continuous sermon.
+    let processed = pipeline
+        .quote_processed_words
+        .load(Ordering::Relaxed)
+        .min(pipeline.partial_scanned_words);
     if words
         < pipeline
-            .partial_words
-            .saturating_add(PARTIAL_QUOTE_DETECTION_STEP_WORDS)
+            .partial_scanned_words
+            .saturating_add(interim_quote_step(
+                pipeline.quote_latency_millis.load(Ordering::Relaxed),
+            ))
     {
         return;
     }
+
+    // Walk the turn with a monotonic cursor instead of rescanning only the
+    // final words: continuous speech produces long unbroken turns, and the
+    // old tail-only suffix left early quotations unexamined. Recent finalized
+    // turn tails join the evidence so a quotation split at an ASR boundary is
+    // still covered.
+    let cross_turn_tails = pipeline
+        .context
+        .iter()
+        .rev()
+        .take(2)
+        .rev()
+        .map(|(_, text)| latest_word_suffix(text, QUOTE_CROSS_TURN_WORDS))
+        .collect::<Vec<_>>();
+    let Some((evidence, scanned_words)) =
+        interim_quote_evidence(&tokens, processed, &cross_turn_tails)
+    else {
+        return;
+    };
     pipeline.partial_words = words;
+    // Keep the submission cursor as a high-water mark: while the worker is
+    // behind, evidence restarts from its processed point, and the step gate
+    // must still measure against the furthest text already submitted.
+    pipeline.partial_scanned_words = pipeline.partial_scanned_words.max(scanned_words);
 
     pipeline.quote_tx.send_replace(Some(QuoteJob {
         generation: pipeline.generation.load(Ordering::Acquire),
+        scanned_words,
         rolling_text: transcript.to_string(),
         semantic_text: String::new(),
         semantic_segments: 0,
-        evidence: latest_word_suffix(transcript, MAX_SEMANTIC_CONTEXT_WORDS),
+        evidence,
         asr_confidence,
         is_interim: true,
         source_transcript_timestamp: transcript_timestamp,
     }));
+}
+
+/// Interim submissions narrow to a short anchored slice at normal speed and
+/// widen during backlogs; the cursor guarantees coverage either way.
+fn interim_quote_step(quote_latency_millis: u64) -> usize {
+    if quote_latency_millis > QUOTE_WORKER_BACKLOG_MILLIS {
+        PARTIAL_QUOTE_DETECTION_BACKLOG_STEP_WORDS
+    } else {
+        PARTIAL_QUOTE_DETECTION_STEP_WORDS
+    }
+}
+
+/// Builds interim quote evidence for the next cursor span in `tokens`.
+/// Returns the anchored text and the word index the submission cursor
+/// advanced to.
+fn interim_quote_evidence(
+    tokens: &[String],
+    scanned_words: usize,
+    cross_turn_tails: &[String],
+) -> Option<(String, usize)> {
+    let words = tokens.len();
+    if words == 0 {
+        return None;
+    }
+    let scanned = scanned_words.min(words);
+    let start = scanned.saturating_sub(QUOTE_SCAN_LOOKBACK_WORDS);
+    let end = words.min(start.saturating_add(MAX_INTERIM_QUOTE_SCAN_WORDS));
+    if end <= start {
+        return None;
+    }
+    let mut evidence = String::new();
+    for tail in cross_turn_tails.iter().filter(|tail| !tail.is_empty()) {
+        evidence.push_str(tail);
+        evidence.push(' ');
+    }
+    evidence.push_str(&tokens[start..end].join(" "));
+    Some((evidence, end))
 }
 
 fn latest_word_suffix(text: &str, limit: usize) -> String {
@@ -2754,6 +2886,7 @@ fn detect_direct_quotes(
     evidence: &str,
     output_version: &str,
     asr_confidence: f32,
+    search_rolling_context: bool,
 ) -> Vec<ScriptureSuggestion> {
     if quote_tokens(rolling_text).len() < MIN_DIRECT_QUOTE_WORDS {
         return Vec::new();
@@ -2777,7 +2910,7 @@ fn detect_direct_quotes(
 
     // If the newest finalized turn did not contain a complete match, include
     // the rolling context to recover a quotation split across ASR boundaries.
-    if matches.is_empty() && rolling_text != evidence {
+    if matches.is_empty() && search_rolling_context && rolling_text != evidence {
         for window in quote_search_windows(rolling_text) {
             if let Some((verse, score)) = best_direct_quote_candidate(bible, &window, &window) {
                 let key = (verse.book.clone(), verse.chapter, verse.verse);
@@ -2840,18 +2973,14 @@ fn quote_search_windows(text: &str) -> Vec<String> {
         for sentence in &sentences {
             append_quote_token_windows(&mut windows, &quote_tokens(sentence));
         }
-        // Recover a quotation that ASR punctuation split into a very short
-        // fragment and its neighboring sentence without blending arbitrary
-        // complete sermon thoughts together.
+        // Pair neighbouring sentences whenever the combined span stays
+        // bounded. Continuous speech produces long punctuated sentences, and
+        // the old rule only paired when one side was a short fragment, which
+        // made a quotation spanning two ordinary sentences invisible.
         for pair in sentences.windows(2) {
-            let left = quote_tokens(pair[0]);
-            let right = quote_tokens(pair[1]);
-            if left.len() >= MIN_DIRECT_QUOTE_WORDS && right.len() >= MIN_DIRECT_QUOTE_WORDS {
-                continue;
-            }
-            let mut combined = left;
-            combined.extend(right);
-            if combined.len() <= QUOTE_SEARCH_WINDOW_WORDS {
+            let mut combined = quote_tokens(pair[0]);
+            combined.extend(quote_tokens(pair[1]));
+            if combined.len() <= MAX_PAIRED_SENTENCE_WORDS {
                 append_quote_token_windows(&mut windows, &combined);
             }
         }
@@ -2861,7 +2990,13 @@ fn quote_search_windows(text: &str) -> Vec<String> {
 
     windows.dedup();
     if windows.len() > MAX_QUOTE_SEARCH_WINDOWS {
-        windows.drain(..windows.len() - MAX_QUOTE_SEARCH_WINDOWS);
+        // Continuous speech can produce long turns whose opening words hold
+        // the quotation. Keep both ends instead of only the latest windows.
+        let keep_head = MAX_QUOTE_SEARCH_WINDOWS / 2;
+        let keep_tail = MAX_QUOTE_SEARCH_WINDOWS - keep_head;
+        let tail = windows.split_off(windows.len() - keep_tail);
+        windows.truncate(keep_head);
+        windows.extend(tail);
     }
     windows
 }
@@ -3346,6 +3481,115 @@ mod tests {
             "three four five"
         );
         assert_eq!(latest_word_suffix("one two", 3), "one two");
+    }
+
+    #[test]
+    fn continuous_turns_keep_their_opening_windows() {
+        let mut text = String::from("the lord is my shepherd i shall not want");
+        for index in 0..400 {
+            text.push_str(&format!(" word{index}"));
+        }
+        let windows = quote_search_windows(&text);
+        assert!(windows.len() <= MAX_QUOTE_SEARCH_WINDOWS);
+        assert!(
+            windows
+                .iter()
+                .any(|window| window.contains("my shepherd i shall not want")),
+            "the opening quotation must survive window truncation"
+        );
+        assert!(
+            windows.iter().any(|window| window.contains("word399")),
+            "the newest words must still be searched"
+        );
+    }
+
+    #[test]
+    fn quotations_spanning_two_sentences_are_searched_together() {
+        let text = "the lord is my shepherd i shall not want. \
+                    he makes me to lie down in green pastures.";
+        let windows = quote_search_windows(text);
+        assert!(
+            windows
+                .iter()
+                .any(|window| window.contains("shall not want he makes")),
+            "a quotation crossing a sentence boundary must stay inside one window"
+        );
+    }
+
+    #[test]
+    fn interim_evidence_walks_a_continuous_turn_without_gaps() {
+        let tokens = (0..420)
+            .map(|index| format!("token{index}"))
+            .collect::<Vec<_>>();
+        let mut scanned = 0;
+        let mut submitted = Vec::new();
+        while scanned < tokens.len() {
+            let (evidence, next) = interim_quote_evidence(&tokens, scanned, &[]).unwrap();
+            assert!(next > scanned);
+            assert!(
+                evidence.split_whitespace().count()
+                    <= QUOTE_SCAN_LOOKBACK_WORDS + MAX_INTERIM_QUOTE_SCAN_WORDS
+            );
+            submitted.push(evidence);
+            scanned = next;
+        }
+        for index in 0..tokens.len() {
+            let needle = format!("token{index}");
+            assert!(
+                submitted
+                    .iter()
+                    .any(|evidence| evidence.split_whitespace().any(|word| word == needle)),
+                "word {index} was never submitted"
+            );
+        }
+    }
+
+    #[test]
+    fn interim_evidence_carries_recent_finalized_turn_tails() {
+        let tokens = quote_tokens("verse seventeen continues the thought");
+        let (evidence, _) =
+            interim_quote_evidence(&tokens, 0, &["the lord is my shepherd".to_string()]).unwrap();
+        assert!(evidence.starts_with("the lord is my shepherd"));
+        assert!(evidence.contains("verse seventeen"));
+    }
+
+    #[test]
+    fn backlog_widens_the_interim_quote_step() {
+        assert_eq!(
+            interim_quote_step(QUOTE_WORKER_BACKLOG_MILLIS),
+            PARTIAL_QUOTE_DETECTION_STEP_WORDS
+        );
+        assert_eq!(
+            interim_quote_step(QUOTE_WORKER_BACKLOG_MILLIS + 1),
+            PARTIAL_QUOTE_DETECTION_BACKLOG_STEP_WORDS
+        );
+    }
+
+    #[test]
+    fn continuous_flow_submits_early_quotations_for_review() {
+        let mut text = String::from("the lord is my shepherd i shall not want");
+        for index in 0..600 {
+            text.push_str(&format!(" filler{index}"));
+        }
+        let tokens = quote_tokens(&text);
+        let mut scanned = 0;
+        let mut reviewed = false;
+        let mut words = 0;
+        while words < tokens.len() {
+            words = (words + PARTIAL_QUOTE_DETECTION_STEP_WORDS).min(tokens.len());
+            let (evidence, next) = interim_quote_evidence(&tokens[..words], scanned, &[]).unwrap();
+            if quote_search_windows(&evidence)
+                .iter()
+                .any(|window| window.contains("my shepherd i shall not want"))
+            {
+                reviewed = true;
+            }
+            scanned = next;
+        }
+        assert!(
+            reviewed,
+            "the early quotation never entered a submitted window"
+        );
     }
 
     #[test]

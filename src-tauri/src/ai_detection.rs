@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 
 pub(crate) const MIN_DIRECT_QUOTE_WORDS: usize = 5;
 const EMBEDDED_QUOTE_WINDOW_WORDS: usize = 8;
+const EMBEDDED_QUOTE_ANCHOR_WORDS: usize = 4;
 const REPEATED_PHRASE_WORDS: usize = 4;
 const MIN_QUOTE_CONTENT_WORDS: usize = 2;
 
@@ -617,6 +618,34 @@ fn longest_contiguous_run(spoken: &[String], verse: &[String]) -> usize {
     longest
 }
 
+/// Content words inside the best phrase anchor: the maximum number of
+/// meaningful words carried by any contiguous run of at least
+/// `EMBEDDED_QUOTE_ANCHOR_WORDS` tokens. An anchor made only of function
+/// words (for example "in the name of") can line up with almost any verse, so
+/// callers require substance before treating a four-word match as a quotation.
+fn longest_contiguous_anchor_content(spoken: &[String], verse: &[String]) -> usize {
+    let mut best = 0;
+    for start in 0..spoken.len() {
+        for verse_start in 0..verse.len() {
+            let mut length = 0;
+            while start + length < spoken.len()
+                && verse_start + length < verse.len()
+                && spoken[start + length] == verse[verse_start + length]
+            {
+                length += 1;
+            }
+            if length >= EMBEDDED_QUOTE_ANCHOR_WORDS {
+                let content = spoken[start..start + length]
+                    .iter()
+                    .filter(|token| is_quote_content_word(token))
+                    .count();
+                best = best.max(content);
+            }
+        }
+    }
+    best
+}
+
 fn token_quote_score(spoken: &[String], verse: &[String]) -> f32 {
     if spoken.len() < MIN_DIRECT_QUOTE_WORDS || verse.len() < MIN_DIRECT_QUOTE_WORDS {
         return 0.0;
@@ -669,8 +698,13 @@ fn quote_alignment_is_strong(spoken: &[String], verse: &[String]) -> bool {
 
     // ASR can substitute a word inside an embedded quotation. Four exact
     // words are sufficient only when at least three meaningful words also
-    // agree, as in "what manner of man" from James 1:24.
-    let embedded_phrase = contiguous >= 4 && content >= 3 && ordered_content >= 3;
+    // agree and the anchor itself carries at least two of them, as in "what
+    // manner of man" from James 1:24. Function-word anchors ("in the name of")
+    // are rejected because they align with nearly every verse.
+    let embedded_phrase = contiguous >= EMBEDDED_QUOTE_ANCHOR_WORDS
+        && longest_contiguous_anchor_content(spoken, verse) >= 2
+        && content >= 3
+        && ordered_content >= 3;
 
     // Permit a heavily punctuated/ASR-resegmented long quotation when many
     // meaningful words remain in order, but never on function-word overlap
