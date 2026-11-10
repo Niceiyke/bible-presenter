@@ -16,17 +16,28 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Emitter};
 
-const INDEX_MAGIC: &[u8; 8] = b"WLYSEM03";
-const INDEX_FILE: &str = "bible-semantic-bge-v1.index";
+const INDEX_MAGIC: &[u8; 8] = b"WLYSEM04";
+const INDEX_FILE_BASE: &str = "bible-semantic-bge-base-v1";
+/// Superseded aggregate index that concatenated every installed translation
+/// into one document per verse (truncated at the model's token limit). It is
+/// removed during preparation now that each translation owns an index.
+const LEGACY_INDEX_FILE: &str = "bible-semantic-bge-v1.index";
+/// Release asset with pre-built per-version indexes produced by
+/// tools/semantic-index-builder (Google Colab). Preparation downloads it
+/// first and falls back to embedding each version locally when the bundle is
+/// unavailable or any version's fingerprint does not match the installed
+/// Bible text.
+const PREBUILT_BUNDLE_URL: &str = "https://github.com/Niceiyke/bible-presenter/releases/latest/download/bible-semantic-bge-base-v1.zip";
+const PREBUILT_BUNDLE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const READY_MARKER: &str = "prepared-v1";
-const MODEL_ID: &str = "BAAI/bge-small-en-v1.5-quantized";
-const MODEL_REPOSITORY: &str = "Xenova/bge-small-en-v1.5";
-const MODEL_REVISION: &str = "ea104dacec62c0de699686887e3f920caeb4f3e3";
+const MODEL_ID: &str = "BAAI/bge-base-en-v1.5-quantized";
+const MODEL_REPOSITORY: &str = "Xenova/bge-base-en-v1.5";
+const MODEL_REVISION: &str = "4d6cd88e18e51a5e020c2c305726d76ada9c03cf";
 const QUERY_PREFIX: &str = "Represent this sentence for searching relevant passages: ";
 const MODEL_FILES: &[(&str, &str)] = &[
     (
         "onnx/model_quantized.onnx",
-        "6c9c6101a956d62dfb5e7190c538226c0c5bb9cb27b651234b6df063ee7dbfe4",
+        "c9729cc84cbd0e9fecc759505d2be65916c9fe05222d7ea26c65fcb3382af38d",
     ),
     (
         "tokenizer.json",
@@ -34,7 +45,7 @@ const MODEL_FILES: &[(&str, &str)] = &[
     ),
     (
         "config.json",
-        "fa73f90bf92c8cace1fbcb709626306f2bdbc9ea3e5b5f94b440df9b6aa56350",
+        "d83c21fa7366994560727112ef0a31d8a2ec1c280c2a3e66326fdb877f64c91e",
     ),
     (
         "special_tokens_map.json",
@@ -45,9 +56,19 @@ const MODEL_FILES: &[(&str, &str)] = &[
         "9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3",
     ),
 ];
-const EMBEDDING_DIMENSION: usize = 384;
+/// Translations that get their own paraphrase index. Matching runs against the
+/// translation the operator is projecting, so the spoken paraphrase and the
+/// indexed text share one language register.
+const SEMANTIC_INDEX_VERSIONS: &[&str] = &["NKJV", "ASV", "WEB", "NIV", "AMP"];
+const EMBEDDING_DIMENSION: usize = 768;
 const MIN_QUERY_WORDS: usize = 5;
-pub const MIN_SIMILARITY: f32 = 0.70;
+/// Minimum cosine similarity for a paraphrase candidate. Calibrated on the
+/// pinned bge-base-en-v1.5 index: in the paraphrase fixture the strongest
+/// non-scripture negative scores 0.606 while the weakest correct top-1 scores
+/// 0.615, so the gate sits inside that gap. bge-base spreads true pairs over a
+/// lower band than the previous bge-small model, so this is a model-scale
+/// calibration, not a relaxation of ranking quality.
+pub const MIN_SIMILARITY: f32 = 0.62;
 pub const MIN_MARGIN: f32 = 0.025;
 const MAX_SEMANTIC_SUGGESTIONS: usize = 3;
 const RANKING_POOL_SIZE: usize = 24;
@@ -196,7 +217,45 @@ pub struct SemanticScripture {
     cancel_requested: AtomicBool,
     status: Mutex<SemanticStatus>,
     model: Mutex<Option<TextEmbedding>>,
-    index: Mutex<Option<SemanticIndex>>,
+    indexes: Mutex<IndexCache>,
+}
+
+/// Per-translation indexes loaded on demand. Keeping every index resident
+/// would cost roughly 40 MB per translation, so at most two stay cached; a
+/// long session that switches translations often still evicts the oldest one.
+struct IndexCache {
+    loaded: Vec<(String, SemanticIndex)>,
+}
+
+impl IndexCache {
+    /// Ensures the version's index is resident, loading (and validating) it
+    /// from disk on first use. Evicts the oldest entry beyond two caches.
+    fn load(&mut self, root: &Path, version: &str) -> Result<(), String> {
+        if self.loaded.iter().any(|(cached, _)| cached == version) {
+            return Ok(());
+        }
+        let index = load_index(&root.join(index_file(version)))?;
+        if index.dimension != EMBEDDING_DIMENSION {
+            return Err(format!(
+                "The {version} paraphrase index was built with a different model. Run preparation again."
+            ));
+        }
+        self.loaded.push((version.to_string(), index));
+        while self.loaded.len() > 2 {
+            self.loaded.remove(0);
+        }
+        Ok(())
+    }
+
+    /// Caller must have run `load` for this version first.
+    fn get(&self, version: &str) -> &SemanticIndex {
+        &self
+            .loaded
+            .iter()
+            .find(|(cached, _)| cached == version)
+            .expect("index must be loaded before get")
+            .1
+    }
 }
 
 impl SemanticScripture {
@@ -223,7 +282,7 @@ impl SemanticScripture {
                 verified: false,
             }),
             model: Mutex::new(None),
-            index: Mutex::new(None),
+            indexes: Mutex::new(IndexCache { loaded: Vec::new() }),
         }
     }
 
@@ -263,28 +322,38 @@ impl SemanticScripture {
     }
 
     fn prepare(&self, app: &AppHandle, bible: &BibleStore) -> Result<(), String> {
-        self.update_status(
-            app,
-            "preparing",
-            "Reading the canonical KJV semantic corpus…",
-            0,
-            0,
-        );
-        let corpus = bible.semantic_corpus().map_err(|error| error.to_string())?;
-        if corpus.is_empty() {
-            return Err("The canonical KJV Bible corpus is not installed.".into());
+        // The per-version index files supersede the aggregate index; leaving
+        // the old file behind would only inflate the reported disk usage.
+        let _ = fs::remove_file(self.root.join(LEGACY_INDEX_FILE));
+
+        // Collect every supported translation that is actually installed so
+        // the progress totals cover the real work, and preparation fails with
+        // a clear message when none is present.
+        let mut jobs = Vec::new();
+        for version in SEMANTIC_INDEX_VERSIONS {
+            let Ok(corpus) = bible.semantic_corpus(version) else {
+                continue;
+            };
+            if corpus.is_empty() {
+                continue;
+            }
+            let fingerprint = corpus_fingerprint(&corpus);
+            let documents = semantic_documents(&corpus);
+            let total = documents.len();
+            jobs.push(((*version).to_string(), documents, fingerprint, total));
         }
-        let fingerprint = corpus_fingerprint(&corpus);
-        let documents = semantic_documents(&corpus);
-        let total = documents.len();
+        if jobs.is_empty() {
+            return Err("Install one of the modern Bible translations (NKJV, ASV, WEB, NIV, or AMP) to enable paraphrase suggestions.".into());
+        }
+        let grand_total: usize = jobs.iter().map(|(_, _, _, total)| total).sum();
 
         fs::create_dir_all(&self.root).map_err(|error| error.to_string())?;
         self.update_status(
             app,
             "preparing",
-            "Loading the local paraphrase model. First preparation may download about 35 MB…",
+            "Loading the local paraphrase model. First preparation may download about 120 MB…",
             0,
-            total,
+            grand_total,
         );
         let mut model = load_pinned_model(&self.root, |completed, total, file| {
             if self.cancel_requested.load(Ordering::Acquire) {
@@ -315,51 +384,224 @@ impl SemanticScripture {
             .embed(vec![warmup.as_str()], Some(1))
             .map_err(|error| format!("Could not warm the local paraphrase model: {error}"))?;
 
-        self.update_status(
-            app,
-            "preparing",
-            "Checking the local Bible meaning index…",
-            0,
-            total,
-        );
-        let local_index = self.root.join(INDEX_FILE);
-        let index = match load_index(&local_index) {
-            Ok(index)
-                if index.fingerprint == fingerprint
-                    && index.dimension == EMBEDDING_DIMENSION
-                    && index.entries.len() == total =>
-            {
-                index
+        // Prefer the release bundle of pre-built indexes: it turns hours of
+        // CPU embedding on the operator's machine into one download. Versions
+        // missing from the bundle (or whose fingerprint differs from the
+        // installed Bible text) still build locally below.
+        match self.try_prebuilt_bundle(app, &jobs) {
+            Ok(installed) if installed > 0 => {
+                self.update_status(
+                    app,
+                    "preparing",
+                    format!(
+                        "Using {installed}/{job_total} pre-built meaning indexes…",
+                        job_total = jobs.len()
+                    ),
+                    0,
+                    grand_total,
+                );
             }
-            _ => {
-                let index = build_index(&mut model, &documents, fingerprint, |indexed| {
-                    if self.cancel_requested.load(Ordering::Acquire) {
-                        return Err(PREPARATION_CANCELLED.to_string());
-                    }
-                    self.update_status(
-                        app,
-                        "preparing",
-                        format!("Indexing canonical Bible passages… {indexed}/{total}"),
-                        indexed,
-                        total,
-                    );
-                    Ok(())
-                })?;
-                save_index(&local_index, &index)?;
-                index
+            Ok(_) => {}
+            Err(message) if message == PREPARATION_CANCELLED => return Err(message),
+            Err(message) => {
+                self.update_status(
+                    app,
+                    "preparing",
+                    format!("Pre-built indexes unavailable ({message}); building locally…"),
+                    0,
+                    grand_total,
+                );
             }
-        };
+        }
+
+        let mut indexed_before = 0_usize;
+        let job_count = jobs.len();
+        for (job_index, (version, documents, fingerprint, total)) in jobs.iter().enumerate() {
+            let label = format!("{version} ({}/{job_count})", job_index + 1);
+            self.update_status(
+                app,
+                "preparing",
+                format!("Checking the {label} meaning index…"),
+                indexed_before,
+                grand_total,
+            );
+            let local_index = self.root.join(index_file(version));
+            let _ = match load_index(&local_index) {
+                Ok(index)
+                    if index.fingerprint == *fingerprint
+                        && index.dimension == EMBEDDING_DIMENSION
+                        && index.entries.len() == *total =>
+                {
+                    index
+                }
+                _ => {
+                    let index = build_index(&mut model, documents, *fingerprint, |indexed| {
+                        if self.cancel_requested.load(Ordering::Acquire) {
+                            return Err(PREPARATION_CANCELLED.to_string());
+                        }
+                        self.update_status(
+                            app,
+                            "preparing",
+                            format!("Indexing {label} Bible passages… {indexed}/{total}"),
+                            indexed_before + indexed,
+                            grand_total,
+                        );
+                        Ok(())
+                    })?;
+                    save_index(&local_index, &index)?;
+                    index
+                }
+            };
+            indexed_before += *total;
+        }
         *self.model.lock() = Some(model);
-        *self.index.lock() = Some(index);
+        let ready_versions = jobs
+            .iter()
+            .map(|(version, _, _, _)| version.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
         let _ = fs::write(self.root.join(READY_MARKER), MODEL_REVISION);
         self.update_status(
             app,
             "ready",
-            "Local paraphrase matching is ready.",
-            total,
-            total,
+            format!("Local paraphrase matching is ready for {ready_versions}."),
+            grand_total,
+            grand_total,
         );
         Ok(())
+    }
+
+    /// Downloads the pre-built per-version index bundle from the project's
+    /// GitHub releases and installs every entry whose fingerprint matches the
+    /// local corpus. Returns how many versions were installed; any download,
+    /// parse, or verification failure yields the reason so preparation can
+    /// build those versions locally instead.
+    fn try_prebuilt_bundle(
+        &self,
+        app: &AppHandle,
+        jobs: &[(String, Vec<SemanticDocument>, [u8; 32], usize)],
+    ) -> Result<usize, String> {
+        if self.cancel_requested.load(Ordering::Acquire) {
+            return Err(PREPARATION_CANCELLED.into());
+        }
+        // Skip the download entirely when every version already has a valid
+        // local index — the common re-preparation case.
+        let needed: Vec<(String, [u8; 32], usize)> = jobs
+            .iter()
+            .filter(|job| {
+                let (version, _, fingerprint, total) = *job;
+                match load_index(&self.root.join(index_file(version))) {
+                    Ok(index) => {
+                        !(index.fingerprint == *fingerprint
+                            && index.dimension == EMBEDDING_DIMENSION
+                            && index.entries.len() == *total)
+                    }
+                    Err(_) => true,
+                }
+            })
+            .map(|(version, _, fingerprint, total)| (version.clone(), *fingerprint, *total))
+            .collect();
+        if needed.is_empty() {
+            return Ok(0);
+        }
+        self.update_status(
+            app,
+            "preparing",
+            "Checking for pre-built meaning indexes…",
+            0,
+            0,
+        );
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(20))
+            .build()
+            .map_err(|error| error.to_string())?;
+        let mut response = client
+            .get(PREBUILT_BUNDLE_URL)
+            .send()
+            .map_err(|error| error.to_string())?;
+        if !response.status().is_success() {
+            return Err(format!("release asset returned HTTP {}", response.status()));
+        }
+        if response.content_length().unwrap_or(0) > PREBUILT_BUNDLE_MAX_BYTES {
+            return Err("the pre-built bundle exceeds the size limit".into());
+        }
+
+        let temp = self.root.join("prebuilt-bundle.zip.part");
+        let mut file = File::create(&temp).map_err(|error| error.to_string())?;
+        let mut downloaded = 0_u64;
+        let mut buffer = vec![0_u8; 64 * 1024];
+        loop {
+            if self.cancel_requested.load(Ordering::Acquire) {
+                drop(file);
+                let _ = fs::remove_file(&temp);
+                return Err(PREPARATION_CANCELLED.into());
+            }
+            // blocking::Response streams through its std::io::Read impl.
+            let count = response
+                .read(&mut buffer)
+                .map_err(|error| format!("The pre-built bundle download failed: {error}"))?;
+            if count == 0 {
+                break;
+            }
+            downloaded += count as u64;
+            if downloaded > PREBUILT_BUNDLE_MAX_BYTES {
+                drop(file);
+                let _ = fs::remove_file(&temp);
+                return Err("the pre-built bundle exceeds the size limit".into());
+            }
+            file.write_all(&buffer[..count])
+                .map_err(|error| format!("Could not save the pre-built bundle: {error}"))?;
+            self.update_status(
+                app,
+                "preparing",
+                format!(
+                    "Downloading pre-built meaning indexes… {:.0} MB",
+                    downloaded as f64 / (1024.0 * 1024.0)
+                ),
+                0,
+                0,
+            );
+        }
+        drop(file);
+
+        let archive_file = File::open(&temp).map_err(|error| error.to_string())?;
+        let mut archive = zip::ZipArchive::new(BufReader::new(archive_file))
+            .map_err(|error| format!("The pre-built bundle could not be opened: {error}"))?;
+        let mut installed = 0_usize;
+        for (version, fingerprint, total) in &needed {
+            let Ok(mut entry) = archive.by_name(&index_file(version)) else {
+                continue;
+            };
+            let mut bytes = Vec::new();
+            if entry.read_to_end(&mut bytes).is_err() {
+                continue;
+            }
+            let Ok(index) = parse_index(bytes.as_slice()) else {
+                continue;
+            };
+            if index.fingerprint != *fingerprint
+                || index.dimension != EMBEDDING_DIMENSION
+                || index.entries.len() != *total
+            {
+                continue;
+            }
+            // Install atomically the same way save_index does, so a failed
+            // copy never leaves a truncated index behind for the cache to load.
+            let local_index = self.root.join(index_file(version));
+            let part = local_index.with_extension("index.part");
+            let install = || -> std::io::Result<()> {
+                fs::write(&part, &bytes)?;
+                if local_index.exists() {
+                    fs::remove_file(&local_index)?;
+                }
+                fs::rename(&part, &local_index)
+            };
+            if install().is_ok() {
+                installed += 1;
+            }
+        }
+        let _ = fs::remove_file(&temp);
+        Ok(installed)
     }
 
     pub fn search(
@@ -437,10 +679,38 @@ impl SemanticScripture {
             .ok_or_else(|| "The local paraphrase model returned no query vector.".to_string())?;
         normalize(&mut query_vector);
 
-        let index = self.index.lock();
-        let Some(index) = index.as_ref() else {
-            return Err("Local paraphrase index is not loaded.".into());
+        // Paraphrase ranking runs against the output version's own text so
+        // the spoken paraphrase and the indexed document share a register.
+        // KJV reuses the NKJV index (closest register, matching verse
+        // numbering); every verse is still rendered from the operator's
+        // chosen translation below. Other translations simply skip semantic
+        // matching — references and quotations keep working.
+        let Some(index_version) = resolve_index_version(output_version) else {
+            return Ok(SemanticSearchOutcome {
+                matches: Vec::new(),
+                diagnostic: diagnostic(
+                    "skipped",
+                    "Paraphrase matching covers NKJV, ASV, WEB, NIV, and AMP; explicit references and quotations still work.",
+                    None,
+                    None,
+                    Vec::new(),
+                ),
+            });
         };
+        let mut indexes = self.indexes.lock();
+        if indexes.load(&self.root, index_version).is_err() {
+            return Ok(SemanticSearchOutcome {
+                matches: Vec::new(),
+                diagnostic: diagnostic(
+                    "skipped",
+                    "The local paraphrase index for this translation could not be loaded. Run preparation again.",
+                    None,
+                    None,
+                    Vec::new(),
+                ),
+            });
+        }
+        let index = indexes.get(index_version);
         let ranked = index.ranked(&query_vector, RANKING_POOL_SIZE);
         let Some(&(winner_index, similarity)) = ranked.first() else {
             return Ok(SemanticSearchOutcome {
@@ -575,7 +845,7 @@ impl SemanticScripture {
             return Err("Cancel paraphrase preparation before removing local files.".into());
         }
         *self.model.lock() = None;
-        *self.index.lock() = None;
+        self.indexes.lock().loaded.clear();
         if self.root.exists() {
             if let Err(error) = fs::remove_dir_all(&self.root) {
                 let message = format!("Could not remove the local AI model: {error}");
@@ -779,6 +1049,29 @@ fn build_index(
     })
 }
 
+/// File name of the paraphrase index for one translation. Version labels are
+/// short alphanumerics ("NKJV", "WEB"), but sanitize anyway so any future
+/// version label cannot escape the index directory.
+fn index_file(version: &str) -> String {
+    let sanitized: String = version
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .collect();
+    format!("{INDEX_FILE_BASE}-{sanitized}.index")
+}
+
+/// Resolves the semantic index used to rank paraphrases for an output
+/// version. Only modern-English translations are indexed; KJV reuses the NKJV
+/// index because its register is closest and its verse numbering aligns with
+/// the canonical corpus, while unmatched versions skip semantic matching.
+fn resolve_index_version(output_version: &str) -> Option<&'static str> {
+    SEMANTIC_INDEX_VERSIONS
+        .iter()
+        .copied()
+        .find(|version| version.eq_ignore_ascii_case(output_version))
+        .or_else(|| output_version.eq_ignore_ascii_case("KJV").then_some("NKJV"))
+}
+
 fn prepared_marker_matches(root: &Path) -> bool {
     fs::read_to_string(root.join(READY_MARKER))
         .is_ok_and(|revision| revision.trim() == MODEL_REVISION)
@@ -935,7 +1228,13 @@ fn save_index(path: &Path, index: &SemanticIndex) -> Result<(), String> {
 
 fn load_index(path: &Path) -> Result<SemanticIndex, String> {
     let file = File::open(path).map_err(|error| error.to_string())?;
-    let mut reader = BufReader::new(file);
+    parse_index(file)
+}
+
+/// Parses an index from any reader — the on-disk file or a pre-built bundle
+/// entry — so both sources share the same validation rules.
+fn parse_index(reader: impl Read) -> Result<SemanticIndex, String> {
+    let mut reader = BufReader::new(reader);
     let mut magic = [0u8; 8];
     reader
         .read_exact(&mut magic)
@@ -1015,6 +1314,12 @@ fn read_i32(reader: &mut impl Read) -> Result<i32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Translation used to calibrate the paraphrase recall floors. The
+    /// fixture index is built from an installed WEB database by
+    /// `builds_probe_index_fixture` and lives in gitignored
+    /// `src-tauri/bible_data/`.
+    const PROBE_INDEX_VERSION: &str = "WEB";
 
     #[test]
     fn repeated_self_corrections_are_not_semantic_queries() {
@@ -1109,8 +1414,8 @@ mod tests {
     fn close_semantic_candidates_require_manual_alternatives() {
         assert!(!accepts_semantic_candidates(0.75, 0.01, 1));
         assert!(accepts_semantic_candidates(0.75, 0.01, 2));
-        assert!(accepts_semantic_candidates(0.70, 0.01, 3));
-        assert!(!accepts_semantic_candidates(0.69, 0.10, 3));
+        assert!(accepts_semantic_candidates(MIN_SIMILARITY, 0.01, 3));
+        assert!(!accepts_semantic_candidates(MIN_SIMILARITY - 0.01, 0.10, 3));
     }
 
     #[test]
@@ -1158,6 +1463,87 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// Rebuilds the probe fixture index for `PROBE_INDEX_VERSION` from an
+    /// installed Bible database. Point `WORDLYTE_TEST_BIBLE_DB` at the
+    /// operator database (the default below is the usual Windows install) and
+    /// `WORDLYTE_TEST_BGE_MODEL` at the flat pinned model files, then run:
+    /// `cargo test --lib builds_probe_index_fixture -- --ignored --nocapture`
+    #[test]
+    #[ignore = "builds a local probe index fixture from an installed Bible database"]
+    fn builds_probe_index_fixture() {
+        let default_db = std::env::var_os("LOCALAPPDATA")
+            .map(|local| {
+                PathBuf::from(local)
+                    .join("io.wordlyte.app")
+                    .join("bible_data")
+                    .join("wordlyte_bible.db")
+            })
+            .expect("LOCALAPPDATA is not set");
+        let db_path = std::env::var_os("WORDLYTE_TEST_BIBLE_DB")
+            .map(PathBuf::from)
+            .unwrap_or(default_db);
+        assert!(
+            db_path.is_file(),
+            "missing Bible database fixture at {}",
+            db_path.display()
+        );
+        let bible = BibleStore::open_for_tests(&db_path)
+            .expect("could not open the Bible database fixture");
+        let corpus = bible
+            .semantic_corpus(PROBE_INDEX_VERSION)
+            .expect("could not read the semantic corpus");
+        assert!(
+            !corpus.is_empty(),
+            "the {PROBE_INDEX_VERSION} corpus is not installed"
+        );
+        let model_dir = std::env::var_os("WORDLYTE_TEST_BGE_MODEL")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join("opencode").join("bge-base-pin"));
+        let mut files = std::collections::HashMap::new();
+        for (name, _) in MODEL_FILES {
+            let local_name = if *name == "onnx/model_quantized.onnx" {
+                "model_quantized.onnx"
+            } else {
+                name
+            };
+            files.insert(*name, fs::read(model_dir.join(local_name)).unwrap());
+        }
+        let mut model = create_model(files).unwrap();
+        let documents = semantic_documents(&corpus);
+        let indexed_total = documents.len();
+        let started = std::time::Instant::now();
+        let index = build_index(
+            &mut model,
+            &documents,
+            corpus_fingerprint(&corpus),
+            |indexed| {
+                // bge-base over a full translation takes a long time; keep the
+                // operator informed between batches.
+                if indexed % (32 * 100) == 0 {
+                    let elapsed = started.elapsed().as_secs_f64().max(1.0);
+                    let rate = indexed as f64 / elapsed;
+                    let remaining = (indexed_total - indexed) as f64 / rate.max(1.0);
+                    eprintln!(
+                    "fixture: {indexed}/{indexed_total} ({rate:.1} docs/s, ~{remaining:.0}s left)"
+                );
+                }
+                Ok(())
+            },
+        )
+        .expect("index build failed");
+        let target = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("bible_data")
+            .join(index_file(PROBE_INDEX_VERSION));
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        save_index(&target, &index).unwrap();
+        eprintln!(
+            "probe fixture written: {} entries={} dimension={}",
+            target.display(),
+            index.entries.len(),
+            index.dimension
+        );
+    }
+
     #[test]
     #[ignore = "uses a local model fixture to qualify semantic ranking"]
     fn bundled_index_quality_probe() {
@@ -1176,7 +1562,7 @@ mod tests {
 
         let model_dir = std::env::var_os("WORDLYTE_TEST_BGE_MODEL")
             .map(PathBuf::from)
-            .unwrap_or_else(|| std::env::temp_dir().join("opencode").join("bge-pin"));
+            .unwrap_or_else(|| std::env::temp_dir().join("opencode").join("bge-base-pin"));
         assert!(
             model_dir.is_dir(),
             "missing model fixture at {}",
@@ -1195,7 +1581,7 @@ mod tests {
         let index = load_index(
             &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("bible_data")
-                .join(INDEX_FILE),
+                .join(index_file(PROBE_INDEX_VERSION)),
         )
         .unwrap();
         let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1301,17 +1687,21 @@ mod tests {
             "conservative gate emitted hard negatives: {accepted_negatives:?}"
         );
         assert!(p95 < 3_000.0, "semantic debug p95 exceeded 3 seconds");
-        // Recalled-hit floors, calibrated on the pinned model + bundled index
-        // (top1=9/22, top3=13/22 late 2026). They sit one fixture below the
-        // calibrated values so a ranking, model, or index change that degrades
-        // a single fixture fails loudly, while small numeric drift does not.
-        assert!(top_three_hits >= top_one_hits, "top-3 recall fell below top-1 recall");
+        // Recalled-hit floors, calibrated on the pinned bge-base-en-v1.5 model
+        // and bundled WEB index (top1=10/22, top3=12/22, zero accepted
+        // negatives, Nov 2026). They sit one fixture below the calibrated
+        // values so a ranking, model, or index change that degrades a single
+        // fixture fails loudly, while small numeric drift does not.
         assert!(
-            top_one_hits >= 8,
+            top_three_hits >= top_one_hits,
+            "top-3 recall fell below top-1 recall"
+        );
+        assert!(
+            top_one_hits >= 9,
             "semantic top-1 recall regressed: {top_one_hits}/{positives}"
         );
         assert!(
-            top_three_hits >= 12,
+            top_three_hits >= 11,
             "semantic top-3 recall regressed: {top_three_hits}/{positives}"
         );
     }

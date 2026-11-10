@@ -102,9 +102,10 @@ pub struct SemanticCorpusVerse {
     pub book: String,
     pub chapter: i32,
     pub verse: i32,
-    /// Text from every installed English translation for this canonical
-    /// reference. One aggregate embedding lets all installed translations
-    /// contribute to retrieval without multiplying the in-memory index.
+    /// Text from one installed English translation for this canonical
+    /// reference. Embedding a single translation keeps the document in one
+    /// language register and under the model's token limit; each supported
+    /// translation gets its own semantic index.
     pub text: String,
 }
 
@@ -149,13 +150,26 @@ impl BibleStore {
     }
 
     pub fn new(app: &tauri::AppHandle, db_path: &str) -> anyhow::Result<Self> {
+        Self::open_inner(Some(app), db_path)
+    }
+
+    /// Test-only opener used by the semantic probe fixture builder, which has
+    /// no Tauri app handle to log through.
+    #[cfg(test)]
+    pub fn open_for_tests(db_path: &std::path::Path) -> anyhow::Result<Self> {
+        Self::open_inner(None, &db_path.to_string_lossy())
+    }
+
+    fn open_inner(app: Option<&tauri::AppHandle>, db_path: &str) -> anyhow::Result<Self> {
         if !std::path::Path::new(db_path).exists() {
             return Err(anyhow::anyhow!("Bible database not found at {}", db_path));
         }
         let conn = Connection::open(db_path)?;
 
         if let Err(e) = conn.execute("PRAGMA journal_mode=WAL", []) {
-            log_msg(app, &format!("Warning: Could not set WAL mode: {}", e));
+            if let Some(app) = app {
+                log_msg(app, &format!("Warning: Could not set WAL mode: {}", e));
+            }
         }
 
         const CURRENT_SCHEMA_VERSION: u32 = 2;
@@ -168,7 +182,9 @@ impl BibleStore {
                 let _ = conn.execute_batch("DROP TABLE IF EXISTS wordlyte_bible_fts;");
             }
             conn.execute_batch(&format!("PRAGMA user_version = {}", CURRENT_SCHEMA_VERSION))?;
-            log_msg(app, &format!("BibleStore: schema migrated to version {}", CURRENT_SCHEMA_VERSION));
+            if let Some(app) = app {
+                log_msg(app, &format!("BibleStore: schema migrated to version {}", CURRENT_SCHEMA_VERSION));
+            }
         }
 
         conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS wordlyte_bible_fts USING fts5(
@@ -199,7 +215,9 @@ impl BibleStore {
             let rows = stmt.query_map([], |row| row.get(0))?;
             rows.filter_map(|r| r.ok()).collect()
         };
-        log_msg(app, &format!("BibleStore: Available versions: {:?}", available_versions));
+        if let Some(app) = app {
+            log_msg(app, &format!("BibleStore: Available versions: {:?}", available_versions));
+        }
 
         let default_version = available_versions.first().cloned().unwrap_or_else(|| "KJV".to_string());
 
@@ -297,20 +315,20 @@ impl BibleStore {
     /// Returns one deterministic record per canonical English Bible verse.
     /// Translation text is ordered by version before aggregation so the
     /// semantic-index fingerprint remains stable across launches.
-    pub fn semantic_corpus(&self) -> anyhow::Result<Vec<SemanticCorpusVerse>> {
+    /// Semantic corpus for one installed translation. Supported versions are
+    /// indexed separately so retrieval compares the spoken paraphrase against
+    /// the same register it was spoken in, and the rendered verse text can
+    /// come from the version the operator is projecting.
+    pub fn semantic_corpus(&self, version: &str) -> anyhow::Result<Vec<SemanticCorpusVerse>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT title, chapter, verse, GROUP_CONCAT(text, '\n')
-             FROM (
-                 SELECT title, book, chapter, verse, text, version
-                 FROM wordlyte_bible
-                 WHERE language = 'EN' AND text IS NOT NULL AND text != ''
-                 ORDER BY book, chapter, verse, version
-             )
-             GROUP BY book, title, chapter, verse
+            "SELECT title, chapter, verse, text
+             FROM wordlyte_bible
+             WHERE language = 'EN' AND version = ?1
+               AND text IS NOT NULL AND text != ''
              ORDER BY book, chapter, verse"
         )?;
-        let rows = stmt.query_map([], |row| {
+        let rows = stmt.query_map(params![version], |row| {
             Ok(SemanticCorpusVerse {
                 book: row.get(0)?,
                 chapter: row.get(1)?,
