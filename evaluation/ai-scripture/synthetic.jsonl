@@ -15,7 +15,11 @@
 {"kind":"reference","id":"chapter-and-verse","transcript":"Because if we go to Hebrews chapter 2 and verse 1, we'll see that this is scriptural.","expected":{"book":"Hebrews","chapter":2,"verse":1}}
 {"kind":"reference","id":"spoken-verse-range","transcript":"First Corinthians chapter 10, verses eleven and twelve.","expected":{"book":"1 Corinthians","chapter":10,"verse":11}}
 {"kind":"reference","id":"hard-negative-name","transcript":"John spoke to the congregation after worship.","expected":null}
-{"kind":"reference","id":"hard-negative-psalm-chapter","transcript":"Our reading is Psalm twenty three.","expected":null}
+{"kind":"reference","id":"psalm-twenty-three-chapter-only","transcript":"Our reading is Psalm twenty three.","expected":{"book":"Psalms","chapter":23,"verse":1}}
+{"kind":"reference","id":"revelation-twenty-one-chapter-only","transcript":"Revelation twenty one tells of the new heaven.","expected":{"book":"Revelation","chapter":21,"verse":1}}
+{"kind":"reference","id":"john-chapter-three-chapter-only","transcript":"Stay with me in John chapter three.","expected":{"book":"John","chapter":3,"verse":1}}
+{"kind":"reference","id":"hard-negative-ambiguous-twelve","transcript":"John twenty twelve.","expected":null}
+{"kind":"reference","id":"hard-negative-chapter-trailing-number","transcript":"John chapter three four.","expected":null}
 {"kind":"reference","id":"hard-negative-common-book","transcript":"Please mark my words before we begin.","expected":null}
 {"kind":"reference","id":"hard-negative-act","transcript":"Act one begins after the intermission.","expected":null}
 {"kind":"reference","id":"hard-negative-number","transcript":"This is the number one priority.","expected":null}

@@ -164,8 +164,10 @@ fn has_explicit_verse_marker(tokens: &[String], start: usize) -> bool {
 
 /// Parse the chapter token in a compact spoken reference. A spoken tens value
 /// ("twenty") is marked as ambiguous and is accepted only when the following
-/// verse is itself compound ("twenty eight"). This keeps "Psalm twenty three"
-/// from becoming Psalm 20:3 while allowing "Matthew six thirty three".
+/// verse is itself compound ("twenty eight"), keeping "Matthew six thirty
+/// three" competitive. When the verse is small ("Psalm twenty three") or
+/// absent ("Revelation twenty one"), the reference is resolved as the compound
+/// chapter number and rendered as the chapter's first verse instead.
 fn parse_compact_chapter(token: &str) -> Option<(i32, bool)> {
     if let Ok(number) = token.parse::<i32>() {
         return Some((number, false));
@@ -196,9 +198,8 @@ pub(crate) fn parse_verse_number(
 ) -> Option<(i32, usize, Option<i32>)> {
     let (verse, next) = parse_number(tokens, start)?;
     let verse_end = tokens.get(next).and_then(|separator| {
-        let is_range = separator == "-"
-            || separator == "to"
-            || (separator == "and" && plural_marker);
+        let is_range =
+            separator == "-" || separator == "to" || (separator == "and" && plural_marker);
         is_range
             .then(|| parse_number(tokens, next + 1).map(|(end, _)| end))
             .flatten()
@@ -255,17 +256,9 @@ pub fn detect_references(text: &str, books: &[String]) -> Vec<ScriptureReference
                     .get(index)
                     .and_then(|token| parse_compact_chapter(token))
                 {
-                    if let Some((verse, verse_next, verse_end)) =
-                        parse_compact_verse(&tokens, index + 1)
-                    {
-                        let verse_is_compound = verse_next > index + 2;
-                        if !compound_verse_required || verse_is_compound {
-                            let candidate = ScriptureReference {
-                                book: canonical.clone(),
-                                chapter,
-                                verse,
-                                verse_end,
-                            };
+                    let insert_candidate =
+                        |matches: &mut BTreeMap<usize, (usize, ScriptureReference)>,
+                         candidate: ScriptureReference| {
                             let book_end = start + alias.len();
                             if matches
                                 .get(&book_end)
@@ -273,17 +266,95 @@ pub fn detect_references(text: &str, books: &[String]) -> Vec<ScriptureReference
                             {
                                 matches.insert(book_end, (alias.len(), candidate));
                             }
-                            continue;
+                        };
+
+                    // Chapter-only spoken references render as the chapter's
+                    // first verse ("Psalm twenty three" -> Psalm 23:1): the
+                    // card an operator can navigate forward through verse by
+                    // verse. A trailing verse number suppresses this fallback
+                    // so genuinely ambiguous shapes stay unresolved.
+
+                    // A compound multi-token chapter ("John chapter four five")
+                    // must not swallow a trailing verse number.
+                    let compact_verse = parse_compact_verse(&tokens, index + 1);
+                    match compact_verse {
+                        Some((verse, verse_next, verse_end)) => {
+                            let verse_is_compound = verse_next > index + 2;
+                            if !compound_verse_required || verse_is_compound {
+                                insert_candidate(
+                                    &mut matches,
+                                    ScriptureReference {
+                                        book: canonical.clone(),
+                                        chapter,
+                                        verse,
+                                        verse_end,
+                                    },
+                                );
+                                continue;
+                            }
+                            // A spoken tens chapter followed by a small verse
+                            // ("Psalm twenty three") nearly always means the
+                            // compound chapter number, not the obscure
+                            // alternative reading ("Psalm 20:3"). Only a larger
+                            // or "10"-plus verse keeps the compound verse
+                            // reading ambiguous and unresolved.
+                            let ten_ambiguity_resolvable = compound_verse_required
+                                && (1..=10).contains(&verse)
+                                && verse_next == index + 2
+                                && tokens
+                                    .get(verse_next)
+                                    .is_none_or(|token| single_number_token(token).is_none());
+                            if ten_ambiguity_resolvable {
+                                if let Some((chapter_only, _)) = parse_number(&tokens, index) {
+                                    insert_candidate(
+                                        &mut matches,
+                                        ScriptureReference {
+                                            book: canonical.clone(),
+                                            chapter: chapter_only,
+                                            verse: 1,
+                                            verse_end: None,
+                                        },
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+                        None => {
+                            // A spoken tens chapter with no verse number
+                            // following ("Psalm twenty") still names a
+                            // chapter; a small unambiguous chapter followed
+                            // by prose ("Act one begins...", "the number one
+                            // priority") is everyday speech and stays
+                            // unresolved.
+                            if compound_verse_required {
+                                insert_candidate(
+                                    &mut matches,
+                                    ScriptureReference {
+                                        book: canonical.clone(),
+                                        chapter,
+                                        verse: 1,
+                                        verse_end: None,
+                                    },
+                                );
+                                continue;
+                            }
                         }
                     }
                 }
             }
-            if tokens.get(index).is_some_and(|token| token == "chapter") {
+            let spoken_chapter_marker = tokens.get(index).is_some_and(|token| token == "chapter");
+            if spoken_chapter_marker {
                 index += 1;
             }
+            let chapter_start = index;
             let Some((chapter, next)) = parse_number(&tokens, index) else {
                 continue;
             };
+            // parse_number assembles compound numbers ("twenty three" -> 23)
+            // but also misassembles two unrelated small numbers ("three four"
+            // -> 7), so the chapter-only fallback below only accepts single
+            // spoken chapter tokens.
+            let chapter_is_single_token = next == chapter_start + 1;
             index = next;
             // Natural speech often inserts a bridge between chapter and verse
             // ("Hebrews chapter 2 and verse 1" / "John 16, on verse 13").
@@ -306,6 +377,31 @@ pub fn detect_references(text: &str, books: &[String]) -> Vec<ScriptureReference
             {
                 index += 1;
             } else {
+                // "John chapter three" with no verse marker renders as the
+                // chapter's first verse when nothing numeric follows; a
+                // further number keeps the shape ambiguous and unresolved.
+                let chapter_only_allowed = spoken_chapter_marker
+                    && chapter_is_single_token
+                    && chapter > 0
+                    && tokens
+                        .get(index)
+                        .map(|_| parse_number(&tokens, index).is_none())
+                        .unwrap_or(true);
+                if chapter_only_allowed {
+                    let candidate = ScriptureReference {
+                        book: canonical.clone(),
+                        chapter,
+                        verse: 1,
+                        verse_end: None,
+                    };
+                    let book_end = start + alias.len();
+                    if matches
+                        .get(&book_end)
+                        .is_none_or(|(length, _)| alias.len() > *length)
+                    {
+                        matches.insert(book_end, (alias.len(), candidate));
+                    }
+                }
                 continue;
             }
             let plural_marker = verse_marker.as_deref() == Some("verses");
@@ -803,7 +899,17 @@ mod tests {
                 verse_end: Some(10),
             })
         );
-        assert_eq!(detect_reference("Psalm twenty three", &books()), None);
+        assert_eq!(
+            detect_reference("Psalm twenty three", &books()),
+            Some(ScriptureReference {
+                book: "Psalms".into(),
+                chapter: 23,
+                verse: 1,
+                verse_end: None,
+            }),
+            "a spoken tens chapter with a small verse resolves as the compound \
+             chapter number and renders as the chapter's first verse"
+        );
         assert_eq!(
             detect_reference("Hebrew one six", &books()),
             Some(ScriptureReference {
@@ -812,6 +918,58 @@ mod tests {
                 verse: 6,
                 verse_end: None,
             })
+        );
+    }
+
+    #[test]
+    fn chapter_only_spoken_references_render_the_first_verse() {
+        // The calibration corpus' Psalm-23 case: "Psalm twenty three" is the
+        // compound chapter number, not the obscure Psalm 20:3 reading.
+        assert_eq!(
+            detect_reference("Our reading is Psalm twenty three.", &books()),
+            Some(ScriptureReference {
+                book: "Psalms".into(),
+                chapter: 23,
+                verse: 1,
+                verse_end: None,
+            })
+        );
+        assert_eq!(
+            detect_reference("Revelation twenty one tells of the new heaven.", &books()),
+            Some(ScriptureReference {
+                book: "Revelation".into(),
+                chapter: 21,
+                verse: 1,
+                verse_end: None,
+            })
+        );
+        assert_eq!(
+            detect_reference("Stay with me in John chapter three.", &books()),
+            Some(ScriptureReference {
+                book: "John".into(),
+                chapter: 3,
+                verse: 1,
+                verse_end: None,
+            })
+        );
+        assert_eq!(
+            detect_reference("John four is the woman at the well.", &books()),
+            None,
+            "an unambiguous small chapter followed by prose is everyday speech, \
+             not a chapter reference"
+        );
+        // Ambiguous shapes stay unresolved.
+        assert_eq!(
+            detect_reference("John twenty twelve", &books()),
+            None,
+            "a larger verse after a tens chapter keeps the compound verse reading \
+             ambiguous"
+        );
+        assert_eq!(
+            detect_reference("John chapter three four", &books()),
+            None,
+            "a trailing verse number after the chapter marker keeps the shape \
+             ambiguous"
         );
     }
 

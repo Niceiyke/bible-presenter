@@ -101,6 +101,9 @@ const QUOTE_SEARCH_WINDOW_WORDS: usize = 24;
 const QUOTE_SEARCH_WINDOW_OVERLAP: usize = 8;
 const MAX_QUOTE_SEARCH_WINDOWS: usize = 24;
 const MAX_DIRECT_QUOTES_PER_TURN: usize = 3;
+/// Limits how many FTS-retrieved candidates are lexically aligned per search
+/// window; tier results arrive bm25-ordered, so the front is the strongest.
+const MAX_QUOTE_CANDIDATES_SCORED: usize = 96;
 const MIN_SHORT_WINDOW_CONTENT_WORDS: usize = 3;
 const STRONG_SEMANTIC_SIMILARITY: f32 = 0.80;
 const STRONG_SEMANTIC_MARGIN: f32 = 0.08;
@@ -2903,6 +2906,11 @@ fn best_direct_quote_candidate(
         .search_quote_candidates(query)
         .ok()?
         .into_iter()
+        // `search_quote_candidates` orders each tier by bm25 relevance
+        // (exact-phrase tier first, then AND, OR, LIKE), so truncating the
+        // front preserves the strongest candidates while bounding alignment
+        // work when broad OR/LIKE tiers return hundreds of rows.
+        .take(MAX_QUOTE_CANDIDATES_SCORED)
         .filter_map(|verse| {
             direct_quote_match_score(scoring_text, &verse.text).map(|score| (verse, score))
         })

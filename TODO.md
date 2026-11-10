@@ -99,3 +99,40 @@ steps on the dev machine.
       present; update the empty-state + footnote text if it still says "SDK required".
 - [ ] Update the output design notes and `CLAUDE.md` to document the sender as
       implemented while keeping NDI input marked as future work.
+
+## 4. Scripture AI roadmap
+
+### 4.1 Offline ASR fallback (planned, feature-sized)
+
+Goal: keep scripture detection working when the operator has no internet or an
+ASR provider key is missing/expired — a local engine capturing the same PCM the
+cloud providers already receive.
+
+Design sketch (each step independently shippable):
+
+- [ ] **Engine choice**: `whisper.cpp` bindings (`whisper-rs`, MIT) with
+      `base.en`/`small.en` quantized model (~80–460 MB), streaming via
+      `full_transcribe` on audio chunks; or `vosk` (Apache-2.0, small 40 MB
+      models, true streaming + partial results like Deepgram interims).
+      Vosk partials map onto the existing interim-evidence pipeline better;
+      whisper quality is higher. Benchmark both on sermon audio before choosing.
+- [ ] **Model provisioning**: ship nothing in the installer; download on
+      demand in the AI settings page (same UX pattern as the semantic `bge`
+      model), store under `%LOCALAPPDATA%\io.wordlyte.app\ai\asr\`, verify by
+      checksum, keep the existing `Revision`-pinning pattern from
+      `semantic_scripture.rs`.
+- [ ] **Audio plumbing**: reuse the `program_audio` PCM fan-out (`feed_refcount`
+      consumers) instead of capture-style taps; 16 kHz mono s16le is already
+      produced by the shared capture — feed the engine in ring-buffer chunks
+      with a small VAD gate (energy threshold) so idle pauses are skipped.
+- [ ] **Provider integration**: add an `AsrProvider::Local` variant that emits
+      the same normalized `Turn` stream; the provider-selection UI lists
+      "Offline (local model)" and auto-falls-back when the chosen cloud
+      provider is unreachable after N attempts (existing recovery counters).
+- [ ] **Feature gating**: license-plan gating consistent with cloud ASR
+      (free plan may restrict to the small model or a session length cap).
+- [ ] **Eval**: extend `tools/ai-eval` with an ASR-quality fixture set (recorded
+      sermon audio → expected transcript excerpts) so the offline engine's
+      verse-detection parity is measured, not assumed.
+
+Non-goals: speaker diarization, multi-language ASR, GPU requirements.
