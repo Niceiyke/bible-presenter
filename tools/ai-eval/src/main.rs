@@ -1,3 +1,13 @@
+// `ai_detection.rs` resolves book names through the canonical catalog, which
+// lives in the app crate root — net-new to commit "unify scripture retrieval
+// catalog". Path-include it here too so the standalone evaluator sees the
+// same `crate::scripture_catalog` namespace. It has no cross-crate deps.
+// `allow(dead_code)`: the evaluator only exercises the detection entry points,
+// so unused catalog helpers are still compiled but intentionally not called.
+#[allow(dead_code)]
+#[path = "../../../src-tauri/src/scripture_catalog.rs"]
+mod scripture_catalog;
+
 #[path = "../../../src-tauri/src/ai_detection.rs"]
 mod ai_detection;
 

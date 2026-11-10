@@ -455,6 +455,10 @@ fn content_words(tokens: &[String]) -> Vec<String> {
         .collect()
 }
 
+// Also compiled into the standalone AI evaluator (tools/ai-eval), which only
+// exercises detection entry points — the word-count helper is used by the app
+// crate's ai_scripture command surface, so it is unused there.
+#[allow(dead_code)]
 pub(crate) fn quote_content_word_count(text: &str) -> usize {
     quote_tokens(text)
         .iter()
