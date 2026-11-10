@@ -330,8 +330,8 @@ struct AiAudioLevel {
 fn pcm_level(bytes: &[u8]) -> f32 {
     let mut sum_squares = 0.0f64;
     let mut samples = 0usize;
-    for pair in bytes.chunks_exact(2) {
-        let sample = i16::from_le_bytes([pair[0], pair[1]]) as f64 / i16::MAX as f64;
+    for &pair in bytes.as_chunks::<2>().0 {
+        let sample = i16::from_le_bytes(pair) as f64 / i16::MAX as f64;
         sum_squares += sample * sample;
         samples += 1;
     }
@@ -877,6 +877,7 @@ fn emit_voice_command(
     );
 }
 
+#[allow(clippy::too_many_arguments)] // internal pipeline helper, args mirror detection flow
 fn apply_voice_version(
     app: &AppHandle,
     bible: &BibleStore,
@@ -1267,7 +1268,9 @@ pub fn ai_set_api_key(
 #[tauri::command]
 pub fn ai_clear_api_key(state: State<'_, AppState>, provider: String) -> Result<(), String> {
     let provider = AsrProvider::parse(&provider)?;
-    let _ = ai_stop();
+    // Fire-and-forget: drop the in-flight session in the background so the
+    // saved transcript can flush (the future must be polled, not just dropped).
+    tauri::async_runtime::spawn(ai_stop());
     let path = key_path(&state.app_data_dir, provider);
     if path.exists() {
         std::fs::remove_file(path).map_err(|e| format!("Could not remove the API key: {e}"))?;
@@ -2547,6 +2550,7 @@ fn handle_provider_message(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // internal pipeline helper, args mirror detection flow
 fn handle_interim_transcript(
     app: &AppHandle,
     bible: &BibleStore,

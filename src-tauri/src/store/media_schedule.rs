@@ -313,7 +313,9 @@ pub enum DisplayItem {
     Verse(Verse),
     Media(MediaItem),
     Camera(CameraBackground),
-    CustomSlide(CustomSlideData),
+    // Boxed: `CustomSlideData` is the largest variant (clippy::large_enum_variant).
+    // Wire format is unchanged (`Box` is transparent to serde).
+    CustomSlide(Box<CustomSlideData>),
     Timer(TimerData),
     Song(SongSlideData),
     SceneComposition(SceneCompositionData),

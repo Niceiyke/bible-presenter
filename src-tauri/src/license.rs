@@ -82,21 +82,12 @@ pub struct LicenseLimits {
 
 /// Signed access to the Wordlyte AI Add-on. Unit balances remain online-only;
 /// they must never be trusted from a cached desktop entitlement.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiEntitlement {
     pub addon_active: bool,
     #[serde(default)]
     pub addon_expires_at: Option<u64>,
-}
-
-impl Default for AiEntitlement {
-    fn default() -> Self {
-        Self {
-            addon_active: false,
-            addon_expires_at: None,
-        }
-    }
 }
 
 impl LicenseLimits {

@@ -962,7 +962,7 @@ pub async fn dispatch(
                 Some(req) => match state.media_schedule.load_studio_presentation(&req.presentation_id) {
                     Ok(pres) => match pres.slides.get(req.slide_index as usize) {
                         Some(slide) => {
-                            let item = DisplayItem::CustomSlide(CustomSlideData {
+                            let item = DisplayItem::CustomSlide(Box::new(CustomSlideData {
                                 presentation_id: pres.id,
                                 presentation_name: pres.name,
                                 slide_index: req.slide_index,
@@ -982,7 +982,7 @@ pub async fn dispatch(
                                 notes: slide.notes.clone(),
                                 section: slide.section.clone(),
                                 transition: slide.transition.clone(),
-                            });
+                            }));
                             if command.r#type == RemoteCommandType::StudioGoLive {
                                 op_go_live_item(app, state, item, source.clone());
                             } else {

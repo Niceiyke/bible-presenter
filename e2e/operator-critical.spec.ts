@@ -11,12 +11,16 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("stages a service item and commits it on air", async ({ page }) => {
+  // The schedule queue lives in the Service Plan workspace; clicking a tile
+  // stages it into the Live Canvas Cockpit ("Take live" becomes enabled).
+  await page.getByRole("button", { name: /Service Plan/ }).click();
   const cockpitEntry = page.getByText("John 3:16").last();
   await cockpitEntry.click();
-  await expect(page.getByText("Staged", { exact: true })).toBeVisible();
-  await page.getByRole("complementary").getByRole("button", { name: "Go Live", exact: true }).click();
+  const takeLive = page.getByRole("button", { name: /Take live/ });
+  await expect(takeLive).toBeEnabled();
+  await takeLive.click();
 
-  await expect(page.getByText("On Air", { exact: true })).toBeVisible();
+  await expect(page.getByText("On air", { exact: true })).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.__WORDLYTE_E2E__.live?.data?.book)).toBe("John");
 });
 
@@ -35,13 +39,14 @@ test("does not consume a one-shot service item when send-live fails", async ({ p
 });
 
 test("toggles blackout without crashing the always-mounted Program preview", async ({ page }) => {
-  const blackout = page.getByRole("button", { name: "Blackout", exact: true });
+  // The blackout toggle is the "Black"/"Restore" button in the Live Canvas.
+  const blackout = page.getByRole("button", { name: "Black", exact: true });
   await blackout.click();
   await expect(page.getByRole("button", { name: "Restore", exact: true })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Workspaces" })).toBeVisible();
 
   await page.getByRole("button", { name: "Restore", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Blackout", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Black", exact: true })).toBeVisible();
 });
 
 declare global {
