@@ -4,9 +4,9 @@ Paste this ENTIRE file into one Colab cell and run it. It:
 
 1. Downloads the pinned Xenova/bge-base-en-v1.5 model files (revision-pinned,
    SHA256-verified — identical pins to src-tauri/src/semantic_scripture.rs).
-2. Downloads wordlyte_bible.zip from the project's GitHub releases (the same
-   DB asset the app uses). If no release asset exists, it asks you to upload a
-   wordlyte_bible.db instead.
+2. Downloads wordlyte_bible.zip from the pinned release tag that the app itself
+   uses (same URL and SHA-256 as src-tauri/src/commands/assets.rs). If the
+   asset is unavailable, it asks you to upload a wordlyte_bible.db instead.
 3. For each supported translation (NKJV, ASV, WEB, NIV, AMP) it replicates the
    Rust pipeline exactly: corpus SQL, per-verse + overlapping 4-verse window
    documents, corpus fingerprint, CLS pooling, L2 normalization, i8
@@ -53,8 +53,12 @@ INDEX_FILE_BASE = "bible-semantic-bge-base-v1"
 SEMANTIC_INDEX_VERSIONS = ["NKJV", "ASV", "WEB", "NIV", "AMP"]
 BUNDLE_NAME = "bible-semantic-bge-base-v1.zip"
 BIBLE_DB_RELEASE_URL = (
-    "https://github.com/Niceiyke/bible-presenter/releases/latest/download/wordlyte_bible.zip"
+    "https://github.com/Niceiyke/bible-presenter/releases/download/v2.0.0/wordlyte_bible.zip"
 )
+# Pinned to the same asset the app downloads (src-tauri/src/commands/assets.rs).
+# `releases/latest/` is deliberately avoided: newer releases may not carry this
+# asset, and a changed DB silently invalidates every cached index fingerprint.
+BIBLE_DATA_ZIP_SHA256 = "3d05357e5d292b74547c544d2a78d58ce7cf1529d2df888de002d00f0c211281"
 MODEL_FILES = {
     "onnx/model_quantized.onnx": "c9729cc84cbd0e9fecc759505d2be65916c9fe05222d7ea26c65fcb3382af38d",
     "tokenizer.json": "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
@@ -115,13 +119,17 @@ print("Model files verified against the pinned SHA256 hashes.")
 # ---------------------------------------------------------------------------
 db_path = os.path.join(WORK, "wordlyte_bible.db")
 if not os.path.exists(db_path):
-    print("Trying the wordlyte_bible.zip release asset…")
+    print("Downloading the pinned wordlyte_bible.zip release asset…")
     try:
-        urllib.request.urlretrieve(BIBLE_DB_RELEASE_URL, os.path.join(WORK, "wordlyte_bible.zip"))
-        with zipfile.ZipFile(os.path.join(WORK, "wordlyte_bible.zip")) as archive:
+        zip_path = os.path.join(WORK, "wordlyte_bible.zip")
+        urllib.request.urlretrieve(BIBLE_DB_RELEASE_URL, zip_path)
+        actual = sha256_file(zip_path)
+        assert actual == BIBLE_DATA_ZIP_SHA256, f"wordlyte_bible.zip SHA256 mismatch: {actual}"
+        with zipfile.ZipFile(zip_path) as archive:
             member = next(name for name in archive.namelist() if name.endswith(".db"))
             archive.extract(member, WORK)
             os.rename(os.path.join(WORK, member), db_path)
+        print("Bible database verified against the pinned SHA256.")
     except Exception as error:
         print(f"Release asset unavailable ({error}). Upload wordlyte_bible.db below.")
         from google.colab import files

@@ -32,9 +32,9 @@ preparation instead of embedding ~232k passages on the church machine.
 1. `Runtime → Change runtime type → T4 GPU` (CPU works, ~10x slower).
 2. `Runtime → Run all`. The cells below mirror `build_prebuilt_indexes.py`
    exactly (this notebook is generated from it by `make_notebook.py`).
-3. Bible source: the `wordlyte_bible.zip` release asset is fetched
-   automatically; if it is missing you are prompted to upload
-   `wordlyte_bible.db`.
+3. Bible source: `wordlyte_bible.zip` from the pinned `v2.0.0` release is
+   fetched and SHA-256 verified automatically (the same asset the app installs);
+   if it is unavailable you are prompted to upload `wordlyte_bible.db`.
 4. Output lands at `/content/bible-semantic-bge-base-v1.zip` (~180 MB) and is
    offered for download. Re-running is safe — finished indexes are cached in
    `/content/semantic-cache` and skipped while their fingerprint matches.

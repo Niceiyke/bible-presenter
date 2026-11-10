@@ -43,7 +43,8 @@ Either way:
 1. Set *Runtime → Change runtime type → T4 GPU* (CPU works but is ~10× slower).
 2. The script handles pip installs, model download, and checksum verification.
 3. Bible source (in order of preference):
-   - the `wordlyte_bible.zip` release asset, downloaded automatically;
+   - `wordlyte_bible.zip` from the pinned `v2.0.0` release, downloaded and
+     SHA-256 verified automatically — the exact asset the app installs;
    - otherwise a file-upload prompt for `wordlyte_bible.db`.
 4. When it finishes, Colab offers the bundle for download. It is also at
    `/content/bible-semantic-bge-base-v1.zip`, and a `manifest.json` inside the
