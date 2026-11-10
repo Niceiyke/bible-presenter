@@ -32,6 +32,18 @@ cargo test --lib bundled_index_quality_probe -- --ignored --nocapture
 
 The probe asserts the conservative gate accepts no hard negative, keeps p95 latency under 3 s, and enforces recalled-hit floors calibrated against the pinned fixtures. Failures mean a model, index, or ranking change degraded retrieval quality; re-run the summary line above and recalibrate the floors deliberately rather than silencing them.
 
+### Hybrid rerank harness
+
+Dense retrieval is no longer the shipped ranking path: production adds lexical FTS candidates and re-ranks the pool with a pinned `Xenova/ms-marco-MiniLM-L-6-v2` cross-encoder. That path has its own harness, which also needs the reranker fixture:
+
+3. **Reranker fixture**: the pinned reranker files (revision `a09144355adeed5f58c8ed011d209bf8ee5a1fec`) in a flat folder — `model_quantized.onnx`, `tokenizer.json`, `config.json`, `special_tokens_map.json`, `tokenizer_config.json` — e.g. `%TEMP%\opencode\reranker-pin`, or point `WORDLYTE_TEST_RERANKER_MODEL` at it.
+
+```powershell
+cargo test --lib evaluates_reranker_candidates -- --ignored --nocapture
+```
+
+It mirrors production candidate assembly, blending (`BLEND_DENSE_WEIGHT`), and the `MIN_RERANK_SIMILARITY` gate, and asserts hybrid coverage, reranked top-1, and zero hard-negative accepts. Current measured baseline: coverage 21/22, top-1 17/22 (dense-only 13/22), top-3 21/22, 16 correct suggestions, 3 close alternatives, 0 hard negatives.
+
 ## Private sermon corpus
 
 Do not commit sermon audio, raw transcripts, speaker names, or congregation data. Place consented and de-identified local material under `evaluation/ai-scripture/private/`, which is gitignored. Track consent, permitted uses, retention, and deletion outside this repository. Aggregate measurements may be copied into an approved report only after privacy review.

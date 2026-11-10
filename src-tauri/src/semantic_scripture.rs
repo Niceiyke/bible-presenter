@@ -1,8 +1,8 @@
 use crate::ai_detection::has_repeated_phrase;
 use crate::store::{BibleStore, SemanticCorpusVerse, Verse};
 use fastembed::{
-    InitOptionsUserDefined, Pooling, QuantizationMode, TextEmbedding, TokenizerFiles,
-    UserDefinedEmbeddingModel,
+    InitOptionsUserDefined, Pooling, QuantizationMode, RerankInitOptionsUserDefined, TextEmbedding,
+    TextRerank, TokenizerFiles, UserDefinedEmbeddingModel, UserDefinedRerankingModel,
 };
 use hf_hub::{Repo, RepoType};
 use parking_lot::Mutex;
@@ -62,15 +62,56 @@ const MODEL_FILES: &[(&str, &str)] = &[
 const SEMANTIC_INDEX_VERSIONS: &[&str] = &["NKJV", "ASV", "WEB", "NIV", "AMP"];
 const EMBEDDING_DIMENSION: usize = 768;
 const MIN_QUERY_WORDS: usize = 5;
-/// Minimum cosine similarity for a paraphrase candidate. Calibrated on the
-/// pinned bge-base-en-v1.5 index: in the paraphrase fixture the strongest
-/// non-scripture negative scores 0.606 while the weakest correct top-1 scores
-/// 0.615, so the gate sits inside that gap. bge-base spreads true pairs over a
-/// lower band than the previous bge-small model, so this is a model-scale
-/// calibration, not a relaxation of ranking quality.
+/// Minimum cosine similarity for the *dense* retrieval health probe. Ranking
+/// in production is decided by a cross-encoder, so raw cosine is now only a
+/// diagnostic (and a guard against an index/model mismatch).
 pub const MIN_SIMILARITY: f32 = 0.62;
 pub const MIN_MARGIN: f32 = 0.025;
+/// Cross-encoder that re-ranks the hybrid candidate pool. A dedicated
+/// reranker separates near-paraphrases far better than cosine does: on the
+/// paraphrase fixture the weakest correct top-1 scores 0.331 after the switch
+/// while the strongest real negative scores 0.005 (before: 0.615 vs 0.606).
+const RERANKER_REPOSITORY: &str = "Xenova/ms-marco-MiniLM-L-6-v2";
+const RERANKER_REVISION: &str = "a09144355adeed5f58c8ed011d209bf8ee5a1fec";
+const RERANKER_DIRECTORY: &str = "reranker";
+const RERANKER_FILES: &[(&str, &str)] = &[
+    (
+        "onnx/model_quantized.onnx",
+        "e9d8ebf845c413e981c175bfe49a3bfa9b3dcce2a3ba54875ee5df5a58639fbe",
+    ),
+    (
+        "tokenizer.json",
+        "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
+    ),
+    (
+        "config.json",
+        "d827779a72d27ae68cf878a6fc2e954542663fe21ca515d9f4783fc96be2d37e",
+    ),
+    (
+        "special_tokens_map.json",
+        "b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3",
+    ),
+    (
+        "tokenizer_config.json",
+        "0b29c7bfc889e53b36d9dd3e686dd4300f6525110eaa98c76a5dafceb2029f53",
+    ),
+];
+const RERANK_MAX_LENGTH: usize = 256;
+/// Accept when the winning logit maps to at least this probability.
+/// The weakest correct top-1 pair scores 0.331 and the strongest real
+/// negative 0.005; repeated-speech noise (0.506) is already filtered by
+/// `has_repeated_phrase` before ranking.
+pub const MIN_RERANK_SIMILARITY: f32 = 0.25;
+/// Dense candidates fed to the reranker, plus lexical FTS candidates that the
+/// dense retriever misses entirely.
+const RERANK_POOL_SIZE: usize = 24;
+const LEXICAL_CANDIDATE_LIMIT: usize = 12;
+/// Blend weight for the normalized dense score; the rest comes from the
+/// cross-encoder. Dense-only is 1.0, reranker-only 0.0. Measured top-1 is
+/// stable between 0.25 and 0.60, so the midpoint of that plateau is safe.
+const BLEND_DENSE_WEIGHT: f32 = 0.25;
 const MAX_SEMANTIC_SUGGESTIONS: usize = 3;
+#[cfg(test)]
 const RANKING_POOL_SIZE: usize = 24;
 const MAX_ALTERNATIVE_DELTA: f32 = 0.10;
 const MAX_PASSAGE_NEIGHBOR_DELTA: f32 = 0.05;
@@ -151,7 +192,10 @@ struct SemanticIndex {
 }
 
 impl SemanticIndex {
-    fn ranked(&self, query: &[f32], limit: usize) -> Vec<(usize, f32)> {
+    /// Context-blended similarity for every entry, in entry order. Exposed so
+    /// retrieval can score a lexically recalled candidate without rescanning
+    /// the whole index, and so the probe can report where a known verse landed.
+    fn scores(&self, query: &[f32]) -> Vec<f32> {
         if query.len() != self.dimension || self.entries.is_empty() {
             return Vec::new();
         }
@@ -175,7 +219,7 @@ impl SemanticIndex {
                 }
             })
             .collect::<Vec<_>>();
-        let mut ranked: Vec<(usize, f32)> = Vec::with_capacity(limit);
+        let mut scores = Vec::with_capacity(raw_scores.len());
         for (index, &raw_score) in raw_scores.iter().enumerate() {
             let entry = &self.entries[index];
             let mut score = raw_score;
@@ -196,17 +240,25 @@ impl SemanticIndex {
                     context_count += PASSAGE_CONTEXT_WEIGHT;
                 }
             }
-            score -= raw_score * context_count;
-            let position = ranked
-                .binary_search_by(|(_, current)| current.total_cmp(&score).reverse())
-                .unwrap_or_else(|position| position);
-            if position < limit {
-                ranked.insert(position, (index, score));
-                if ranked.len() > limit {
-                    ranked.pop();
-                }
-            }
+            scores.push(score - raw_score * context_count);
         }
+        scores
+    }
+
+    fn ranked_from(scores: &[f32], limit: usize) -> Vec<(usize, f32)> {
+        if limit == 0 || scores.is_empty() {
+            return Vec::new();
+        }
+        let mut ranked = scores
+            .iter()
+            .copied()
+            .enumerate()
+            .collect::<Vec<(usize, f32)>>();
+        if ranked.len() > limit {
+            ranked.select_nth_unstable_by(limit, |left, right| right.1.total_cmp(&left.1));
+            ranked.truncate(limit);
+        }
+        ranked.sort_unstable_by(|left, right| right.1.total_cmp(&left.1));
         ranked
     }
 }
@@ -217,6 +269,7 @@ pub struct SemanticScripture {
     cancel_requested: AtomicBool,
     status: Mutex<SemanticStatus>,
     model: Mutex<Option<TextEmbedding>>,
+    reranker: Mutex<Option<TextRerank>>,
     indexes: Mutex<IndexCache>,
 }
 
@@ -282,6 +335,7 @@ impl SemanticScripture {
                 verified: false,
             }),
             model: Mutex::new(None),
+            reranker: Mutex::new(None),
             indexes: Mutex::new(IndexCache { loaded: Vec::new() }),
         }
     }
@@ -348,23 +402,24 @@ impl SemanticScripture {
         let grand_total: usize = jobs.iter().map(|(_, _, _, total)| total).sum();
 
         fs::create_dir_all(&self.root).map_err(|error| error.to_string())?;
+        let file_total = MODEL_FILES.len() + RERANKER_FILES.len();
         self.update_status(
             app,
             "preparing",
-            "Loading the local paraphrase model. First preparation may download about 120 MB…",
+            "Loading the local paraphrase models. First preparation may download about 145 MB…",
             0,
-            grand_total,
+            file_total,
         );
-        let mut model = load_pinned_model(&self.root, |completed, total, file| {
+        let mut model = load_pinned_model(&self.root, |completed, file| {
             if self.cancel_requested.load(Ordering::Acquire) {
                 return Err(PREPARATION_CANCELLED.to_string());
             }
             self.update_status(
                 app,
                 "preparing",
-                format!("Preparing model files… {completed}/{total} verified ({file})"),
+                format!("Preparing embedding files… {completed}/{file_total} verified ({file})"),
                 completed,
-                total,
+                file_total,
             );
             Ok(())
         })?;
@@ -377,12 +432,34 @@ impl SemanticScripture {
             "preparing",
             "Warming the local paraphrase model…",
             MODEL_FILES.len(),
-            MODEL_FILES.len(),
+            file_total,
         );
         let warmup = format!("{QUERY_PREFIX}local Bible passage retrieval");
         model
             .embed(vec![warmup.as_str()], Some(1))
             .map_err(|error| format!("Could not warm the local paraphrase model: {error}"))?;
+
+        let mut reranker = load_pinned_reranker(&self.root, |completed, file| {
+            if self.cancel_requested.load(Ordering::Acquire) {
+                return Err(PREPARATION_CANCELLED.to_string());
+            }
+            self.update_status(
+                app,
+                "preparing",
+                format!("Preparing reranker files… {completed}/{file_total} verified ({file})"),
+                MODEL_FILES.len() + completed,
+                file_total,
+            );
+            Ok(())
+        })?;
+        if self.cancel_requested.load(Ordering::Acquire) {
+            return Err(PREPARATION_CANCELLED.into());
+        }
+        // Warm the reranker once so the first operator query does not pay the
+        // ONNX session initialization cost.
+        reranker
+            .rerank("warmup", ["warmup passage"], false, Some(1))
+            .map_err(|error| format!("Could not warm the local reranker: {error}"))?;
 
         // Prefer the release bundle of pre-built indexes: it turns hours of
         // CPU embedding on the operator's machine into one download. Versions
@@ -455,12 +532,13 @@ impl SemanticScripture {
             indexed_before += *total;
         }
         *self.model.lock() = Some(model);
+        *self.reranker.lock() = Some(reranker);
         let ready_versions = jobs
             .iter()
             .map(|(version, _, _, _)| version.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        let _ = fs::write(self.root.join(READY_MARKER), MODEL_REVISION);
+        let _ = fs::write(self.root.join(READY_MARKER), prepared_marker());
         self.update_status(
             app,
             "ready",
@@ -624,7 +702,7 @@ impl SemanticScripture {
                 context_segments: 0,
                 similarity,
                 margin,
-                minimum_similarity: MIN_SIMILARITY,
+                minimum_similarity: MIN_RERANK_SIMILARITY,
                 minimum_margin: MIN_MARGIN,
                 latency_ms: started.elapsed().as_secs_f64() * 1_000.0,
                 candidates,
@@ -711,8 +789,71 @@ impl SemanticScripture {
             });
         }
         let index = indexes.get(index_version);
-        let ranked = index.ranked(&query_vector, RANKING_POOL_SIZE);
-        let Some(&(winner_index, similarity)) = ranked.first() else {
+        let scores = index.scores(&query_vector);
+        let ranked = SemanticIndex::ranked_from(&scores, RERANK_POOL_SIZE);
+
+        // Candidate text comes from the *indexed* translation so the
+        // cross-encoder reads the same register the vectors were built from.
+        let mut candidates: Vec<RerankCandidate> = Vec::new();
+        for &(position, score) in &ranked {
+            let entry = &index.entries[position];
+            let Some(text) = passage_text(
+                bible,
+                &entry.book,
+                entry.chapter,
+                entry.verse,
+                entry.verse_end,
+                index_version,
+            ) else {
+                continue;
+            };
+            candidates.push(RerankCandidate {
+                book: entry.book.clone(),
+                chapter: entry.chapter,
+                verse: entry.verse,
+                verse_end: entry.verse_end,
+                text,
+                dense: Some(score),
+            });
+        }
+
+        // Lexical candidates: spoken paraphrases often share a rare word
+        // ("lamp", "doers", "truth") with a verse dense retrieval never
+        // surfaces. Add the FTS winners to the pool and let the reranker judge.
+        if let Ok(lexical) = bible.search_quote_candidates(query) {
+            for verse in lexical {
+                if candidates.len() >= RERANK_POOL_SIZE + LEXICAL_CANDIDATE_LIMIT {
+                    break;
+                }
+                if candidates.iter().any(|candidate| {
+                    candidate.book == verse.book
+                        && candidate.chapter == verse.chapter
+                        && verse.verse >= candidate.verse
+                        && verse.verse <= candidate.verse_end
+                }) {
+                    continue;
+                }
+                let Some(text) = passage_text(
+                    bible,
+                    &verse.book,
+                    verse.chapter,
+                    verse.verse,
+                    verse.verse,
+                    index_version,
+                ) else {
+                    continue;
+                };
+                candidates.push(RerankCandidate {
+                    book: verse.book,
+                    chapter: verse.chapter,
+                    verse: verse.verse,
+                    verse_end: verse.verse,
+                    text,
+                    dense: None,
+                });
+            }
+        }
+        if candidates.is_empty() {
             return Ok(SemanticSearchOutcome {
                 matches: Vec::new(),
                 diagnostic: diagnostic(
@@ -723,37 +864,71 @@ impl SemanticScripture {
                     Vec::new(),
                 ),
             });
+        }
+
+        let (logits, order) = {
+            let mut guard = self.reranker.lock();
+            let Some(reranker) = guard.as_mut() else {
+                return Ok(SemanticSearchOutcome {
+                    matches: Vec::new(),
+                    diagnostic: diagnostic(
+                        "skipped",
+                        "Local paraphrase matching is not ready.",
+                        None,
+                        None,
+                        Vec::new(),
+                    ),
+                });
+            };
+            let documents = candidates
+                .iter()
+                .map(|candidate| candidate.text.as_str())
+                .collect::<Vec<_>>();
+            let reranked = reranker
+                .rerank(query, &documents, false, Some(16))
+                .map_err(|error| format!("Could not re-rank sermon context: {error}"))?;
+            let mut logits = vec![f32::NEG_INFINITY; candidates.len()];
+            for result in &reranked {
+                logits[result.index] = result.score;
+            }
+            let order = blended_order(&candidates, &logits);
+            (logits, order)
         };
-        let winner = &index.entries[winner_index];
-        let distinct_runner = ranked.iter().skip(1).find(|(candidate_index, _)| {
-            !same_passage_neighborhood(winner, &index.entries[*candidate_index])
-        });
+
+        let similarity = sigmoid(logits[order[0]]);
+        let winner = &candidates[order[0]];
+        let distinct_runner = order
+            .iter()
+            .skip(1)
+            .find(|&&position| !same_candidate_neighborhood(winner, &candidates[position]));
         let margin = distinct_runner
-            .map(|(_, score)| similarity - score)
+            .map(|&position| similarity - sigmoid(logits[position]))
             .unwrap_or(similarity);
 
         let mut diagnostic_candidates = Vec::new();
         let mut matches = Vec::new();
         let mut consumed = std::collections::HashSet::new();
-        for &(candidate_index, candidate_similarity) in &ranked {
+        for &position in &order {
+            let candidate_similarity = sigmoid(logits[position]);
             if matches.len() >= MAX_SEMANTIC_SUGGESTIONS
                 || similarity - candidate_similarity > MAX_ALTERNATIVE_DELTA
-                || candidate_similarity < MIN_SIMILARITY
+                || candidate_similarity < MIN_RERANK_SIMILARITY
             {
                 break;
             }
-            if consumed.contains(&candidate_index) {
+            if consumed.contains(&position) {
                 continue;
             }
-            let entry = &index.entries[candidate_index];
+            let entry = &candidates[position];
             let mut passage_start = entry.verse;
             let mut passage_end = entry.verse_end;
-            for &(neighbor_index, neighbor_similarity) in &ranked {
-                let neighbor = &index.entries[neighbor_index];
-                if same_passage_neighborhood(entry, neighbor)
-                    && candidate_similarity - neighbor_similarity <= MAX_PASSAGE_NEIGHBOR_DELTA
+            for &neighbor_position in &order {
+                let neighbor = &candidates[neighbor_position];
+                if same_candidate_neighborhood(entry, neighbor)
+                    && candidate_similarity - sigmoid(logits[neighbor_position])
+                        <= MAX_PASSAGE_NEIGHBOR_DELTA
                 {
-                    consumed.insert(neighbor_index);
+                    consumed.insert(neighbor_position);
                     passage_start = passage_start.min(neighbor.verse);
                     passage_end = passage_end.max(neighbor.verse_end);
                 }
@@ -780,7 +955,8 @@ impl SemanticScripture {
             };
 
             let rank = matches.len() + 1;
-            let confidence = semantic_confidence(candidate_similarity, margin, rank);
+            let confidence =
+                semantic_confidence(candidate_similarity, margin, rank, MIN_RERANK_SIMILARITY);
             matches.push(SemanticMatch {
                 verse,
                 confidence,
@@ -792,12 +968,13 @@ impl SemanticScripture {
             });
         }
 
-        let accepted = accepts_semantic_candidates(similarity, margin, matches.len());
-        let (state, reason) = if similarity < MIN_SIMILARITY {
+        let accepted =
+            accepts_semantic_candidates(similarity, margin, matches.len(), MIN_RERANK_SIMILARITY);
+        let (state, reason) = if similarity < MIN_RERANK_SIMILARITY {
             matches.clear();
             (
                 "rejected",
-                "Best candidate was below the minimum similarity threshold.",
+                "Best candidate was below the minimum rerank threshold.",
             )
         } else if !accepted {
             matches.clear();
@@ -834,7 +1011,7 @@ impl SemanticScripture {
                 "preparing",
                 "Cancelling after the current model file finishes…",
                 0,
-                MODEL_FILES.len(),
+                MODEL_FILES.len() + RERANKER_FILES.len(),
             );
         }
         self.status()
@@ -845,6 +1022,7 @@ impl SemanticScripture {
             return Err("Cancel paraphrase preparation before removing local files.".into());
         }
         *self.model.lock() = None;
+        *self.reranker.lock() = None;
         self.indexes.lock().loaded.clear();
         if self.root.exists() {
             if let Err(error) = fs::remove_dir_all(&self.root) {
@@ -864,6 +1042,7 @@ impl SemanticScripture {
     }
 }
 
+#[cfg(test)]
 fn same_passage_neighborhood(left: &IndexEntry, right: &IndexEntry) -> bool {
     left.book == right.book
         && left.chapter == right.chapter
@@ -871,17 +1050,96 @@ fn same_passage_neighborhood(left: &IndexEntry, right: &IndexEntry) -> bool {
         && right.verse <= left.verse_end + 1
 }
 
+/// One unit of text offered to the cross-encoder: either an indexed passage
+/// (verse or 4-verse window) or a single verse recovered by lexical search.
+struct RerankCandidate {
+    book: String,
+    chapter: i32,
+    verse: i32,
+    verse_end: i32,
+    text: String,
+    dense: Option<f32>,
+}
+
+fn same_candidate_neighborhood(left: &RerankCandidate, right: &RerankCandidate) -> bool {
+    left.book == right.book
+        && left.chapter == right.chapter
+        && left.verse <= right.verse_end + 1
+        && right.verse <= left.verse_end + 1
+}
+
+/// Rebuilds an indexed document from the store. Missing verses are skipped so
+/// a partially installed chapter never produces an empty candidate.
+fn passage_text(
+    bible: &BibleStore,
+    book: &str,
+    chapter: i32,
+    start: i32,
+    end: i32,
+    version: &str,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    for verse in start..=end {
+        if let Ok(Some(found)) = bible.get_verse(book, chapter, verse, version) {
+            parts.push(found.text);
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
+/// Maps a cross-encoder logit into (0, 1). The reranker emits unbounded
+/// logits; this keeps the public `similarity` field a probability so the UI
+/// and confidence formula keep their previous range.
+fn sigmoid(logit: f32) -> f32 {
+    1.0 / (1.0 + (-logit).exp())
+}
+
+fn min_max_normalized(values: &[f32]) -> Vec<f32> {
+    let min = values.iter().copied().fold(f32::INFINITY, f32::min);
+    let max = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let span = (max - min).max(f32::EPSILON);
+    values.iter().map(|value| (value - min) / span).collect()
+}
+
+/// Orders candidates by a blend of normalized dense similarity and normalized
+/// cross-encoder logit. Lexical-only candidates take the worst dense score, so
+/// they still win when the reranker is confident.
+fn blended_order(candidates: &[RerankCandidate], logits: &[f32]) -> Vec<usize> {
+    let worst_dense = candidates
+        .iter()
+        .filter_map(|candidate| candidate.dense)
+        .fold(f32::INFINITY, f32::min);
+    let dense = candidates
+        .iter()
+        .map(|candidate| candidate.dense.unwrap_or(worst_dense))
+        .collect::<Vec<_>>();
+    let dense = min_max_normalized(&dense);
+    let rerank = min_max_normalized(logits);
+    let mut order = (0..candidates.len()).collect::<Vec<_>>();
+    order.sort_unstable_by(|left, right| {
+        let score = |index: usize| {
+            BLEND_DENSE_WEIGHT * dense[index] + (1.0 - BLEND_DENSE_WEIGHT) * rerank[index]
+        };
+        score(*right).total_cmp(&score(*left))
+    });
+    order
+}
+
 /// Production confidence for a semantic match. Kept as one function so the
 /// guarantee that paraphrase confidence stays below the auto-stage threshold
 /// is enforced by an assertion on *this* formula, not on a re-typed copy.
-fn semantic_confidence(similarity: f32, margin: f32, rank: usize) -> f32 {
-    (0.55 + (similarity - MIN_SIMILARITY) * 0.65 + margin * 0.35
-        - (rank.saturating_sub(1) as f32 * 0.04))
+fn semantic_confidence(similarity: f32, margin: f32, rank: usize, minimum: f32) -> f32 {
+    (0.55 + (similarity - minimum) * 0.65 + margin * 0.35 - (rank.saturating_sub(1) as f32 * 0.04))
         .clamp(0.55, MAX_PARAPHRASE_CONFIDENCE)
 }
 
-fn accepts_semantic_candidates(similarity: f32, margin: f32, candidate_count: usize) -> bool {
-    similarity >= MIN_SIMILARITY && (margin >= MIN_MARGIN || candidate_count >= 2)
+fn accepts_semantic_candidates(
+    similarity: f32,
+    margin: f32,
+    candidate_count: usize,
+    minimum: f32,
+) -> bool {
+    similarity >= minimum && (margin >= MIN_MARGIN || candidate_count >= 2)
 }
 
 static ENGINE: OnceLock<Arc<SemanticScripture>> = OnceLock::new();
@@ -1072,14 +1330,18 @@ fn resolve_index_version(output_version: &str) -> Option<&'static str> {
         .or_else(|| output_version.eq_ignore_ascii_case("KJV").then_some("NKJV"))
 }
 
+fn prepared_marker() -> String {
+    format!("{MODEL_REVISION}\n{RERANKER_REVISION}")
+}
+
 fn prepared_marker_matches(root: &Path) -> bool {
     fs::read_to_string(root.join(READY_MARKER))
-        .is_ok_and(|revision| revision.trim() == MODEL_REVISION)
+        .is_ok_and(|revision| revision.trim() == prepared_marker())
 }
 
 fn load_pinned_model(
     root: &Path,
-    mut progress: impl FnMut(usize, usize, &str) -> Result<(), String>,
+    mut progress: impl FnMut(usize, &str) -> Result<(), String>,
 ) -> Result<TextEmbedding, String> {
     let api = hf_hub::api::sync::ApiBuilder::new()
         .with_cache_dir(root.join("model"))
@@ -1094,7 +1356,7 @@ fn load_pinned_model(
     ));
     let mut files = std::collections::HashMap::new();
     for (index, (name, expected_hash)) in MODEL_FILES.iter().enumerate() {
-        progress(index, MODEL_FILES.len(), name)?;
+        progress(index, name)?;
         let path = repository
             .get(name)
             .map_err(|error| format!("Could not download {name}: {error}"))?;
@@ -1107,10 +1369,46 @@ fn load_pinned_model(
             ));
         }
         files.insert(*name, bytes);
-        progress(index + 1, MODEL_FILES.len(), name)?;
+        progress(index + 1, name)?;
     }
 
     create_model(files)
+}
+
+fn load_pinned_reranker(
+    root: &Path,
+    mut progress: impl FnMut(usize, &str) -> Result<(), String>,
+) -> Result<TextRerank, String> {
+    let api = hf_hub::api::sync::ApiBuilder::new()
+        .with_cache_dir(root.join(RERANKER_DIRECTORY))
+        .with_progress(false)
+        .with_retries(3)
+        .build()
+        .map_err(|error| format!("Could not initialize the reranker downloader: {error}"))?;
+    let repository = api.repo(Repo::with_revision(
+        RERANKER_REPOSITORY.into(),
+        RepoType::Model,
+        RERANKER_REVISION.into(),
+    ));
+    let mut files = std::collections::HashMap::new();
+    for (index, (name, expected_hash)) in RERANKER_FILES.iter().enumerate() {
+        progress(index, name)?;
+        let path = repository
+            .get(name)
+            .map_err(|error| format!("Could not download {name}: {error}"))?;
+        let bytes = fs::read(&path).map_err(|error| format!("Could not read {name}: {error}"))?;
+        let actual_hash = format!("{:x}", Sha256::digest(&bytes));
+        if actual_hash != *expected_hash {
+            let _ = fs::remove_file(path);
+            return Err(format!(
+                "Local reranker integrity check failed for {name}; the cached file was removed. Retry preparation."
+            ));
+        }
+        files.insert(*name, bytes);
+        progress(index + 1, name)?;
+    }
+
+    create_reranker(files)
 }
 
 fn directory_size(path: &Path) -> u64 {
@@ -1163,6 +1461,35 @@ fn create_model(
             .with_max_length(256),
     )
     .map_err(|error| format!("Could not load the local paraphrase model: {error}"))
+}
+
+fn create_reranker(
+    mut files: std::collections::HashMap<&str, Vec<u8>>,
+) -> Result<TextRerank, String> {
+    let inference_threads = std::thread::available_parallelism()
+        .map(|count| count.get().min(4))
+        .unwrap_or(2);
+    let take = |files: &mut std::collections::HashMap<&str, Vec<u8>>, name: &str| {
+        files
+            .remove(name)
+            .ok_or_else(|| format!("Pinned reranker is missing {name}."))
+    };
+    let model = UserDefinedRerankingModel::new(
+        take(&mut files, "onnx/model_quantized.onnx")?,
+        TokenizerFiles {
+            tokenizer_file: take(&mut files, "tokenizer.json")?,
+            config_file: take(&mut files, "config.json")?,
+            special_tokens_map_file: take(&mut files, "special_tokens_map.json")?,
+            tokenizer_config_file: take(&mut files, "tokenizer_config.json")?,
+        },
+    );
+    TextRerank::try_new_from_user_defined(
+        model,
+        RerankInitOptionsUserDefined::new()
+            .with_intra_threads(inference_threads)
+            .with_max_length(RERANK_MAX_LENGTH),
+    )
+    .map_err(|error| format!("Could not load the local reranker: {error}"))
 }
 
 fn corpus_fingerprint(corpus: &[SemanticCorpusVerse]) -> [u8; 32] {
@@ -1358,7 +1685,7 @@ mod tests {
             ],
             vectors: vec![127, 0, 0, 0, 127, 0, 102, 25, 0],
         };
-        let ranked = index.ranked(&[1.0, 0.0, 0.0], 2);
+        let ranked = SemanticIndex::ranked_from(&index.scores(&[1.0, 0.0, 0.0]), 2);
         assert_eq!(ranked[0].0, 0);
         assert_eq!(ranked[1].0, 2);
     }
@@ -1395,27 +1722,87 @@ mod tests {
     fn paraphrase_confidence_cannot_reach_auto_stage_threshold() {
         // The ceiling must hold even for a perfect, unanimous rank-1 match.
         assert_eq!(
-            semantic_confidence(1.0, 1.0, 1),
+            semantic_confidence(1.0, 1.0, 1, MIN_RERANK_SIMILARITY),
             MAX_PARAPHRASE_CONFIDENCE,
             "semantic_confidence must stay capped below the auto-stage threshold"
         );
         // The floor holds at the minimum qualifying similarity with no margin.
-        assert_eq!(semantic_confidence(MIN_SIMILARITY, 0.0, 1), 0.55);
+        assert_eq!(
+            semantic_confidence(MIN_RERANK_SIMILARITY, 0.0, 1, MIN_RERANK_SIMILARITY),
+            0.55
+        );
     }
 
     #[test]
     fn semantic_confidence_penalizes_lower_ranks() {
-        let winner = semantic_confidence(0.80, 0.05, 1);
-        assert!(semantic_confidence(0.80, 0.05, 2) < winner);
-        assert!(semantic_confidence(0.80, 0.05, 3) < semantic_confidence(0.80, 0.05, 2));
+        let winner = semantic_confidence(0.80, 0.05, 1, MIN_RERANK_SIMILARITY);
+        assert!(semantic_confidence(0.80, 0.05, 2, MIN_RERANK_SIMILARITY) < winner);
+        assert!(
+            semantic_confidence(0.80, 0.05, 3, MIN_RERANK_SIMILARITY)
+                < semantic_confidence(0.80, 0.05, 2, MIN_RERANK_SIMILARITY)
+        );
     }
 
     #[test]
     fn close_semantic_candidates_require_manual_alternatives() {
-        assert!(!accepts_semantic_candidates(0.75, 0.01, 1));
-        assert!(accepts_semantic_candidates(0.75, 0.01, 2));
-        assert!(accepts_semantic_candidates(MIN_SIMILARITY, 0.01, 3));
-        assert!(!accepts_semantic_candidates(MIN_SIMILARITY - 0.01, 0.10, 3));
+        assert!(!accepts_semantic_candidates(
+            0.75,
+            0.01,
+            1,
+            MIN_RERANK_SIMILARITY
+        ));
+        assert!(accepts_semantic_candidates(
+            0.75,
+            0.01,
+            2,
+            MIN_RERANK_SIMILARITY
+        ));
+        assert!(accepts_semantic_candidates(
+            MIN_RERANK_SIMILARITY,
+            0.01,
+            3,
+            MIN_RERANK_SIMILARITY
+        ));
+        assert!(!accepts_semantic_candidates(
+            MIN_RERANK_SIMILARITY - 0.01,
+            0.10,
+            3,
+            MIN_RERANK_SIMILARITY
+        ));
+    }
+
+    #[test]
+    fn sigmoid_maps_logits_to_probabilities() {
+        assert!((sigmoid(0.0) - 0.5).abs() < 1e-6);
+        assert!(sigmoid(-5.381) < MIN_RERANK_SIMILARITY);
+        assert!(sigmoid(-0.704) > MIN_RERANK_SIMILARITY);
+        assert!((sigmoid(6.419) - 1.0).abs() < 1e-2);
+    }
+
+    #[test]
+    fn blended_order_prefers_reranker_evidence_for_lexical_candidates() {
+        let candidates = vec![
+            RerankCandidate {
+                book: "John".into(),
+                chapter: 3,
+                verse: 16,
+                verse_end: 16,
+                text: "a".into(),
+                dense: Some(0.70),
+            },
+            RerankCandidate {
+                book: "John".into(),
+                chapter: 8,
+                verse: 32,
+                verse_end: 32,
+                text: "b".into(),
+                dense: None,
+            },
+        ];
+        // Dense leads, but a confident reranker promotes the lexical-only verse.
+        assert_eq!(blended_order(&candidates, &[0.0, 8.0]), vec![1, 0]);
+        // Without reranker evidence the dense candidate stays first.
+        assert_eq!(blended_order(&candidates, &[0.0, -8.0]), vec![0, 1]);
     }
 
     #[test]
@@ -1445,6 +1832,8 @@ mod tests {
         fs::write(root.join(READY_MARKER), "old-model-revision").unwrap();
         assert!(!prepared_marker_matches(&root));
         fs::write(root.join(READY_MARKER), format!("{MODEL_REVISION}\n")).unwrap();
+        assert!(!prepared_marker_matches(&root));
+        fs::write(root.join(READY_MARKER), prepared_marker()).unwrap();
         assert!(prepared_marker_matches(&root));
         let _ = fs::remove_dir_all(root);
     }
@@ -1454,7 +1843,7 @@ mod tests {
     fn pinned_model_loads_and_embeds_offline_query() {
         let root = std::env::temp_dir().join(format!("wordlyte-model-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
-        let mut model = load_pinned_model(&root, |_, _, _| Ok(())).unwrap();
+        let mut model = load_pinned_model(&root, |_, _| Ok(())).unwrap();
         let embeddings = model
             .embed(vec!["God gives strength to the weak"], Some(1))
             .unwrap();
@@ -1606,7 +1995,8 @@ mod tests {
             let input = format!("{QUERY_PREFIX}{}", fixture.transcript);
             let mut vector = model.embed(vec![input], Some(1)).unwrap().remove(0);
             normalize(&mut vector);
-            let ranked = index.ranked(&vector, RANKING_POOL_SIZE);
+            let scores = index.scores(&vector);
+            let ranked = SemanticIndex::ranked_from(&scores, RANKING_POOL_SIZE);
             let first = ranked[0];
             let winner = &index.entries[first.0];
             let second = ranked
@@ -1645,7 +2035,43 @@ mod tests {
                         && candidate.verse == expected.verse
                 })
             });
-            let accepted = accepts_semantic_candidates(first.1, margin, distinct.len());
+            let accepted =
+                accepts_semantic_candidates(first.1, margin, distinct.len(), MIN_SIMILARITY);
+            // Where the expected verse actually landed in the ranking pool.
+            // `Some(1)` is a hit; `Some(n)` means a reranker could recover it;
+            // `None` means retrieval never surfaced it and reranking cannot help.
+            let expected_rank = ranked
+                .iter()
+                .position(|(position, _)| {
+                    let candidate = &index.entries[*position];
+                    fixture.expected.iter().any(|expected| {
+                        candidate.book == expected.book
+                            && candidate.chapter == expected.chapter
+                            && candidate.verse == expected.verse
+                    })
+                })
+                .map(|position| position + 1);
+            // Best context-blended score of any entry covering an expected
+            // verse, regardless of its rank. Distinguishes "crowded out of the
+            // pool but would pass the gate" (hybrid recall fixes it) from "the
+            // model never scored it" (needs a different retrieval approach).
+            let expected_best = fixture
+                .expected
+                .iter()
+                .fold(None::<f32>, |best, expected| {
+                    let mut score = best.unwrap_or(f32::NEG_INFINITY);
+                    for (position, entry) in index.entries.iter().enumerate() {
+                        if entry.book == expected.book
+                            && entry.chapter == expected.chapter
+                            && entry.verse <= expected.verse
+                            && expected.verse <= entry.verse_end
+                        {
+                            score = score.max(scores[position]);
+                        }
+                    }
+                    Some(score)
+                })
+                .filter(|score| score.is_finite());
             if accepted && expected_top_one {
                 top_one_hits += 1;
             }
@@ -1658,11 +2084,15 @@ mod tests {
             let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
             latencies.push(elapsed_ms);
             eprintln!(
-                "fixture={} accepted={} top1={} top3={} winner={} {}:{} score={:.3} runner={} {}:{} margin={:.3} elapsed_ms={:.1}",
+                "fixture={} accepted={} top1={} top3={} expected_rank={:?} expected_best={} winner={} {}:{} score={:.3} runner={} {}:{} margin={:.3} elapsed_ms={:.1}",
                 fixture.id,
                 accepted,
                 expected_top_one,
                 expected_top_three,
+                expected_rank,
+                expected_best
+                    .map(|score| format!("{score:.3}"))
+                    .unwrap_or_else(|| "n/a".into()),
                 winner.book,
                 winner.chapter,
                 winner.verse,
@@ -1703,6 +2133,340 @@ mod tests {
         assert!(
             top_three_hits >= 11,
             "semantic top-3 recall regressed: {top_three_hits}/{positives}"
+        );
+    }
+
+    /// Calibration harness for the shipped hybrid retrieval path: dense top-N
+    /// plus lexical FTS candidates, re-ranked by the pinned cross-encoder,
+    /// blended with `blended_order`, then gated at `MIN_RERANK_SIMILARITY`.
+    ///
+    /// Requires the local index fixture (`builds_probe_index_fixture`), the
+    /// flat pinned embedder (`WORDLYTE_TEST_BGE_MODEL`), the flat pinned
+    /// reranker (`WORDLYTE_TEST_RERANKER_MODEL`), and the operator database
+    /// (`WORDLYTE_TEST_BIBLE_DB`). Not a CI gate; run it after any model,
+    /// index, blend-weight, or threshold change:
+    /// `cargo test --lib evaluates_reranker_candidates -- --ignored --nocapture`
+    #[test]
+    #[ignore = "evaluates the hybrid retrieval pipeline against local model fixtures"]
+    fn evaluates_reranker_candidates() {
+        #[derive(serde::Deserialize)]
+        struct ExpectedReference {
+            book: String,
+            chapter: i32,
+            verse: i32,
+        }
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            id: String,
+            transcript: String,
+            expected: Vec<ExpectedReference>,
+        }
+
+        let embed_dir: PathBuf = std::env::var_os("WORDLYTE_TEST_BGE_MODEL")
+            .expect("set WORDLYTE_TEST_BGE_MODEL")
+            .into();
+        let rerank_dir: PathBuf = std::env::var_os("WORDLYTE_TEST_RERANKER_MODEL")
+            .expect("set WORDLYTE_TEST_RERANKER_MODEL")
+            .into();
+        let default_db = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .expect("LOCALAPPDATA is not set")
+            .join("io.wordlyte.app")
+            .join("bible_data")
+            .join("wordlyte_bible.db");
+        let db_path = std::env::var_os("WORDLYTE_TEST_BIBLE_DB")
+            .map(PathBuf::from)
+            .unwrap_or(default_db);
+        assert!(
+            db_path.is_file(),
+            "missing Bible database at {}",
+            db_path.display()
+        );
+
+        let mut files = std::collections::HashMap::new();
+        for (name, _) in MODEL_FILES {
+            let local_name = if *name == "onnx/model_quantized.onnx" {
+                "model_quantized.onnx"
+            } else {
+                name
+            };
+            files.insert(*name, fs::read(embed_dir.join(local_name)).unwrap());
+        }
+        let mut model = create_model(files).unwrap();
+        let index = load_index(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("bible_data")
+                .join(index_file(PROBE_INDEX_VERSION)),
+        )
+        .unwrap();
+        let bible = BibleStore::open_for_tests(&db_path).expect("open Bible database");
+
+        let mut reranker_files = std::collections::HashMap::new();
+        for (name, _) in RERANKER_FILES {
+            let local_name = if *name == "onnx/model_quantized.onnx" {
+                "model_quantized.onnx"
+            } else {
+                name
+            };
+            reranker_files.insert(*name, fs::read(rerank_dir.join(local_name)).unwrap());
+        }
+        let mut reranker = create_reranker(reranker_files).unwrap();
+
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("evaluation")
+            .join("ai-scripture")
+            .join("paraphrase.jsonl");
+        let fixtures = fs::read_to_string(fixture_path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Fixture>(line).unwrap())
+            .collect::<Vec<_>>();
+
+        let (mut positives, mut dense_top1, mut covered, mut hit_top1, mut hit_top3) =
+            (0_usize, 0_usize, 0_usize, 0_usize, 0_usize);
+        let (mut accepted_correct, mut accepted_wrong, mut false_accepts) =
+            (0_usize, 0_usize, 0_usize);
+        let (mut dense_accepted_correct, mut dense_accepted_wrong) = (0_usize, 0_usize);
+        let mut dense_latency = Vec::new();
+        let mut rerank_latency = Vec::new();
+
+        for fixture in &fixtures {
+            // Production returns before ranking for unstable repeated speech.
+            if has_repeated_phrase(&fixture.transcript) {
+                eprintln!("rerank fixture={} skipped=repeated-phrase", fixture.id);
+                continue;
+            }
+            let started = std::time::Instant::now();
+            let mut vector = model
+                .embed(
+                    vec![format!("{QUERY_PREFIX}{}", fixture.transcript)],
+                    Some(1),
+                )
+                .unwrap()
+                .remove(0);
+            normalize(&mut vector);
+            let scores = index.scores(&vector);
+            let ranked = SemanticIndex::ranked_from(&scores, RERANK_POOL_SIZE);
+            dense_latency.push(started.elapsed().as_secs_f64() * 1_000.0);
+
+            let mut candidates: Vec<RerankCandidate> = Vec::new();
+            for &(position, score) in &ranked {
+                let entry = &index.entries[position];
+                let Some(text) = passage_text(
+                    &bible,
+                    &entry.book,
+                    entry.chapter,
+                    entry.verse,
+                    entry.verse_end,
+                    PROBE_INDEX_VERSION,
+                ) else {
+                    continue;
+                };
+                candidates.push(RerankCandidate {
+                    book: entry.book.clone(),
+                    chapter: entry.chapter,
+                    verse: entry.verse,
+                    verse_end: entry.verse_end,
+                    text,
+                    dense: Some(score),
+                });
+            }
+            let dense_count = candidates.len();
+            if let Ok(lexical) = bible.search_quote_candidates(&fixture.transcript) {
+                for verse in lexical {
+                    if candidates.len() >= RERANK_POOL_SIZE + LEXICAL_CANDIDATE_LIMIT {
+                        break;
+                    }
+                    if candidates.iter().any(|candidate| {
+                        candidate.book == verse.book
+                            && candidate.chapter == verse.chapter
+                            && verse.verse >= candidate.verse
+                            && verse.verse <= candidate.verse_end
+                    }) {
+                        continue;
+                    }
+                    let Some(text) = passage_text(
+                        &bible,
+                        &verse.book,
+                        verse.chapter,
+                        verse.verse,
+                        verse.verse,
+                        PROBE_INDEX_VERSION,
+                    ) else {
+                        continue;
+                    };
+                    candidates.push(RerankCandidate {
+                        book: verse.book,
+                        chapter: verse.chapter,
+                        verse: verse.verse,
+                        verse_end: verse.verse,
+                        text,
+                        dense: None,
+                    });
+                }
+            }
+
+            let covers = |candidate: &RerankCandidate| {
+                fixture.expected.iter().any(|expected| {
+                    expected.book == candidate.book
+                        && expected.chapter == candidate.chapter
+                        && expected.verse >= candidate.verse
+                        && expected.verse <= candidate.verse_end
+                })
+            };
+            let dense_rank = ranked
+                .iter()
+                .position(|&(position, _)| {
+                    let entry = &index.entries[position];
+                    fixture.expected.iter().any(|expected| {
+                        expected.book == entry.book
+                            && expected.chapter == entry.chapter
+                            && expected.verse >= entry.verse
+                            && expected.verse <= entry.verse_end
+                    })
+                })
+                .map(|position| position + 1);
+
+            let rerank_started = std::time::Instant::now();
+            let documents = candidates
+                .iter()
+                .map(|candidate| candidate.text.as_str())
+                .collect::<Vec<_>>();
+            let reranked = reranker
+                .rerank(fixture.transcript.as_str(), &documents, false, Some(16))
+                .unwrap();
+            rerank_latency.push(rerank_started.elapsed().as_secs_f64() * 1_000.0);
+
+            let mut logits = vec![f32::NEG_INFINITY; candidates.len()];
+            for result in &reranked {
+                logits[result.index] = result.score;
+            }
+            let order = blended_order(&candidates, &logits);
+            let top_similarity = sigmoid(logits[order[0]]);
+            let runner = order
+                .iter()
+                .skip(1)
+                .find(|&&position| {
+                    !same_candidate_neighborhood(&candidates[order[0]], &candidates[position])
+                })
+                .copied();
+            let margin = runner
+                .map(|position| top_similarity - sigmoid(logits[position]))
+                .unwrap_or(top_similarity);
+
+            let is_covered = candidates.iter().any(covers);
+            let expected_rank = order
+                .iter()
+                .position(|&position| covers(&candidates[position]));
+            let top_correct = covers(&candidates[order[0]]);
+
+            // Mirror the production match-building loop closely enough to
+            // compare acceptance apples to apples: candidates within the
+            // alternative delta stay eligible, which can bypass the margin
+            // rule for close alternatives.
+            let candidate_count = order
+                .iter()
+                .take_while(|&&position| {
+                    let candidate_similarity = sigmoid(logits[position]);
+                    top_similarity - candidate_similarity <= MAX_ALTERNATIVE_DELTA
+                        && candidate_similarity >= MIN_RERANK_SIMILARITY
+                })
+                .count();
+            let accepted = accepts_semantic_candidates(
+                top_similarity,
+                margin,
+                candidate_count,
+                MIN_RERANK_SIMILARITY,
+            );
+
+            // Dense-only baseline: what the shipped cosine gate would accept.
+            let dense_top_similarity = ranked.first().map(|(_, score)| *score).unwrap_or(0.0);
+            let dense_runner = ranked
+                .iter()
+                .skip(1)
+                .find(|(position, _)| {
+                    !same_passage_neighborhood(
+                        &index.entries[ranked[0].0],
+                        &index.entries[*position],
+                    )
+                })
+                .map(|(_, score)| *score);
+            let dense_margin = dense_runner
+                .map(|score| dense_top_similarity - score)
+                .unwrap_or(dense_top_similarity);
+            let dense_accepted =
+                accepts_semantic_candidates(dense_top_similarity, dense_margin, 1, MIN_SIMILARITY);
+
+            if fixture.expected.is_empty() {
+                if accepted {
+                    false_accepts += 1;
+                }
+            } else {
+                positives += 1;
+                if dense_rank == Some(1) {
+                    dense_top1 += 1;
+                }
+                if dense_accepted && dense_rank == Some(1) {
+                    dense_accepted_correct += 1;
+                }
+                if dense_accepted && dense_rank != Some(1) {
+                    dense_accepted_wrong += 1;
+                }
+                if is_covered {
+                    covered += 1;
+                }
+                if expected_rank == Some(0) {
+                    hit_top1 += 1;
+                }
+                if expected_rank.is_some_and(|position| position < 3) {
+                    hit_top3 += 1;
+                }
+                if accepted && top_correct {
+                    accepted_correct += 1;
+                }
+                if accepted && !top_correct {
+                    accepted_wrong += 1;
+                }
+            }
+
+            eprintln!(
+                "rerank fixture={} dense_rank={:?} candidates={} covered={} expected_rank={:?} accepted={} top1_similarity={:.3}",
+                fixture.id,
+                dense_rank,
+                dense_count,
+                is_covered,
+                expected_rank.map(|position| position + 1),
+                accepted,
+                top_similarity,
+            );
+        }
+
+        dense_latency.sort_by(f64::total_cmp);
+        rerank_latency.sort_by(f64::total_cmp);
+        let p95 = |values: &[f64]| {
+            values[((values.len() as f64 * 0.95).ceil() as usize)
+                .saturating_sub(1)
+                .min(values.len() - 1)]
+        };
+        eprintln!(
+            "rerank summary: positives={positives} dense_top1={dense_top1} covered={covered} hit_top1={hit_top1} hit_top3={hit_top3} accepted_correct={accepted_correct} accepted_wrong={accepted_wrong} false_accepts={false_accepts} dense_accepted_correct={dense_accepted_correct} dense_accepted_wrong={dense_accepted_wrong} dense_p95_ms={:.1} rerank_p95_ms={:.1}",
+            p95(&dense_latency),
+            p95(&rerank_latency),
+        );
+
+        assert!(
+            covered >= 20,
+            "hybrid retrieval coverage regressed: {covered}/{positives}"
+        );
+        assert!(
+            hit_top1 >= 15,
+            "reranked top-1 regressed: {hit_top1}/{positives}"
+        );
+        assert_eq!(
+            false_accepts, 0,
+            "the rerank gate accepted non-scripture negatives"
         );
     }
 }
