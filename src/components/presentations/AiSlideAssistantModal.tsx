@@ -83,7 +83,6 @@ export function AiSlideAssistantModal({
       slideContext,
       presentationTitle,
       bibleVersion,
-      model: localStorage.getItem("pref_aiPresentationModel") || "gpt-6-astra",
     };
     try {
       const generated = await invoke<AiSlideEditResult>("ai_edit_presentation_slide", { request });

@@ -1672,6 +1672,7 @@ async fn connect_provider_socket(
     Ok(Some(socket))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn reconnect_provider_socket(
     app: &AppHandle,
     adapter: &dyn providers::StreamingTranscriptionAdapter,

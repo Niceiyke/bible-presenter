@@ -279,7 +279,7 @@ pub(crate) fn detect_references_with_aliases(
             }
             let mut index = start + alias.len();
             if tokens.get(index).is_some_and(|token| token != "chapter")
-                && !has_explicit_verse_marker(&tokens, index)
+                && !has_explicit_verse_marker(tokens, index)
             {
                 if let Some((chapter, compound_verse_required)) = tokens
                     .get(index)
@@ -305,7 +305,7 @@ pub(crate) fn detect_references_with_aliases(
 
                     // A compound multi-token chapter ("John chapter four five")
                     // must not swallow a trailing verse number.
-                    let compact_verse = parse_compact_verse(&tokens, index + 1);
+                    let compact_verse = parse_compact_verse(tokens, index + 1);
                     match compact_verse {
                         Some((verse, verse_next, verse_end)) => {
                             let verse_is_compound = verse_next > index + 2;
@@ -334,7 +334,7 @@ pub(crate) fn detect_references_with_aliases(
                                     .get(verse_next)
                                     .is_none_or(|token| single_number_token(token).is_none());
                             if ten_ambiguity_resolvable {
-                                if let Some((chapter_only, _)) = parse_number(&tokens, index) {
+                                if let Some((chapter_only, _)) = parse_number(tokens, index) {
                                     insert_candidate(
                                         &mut matches,
                                         ScriptureReference {
@@ -376,7 +376,7 @@ pub(crate) fn detect_references_with_aliases(
                 index += 1;
             }
             let chapter_start = index;
-            let Some((chapter, next)) = parse_number(&tokens, index) else {
+            let Some((chapter, next)) = parse_number(tokens, index) else {
                 continue;
             };
             // parse_number assembles compound numbers ("twenty three" -> 23)
@@ -414,7 +414,7 @@ pub(crate) fn detect_references_with_aliases(
                     && chapter > 0
                     && tokens
                         .get(index)
-                        .map(|_| parse_number(&tokens, index).is_none())
+                        .map(|_| parse_number(tokens, index).is_none())
                         .unwrap_or(true);
                 if chapter_only_allowed {
                     let candidate = ScriptureReference {
@@ -435,7 +435,7 @@ pub(crate) fn detect_references_with_aliases(
             }
             let plural_marker = verse_marker.as_deref() == Some("verses");
             let Some((verse, _verse_next, verse_end)) =
-                parse_verse_number(&tokens, index, plural_marker)
+                parse_verse_number(tokens, index, plural_marker)
             else {
                 continue;
             };

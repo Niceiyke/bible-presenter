@@ -15,8 +15,11 @@ organization and its registered computers.
 - The desktop client verifies every entitlement against its embedded Ed25519
   public key before trusting it.
 
-AI billing, Dashboard login, transcript sync, and AI Unit wallets are later
-phases documented in [`../../docs/LICENSING_AND_AI_PLATFORM_PLAN.md`](../../docs/LICENSING_AND_AI_PLATFORM_PLAN.md).
+The managed AI Gateway, AI access tokens, and Unit reservation/settlement are
+implemented in [`../ai-gateway/`](../ai-gateway/). Billing checkout/webhooks,
+streaming ASR relay, transcript sync, and the broader Dashboard workspace remain
+later phases documented in
+[`../../docs/LICENSING_AND_AI_PLATFORM_PLAN.md`](../../docs/LICENSING_AND_AI_PLATFORM_PLAN.md).
 
 ## Local development
 
@@ -42,7 +45,13 @@ Set these secrets before deployment:
 ```text
 ADMIN_TOKEN
 LICENSE_SIGN_PRIVATE_KEY
+AI_TOKEN_SECRET
+AI_GATEWAY_SERVICE_TOKEN
 ```
+
+`AI_TOKEN_SECRET` must match the AI Gateway Worker's value. It signs
+short-lived AI access tokens. `AI_GATEWAY_SERVICE_TOKEN` protects the internal
+reserve/settle/release endpoints and must also match the AI Gateway.
 
 `LICENSE_SIGN_PRIVATE_KEY` is an Ed25519 private JWK. Its matching public key
 must match `SIGNING_PUBLIC_KEY_B64` in `src-tauri/src/license.rs`. Never commit,
@@ -56,6 +65,7 @@ log, or distribute the private key.
 | --- | --- | --- |
 | `POST` | `/activate` | Redeem a one-time `WACT-...` device activation code. Returns a signed entitlement and one device credential. |
 | `POST` | `/entitlement` | Refresh a device entitlement using its organization id, machine fingerprint, and device credential. |
+| `POST` | `/ai/token` | Exchange a device credential for a 15-minute AI access token and current AI Unit balance. Requires an active AI Add-on. |
 | `GET` | `/health` | Health check. |
 
 The desktop app stores the returned device credential only in its protected
@@ -80,8 +90,23 @@ All administrator endpoints require `Authorization: Bearer <ADMIN_TOKEN>`.
 `/ai` accepts `addon_duration_days` (`0` disables), `monthly_units`, optional
 `monthly_reset_days` (default `30`), and `topup_units`. It stores Unit balances
 in milli-Units for future exact per-second transcription settlement. This is a
-transitional provisioning endpoint only: only the future managed AI Gateway may
+transitional provisioning endpoint only: only the managed AI Gateway may
 reserve or spend Units, and customer AI provider keys are never accepted.
+
+### Internal AI Gateway endpoints
+
+These endpoints require `Authorization: Bearer <AI_GATEWAY_SERVICE_TOKEN>` and
+are intended for the AI Gateway only:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/internal/ai/reserve` | Reserve Units before an AI request. Idempotency key required. |
+| `POST` | `/internal/ai/settle` | Settle actual usage against a reservation. |
+| `POST` | `/internal/ai/release` | Release a failed or cancelled reservation. |
+| `POST` | `/internal/ai/balance` | Read the current wallet balance. |
+
+`GET /admin/organizations/:id/ai` returns the organization, current balance, and
+recent wallet events for the Dashboard.
 
 ## Signed entitlement protocol
 

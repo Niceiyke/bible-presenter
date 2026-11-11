@@ -1,0 +1,15 @@
+{
+  "name": "wordlyte-ai-gateway-worker",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Managed AI Gateway for Wordlyte (LLM first, streaming ASR next)",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node scripts/test.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^3.80.0"
+  }
+}

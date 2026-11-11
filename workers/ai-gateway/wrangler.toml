@@ -1,0 +1,22 @@
+name = "wordlyte-ai-gateway"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# Provider credentials and the shared license-service credential are Worker
+# secrets, never vars or client configuration:
+#   npx wrangler secret put OPENAI_API_KEY
+#   npx wrangler secret put AI_TOKEN_SECRET
+#   npx wrangler secret put AI_GATEWAY_SERVICE_TOKEN
+#   npx wrangler secret put LICENSE_SERVICE_URL
+
+[vars]
+OPENAI_ALLOWED_MODELS = "gpt-5.6-luna"
+
+# Private Worker-to-Worker binding. Fetching the License Worker over its public
+# workers.dev URL from another Worker in the same zone returns Cloudflare 1042.
+[[services]]
+binding = "LICENSE_SERVICE"
+service = "wordlyte-license"
+
+# Optional override for local integration tests only.
+# OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"

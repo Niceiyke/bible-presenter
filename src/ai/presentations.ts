@@ -51,7 +51,6 @@ export interface AiPresentationRequest {
   bibleVersion: string;
   includeSpeakerNotes: boolean;
   highlightKeyPoints: boolean;
-  model: string;
 }
 
 export type AiSlideEditAction =
@@ -69,7 +68,6 @@ export interface AiSlideEditRequest {
   slideContext: string;
   presentationTitle: string;
   bibleVersion: string;
-  model: string;
 }
 
 export interface AiSlideEditResult {

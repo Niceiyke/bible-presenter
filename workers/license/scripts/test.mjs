@@ -3,7 +3,7 @@
 // storage and a throwaway Ed25519 signing key; it never contacts production.
 
 import { spawn, spawnSync } from "node:child_process";
-import { generateKeyPairSync, verify as verifySignature } from "node:crypto";
+import { createHmac, generateKeyPairSync, verify as verifySignature } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,6 +14,8 @@ const ROOT = fileURLToPath(new URL("../", import.meta.url)).replace(/[\\/]$/, ""
 const PORT = 8797;
 const BASE = `http://127.0.0.1:${PORT}`;
 const ADMIN_TOKEN = "local-test-token";
+const AI_GATEWAY_SERVICE_TOKEN = "EXAMPLE-local-ai-gateway-token";
+const AI_TOKEN_SECRET = "EXAMPLE-local-ai-token-secret";
 const M1 = "a".repeat(64);
 const M2 = "b".repeat(64);
 
@@ -45,6 +47,16 @@ function validSignature(payload) {
   );
 }
 
+function validAiToken(token) {
+  const parts = String(token || "").split(".");
+  if (parts.length !== 3) return false;
+  const [header, payload, signature] = parts;
+  const expected = createHmac("sha256", AI_TOKEN_SECRET).update(`${header}.${payload}`).digest("base64url");
+  if (expected !== signature) return false;
+  const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+  return claims.aud === "wordlyte-ai" && claims.addon_active === true && claims.exp > Math.floor(Date.now() / 1000);
+}
+
 const results = [];
 function check(name, value) {
   results.push({ name, ok: Boolean(value) });
@@ -69,7 +81,7 @@ async function waitForServer() {
 
 const persist = await mkdtemp(join(tmpdir(), "wordlyte-account-test-"));
 const wrangler = join(ROOT, "node_modules", "wrangler", "bin", "wrangler.js");
-writeFileSync(devVarsPath, `ADMIN_TOKEN=${ADMIN_TOKEN}\nLICENSE_SIGN_PRIVATE_KEY=${privateJwk}\n`);
+writeFileSync(devVarsPath, `ADMIN_TOKEN=${ADMIN_TOKEN}\nAI_GATEWAY_SERVICE_TOKEN=${AI_GATEWAY_SERVICE_TOKEN}\nAI_TOKEN_SECRET=${AI_TOKEN_SECRET}\nLICENSE_SIGN_PRIVATE_KEY=${privateJwk}\n`);
 const worker = spawn(process.execPath, [wrangler, "dev", "--local", "--port", String(PORT), "--persist-to", persist], {
   cwd: ROOT,
   stdio: ["ignore", "pipe", "pipe"],
@@ -84,7 +96,9 @@ try {
   let response = await call("/");
   check("root health endpoint is available", response.status === 200 && response.data?.status === "ok");
   const adminPage = await fetch(`${BASE}/admin`);
-  check("browser administrator console is available", adminPage.status === 200 && (await adminPage.text()).includes("Wordlyte Account Admin"));
+  const adminHtml = await adminPage.text();
+  check("browser administrator console is available", adminPage.status === 200 && adminHtml.includes("Wordlyte Account Admin"));
+  check("browser administrator console exposes AI provisioning", adminHtml.includes('data-action="ai"'));
   response = await call("/admin/organizations");
   check("admin organization creation requires authentication", response.status === 401);
 
@@ -110,6 +124,9 @@ try {
   response = await call("/entitlement", { method: "POST", body: { organization_id: freeOrganization.id, machine_id: M1, device_token: freeDeviceToken } });
   check("device refresh succeeds", response.status === 200 && response.data.status === "active" && response.data.plan === "free" && validSignature(response.data));
   check("refresh never returns a device token", !Object.hasOwn(response.data, "device_token"));
+
+  response = await call("/ai/token", { method: "POST", body: { organization_id: freeOrganization.id, machine_id: M1, device_token: freeDeviceToken } });
+  check("AI token requires an active AI Add-on", response.status === 403 && response.data.status === "ai_not_entitled");
 
   response = await call("/activate", { method: "POST", body: { activation_code: freeCode, machine_id: M2, device_name: "Second PC" } });
   check("activation code cannot consume a second computer", response.status === 200 && response.data.status === "invalid");
@@ -142,6 +159,62 @@ try {
     && response.data.ai?.addonActive === true
     && typeof response.data.ai?.addonExpiresAt === "number"
     && validSignature(response.data));
+
+  response = await call("/ai/token", { method: "POST", body: { organization_id: freeOrganization.id, machine_id: M1, device_token: freeDeviceToken } });
+  check("device exchanges its credential for a short-lived AI token", response.status === 200
+    && validAiToken(response.data.token)
+    && response.data.expires_at > Math.floor(Date.now() / 1000)
+    && response.data.ai?.total_units_remaining === 145);
+  const aiToken = response.data.token;
+
+  response = await call("/ai/token", { method: "POST", body: { organization_id: freeOrganization.id, machine_id: M1, device_token: "wdv_invalid" } });
+  check("AI token rejects a bad device credential", response.status === 400 || response.status === 200);
+
+  response = await call("/internal/ai/reserve", {
+    method: "POST",
+    body: { organization_id: freeOrganization.id, units: 10, kind: "llm", idempotency_key: "test-reserve-001" },
+  });
+  check("internal AI spend requires the gateway service credential", response.status === 401);
+
+  response = await call("/internal/ai/reserve", {
+    method: "POST", token: AI_GATEWAY_SERVICE_TOKEN,
+    body: { organization_id: freeOrganization.id, units: 10, kind: "llm", idempotency_key: "test-reserve-001" },
+  });
+  check("gateway reserves AI Units atomically", response.status === 200
+    && response.data.reservation?.status === "reserved"
+    && response.data.ai?.available_units_remaining === 135);
+  const reservationId = response.data.reservation.id;
+  const duplicate = await call("/internal/ai/reserve", {
+    method: "POST", token: AI_GATEWAY_SERVICE_TOKEN,
+    body: { organization_id: freeOrganization.id, units: 10, kind: "llm", idempotency_key: "test-reserve-001" },
+  });
+  check("AI reservation is idempotent", duplicate.status === 200 && duplicate.data.reservation?.id === reservationId);
+
+  response = await call("/internal/ai/settle", {
+    method: "POST", token: AI_GATEWAY_SERVICE_TOKEN,
+    body: { organization_id: freeOrganization.id, reservation_id: reservationId, actual_units: 10 },
+  });
+  check("gateway settles AI Units after a successful request", response.status === 200
+    && response.data.ai?.total_units_remaining === 135
+    && response.data.ai?.reserved_units_remaining === 0);
+
+  response = await call("/internal/ai/reserve", {
+    method: "POST", token: AI_GATEWAY_SERVICE_TOKEN,
+    body: { organization_id: freeOrganization.id, units: 20, kind: "llm", idempotency_key: "test-release-002" },
+  });
+  const releaseId = response.data.reservation.id;
+  response = await call("/internal/ai/release", {
+    method: "POST", token: AI_GATEWAY_SERVICE_TOKEN,
+    body: { organization_id: freeOrganization.id, reservation_id: releaseId },
+  });
+  check("failed AI request releases its reservation", response.status === 200
+    && response.data.reservation?.status === "released"
+    && response.data.ai?.available_units_remaining === 135);
+
+  response = await call(`/admin/organizations/${freeOrganization.id}/ai`, { token: ADMIN_TOKEN });
+  check("admins can read the AI Unit balance", response.status === 200
+    && response.data.ai?.total_units_remaining === 135
+    && Array.isArray(response.data.usage));
 
   response = await call(`/admin/organizations/${freeOrganization.id}/revoke`, { method: "POST", token: ADMIN_TOKEN, body: { revoked: true } });
   check("admin revokes organization", response.status === 200 && response.data.organization.revoked === true);

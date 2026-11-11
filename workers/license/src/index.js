@@ -11,6 +11,10 @@
 
 const PLANS = ["free", "pro", "premium"];
 const PLAN_DEVICE_CAPS = { free: 1, pro: 3, premium: 50 };
+const AI_TOKEN_TTL_SECONDS = 15 * 60;
+const AI_TOKEN_AUDIENCE = "wordlyte-ai";
+const MAX_AI_RESERVATION_UNITS = 10_000;
+const AI_RESERVATION_TTL_SECONDS = 15 * 60;
 const jsonHeaders = {
   "content-type": "application/json",
   "cache-control": "no-store",
@@ -79,6 +83,52 @@ export default {
         method: "POST",
         body: JSON.stringify({ organization_id: organizationId, machine_id: machineId, device_token: deviceToken }),
       }));
+    }
+
+    if (url.pathname === "/ai/token" && request.method === "POST") {
+      const body = await request.json().catch(() => null);
+      const organizationId = String(body?.organization_id || "").trim();
+      const machineId = String(body?.machine_id || "").trim();
+      const deviceToken = String(body?.device_token || "").trim();
+      if (!validOrganizationId(organizationId) || !validMachineId(machineId) || !validDeviceToken(deviceToken)) {
+        return json({ status: "invalid", message: "Invalid AI token request." }, 400);
+      }
+      const stub = env.ORGANIZATION_REGISTRY.get(env.ORGANIZATION_REGISTRY.idFromName(organizationId));
+      return forward(await stub.fetch("https://registry/ai/token", {
+        method: "POST",
+        body: JSON.stringify({ organization_id: organizationId, machine_id: machineId, device_token: deviceToken }),
+      }));
+    }
+
+    if (url.pathname.startsWith("/internal/ai/") && request.method === "POST") {
+      if (!(await isGateway(request, env))) return unauthorized();
+      const action = url.pathname.slice("/internal/ai/".length);
+      if (!["reserve", "settle", "release", "balance"].includes(action)) {
+        return json({ status: "error", message: "Not found" }, 404);
+      }
+      const body = await request.json().catch(() => null);
+      const organizationId = String(body?.organization_id || "").trim();
+      if (!validOrganizationId(organizationId)) {
+        return json({ status: "invalid", message: "Invalid organization." }, 400);
+      }
+      const stub = env.ORGANIZATION_REGISTRY.get(env.ORGANIZATION_REGISTRY.idFromName(organizationId));
+      return forward(await stub.fetch(`https://registry/internal/ai/${action}`, {
+        method: "POST",
+        body: JSON.stringify({ organization_id: organizationId, ...body }),
+      }));
+    }
+
+    const aiReadMatch = url.pathname.match(/^\/admin\/organizations\/(org_[a-f0-9]+)\/ai$/);
+    if (aiReadMatch && request.method === "GET") {
+      if (!(await isAdmin(request, env))) return unauthorized();
+      const organization = await env.ORGANIZATIONS.get(orgKey(aiReadMatch[1]), "json");
+      if (!organization) return json({ status: "error", message: "Organization not found." }, 404);
+      return json({
+        status: "ok",
+        organization: publicOrganization(organization),
+        ai: aiBalance(organization),
+        usage: (organization.ai?.ledger || []).slice(-50),
+      });
     }
 
     if (url.pathname === "/admin/organizations" && request.method === "POST") {
@@ -161,6 +211,11 @@ export class OrganizationRegistry {
     if (!organization) return json({ status: "invalid", message: "Organization not found." }, 404);
     if (path === "/activate") return this.activate(organization, body);
     if (path === "/entitlement") return this.entitlement(organization, body);
+    if (path === "/ai/token") return this.aiToken(organization, body);
+    if (path === "/internal/ai/reserve") return this.reserveAi(organization, body);
+    if (path === "/internal/ai/settle") return this.settleAi(organization, body);
+    if (path === "/internal/ai/release") return this.releaseAi(organization, body);
+    if (path === "/internal/ai/balance") return this.aiBalance(organization);
     if (path === "/admin/plan") return this.updatePlan(organization, body);
     if (path === "/admin/activation-code") return this.createActivationCode(organization);
     if (path === "/admin/revoke") return this.revoke(organization, body);
@@ -233,6 +288,135 @@ export class OrganizationRegistry {
     device.last_seen_at = epoch();
     await this.save(organization);
     return signedResponse(this.env, organization, machineId, "active", null);
+  }
+
+  async aiToken(organization, body) {
+    const now = epoch();
+    const machineId = String(body.machine_id || "").trim();
+    const token = String(body.device_token || "").trim();
+    const device = (organization.devices || []).find((entry) => entry.machine_id === machineId);
+    if (!device || !(await constantTimeEqual(await sha256(token), device.token_hash))) {
+      return json({ status: "invalid", message: "This computer is not activated for the organization." }, 200);
+    }
+    if (organization.revoked || device.revoked) {
+      return json({ status: "revoked", message: "This device or organization has been revoked." }, 403);
+    }
+    const ai = aiEntitlement(organization, now);
+    if (!ai.addonActive) {
+      return json({ status: "ai_not_entitled", message: "The Wordlyte AI Add-on is not active for this organization." }, 403);
+    }
+    const wallet = aiWallet(organization);
+    const resetBefore = wallet.monthly_reset_at;
+    const balance = aiBalance(organization, now);
+    if (wallet.monthly_reset_at !== resetBefore) await this.save(organization);
+    let accessToken;
+    try {
+      accessToken = await createAiToken(this.env, organization.id, machineId, ai, now);
+    } catch (error) {
+      return json({ status: "error", message: String(error?.message || error) }, 500);
+    }
+    return json({
+      status: "ok",
+      token: accessToken,
+      expires_at: now + AI_TOKEN_TTL_SECONDS,
+      ai: { ...balance, addonActive: ai.addonActive, addonExpiresAt: ai.addonExpiresAt || null },
+    });
+  }
+
+  async aiBalance(organization) {
+    const now = epoch();
+    const wallet = aiWallet(organization);
+    const resetBefore = wallet.monthly_reset_at;
+    const balance = aiBalance(organization, now);
+    if (wallet.monthly_reset_at !== resetBefore) await this.save(organization);
+    return json({ status: "ok", ai: balance });
+  }
+
+  async reserveAi(organization, body) {
+    const now = epoch();
+    const units = optionalWhole(body.units, 1, MAX_AI_RESERVATION_UNITS);
+    const key = cleanIdempotencyKey(body.idempotency_key);
+    if (units === null || !key) {
+      return json({ status: "invalid", message: "units and idempotency_key are required." }, 400);
+    }
+    if (!aiEntitlement(organization, now).addonActive) {
+      return json({ status: "ai_not_entitled", message: "The Wordlyte AI Add-on is not active." }, 403);
+    }
+    const wallet = aiWallet(organization);
+    expireReservations(wallet, now);
+    const existing = wallet.reservations.find((entry) => entry.idempotency_key === key);
+    if (existing) {
+      return json({ status: "ok", reservation: publicReservation(existing), ai: aiBalance(organization, now) });
+    }
+    const balance = aiBalance(organization, now);
+    if (balance.available_units_remaining < units) {
+      return json({ status: "ai_no_units", message: "Not enough AI Units available.", ai: balance }, 402);
+    }
+    const reservation = {
+      id: `res_${crypto.randomUUID().replaceAll("-", "")}`,
+      idempotency_key: key,
+      units_millis: units * 1000,
+      kind: String(body.kind || "standard").trim().slice(0, 32) || "standard",
+      status: "reserved",
+      created_at: now,
+      expires_at: now + AI_RESERVATION_TTL_SECONDS,
+    };
+    wallet.reserved_units_millis = nonNegativeInt(wallet.reserved_units_millis) + reservation.units_millis;
+    wallet.reservations.push(reservation);
+    trimReservations(wallet);
+    recordWalletEvent(wallet, now, "reservation", 0);
+    await this.save(organization);
+    return json({ status: "ok", reservation: publicReservation(reservation), ai: aiBalance(organization, now) });
+  }
+
+  async settleAi(organization, body) {
+    const now = epoch();
+    const reservationId = cleanReservationId(body.reservation_id);
+    if (!reservationId) return json({ status: "invalid", message: "reservation_id is required." }, 400);
+    const wallet = aiWallet(organization);
+    expireReservations(wallet, now);
+    const reservation = wallet.reservations.find((entry) => entry.id === reservationId);
+    if (!reservation) return json({ status: "not_found", message: "Reservation not found." }, 404);
+    if (reservation.status === "settled") {
+      return json({ status: "ok", reservation: publicReservation(reservation), ai: aiBalance(organization, now) });
+    }
+    if (reservation.status !== "reserved") {
+      return json({ status: "invalid", message: "Reservation is no longer active." }, 409);
+    }
+    const actualUnits = optionalWhole(body.actual_units, 0, MAX_AI_RESERVATION_UNITS);
+    if (actualUnits === null) return json({ status: "invalid", message: "actual_units is required." }, 400);
+    const actualMillis = actualUnits * 1000;
+    if (actualMillis > reservation.units_millis) {
+      return json({ status: "invalid", message: "Settled usage exceeds the reservation." }, 400);
+    }
+    wallet.reserved_units_millis = Math.max(0, nonNegativeInt(wallet.reserved_units_millis) - reservation.units_millis);
+    spendUnits(wallet, actualMillis);
+    reservation.status = "settled";
+    reservation.settled_units_millis = actualMillis;
+    reservation.settled_at = now;
+    recordWalletEvent(wallet, now, "usage_settled", -actualMillis);
+    await this.save(organization);
+    return json({ status: "ok", reservation: publicReservation(reservation), ai: aiBalance(organization, now) });
+  }
+
+  async releaseAi(organization, body) {
+    const reservationId = cleanReservationId(body.reservation_id);
+    if (!reservationId) return json({ status: "invalid", message: "reservation_id is required." }, 400);
+    const wallet = aiWallet(organization);
+    const reservation = wallet.reservations.find((entry) => entry.id === reservationId);
+    if (!reservation) return json({ status: "not_found", message: "Reservation not found." }, 404);
+    if (reservation.status === "released") {
+      return json({ status: "ok", reservation: publicReservation(reservation), ai: aiBalance(organization) });
+    }
+    if (reservation.status !== "reserved") {
+      return json({ status: "invalid", message: "Reservation is no longer active." }, 409);
+    }
+    wallet.reserved_units_millis = Math.max(0, nonNegativeInt(wallet.reserved_units_millis) - reservation.units_millis);
+    reservation.status = "released";
+    reservation.released_at = epoch();
+    recordWalletEvent(wallet, reservation.released_at, "reservation_released", 0);
+    await this.save(organization);
+    return json({ status: "ok", reservation: publicReservation(reservation), ai: aiBalance(organization) });
   }
 
   async updatePlan(organization, body) {
@@ -347,6 +531,7 @@ function publicOrganization(organization) {
     devices_used: (organization.devices || []).length,
     revoked: organization.revoked === true,
     ai: aiEntitlement(organization),
+    ai_balance: aiBalance(organization),
     created_at: organization.created_at,
   };
 }
@@ -381,6 +566,45 @@ async function findOrganizationByActivationCode(env, codeHash) {
 async function isAdmin(request, env) {
   const supplied = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   return constantTimeEqual(supplied, env.ADMIN_TOKEN || "");
+}
+
+async function isGateway(request, env) {
+  const supplied = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+  return Boolean(env.AI_GATEWAY_SERVICE_TOKEN) && constantTimeEqual(supplied, env.AI_GATEWAY_SERVICE_TOKEN);
+}
+
+async function createAiToken(env, organizationId, machineId, ai, now) {
+  if (!env.AI_TOKEN_SECRET) throw new Error("AI_TOKEN_SECRET is not configured.");
+  const header = base64urlText(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+  const payload = base64urlText(JSON.stringify({
+    aud: AI_TOKEN_AUDIENCE,
+    org: organizationId,
+    machine: machineId,
+    addon_active: ai.addonActive === true,
+    addon_expires_at: ai.addonExpiresAt || 0,
+    iat: now,
+    exp: now + AI_TOKEN_TTL_SECONDS,
+    jti: crypto.randomUUID(),
+  }));
+  const unsigned = `${header}.${payload}`;
+  const signature = await hmacBase64url(env.AI_TOKEN_SECRET, unsigned);
+  return `${unsigned}.${signature}`;
+}
+
+function base64urlText(value) {
+  return base64url(new TextEncoder().encode(value));
+}
+
+async function hmacBase64url(secret, value) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value));
+  return base64url(new Uint8Array(signature));
 }
 
 async function constantTimeEqual(left, right) {
@@ -476,7 +700,9 @@ function aiWallet(organization) {
   wallet.monthly_units_remaining_millis = nonNegativeInt(wallet.monthly_units_remaining_millis);
   wallet.topup_units_remaining_millis = nonNegativeInt(wallet.topup_units_remaining_millis);
   wallet.monthly_reset_at = positiveEpoch(wallet.monthly_reset_at);
+  wallet.reserved_units_millis = nonNegativeInt(wallet.reserved_units_millis);
   if (!Array.isArray(wallet.ledger)) wallet.ledger = [];
+  if (!Array.isArray(wallet.reservations)) wallet.reservations = [];
   return wallet;
 }
 function aiEntitlement(organization, now = epoch()) {
@@ -492,11 +718,14 @@ function aiBalance(organization, now = epoch()) {
   refreshMonthlyAllowance(wallet, now);
   const monthly = wallet.monthly_units_remaining_millis;
   const topup = wallet.topup_units_remaining_millis;
+  const reserved = nonNegativeInt(wallet.reserved_units_millis);
   return {
     addon_active: aiEntitlement(organization, now).addonActive,
     monthly_units_remaining: monthly / 1000,
     topup_units_remaining: topup / 1000,
+    reserved_units_remaining: reserved / 1000,
     total_units_remaining: (monthly + topup) / 1000,
+    available_units_remaining: Math.max(0, monthly + topup - reserved) / 1000,
     monthly_reset_at: wallet.monthly_reset_at,
     rates: { transcription_units_per_minute: 1, standard_llm_request_units: 10 },
   };
@@ -504,6 +733,51 @@ function aiBalance(organization, now = epoch()) {
 function recordWalletEvent(wallet, at, type, deltaMillis) {
   wallet.ledger.push({ at, type, delta_millis: deltaMillis });
   if (wallet.ledger.length > 200) wallet.ledger.splice(0, wallet.ledger.length - 200);
+}
+
+function spendUnits(wallet, unitsMillis) {
+  const fromMonthly = Math.min(nonNegativeInt(wallet.monthly_units_remaining_millis), unitsMillis);
+  wallet.monthly_units_remaining_millis = nonNegativeInt(wallet.monthly_units_remaining_millis) - fromMonthly;
+  const remaining = unitsMillis - fromMonthly;
+  wallet.topup_units_remaining_millis = Math.max(0, nonNegativeInt(wallet.topup_units_remaining_millis) - remaining);
+}
+
+function expireReservations(wallet, now) {
+  for (const reservation of wallet.reservations) {
+    if (reservation.status !== "reserved" || reservation.expires_at > now) continue;
+    reservation.status = "released";
+    reservation.released_at = now;
+    wallet.reserved_units_millis = Math.max(0, nonNegativeInt(wallet.reserved_units_millis) - reservation.units_millis);
+  }
+}
+
+function trimReservations(wallet) {
+  if (wallet.reservations.length <= 1000) return;
+  const active = wallet.reservations.filter((entry) => entry.status === "reserved");
+  const recent = wallet.reservations.filter((entry) => entry.status !== "reserved").slice(-900);
+  wallet.reservations = [...active, ...recent];
+}
+
+function publicReservation(reservation) {
+  return {
+    id: reservation.id,
+    units: reservation.units_millis / 1000,
+    kind: reservation.kind,
+    status: reservation.status,
+    created_at: reservation.created_at,
+    expires_at: reservation.expires_at,
+    settled_units: (reservation.settled_units_millis || 0) / 1000,
+  };
+}
+
+function cleanIdempotencyKey(value) {
+  const key = String(value || "").trim();
+  return key.length >= 8 && key.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(key) ? key : null;
+}
+
+function cleanReservationId(value) {
+  const id = String(value || "").trim();
+  return /^res_[a-f0-9]{32}$/.test(id) ? id : null;
 }
 function refreshMonthlyAllowance(wallet, now) {
   const cycleDays = optionalWhole(wallet.monthly_cycle_days, 1, 366) ?? 30;
@@ -529,12 +803,12 @@ function forward(response) { return new Response(response.body, { status: respon
 const ADMIN_HTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Wordlyte Account Admin</title><style>
-:root{color-scheme:dark;--bg:#10131a;--panel:#191e29;--border:#30394a;--text:#edf2f7;--muted:#a5b0c0;--accent:#77b7ff;--danger:#fb7185;--ok:#5eead4}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px system-ui,-apple-system,Segoe UI,Roboto,sans-serif}header{padding:16px 22px;border-bottom:1px solid var(--border);display:flex;gap:12px;align-items:center}h1,h2{margin:0}h1{font-size:17px}h2{font-size:15px}.spacer{flex:1}main{max-width:1200px;margin:22px auto;padding:0 18px;display:grid;gap:16px}.panel{padding:16px;background:var(--panel);border:1px solid var(--border);border-radius:10px}.hidden{display:none}.muted{color:var(--muted)}.row{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin-top:12px}input,select,button{font:inherit;border-radius:6px;padding:8px 10px;border:1px solid var(--border);background:#10141c;color:var(--text)}input{min-width:130px}button{cursor:pointer}button:hover{border-color:var(--accent)}button.primary{background:var(--accent);color:#07111f;border-color:var(--accent);font-weight:700}button.danger{color:var(--danger)}table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--border);vertical-align:middle}th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em}.badge{border:1px solid var(--border);border-radius:999px;padding:2px 7px;font-size:11px;font-weight:700}.free{color:#cbd5e1}.pro{color:#7dd3fc}.premium{color:#d8b4fe}.revoked{color:var(--danger)}.code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.notice{min-height:20px;margin-top:10px;color:var(--muted)}.error{color:var(--danger)}@media(max-width:800px){table{display:block;overflow:auto}}
+:root{color-scheme:dark;--bg:#10131a;--panel:#191e29;--border:#30394a;--text:#edf2f7;--muted:#a5b0c0;--accent:#77b7ff;--danger:#fb7185;--ok:#5eead4}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px system-ui,-apple-system,Segoe UI,Roboto,sans-serif}header{padding:16px 22px;border-bottom:1px solid var(--border);display:flex;gap:12px;align-items:center}h1,h2{margin:0}h1{font-size:17px}h2{font-size:15px}.spacer{flex:1}main{max-width:1200px;margin:22px auto;padding:0 18px;display:grid;gap:16px}.panel{padding:16px;background:var(--panel);border:1px solid var(--border);border-radius:10px}.hidden{display:none}.muted{color:var(--muted)}.row{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin-top:12px}input,select,button{font:inherit;border-radius:6px;padding:8px 10px;border:1px solid var(--border);background:#10141c;color:var(--text)}input{min-width:130px}button{cursor:pointer}button:hover{border-color:var(--accent)}button.primary{background:var(--accent);color:#07111f;border-color:var(--accent);font-weight:700}button.danger{color:var(--danger)}table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--border);vertical-align:middle}th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em}.badge{border:1px solid var(--border);border-radius:999px;padding:2px 7px;font-size:11px;font-weight:700}.free{color:#cbd5e1}.pro{color:#7dd3fc}.premium{color:#d8b4fe}.revoked{color:var(--danger)}.ai{color:#5eead4}.code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.notice{min-height:20px;margin-top:10px;color:var(--muted)}.error{color:var(--danger)}@media(max-width:800px){table{display:block;overflow:auto}}
 </style></head><body>
 <section id="login"><main><div class="panel"><h1>Wordlyte Account Admin</h1><p class="muted">Sign in with the server administrator token. The token is held only in this browser tab.</p><div class="row"><input id="token" type="password" autocomplete="current-password" placeholder="ADMIN_TOKEN" style="flex:1"><button class="primary" id="signIn">Sign in</button></div><p class="notice" id="loginNotice"></p></div></main></section>
 <section id="app" class="hidden"><header><h1>Wordlyte Account Admin</h1><span class="muted" id="summary"></span><span class="spacer"></span><button id="refresh">Refresh</button><button id="signOut">Sign out</button></header><main>
 <div class="panel"><h2>Create organization</h2><div class="row"><input id="church" placeholder="Church name" style="flex:2"><input id="email" type="email" placeholder="Owner email" style="flex:2"><select id="createPlan"><option value="free">Free</option><option value="pro">Pro</option><option value="premium">Premium</option></select><input id="createDays" type="number" min="1" max="3650" value="30" title="Paid plan duration in days"><input id="createDevices" type="number" min="1" value="1" title="Device limit"><button class="primary" id="create">Create</button></div><p class="notice" id="createNotice"></p></div>
-<div class="panel"><h2>Organizations</h2><p class="notice" id="notice"></p><table><thead><tr><th>Church</th><th>Owner</th><th>Plan</th><th>Devices</th><th>Paid expiry</th><th>Status</th><th>Actions</th></tr></thead><tbody id="rows"></tbody></table></div>
+<div class="panel"><h2>Organizations</h2><p class="notice" id="notice"></p><table><thead><tr><th>Church</th><th>Owner</th><th>Plan</th><th>Devices</th><th>Paid expiry</th><th>Status</th><th>AI</th><th>Actions</th></tr></thead><tbody id="rows"></tbody></table></div>
 </main></section>
 <script>
 let token=sessionStorage.getItem('wordlyte_admin_token')||'', organizations=[];
@@ -545,8 +819,8 @@ function showNotice(id,text,error=false){const e=$(id);e.textContent=text;e.clas
 function showApp(){ $('login').classList.add('hidden');$('app').classList.remove('hidden');load(); }
 function showLogin(message=''){ $('app').classList.add('hidden');$('login').classList.remove('hidden');$('token').value=token;showNotice('loginNotice',message,true); }
 async function load(){showNotice('notice','Loading…');const r=await api('/admin/organizations');if(r.status===401){showLogin('Unauthorized — check the administrator token.');return}if(r.status!==200||!r.data?.organizations){showNotice('notice',r.data?.message||'Could not load organizations.',true);return}organizations=r.data.organizations;$('summary').textContent=organizations.length+' organization'+(organizations.length===1?'':'s');showNotice('notice','');render()}
-function render(){const body=$('rows');if(!organizations.length){body.innerHTML='<tr><td colspan="7" class="muted">No organizations yet.</td></tr>';return}body.innerHTML=organizations.map(o=>'<tr><td><b>'+esc(o.church_name)+'</b><br><span class="muted code">'+esc(o.id)+'</span></td><td>'+esc(o.email)+'</td><td><span class="badge '+esc(o.plan)+'">'+esc(o.plan)+'</span></td><td>'+esc(o.devices_used)+' / '+esc(o.device_limit)+'</td><td>'+date(o.plan_expires_at)+'</td><td>'+(o.revoked?'<span class="badge revoked">revoked</span>':'<span class="badge">active</span>')+'</td><td><button data-action="code" data-id="'+esc(o.id)+'">Pair code</button> <button data-action="plan" data-id="'+esc(o.id)+'">Plan</button> <button class="danger" data-action="revoke" data-id="'+esc(o.id)+'">'+(o.revoked?'Restore':'Revoke')+'</button></td></tr>').join('')}
+function render(){const body=$('rows');if(!organizations.length){body.innerHTML='<tr><td colspan="8" class="muted">No organizations yet.</td></tr>';return}body.innerHTML=organizations.map(o=>'<tr><td><b>'+esc(o.church_name)+'</b><br><span class="muted code">'+esc(o.id)+'</span></td><td>'+esc(o.email)+'</td><td><span class="badge '+esc(o.plan)+'">'+esc(o.plan)+'</span></td><td>'+esc(o.devices_used)+' / '+esc(o.device_limit)+'</td><td>'+date(o.plan_expires_at)+'</td><td>'+(o.revoked?'<span class="badge revoked">revoked</span>':'<span class="badge">active</span>')+'</td><td>'+(o.ai?.addonActive?'<span class="badge ai">AI</span><br><span class="muted">'+esc(o.ai_balance?.total_units_remaining??'—')+' Units</span>':'<span class="muted">—</span>')+'</td><td><button data-action="code" data-id="'+esc(o.id)+'">Pair code</button> <button data-action="plan" data-id="'+esc(o.id)+'">Plan</button> <button data-action="ai" data-id="'+esc(o.id)+'">AI</button> <button class="danger" data-action="revoke" data-id="'+esc(o.id)+'">'+(o.revoked?'Restore':'Revoke')+'</button></td></tr>').join('')}
 async function create(){const church_name=$('church').value.trim(),email=$('email').value.trim(),plan=$('createPlan').value;if(!church_name||!email){showNotice('createNotice','Church name and owner email are required.',true);return}const r=await api('/admin/organizations',{method:'POST',body:JSON.stringify({church_name,email,plan,plan_duration_days:+$('createDays').value,device_limit:+$('createDevices').value})});if(r.status!==200){showNotice('createNotice',r.data?.message||'Could not create organization.',true);return}showNotice('createNotice','Created. Activation code: '+r.data.activation_code);$('church').value='';$('email').value='';load()}
-async function action(event){const button=event.target.closest('button[data-action]');if(!button)return;const id=button.dataset.id,kind=button.dataset.action;if(kind==='code'){const r=await api('/admin/organizations/'+id+'/activation-code',{method:'POST',body:'{}'});showNotice('notice',r.status===200?'Device activation code: '+r.data.activation_code:(r.data?.message||'Could not create pairing code.'),r.status!==200);return}if(kind==='revoke'){const organization=organizations.find(o=>o.id===id);if(!organization||!confirm((organization.revoked?'Restore':'Revoke')+' '+organization.church_name+'?'))return;const r=await api('/admin/organizations/'+id+'/revoke',{method:'POST',body:JSON.stringify({revoked:!organization.revoked})});if(r.status!==200)showNotice('notice',r.data?.message||'Update failed.',true);else load();return}const organization=organizations.find(o=>o.id===id);const plan=prompt('Plan: free, pro, or premium',organization?.plan||'free');if(!plan)return;const days=prompt('Plan duration in days (paid plans)', '30');const devices=prompt('Device limit',String(organization?.device_limit||1));const r=await api('/admin/organizations/'+id+'/plan',{method:'POST',body:JSON.stringify({plan,plan_duration_days:+days,device_limit:+devices})});if(r.status!==200)showNotice('notice',r.data?.message||'Plan update failed.',true);else load()}
+async function action(event){const button=event.target.closest('button[data-action]');if(!button)return;const id=button.dataset.id,kind=button.dataset.action;if(kind==='code'){const r=await api('/admin/organizations/'+id+'/activation-code',{method:'POST',body:'{}'});showNotice('notice',r.status===200?'Device activation code: '+r.data.activation_code:(r.data?.message||'Could not create pairing code.'),r.status!==200);return}if(kind==='revoke'){const organization=organizations.find(o=>o.id===id);if(!organization||!confirm((organization.revoked?'Restore':'Revoke')+' '+organization.church_name+'?'))return;const r=await api('/admin/organizations/'+id+'/revoke',{method:'POST',body:JSON.stringify({revoked:!organization.revoked})});if(r.status!==200)showNotice('notice',r.data?.message||'Update failed.',true);else load();return}if(kind==='ai'){const organization=organizations.find(o=>o.id===id);const days=prompt('AI Add-on duration in days (0 disables)','30');if(days===null)return;const monthly=prompt('Monthly AI Units',String(organization?.ai_balance?.monthly_units_remaining??120));if(monthly===null)return;const topup=prompt('One-time top-up Units (added)', '0');if(topup===null)return;const r=await api('/admin/organizations/'+id+'/ai',{method:'POST',body:JSON.stringify({addon_duration_days:+days,monthly_units:+monthly,topup_units:+topup})});if(r.status!==200)showNotice('notice',r.data?.message||'AI provisioning failed.',true);else{showNotice('notice','AI provisioned: '+esc(r.data?.ai?.total_units_remaining??0)+' Units available.');load()}return}const organization=organizations.find(o=>o.id===id);const plan=prompt('Plan: free, pro, or premium',organization?.plan||'free');if(!plan)return;const days=prompt('Plan duration in days (paid plans)', '30');const devices=prompt('Device limit',String(organization?.device_limit||1));const r=await api('/admin/organizations/'+id+'/plan',{method:'POST',body:JSON.stringify({plan,plan_duration_days:+days,device_limit:+devices})});if(r.status!==200)showNotice('notice',r.data?.message||'Plan update failed.',true);else load()}
 $('signIn').onclick=()=>{token=$('token').value.trim();if(!token){showNotice('loginNotice','Enter the administrator token.',true);return}sessionStorage.setItem('wordlyte_admin_token',token);showApp()};$('signOut').onclick=()=>{token='';sessionStorage.removeItem('wordlyte_admin_token');showLogin('')};$('refresh').onclick=load;$('create').onclick=create;$('rows').onclick=action;if(token)showApp();
 </script></body></html>`;

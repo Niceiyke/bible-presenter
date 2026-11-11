@@ -1,18 +1,14 @@
-use crate::secure_storage;
 use crate::state::AppState;
 use crate::store::{BibleStore, Verse};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::State;
 use tokio::sync::watch;
 
-const OPENAI_KEY_FILE: &str = "openai-api-key.dpapi";
-const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
-const DEFAULT_MODEL: &str = "gpt-6-astra";
+const DEFAULT_MODEL: &str = "gpt-5.6-luna";
 const MAX_SOURCE_CHARS: usize = 24_000;
 const MAX_SLIDES: u8 = 20;
 const MAX_EDIT_SOURCE_CHARS: usize = 16_000;
@@ -26,9 +22,14 @@ fn jobs() -> &'static GenerationJobs {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AiPresentationKeyStatus {
-    configured: bool,
-    provider: &'static str,
+pub struct AiPresentationStatus {
+    available: bool,
+    addon_active: bool,
+    monthly_units_remaining: f64,
+    topup_units_remaining: f64,
+    available_units_remaining: f64,
+    standard_llm_request_units: f64,
+    message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -115,58 +116,42 @@ pub struct AiSlideEditResult {
     pub warnings: Vec<String>,
 }
 
-fn key_path(app_data_dir: &Path) -> PathBuf {
-    app_data_dir.join("secrets").join(OPENAI_KEY_FILE)
-}
-
-fn load_api_key(app_data_dir: &Path) -> Result<String, String> {
-    let encrypted = std::fs::read(key_path(app_data_dir))
-        .map_err(|_| "OpenAI API key is not configured.".to_string())?;
-    let clear = secure_storage::unprotect(&encrypted)?;
-    let key =
-        String::from_utf8(clear).map_err(|_| "Stored OpenAI API key is invalid.".to_string())?;
-    if key.trim().is_empty() {
-        return Err("OpenAI API key is not configured.".into());
-    }
-    Ok(key)
-}
-
 #[tauri::command]
-pub fn ai_presentation_key_status(state: State<'_, AppState>) -> AiPresentationKeyStatus {
-    AiPresentationKeyStatus {
-        configured: load_api_key(&state.app_data_dir).is_ok(),
-        provider: "openai",
+pub async fn ai_presentation_status(state: State<'_, AppState>) -> Result<AiPresentationStatus, String> {
+    // Managed AI replaces the beta BYOK path. Remove any legacy local key as
+    // soon as the settings surface opens; it is never read by this build.
+    let legacy_key = state
+        .app_data_dir
+        .join("secrets")
+        .join("openai-api-key.dpapi");
+    if legacy_key.exists() {
+        let _ = std::fs::remove_file(legacy_key);
     }
-}
-
-#[tauri::command]
-pub fn ai_presentation_set_api_key(
-    state: State<'_, AppState>,
-    api_key: String,
-) -> Result<AiPresentationKeyStatus, String> {
-    let key = api_key.trim();
-    if key.len() < 20 || key.chars().any(char::is_whitespace) {
-        return Err("Enter a valid OpenAI API key.".into());
-    }
-    let path = key_path(&state.app_data_dir);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let encrypted = secure_storage::protect(key.as_bytes())?;
-    std::fs::write(path, encrypted).map_err(|e| format!("Could not save the API key: {e}"))?;
-    Ok(AiPresentationKeyStatus {
-        configured: true,
-        provider: "openai",
-    })
-}
-
-#[tauri::command]
-pub fn ai_presentation_clear_api_key(state: State<'_, AppState>) -> Result<(), String> {
-    let path = key_path(&state.app_data_dir);
-    if path.exists() {
-        std::fs::remove_file(path).map_err(|e| format!("Could not remove the API key: {e}"))?;
-    }
-    Ok(())
+    let status = match state.license.ai_access().await {
+        Ok(access) => AiPresentationStatus {
+            available: access.ai.available_units_remaining >= access.ai.rates.standard_llm_request_units,
+            addon_active: access.ai.addon_active,
+            monthly_units_remaining: access.ai.monthly_units_remaining,
+            topup_units_remaining: access.ai.topup_units_remaining,
+            available_units_remaining: access.ai.available_units_remaining,
+            standard_llm_request_units: access.ai.rates.standard_llm_request_units,
+            message: if access.ai.available_units_remaining >= access.ai.rates.standard_llm_request_units {
+                "Managed by Wordlyte AI".to_owned()
+            } else {
+                "Not enough AI Units for another draft.".to_owned()
+            },
+        },
+        Err(message) => AiPresentationStatus {
+            available: false,
+            addon_active: false,
+            monthly_units_remaining: 0.0,
+            topup_units_remaining: 0.0,
+            available_units_remaining: 0.0,
+            standard_llm_request_units: 10.0,
+            message,
+        },
+    };
+    Ok(status)
 }
 
 #[tauri::command]
@@ -182,9 +167,9 @@ pub async fn ai_generate_presentation(
     state: State<'_, AppState>,
     request: AiPresentationRequest,
 ) -> Result<AiDeckPlan, String> {
-    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
+    crate::license::ensure_core_activated(&state)?;
     validate_request(&request)?;
-    let api_key = load_api_key(&state.app_data_dir)?;
+    let access = state.license.ai_access().await?;
     let bible = state.store.clone();
     let job_id = request.job_id.clone();
     let (cancel_tx, cancel_rx) = watch::channel(false);
@@ -196,7 +181,7 @@ pub async fn ai_generate_presentation(
         guard.insert(job_id.clone(), cancel_tx);
     }
 
-    let result = generate_openai_plan(&api_key, &request, bible, cancel_rx).await;
+    let result = generate_openai_plan(&access.token, &request, bible, cancel_rx).await;
     jobs()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -209,9 +194,9 @@ pub async fn ai_edit_presentation_slide(
     state: State<'_, AppState>,
     request: AiSlideEditRequest,
 ) -> Result<AiSlideEditResult, String> {
-    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
+    crate::license::ensure_core_activated(&state)?;
     validate_edit_request(&request)?;
-    let api_key = load_api_key(&state.app_data_dir)?;
+    let access = state.license.ai_access().await?;
     let bible = state.store.clone();
     let job_id = request.job_id.clone();
     let (cancel_tx, cancel_rx) = watch::channel(false);
@@ -223,7 +208,7 @@ pub async fn ai_edit_presentation_slide(
         guard.insert(job_id.clone(), cancel_tx);
     }
 
-    let result = generate_openai_slide_edit(&api_key, &request, bible, cancel_rx).await;
+    let result = generate_openai_slide_edit(&access.token, &request, bible, cancel_rx).await;
     jobs()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -317,8 +302,15 @@ fn validate_edit_request(request: &AiSlideEditRequest) -> Result<(), String> {
     Ok(())
 }
 
+fn ai_gateway_responses_url() -> String {
+    format!(
+        "{}/v1/llm/responses",
+        crate::license::ai_gateway_url().trim_end_matches('/')
+    )
+}
+
 async fn generate_openai_plan(
-    api_key: &str,
+    access_token: &str,
     request: &AiPresentationRequest,
     bible: Arc<BibleStore>,
     mut cancel_rx: watch::Receiver<bool>,
@@ -326,11 +318,11 @@ async fn generate_openai_plan(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .build()
-        .map_err(|e| format!("Could not initialize OpenAI: {e}"))?;
+        .map_err(|e| format!("Could not initialize Wordlyte AI: {e}"))?;
     let body = openai_request_body(request);
     let send = client
-        .post(OPENAI_RESPONSES_URL)
-        .bearer_auth(api_key)
+        .post(ai_gateway_responses_url())
+        .bearer_auth(access_token)
         .json(&body)
         .send();
     let response = tokio::select! {
@@ -359,7 +351,7 @@ async fn generate_openai_plan(
 }
 
 async fn generate_openai_slide_edit(
-    api_key: &str,
+    access_token: &str,
     request: &AiSlideEditRequest,
     bible: Arc<BibleStore>,
     mut cancel_rx: watch::Receiver<bool>,
@@ -367,10 +359,10 @@ async fn generate_openai_slide_edit(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .build()
-        .map_err(|e| format!("Could not initialize OpenAI: {e}"))?;
+        .map_err(|e| format!("Could not initialize Wordlyte AI: {e}"))?;
     let send = client
-        .post(OPENAI_RESPONSES_URL)
-        .bearer_auth(api_key)
+        .post(ai_gateway_responses_url())
+        .bearer_auth(access_token)
         .json(&openai_slide_edit_request_body(request))
         .send();
     let response = tokio::select! {
@@ -612,7 +604,13 @@ fn extract_output_text(value: &Value) -> Option<&str> {
 fn openai_error_message(status: u16, body: &str) -> String {
     let detail = serde_json::from_str::<Value>(body)
         .ok()
-        .and_then(|value| value.pointer("/error/message")?.as_str().map(str::to_owned));
+        .and_then(|value| {
+            value
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .or_else(|| value.pointer("/error").and_then(Value::as_str))
+                .map(str::to_owned)
+        });
     match detail {
         Some(detail) if detail.len() <= 500 => {
             format!("OpenAI rejected the request ({status}): {detail}")

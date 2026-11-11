@@ -9,9 +9,12 @@ account, AI, and Dashboard services.
 **Implementation status:** Phase 1A and the entitlement portion of Phase 2 are
 in progress. The clean v3 organization/device entitlement protocol, permanent
 activated-Free desktop model, server-signed plan limits, AI Add-on status, and
-an admin-provisioned AI Unit wallet are implemented. Self-service Dashboard
-authentication, verified-email onboarding, billing, managed AI Gateway, and
-transcript sync remain subsequent phases.
+an admin-provisioned AI Unit wallet are implemented. The first managed AI
+Gateway slice now provides device-to-AI token exchange, AI Unit
+reservation/settlement/release, an OpenAI Responses proxy with model
+allowlisting, and a read-only Dashboard AI balance view. Desktop BYOK removal,
+streaming ASR relay, billing checkout/webhooks, and transcript sync remain
+subsequent phases.
 
 ## Product principles
 

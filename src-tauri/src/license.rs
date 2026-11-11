@@ -22,6 +22,11 @@ fn default_server_url() -> String {
         .unwrap_or_else(|_| "https://wordlyte-license.oyomworld.workers.dev".to_owned())
 }
 
+pub fn ai_gateway_url() -> String {
+    std::env::var("WORDLYTE_AI_GATEWAY_URL")
+        .unwrap_or_else(|_| "https://wordlyte-ai-gateway.oyomworld.workers.dev".to_owned())
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LicenseStatus {
@@ -88,6 +93,77 @@ pub struct AiEntitlement {
     pub addon_active: bool,
     #[serde(default)]
     pub addon_expires_at: Option<u64>,
+}
+
+/// Display-only AI Unit balance. It is fetched online and never cached in the
+/// signed entitlement; only the License Worker may spend Units.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiUnitBalance {
+    pub addon_active: bool,
+    pub monthly_units_remaining: f64,
+    pub topup_units_remaining: f64,
+    pub reserved_units_remaining: f64,
+    pub total_units_remaining: f64,
+    pub available_units_remaining: f64,
+    pub monthly_reset_at: Option<u64>,
+    pub rates: AiUnitRates,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiUnitRates {
+    pub transcription_units_per_minute: f64,
+    pub standard_llm_request_units: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiAccessInfo {
+    pub token: String,
+    pub expires_at: u64,
+    pub ai: AiUnitBalance,
+}
+
+#[derive(Debug, Deserialize)]
+struct ServerAiRates {
+    #[serde(default)]
+    transcription_units_per_minute: f64,
+    #[serde(default)]
+    standard_llm_request_units: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ServerAiBalance {
+    #[serde(default)]
+    addon_active: bool,
+    #[serde(default)]
+    monthly_units_remaining: f64,
+    #[serde(default)]
+    topup_units_remaining: f64,
+    #[serde(default)]
+    reserved_units_remaining: f64,
+    #[serde(default)]
+    total_units_remaining: f64,
+    #[serde(default)]
+    available_units_remaining: f64,
+    #[serde(default)]
+    monthly_reset_at: Option<u64>,
+    #[serde(default)]
+    rates: Option<ServerAiRates>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AiTokenResponse {
+    status: String,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    token: Option<String>,
+    #[serde(default)]
+    expires_at: Option<u64>,
+    #[serde(default)]
+    ai: Option<ServerAiBalance>,
 }
 
 impl LicenseLimits {
@@ -754,6 +830,74 @@ impl LicenseManager {
             }
             Err(_) => Ok(self.evaluate(Some(existing), true)),
         }
+    }
+
+    /// Exchange this device's activation credential for a short-lived managed
+    /// AI token. This is always an online operation; no AI token or provider
+    /// key is ever persisted locally.
+    pub async fn ai_access(&self) -> Result<AiAccessInfo, String> {
+        let existing = self
+            .license
+            .lock()
+            .clone()
+            .ok_or_else(|| "Activate this computer before using Wordlyte AI.".to_owned())?;
+        if existing.machine_id != self.machine_id {
+            return Err("This activation belongs to a different computer.".to_owned());
+        }
+        let url = format!(
+            "{}{}",
+            self.server_url.trim_end_matches('/'),
+            "/ai/token"
+        );
+        let response = self
+            .client
+            .post(url)
+            .json(&serde_json::json!({
+                "organization_id": existing.organization_id,
+                "machine_id": self.machine_id,
+                "device_token": existing.device_token,
+            }))
+            .send()
+            .await
+            .map_err(|error| format!("Could not reach the Wordlyte AI service: {error}"))?;
+        let status = response.status();
+        let payload: AiTokenResponse = response
+            .json()
+            .await
+            .map_err(|error| format!("The Wordlyte AI service returned an invalid response: {error}"))?;
+        if !status.is_success() || payload.status != "ok" {
+            return Err(payload
+                .message
+                .unwrap_or_else(|| "Wordlyte AI is not available for this organization.".to_owned()));
+        }
+        let token = payload
+            .token
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "The Wordlyte AI service did not issue an access token.".to_owned())?;
+        let server_ai = payload
+            .ai
+            .ok_or_else(|| "The Wordlyte AI service did not return an AI Unit balance.".to_owned())?;
+        let rates = server_ai.rates.unwrap_or(ServerAiRates {
+            transcription_units_per_minute: 1.0,
+            standard_llm_request_units: 10.0,
+        });
+        Ok(AiAccessInfo {
+            token,
+            expires_at: payload.expires_at.unwrap_or_else(|| now_secs() + 900),
+            ai: AiUnitBalance {
+                addon_active: server_ai.addon_active,
+                monthly_units_remaining: server_ai.monthly_units_remaining,
+                topup_units_remaining: server_ai.topup_units_remaining,
+                reserved_units_remaining: server_ai.reserved_units_remaining,
+                total_units_remaining: server_ai.total_units_remaining,
+                available_units_remaining: server_ai.available_units_remaining,
+                monthly_reset_at: server_ai.monthly_reset_at,
+                rates: AiUnitRates {
+                    transcription_units_per_minute: rates.transcription_units_per_minute,
+                    standard_llm_request_units: rates.standard_llm_request_units,
+                },
+            },
+        })
     }
 
     fn license_from_signed_nonactive(

@@ -42,16 +42,28 @@ jobs:
           npm test
           rm -f .dev.vars
 
-      - name: set ADMIN_TOKEN secret (from GitHub secret)
+      - name: set worker secrets (from GitHub secrets)
         shell: bash
         working-directory: workers/license
         env:
           ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          AI_TOKEN_SECRET: ${{ secrets.AI_TOKEN_SECRET }}
+          AI_GATEWAY_SERVICE_TOKEN: ${{ secrets.AI_GATEWAY_SERVICE_TOKEN }}
         run: |
           if [ -n "$ADMIN_TOKEN" ]; then
             echo "$ADMIN_TOKEN" | npx wrangler secret put ADMIN_TOKEN
           else
             echo "::warning::ADMIN_TOKEN secret not set in GitHub; skipping secret write."
+          fi
+          if [ -n "$AI_TOKEN_SECRET" ]; then
+            echo "$AI_TOKEN_SECRET" | npx wrangler secret put AI_TOKEN_SECRET
+          else
+            echo "::warning::AI_TOKEN_SECRET secret not set in GitHub; managed AI token exchange will be unavailable."
+          fi
+          if [ -n "$AI_GATEWAY_SERVICE_TOKEN" ]; then
+            echo "$AI_GATEWAY_SERVICE_TOKEN" | npx wrangler secret put AI_GATEWAY_SERVICE_TOKEN
+          else
+            echo "::warning::AI_GATEWAY_SERVICE_TOKEN secret not set in GitHub; AI wallet spend endpoints will reject the gateway."
           fi
 
       - name: deploy worker

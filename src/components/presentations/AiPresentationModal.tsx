@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertTriangle, BookOpen, CheckCircle2, History, Sparkles, XCircle } from "lucide-react";
 import { Button, Modal, StatusBadge } from "../ui";
@@ -18,9 +18,14 @@ interface AiPresentationModalProps {
   onCreate: (presentation: CustomPresentation) => Promise<void>;
 }
 
-interface KeyStatus {
-  configured: boolean;
-  provider: "openai";
+interface AiPresentationStatus {
+  available: boolean;
+  addonActive: boolean;
+  monthlyUnitsRemaining: number;
+  topupUnitsRemaining: number;
+  availableUnitsRemaining: number;
+  standardLlmRequestUnits: number;
+  message: string;
 }
 
 const PRESENTATION_TYPES = ["Sermon", "Bible study", "Teaching", "Announcement", "Event"];
@@ -38,7 +43,7 @@ export function AiPresentationModal({ open, defaultBibleVersion, onClose, onCrea
   const [savedSessionId, setSavedSessionId] = useState("");
   const [includeSpeakerNotes, setIncludeSpeakerNotes] = useState(true);
   const [highlightKeyPoints, setHighlightKeyPoints] = useState(true);
-  const [configured, setConfigured] = useState<boolean | null>(null);
+  const [aiStatus, setAiStatus] = useState<AiPresentationStatus | null>(null);
   const [generating, setGenerating] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
@@ -48,11 +53,11 @@ export function AiPresentationModal({ open, defaultBibleVersion, onClose, onCrea
   useEffect(() => {
     if (!open) return;
     void Promise.all([
-      invoke<KeyStatus>("ai_presentation_key_status"),
+      invoke<AiPresentationStatus>("ai_presentation_status"),
       invoke<string[]>("get_bible_versions"),
       invoke<SavedAiScriptureSessionSummary[]>("ai_sessions_list"),
-    ]).then(([key, available, sessions]) => {
-      setConfigured(key.configured);
+    ]).then(([ai, available, sessions]) => {
+      setAiStatus(ai);
       setVersions(available);
       setSavedSessions(sessions.filter((session) => session.transcriptSegments > 0));
       if (!available.includes(bibleVersion)) setBibleVersion(available[0] || defaultBibleVersion || "KJV");
@@ -69,8 +74,6 @@ export function AiPresentationModal({ open, defaultBibleVersion, onClose, onCrea
     const interval = window.setInterval(refreshSavedSessions, 3_000);
     return () => window.clearInterval(interval);
   }, [open]);
-
-  const model = useMemo(() => localStorage.getItem("pref_aiPresentationModel") || "gpt-6-astra", [open]);
 
   const cancel = async () => {
     const jobId = jobIdRef.current;
@@ -100,7 +103,6 @@ export function AiPresentationModal({ open, defaultBibleVersion, onClose, onCrea
       bibleVersion,
       includeSpeakerNotes,
       highlightKeyPoints,
-      model,
     };
     try {
       setPlan(await invoke<AiDeckPlan>("ai_generate_presentation", { request }));
@@ -160,17 +162,17 @@ export function AiPresentationModal({ open, defaultBibleVersion, onClose, onCrea
   ) : (
     <>
       <Button variant="bare" onClick={close}>Cancel</Button>
-      <Button variant="primary" onClick={() => void generate()} disabled={!configured || topic.trim().length < 3 || versions.length === 0} icon={<Sparkles size={14} />}>Generate outline</Button>
+      <Button variant="primary" onClick={() => void generate()} disabled={!aiStatus?.available || topic.trim().length < 3 || versions.length === 0} icon={<Sparkles size={14} />}>Generate outline</Button>
     </>
   );
 
   return (
     <Modal open={open} onClose={close} title="Create presentation with AI" maxWidth="max-w-4xl" footer={footer}>
       <div className="p-4">
-        {configured === false && (
+        {aiStatus && !aiStatus.available && (
           <div className="mb-4 rounded-lg border border-state-warning/40 bg-state-warning/10 p-3 text-xs text-state-warning flex gap-2">
             <AlertTriangle size={15} className="shrink-0 mt-0.5" />
-            <span>OpenAI is not configured. Save an API key under <strong>Settings → AI Creation</strong>.</span>
+            <span>{aiStatus.message} Manage the AI Add-on in your Wordlyte Dashboard, then refresh this window.</span>
           </div>
         )}
         {error && (

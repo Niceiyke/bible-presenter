@@ -9,11 +9,11 @@ The AI Presentation Assistant creates editable Studio drafts from an operator-su
 - The operator previews the outline before creating the deck and can edit every generated element afterward.
 - Network, provider, credential, cancellation, or validation failures do not affect existing presentations or normal projection.
 
-## Initial OpenAI slice
+## Managed AI slice
 
-1. **Settings → AI Creation** stores a church-owned OpenAI key in the separate `openai-api-key.dpapi` file using current-user Windows DPAPI. The key is not returned to React and is excluded from Wordlyte backups.
+1. **Settings → AI Creation** shows the organization's managed AI Add-on and online AI Unit balance. Provider credentials live only in the Wordlyte AI Gateway; the desktop never stores or accepts an OpenAI key.
 2. **Presentations → Create with AI** accepts a topic, optional notes, audience, presentation type, slide count, installed Bible version, speaker-note preference, and key-point highlighting preference.
-3. The Rust backend calls the OpenAI Responses API with strict Structured Outputs. Source notes are explicitly treated as content rather than instructions.
+3. The Rust backend calls the Wordlyte AI Gateway with a short-lived device AI token. The Gateway reserves AI Units, calls the OpenAI Responses API with strict Structured Outputs, and settles the Units. Source notes are explicitly treated as content rather than instructions.
 4. The provider returns a semantic deck plan, never raw slide JSON, HTML, element coordinates, IDs, local paths, or Bible verse text.
 5. The backend applies independent size, enum, markup, and exact-emphasis validation after schema validation.
 6. Generated Scripture references are resolved against the installed Bible database. Verse text always comes from Wordlyte; unresolved references produce visible warnings and are not inserted as Scripture text.
@@ -25,7 +25,7 @@ The AI Presentation Assistant creates editable Studio drafts from an operator-su
 ```text
 topic / pasted notes
   -> Rust request validation
-  -> OpenAI Responses API structured deck plan
+  -> Wordlyte AI Gateway -> OpenAI Responses API structured deck plan
   -> strict local plan validation
   -> installed-Bible reference resolution
   -> operator outline preview and warnings
@@ -40,8 +40,8 @@ topic / pasted notes
 - Topic and notes are sent only when the operator selects **Generate outline**.
 - Generated plans remain in frontend memory until accepted or dismissed.
 - Accepted decks contain normal presentation content and are included in ordinary backups.
-- The OpenAI credential remains in the app-data `secrets` directory, which backup creation does not include.
-- API keys and source notes must not be written to application logs.
+- The OpenAI credential exists only as a Cloudflare Worker secret; it is never present on a customer computer or in a backup.
+- AI access tokens, provider keys, source notes, and generated content must not be written to application logs.
 
 ## Next implementation slices
 
@@ -65,7 +65,7 @@ The supplied November 2–6, 2026 qualification document parses as five daily de
 
 ## Contextual Slide Editor actions
 
-The Slide Editor uses the same encrypted OpenAI credential and provider-neutral semantic boundary for contextual draft changes:
+The Slide Editor uses the same managed AI Gateway token flow and provider-neutral semantic boundary for contextual draft changes:
 
 - Selected editable text: shorten, rewrite, convert to bullets, and highlight exact key phrases.
 - Current slide: generate speaker notes or regenerate one slide.

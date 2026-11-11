@@ -33,6 +33,32 @@ jobs:
       - name: run operator workflow E2E tests
         run: npm run test:e2e
 
+  workers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: install license worker dependencies
+        working-directory: workers/license
+        run: npm ci
+
+      - name: test license worker
+        working-directory: workers/license
+        run: npm test
+
+      - name: install AI Gateway dependencies
+        working-directory: workers/ai-gateway
+        run: npm ci
+
+      - name: test AI Gateway
+        working-directory: workers/ai-gateway
+        run: npm test
+
   backend:
     # The app ships only for Windows (NSIS/WebView2); Tauri's glib/gtk -sys
     # crates also fail to pkg-config on bare ubuntu runners. Build/check on the
