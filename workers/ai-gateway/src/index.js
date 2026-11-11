@@ -7,6 +7,10 @@
  * configured provider. No provider key is ever sent to a customer computer.
  */
 
+import { TranscriptionSession } from "./asr.js";
+
+export { TranscriptionSession };
+
 const AI_TOKEN_AUDIENCE = "wordlyte-ai";
 const STANDARD_LLM_UNITS = 10;
 const MAX_BODY_BYTES = 2_000_000;
@@ -263,6 +267,20 @@ export default {
         console.error("Unhandled AI Gateway error", error);
         return json({ error: "The AI Gateway encountered an unexpected error." }, 500);
       }
+    }
+    const asrMatch = url.pathname.match(/^\/v1\/asr\/(deepgram|assemblyai)$/);
+    if (asrMatch && request.headers.get("Upgrade") === "websocket") {
+      const claims = await verifyAiToken(env, bearer(request));
+      if (!claims) return json({ error: "A valid Wordlyte AI access token is required." }, 401);
+      if (!env.TRANSCRIPTION_SESSION) {
+        return json({ error: "Managed transcription is not configured." }, 503);
+      }
+      const id = env.TRANSCRIPTION_SESSION.idFromName(`${claims.org}:${crypto.randomUUID()}`);
+      const stub = env.TRANSCRIPTION_SESSION.get(id);
+      const headers = new Headers(request.headers);
+      headers.set("x-wordlyte-org", claims.org);
+      headers.set("x-wordlyte-addon-expires", String(claims.addon_expires_at || 0));
+      return stub.fetch(new Request(request, { headers }));
     }
     return json({ error: "Not found" }, 404);
   },

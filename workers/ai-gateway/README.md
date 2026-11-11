@@ -8,20 +8,28 @@ Worker and the Gateway enforces AI Add-on and AI Unit access.
 
 - `POST /v1/llm/responses` — OpenAI Responses proxy with a model allowlist,
   AI Unit reservation, settlement on success, and release on failure.
+- `GET /v1/asr/deepgram` and `GET /v1/asr/assemblyai` — managed WebSocket
+  transcription relays. A Durable Object owns one client/provider socket pair,
+  reserves one Unit per minute, settles fractional Units on close, and cuts the
+  stream when Units run out.
 - `GET /health` — health check.
 
-Streaming transcription will be added as a Durable Object WebSocket relay. The
-desktop provider adapters will keep their existing frame decoders; only the
-upstream URL and authentication change.
+The desktop provider adapters keep their existing frame decoders; only the
+upstream URL and authentication changed.
 
 ## Required secrets
 
 ```text
 AI_TOKEN_SECRET             # same value as the License Worker
 AI_GATEWAY_SERVICE_TOKEN    # same value as the License Worker
-LICENSE_SERVICE_URL         # e.g. https://wordlyte-license.example.workers.dev
 OPENAI_API_KEY
+DEEPGRAM_API_KEY
+ASSEMBLYAI_API_KEY
 ```
+
+`LICENSE_SERVICE` is a private Worker service binding to `wordlyte-license`, so
+no public `LICENSE_SERVICE_URL` is required. `LICENSE_SERVICE_URL` remains an
+optional local fallback.
 
 Set with `npx wrangler secret put <NAME>`.
 
@@ -39,8 +47,8 @@ The test suite mocks the License Worker and OpenAI, and verifies:
 - short-lived token validation and expiry;
 - model allowlisting;
 - 10-Unit LLM reservation and settlement;
-- release on provider failure;
-- rejection when Units are unavailable.
+- release on provider failure and rejection when Units are unavailable;
+- ASR route authentication and Durable Object routing.
 
 ## Deployment
 

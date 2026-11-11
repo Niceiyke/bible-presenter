@@ -35,18 +35,20 @@ jobs:
         working-directory: workers/ai-gateway
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+          ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
           AI_TOKEN_SECRET: ${{ secrets.AI_TOKEN_SECRET }}
           AI_GATEWAY_SERVICE_TOKEN: ${{ secrets.AI_GATEWAY_SERVICE_TOKEN }}
-          LICENSE_SERVICE_URL: https://wordlyte-license.oyomworld.workers.dev
         run: |
-          if [ -z "$OPENAI_API_KEY" ] || [ -z "$AI_TOKEN_SECRET" ] || [ -z "$AI_GATEWAY_SERVICE_TOKEN" ]; then
-            echo "::error::OPENAI_API_KEY, AI_TOKEN_SECRET, and AI_GATEWAY_SERVICE_TOKEN must be set in GitHub secrets."
+          if [ -z "$OPENAI_API_KEY" ] || [ -z "$DEEPGRAM_API_KEY" ] || [ -z "$ASSEMBLYAI_API_KEY" ] || [ -z "$AI_TOKEN_SECRET" ] || [ -z "$AI_GATEWAY_SERVICE_TOKEN" ]; then
+            echo "::error::OPENAI_API_KEY, DEEPGRAM_API_KEY, ASSEMBLYAI_API_KEY, AI_TOKEN_SECRET, and AI_GATEWAY_SERVICE_TOKEN must be set in GitHub secrets."
             exit 1
           fi
           echo "$OPENAI_API_KEY" | npx wrangler secret put OPENAI_API_KEY
+          echo "$DEEPGRAM_API_KEY" | npx wrangler secret put DEEPGRAM_API_KEY
+          echo "$ASSEMBLYAI_API_KEY" | npx wrangler secret put ASSEMBLYAI_API_KEY
           echo "$AI_TOKEN_SECRET" | npx wrangler secret put AI_TOKEN_SECRET
           echo "$AI_GATEWAY_SERVICE_TOKEN" | npx wrangler secret put AI_GATEWAY_SERVICE_TOKEN
-          echo "$LICENSE_SERVICE_URL" | npx wrangler secret put LICENSE_SERVICE_URL
 
       - name: deploy worker
         working-directory: workers/ai-gateway

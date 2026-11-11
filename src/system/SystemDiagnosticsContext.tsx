@@ -139,9 +139,11 @@ interface StartupStatus {
   issues: string[];
 }
 
-interface AiKeyStatus {
-  configured: boolean;
-  provider: string;
+interface ManagedAiStatus {
+  available: boolean;
+  addonActive: boolean;
+  availableUnitsRemaining: number;
+  message: string;
 }
 
 interface OutputConfigProbe {
@@ -192,8 +194,7 @@ async function runReadinessChecks(systemChecks: SystemChecks | null): Promise<Re
     invoke<StartupStatus>("get_startup_status"),
     invoke<string[]>("get_bible_versions"),
     invoke<string[]>("audio_devices"),
-    invoke<AiKeyStatus>("ai_key_status", { provider: "deepgram" }),
-    invoke<AiKeyStatus>("ai_key_status", { provider: "assemblyai" }),
+    invoke<ManagedAiStatus>("ai_presentation_status"),
     invoke<OutputConfigProbe[]>("outputs_list"),
     invoke<OutputStateProbe[]>("outputs_states"),
     invoke<RecordingStatusProbe>("recording_status"),
@@ -203,12 +204,11 @@ async function runReadinessChecks(systemChecks: SystemChecks | null): Promise<Re
   const startup = fulfilled(results[0]);
   const versions = fulfilled(results[1]);
   const audioDevices = fulfilled(results[2]);
-  const deepgram = fulfilled(results[3]);
-  const assembly = fulfilled(results[4]);
-  const outputConfigs = fulfilled(results[5]);
-  const outputStates = fulfilled(results[6]);
-  const recording = fulfilled(results[7]);
-  const streaming = fulfilled(results[8]);
+  const managedAi = fulfilled(results[3]);
+  const outputConfigs = fulfilled(results[4]);
+  const outputStates = fulfilled(results[5]);
+  const recording = fulfilled(results[6]);
+  const streaming = fulfilled(results[7]);
   const checks: ReleaseCheck[] = [];
 
   checks.push(startup
@@ -229,10 +229,9 @@ async function runReadinessChecks(systemChecks: SystemChecks | null): Promise<Re
       : createReadinessCheck("audio", "Audio input", "warn", "No DirectShow audio input detected. AI Scripture, recording, and stream audio need a selected device.")
     : createReadinessCheck("audio", "Audio input", "warn", "Could not enumerate audio inputs."));
 
-  const configuredProviders = [deepgram, assembly].filter((status) => status?.configured).map((status) => status?.provider).filter(Boolean);
-  checks.push(configuredProviders.length > 0
-    ? createReadinessCheck("ai-provider", "AI Scripture provider", "pass", `${configuredProviders.join(" and ")} credential${configuredProviders.length === 1 ? "" : "s"} configured in secure storage.`)
-    : createReadinessCheck("ai-provider", "AI Scripture provider", "warn", "No transcription provider credential is configured. AI Scripture will not start until one is added."));
+  checks.push(managedAi?.available
+    ? createReadinessCheck("ai-provider", "Managed AI", "pass", `${managedAi.availableUnitsRemaining.toLocaleString()} AI Units available for transcription and drafting.`)
+    : createReadinessCheck("ai-provider", "Managed AI", "warn", managedAi?.message || "AI Add-on or AI Units are unavailable. Add-on features will not start until the organization has managed AI access."));
 
   const outputIds = new Set((outputConfigs ?? []).map((output) => output.id));
   const outputStateErrors = (outputStates ?? []).filter((state) => state.error).map((state) => `${state.id}: ${state.error}`);

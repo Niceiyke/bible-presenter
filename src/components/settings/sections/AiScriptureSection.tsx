@@ -1,16 +1,21 @@
 import React, { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Database, KeyRound, Mic, RotateCcw } from "lucide-react";
+import { Database, Mic, RotateCcw, ShieldCheck } from "lucide-react";
 import { useAiScripture, type AiProvider } from "../../../hooks/useAiScripture";
 import { useProgramAudio } from "../../../hooks/useProgramAudio";
 import { useAppStore } from "../../../store";
 import type { PresentationSettings } from "../../../types";
 import { AiScripturePerformancePanel } from "./AiScripturePerformancePanel";
 
-interface AiKeyStatus {
-  configured: boolean;
-  provider: string;
+interface ManagedAiStatus {
+  available: boolean;
+  addonActive: boolean;
+  monthlyUnitsRemaining: number;
+  topupUnitsRemaining: number;
+  availableUnitsRemaining: number;
+  standardLlmRequestUnits: number;
+  message: string;
 }
 
 interface SemanticStatus {
@@ -48,15 +53,11 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
   const programAudio = useProgramAudio();
   const settings = useAppStore((state) => state.settings);
   const [selectedProvider, setSelectedProvider] = useState<AiProvider>(ai.provider);
-  const [keyStatus, setKeyStatus] = useState<AiKeyStatus>({ configured: false, provider: ai.provider });
-  const [apiKey, setApiKey] = useState("");
-  const [savingKey, setSavingKey] = useState(false);
+  const [managedStatus, setManagedStatus] = useState<ManagedAiStatus | null>(null);
+  const [managedLoading, setManagedLoading] = useState(true);
   const [semanticStatus, setSemanticStatus] = useState<SemanticStatus>(INITIAL_STATUS);
   const [removingModel, setRemovingModel] = useState(false);
   const active = ["connecting", "running", "listening"].includes(ai.status.state);
-  const providerName = selectedProvider === "deepgram" ? "Deepgram" : "AssemblyAI";
-  const activeProvider = ai.status.provider as AiProvider;
-  const credentialsLocked = active && activeProvider === selectedProvider;
 
   useEffect(() => {
     setSelectedProvider(ai.provider);
@@ -66,13 +67,28 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
     void programAudio.refreshDevices();
   }, [programAudio.refreshDevices]);
 
+  const refreshManagedStatus = async () => {
+    setManagedLoading(true);
+    try {
+      setManagedStatus(await invoke<ManagedAiStatus>("ai_presentation_status"));
+    } catch (error) {
+      setManagedStatus({
+        available: false,
+        addonActive: false,
+        monthlyUnitsRemaining: 0,
+        topupUnitsRemaining: 0,
+        availableUnitsRemaining: 0,
+        standardLlmRequestUnits: 10,
+        message: `Could not read AI status: ${error}`,
+      });
+    } finally {
+      setManagedLoading(false);
+    }
+  };
+
   useEffect(() => {
-    let mounted = true;
-    void invoke<AiKeyStatus>("ai_key_status", { provider: selectedProvider })
-      .then((next) => mounted && setKeyStatus(next))
-      .catch(() => undefined);
-    return () => { mounted = false; };
-  }, [selectedProvider]);
+    void refreshManagedStatus();
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -91,27 +107,6 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
       stop?.();
     };
   }, []);
-
-  const saveKey = async () => {
-    setSavingKey(true);
-    try {
-      setKeyStatus(await invoke<AiKeyStatus>("ai_set_api_key", { provider: selectedProvider, apiKey }));
-      setApiKey("");
-    } catch (error) {
-      window.alert(`Could not save API key: ${error}`);
-    } finally {
-      setSavingKey(false);
-    }
-  };
-
-  const clearKey = async () => {
-    try {
-      await invoke("ai_clear_api_key", { provider: selectedProvider });
-      setKeyStatus({ configured: false, provider: selectedProvider });
-    } catch (error) {
-      window.alert(`Could not remove API key: ${error}`);
-    }
-  };
 
   const prepareModel = async () => {
     try {
@@ -158,8 +153,10 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
 
       <section className="rounded-lg border border-console-border bg-console-surface-raised/40 p-3 flex flex-col gap-3">
         <div className="flex items-center justify-between gap-3">
-          <p className="text-[10px] font-black uppercase tracking-widest text-console-text-muted flex items-center gap-1.5"><KeyRound size={12} /> Transcription provider</p>
-          <span className={`text-[10px] font-bold ${keyStatus.configured ? "text-state-success" : "text-state-stage"}`}>{keyStatus.configured ? "Configured" : "Required"}</span>
+          <p className="text-[10px] font-black uppercase tracking-widest text-console-text-muted flex items-center gap-1.5"><ShieldCheck size={12} /> Managed transcription</p>
+          <span className={`text-[10px] font-bold ${managedStatus?.available ? "text-state-success" : "text-state-warning"}`}>
+            {managedStatus?.available ? "Ready" : managedStatus?.addonActive ? "Needs Units" : "Add-on required"}
+          </span>
         </div>
         <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Transcription provider">
           {PROVIDERS.map((item) => {
@@ -174,8 +171,6 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
                   if (selected) return;
                   setSelectedProvider(item.value);
                   ai.setProvider(item.value);
-                  setKeyStatus({ configured: false, provider: item.value });
-                  setApiKey("");
                 }}
                 className={`px-3 py-2 rounded-md border text-left text-xs font-bold transition-colors ${
                   selected
@@ -189,20 +184,30 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
             );
           })}
         </div>
-        <div className="flex gap-2">
-          <input
-            type="password"
-            autoComplete="off"
-            value={apiKey}
-            onChange={(event) => setApiKey(event.target.value)}
-            disabled={credentialsLocked}
-            placeholder={keyStatus.configured ? "Enter a replacement key" : `${providerName} API key`}
-            className="min-w-0 flex-1 px-2.5 py-2 rounded-md border border-console-border bg-console-surface text-xs text-console-text placeholder:text-console-text-subtle disabled:opacity-50"
-          />
-          <button onClick={() => void saveKey()} disabled={savingKey || credentialsLocked || apiKey.trim().length < 16} className="px-3 py-2 rounded-md bg-action-primary text-black disabled:bg-console-surface-strong disabled:text-console-text-subtle text-[11px] font-bold">{savingKey ? "Saving…" : "Save key"}</button>
-          {keyStatus.configured && <button onClick={() => void clearKey()} disabled={credentialsLocked} className="px-3 py-2 rounded-md border border-console-border text-console-text-muted text-[11px] font-bold disabled:opacity-50">Remove</button>}
+        <div className="grid grid-cols-2 gap-2">
+          <div className="rounded-md border border-console-border bg-console-surface p-2.5">
+            <p className="text-[9px] font-bold uppercase tracking-wider text-console-text-subtle">Available Units</p>
+            <p className="mt-1 text-lg font-black text-console-text">{managedStatus?.availableUnitsRemaining.toLocaleString() ?? "—"}</p>
+          </div>
+          <div className="rounded-md border border-console-border bg-console-surface p-2.5">
+            <p className="text-[9px] font-bold uppercase tracking-wider text-console-text-subtle">Est. transcription</p>
+            <p className="mt-1 text-lg font-black text-console-text">{managedStatus ? `${Math.floor(managedStatus.availableUnitsRemaining).toLocaleString()} min` : "—"}</p>
+          </div>
         </div>
-        <p className="text-[10px] text-console-text-subtle">Stored with Windows DPAPI for the current user. Audio and transcript data are sent only while listening.{active ? ` ${ai.status.provider === selectedProvider ? "Stop listening before replacing or removing the active provider key." : `${ai.status.provider} is currently listening; ${providerName} will be used next time you start.`}` : ""}</p>
+        <p className="text-[10px] text-console-text-subtle">
+          Live transcription uses 1 AI Unit per minute and is billed in fractional Units for partial minutes. {managedStatus?.available ? "" : managedStatus?.message || "Checking AI Add-on availability…"}
+        </p>
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => void refreshManagedStatus()}
+            disabled={managedLoading}
+            className="inline-flex items-center gap-1.5 rounded-md border border-console-border px-2.5 py-1.5 text-[10px] font-bold text-console-text-muted hover:text-console-text disabled:opacity-50"
+          >
+            <RotateCcw size={11} className={managedLoading ? "animate-spin" : ""} /> Refresh
+          </button>
+        </div>
+        <p className="text-[10px] text-console-text-subtle">Provider credentials stay in Wordlyte's managed AI Gateway. Audio is streamed only while listening, and no provider key is stored on this computer.</p>
       </section>
 
       <section className={`rounded-lg border p-3 flex flex-col gap-3 ${settings.ai_scripture_auto_live ? "border-state-error/60 bg-state-error/5" : "border-console-border bg-console-surface-raised/40"}`}>

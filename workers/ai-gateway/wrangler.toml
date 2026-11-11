@@ -18,5 +18,13 @@ OPENAI_ALLOWED_MODELS = "gpt-5.6-luna"
 binding = "LICENSE_SERVICE"
 service = "wordlyte-license"
 
+[[durable_objects.bindings]]
+name = "TRANSCRIPTION_SESSION"
+class_name = "TranscriptionSession"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TranscriptionSession"]
+
 # Optional override for local integration tests only.
 # OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"

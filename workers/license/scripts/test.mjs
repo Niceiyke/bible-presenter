@@ -216,6 +216,18 @@ try {
     && response.data.ai?.total_units_remaining === 135
     && Array.isArray(response.data.usage));
 
+  response = await call("/internal/ai/reserve", {
+    method: "POST", token: AI_GATEWAY_SERVICE_TOKEN,
+    body: { organization_id: freeOrganization.id, units: 1, kind: "asr", idempotency_key: "test-asr-millis-004" },
+  });
+  const asrReservationId = response.data.reservation.id;
+  response = await call("/internal/ai/settle", {
+    method: "POST", token: AI_GATEWAY_SERVICE_TOKEN,
+    body: { organization_id: freeOrganization.id, reservation_id: asrReservationId, actual_milli_units: 500 },
+  });
+  check("transcription settles fractional minutes exactly", response.status === 200
+    && response.data.ai?.total_units_remaining === 134.5);
+
   response = await call(`/admin/organizations/${freeOrganization.id}/revoke`, { method: "POST", token: ADMIN_TOKEN, body: { revoked: true } });
   check("admin revokes organization", response.status === 200 && response.data.organization.revoked === true);
   response = await call("/entitlement", { method: "POST", body: { organization_id: freeOrganization.id, machine_id: M1, device_token: freeDeviceToken } });

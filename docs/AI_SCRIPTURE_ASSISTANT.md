@@ -11,14 +11,14 @@ The assistant listens to an English sermon and proposes Scripture for an operato
 
 ## Implemented beta slice
 
-1. A provider-neutral streaming boundary: Deepgram and AssemblyAI adapters live in `src-tauri/src/commands/ai_scripture/providers.rs` and normalize service-specific authentication, messages, errors, and shutdown into shared transcript events. Audio transport and Scripture detection do not branch on provider. The operator can select either configured provider for the next session; switching an active WebSocket session requires stopping and starting again.
+1. A provider-neutral streaming boundary: Deepgram and AssemblyAI adapters live in `src-tauri/src/commands/ai_scripture/providers.rs` and normalize service-specific messages, errors, and shutdown into shared transcript events. The desktop connects to the Wordlyte AI Gateway with a short-lived AI token; provider credentials remain server-side. Audio transport and Scripture detection do not branch on provider. The operator can select either managed provider for the next session; switching an active WebSocket session requires stopping and starting again.
 2. Two operator-selected listening modes: Service mode listens continuously until stopped; Operator mode is an on-demand one-result session that stops after a verified reference, direct quote, or deterministic voice command. It does not stop for raw transcript or paraphrase candidates.
 2. A dedicated consumer of the existing shared audio feed, preventing transcription, recording, and streaming from opening the DirectShow device independently.
 3. Live interim/final transcript diagnostics.
 4. Deterministic parsing for numeric and spoken references, including numbered books, spoken numbers through the Bible's chapter/verse range, and bounded spoken verse ranges such as “First Corinthians chapter ten, verses eleven and twelve.” The first verse is eligible for automatic staging; additional range cards remain manual.
 5. Lexical direct-quotation alignment. Candidate retrieval searches every installed English translation; the winning canonical reference is displayed in the operator-selected translation. Five-word exact quotations are supported but capped at 89% confidence for manual review.
 6. A 20-second rolling context, duplicate suppression, confidence labels, automatic staging at 90% confidence or above for eligible longer quotations and explicit references, and an explicit off-by-default Auto Live control.
-7. Bring-your-own Deepgram or AssemblyAI credentials encrypted at rest with current-user Windows DPAPI and excluded from Wordlyte backups.
+7. Subscription-managed Wordlyte AI access. The organization's AI Add-on and Unit balance authorize a short-lived device token; no provider key is stored on the computer.
 8. Nova-3 Bible-name keyterm prompting, focused on uncommon and commonly misheard book names while avoiding broad words such as “Mark” and “Job.”
 9. A CI-gated synthetic evaluation corpus and `npm run ai:eval` runner for precision, recall, F1, exact-result accuracy, and local detector p95 latency.
 10. A low-latency detection pipeline: finalized explicit references use an immediate deterministic fast path, while bounded cross-translation quotation searches run in a coalescing background worker. Stale interim quote previews are discarded; delayed finalized quote results remain manual-only. Semantic context prefers the latest complete sentence, can include one preceding sentence when the latest thought is short, stops across a four-second speech gap, and is capped at 48 words.
@@ -59,7 +59,7 @@ DirectShow input
   -> shared AudioFeed (single capture, AAC fan-out)
   -> private AI relay
   -> ffmpeg mono PCM 16 kHz decoder
-  -> selected Deepgram or AssemblyAI streaming WebSocket
+  -> Wordlyte AI Gateway WebSocket -> managed Deepgram or AssemblyAI
   -> final/interim transcript events
   -> deterministic voice command / reference fast path OR background lexical quotation matcher
   -> if neither matches, optional local BGE query + exact cosine verse retrieval
@@ -68,13 +68,13 @@ DirectShow input
      OR atomic Send Live (only after explicit Auto Live category opt-in)
 ```
 
-The Rust backend owns credentials, audio transport, transcription, and detection. The Scripture workspace contains the Live Scripture Assistant panel, while a global React provider owns session status and recent transcript/suggestions so listening continues while the operator changes workspaces. Provider keys and local-model controls are in Settings → AI Scripture.
+The Rust backend owns audio transport and connects to the AI Gateway; provider credentials are held only by the Gateway. The Scripture workspace contains the Live Scripture Assistant panel, while a global React provider owns session status and recent transcript/suggestions so listening continues while the operator changes workspaces. Managed AI Unit status, provider selection, and local-model controls are in Settings → AI Scripture.
 
 ## Safety and privacy
 
-- The Live Scripture Assistant panel states which provider is receiving audio and provides an explicit Stop control. Permanent provider keys remain encrypted with Windows DPAPI.
+- The Live Scripture Assistant panel states which provider is receiving audio and provides an explicit Stop control. Provider credentials remain in the AI Gateway; the desktop holds only a short-lived AI token.
 - Churches are responsible for obtaining consent required by their policy and local law.
-- API keys are never embedded in the distributed desktop app or returned to the frontend after storage.
+- Provider API keys are never embedded in the distributed desktop app or returned to the frontend. Each listening session is authorized online and billed in AI Units.
 - The transcript and suggestions are held in memory only in this beta. They are not added to backups or service data.
 - Settings → AI Scripture includes a local session Performance panel. It records only counters and timing samples (not audio, transcript text, Bible text, references, or credentials): ASR final/interim activity, suggestion source counts, automatic/manual stage/live outcomes, failures, and median/p95 ASR-update-to-verified-Scripture, verified-to-operator/stage/live timing. ASR verification samples are broken down by references, quotes, themes, and commands. “ASR update → verified Scripture” starts after a provider interim/final update reaches Wordlyte and must not be presented as speech or provider-recognition latency. “Live committed” ends at acknowledgement of Wordlyte’s atomic Send Live command; it must not be presented as a measure of display render time or downstream encoder/CDN latency.
 - Provider errors end the AI session and surface an error status without affecting live or staged content.
@@ -101,7 +101,7 @@ The Rust backend owns credentials, audio transport, transcription, and detection
 
 ### Beta hardening
 
-- Validate Deepgram and AssemblyAI authentication, reconnect/error behavior, long-session billing, and audio quality on representative church mixers.
+- Validate managed Gateway authentication, reconnect/token-refresh behavior, fractional Unit settlement, zero-balance cutoff, and audio quality on representative church mixers.
 - Add a transcript export only if an explicit retention/consent policy is approved.
 - Add session usage and provider-cost diagnostics without logging credentials or sermon text.
 - Decide whether AI should be license-gated after beta; safety controls must remain backend-enforced regardless of tier.

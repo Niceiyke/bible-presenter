@@ -12,9 +12,10 @@ activated-Free desktop model, server-signed plan limits, AI Add-on status, and
 an admin-provisioned AI Unit wallet are implemented. The first managed AI
 Gateway slice now provides device-to-AI token exchange, AI Unit
 reservation/settlement/release, an OpenAI Responses proxy with model
-allowlisting, and a read-only Dashboard AI balance view. Desktop BYOK removal,
-streaming ASR relay, billing checkout/webhooks, and transcript sync remain
-subsequent phases.
+allowlisting, a managed Deepgram/AssemblyAI WebSocket relay with fractional
+per-minute settlement, and a read-only Dashboard AI balance view. Desktop AI
+presentation and transcription are now off local provider keys. Billing
+checkout/webhooks and transcript sync remain subsequent phases.
 
 ## Product principles
 

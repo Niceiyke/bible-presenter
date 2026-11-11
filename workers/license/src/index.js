@@ -383,18 +383,25 @@ export class OrganizationRegistry {
     if (reservation.status !== "reserved") {
       return json({ status: "invalid", message: "Reservation is no longer active." }, 409);
     }
-    const actualUnits = optionalWhole(body.actual_units, 0, MAX_AI_RESERVATION_UNITS);
-    if (actualUnits === null) return json({ status: "invalid", message: "actual_units is required." }, 400);
-    const actualMillis = actualUnits * 1000;
-    if (actualMillis > reservation.units_millis) {
+    let actualUnitsMillis;
+    if (body.actual_milli_units !== undefined && body.actual_milli_units !== null) {
+      actualUnitsMillis = optionalWhole(body.actual_milli_units, 0, MAX_AI_RESERVATION_UNITS * 1000);
+    } else {
+      const actualUnits = optionalWhole(body.actual_units, 0, MAX_AI_RESERVATION_UNITS);
+      actualUnitsMillis = actualUnits === null ? null : actualUnits * 1000;
+    }
+    if (actualUnitsMillis === null) {
+      return json({ status: "invalid", message: "actual_units or actual_milli_units is required." }, 400);
+    }
+    if (actualUnitsMillis > reservation.units_millis) {
       return json({ status: "invalid", message: "Settled usage exceeds the reservation." }, 400);
     }
     wallet.reserved_units_millis = Math.max(0, nonNegativeInt(wallet.reserved_units_millis) - reservation.units_millis);
-    spendUnits(wallet, actualMillis);
+    spendUnits(wallet, actualUnitsMillis);
     reservation.status = "settled";
-    reservation.settled_units_millis = actualMillis;
+    reservation.settled_units_millis = actualUnitsMillis;
     reservation.settled_at = now;
-    recordWalletEvent(wallet, now, "usage_settled", -actualMillis);
+    recordWalletEvent(wallet, now, "usage_settled", -actualUnitsMillis);
     await this.save(organization);
     return json({ status: "ok", reservation: publicReservation(reservation), ai: aiBalance(organization, now) });
   }

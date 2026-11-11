@@ -121,6 +121,22 @@ async function main() {
     assert.equal(calls.length, 0);
   });
 
+  const wsRequest = new Request("https://ai.test/v1/asr/deepgram", {
+    headers: { Upgrade: "websocket", Authorization: `Bearer ${token()}` },
+  });
+  response = await worker.fetch(wsRequest, env());
+  await check("ASR route requires the Durable Object binding", async () => {
+    assert.equal(response.status, 503);
+  });
+
+  const unauthenticatedWs = new Request("https://ai.test/v1/asr/deepgram", {
+    headers: { Upgrade: "websocket" },
+  });
+  response = await worker.fetch(unauthenticatedWs, env());
+  await check("ASR route rejects missing AI tokens", async () => {
+    assert.equal(response.status, 401);
+  });
+
   calls.length = 0;
   installFetch({ reserveStatus: 402 });
   response = await worker.fetch(request(validBody), env());

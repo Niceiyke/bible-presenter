@@ -13,7 +13,7 @@ use futures_util::{FutureExt, SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::panic::AssertUnwindSafe;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -72,13 +72,6 @@ const PROVIDER_RECONNECT_STABLE_WINDOW: Duration = Duration::from_secs(30);
 
 type AsrWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AiKeyStatus {
-    pub configured: bool,
-    pub provider: String,
-}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1052,152 +1045,6 @@ fn handle_voice_navigation(
     );
 }
 
-fn key_path(app_data_dir: &Path, provider: AsrProvider) -> PathBuf {
-    app_data_dir.join("secrets").join(provider.key_file())
-}
-
-#[cfg(windows)]
-mod key_storage {
-    use windows::core::{PCWSTR, PWSTR};
-    use windows::Win32::Foundation::{LocalFree, HLOCAL};
-    use windows::Win32::Security::Cryptography::{
-        CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
-    };
-
-    fn blob(data: &[u8]) -> CRYPT_INTEGER_BLOB {
-        CRYPT_INTEGER_BLOB {
-            cbData: data.len() as u32,
-            pbData: data.as_ptr() as *mut u8,
-        }
-    }
-
-    fn collect(out: &CRYPT_INTEGER_BLOB) -> Vec<u8> {
-        unsafe { std::slice::from_raw_parts(out.pbData, out.cbData as usize) }.to_vec()
-    }
-
-    fn free_blob(out: &CRYPT_INTEGER_BLOB) {
-        unsafe {
-            if !out.pbData.is_null() {
-                let _ = LocalFree(Some(HLOCAL(out.pbData.cast())));
-            }
-        }
-    }
-
-    pub fn protect(data: &[u8]) -> Result<Vec<u8>, String> {
-        let mut out = CRYPT_INTEGER_BLOB::default();
-        unsafe {
-            CryptProtectData(
-                &blob(data),
-                PCWSTR::null(),
-                None,
-                None,
-                None,
-                CRYPTPROTECT_UI_FORBIDDEN,
-                &mut out,
-            )
-            .map_err(|e| format!("Could not protect the transcription API key: {e}"))?;
-        }
-        let result = collect(&out);
-        free_blob(&out);
-        Ok(result)
-    }
-
-    pub fn unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
-        let mut out = CRYPT_INTEGER_BLOB::default();
-        let mut description = PWSTR::null();
-        unsafe {
-            CryptUnprotectData(
-                &blob(data),
-                Some(&mut description),
-                None,
-                None,
-                None,
-                CRYPTPROTECT_UI_FORBIDDEN,
-                &mut out,
-            )
-            .map_err(|e| format!("Could not decrypt the transcription API key: {e}"))?;
-        }
-        let result = collect(&out);
-        free_blob(&out);
-        if !description.is_null() {
-            unsafe {
-                let _ = LocalFree(Some(HLOCAL(description.as_ptr().cast())));
-            }
-        }
-        Ok(result)
-    }
-}
-
-#[cfg(not(windows))]
-mod key_storage {
-    pub fn protect(_data: &[u8]) -> Result<Vec<u8>, String> {
-        Err("Secure AI credential storage is currently available only on Windows.".into())
-    }
-    pub fn unprotect(_data: &[u8]) -> Result<Vec<u8>, String> {
-        Err("Secure AI credential storage is currently available only on Windows.".into())
-    }
-}
-
-fn load_api_key(app_data_dir: &Path, provider: AsrProvider) -> Result<String, String> {
-    let name = provider.display_name();
-    let encrypted = std::fs::read(key_path(app_data_dir, provider))
-        .map_err(|_| format!("{name} API key is not configured."))?;
-    let clear = key_storage::unprotect(&encrypted)?;
-    let key = String::from_utf8(clear).map_err(|_| format!("Stored {name} API key is invalid."))?;
-    if key.trim().is_empty() {
-        return Err(format!("{name} API key is not configured."));
-    }
-    Ok(key)
-}
-
-#[tauri::command]
-pub fn ai_key_status(state: State<'_, AppState>, provider: String) -> AiKeyStatus {
-    let provider = AsrProvider::parse(&provider).unwrap_or(AsrProvider::Deepgram);
-    AiKeyStatus {
-        configured: load_api_key(&state.app_data_dir, provider).is_ok(),
-        provider: provider.as_str().into(),
-    }
-}
-
-#[tauri::command]
-pub fn ai_set_api_key(
-    state: State<'_, AppState>,
-    provider: String,
-    api_key: String,
-) -> Result<AiKeyStatus, String> {
-    let provider = AsrProvider::parse(&provider)?;
-    let key = api_key.trim();
-    if key.len() < 16 || key.chars().any(char::is_whitespace) {
-        return Err(format!(
-            "Enter a valid {} API key.",
-            provider.display_name()
-        ));
-    }
-    let path = key_path(&state.app_data_dir, provider);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let encrypted = key_storage::protect(key.as_bytes())?;
-    std::fs::write(path, encrypted).map_err(|e| format!("Could not save the API key: {e}"))?;
-    Ok(AiKeyStatus {
-        configured: true,
-        provider: provider.as_str().into(),
-    })
-}
-
-#[tauri::command]
-pub fn ai_clear_api_key(state: State<'_, AppState>, provider: String) -> Result<(), String> {
-    let provider = AsrProvider::parse(&provider)?;
-    // Fire-and-forget: drop the in-flight session in the background so the
-    // saved transcript can flush (the future must be polled, not just dropped).
-    tauri::async_runtime::spawn(ai_stop());
-    let path = key_path(&state.app_data_dir, provider);
-    if path.exists() {
-        std::fs::remove_file(path).map_err(|e| format!("Could not remove the API key: {e}"))?;
-    }
-    Ok(())
-}
-
 #[tauri::command]
 pub fn ai_status() -> AiRuntimeStatus {
     let guard = runtime().lock().unwrap_or_else(|e| e.into_inner());
@@ -1253,8 +1100,16 @@ pub async fn ai_start(
     version: String,
     mode: String,
 ) -> Result<AiRuntimeStatus, String> {
-    crate::license::ensure_active_tier(&state, crate::license::LicenseTier::Pro)?;
+    crate::license::ensure_core_activated(&state)?;
     let provider = AsrProvider::parse(&provider)?;
+    // Managed transcription replaces the beta BYOK path. Remove any legacy
+    // provider credentials so they can never be used again after this update.
+    for legacy in ["deepgram-api-key.dpapi", "assemblyai-api-key.dpapi"] {
+        let path = state.app_data_dir.join("secrets").join(legacy);
+        if path.exists() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
     let mode = match mode.trim().to_ascii_lowercase().as_str() {
         "service" => "service".to_string(),
         "operator" => "operator".to_string(),
@@ -1281,7 +1136,10 @@ pub async fn ai_start(
     {
         return Err("Choose an enabled installed Bible version.".into());
     }
-    let api_key = load_api_key(&state.app_data_dir, provider)?;
+    let access = state.license.ai_access().await?;
+    if access.ai.available_units_remaining < 1.0 {
+        return Err("Not enough AI Units to start transcription.".into());
+    }
     let relay = subscribe_pcm_feed(&audio_device)?;
     let semantic = semantic_scripture::engine(&state.app_data_dir);
     if semantic.was_prepared() && !semantic.is_ready() {
@@ -1330,6 +1188,7 @@ pub async fn ai_start(
     );
 
     let bible = state.store.clone();
+    let license = state.license.clone();
     let task_app = app.clone();
     let task_device = audio_device.clone();
     let task_version = version.clone();
@@ -1338,7 +1197,7 @@ pub async fn ai_start(
             task_app.clone(),
             bible,
             relay,
-            api_key,
+            license,
             AsrSessionConfig {
                 provider,
                 audio_device: task_device.clone(),
@@ -1640,20 +1499,22 @@ pub fn ai_remove_semantic(
 async fn connect_provider_socket(
     adapter: &dyn providers::StreamingTranscriptionAdapter,
     provider: AsrProvider,
-    api_key: &str,
+    access_token: &str,
     stop: &mut watch::Receiver<bool>,
     timeout: Duration,
 ) -> Result<Option<AsrWebSocket>, String> {
-    let mut request = adapter
-        .websocket_url()
-        .into_client_request()
-        .map_err(|error| {
-            format!(
-                "Could not create the {} request: {error}",
-                provider.display_name()
-            )
-        })?;
-    adapter.configure_request(&mut request, api_key)?;
+    let gateway_url = format!(
+        "{}/v1/asr/{}",
+        crate::license::ai_gateway_url().trim_end_matches('/'),
+        provider.as_str()
+    );
+    let mut request = gateway_url.into_client_request().map_err(|error| {
+        format!(
+            "Could not create the {} gateway request: {error}",
+            provider.display_name()
+        )
+    })?;
+    adapter.configure_gateway_request(&mut request, access_token)?;
 
     let connection = tokio::time::timeout(timeout, tokio_tungstenite::connect_async(request));
     let result = tokio::select! {
@@ -1677,7 +1538,7 @@ async fn reconnect_provider_socket(
     app: &AppHandle,
     adapter: &dyn providers::StreamingTranscriptionAdapter,
     provider: AsrProvider,
-    api_key: &str,
+    license: &Arc<crate::license::LicenseManager>,
     audio_device: &str,
     version: &str,
     reason: &str,
@@ -1712,8 +1573,21 @@ async fn reconnect_provider_socket(
             _ = stop.changed() => return Ok(None),
             _ = tokio::time::sleep(Duration::from_millis(delay)) => {}
         }
-        match connect_provider_socket(adapter, provider, api_key, stop, PROVIDER_RECONNECT_TIMEOUT)
-            .await
+        let access = match license.ai_access().await {
+            Ok(access) => access,
+            Err(error) => {
+                failures.push(error);
+                continue;
+            }
+        };
+        match connect_provider_socket(
+            adapter,
+            provider,
+            &access.token,
+            stop,
+            PROVIDER_RECONNECT_TIMEOUT,
+        )
+        .await
         {
             Ok(Some(socket)) => {
                 emit_status(
@@ -1794,7 +1668,7 @@ async fn run_asr_session(
     app: AppHandle,
     bible: Arc<BibleStore>,
     relay: AudioRelay,
-    api_key: String,
+    license: Arc<crate::license::LicenseManager>,
     config: AsrSessionConfig,
     mut stop: watch::Receiver<bool>,
 ) -> Result<(), String> {
@@ -1812,10 +1686,11 @@ async fn run_asr_session(
             .map_err(|error| error.to_string())?
             .as_path(),
     );
+    let access = license.ai_access().await?;
     let Some(mut socket) = connect_provider_socket(
         adapter,
         provider,
-        &api_key,
+        &access.token,
         &mut stop,
         Duration::from_secs(15),
     )
@@ -1944,7 +1819,7 @@ async fn run_asr_session(
                         &app,
                         adapter,
                         provider,
-                        &api_key,
+                        &license,
                         &audio_device,
                         &version,
                         &format!("could not send audio: {error}"),
@@ -1985,7 +1860,7 @@ async fn run_asr_session(
                             &app,
                             adapter,
                             provider,
-                            &api_key,
+                            &license,
                             &audio_device,
                             &version,
                             &reason,
@@ -2008,7 +1883,7 @@ async fn run_asr_session(
                             &app,
                             adapter,
                             provider,
-                            &api_key,
+                            &license,
                             &audio_device,
                             &version,
                             &error.to_string(),
@@ -2030,7 +1905,7 @@ async fn run_asr_session(
                             &app,
                             adapter,
                             provider,
-                            &api_key,
+                            &license,
                             &audio_device,
                             &version,
                             "provider closed the stream",
