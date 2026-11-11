@@ -92,7 +92,7 @@ In **Presentations**, select **Prayer DOCX** and choose a weekly Covenant Hour o
 
 ## AI Scripture Assistant (beta)
 
-Open **Settings → AI Scripture** to choose Deepgram or AssemblyAI and save the church-owned API key for that provider. Then return to **Scripture**, expand **Live Scripture Assistant**, choose the mixer or microphone input and translation, and select **Start listening** only after obtaining any consent required by your church and local law.
+Open **Settings → AI Scripture** to choose Deepgram or AssemblyAI and save the church-owned API key for that provider. You can switch providers between sessions; stop and restart listening to reconnect through a different provider. Then return to **Scripture**, expand **Live Scripture Assistant**, choose the mixer or microphone input and translation, and select **Start listening** only after obtaining any consent required by your church and local law.
 
 - Audio and transcript data are sent to the selected provider while listening. Stop listening when transcription is no longer needed. Wordlyte does not retain the audio. Final transcript segments and Scripture suggestions are saved locally in **Saved sessions**; they are included in Wordlyte backups and can be reviewed, exported as Markdown/plain text/JSON, or deleted by the operator. Provider keys are stored separately with Windows DPAPI and are never included in backups.
 - The API key is encrypted with Windows DPAPI for the current Windows user. It is excluded from Wordlyte backups.

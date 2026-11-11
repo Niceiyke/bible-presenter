@@ -14,6 +14,7 @@ import {
   type AiScripturePerformance,
   type PerformanceAccumulator,
 } from "../ai/scripturePerformance";
+import { mergeSuggestionFeed } from "../ai/scriptureSuggestions";
 
 export const AI_AUTO_STAGE_CONFIDENCE = 0.9;
 /** Direct references are deterministic enough to act on the backend's interim 89% result. */
@@ -41,6 +42,8 @@ export interface TranscriptSegment {
 export interface ScriptureSuggestion {
   id: string;
   detection: "reference" | "quote" | "paraphrase" | "command";
+  /** Direct evidence sources merged for one canonical verse card. */
+  evidenceTypes?: Array<"reference" | "quote">;
   confidence: number;
   evidence: string;
   verse: Verse;
@@ -312,18 +315,9 @@ export function AiScriptureProvider({
         if (!mounted) return;
         const suggestion = event.payload;
         registerSuggestion(suggestion);
-        // AssemblyAI can surface a manual interim match before its formatted
-        // final turn. Replace the same canonical card instead of showing an
-        // interim/final duplicate; different detection paths remain distinct.
-        setSuggestions((current) => [
-          suggestion,
-          ...current.filter((existing) => !(
-            existing.detection === suggestion.detection
-            && existing.verse.book === suggestion.verse.book
-            && existing.verse.chapter === suggestion.verse.chapter
-            && existing.verse.verse === suggestion.verse.verse
-          )),
-        ].slice(0, 30));
+        // One canonical verse card can retain both the spoken-reference and
+        // direct-quote evidence without conflating their automation policies.
+        setSuggestions((current) => mergeSuggestionFeed(current, suggestion));
         const settings = useAppStore.getState().settings;
         const autoLive = shouldAutoLiveSuggestion(suggestion, settings) && Boolean(onSendLiveVerseRef.current);
         const autoStage = !autoLive && shouldAutoStageSuggestion(suggestion);
@@ -337,7 +331,10 @@ export function AiScriptureProvider({
         // again when that turn finalizes. Act on the interim result, then hold
         // the final upgrade long enough to avoid staging/sending the same
         // Scripture twice. A later spoken mention remains eligible.
-        const actionKey = `${autoLive ? "live" : "stage"}:${suggestion.detection}:${verseKey(suggestion.verse)}`;
+        const actionSource = suggestion.detection === "reference" || suggestion.detection === "quote"
+          ? "direct"
+          : suggestion.detection;
+        const actionKey = `${autoLive ? "live" : "stage"}:${actionSource}:${verseKey(suggestion.verse)}`;
         const now = suggestion.timestamp || Date.now();
         for (const [key, handledAt] of autoHandledCanonicalActions.current) {
           if (now - handledAt > AUTO_ACTION_UPGRADE_DEDUP_MS) autoHandledCanonicalActions.current.delete(key);

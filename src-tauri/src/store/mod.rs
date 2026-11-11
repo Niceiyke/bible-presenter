@@ -520,6 +520,20 @@ impl BibleStore {
     /// scores the returned text lexically and converts the winning canonical
     /// reference back to the operator-selected translation.
     pub fn search_quote_candidates(&self, query: &str) -> anyhow::Result<Vec<Verse>> {
+        self.search_quote_candidates_with_fallback(query, true)
+    }
+
+    /// Interim quote lookups stay on the indexed path. The broad LIKE fallback
+    /// can scan the complete Bible corpus, so reserve it for finalized turns.
+    pub fn search_quote_candidates_fast(&self, query: &str) -> anyhow::Result<Vec<Verse>> {
+        self.search_quote_candidates_with_fallback(query, false)
+    }
+
+    fn search_quote_candidates_with_fallback(
+        &self,
+        query: &str,
+        allow_like_fallback: bool,
+    ) -> anyhow::Result<Vec<Verse>> {
         let query = query.trim();
         if query.is_empty() {
             return Ok(Vec::new());
@@ -555,7 +569,11 @@ impl BibleStore {
             }
         }
 
-        self.like_contiguous_all_english(query)
+        if allow_like_fallback {
+            self.like_contiguous_all_english(query)
+        } else {
+            Ok(Vec::new())
+        }
     }
 
     /// True when the query contains tokens beyond a Bible reference (book words + numbers),

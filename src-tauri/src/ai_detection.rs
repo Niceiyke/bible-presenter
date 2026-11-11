@@ -25,6 +25,16 @@ fn tokenize(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Tokenizes one ASR update so reference and quote detection can share the
+/// normalization work instead of independently scanning a growing interim
+/// transcript.
+// Also compiled into the standalone evaluator, which calls the text-based
+// detection API rather than the application's shared-token path.
+#[allow(dead_code)]
+pub(crate) fn normalized_transcript_tokens(text: &str) -> Vec<String> {
+    tokenize(text)
+}
+
 fn number_word(word: &str) -> Option<i32> {
     Some(match word {
         "zero" => 0,
@@ -235,7 +245,25 @@ fn parse_compact_verse(tokens: &[String], start: usize) -> Option<(i32, usize, O
 /// the operator's Preview queue rather than silently dropping all but the last.
 pub fn detect_references(text: &str, books: &[String]) -> Vec<ScriptureReference> {
     let tokens = tokenize(text);
-    let aliases = aliases_for_books(books);
+    detect_references_from_tokens(&tokens, books)
+}
+
+pub(crate) fn detect_references_from_tokens(
+    tokens: &[String],
+    books: &[String],
+) -> Vec<ScriptureReference> {
+    let aliases = reference_aliases_for_books(books);
+    detect_references_with_aliases(tokens, &aliases)
+}
+
+pub(crate) fn reference_aliases_for_books(books: &[String]) -> Vec<(Vec<String>, String)> {
+    aliases_for_books(books)
+}
+
+pub(crate) fn detect_references_with_aliases(
+    tokens: &[String],
+    aliases: &[(Vec<String>, String)],
+) -> Vec<ScriptureReference> {
     // Rank by the end of the matched book name, not its start. Numbered books
     // can contain another canonical book as a suffix ("First John" contains
     // "John"). Both aliases end at the same token, so prefer the longer alias.
@@ -246,7 +274,7 @@ pub fn detect_references(text: &str, books: &[String]) -> Vec<ScriptureReference
             continue;
         }
         for start in 0..=tokens.len() - alias.len() {
-            if tokens[start..start + alias.len()] != alias {
+            if tokens[start..start + alias.len()] != alias[..] {
                 continue;
             }
             let mut index = start + alias.len();
@@ -441,9 +469,13 @@ pub fn detect_reference(text: &str, books: &[String]) -> Option<ScriptureReferen
 }
 
 pub(crate) fn quote_tokens(text: &str) -> Vec<String> {
-    tokenize(text)
-        .into_iter()
-        .filter(|word| word != ":" && word != "-")
+    quote_tokens_from_normalized(&tokenize(text))
+}
+
+pub(crate) fn quote_tokens_from_normalized(tokens: &[String]) -> Vec<String> {
+    tokens
+        .iter()
+        .filter(|word| word.as_str() != ":" && word.as_str() != "-")
         // ASR commonly drops possessive endings ("the Lord" for "the
         // Lord's"). Ignore only the possessive suffix so short, otherwise
         // exact quotations can still align without broadly stemming words.
@@ -791,6 +823,19 @@ mod tests {
             "Judges".into(),
             "Romans".into(),
         ]
+    }
+
+    #[test]
+    fn shared_normalized_tokens_preserve_reference_and_quote_detection() {
+        let text = "Please turn to John 3:16, for God so loved the world.";
+        let normalized = normalized_transcript_tokens(text);
+        let references = detect_references_from_tokens(&normalized, &books());
+
+        assert_eq!(references, detect_references(text, &books()));
+        assert_eq!(
+            quote_tokens_from_normalized(&normalized),
+            quote_tokens(text)
+        );
     }
 
     #[test]

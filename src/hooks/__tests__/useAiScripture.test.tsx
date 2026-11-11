@@ -193,6 +193,21 @@ describe("AiScriptureProvider automatic staging", () => {
     expect(onStageVerse).toHaveBeenCalledWith(suggestion(0.89, "interim-reference").verse);
   });
 
+  it("does not auto-stage a second time when another detector finds the same verse", async () => {
+    const onStageVerse = vi.fn().mockResolvedValue(true);
+    render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);
+    await waitFor(() => expect(mocks.listeners.has("ai-scripture-suggestion")).toBe(true));
+
+    await emitSuggestion({ ...suggestion(0.97, "reference-match"), timestamp: 1_000 });
+    await emitSuggestion({
+      ...suggestion(0.96, "quote-match"),
+      detection: "quote",
+      timestamp: 1_500,
+    });
+
+    expect(onStageVerse).toHaveBeenCalledOnce();
+  });
+
   it("runs automation again for a fresh mention while reusing the same passage card", async () => {
     const onStageVerse = vi.fn().mockResolvedValue(true);
     render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);

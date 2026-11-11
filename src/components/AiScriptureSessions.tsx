@@ -117,7 +117,7 @@ export function AiScriptureSessions({ active }: { active: boolean }) {
                   <div className="mt-4">
                     <h4 className="text-xs font-bold text-console-text">Suggestions ({selected.suggestions.length})</h4>
                     <div className="mt-2 flex flex-wrap gap-1.5">
-                      {selected.suggestions.map((suggestion) => <span key={suggestion.id} className="rounded border border-console-border bg-console-surface px-2 py-1 text-[9px] text-console-text-muted">{suggestion.verse.book} {suggestion.verse.chapter}:{suggestion.verse.verse} · {suggestion.detection} · {Math.round(suggestion.confidence * 100)}%</span>)}
+                      {selected.suggestions.map((suggestion) => <span key={suggestion.id} className="rounded border border-console-border bg-console-surface px-2 py-1 text-[9px] text-console-text-muted">{suggestion.verse.book} {suggestion.verse.chapter}:{suggestion.verse.verse} · {suggestion.evidenceTypes?.length ? suggestion.evidenceTypes.join(" + ") : suggestion.detection} · {Math.round(suggestion.confidence * 100)}%</span>)}
                     </div>
                   </div>
                 )}

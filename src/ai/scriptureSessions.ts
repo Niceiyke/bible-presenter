@@ -11,6 +11,7 @@ export interface SavedTranscriptSegment {
 export interface SavedScriptureSuggestion {
   id: string;
   detection: "reference" | "quote" | "paraphrase" | "command";
+  evidenceTypes?: Array<"reference" | "quote">;
   confidence: number;
   evidence: string;
   verse: Verse;
