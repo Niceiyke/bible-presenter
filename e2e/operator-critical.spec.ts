@@ -14,8 +14,7 @@ test("stages a service item and commits it on air", async ({ page }) => {
   // The schedule queue lives in the Service Plan workspace; clicking a tile
   // stages it into the Live Canvas Cockpit ("Take live" becomes enabled).
   await page.getByRole("button", { name: /Service Plan/ }).click();
-  const cockpitEntry = page.getByText("John 3:16").last();
-  await cockpitEntry.click();
+  await page.getByTestId("schedule-item-stage").first().click();
   const takeLive = page.getByRole("button", { name: /Take live/ });
   await expect(takeLive).toBeEnabled();
   await takeLive.click();

@@ -319,7 +319,11 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
                 <div className={`w-5 h-5 flex items-center justify-center rounded text-[9px] font-black shrink-0 ${isActive ? "bg-state-stage text-slate-950" : "bg-console-surface-strong text-console-text-muted"}`}>
                   {idx + 1}
                 </div>
-                <div className="flex-1 min-w-0 cursor-pointer" onClick={() => stageItem(entry.item)}>
+                <div
+                  className="flex-1 min-w-0 cursor-pointer"
+                  data-testid="schedule-item-stage"
+                  onClick={() => stageItem(entry.item)}
+                >
                   <ScheduleTile item={entry.item} />
                 </div>
                 <div className="flex gap-1 shrink-0">
