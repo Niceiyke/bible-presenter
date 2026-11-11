@@ -22,18 +22,17 @@ interface MediaDetailPanelProps {
   onRelink: () => void;
   onSetFit: (mode: MediaFitMode) => void;
   onSetPlayback: (loop: boolean, rate: number, volume: number) => void;
-  onSetAsLogo: () => void;
   onSetAsBackgroundLogo: () => void;
 }
 
 /** Focused per-item controls keep the media grid fast to scan and use. */
 export function MediaDetailPanel({
   item, missing, onClose, onStage, onLive, onAddToSchedule, onEdit, onDelete,
-  onRelink, onSetFit, onSetPlayback, onSetAsLogo, onSetAsBackgroundLogo,
+  onRelink, onSetFit, onSetPlayback, onSetAsBackgroundLogo,
 }: MediaDetailPanelProps) {
   if (!item) {
     return (
-      <aside className="hidden min-h-[460px] items-center justify-center rounded-2xl border border-dashed border-console-border bg-console-surface/35 p-8 text-center xl:flex">
+      <aside className="hidden h-full min-h-0 items-center justify-center rounded-2xl border border-dashed border-console-border bg-console-surface/35 p-8 text-center xl:flex">
         <div>
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-tool-design/10 text-tool-design"><ImagePlus size={22} /></div>
           <p className="mt-4 text-sm font-bold text-console-text">Select media</p>
@@ -48,8 +47,8 @@ export function MediaDetailPanel({
   const display = { type: "Media" as const, data: item };
 
   return (
-    <aside className="flex min-h-[520px] min-w-0 flex-col overflow-hidden rounded-2xl border border-console-border bg-console-surface shadow-xl shadow-black/15">
-      <div className="border-b border-console-border p-4">
+    <aside className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-console-border bg-console-surface shadow-xl shadow-black/15">
+      <div className="shrink-0 border-b border-console-border p-4">
         <div className="flex items-start gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-tool-design/12 text-tool-design"><MediaTypeIcon item={item} /></div>
           <div className="min-w-0 flex-1">
@@ -78,10 +77,10 @@ export function MediaDetailPanel({
 
         {hasPlayback && <section className="rounded-xl border border-console-border bg-console-canvas/60 p-3"><p className="text-[9px] font-black uppercase tracking-[0.14em] text-console-text-muted">Playback</p><div className="mt-2 flex items-center gap-1.5"><button type="button" onClick={() => onSetPlayback(!(item.loop_playback ?? true), item.playback_rate ?? 1, item.volume ?? 1)} className={`flex h-7 items-center gap-1 rounded px-2 text-[9px] font-bold ${(item.loop_playback ?? true) ? "bg-action-primary/15 text-action-primary" : "bg-console-surface-raised text-console-text-muted"}`}><Repeat size={11} /> {(item.loop_playback ?? true) ? "Loop" : "Once"}</button><select value={item.playback_rate ?? 1} onChange={(event) => onSetPlayback(item.loop_playback ?? true, Number(event.target.value), item.volume ?? 1)} className="h-7 rounded bg-console-surface-raised px-2 text-[9px] text-console-text-muted">{[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate}>{rate}×</option>)}</select><button type="button" onClick={() => onSetPlayback(item.loop_playback ?? true, item.playback_rate ?? 1, (item.volume ?? 1) > 0 ? 0 : 1)} className="flex h-7 items-center gap-1 rounded bg-console-surface-raised px-2 text-[9px] font-bold text-console-text-muted"><Volume2 size={11} /> {(item.volume ?? 1) > 0 ? "Mute" : "Unmute"}</button></div></section>}
 
-        <section className="rounded-xl border border-console-border bg-console-canvas/60 p-3"><p className="text-[9px] font-black uppercase tracking-[0.14em] text-console-text-muted">Branding roles</p><div className="mt-2 grid grid-cols-2 gap-1.5"><Button variant="ghost" size="sm" onClick={onSetAsBackgroundLogo}>Background logo</Button><Button variant="ghost" size="sm" onClick={onSetAsLogo}>Corner logo</Button></div></section>
+        <section className="rounded-xl border border-console-border bg-console-canvas/60 p-3"><p className="text-[9px] font-black uppercase tracking-[0.14em] text-console-text-muted">Branding</p><Button variant="ghost" size="sm" className="mt-2 w-full" onClick={onSetAsBackgroundLogo}>Logo</Button></section>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 border-t border-console-border p-3"><Button variant="ghost" size="sm" onClick={onEdit}><Edit3 size={12} /> Edit</Button><button type="button" onClick={onDelete} className="flex h-8 items-center justify-center gap-1 rounded-md text-[10px] font-bold uppercase tracking-wide text-console-text-subtle hover:bg-state-live-soft hover:text-state-live"><Trash2 size={12} /> Delete</button></div>
+      <div className="grid shrink-0 grid-cols-2 gap-2 border-t border-console-border p-3"><Button variant="ghost" size="sm" onClick={onEdit}><Edit3 size={12} /> Edit</Button><button type="button" onClick={onDelete} className="flex h-8 items-center justify-center gap-1 rounded-md text-[10px] font-bold uppercase tracking-wide text-console-text-subtle hover:bg-state-live-soft hover:text-state-live"><Trash2 size={12} /> Delete</button></div>
     </aside>
   );
 }

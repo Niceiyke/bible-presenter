@@ -1,9 +1,10 @@
 import React from "react";
 import { Edit3, MoreHorizontal, Star } from "lucide-react";
-import type { CustomPresentation, CustomSlide, PresentationSummary } from "../../types";
+import type { CustomPresentation, CustomSlide, DisplayItem, PresentationSummary } from "../../types";
 import { formatPresentationUpdatedAt, type PresentationView } from "../../presentations/library";
 import { SlideThumbnail } from "../shared/SlideThumbnail";
 import { cn } from "../ui/cn";
+import { setDisplayItemDragData } from "../../utils/dragItem";
 
 interface PresentationDeckCardProps {
   summary: PresentationSummary;
@@ -13,6 +14,8 @@ interface PresentationDeckCardProps {
   selected: boolean;
   favorite: boolean;
   view: PresentationView;
+  /** First-slide item used when the deck card is dragged into Up Next. */
+  dragItem?: DisplayItem;
   onSelect: () => void;
   onEdit: () => void;
   onToggleFavorite: () => void;
@@ -26,6 +29,7 @@ export function PresentationDeckCard({
   selected,
   favorite,
   view,
+  dragItem,
   onSelect,
   onEdit,
   onToggleFavorite,
@@ -47,6 +51,9 @@ export function PresentationDeckCard({
         aria-pressed={selected}
         onClick={onSelect}
         onKeyDown={activate}
+        draggable={!!dragItem}
+        title={dragItem ? "Drag to Up Next" : undefined}
+        onDragStart={(event) => dragItem && setDisplayItemDragData(event, dragItem)}
         className={cn(
           "group flex min-w-0 items-center gap-3 rounded-xl border bg-console-surface p-2.5 text-left transition-all",
           selected
@@ -75,6 +82,9 @@ export function PresentationDeckCard({
       aria-pressed={selected}
       onClick={onSelect}
       onKeyDown={activate}
+      draggable={!!dragItem}
+      title={dragItem ? "Drag to Up Next" : undefined}
+      onDragStart={(event) => dragItem && setDisplayItemDragData(event, dragItem)}
       className={cn(
         "group min-w-0 overflow-hidden rounded-2xl border bg-console-surface text-left transition-all",
         "hover:-translate-y-0.5 hover:border-console-border-strong hover:shadow-xl hover:shadow-black/25",

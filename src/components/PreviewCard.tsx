@@ -63,16 +63,18 @@ export function PreviewCard({
   const bgStyle = item ? getEffectiveBackground(settings, item, effectiveColors, appDataDir) : {};
   const bgVideo = getVideoBackground(settings, item);
 
-  // Measure the 16:9 slide box and scale slide/song fonts against the
-  // configured reference (1080p by default) — the same policy
-  // `useCanvasScale` uses, so the preview always matches the output
-  // proportions regardless of the cockpit's resizable width.
-  const slideBoxRef = useRef<HTMLDivElement | null>(null);
+  // Measure the full 16:9 body (not the padded verse box) and scale against
+  // the configured reference (1080p by default). This matches the
+  // ProgramSurface's `windowScale`, so the preview's font size is identical
+  // to the audience output.
+  const previewBodyRef = useRef<HTMLDivElement | null>(null);
+  const verseBoxRef = useRef<HTMLDivElement | null>(null);
   const referenceHeight = useReferenceHeight();
   const [slideScale, setSlideScale] = useState(0.25);
+  const [fittedVersePt, setFittedVersePt] = useState<number | null>(null);
 
   useLayoutEffect(() => {
-    const el = slideBoxRef.current;
+    const el = previewBodyRef.current;
     if (!el) return;
     const update = () => setSlideScale(el.clientHeight / referenceHeight);
     update();
@@ -80,6 +82,54 @@ export function PreviewCard({
     ro.observe(el);
     return () => ro.disconnect();
   }, [item, referenceHeight]);
+
+  // Mirror ProgramSurface's verse auto-fit so a long passage wraps and shrinks
+  // the same way in the cockpit as it does on the projector.
+  useLayoutEffect(() => {
+    const isVerse = item?.type === "Verse";
+    const container = verseBoxRef.current;
+    if (!isVerse || !container || settings.auto_split_verses || slideScale <= 0) {
+      setFittedVersePt(null);
+      return;
+    }
+    const text = (item as { data: { text: string } }).data.text;
+    const maxPt = settings.font_size * slideScale;
+    const availH = container.clientHeight * 0.8;
+    const availW = Math.max(0, container.clientWidth - 128 * slideScale);
+    if (availH <= 0 || availW <= 0 || maxPt <= 0) {
+      setFittedVersePt(null);
+      return;
+    }
+    const probe = document.createElement("p");
+    probe.style.cssText = [
+      "position:absolute",
+      "visibility:hidden",
+      "pointer-events:none",
+      `width:${availW}px`,
+      `font-family:${settings.verse_font_family ?? "Georgia, serif"}`,
+      "text-align:center",
+      "word-break:break-word",
+      "line-height:1.25",
+      "white-space:normal",
+    ].join(";");
+    container.appendChild(probe);
+    let lo = 8;
+    let hi = maxPt;
+    let best = 8;
+    for (let i = 0; i < 16; i++) {
+      const mid = (lo + hi) / 2;
+      probe.style.fontSize = `${mid}pt`;
+      probe.textContent = text;
+      if (probe.scrollHeight <= availH) {
+        best = mid;
+        lo = mid + 0.25;
+      } else {
+        hi = mid - 0.25;
+      }
+    }
+    container.removeChild(probe);
+    setFittedVersePt(best < maxPt ? Math.floor(best) : null);
+  }, [item, settings.auto_split_verses, settings.font_size, settings.verse_font_family, slideScale]);
 
   // Letterbox the 16:9 slide/song design inside the (possibly non-16:9)
   // preview card so text never overflows: the renderer fills the largest
@@ -244,9 +294,8 @@ export function PreviewCard({
         </div>
       )}
       <div
-        className={`flex-1 flex flex-col items-center justify-center bg-black/40 rounded-2xl border border-slate-800 text-center min-h-0 relative group overflow-hidden ${
-          item?.type === "Media" ? "p-0" : "p-6"
-        }`}
+        ref={previewBodyRef}
+        className="flex-1 flex flex-col items-center justify-center text-center min-h-0 relative group overflow-hidden"
         style={bgStyle}
       >
         {bgVideo?.path && (
@@ -269,27 +318,33 @@ export function PreviewCard({
             transition={{ duration: 0.2 }}
           >
             {item.type === "Verse" ? (
-              <div ref={slideBoxRef} className="w-full h-full flex flex-col items-center justify-center gap-3 text-center">
+              <div
+                  ref={verseBoxRef}
+                  className="w-full h-full flex flex-col items-center justify-center text-center"
+                  style={{ padding: 64 * slideScale, gap: 32 * slideScale }}
+                >
                 {settings.reference_position === "top" && (
                   <p
                     className="uppercase tracking-widest font-bold shrink-0"
-                    style={{ color: refColor, fontSize: `${(settings.reference_font_size ?? 36) * slideScale}px`, fontFamily: settings.reference_font_family ?? "Arial, sans-serif" }}
+                    style={{ color: refColor, fontSize: `${(settings.reference_font_size ?? 36) * slideScale}pt`, fontFamily: settings.reference_font_family ?? "Arial, sans-serif" }}
                   >
                     {item.data.book} {item.data.chapter}:{item.data.verse}
+                    {item.data.version && <span className="ml-2 text-[0.7em] font-normal opacity-60">({item.data.version})</span>}
                   </p>
                 )}
                 <p
-                  className="leading-snug"
-                  style={{ color: effectiveColors.verseText, fontFamily: settings.verse_font_family ?? "Georgia, serif", fontSize: `${settings.font_size * slideScale}px` }}
+                  className="leading-tight drop-shadow-2xl"
+                  style={{ color: effectiveColors.verseText, fontFamily: settings.verse_font_family ?? "Georgia, serif", fontSize: `${fittedVersePt ?? settings.font_size * slideScale}pt` }}
                 >
                   {item.data.text}
                 </p>
                 {settings.reference_position !== "top" && (
                   <p
                     className="uppercase tracking-widest font-bold shrink-0"
-                    style={{ color: refColor, fontSize: `${(settings.reference_font_size ?? 36) * slideScale}px`, fontFamily: settings.reference_font_family ?? "Arial, sans-serif" }}
+                    style={{ color: refColor, fontSize: `${(settings.reference_font_size ?? 36) * slideScale}pt`, fontFamily: settings.reference_font_family ?? "Arial, sans-serif" }}
                   >
                     {item.data.book} {item.data.chapter}:{item.data.verse}
+                    {item.data.version && <span className="ml-2 text-[0.7em] font-normal opacity-60">({item.data.version})</span>}
                   </p>
                 )}
               </div>
@@ -338,13 +393,13 @@ export function PreviewCard({
                   mirrored={item.data.mirrored}
                   objectFit="contain"
                 />
-                <div className="absolute top-2 left-2 px-1.5 py-0.5 bg-red-500/80 rounded text-[8px] font-black text-white flex items-center gap-1 animate-pulse">
+                <div className="absolute top-2 left-2 px-1.5 py-0.5 bg-red-500/80 rounded text-[10px] font-black text-white flex items-center gap-1 animate-pulse">
                   <div className="w-1.5 h-1.5 rounded-full bg-white" />
                   LIVE CAMERA
                 </div>
                 {item.data.deviceId.startsWith("phone-camera-") && !phoneStreams[item.data.deviceId] && (
                   <div className="absolute inset-0 flex items-center justify-center">
-                    <p className="px-2 py-1 bg-black/60 rounded text-[9px] font-bold uppercase tracking-widest text-slate-300">
+                    <p className="px-2 py-1 bg-black/60 rounded text-[10px] font-bold uppercase tracking-widest text-slate-300">
                       Connecting…
                     </p>
                   </div>
@@ -391,11 +446,11 @@ export function PreviewCard({
             {showControls && (
               isLocalPreview && isVideo ? (
                 <div className="absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-3 pb-2 pt-10 flex flex-col gap-1.5">
-                  <p className="text-[9px] text-slate-400 font-bold uppercase truncate text-center mb-0.5">
+                  <p className="text-[10px] text-slate-400 font-bold uppercase truncate text-center mb-0.5">
                     {(item.data as MediaItem).name}
                   </p>
                   <div className="flex items-center gap-2">
-                    <span className="text-[9px] text-slate-400 font-mono w-8 text-right shrink-0">
+                    <span className="text-[10px] text-slate-400 font-mono w-8 text-right shrink-0">
                       {formatTime(currentTime)}
                     </span>
                     <input
@@ -407,7 +462,7 @@ export function PreviewCard({
                       onChange={handleSeek}
                       className="flex-1 h-1.5 accent-amber-500 cursor-pointer rounded-full"
                     />
-                    <span className="text-[9px] text-slate-400 font-mono w-8 shrink-0">
+                    <span className="text-[10px] text-slate-400 font-mono w-8 shrink-0">
                       {formatTime(duration)}
                     </span>
                   </div>
@@ -461,7 +516,7 @@ export function PreviewCard({
                     <select
                       value={rate}
                       onChange={(e) => handleRate(parseFloat(e.target.value))}
-                      className="h-7 px-1.5 rounded bg-slate-800 text-slate-300 text-[9px] font-bold border border-slate-700"
+                      className="h-7 px-1.5 rounded bg-slate-800 text-slate-300 text-[10px] font-bold border border-slate-700"
                       title="Playback speed"
                     >
                       {[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => (
@@ -532,7 +587,7 @@ export function PreviewCard({
                       <select
                         value={rate}
                         onChange={(e) => handleRate(parseFloat(e.target.value))}
-                        className="h-7 px-1 rounded bg-slate-800 text-slate-300 text-[9px] font-bold border border-slate-700"
+                        className="h-7 px-1 rounded bg-slate-800 text-slate-300 text-[10px] font-bold border border-slate-700"
                         title="Playback speed"
                       >
                         {[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => (

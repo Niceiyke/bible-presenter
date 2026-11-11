@@ -244,6 +244,8 @@ export default function App() {
               clearStaged={clearStaged}
               clearLive={clearLive}
               updateSettings={updateSettings}
+              stageItem={stageItem}
+              onAddToSchedule={addToSchedule}
             />
 
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">

@@ -81,14 +81,20 @@ export function QuickBiblePicker({
       const item: DisplayItem = { type: "Verse", data: v };
       if (isDouble) {
         await onLive(item);
-        cvInputRef.current?.blur();
+        // Reset every part of the picker, but put the caret back in the book
+        // field so the operator can type the next reference without clicking.
+        // Clear the double-Enter window too, so the next reference starts with
+        // a safe single-Enter stage instead of going live immediately.
+        lastEnterRef.current = 0;
         setLockedBook(null);
         setCvText("");
         setBookQuery("");
+        window.setTimeout(() => bookInputRef.current?.focus(), 0);
       } else {
         await onStage(item);
         // Do not clear inputs or focus on single enter (stage)
         // This allows double-enter to work and keeps the current context
+        cvInputRef.current?.focus();
         cvInputRef.current?.select();
       }
     } catch (err) {
@@ -142,9 +148,9 @@ export function QuickBiblePicker({
           </div>
         )}
       </div>
-      <p className="text-[9px] text-console-text-subtle leading-tight">
+      <p className="text-[10px] text-console-text-subtle leading-snug">
         {lockedBook
-          ? "Type chapter+verse (e.g. 3 16) · Enter = stage · Enter×2 = live · Esc = clear"
+          ? "Type chapter + verse (e.g. 3 16) · Enter = stage · double Enter = go live · Esc = clear"
           : "↑↓ arrows · Space/Tab/Enter = select book"}
       </p>
     </div>

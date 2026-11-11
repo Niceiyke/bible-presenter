@@ -22,6 +22,7 @@ import { PrayerDocxImportModal } from "./presentations/PrayerDocxImportModal";
 import { PresentationDeckCard } from "./presentations/PresentationDeckCard";
 import { PresentationDetailPanel } from "./presentations/PresentationDetailPanel";
 import { compilePrayerGuide, type PrayerGuideImport } from "../imports/prayerGuide";
+import { buildCustomSlideItem } from "../utils";
 import {
   duplicatePresentation,
   filterAndSortPresentations,
@@ -337,21 +338,29 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
                 ? "grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-3"
                 : "flex flex-col gap-2",
             )}>
-              {filtered.map((summary) => (
-                <PresentationDeckCard
-                  key={summary.id}
-                  summary={summary}
-                  presentation={loadedPresentations[summary.id]}
-                  firstSlide={studioSlides[summary.id]?.[0]}
-                  appDataDir={appDataDir}
-                  selected={expandedStudioPresId === summary.id}
-                  favorite={preferences.favorites.includes(summary.id)}
-                  view={preferences.view}
-                  onSelect={() => selectPresentation(summary.id)}
-                  onEdit={() => onOpenEditor(summary.id)}
-                  onToggleFavorite={() => toggleFavorite(summary.id)}
-                />
-              ))}
+              {filtered.map((summary) => {
+                const loadedDeck = loadedPresentations[summary.id];
+                const dragSlides = loadedDeck?.slides ?? studioSlides[summary.id];
+                const dragItem = dragSlides && dragSlides.length > 0
+                  ? buildCustomSlideItem(summary, dragSlides, 0, loadedDeck?.theme)
+                  : undefined;
+                return (
+                  <PresentationDeckCard
+                    key={summary.id}
+                    summary={summary}
+                    presentation={loadedDeck}
+                    firstSlide={studioSlides[summary.id]?.[0]}
+                    appDataDir={appDataDir}
+                    selected={expandedStudioPresId === summary.id}
+                    favorite={preferences.favorites.includes(summary.id)}
+                    view={preferences.view}
+                    dragItem={dragItem}
+                    onSelect={() => selectPresentation(summary.id)}
+                    onEdit={() => onOpenEditor(summary.id)}
+                    onToggleFavorite={() => toggleFavorite(summary.id)}
+                  />
+                );
+              })}
             </div>
           ) : (
             <LibraryEmptyState hasQuery={query.trim().length > 0} onCreate={onNewPresentation} />

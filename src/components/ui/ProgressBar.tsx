@@ -30,7 +30,7 @@ export function ProgressBar({ value, tone = "neutral", className, label }: Progr
         <div className={cn("h-full rounded-full transition-all", TONES[tone])} style={{ width: `${pct * 100}%` }} />
       </div>
       {label && (
-        <span className="text-[9px] font-black text-console-text-muted shrink-0">{label}</span>
+        <span className="text-[10px] font-bold text-console-text-muted shrink-0">{label}</span>
       )}
     </div>
   );

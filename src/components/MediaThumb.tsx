@@ -41,8 +41,8 @@ export function MediaThumb({
           preload="metadata"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent pointer-events-none" />
-        <span className="absolute bottom-1 right-1 px-1.5 py-0.5 bg-black/70 text-white text-[8px] font-mono rounded flex items-center gap-1">
-          <Play size={8} fill="currentColor" />
+        <span className="absolute bottom-1 right-1 flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[10px] text-white">
+          <Play size={9} fill="currentColor" />
           {formatDuration(item.duration) || "VIDEO"}
         </span>
       </div>
@@ -55,7 +55,7 @@ export function MediaThumb({
         <div className="w-9 h-9 rounded-full bg-amber-500/15 flex items-center justify-center border border-amber-500/30">
           <Music size={16} className="text-amber-500/90" />
         </div>
-        <span className="text-white/70 text-[8px] font-mono">
+        <span className="font-mono text-[10px] text-white/70">
           {formatDuration(item.duration) || "AUDIO"}
         </span>
       </div>

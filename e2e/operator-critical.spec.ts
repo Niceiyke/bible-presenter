@@ -21,6 +21,9 @@ test("stages a service item and commits it on air", async ({ page }) => {
   await takeLive.click();
 
   await expect(page.getByText("On air", { exact: true })).toBeVisible();
+  // The mock leaves the projection window off, so the operator must be warned
+  // that the live item is not reaching the audience.
+  await expect(page.getByText(/Output window off/)).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.__WORDLYTE_E2E__.live?.data?.book)).toBe("John");
 });
 
@@ -39,14 +42,14 @@ test("does not consume a one-shot service item when send-live fails", async ({ p
 });
 
 test("toggles blackout without crashing the always-mounted Program preview", async ({ page }) => {
-  // The blackout toggle is the "Black"/"Restore" button in the Live Canvas.
-  const blackout = page.getByRole("button", { name: "Black", exact: true });
+  // The blackout toggle is the "Blackout"/"Restore" button in the Live Canvas.
+  const blackout = page.getByRole("button", { name: "Blackout", exact: true });
   await blackout.click();
   await expect(page.getByRole("button", { name: "Restore", exact: true })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Workspaces" })).toBeVisible();
 
   await page.getByRole("button", { name: "Restore", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Black", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Blackout", exact: true })).toBeVisible();
 });
 
 declare global {

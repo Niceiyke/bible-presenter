@@ -155,6 +155,39 @@ select option {
   text-decoration: underline;
 }
 
+/* Live Canvas sizing -------------------------------------------------------
+   The monitors must stay 16:9 so the operator preview wraps and crops exactly
+   like the audience output. On short windows (1080p at 125–150% Windows
+   scaling, or 1280x720) full half-width 16:9 cards would consume the entire
+   workspace, so cap their width by viewport height. These rules are unlayered
+   so they intentionally override the Tailwind grid/max-width utilities. */
+.live-canvas-shell {
+  max-width: 1600px;
+}
+.live-canvas-upnext {
+  display: none;
+}
+.workspace-upnext {
+  display: flex;
+}
+@media (min-width: 1280px) and (max-width: 1449px) {
+  .live-canvas-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 320px;
+  }
+}
+@media (min-width: 1450px) {
+  .live-canvas-grid {
+    grid-template-columns: 280px minmax(0, 1fr) minmax(0, 1fr) 320px;
+  }
+  .live-canvas-upnext {
+    display: flex;
+  }
+  .workspace-upnext {
+    display: none;
+  }
+}
+
+
 /* Custom Scrollbar for the Log Viewer and Sidebar */
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;

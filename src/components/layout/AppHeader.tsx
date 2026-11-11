@@ -1,6 +1,6 @@
 import React from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, CalendarDays, Clock3, Monitor, Repeat, Keyboard, X, Signal, EyeOff, MonitorSmartphone, ExternalLink, Save } from "lucide-react";
+import { AlertTriangle, CalendarDays, Clock3, Monitor, Keyboard, X, Signal, EyeOff, MonitorSmartphone, Save, ScrollText, Loader2 } from "lucide-react";
 import { useAppStore } from "../../store";
 import { IconButton, StatusBadge } from "../ui";
 
@@ -8,12 +8,12 @@ export function AppHeader({ onPersistSchedule }: { onPersistSchedule?: () => Pro
   const {
     isLogOpen, setIsLogOpen,
     showShortcuts, setShowShortcuts,
-    outputVisible, setOutputVisible,
+    outputVisible,
     backendError, setBackendError,
+    backendAvailable,
     busyActions, setBusyAction,
     settings,
     services, activeServiceId, scheduleEntries,
-    backendAvailable,
     setActiveTab,
     setBottomDeckOpen,
     outputs, outputStates,
@@ -57,6 +57,7 @@ export function AppHeader({ onPersistSchedule }: { onPersistSchedule?: () => Pro
   }, []);
 
   const outputBusy = busyActions.includes("output");
+  const saveBusy = busyActions.includes("save");
 
   const toggleOutput = async () => {
     if (outputBusy) return;
@@ -74,6 +75,7 @@ export function AppHeader({ onPersistSchedule }: { onPersistSchedule?: () => Pro
   };
 
   const activeService = services.find((s) => s.id === activeServiceId);
+  const itemCount = scheduleEntries.length;
 
   return (
     <header className="z-30 flex h-14 shrink-0 items-center gap-3 border-b border-console-border bg-console-surface px-3 shadow-lg shadow-black/10">
@@ -82,49 +84,48 @@ export function AppHeader({ onPersistSchedule }: { onPersistSchedule?: () => Pro
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-action-primary text-[10px] font-black text-black shadow-lg shadow-action-primary/20">WL</div>
           <div className="hidden md:block">
             <span className="block text-[10px] font-black uppercase tracking-[0.18em] text-console-text">Wordlyte</span>
-            <span className="block text-[7px] font-black uppercase tracking-[0.16em] text-console-text-subtle">Operator</span>
+            <span className="block text-[9px] font-black uppercase tracking-[0.16em] text-console-text-subtle">Operator</span>
           </div>
         </div>
 
         <div className="hidden h-6 w-px bg-console-border sm:block" />
         <button
           onClick={() => { setBottomDeckOpen(false); setActiveTab("schedule"); }}
-          className="hidden min-w-0 max-w-[220px] items-center gap-2 rounded-lg border border-console-border bg-console-canvas/60 px-2.5 py-1.5 text-left transition-colors hover:border-action-primary/40 hover:bg-console-surface-strong sm:flex"
-          title="Open Service Plan"
+          className="hidden min-w-0 max-w-[240px] items-center gap-2 rounded-lg border border-console-border bg-console-canvas/60 px-2.5 py-1.5 text-left transition-colors hover:border-action-primary/40 hover:bg-console-surface-strong sm:flex"
+          title="Open service plan"
         >
-          <CalendarDays size={12} className="shrink-0 text-action-primary" />
+          <CalendarDays size={13} className="shrink-0 text-action-primary" />
           <span className="min-w-0">
-            <span className="block text-[7px] font-black uppercase tracking-wider text-console-text-subtle">Service rundown</span>
-            <span className="block truncate text-[10px] font-black text-console-text">{activeService?.name ?? "No service selected"} <span className="text-console-text-subtle">· {scheduleEntries.length}</span></span>
+            <span className="block text-[10px] font-black uppercase tracking-wider text-console-text-subtle">Service plan</span>
+            <span className="block truncate text-[11px] font-bold text-console-text">
+              {activeService?.name ?? "No service selected"}
+              <span className="text-console-text-subtle"> · {itemCount} {itemCount === 1 ? "item" : "items"}</span>
+            </span>
           </span>
         </button>
       </div>
 
-      <div className="flex min-w-0 flex-1 items-center justify-center gap-1.5 overflow-hidden">
-        <StatusBadge
-          tone={outputOn ? "success" : "neutral"}
-          icon={<Monitor size={10} />}
-          label={outputOn ? "Output On" : "Output Off"}
-          className="max-w-[110px]"
-        />
-        <StatusBadge
-          tone={settings.is_blanked ? "warning" : "neutral"}
-          icon={<EyeOff size={10} />}
-          label={settings.is_blanked ? "Blackout" : "Live"}
-          className={`${settings.is_blanked ? "" : "hidden xl:inline-flex"}`}
-        />
-        <StatusBadge
-          tone={backendAvailable ? "success" : "error"}
-          icon={<Signal size={10} />}
-          label={backendAvailable ? "Backend Ready" : "Backend Offline"}
-          className="hidden lg:inline-flex"
-        />
+      <div className="flex min-w-0 flex-1 items-center justify-center gap-2 overflow-hidden">
+        <button
+          onClick={toggleOutput}
+          disabled={outputBusy}
+          aria-label="Toggle Output Window (Ctrl+O)"
+          aria-pressed={outputOn}
+          title="Toggle the audience output window (Ctrl+O)"
+          className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[10px] font-bold uppercase tracking-wider transition-colors disabled:opacity-50 ${outputOn ? "border-state-success/40 bg-state-success/10 text-state-success" : "border-console-border bg-console-surface-raised text-console-text-muted hover:border-console-border-strong hover:text-console-text"}`}
+        >
+          {outputBusy ? <Loader2 size={11} className="animate-spin" /> : <Monitor size={11} />}
+          <span aria-live="polite">{outputOn ? "Output On" : "Output Off"}</span>
+        </button>
+        {settings.is_blanked && (
+          <StatusBadge tone="warning" icon={<EyeOff size={10} />} label="Blackout" />
+        )}
         {remoteCount !== null && (
           <button
             onClick={() => setActiveTab("remote")}
-            title="Remote Control — click to open"
-            aria-label="Remote Control devices"
-            className="hover:opacity-80 transition-opacity shrink-0"
+            title="Remote control — click to open"
+            aria-label="Remote control devices"
+            className="shrink-0 transition-opacity hover:opacity-80"
           >
             <StatusBadge
               tone={remoteCount > 0 ? "success" : "neutral"}
@@ -134,58 +135,62 @@ export function AppHeader({ onPersistSchedule }: { onPersistSchedule?: () => Pro
             />
           </button>
         )}
+        {!backendAvailable && (
+          <StatusBadge
+            tone="error"
+            icon={<Signal size={10} />}
+            label="Backend Offline"
+            className="hidden lg:inline-flex"
+          />
+        )}
       </div>
 
       {backendError && (
-        <button
-          onClick={() => { setIsLogOpen(true); setBackendError(null); }}
-          className="flex items-center gap-1.5 pl-1 pr-1 py-1 rounded-full bg-state-live-soft border border-state-live/50 text-state-live hover:bg-state-live/15 transition-all group shrink-0"
-          title={backendError}
-        >
-          <StatusBadge tone="error" label="Backend issue" icon={<AlertTriangle size={11} />} className="border-transparent bg-transparent py-0" />
-          <span
-            role="button"
-            tabIndex={0}
-            onClick={(e) => { e.stopPropagation(); setBackendError(null); }}
-            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setBackendError(null); } }}
-            className="text-state-live/70 hover:text-state-live shrink-0"
+        <div className="flex shrink-0 items-center gap-1 rounded-full border border-state-live/50 bg-state-live-soft py-1 pl-1.5 pr-1">
+          <button
+            onClick={() => setIsLogOpen(true)}
+            className="flex items-center gap-1.5 rounded-full px-1 py-0.5 text-state-live transition-colors hover:bg-state-live/15"
+            title={backendError}
+          >
+            <StatusBadge tone="error" label="Backend issue" icon={<AlertTriangle size={11} />} className="border-transparent bg-transparent py-0" />
+          </button>
+          <button
+            onClick={() => setBackendError(null)}
+            aria-label="Dismiss backend error"
+            className="flex h-6 w-6 items-center justify-center rounded-full text-state-live/70 transition-colors hover:bg-state-live/15 hover:text-state-live"
           >
             <X size={11} />
-          </span>
-        </button>
+          </button>
+        </div>
       )}
 
       <div className="ml-auto flex shrink-0 items-center gap-1">
-        <div className="mr-1 hidden items-center gap-1 sm:flex">
-          {onPersistSchedule && <button onClick={() => void onPersistSchedule()} disabled={busyActions.includes("save")} className="flex h-7 items-center gap-1.5 rounded-lg border border-console-border bg-console-canvas px-2 text-[8px] font-black uppercase text-console-text-muted hover:bg-console-surface-strong hover:text-console-text disabled:opacity-40" title="Save service plan"><Save size={10} /> Save</button>}
-          <button onClick={() => { setBottomDeckOpen(false); setActiveTab("schedule"); }} className="flex h-7 items-center gap-1.5 rounded-lg border border-console-border bg-console-canvas px-2 text-[8px] font-black uppercase text-console-text-muted hover:border-action-primary/35 hover:text-action-primary" title="Open service plan"><ExternalLink size={10} /> Plan</button>
-        </div>
+        {onPersistSchedule && (
+          <button
+            onClick={() => void onPersistSchedule()}
+            disabled={saveBusy}
+            className="flex h-8 items-center gap-1.5 rounded-lg border border-console-border bg-console-canvas px-2.5 text-[10px] font-bold uppercase text-console-text-muted transition-colors hover:bg-console-surface-strong hover:text-console-text disabled:opacity-50"
+            title="Save service plan"
+            aria-label="Save service plan"
+          >
+            {saveBusy ? <Loader2 size={11} className="animate-spin" /> : <Save size={11} />}
+            {saveBusy ? "Saving" : "Save"}
+          </button>
+        )}
         <div className="mr-1 hidden items-center gap-1.5 rounded-lg border border-console-border bg-console-canvas/50 px-2.5 py-1.5 xl:flex" title={now.toLocaleDateString()}>
           <Clock3 size={11} className="text-console-text-subtle" />
           <span className="font-mono text-[11px] font-bold tabular-nums text-console-text">{now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
         </div>
         <IconButton
-          label="Toggle Output Window (Ctrl+O)"
-          tone="success"
-          active={outputOn}
-          loading={outputBusy}
-          onClick={toggleOutput}
-          disabled={outputBusy}
-          size={15}
-        >
-          <Monitor size={15} />
-        </IconButton>
-        <div className="w-px h-4 bg-console-border mx-0.5" />
-        <IconButton
-          label="System Logs"
+          label="System logs"
           active={isLogOpen}
           onClick={() => setIsLogOpen(!isLogOpen)}
           size={15}
         >
-          <Repeat size={15} className="rotate-90" />
+          <ScrollText size={15} />
         </IconButton>
         <IconButton
-          label="Keyboard Shortcuts (?)"
+          label="Keyboard shortcuts (?)"
           active={showShortcuts}
           onClick={() => setShowShortcuts(true)}
           size={15}

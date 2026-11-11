@@ -1,7 +1,8 @@
 import React from "react";
 import { ListPlus, Pencil, Copy, Trash2, BookPlus } from "lucide-react";
-import type { Song } from "../../types";
+import type { DisplayItem, Song } from "../../types";
 import { getSongCounts, songNeedsMetadata } from "../../utils/song";
+import { setDisplayItemDragData } from "../../utils/dragItem";
 import { Button, ContentCard, StatusBadge, type StatusTone } from "../ui";
 import { useT } from "../../i18n";
 import type { SongSource } from "./SongLibraryToolbar";
@@ -16,6 +17,8 @@ export interface SongCardProps {
   /** Unity "Use" action. Mode-aware (caller decides stage vs lyrics overlay). */
   onUse: () => void;
   onAddToSchedule: () => void;
+  /** Display item used when the card is dragged into the Up Next queue. */
+  dragItem?: DisplayItem;
   /** Secondary actions. Source decides which are available; the labels of the
    *  primary flow (Preview / Use / Add to Service) never change. */
   onEdit?: () => void;
@@ -36,6 +39,7 @@ export function SongCard({
   onPreview,
   onUse,
   onAddToSchedule,
+  dragItem,
   onEdit,
   onDuplicate,
   onDelete,
@@ -67,10 +71,12 @@ export function SongCard({
 
   return (
     <ContentCard className={`p-2 gap-1.5 transition-colors ${selected ? "border-action-primary/70 bg-action-primary/5" : ""}`}>
-      <button type="button" onClick={onSelect} className="group/preview relative block w-full overflow-hidden rounded-lg text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus-ring)]" aria-label={`Open details for ${song.title}`}>
-        <SongLyricThumbnail song={song} compact />
-        {onSelect && <span className="absolute inset-x-0 bottom-0 bg-black/65 px-2 py-1 text-[8px] font-black uppercase tracking-wider text-white opacity-0 transition-opacity group-hover/preview:opacity-100 group-focus-visible/preview:opacity-100">Open details</span>}
-      </button>
+      <div draggable={!!dragItem} title={dragItem ? "Drag to Up Next" : undefined} onDragStart={(event) => dragItem && setDisplayItemDragData(event, dragItem)}>
+        <button type="button" onClick={onSelect} className="group/preview relative block w-full overflow-hidden rounded-lg text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus-ring)]" aria-label={`Open details for ${song.title}`}>
+          <SongLyricThumbnail song={song} compact />
+          {onSelect && <span className="absolute inset-x-0 bottom-0 bg-black/65 px-2 py-1 text-[8px] font-black uppercase tracking-wider text-white opacity-0 transition-opacity group-hover/preview:opacity-100 group-focus-visible/preview:opacity-100">Open details</span>}
+        </button>
+      </div>
 
       <div className="flex items-start justify-between gap-2">
         <button type="button" onClick={onSelect} className="min-w-0 flex-1 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus-ring)]">

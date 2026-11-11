@@ -8,7 +8,8 @@
 import React from "react";
 import { CalendarPlus, Radio, Send } from "lucide-react";
 import { SlideThumbnail } from "./shared/SlideThumbnail";
-import type { CustomSlide, SlideTheme } from "../types";
+import { setDisplayItemDragData } from "../utils/dragItem";
+import type { CustomSlide, DisplayItem, SlideTheme } from "../types";
 
 interface StudioSlideCardProps {
   slide: CustomSlide;
@@ -16,6 +17,8 @@ interface StudioSlideCardProps {
   onStage?: () => void;
   onLive?: () => void;
   onAddToSchedule?: () => void;
+  /** Display item used when the slide is dragged into Up Next. */
+  dragItem?: DisplayItem;
   appDataDir?: string | null;
   theme?: SlideTheme;
 }
@@ -26,6 +29,7 @@ export function StudioSlideCard({
   onStage,
   onLive,
   onAddToSchedule,
+  dragItem,
   appDataDir,
   theme,
 }: StudioSlideCardProps) {
@@ -35,7 +39,13 @@ export function StudioSlideCard({
     <div
       className="group overflow-hidden rounded-lg border border-console-border bg-black shadow-sm transition-all hover:border-state-stage/60 hover:shadow-lg hover:shadow-black/30"
     >
-      <div className="relative aspect-video cursor-pointer" onClick={onStage}>
+      <div
+        className="relative aspect-video cursor-pointer"
+        onClick={onStage}
+        draggable={!!dragItem}
+        title={dragItem ? "Drag to Up Next" : undefined}
+        onDragStart={(event) => dragItem && setDisplayItemDragData(event, dragItem)}
+      >
         <SlideThumbnail slide={slide} theme={theme} className="absolute inset-0 h-full w-full" appDataDir={appDataDir} />
         <div className="absolute bottom-1.5 left-1.5 flex h-5 min-w-5 items-center justify-center rounded-md border border-white/10 bg-black/70 px-1.5 backdrop-blur-sm">
           <span className="text-[8px] font-black text-white/80">{index + 1}</span>

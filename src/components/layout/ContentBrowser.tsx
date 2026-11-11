@@ -131,18 +131,19 @@ export function ContentBrowser({
 return (
     <div className={activeTab === "lt-designer" || activeTab === "scenes" || activeTab === "scene-builder"
       ? "flex-1 min-h-0 overflow-hidden"
+      : activeTab === "bible" || activeTab === "media"
+      ? "flex-1 min-h-0 overflow-hidden p-4"
       : "flex-1 min-h-0 overflow-y-auto p-4 custom-scrollbar"}>
       <Suspense fallback={null}>
-        {activeTab === "bible" && <BibleTab onStage={stageItem} onLive={sendLive} />}
+        {activeTab === "bible" && <BibleTab onStage={stageItem} onLive={sendLive} onAddToSchedule={addToSchedule} />}
         {activeTab === "media" && (
           <MediaTab
             onStage={stageItem} onLive={sendLive} onAddToSchedule={addToSchedule}
             onLoadMedia={handleFileUpload} onDeleteMedia={handleDeleteMedia}
-            onSetAsLogo={(path) => updateSettings({ ...useAppStore.getState().settings, logo_path: path })}
             onSetAsBackgroundLogo={(path) => {
               const fit = media.find(m => m.path === path)?.fit_mode ?? "cover";
               updateSettings({ ...useAppStore.getState().settings, background_logo_path: path, background_logo_fit: fit, show_background_logo: true });
-              setToast("Background logo set & activated");
+              setToast("Logo set & activated");
             }}
           />
         )}

@@ -98,8 +98,11 @@ export function ProgramSurface({ frame, runtime, mode = "output", silent = false
     const fontFamily = settings.verse_font_family ?? "Georgia, serif";
     const container = verseContainerRef.current;
 
+    // Keep the fit budget proportional to the surface. The surrounding padding
+    // is scaled with `windowScale`, so subtracting a fixed 128px here would
+    // over-shrink text in small (cockpit) surfaces.
     const availH = container.clientHeight * 0.8;
-    const availW = container.clientWidth - 128;
+    const availW = Math.max(0, container.clientWidth - 128 * windowScale);
 
     if (availH <= 0 || availW <= 0) return;
 
@@ -339,12 +342,17 @@ export function ProgramSurface({ frame, runtime, mode = "output", silent = false
           >
             <ErrorBoundary fallback={<ProjectionErrorFallback />}>
             {item.type === "Verse" ? (
-              <div ref={verseContainerRef} className="absolute inset-0 flex flex-col items-center justify-center p-16 text-center">
+              <div
+                ref={verseContainerRef}
+                className="absolute inset-0 flex flex-col items-center justify-center text-center"
+                style={{ padding: 64 * windowScale }}
+              >
                 <motion.div
-                  className="w-full flex flex-col items-center gap-8"
-                  initial={{ y: 20, opacity: 0 }}
+                  className="w-full flex flex-col items-center"
+                  style={{ gap: 32 * windowScale }}
+                  initial={{ y: 20 * windowScale, opacity: 0 }}
                   animate={{ y: 0, opacity: 1 }}
-                  transition={{ duration: 0.6, delay: 0.1 }}
+                  transition={mode === "preview" ? { duration: 0.18 } : { duration: 0.6, delay: 0.1 }}
                 >
                   {isTop && ReferenceTag}
                   <div className="relative w-full flex flex-col items-center">

@@ -5,7 +5,9 @@ import { cn } from "./cn";
 export type ButtonVariant =
   | "primary"    // Main operator action (amber)
   | "live"       // On-air / destructive (red)
+  | "live-outline" // Direct-to-air action that bypasses preview (hot outline)
   | "stage"      // Prepared / up-next (cyan)
+  | "stage-outline" // Prepared/up-next secondary action
   | "success"    // Saved / connected (green)
   | "warning"    // Attention
   | "ghost"      // Subtle neutral
@@ -23,7 +25,9 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 const VARIANTS: Record<ButtonVariant, string> = {
   primary: "bg-action-primary text-black hover:bg-action-primary-hover shadow-lg shadow-action-primary/20",
   live: "bg-state-live text-white hover:bg-state-live/90 shadow-lg shadow-state-live/20",
+  "live-outline": "border border-state-live/40 bg-state-live/5 text-state-live hover:bg-state-live/15",
   stage: "bg-state-stage text-slate-950 hover:bg-state-stage/90 shadow-lg shadow-state-stage/20",
+  "stage-outline": "border border-state-stage/35 bg-state-stage/10 text-state-stage hover:bg-state-stage/20",
   success: "bg-state-success text-slate-950 hover:bg-state-success/90",
   warning: "bg-state-warning text-slate-950 hover:bg-state-warning/90",
   ghost: "bg-console-surface-raised text-console-text-muted hover:bg-console-surface-strong hover:text-console-text",
@@ -31,9 +35,9 @@ const VARIANTS: Record<ButtonVariant, string> = {
 };
 
 const SIZES: Record<ButtonSize, string> = {
-  sm: "h-8 px-2.5 text-[10px] gap-1",
-  md: "h-10 px-3.5 text-[11px] gap-1.5",
-  lg: "h-11 px-4 text-xs gap-2",
+  sm: "h-8 px-2.5 text-[11px] gap-1",
+  md: "h-10 px-3.5 text-xs gap-1.5",
+  lg: "h-11 px-4 text-[13px] gap-2",
 };
 
 export function Button({

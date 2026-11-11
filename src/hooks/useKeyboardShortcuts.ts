@@ -108,13 +108,18 @@ export function useKeyboardShortcuts(props: Props): void {
       return true;
     },
     (e) => {
+      // The Bible chapter reader owns Up/Down/Enter while its verse list has
+      // focus, so those keys must not fall through to the schedule shortcuts.
+      const target = e.target as Element | null;
+      const inChapterReader = !!target?.closest?.('[data-keyboard-scope="chapter"]');
+
       switch (e.key) {
         case "?": setShowShortcuts((v: boolean) => !v); break;
         case "Escape":
           if (showShortcuts) { setShowShortcuts(false); return; }
           shortcutClearLive();
           break;
-        case "Enter": if (stagedItem) goLive(); break;
+        case "Enter": if (!inChapterReader && stagedItem) goLive(); break;
         case "o": if (e.ctrlKey) { e.preventDefault(); invoke("toggle_output_window").catch((err: any) => setBackendError(`Output window: ${err?.message ?? err}`)); } break;
         case "b": if (e.ctrlKey) { e.preventDefault(); shortcutToggleBlackout(); } break;
         case "t": if (e.ctrlKey) { e.preventDefault(); setBottomDeckOpen(!bottomDeckOpen); } break;
@@ -166,6 +171,7 @@ export function useKeyboardShortcuts(props: Props): void {
         case "x": if (e.ctrlKey && e.shiftKey) { e.preventDefault(); clearAll(); } break;
         case "s": if (e.ctrlKey) { e.preventDefault(); setActiveTab("settings"); } break;
         case "ArrowDown": {
+          if (inChapterReader) break;
           e.preventDefault();
           const nextIdx = activeScheduleIdx !== null ? activeScheduleIdx + 1 : 0;
           if (nextIdx < scheduleEntries.length) {
@@ -176,6 +182,7 @@ export function useKeyboardShortcuts(props: Props): void {
           break;
         }
         case "ArrowUp": {
+          if (inChapterReader) break;
           e.preventDefault();
           const prevIdx = activeScheduleIdx !== null ? activeScheduleIdx - 1 : scheduleEntries.length - 1;
           if (prevIdx >= 0 && scheduleEntries.length > 0) {

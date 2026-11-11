@@ -286,6 +286,7 @@ export function SongsTab({ onOpenLyricsMode, onStage, onLive, onAddToSchedule }:
                   onPreview={() => setPreviewSong(song)}
                   onUse={() => { setSelectedSongId(song.id); setUseSong(song); }}
                   onAddToSchedule={() => onAddToSchedule(buildSongDisplayItem(song, 0))}
+                  dragItem={buildSongDisplayItem(song, 0)}
                   onEdit={allowEditing ? () => setEditingSong(cloneSong(song)) : undefined}
                   onDuplicate={allowEditing ? () => handleCopySong(song) : undefined}
                   onDelete={allowEditing ? () => setDeleteSong(song) : undefined}

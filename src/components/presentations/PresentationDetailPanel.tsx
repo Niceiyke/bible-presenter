@@ -137,6 +137,7 @@ export function PresentationDetailPanel({
                   onStage={onStage ? () => onStage(item) : undefined}
                   onLive={onLive ? () => onLive(item) : undefined}
                   onAddToSchedule={onAddToSchedule ? () => onAddToSchedule(item) : undefined}
+                  dragItem={item}
                   appDataDir={appDataDir}
                 />
               );
