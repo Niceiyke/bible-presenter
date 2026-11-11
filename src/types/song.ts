@@ -25,6 +25,23 @@ export interface SongLine {
   lineIndex: number;
 }
 
+/**
+ * One audience-facing lyric page. A page is what the operator stages and
+ * advances; a section is the authored Verse/Chorus. Full-screen pages split
+ * long sections, and lower-third pages never cross a section boundary.
+ */
+export interface SongPage {
+  /** Stable key within this song/mode: sequence occurrence + page-in-section. */
+  key: string;
+  sectionId: string;
+  sectionLabel: string;
+  /** Occurrence in the arrangement (repeated choruses have distinct values). */
+  sequenceIndex: number;
+  /** Index into the flattened lower-third line list (overlay mode). */
+  lineStart: number;
+  lines: string[];
+}
+
 export interface Song {
   id: string;
   title: string;
@@ -73,9 +90,14 @@ export interface SongSlideData {
   title: string;
   author?: string;
   section_label: string;
+  /** Source section id, so repeated sections and page navigation stay stable. */
+  section_id?: string;
   lines: string[];
+  /** Page index (not section index) for page-built song items. */
   slide_index: number;
   total_slides: number;
+  /** First line of this page in the flattened lower-third list. */
+  line_start?: number;
   style?: SongStyle;
   font?: string;
   font_size?: number;

@@ -1,7 +1,7 @@
 import React from "react";
 import type { DisplayItem, Song, CustomSlide, Verse, PresentationSettings } from "../types";
 import { buildCustomSlideItem, displayItemLabel } from "../utils";
-import { getSongSequence } from "../utils/song";
+import { buildSongPageItem, getSongPages } from "../utils/song";
 
 /**
  * Item-kind registry.
@@ -30,6 +30,9 @@ export interface ItemLookup {
   nextVerse: Verse | null;
   verseSplits: Record<string, Verse[]>;
   verseSplitThreshold: number;
+  /** Lower-third lyric lines per page, so song navigation uses the same page
+   *  boundaries as the runner and the Lower Third tab. */
+  songLinesPerDisplay?: 1 | 2;
 }
 
 export interface NavResult {
@@ -61,8 +64,33 @@ export interface ItemKind<T extends DisplayItem = DisplayItem> {
 const verseKey = (v: Verse, threshold: number) =>
   `${v.book}-${v.chapter}-${v.verse}-${v.version}-${threshold}`;
 
-function songFlatSections(song: Song): { label: string; lines: string[] }[] {
-  return getSongSequence(song);
+/** Resolve the page list for a live song item using the same mode and page
+ *  size as the runner. */
+function songPagesFor(item: Extract<DisplayItem, { type: "Song" }>, lookup: ItemLookup) {
+  const song = lookupSong(lookup, item.data.song_id);
+  if (!song) return [];
+  return getSongPages(song, {
+    style: item.data.style ?? song.style,
+    linesPerDisplay: lookup.songLinesPerDisplay ?? 2,
+  });
+}
+
+/** Map the current song item to a page index. Remote clients still stage
+ *  section-level items, and older schedules may have been built before pages
+ *  existed, so fall back to the section occurrence when the item's own slide
+ *  count does not match the page model. */
+function currentSongPageIndex(
+  item: Extract<DisplayItem, { type: "Song" }>,
+  pages: { lineStart: number; sequenceIndex: number }[],
+): number {
+  if (pages.length === 0) return 0;
+  if (item.data.line_start !== undefined) {
+    const byLine = pages.findIndex((page) => page.lineStart === item.data.line_start);
+    if (byLine >= 0) return byLine;
+  }
+  if (item.data.total_slides === pages.length) return item.data.slide_index ?? 0;
+  const bySection = pages.findIndex((page) => page.sequenceIndex === item.data.slide_index);
+  return bySection >= 0 ? bySection : 0;
 }
 
 /** Find a song by id across both the user collection and the hymn library. */
@@ -190,33 +218,48 @@ const songKind: ItemKind<Extract<DisplayItem, { type: "Song" }>> = {
   accent: "pink",
   stageDetail: (i) => i.data.lines.join("\n"),
   ScheduleTile: ({ item }) => (
-    <p className="text-pink-400 text-[10px] font-bold uppercase truncate">
-      {item.data.style === "FullSlide" ? "FULL" : "OVR"} · {item.data.title} ({item.data.section_label})
-    </p>
+    <>
+      <p className="text-pink-400 text-[10px] font-bold uppercase truncate">
+        {item.data.style === "FullSlide" ? "FULL" : "OVR"} · {item.data.title}
+      </p>
+      <p className="text-slate-400 text-[10px] truncate">
+        {item.data.section_label} · page {(item.data.slide_index ?? 0) + 1} of {item.data.total_slides || 1}
+      </p>
+    </>
   ),
   nextLive: (i, lookup) => {
     const song = lookupSong(lookup, i.data.song_id);
     if (!song) return null;
-    const flat = songFlatSections(song);
-    const idx = i.data.slide_index + 1;
-    if (idx < flat.length) {
-      return { type: "Song", data: { ...i.data, section_label: flat[idx].label, lines: flat[idx].lines, slide_index: idx } };
+    const pages = songPagesFor(i, lookup);
+    const idx = currentSongPageIndex(i, pages) + 1;
+    if (idx < pages.length) {
+      return buildSongPageItem(
+        song,
+        idx,
+        i.data.style ?? song.style,
+        lookup.songLinesPerDisplay ?? 2,
+      );
     }
     return null;
   },
   nav: (i, lookup) => {
     const song = lookupSong(lookup, i.data.song_id);
     if (!song) return { prev: null, next: null, first: null, last: null };
-    const flat = songFlatSections(song);
-    if (flat.length === 0) return { prev: null, next: null, first: null, last: null };
-    const cur = i.data.slide_index;
+    const pages = songPagesFor(i, lookup);
+    if (pages.length === 0) return { prev: null, next: null, first: null, last: null };
+    const cur = currentSongPageIndex(i, pages);
     const build = (idx: number) =>
-      ({ type: "Song", data: { ...i.data, section_label: flat[idx].label, lines: flat[idx].lines, slide_index: idx } }) as DisplayItem;
+      buildSongPageItem(
+        song,
+        idx,
+        i.data.style ?? song.style,
+        lookup.songLinesPerDisplay ?? 2,
+      ) as DisplayItem;
     return {
       prev: cur > 0 ? build(cur - 1) : null,
-      next: cur < flat.length - 1 ? build(cur + 1) : null,
+      next: cur < pages.length - 1 ? build(cur + 1) : null,
       first: build(0),
-      last: build(flat.length - 1),
+      last: build(pages.length - 1),
     };
   },
 };

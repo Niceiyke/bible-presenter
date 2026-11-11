@@ -11,6 +11,7 @@ import { useBibleCascade } from "./hooks/useBibleCascade";
 import { useItemActions } from "./hooks/useItemActions";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useLtFlatLines } from "./hooks/useLtFlatLines";
+import { useLtAutoAdvance } from "./hooks/useLtAutoAdvance";
 import { PhoneCameraProvider } from "./hooks/usePhoneCameraHost";
 import { SystemDiagnosticsProvider } from "./system/SystemDiagnosticsContext";
 import { RecordingProvider } from "./hooks/useRecordingProvider";
@@ -86,6 +87,7 @@ export default function App() {
   } = useItemActions();
 
   const ltFlatLines = useLtFlatLines();
+  useLtAutoAdvance();
 
   useKeyboardShortcuts({ stageItem, goLive, sendLive, clearAll, ltFlatLines });
 

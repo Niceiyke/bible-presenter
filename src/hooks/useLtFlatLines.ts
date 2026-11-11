@@ -5,6 +5,7 @@ import { flattenSongForLowerThird } from "../utils/song";
 export interface LtFlatLine {
   text: string;
   sectionLabel: string;
+  sectionKey: string;
 }
 
 /**
@@ -23,15 +24,21 @@ export function useLtFlatLines(): LtFlatLine[] {
       return quickLyricsText
         .split("\n")
         .filter((l) => l.trim())
-        .map((l) => ({ text: l.trim(), sectionLabel: "QUICK" }));
+        .map((l) => ({ text: l.trim(), sectionLabel: "QUICK", sectionKey: "quick" }));
     }
     const song = ltSongId ? songs.find((s) => s.id === ltSongId) ?? null : null;
+    const lines = flattenSongForLowerThird(song).map((line) => ({
+      text: line.text,
+      sectionLabel: line.sectionLabel,
+      sectionKey: line.sectionKey,
+    }));
     // The global "Show song section labels" output setting also gates the
     // lower-third overlay: when it is off, section labels never make it into
-    // the projected payload (matching the full-screen song renderer).
+    // the projected payload (matching the full-screen song renderer). The
+    // sectionKey remains available for pagination.
     if (!showSectionLabels) {
-      return flattenSongForLowerThird(song).map((l) => ({ ...l, sectionLabel: "" }));
+      return lines.map((l) => ({ ...l, sectionLabel: "" }));
     }
-    return flattenSongForLowerThird(song);
+    return lines;
   }, [songs, ltSongId, quickLyricsText, showSectionLabels]);
 }

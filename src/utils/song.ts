@@ -9,7 +9,21 @@
 
 import { stableId } from "./index";
 import type { DisplayItem } from "../types";
-import type { Song, LyricSection, SongLine, SongStyle, SongArrangementStep, LowerThirdTemplate } from "../types";
+import type { Song, LyricSection, SongLine, SongPage, SongStyle, SongArrangementStep, LowerThirdTemplate } from "../types";
+
+/** Maximum lyric lines on one full-screen page before it is split. Longer
+ *  sections used to overflow the 16:9 output because a section was always one
+ *  slide regardless of length. */
+export const FULL_SLIDE_MAX_LINES = 6;
+
+export interface SongPageOptions {
+  /** Display mode. Defaults to the song's saved style. */
+  style?: SongStyle;
+  /** Number of lyric lines shown at once in lower-third mode. */
+  linesPerDisplay?: 1 | 2;
+  /** Override the full-screen page size (defaults to `FULL_SLIDE_MAX_LINES`). */
+  maxLines?: number;
+}
 
 /** Resolve the lower-third template a song should be projected with. A song
  *  with a saved `lt_template_id` wins over the operator's currently selected
@@ -157,6 +171,123 @@ export function flattenSongLyrics(song: Song): SongLine[] {
     });
   });
   return out;
+}
+
+/**
+ * Build the audience-facing lyric pages for a song.
+ *
+ * - Lower-third pages contain at most `linesPerDisplay` lines and never cross
+ *   a section boundary, so a page cannot pair the end of a verse with the start
+ *   of a chorus under the wrong section label.
+ * - Full-screen pages split a section only when it exceeds `maxLines`; a short
+ *   verse remains one page and a long bridge becomes several.
+ */
+export function getSongPages(song: Song, options: SongPageOptions = {}): SongPage[] {
+  const style = options.style ?? song.style ?? "LowerThird";
+  const perPage = options.linesPerDisplay ?? 2;
+  const maxLines = Math.max(1, options.maxLines ?? FULL_SLIDE_MAX_LINES);
+
+  if (style === "LowerThird") {
+    const flat = flattenSongForLowerThird(song);
+    const pages: SongPage[] = [];
+    let index = 0;
+    while (index < flat.length) {
+      const first = flat[index];
+      const lines: string[] = [];
+      let pageInSection = 0;
+      // The section key includes the arrangement occurrence, so a repeated
+      // chorus is treated as a fresh page run rather than merged with the
+      // preceding occurrence.
+      while (
+        index < flat.length &&
+        flat[index].sectionKey === first.sectionKey &&
+        lines.length < perPage
+      ) {
+        lines.push(flat[index].text);
+        index++;
+        pageInSection++;
+      }
+      pages.push({
+        key: `${first.sectionKey}:${pageInSection}`,
+        sectionId: first.sectionId,
+        sectionLabel: first.sectionLabel,
+        sequenceIndex: first.sequenceIndex,
+        lineStart: index - lines.length,
+        lines,
+      });
+    }
+    return pages;
+  }
+
+  const sequence = getSongSequence(song);
+  const pages: SongPage[] = [];
+  let flatLineStart = 0;
+  sequence.forEach((section, sequenceIndex) => {
+    const lines = section.lines;
+    if (lines.length === 0) {
+      flatLineStart += 1;
+      return;
+    }
+    for (let start = 0, pageInSection = 0; start < lines.length; start += maxLines, pageInSection++) {
+      pages.push({
+        key: `${sequenceIndex}:${pageInSection}`,
+        sectionId: section.id ?? "",
+        sectionLabel: section.label,
+        sequenceIndex,
+        lineStart: flatLineStart + start,
+        lines: lines.slice(start, start + maxLines),
+      });
+    }
+    flatLineStart += lines.length;
+  });
+  return pages;
+}
+
+/** Number of audience-facing pages for the given mode. */
+export function getSongPageCount(
+  song: Song,
+  style?: SongStyle,
+  linesPerDisplay: 1 | 2 = 2,
+): number {
+  return getSongPages(song, { style, linesPerDisplay }).length;
+}
+
+/**
+ * Build a Song DisplayItem for a lyric page. This is the item the runner,
+ * library cards, drag/drop, schedule, and keyboard navigation all use, so
+ * `slide_index` consistently means "page index" for new song items.
+ */
+export function buildSongPageItem(
+  song: Song,
+  pageIndex: number,
+  mode?: SongStyle,
+  linesPerDisplay: 1 | 2 = 2,
+): DisplayItem {
+  const style = mode ?? song.style ?? "LowerThird";
+  const pages = getSongPages(song, { style, linesPerDisplay });
+  const index = pages.length === 0 ? 0 : Math.max(0, Math.min(pageIndex, pages.length - 1));
+  const page = pages[index];
+  return {
+    type: "Song",
+    data: {
+      song_id: song.id,
+      title: song.title,
+      author: song.author,
+      section_label: page?.sectionLabel ?? "",
+      section_id: page?.sectionId,
+      lines: page?.lines ?? [],
+      slide_index: index,
+      total_slides: pages.length,
+      line_start: page?.lineStart,
+      style,
+      font: song.font,
+      font_size: song.font_size,
+      font_weight: song.font_weight,
+      color: song.color,
+      background: song.background,
+      lt_template_id: song.lt_template_id,
+    },
+  };
 }
 
 /** Build a full-screen Song DisplayItem for the given sequence slide index. */
@@ -313,16 +444,76 @@ export function getSongCounts(song: Song): { sections: number; sequence: number;
   return { sections, sequence, lines };
 }
 
+/** A lower-third lyric line with a stable section identity. `sectionKey`
+ *  survives the global "show section labels" setting being off, so pagination
+ *  still knows where one section ends and the next begins. */
+export interface SongLtLine {
+  text: string;
+  sectionLabel: string;
+  sectionKey: string;
+  sectionId: string;
+  sequenceIndex: number;
+}
+
 /**
- * Flatten the song sequence into lower-third line entries
- * (`{ text, sectionLabel }`), the shape consumed by `ltBuildLyricsPayload`.
- * This replaces the triplicated `ltFlatLines` useMemo in App.tsx,
- * LowerThirdTab.tsx, and LtDesignerTab.tsx.
+ * Flatten the song sequence into lower-third line entries, filtering blank
+ * lines so a projected page never advances to an empty lyric.
  */
 export function flattenSongForLowerThird(
   song: Song | null | undefined,
-): { text: string; sectionLabel: string }[] {
+): SongLtLine[] {
   if (!song) return [];
-  const lines = flattenSongLyrics(song);
-  return lines.map(l => ({ text: l.text, sectionLabel: l.sectionLabel }));
+  return flattenSongLyrics(song)
+    .filter(line => line.text.trim().length > 0)
+    .map(line => ({
+      text: line.text,
+      sectionLabel: line.sectionLabel,
+      sectionKey: `${line.sectionId || line.sectionLabel}:${line.sequenceIndex}`,
+      sectionId: line.sectionId,
+      sequenceIndex: line.sequenceIndex,
+    }));
+}
+
+/**
+ * Page starts for lower-third lyrics. Pages never span a section boundary;
+ * PageDown/PageUp, auto-advance, and the runner all use this list so they
+ * advance in lockstep.
+ */
+export function getLtPageStarts(
+  lines: { sectionKey?: string }[],
+  linesPerDisplay: 1 | 2,
+): number[] {
+  const starts: number[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    starts.push(index);
+    const sectionKey = lines[index]?.sectionKey;
+    let count = 0;
+    while (
+      index + count < lines.length &&
+      count < linesPerDisplay &&
+      (sectionKey === undefined || lines[index + count]?.sectionKey === sectionKey)
+    ) {
+      count++;
+    }
+    index += Math.max(1, count);
+  }
+  return starts;
+}
+
+/** Next/previous page start for lower-third navigation. Returns the current
+ *  index when there is nowhere to go. */
+export function stepLtPage(
+  lines: { sectionKey?: string }[],
+  current: number,
+  linesPerDisplay: 1 | 2,
+  direction: 1 | -1,
+): number {
+  const starts = getLtPageStarts(lines, linesPerDisplay);
+  if (starts.length === 0) return 0;
+  if (direction > 0) {
+    return starts.find((start) => start > current) ?? starts[starts.length - 1];
+  }
+  const previous = [...starts].reverse().find((start) => start < current);
+  return previous ?? starts[0];
 }

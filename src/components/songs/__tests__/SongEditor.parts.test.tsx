@@ -74,6 +74,20 @@ describe("SongSectionEditorList", () => {
     expect((onChange.mock.calls[0][0] as LyricSection[])[0].lines).toEqual(["keep"]);
   });
 
+  it("uses one editable section-label field instead of a select plus a custom input", () => {
+    const onChange = vi.fn();
+    render(
+      <SongSectionEditorList
+        sections={[section("a", "Verse 1", ["x"])]}
+        onChange={onChange}
+      />,
+    );
+    const label = screen.getByLabelText("Section label") as HTMLInputElement;
+    expect(label.value).toBe("Verse 1");
+    fireEvent.change(label, { target: { value: "Refrain" } });
+    expect((onChange.mock.calls[0][0] as LyricSection[])[0].label).toBe("Refrain");
+  });
+
   it("duplicates a section as a new section with a fresh id", () => {
     const onChange = vi.fn();
     render(
@@ -104,7 +118,7 @@ describe("SongSectionEditorList", () => {
     expect(next).toHaveLength(2);
     expect(next[0].id).toBe("a");
     expect(next[1].id).toBeTruthy();
-    expect(next[1].label).toBe("Verse");
+    expect(next[1].label).toBe("Verse 2");
     expect(next[1].lines).toEqual([""]);
   });
 

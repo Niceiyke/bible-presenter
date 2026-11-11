@@ -51,7 +51,7 @@ export function SongLibraryToolbar({
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-tool-audio/12 text-tool-audio"><Music2 size={15} /></span>
         <div className="min-w-0">
           <h1 className="truncate text-sm font-black text-console-text">Song library</h1>
-          <p className="text-[9px] font-medium text-console-text-subtle">{mineCount} my songs · {hymnCount} hymns</p>
+          <p className="text-[9px] font-medium text-console-text-subtle">Find a song, open its pages, or add it to the plan.</p>
         </div>
       </div>
       <div className="ml-auto flex flex-wrap items-center gap-1.5">

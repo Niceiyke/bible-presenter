@@ -22,14 +22,14 @@ export function AddToServiceModal({
         <header className="p-4 border-b border-slate-800 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <CalendarPlus className="text-amber-500" size={18} />
-            <h2 className="text-sm font-black uppercase tracking-widest text-white">Add to Service</h2>
+            <h2 className="text-sm font-black uppercase tracking-widest text-white">Add to plan</h2>
           </div>
           <button onClick={onClose} className="p-1 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white transition-all">
             <X size={20} />
           </button>
         </header>
         <p className="px-4 pt-3 pb-1 text-[10px] text-slate-500">
-          Choose the service to add this item to.
+          Choose the service plan to add this item to.
         </p>
         <div className="flex-1 overflow-y-auto p-3 custom-scrollbar flex flex-col gap-1.5">
           {services.length === 0 && (

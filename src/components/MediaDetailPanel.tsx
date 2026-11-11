@@ -60,7 +60,7 @@ export function MediaDetailPanel({
         {missing ? <Button variant="live" size="sm" className="mt-4 w-full" onClick={onRelink}><RotateCcw size={12} /> Relink missing file</Button> : <div className="mt-4 grid grid-cols-3 gap-2">
           <Button variant="stage" size="sm" onClick={() => onStage(display)}>Stage</Button>
           <Button variant="primary" size="sm" onClick={() => onLive(display)}><Radio size={12} /> Live</Button>
-          <Button variant="ghost" size="sm" onClick={() => onAddToSchedule(display)}><ListPlus size={12} /> Service</Button>
+          <Button variant="ghost" size="sm" onClick={() => onAddToSchedule(display)}><ListPlus size={12} /> Add to plan</Button>
         </div>}
       </div>
 

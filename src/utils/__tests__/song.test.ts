@@ -4,6 +4,11 @@ import {
   getSongSequence,
   flattenSongLyrics,
   buildSongDisplayItem,
+  buildSongPageItem,
+  getSongPages,
+  getSongPageCount,
+  stepLtPage,
+  FULL_SLIDE_MAX_LINES,
   getNextSongIndex,
   getPreviousSongIndex,
   getSongCounts,
@@ -16,7 +21,7 @@ import {
   songValidate,
   SONG_SCHEMA_VERSION,
 } from "../song";
-import { getEffectiveBackground } from "../index";
+import { getEffectiveBackground, ltBuildLyricsPayload } from "../index";
 import type { Song, LyricSection, DisplayItem, PresentationSettings } from "../../types";
 
 const mkSong = (over: Partial<Song> = {}): Song => ({
@@ -230,6 +235,87 @@ describe("buildSongDisplayItem", () => {
     const song = normalizeSong(mkSong());
     const item = buildSongDisplayItem(song, 0) as Extract<DisplayItem, { type: "Song" }>;
     expect(item.data.background).toBeUndefined();
+  });
+});
+
+describe("audience-facing song pages", () => {
+  const longSong = normalizeSong(mkSong({
+    style: "LowerThird",
+    sections: [
+      { label: "Verse 1", lines: ["v1 a", "v1 b", "v1 c", "v1 d"] },
+      { label: "Chorus", lines: ["c a", "c b", "c c"] },
+    ],
+  }));
+
+  it("splits lower-third pages without crossing a section boundary", () => {
+    const pages = getSongPages(longSong, { style: "LowerThird", linesPerDisplay: 2 });
+    expect(pages.map((page) => page.lines)).toEqual([
+      ["v1 a", "v1 b"],
+      ["v1 c", "v1 d"],
+      ["c a", "c b"],
+      ["c c"],
+    ]);
+    expect(pages.map((page) => page.sectionLabel)).toEqual([
+      "Verse 1", "Verse 1", "Chorus", "Chorus",
+    ]);
+    expect(pages.map((page) => page.lineStart)).toEqual([0, 2, 4, 6]);
+  });
+
+  it("pages by the requested lower-third line count", () => {
+    const pages = getSongPages(longSong, { style: "LowerThird", linesPerDisplay: 1 });
+    expect(pages).toHaveLength(7);
+    expect(pages[1].lines).toEqual(["v1 b"]);
+  });
+
+  it("paginates a long full-screen section instead of overflowing one slide", () => {
+    const lines = Array.from({ length: FULL_SLIDE_MAX_LINES + 3 }, (_, i) => `line ${i + 1}`);
+    const song = normalizeSong(mkSong({ style: "FullSlide", sections: [{ label: "Verse 1", lines }] }));
+    const pages = getSongPages(song, { style: "FullSlide" });
+    expect(pages).toHaveLength(2);
+    expect(pages[0].lines).toHaveLength(FULL_SLIDE_MAX_LINES);
+    expect(pages[1].lines).toHaveLength(3);
+    expect(getSongPageCount(song, "FullSlide")).toBe(2);
+  });
+
+  it("builds page items with page index, section identity and line start", () => {
+    const item = buildSongPageItem(longSong, 2, "LowerThird", 2) as Extract<DisplayItem, { type: "Song" }>;
+    expect(item.data.slide_index).toBe(2);
+    expect(item.data.total_slides).toBe(4);
+    expect(item.data.section_label).toBe("Chorus");
+    expect(item.data.section_id).toBe(longSong.sections[1].id);
+    expect(item.data.line_start).toBe(4);
+    expect(item.data.lines).toEqual(["c a", "c b"]);
+  });
+
+  it("clamps an out-of-range page index to the last page", () => {
+    const item = buildSongPageItem(longSong, 99, "LowerThird", 2) as Extract<DisplayItem, { type: "Song" }>;
+    expect(item.data.slide_index).toBe(3);
+    expect(item.data.section_label).toBe("Chorus");
+  });
+
+  it("does not pair a second overlay line across a section boundary", () => {
+    const lines = [
+      { text: "verse last", sectionLabel: "Verse 1", sectionKey: "v1" },
+      { text: "chorus first", sectionLabel: "Chorus", sectionKey: "c" },
+    ];
+    const payload = ltBuildLyricsPayload(lines, 0, 2);
+    expect(payload?.kind).toBe("Lyrics");
+    if (payload?.kind === "Lyrics") {
+      expect(payload.data.line1).toBe("verse last");
+      expect(payload.data.line2).toBeUndefined();
+      expect(payload.data.section_label).toBe("Verse 1");
+    }
+  });
+
+  it("steps lower-third pages by page starts, never by a raw line count", () => {
+    const flat = [
+      { sectionKey: "v1" }, { sectionKey: "v1" }, { sectionKey: "v1" },
+      { sectionKey: "c" }, { sectionKey: "c" },
+    ];
+    expect(stepLtPage(flat, 0, 2, 1)).toBe(2);
+    expect(stepLtPage(flat, 2, 2, 1)).toBe(3);
+    expect(stepLtPage(flat, 3, 2, 1)).toBe(3);
+    expect(stepLtPage(flat, 3, 2, -1)).toBe(2);
   });
 });
 

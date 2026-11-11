@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Music2 } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, Music2 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { FONTS } from "../../types";
 import type { Song, SongSlideData, SongStyle, MediaItem } from "../../types";
-import { normalizeSong, getSongSequence, syncArrangementForSections, songValidate } from "../../utils/song";
+import { normalizeSong, getSongPageCount, getSongPages, syncArrangementForSections, songValidate } from "../../utils/song";
+import { detectAndParse } from "../../utils/songImporter";
+import { stableId } from "../../utils";
 import { useAppStore } from "../../store";
 import { useT } from "../../i18n";
 import { Button, Modal, SaveStatus, type SaveStatusState } from "../ui";
@@ -12,7 +14,7 @@ import { SongMetadataForm } from "./SongMetadataForm";
 import { SongSectionEditorList } from "./SongSectionEditor";
 import { SongArrangementEditor } from "./SongArrangementEditor";
 import { SongPreviewBox } from "./SongPreviewBox";
-import { LowerThirdOverlay } from "../shared/Renderers";
+import { SongOverlayPreview } from "./SongOverlayPreview";
 import { BackgroundEditor } from "../BackgroundEditor";
 
 interface SongEditorModalProps {
@@ -28,7 +30,7 @@ const newSong = (): Song => ({
   id: "",
   title: "",
   author: "",
-  sections: [{ label: "Verse", lines: [""] }],
+  sections: [{ label: "Verse 1", lines: [""] }],
   arrangement: [],
   style: "LowerThird",
 });
@@ -39,15 +41,19 @@ const newSong = (): Song => ({
  *  confirmation, and validation that prevents saving an empty song. */
 export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps) {
   const [draft, setDraft] = useState<Song>(() => normalizeSong(song ? JSON.parse(JSON.stringify(song)) : newSong()));
-  const [original] = useState<Song>(() => normalizeSong(song ? JSON.parse(JSON.stringify(song)) : newSong()));
+  const [original, setOriginal] = useState<Song>(() => normalizeSong(song ? JSON.parse(JSON.stringify(song)) : newSong()));
   const [saveState, setSaveState] = useState<SaveStatusState>("idle");
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [previewMode, setPreviewMode] = useState<"full" | "overlay">("full");
   const [previewIndex, setPreviewIndex] = useState(0);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [showDefaults, setShowDefaults] = useState(false);
   const [showBackground, setShowBackground] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+  const [pasteError, setPasteError] = useState("");
   const ltTemplate = useAppStore((s) => s.ltTemplate);
   const ltSavedTemplates = useAppStore((s) => s.ltSavedTemplates);
+  const ltLinesPerDisplay = useAppStore((s) => s.ltLinesPerDisplay);
   const media = useAppStore((s) => s.media);
   const setMedia = useAppStore((s) => s.setMedia);
   const settings = useAppStore((s) => s.settings);
@@ -77,8 +83,21 @@ export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps)
   };
 
   useEffect(() => {
-    if (song) setDraft(normalizeSong(JSON.parse(JSON.stringify(song))));
-    else setDraft(normalizeSong(newSong()));
+    // The modal stays mounted while closed, so both sides of the dirty
+    // comparison must be reset together whenever the selected song changes.
+    // Resetting only `draft` marked every freshly opened song as unsaved.
+    const next = normalizeSong(song ? JSON.parse(JSON.stringify(song)) : newSong());
+    setDraft(next);
+    setOriginal(next);
+    setSaveState("idle");
+    setConfirmDiscard(false);
+    setPreviewMode(((song?.style ?? "LowerThird") === "FullSlide") ? "full" : "overlay");
+    setPreviewIndex(0);
+    setAdvancedOpen(false);
+    setShowDefaults(false);
+    setShowBackground(false);
+    setPasteText("");
+    setPasteError("");
   }, [song]);
 
   const dirty = useMemo(
@@ -91,13 +110,20 @@ export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps)
     else if (!dirty && saveState !== "saving" && saveState !== "failed") setSaveState("idle");
   }, [dirty, saveState]);
 
-  const sequence = useMemo(() => getSongSequence(draft), [draft]);
   const validation = useMemo(() => songValidate(draft), [draft]);
-  const previewClamped = Math.max(0, Math.min(previewIndex, sequence.length - 1));
-  const previewSection = sequence[previewClamped];
-  const previewLabel = previewSection
-    ? `${previewSection.label} (${previewClamped + 1} of ${sequence.length || 1})`
-    : "No sections";
+  const previewStyle: SongStyle = previewMode === "full" ? "FullSlide" : "LowerThird";
+  const previewPages = useMemo(
+    () => getSongPages(draft, { style: previewStyle, linesPerDisplay: ltLinesPerDisplay }),
+    [draft, previewStyle, ltLinesPerDisplay],
+  );
+  const defaultPageCount = getSongPageCount(draft, draft.style, ltLinesPerDisplay);
+  const previewClamped = previewPages.length === 0
+    ? 0
+    : Math.max(0, Math.min(previewIndex, previewPages.length - 1));
+  const previewPage = previewPages[previewClamped];
+  const previewLabel = previewPage
+    ? `${previewPage.sectionLabel || "Lyrics"} (${previewClamped + 1} of ${previewPages.length})`
+    : "No pages";
 
   const patch = (next: Partial<Song>) => setDraft((d) => ({ ...d, ...next }));
   // Sections carry stable ids. When a section is added or removed (a
@@ -131,25 +157,27 @@ export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps)
     song_id: draft.id,
     title: draft.title || "Untitled song",
     author: draft.author,
-    section_label: previewSection?.label ?? "",
-    lines: previewSection?.lines ?? [],
+    section_label: previewPage?.sectionLabel ?? "",
+    section_id: previewPage?.sectionId,
+    lines: previewPage?.lines ?? [],
     slide_index: previewClamped,
-    total_slides: sequence.length,
-    style: draft.style,
+    total_slides: previewPages.length,
+    line_start: previewPage?.lineStart,
+    style: previewStyle,
     font: draft.font,
     font_size: draft.font_size,
     font_weight: draft.font_weight,
     color: draft.color,
     background: draft.background,
-  }), [draft, previewSection, previewClamped, sequence.length]);
+  }), [draft, previewPage, previewStyle, previewClamped, previewPages.length]);
 
-  const overlayData = previewSection
+  const overlayData = previewPage
     ? {
         kind: "Lyrics" as const,
         data: {
-          line1: previewSection.lines[0] ?? "",
-          line2: previewSection.lines[1],
-          section_label: previewSection.label,
+          line1: previewPage.lines[0] ?? "",
+          line2: previewPage.lines[1],
+          section_label: previewPage.sectionLabel,
         },
       }
     : { kind: "Nameplate" as const, data: { name: draft.title || "Untitled song", title: draft.author } };
@@ -181,29 +209,92 @@ export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps)
     </>
   );
 
-  const sequenceLength = sequence.length;
+  const applyPastedLyrics = () => {
+    const parsed = detectAndParse(pasteText).result;
+    if (parsed.sections.length === 0) {
+      setPasteError("No lyric sections were detected. Try adding a section label such as Verse 1.");
+      return;
+    }
+    setDraft((current) => ({
+      ...current,
+      title: current.title.trim() ? current.title : (parsed.title || "Untitled"),
+      author: current.author?.trim() ? current.author : parsed.author,
+      copyright: current.copyright?.trim() ? current.copyright : parsed.copyright,
+      ccli: current.ccli?.trim() ? current.ccli : parsed.ccli,
+      key: current.key?.trim() ? current.key : parsed.key,
+      sections: parsed.sections.map((section) => ({
+        id: stableId(),
+        label: section.label || "Verse 1",
+        lines: section.lines,
+      })),
+      arrangement_steps: [],
+    }));
+    setPasteError("");
+    setPasteText("");
+  };
 
   return (
     <Modal
       open={!!song}
       onClose={requestClose}
       title={draft.id ? t("songs.editor.editTitle") : t("songs.editor.newTitle")}
-      headerRight={confirmDiscard ? undefined : <SaveStatus state={saveState} />}
       footer={footer}
-      maxWidth="max-w-4xl"
+      maxWidth="max-w-5xl"
       maxHeightClass="max-h-[92vh]"
     >
-      <div className="grid md:grid-cols-[1fr_minmax(260px,360px)] gap-4 p-4">
+      <div className="grid md:grid-cols-[1fr_minmax(280px,380px)] gap-4 p-4">
         {/* ── Left: editor ────────────────────────────────────────────── */}
         <div className="flex flex-col gap-4 min-w-0">
-          <SongMetadataForm draft={draft} onChange={patch} />
+          {!draft.id && (
+            <div className="rounded-xl border border-console-border bg-console-canvas/60 p-3">
+              <div className="flex items-center gap-2">
+                <FileText size={14} className="text-action-primary" />
+                <p className="text-[10px] font-black uppercase tracking-wider text-console-text-muted">{t("songs.editor.pasteLyrics")}</p>
+              </div>
+              <p className="mt-1 text-[10px] leading-relaxed text-console-text-subtle">
+                Paste lyrics from EasyWorship, OpenLP, ChordPro, or plain text. We will split sections and fill the title when we can.
+              </p>
+              <textarea
+                value={pasteText}
+                onChange={(event) => setPasteText(event.target.value)}
+                placeholder={"Amazing grace, how sweet the sound\nThat saved a wretch like me\n\nChorus\n..."}
+                className="mt-2 h-28 w-full resize-y rounded-lg border border-console-border bg-console-surface px-3 py-2 font-mono text-xs text-console-text placeholder:text-console-text-subtle focus:border-console-border-strong focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
+              />
+              {pasteError && <p className="mt-1 text-[10px] font-bold text-state-error">{pasteError}</p>}
+              <div className="mt-2 flex justify-end">
+                <Button variant="ghost" size="sm" onClick={applyPastedLyrics} disabled={!pasteText.trim()}>
+                  {t("songs.editor.useLyrics")}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          <SongMetadataForm draft={draft} onChange={patch} compact />
 
           <div className="flex flex-col gap-1.5">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-console-text-subtle">{t("songs.editor.sections")}</p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-console-text-subtle">{t("songs.editor.sections")}</p>
+              <p className="text-[10px] text-console-text-subtle">
+                {draft.sections.length} section{draft.sections.length === 1 ? "" : "s"} · {defaultPageCount} page{defaultPageCount === 1 ? "" : "s"} at {draft.style === "FullSlide" ? "full screen" : "lower third"}
+              </p>
+            </div>
             <SongSectionEditorList sections={draft.sections} onChange={setSections} />
           </div>
 
-          <SongArrangementEditor draft={draft} onChange={setArrangement} />
+          <div className="border border-console-border rounded-lg">
+            <button
+              type="button"
+              onClick={() => setAdvancedOpen((value) => !value)}
+              className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left transition-all hover:bg-console-surface-raised focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
+              aria-expanded={advancedOpen}
+            >
+              {advancedOpen ? <ChevronDown size={14} className="text-console-text-subtle" /> : <ChevronRight size={14} className="text-console-text-subtle" />}
+              <span className="text-[10px] font-bold uppercase tracking-wider text-console-text-subtle">{t("songs.editor.advanced")}</span>
+              <span className="ml-auto text-[9px] text-console-text-subtle">Arrangement · Display · Background</span>
+            </button>
+            {advancedOpen && (
+              <div className="flex flex-col gap-3 border-t border-console-border p-3">
+                <SongArrangementEditor draft={draft} onChange={setArrangement} />
 
           <div className="border border-console-border rounded-lg">
             <button
@@ -329,6 +420,9 @@ export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps)
               </div>
             )}
           </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* ── Right: live preview ──────────────────────────────────────── */}
@@ -337,7 +431,7 @@ export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps)
             <div className="flex items-center gap-1 bg-console-surface-raised border border-console-border rounded-lg p-0.5">
               <button
                 type="button"
-                onClick={() => setPreviewMode("full")}
+                onClick={() => { setPreviewMode("full"); setPreviewIndex(0); }}
                 className={`h-7 px-2 text-[10px] font-bold rounded-md transition-all focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)] ${
                   previewMode === "full" ? "bg-console-surface-strong text-action-primary" : "text-console-text-subtle hover:text-console-text"
                 }`}
@@ -347,7 +441,7 @@ export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps)
               </button>
               <button
                 type="button"
-                onClick={() => setPreviewMode("overlay")}
+                onClick={() => { setPreviewMode("overlay"); setPreviewIndex(0); }}
                 className={`h-7 px-2 text-[10px] font-bold rounded-md transition-all focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)] ${
                   previewMode === "overlay" ? "bg-console-surface-strong text-action-primary" : "text-console-text-subtle hover:text-console-text"
                 }`}
@@ -367,11 +461,9 @@ export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps)
                 fill
               />
             ) : (
-              <div className="absolute inset-0" aria-hidden>
-                <LowerThirdOverlay data={overlayData as any} template={overlayTemplate} />
-              </div>
+              <SongOverlayPreview data={overlayData} template={overlayTemplate} />
             )}
-            {sequenceLength === 0 && (
+            {previewPages.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center">
                 <p className="text-[10px] text-console-text-subtle italic">{t("songs.editor.noSections")}</p>
               </div>
@@ -380,7 +472,7 @@ export function SongEditorModal({ song, onClose, onSave }: SongEditorModalProps)
 
           <div className="flex gap-1.5">
             <Button variant="ghost" size="md" onClick={() => setPreviewIndex((i) => Math.max(0, i - 1))} disabled={previewClamped <= 0}>{t("songs.editor.prev")}</Button>
-            <Button variant="ghost" size="md" onClick={() => setPreviewIndex((i) => Math.min(sequence.length - 1, i + 1))} disabled={previewClamped >= sequence.length - 1}>{t("songs.editor.next")}</Button>
+            <Button variant="ghost" size="md" onClick={() => setPreviewIndex((i) => Math.min(previewPages.length - 1, i + 1))} disabled={previewClamped >= previewPages.length - 1}>{t("songs.editor.next")}</Button>
           </div>
           <p className="flex items-center gap-1.5 text-[10px] text-console-text-subtle">
             <Music2 size={11} /> {t("songs.editor.previewLocal")}

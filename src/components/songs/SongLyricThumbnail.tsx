@@ -1,6 +1,6 @@
 import React from "react";
 import type { Song, SongSlideData } from "../../types";
-import { getSongSequence } from "../../utils/song";
+import { getSongPages } from "../../utils/song";
 import { useAppStore } from "../../store";
 import { useSlideFit } from "../../hooks/useSlideFit";
 import { SongSlideRenderer } from "../shared/Renderers";
@@ -22,17 +22,20 @@ export function SongLyricThumbnail({ song, compact = false }: SongLyricThumbnail
   const [boxRef, fit] = useSlideFit();
   const fitReady = fit.width > 0 && fit.height > 0;
 
-  const sequence = getSongSequence(song);
-  const sec = sequence[0];
+  // The card thumbnail is a full-screen representation of the first page, so
+  // it uses the same page builder and cannot overflow on a long verse.
+  const pages = getSongPages(song, { style: "FullSlide" });
+  const firstPage = pages[0];
   const data: SongSlideData = {
     song_id: song.id,
     title: song.title,
     author: song.author,
-    section_label: sec?.label ?? "",
-    lines: sec?.lines ?? [],
+    section_label: firstPage?.sectionLabel ?? "",
+    section_id: firstPage?.sectionId,
+    lines: firstPage?.lines ?? [],
     slide_index: 0,
-    total_slides: sequence.length,
-    style: song.style,
+    total_slides: pages.length,
+    style: "FullSlide",
     font: song.font,
     font_size: song.font_size,
     font_weight: song.font_weight,

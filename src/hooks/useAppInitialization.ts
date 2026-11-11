@@ -121,7 +121,7 @@ export function useAppInitialization() {
       if (appDirRes) setAppDataDir(appDirRes);
       const scheduleItems = Array.isArray(scheduleRes?.items) ? scheduleRes.items : [];
       setScheduleEntries(scheduleItems.map((e: any) => ({ id: e.id || stableId(), item: e.item ?? e })));
-      setSongs(songsRes);
+      setSongs(songsRes.map(normalizeSong));
       // Hymns ship without section ids / arrangement_steps. Normalize so
       // every consumer (sequence, live nav, lower third) sees the full
       // arrangement order instead of falling back to natural section order.
@@ -257,7 +257,7 @@ export function useAppInitialization() {
         if (active) setLtTemplate(active);
       }
     });
-    const unlistenSongsSync = listen<Song[]>("songs-sync", (ev) => { setSongs(ev.payload); });
+    const unlistenSongsSync = listen<Song[]>("songs-sync", (ev) => { setSongs((ev.payload ?? []).map(normalizeSong)); });
     const unlistenStudioSync = listen<any[] | null>("studio-sync", (ev) => {
       if (!ev?.payload) return;
       setStudioList(ev.payload);

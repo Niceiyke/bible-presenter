@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "../store";
@@ -53,7 +53,8 @@ export function useItemActions() {
     nextVerse,
     verseSplits: verseSplitsRef.current as any,
     verseSplitThreshold: settings.verse_split_threshold,
-  }), [studioSlides, songs, hymnLibrary, nextVerse, settings.verse_split_threshold]);
+    songLinesPerDisplay: ltLinesPerDisplay,
+  }), [studioSlides, songs, hymnLibrary, nextVerse, settings.verse_split_threshold, ltLinesPerDisplay]);
 
   const updateSettings = useCallback(async (next: PresentationSettings) => {
     const prev = useAppStore.getState().settings;
@@ -76,11 +77,6 @@ export function useItemActions() {
       setBackendError(`Failed to update props: ${err?.message ?? err}`);
     }
   }, [setPropItems, setBackendError]);
-
-  const nextLiveItem = useMemo((): DisplayItem | null => {
-    if (!liveItem) return null;
-    return itemNextLive(liveItem, buildLookup());
-  }, [liveItem, buildLookup]);
 
   const stageItem = useCallback(async (item: DisplayItem): Promise<boolean> => {
     const reqId = ++stageReqRef.current;
@@ -185,7 +181,24 @@ export function useItemActions() {
     }
   }, [setStagedItem, settings.auto_split_verses, settings.verse_split_threshold, setBackendError, setBusyAction]);
 
-  const getNextItem = useCallback((item: DisplayItem): DisplayItem | null => {
+  /** Resolve the item after `item`. Verses need a backend lookup because the
+   *  store's `nextVerse` is still the one after the *previous* live verse when
+   *  a staged verse is committed. Songs and other items can be resolved from
+   *  the shared item registry. */
+  const nextAfterItem = useCallback(async (item: DisplayItem): Promise<DisplayItem | null> => {
+    if (item.type === "Verse" && item.data.split_index === undefined) {
+      try {
+        const next = await invoke<Verse | null>("get_next_verse", {
+          book: item.data.book,
+          chapter: item.data.chapter,
+          verse: item.data.verse,
+          version: item.data.version,
+        });
+        return next ? { type: "Verse", data: next } : null;
+      } catch {
+        return null;
+      }
+    }
     return itemNextLive(item, buildLookup());
   }, [buildLookup]);
 
@@ -250,7 +263,7 @@ export function useItemActions() {
         .then(() => {
           setLtVisible(true);
           useAppStore.getState().setLtSongId(staged.data.song_id);
-          useAppStore.getState().setLtLineIndex(staged.data.slide_index);
+          useAppStore.getState().setLtLineIndex(staged.data.line_start ?? 0);
           useAppStore.getState().setLtMode("lyrics");
         })
         .catch((e: any) => setBackendError(`Lower-third failed: ${e?.message ?? e}`));
@@ -260,11 +273,13 @@ export function useItemActions() {
       updateSettings({ ...settings, show_background_logo: false });
     }
 
-    if (nextLiveItem) {
-      stageItem(nextLiveItem);
-    }
+    // Advance from the item that actually went live, not the previous live
+    // item. The old `nextLiveItem` closure pointed one step behind and could
+    // re-stage the cue that had just been committed.
+    const next = await nextAfterItem(committed);
+    if (next) stageItem(next);
     return true;
-  }, [nextLiveItem, stageItem, settings, setPreviousItem, setLiveItem, ltTemplate, ltSavedTemplates, ltLinesPerDisplay, songs, setLtVisible, updateSettings, setBackendError, setBusyAction]);
+  }, [stageItem, settings, setPreviousItem, setLiveItem, ltTemplate, ltSavedTemplates, ltLinesPerDisplay, songs, setLtVisible, updateSettings, setBackendError, setBusyAction, nextAfterItem]);
 
   const sendLive = useCallback(async (item: DisplayItem): Promise<boolean> => {
     const current = useAppStore.getState().liveItem;
@@ -349,7 +364,7 @@ export function useItemActions() {
         .then(() => {
           setLtVisible(true);
           useAppStore.getState().setLtSongId(item.data.song_id);
-          useAppStore.getState().setLtLineIndex(item.data.slide_index);
+          useAppStore.getState().setLtLineIndex(item.data.line_start ?? 0);
           useAppStore.getState().setLtMode("lyrics");
         })
         .catch((e: any) => setBackendError(`Lower-third failed: ${e?.message ?? e}`));
@@ -373,12 +388,12 @@ export function useItemActions() {
       return next;
     });
 
-    const next = getNextItem(item);
+    const next = await nextAfterItem(finalItem);
     if (next) {
       stageItem(next);
     }
     return true;
-  }, [stageItem, setStagedItem, setRecentItems, getNextItem, setPreviousItem, setLiveItem, settings, ltTemplate, ltSavedTemplates, ltLinesPerDisplay, songs, setLtVisible, updateSettings, setBackendError, setBusyAction]);
+  }, [stageItem, setStagedItem, setRecentItems, nextAfterItem, setPreviousItem, setLiveItem, settings, ltTemplate, ltSavedTemplates, ltLinesPerDisplay, songs, setLtVisible, updateSettings, setBackendError, setBusyAction]);
 
   const clearStaged = useCallback(async (): Promise<boolean> => {
     const busId = useAppStore.getState().selectedOutputBusId;
@@ -518,7 +533,11 @@ export function useItemActions() {
     }
     const entry: ScheduleEntry = { id: stableId(), item };
     setScheduleEntries([...scheduleEntries, entry]);
-    setToast("Added to schedule");
+    setToast(
+      item.type === "Song"
+        ? `Added ${item.data.title} to plan · ${item.data.total_slides || 1} pages`
+        : "Added to plan",
+    );
   }, [scheduleEntries, setScheduleEntries, setToast, setPendingScheduleItem, setAddToServiceOpen]);
 
   const addToService = useCallback(async (item: DisplayItem, serviceId: string) => {
@@ -534,7 +553,11 @@ export function useItemActions() {
       localStorage.setItem("activeServiceId", serviceId);
       const list = (await invoke<ServiceMeta[]>("list_services")) as ServiceMeta[];
       setServices(list);
-      setToast("Added to service");
+      setToast(
+        item.type === "Song"
+          ? `Added ${item.data.title} to plan · ${item.data.total_slides || 1} pages`
+          : "Added to plan",
+      );
       return true;
     } catch (err: any) {
       setBackendError(`Add to service failed: ${err?.message ?? err}`);
@@ -668,7 +691,6 @@ export function useItemActions() {
   }, [setScenes, setToast, setBackendError]);
 
   return {
-    nextLiveItem,
     stageItem,
     stageVerse,
     goLive,
@@ -677,7 +699,6 @@ export function useItemActions() {
     clearLive,
     clearAll,
     undoClearAll,
-    getNextItem,
     addToSchedule,
     addToService,
     persistSchedule,

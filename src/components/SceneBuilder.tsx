@@ -13,7 +13,7 @@ import {
   MediaItem, CameraBackground, THEMES,
 } from "../types";
 import { stableId, resolvePath, buildCustomSlideItem, FONTS } from "../utils";
-import { buildSongDisplayItem } from "../utils/song";
+import { buildSongPageItem } from "../utils/song";
 import { ZoneContent } from "./shared/CompositionRenderer";
 
 export interface SceneBuilderProps {
@@ -269,7 +269,7 @@ function SongSource({ onPick }: { onPick: (item: DisplayItem) => void }) {
       {list.map((s) => (
         <button
           key={s.id}
-          onClick={() => onPick(buildSongDisplayItem(s, 0))}
+          onClick={() => onPick(buildSongPageItem(s, 0, s.style))}
           className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-console-surface-raised border border-console-border hover:border-action-primary text-left transition-all"
         >
           <Music2 size={13} className="text-pink-400" />

@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { useAppStore } from "../store";
 import { ltBuildLyricsPayload } from "../utils";
-import { resolveSongLtTemplate } from "../utils/song";
+import { resolveSongLtTemplate, stepLtPage } from "../utils/song";
 import { itemNav, type ItemLookup } from "../items/registry";
 import { useKeyboardBinding } from "./keyboardRegistry";
 import type { DisplayItem } from "../types";
@@ -13,7 +13,7 @@ interface Props {
   goLive: () => Promise<boolean>;
   sendLive: (item: DisplayItem) => Promise<boolean>;
   clearAll: () => Promise<unknown>;
-  ltFlatLines: { text: string; sectionLabel: string }[];
+  ltFlatLines: { text: string; sectionLabel: string; sectionKey: string }[];
 }
 
 export function useKeyboardShortcuts(props: Props): void {
@@ -134,13 +134,13 @@ export function useKeyboardShortcuts(props: Props): void {
         case "F9": setActiveTab("settings"); break;
         case "n": if (nextVerse) { const it: DisplayItem = { type: "Verse", data: nextVerse }; if (e.ctrlKey) sendLive(it); else stageItem(it); } break;
         case "ArrowRight": {
-          const lookup: ItemLookup = { studioSlides, songs, hymns: hymnLibrary, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold };
+          const lookup: ItemLookup = { studioSlides, songs, hymns: hymnLibrary, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold, songLinesPerDisplay: ltLinesPerDisplay };
           const nav = liveItem ? itemNav(liveItem, lookup) : null;
           if (nav?.next) sendLive(nav.next);
           break;
         }
         case "ArrowLeft": {
-          const lookup: ItemLookup = { studioSlides, songs, hymns: hymnLibrary, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold };
+          const lookup: ItemLookup = { studioSlides, songs, hymns: hymnLibrary, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold, songLinesPerDisplay: ltLinesPerDisplay };
           const nav = liveItem ? itemNav(liveItem, lookup) : null;
           if (nav?.prev) sendLive(nav.prev);
           break;
@@ -153,14 +153,12 @@ export function useKeyboardShortcuts(props: Props): void {
           break;
         case "PageDown":
           if (ltMode === "lyrics") {
-            const next = Math.min(ltLineIndex + ltLinesPerDisplay, ltFlatLines.length - 1);
-            shortcutLtNavigate(next);
+            shortcutLtNavigate(stepLtPage(ltFlatLines, ltLineIndex, ltLinesPerDisplay, 1));
           }
           break;
         case "PageUp":
           if (ltMode === "lyrics") {
-            const nextIdx = Math.max(0, ltLineIndex - ltLinesPerDisplay);
-            shortcutLtNavigate(nextIdx);
+            shortcutLtNavigate(stepLtPage(ltFlatLines, ltLineIndex, ltLinesPerDisplay, -1));
           }
           break;
         case "k": emit("media-control", { action: "video-play-pause" }); break;
@@ -193,13 +191,13 @@ export function useKeyboardShortcuts(props: Props): void {
           break;
         }
         case "Home": {
-          const lookup: ItemLookup = { studioSlides, songs, hymns: hymnLibrary, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold };
+          const lookup: ItemLookup = { studioSlides, songs, hymns: hymnLibrary, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold, songLinesPerDisplay: ltLinesPerDisplay };
           const nav = liveItem ? itemNav(liveItem, lookup) : null;
           if (nav?.first) { e.preventDefault(); sendLive(nav.first); }
           break;
         }
         case "End": {
-          const lookup: ItemLookup = { studioSlides, songs, hymns: hymnLibrary, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold };
+          const lookup: ItemLookup = { studioSlides, songs, hymns: hymnLibrary, nextVerse, verseSplits: {}, verseSplitThreshold: settings.verse_split_threshold, songLinesPerDisplay: ltLinesPerDisplay };
           const nav = liveItem ? itemNav(liveItem, lookup) : null;
           if (nav?.last) { e.preventDefault(); sendLive(nav.last); }
           break;

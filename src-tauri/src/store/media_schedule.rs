@@ -263,9 +263,15 @@ pub struct SongSlideData {
     pub title: String,
     pub author: Option<String>,
     pub section_label: String,
+    /// Source section id. Optional so legacy song payloads deserialize.
+    #[serde(default)]
+    pub section_id: Option<String>,
     pub lines: Vec<String>,
     pub slide_index: u32,
     pub total_slides: u32,
+    /// First line of this page in the flattened lower-third list.
+    #[serde(default)]
+    pub line_start: Option<u32>,
     /// Phase 6 (SONG_SYSTEM_MODERNIZATION_PLAN §10/§4.7): the display mode a
     /// committed song should render in. Survives `stage_item`/`commit_staged`
     /// so a round-trip never silently drops the full-screen vs overlay
@@ -786,9 +792,11 @@ mod song_tests {
             title: "Amazing Grace".into(),
             author: Some("Newton".into()),
             section_label: "Verse 1".into(),
+            section_id: Some("sec-1".into()),
             lines: vec!["Amazing grace".into()],
             slide_index: 0,
             total_slides: 3,
+            line_start: Some(0),
             style: Some("FullSlide".into()),
             font: None,
             font_size: None,
@@ -809,9 +817,11 @@ mod song_tests {
             title: "Amazing Grace".into(),
             author: None,
             section_label: "Chorus".into(),
+            section_id: Some("sec-2".into()),
             lines: vec!["line".into()],
             slide_index: 1,
             total_slides: 4,
+            line_start: Some(2),
             style: Some("LowerThird".into()),
             font: Some("Georgia".into()),
             font_size: Some(40.0),
@@ -834,9 +844,11 @@ mod song_tests {
             title: "T".into(),
             author: None,
             section_label: "Verse".into(),
+            section_id: Some("sec-3".into()),
             lines: vec!["x".into()],
             slide_index: 0,
             total_slides: 1,
+            line_start: Some(0),
             style: Some("LowerThird".into()),
             font: None,
             font_size: None,

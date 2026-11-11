@@ -27,22 +27,21 @@ const noop = () => {};
 describe("SongCard", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("my-songs cards expose Preview / Use / Service plus Edit, Duplicate, Delete in More", () => {
+  it("keeps one primary action and moves management into More", () => {
     render(
       <SongCard
         song={makeSong()}
         source="mine"
-        onPreview={noop}
-        onUse={noop}
-        onAddToSchedule={noop}
+        onOpen={noop}
+        onAddToPlan={noop}
         onEdit={noop}
         onDuplicate={noop}
         onDelete={noop}
       />,
     );
-    expect(screen.getByRole("button", { name: "Preview" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Use" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Service" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add to plan" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Preview" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Use" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: /More actions/ }));
     expect(screen.getByRole("menuitem", { name: /Edit/ })).toBeTruthy();
@@ -50,45 +49,40 @@ describe("SongCard", () => {
     expect(screen.getByRole("menuitem", { name: /Delete/ })).toBeTruthy();
   });
 
-  it("hymn cards share the primary vocabulary but swap the secondary actions", () => {
+  it("hymn cards swap management for Add to my songs", () => {
     render(
       <SongCard
         song={makeSong()}
         source="library"
-        onPreview={noop}
-        onUse={noop}
-        onAddToSchedule={noop}
+        onOpen={noop}
+        onAddToPlan={noop}
         onAddToMySongs={noop}
       />,
     );
-    expect(screen.getByRole("button", { name: "Preview" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Use" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Service" })).toBeTruthy();
-
+    expect(screen.getByRole("button", { name: "Add to plan" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /More actions/ }));
     expect(screen.getByRole("menuitem", { name: /Add to my songs/ })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: /Edit/ })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: /Delete/ })).toBeNull();
   });
 
-  it("shows mode and source badges for both sources", () => {
-    const { rerender } = render(
-      <SongCard song={makeSong()} source="mine" onPreview={noop} onUse={noop} onAddToSchedule={noop} />,
+  it("shows mode, source and page-count information", () => {
+    render(
+      <SongCard song={makeSong()} source="mine" onOpen={noop} onAddToPlan={noop} />,
     );
     expect(screen.getByText("Lyrics overlay")).toBeTruthy();
     expect(screen.getByText("My song")).toBeTruthy();
+    expect(screen.getByText(/2 pages? · 1 section · 2 lyric lines/)).toBeTruthy();
+  });
 
-    rerender(
-      <SongCard
-        song={makeSong({ style: "FullSlide" })}
-        source="library"
-        onPreview={noop}
-        onUse={noop}
-        onAddToSchedule={noop}
-      />,
-    );
-    expect(screen.getByText("Full-screen")).toBeTruthy();
-    expect(screen.getByText("Hymn")).toBeTruthy();
+  it("opens the runner from the title and the thumbnail", () => {
+    const onOpen = vi.fn();
+    render(<SongCard song={makeSong()} source="mine" onOpen={onOpen} onAddToPlan={noop} />);
+    fireEvent.click(screen.getByRole("button", { name: "Open Amazing Grace" }));
+    const titleButton = screen.getByText("Amazing Grace").closest("button");
+    expect(titleButton).toBeTruthy();
+    fireEvent.click(titleButton!);
+    expect(onOpen).toHaveBeenCalledTimes(2);
   });
 
   it("flags songs that need metadata and hides the badge once complete", () => {
@@ -96,14 +90,13 @@ describe("SongCard", () => {
       <SongCard
         song={makeSong({ author: undefined, copyright: undefined, ccli: undefined })}
         source="mine"
-        onPreview={noop}
-        onUse={noop}
-        onAddToSchedule={noop}
+        onOpen={noop}
+        onAddToPlan={noop}
       />,
     );
     expect(screen.getByText("Needs metadata")).toBeTruthy();
 
-    rerender(<SongCard song={makeSong()} source="mine" onPreview={noop} onUse={noop} onAddToSchedule={noop} />);
+    rerender(<SongCard song={makeSong()} source="mine" onOpen={noop} onAddToPlan={noop} />);
     expect(screen.queryByText("Needs metadata")).toBeNull();
   });
 
@@ -113,9 +106,8 @@ describe("SongCard", () => {
       <SongCard
         song={makeSong()}
         source="mine"
-        onPreview={noop}
-        onUse={noop}
-        onAddToSchedule={noop}
+        onOpen={noop}
+        onAddToPlan={noop}
         onDelete={onDelete}
       />,
     );
@@ -125,10 +117,12 @@ describe("SongCard", () => {
     expect(screen.queryByRole("menuitem")).toBeNull();
   });
 
-  it("Preview fires onPreview without any broadcast", () => {
-    const onPreview = vi.fn();
-    render(<SongCard song={makeSong()} source="mine" onPreview={onPreview} onUse={noop} onAddToSchedule={noop} />);
-    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    expect(onPreview).toHaveBeenCalledTimes(1);
+  it("Add to plan adds the whole song without opening the runner", () => {
+    const onAddToPlan = vi.fn();
+    const onOpen = vi.fn();
+    render(<SongCard song={makeSong()} source="mine" onOpen={onOpen} onAddToPlan={onAddToPlan} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add to plan" }));
+    expect(onAddToPlan).toHaveBeenCalledTimes(1);
+    expect(onOpen).not.toHaveBeenCalled();
   });
 });

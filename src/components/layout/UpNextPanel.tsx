@@ -27,7 +27,20 @@ export function UpNextPanel({
   const start = activeScheduleIdx === null ? 0 : activeScheduleIdx + 1;
   const entries = scheduleEntries
     .slice(start)
-    .filter((entry) => !liveItem || getItemUid(entry.item) !== getItemUid(liveItem));
+    .filter((entry) => {
+      if (!liveItem) return true;
+      // A song is one plan item. While any page of it is live, its first-page
+      // entry is not "up next" — hide the whole run instead of showing a
+      // duplicate of the song currently being sung.
+      if (
+        liveItem.type === "Song" &&
+        entry.item.type === "Song" &&
+        liveItem.data.song_id === entry.item.data.song_id
+      ) {
+        return false;
+      }
+      return getItemUid(entry.item) !== getItemUid(liveItem);
+    });
 
   const content = (
     <>
@@ -39,8 +52,16 @@ export function UpNextPanel({
         {entries.length === 0 ? (
           <p className="px-1 py-2 text-[10px] leading-relaxed text-console-text-subtle">No further items in this service. Drop Bible verses, media, songs, or slides here.</p>
         ) : entries.map((entry, index) => {
-          const label = displayItemLabel(entry.item);
-          const isStaged = stagedItem ? getItemUid(entry.item) === getItemUid(stagedItem) : false;
+          const song = entry.item.type === "Song" ? entry.item.data : null;
+          const label = song ? song.title : displayItemLabel(entry.item);
+          const meta = song
+            ? `Song · ${song.total_slides || 1} page${(song.total_slides || 1) === 1 ? "" : "s"}`
+            : itemMetaAt(entry.item, Date.now()).kindLabel;
+          const isStaged = stagedItem
+            ? stagedItem.type === "Song" && entry.item.type === "Song"
+              ? stagedItem.data.song_id === entry.item.data.song_id
+              : getItemUid(entry.item) === getItemUid(stagedItem)
+            : false;
           return (
             <button
               key={entry.id}
@@ -52,7 +73,7 @@ export function UpNextPanel({
               <span className="w-4 shrink-0 text-[10px] font-bold tabular-nums text-console-text-subtle">{start + index + 1}</span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[11px] font-bold text-console-text">{label}</span>
-                <span className="block truncate text-[10px] text-console-text-subtle">{itemMetaAt(entry.item, Date.now()).kindLabel}</span>
+                <span className="block truncate text-[10px] text-console-text-subtle">{meta}</span>
               </span>
               <span className={`shrink-0 rounded px-1 py-0.5 text-[10px] font-bold uppercase tracking-wide ${isStaged ? "bg-state-stage/10 text-state-stage" : "text-state-stage opacity-70 group-hover:opacity-100"}`}>
                 {isStaged ? "Staged" : "Stage"}

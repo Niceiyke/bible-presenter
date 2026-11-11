@@ -1,9 +1,10 @@
 import React from "react";
-import { ListPlus, Pencil, Copy, Trash2, BookPlus } from "lucide-react";
+import { BookPlus, ChevronRight, Copy, ListPlus, Pencil, Trash2 } from "lucide-react";
 import type { DisplayItem, Song } from "../../types";
-import { getSongCounts, songNeedsMetadata } from "../../utils/song";
+import { getSongCounts, getSongPageCount, songNeedsMetadata } from "../../utils/song";
 import { setDisplayItemDragData } from "../../utils/dragItem";
-import { Button, ContentCard, StatusBadge, type StatusTone } from "../ui";
+import { useAppStore } from "../../store";
+import { Button, ContentCard, StatusBadge } from "../ui";
 import { useT } from "../../i18n";
 import type { SongSource } from "./SongLibraryToolbar";
 import { SongLyricThumbnail } from "./SongLyricThumbnail";
@@ -12,52 +13,39 @@ import { SongMoreMenu, type SongMoreMenuItem } from "./SongMoreMenu";
 export interface SongCardProps {
   song: Song;
   source: SongSource;
-  /** Read-only local preview — never stages or broadcasts. */
-  onPreview: () => void;
-  /** Unity "Use" action. Mode-aware (caller decides stage vs lyrics overlay). */
-  onUse: () => void;
-  onAddToSchedule: () => void;
+  /** Opens the song runner. The runner is the only operating surface. */
+  onOpen: () => void;
+  /** Adds the whole song (all lyric pages) to the service plan. */
+  onAddToPlan: () => void;
   /** Display item used when the card is dragged into the Up Next queue. */
   dragItem?: DisplayItem;
-  /** Secondary actions. Source decides which are available; the labels of the
-   *  primary flow (Preview / Use / Add to Service) never change. */
   onEdit?: () => void;
   onDuplicate?: () => void;
   onDelete?: () => void;
   onAddToMySongs?: () => void;
-  selected?: boolean;
-  /** Opens the library inspector without affecting the production output. */
-  onSelect?: () => void;
 }
 
-/** One shared song card surface for My Songs and Hymn Library. Shows a lyric
- *  preview thumbnail, mode/source/readiness badges, and a consistent primary
- *  action row; source only changes which secondary (More) actions apply. */
+/** Compact song row. The library is for finding a song and putting it in the
+ *  plan; all previewing and live control happens in the song runner. Keeping
+ *  three competing actions on every card made the library feel like a
+ *  storefront instead of an operator tool. */
 export function SongCard({
   song,
   source,
-  onPreview,
-  onUse,
-  onAddToSchedule,
+  onOpen,
+  onAddToPlan,
   dragItem,
   onEdit,
   onDuplicate,
   onDelete,
   onAddToMySongs,
-  selected = false,
-  onSelect,
 }: SongCardProps) {
+  const linesPerDisplay = useAppStore((s) => s.ltLinesPerDisplay);
   const counts = getSongCounts(song);
+  const pageCount = getSongPageCount(song, song.style, linesPerDisplay);
   const isFullSlide = song.style === "FullSlide";
   const needsMetadata = songNeedsMetadata(song);
   const t = useT();
-
-  const modeBadge: { tone: StatusTone; label: string } = isFullSlide
-    ? { tone: "design", label: t("songs.badge.fullScreen") }
-    : { tone: "audio", label: t("songs.badge.overlay") };
-
-  const sectionCount = counts.sections;
-  const lineCount = counts.lines;
 
   const moreItems: SongMoreMenuItem[] = (
     source === "mine"
@@ -70,40 +58,56 @@ export function SongCard({
   ).filter((i) => i.onClick);
 
   return (
-    <ContentCard className={`p-2 gap-1.5 transition-colors ${selected ? "border-action-primary/70 bg-action-primary/5" : ""}`}>
-      <div draggable={!!dragItem} title={dragItem ? "Drag to Up Next" : undefined} onDragStart={(event) => dragItem && setDisplayItemDragData(event, dragItem)}>
-        <button type="button" onClick={onSelect} className="group/preview relative block w-full overflow-hidden rounded-lg text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus-ring)]" aria-label={`Open details for ${song.title}`}>
-          <SongLyricThumbnail song={song} compact />
-          {onSelect && <span className="absolute inset-x-0 bottom-0 bg-black/65 px-2 py-1 text-[8px] font-black uppercase tracking-wider text-white opacity-0 transition-opacity group-hover/preview:opacity-100 group-focus-visible/preview:opacity-100">Open details</span>}
-        </button>
-      </div>
+    <ContentCard className="gap-0 p-2">
+      <div className="flex min-w-0 items-center gap-3">
+        <div
+          className="w-24 shrink-0"
+          draggable={!!dragItem}
+          title={dragItem ? "Drag to plan" : undefined}
+          onDragStart={(event) => dragItem && setDisplayItemDragData(event, dragItem)}
+        >
+          <button
+            type="button"
+            onClick={onOpen}
+            className="group/preview relative block w-full overflow-hidden rounded-lg text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus-ring)]"
+            aria-label={`Open ${song.title}`}
+          >
+            <SongLyricThumbnail song={song} compact />
+            <span className="absolute inset-0 flex items-center justify-center bg-black/55 opacity-0 transition-opacity group-hover/preview:opacity-100 group-focus-visible/preview:opacity-100">
+              <span className="text-[9px] font-black uppercase tracking-wider text-white">Open</span>
+            </span>
+          </button>
+        </div>
 
-      <div className="flex items-start justify-between gap-2">
-        <button type="button" onClick={onSelect} className="min-w-0 flex-1 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus-ring)]">
-          <p className="text-[12px] font-bold text-console-text truncate">{song.title}</p>
-          <p className="text-[10px] text-console-text-muted truncate">
+        <button
+          type="button"
+          onClick={onOpen}
+          className="min-w-0 flex-1 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus-ring)]"
+        >
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-[13px] font-bold text-console-text">{song.title}</span>
+            <ChevronRight size={13} className="shrink-0 text-console-text-subtle" />
+          </span>
+          <span className="mt-0.5 block truncate text-[10px] text-console-text-muted">
             {song.author || "Unknown author"}
             {song.key ? ` · Key: ${song.key}` : ""}
-          </p>
-          <p className="text-[9px] text-console-text-subtle">
-            {sectionCount} section{sectionCount === 1 ? "" : "s"} · {lineCount} lyric line{lineCount === 1 ? "" : "s"}
-          </p>
+          </span>
+          <span className="mt-0.5 block text-[9px] text-console-text-subtle">
+            {pageCount} page{pageCount === 1 ? "" : "s"} · {counts.sections} section{counts.sections === 1 ? "" : "s"} · {counts.lines} lyric line{counts.lines === 1 ? "" : "s"}
+          </span>
+          <span className="mt-1 flex flex-wrap items-center gap-1">
+            <StatusBadge className="gap-1 px-1.5 py-0.5 text-[8px]" tone={isFullSlide ? "design" : "audio"} label={isFullSlide ? t("songs.badge.fullScreen") : t("songs.badge.overlay")} />
+            <StatusBadge className="gap-1 px-1.5 py-0.5 text-[8px]" tone="neutral" label={source === "mine" ? t("songs.badge.mySong") : t("songs.badge.hymn")} />
+            {needsMetadata && <StatusBadge className="gap-1 px-1.5 py-0.5 text-[8px]" tone="warning" label={t("songs.badge.needsMetadata")} />}
+          </span>
         </button>
-        <SongMoreMenu items={moreItems} label={`${t("songs.card.more")} · ${song.title}`} />
-      </div>
 
-      <div className="flex items-center gap-1 flex-wrap">
-        <StatusBadge className="gap-1 px-1.5 py-0.5 text-[8px]" tone={modeBadge.tone} label={modeBadge.label} />
-        <StatusBadge className="gap-1 px-1.5 py-0.5 text-[8px]" tone="neutral" label={source === "mine" ? t("songs.badge.mySong") : t("songs.badge.hymn")} />
-        {needsMetadata && <StatusBadge className="gap-1 px-1.5 py-0.5 text-[8px]" tone="warning" label={t("songs.badge.needsMetadata")} />}
-      </div>
-
-      <div className="flex items-center gap-1.5">
-        <Button variant="bare" size="sm" onClick={onPreview}>{t("songs.card.preview")}</Button>
-        <Button variant="primary" size="sm" onClick={onUse}>{t("songs.card.use")}</Button>
-        <Button variant="bare" size="sm" icon={<ListPlus size={11} />} onClick={onAddToSchedule}>
-          {t("songs.card.service")}
-        </Button>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button variant="primary" size="md" icon={<ListPlus size={12} />} onClick={onAddToPlan} disabled={pageCount === 0}>
+            {t("songs.card.addToPlan")}
+          </Button>
+          <SongMoreMenu items={moreItems} label={`${t("songs.card.more")} · ${song.title}`} />
+        </div>
       </div>
     </ContentCard>
   );

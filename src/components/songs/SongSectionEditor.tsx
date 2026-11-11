@@ -49,13 +49,15 @@ export function SongSectionEditorList({ sections, onChange }: SongSectionEditorL
       return next;
     })());
 
-  const addSection = () =>
+  const addSection = () => {
+    const verseCount = sections.filter((section) => /^verse\b/i.test(section.label)).length;
     onChange([
       ...sections,
       // New sections need a stable id immediately so the arrangement editor
       // can reference them and the sequence can include them.
-      { id: stableId(), label: "Verse", lines: [""] },
+      { id: stableId(), label: `Verse ${verseCount + 1}`, lines: [""] },
     ]);
+  };
 
   const iconBtn = (label: string, icon: React.ReactNode, onClick: () => void, disabled?: boolean) => (
     <button
@@ -72,6 +74,9 @@ export function SongSectionEditorList({ sections, onChange }: SongSectionEditorL
 
   return (
     <div className="flex flex-col gap-1.5">
+      <datalist id="song-section-labels">
+        {SECTION_LABELS.map((label) => <option key={label} value={label} />)}
+      </datalist>
       {sections.map((sec, i) => {
         const isOpen = !collapsed.has(i);
         const lineCount = sec.lines.length;
@@ -86,20 +91,12 @@ export function SongSectionEditorList({ sections, onChange }: SongSectionEditorL
               >
                 {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               </button>
-              <select
-                className="h-9 flex-1 min-w-0 rounded-md bg-console-surface-raised border border-console-border text-console-text text-xs px-2 focus:border-console-border-strong focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)]"
-                value={SECTION_LABELS.includes(sec.label) ? sec.label : ""}
-                onChange={(e) => update(i, { label: e.target.value || sec.label })}
-              >
-                <option value="" disabled>{sec.label || "Section label"}</option>
-                {SECTION_LABELS.map((l) => (
-                  <option key={l} value={l}>{l}</option>
-                ))}
-              </select>
               <input
-                className="h-9 w-28 rounded-md bg-console-surface-raised border border-console-border text-console-text text-xs px-2 focus:border-console-border-strong focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)]"
-                placeholder="Custom label"
-                value={SECTION_LABELS.includes(sec.label) ? "" : sec.label}
+                className="h-9 min-w-0 flex-1 rounded-md bg-console-surface-raised border border-console-border text-console-text text-xs px-2 focus:border-console-border-strong focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)]"
+                aria-label="Section label"
+                list="song-section-labels"
+                placeholder="Section label"
+                value={sec.label}
                 onChange={(e) => update(i, { label: e.target.value })}
               />
               <span className="text-[10px] text-console-text-subtle tabular-nums shrink-0 hidden sm:inline">

@@ -113,7 +113,6 @@ export function ContentBrowser({
     studioList, setStudioList,
     studioSlides, setStudioSlides,
     setToast,
-    setBottomDeckOpen, setBottomDeckMode,
     setActiveTab,
     license,
   } = useAppStore();
@@ -181,12 +180,6 @@ return (
         {activeTab === "songs" && (
           <SongsTab
             onStage={stageItem} onLive={sendLive} onAddToSchedule={addToSchedule}
-            onOpenLyricsMode={(id) => {
-              setBottomDeckOpen(true);
-              setBottomDeckMode("live-lt");
-              useAppStore.getState().setLtSongId(id);
-              useAppStore.getState().setLtMode("lyrics");
-            }}
           />
         )}
         {activeTab === "schedule" && <ScheduleTab onSendItem={sendLive} onPersist={persistSchedule} stageItem={stageItem} />}

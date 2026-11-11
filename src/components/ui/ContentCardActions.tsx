@@ -50,7 +50,7 @@ export function ContentCardActions({
   if (onPreview && !hidePreview) actions.push(stageBtn("bare", "Preview", <Eye size={11} />, onPreview, "preview"));
   if (onStage) actions.push(stageBtn("ghost", "Stage", undefined, onStage, "stage"));
   if (onLive) actions.push(stageBtn("primary", "Go Live", <Zap size={11} />, onLive, "live"));
-  if (onAddToSchedule) actions.push(stageBtn("bare", "Service", <ListPlus size={11} />, onAddToSchedule, "service"));
+  if (onAddToSchedule) actions.push(stageBtn("bare", "Plan", <ListPlus size={11} />, onAddToSchedule, "service"));
   if (onEdit) actions.push(stageBtn("ghost", "Edit", <Pencil size={11} />, onEdit, "edit"));
   if (onDelete) actions.push(stageBtn(deleteVariant, "Delete", <Trash2 size={11} />, onDelete, "delete"));
 

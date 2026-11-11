@@ -354,17 +354,25 @@ export function newShapeElement(opts: Partial<Omit<Extract<SlideElement, { kind:
 }
 
 export function ltBuildLyricsPayload(
-  ltFlatLines: { text: string; sectionLabel: string }[],
+  ltFlatLines: { text: string; sectionLabel: string; sectionKey?: string }[],
   lineIndex: number,
   linesPerDisplay: 1 | 2,
 ): LowerThirdData | null {
   if (ltFlatLines.length === 0) return null;
   const line1 = ltFlatLines[lineIndex];
   if (!line1) return null;
-  const line2Entry = linesPerDisplay === 2 ? ltFlatLines[lineIndex + 1] : undefined;
+  const candidate = linesPerDisplay === 2 ? ltFlatLines[lineIndex + 1] : undefined;
+  // Never pair the last line of one section with the first line of the next:
+  // the projected page would carry the wrong section label and read as one
+  // thought when it is two.
+  const sameSection = candidate && (
+    line1.sectionKey !== undefined && candidate.sectionKey !== undefined
+      ? candidate.sectionKey === line1.sectionKey
+      : candidate.sectionLabel === line1.sectionLabel
+  );
   return {
     kind: "Lyrics",
-    data: { line1: line1.text, line2: line2Entry?.text, section_label: line1.sectionLabel },
+    data: { line1: line1.text, line2: sameSection ? candidate?.text : undefined, section_label: line1.sectionLabel },
   };
 }
 

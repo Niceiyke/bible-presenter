@@ -1,11 +1,11 @@
-import React, { useEffect, useRef, useMemo, useCallback, useState } from "react";
+import React, { useEffect, useMemo, useCallback, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { useAppStore } from "../store";
 import { ltBuildLyricsPayload } from "../utils";
 import { useKeyboardBinding } from "../hooks/keyboardRegistry";
 import { useLtFlatLines } from "../hooks/useLtFlatLines";
-import { resolveSongLtTemplate } from "../utils/song";
+import { resolveSongLtTemplate, stepLtPage } from "../utils/song";
 import { LowerThirdPreview } from "./LowerThirdPreview";
 import type { LowerThirdData, LtPreset, LowerThirdTemplate, Song } from "../types";
 
@@ -343,8 +343,6 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
     setBackendError, setToast,
   } = useAppStore();
 
-  const ltAutoRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
   const ltFlatLines = useLtFlatLines();
 
   // A song with its own saved template wins over the operator's active one
@@ -396,9 +394,12 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
 
   const ltAdvance = useCallback(async (dir: 1 | -1) => {
     if (ltFlatLines.length === 0) return;
-    const next = Math.max(0, Math.min(ltLineIndex + dir * ltLinesPerDisplay, ltFlatLines.length - 1));
+    const next = stepLtPage(ltFlatLines, ltLineIndex, ltLinesPerDisplay, dir);
     setLtLineIndex(next);
-    setLtAtEnd(next >= ltFlatLines.length - 1);
+    setLtAtEnd(
+      (dir > 0 && next === ltLineIndex) ||
+      next + ltLinesPerDisplay >= ltFlatLines.length,
+    );
     if (ltVisible) await ltSendCurrent(next);
   }, [ltFlatLines, ltLinesPerDisplay, ltLineIndex, ltVisible, ltSendCurrent]);
 
@@ -426,27 +427,6 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
       }
     }
   });
-
-  useEffect(() => {
-    if (ltAutoRef.current) clearInterval(ltAutoRef.current);
-    if (ltAutoAdvance && ltVisible && ltMode === "lyrics") {
-      ltAutoRef.current = setInterval(() => {
-        setLtLineIndex((prev) => {
-          const maxIdx = ltFlatLines.length - 1;
-          if (prev >= maxIdx) {
-            if (ltAutoRef.current) clearInterval(ltAutoRef.current);
-            setLtAtEnd(true);
-            return prev;
-          }
-          const next = Math.min(prev + ltLinesPerDisplay, maxIdx);
-          Promise.resolve().then(() => ltSendCurrent(next)).catch((err: any) => setBackendError(`Overlay update failed: ${err?.message ?? err}`));
-          if (next >= maxIdx) setLtAtEnd(true);
-          return next;
-        });
-      }, ltAutoSeconds * 1000);
-    }
-    return () => { if (ltAutoRef.current) clearInterval(ltAutoRef.current); };
-  }, [ltAutoAdvance, ltVisible, ltMode, ltAutoSeconds, ltLinesPerDisplay, ltFlatLines, ltSendCurrent]);
 
   const canShow = ltMode === "nameplate"
     ? ltName.trim().length > 0

@@ -4,6 +4,7 @@ import { useItemActions } from "../useItemActions";
 import { useAppStore } from "../../store";
 import type { DisplayItem, PropItem } from "../../types";
 import { DEFAULT_LT_TEMPLATE } from "../../types";
+import { buildSongPageItem, normalizeSong } from "../../utils/song";
 
 // Mock the Tauri bridge before anything imports the real modules.
 vi.mock("@tauri-apps/api/core", () => ({
@@ -214,6 +215,62 @@ describe("useItemActions", () => {
       expect(useAppStore.getState().liveItem).toEqual(makeVerse());
       expect(useAppStore.getState().previousItem).toBeNull();
       expect(useAppStore.getState().backendError).toContain("Nothing staged");
+    });
+
+    it("stages the next lyric page after a song page goes live", async () => {
+      const song = normalizeSong({
+        id: "song-1",
+        title: "Amazing Grace",
+        style: "LowerThird",
+        sections: [
+          { label: "Verse 1", lines: ["a", "b", "c", "d"] },
+          { label: "Chorus", lines: ["e", "f"] },
+        ],
+      });
+      const page0 = buildSongPageItem(song, 0, "LowerThird", 2);
+      const page1 = buildSongPageItem(song, 1, "LowerThird", 2);
+      const page2 = buildSongPageItem(song, 2, "LowerThird", 2);
+      useAppStore.setState({
+        songs: [song],
+        ltLinesPerDisplay: 2,
+        liveItem: page0,
+        stagedItem: page1,
+      });
+      mockInvoke
+        .mockResolvedValueOnce(page1) // commit_staged
+        .mockResolvedValueOnce(undefined); // stage_item for page 2
+      const { result } = renderHook(() => useItemActions());
+
+      let ok = false;
+      await act(async () => { ok = await result.current.goLive(); });
+
+      expect(ok).toBe(true);
+      expect(mockInvoke).toHaveBeenCalledWith("stage_item", { item: page2 });
+      expect(useAppStore.getState().stagedItem).toEqual(page2);
+    });
+
+    it("stages the cue after the item that just went live, not the previous live cue", async () => {
+      const previousLive = makeVerse(16);
+      const committed = makeVerse(17);
+      const following = makeVerse(18);
+      useAppStore.setState({
+        liveItem: previousLive,
+        stagedItem: committed,
+        nextVerse: following.type === "Verse" ? following.data : null,
+      });
+      mockInvoke
+        .mockResolvedValueOnce(committed) // commit_staged
+        .mockResolvedValueOnce(following.type === "Verse" ? following.data : null) // get_next_verse after committed
+        .mockResolvedValueOnce(undefined); // stage_item for the following verse
+      const { result } = renderHook(() => useItemActions());
+
+      let ok = false;
+      await act(async () => { ok = await result.current.goLive(); });
+
+      expect(ok).toBe(true);
+      expect(useAppStore.getState().liveItem).toEqual(committed);
+      expect(mockInvoke).toHaveBeenCalledWith("stage_item", { item: following });
+      expect(useAppStore.getState().stagedItem).toEqual(following);
     });
   });
 
