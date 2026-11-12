@@ -32,6 +32,11 @@ const MAX_SEMANTIC_SENTENCES: usize = 2;
 const MIN_COMPLETE_THOUGHT_WORDS: usize = 5;
 const SUGGESTION_COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_SHORT_QUOTE_CONFIDENCE: f32 = 0.89;
+/// A chapter-only citation ("Isaiah chapter two") is a valid navigation
+/// preview, but the speaker has not yet selected a verse. Keep it below the
+/// reference auto-stage threshold so the later "verse 10" produces the single
+/// automatic Stage/Live action.
+const MAX_INCOMPLETE_REFERENCE_CONFIDENCE: f32 = 0.85;
 /// A quotation without an explicit citation or attribution cue is useful as a
 /// manual preview, but it must never reach the automatic Stage/Live gates.
 const MAX_LOOSE_QUOTE_CONFIDENCE: f32 = 0.88;
@@ -2831,7 +2836,12 @@ fn handle_transcription_update(
                 set_navigation_anchor(detection, last);
             }
             let passage_end = last_verse.filter(|last| *last > first.verse);
-            let mut reference_confidence = (0.92 + confidence * 0.07).clamp(0.0, 0.99);
+            let chapter_only = reference_is_chapter_only(&reference, transcript);
+            let mut reference_confidence = if chapter_only {
+                MAX_INCOMPLETE_REFERENCE_CONFIDENCE
+            } else {
+                (0.92 + confidence * 0.07).clamp(0.0, 0.99)
+            };
             // A cited chapter/verse is only as reliable as its spoken numerals.
             // If both the average and the weakest word are poor, keep the card
             // reviewable but below the automatic Stage threshold.
@@ -2954,7 +2964,11 @@ fn handle_interim_transcript(
             id: Uuid::new_v4().to_string(),
             detection: "reference".into(),
             evidence_types: Vec::new(),
-            confidence: MAX_SHORT_QUOTE_CONFIDENCE,
+            confidence: if reference_is_chapter_only(&reference, transcript) {
+                MAX_INCOMPLETE_REFERENCE_CONFIDENCE
+            } else {
+                MAX_SHORT_QUOTE_CONFIDENCE
+            },
             evidence: latest_word_suffix(transcript, MAX_SEMANTIC_CONTEXT_WORDS),
             verse: first,
             timestamp: now_ms(),
@@ -3180,6 +3194,23 @@ fn best_indexed_quote_candidate(index: &QuoteSearchIndex, window: &str) -> Optio
         }
     }
     best
+}
+
+/// A generated first verse is not the same thing as a completed citation.
+/// Chapter-only speech ("Isaiah chapter two") creates a verse-1 navigation
+/// preview, but it must remain manual until the speaker names a verse.
+fn reference_is_chapter_only(reference: &ScriptureReference, transcript: &str) -> bool {
+    if reference.verse != 1 || reference.verse_end.is_some() {
+        return false;
+    }
+    let normalized = quote_tokens(transcript);
+    if normalized
+        .iter()
+        .any(|token| token == "verse" || token == "verses")
+    {
+        return false;
+    }
+    !transcript.contains(':')
 }
 
 fn reference_covers_verse(reference: &ScriptureReference, verse: &Verse) -> bool {
@@ -3873,6 +3904,26 @@ mod tests {
             last_book_mention(&quote_tokens("the Bible speaks in Isaiah"), &aliases),
             Some("Isaiah".into())
         );
+    }
+
+    #[test]
+    fn chapter_only_references_stay_below_auto_stage() {
+        let reference = ScriptureReference {
+            book: "Isaiah".into(),
+            chapter: 2,
+            verse: 1,
+            verse_end: None,
+        };
+        assert!(reference_is_chapter_only(
+            &reference,
+            "Isaiah chapter two"
+        ));
+        assert!(reference_is_chapter_only(&reference, "Isaiah two"));
+        assert!(!reference_is_chapter_only(
+            &reference,
+            "Isaiah chapter two verse one"
+        ));
+        assert!(!reference_is_chapter_only(&reference, "Isaiah 2:1"));
     }
 
     #[test]
