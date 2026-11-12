@@ -207,8 +207,8 @@ pub(crate) fn parse_verse_number(
     start: usize,
     plural_marker: bool,
 ) -> Option<(i32, usize, Option<i32>)> {
-    let (verse, next) = parse_number(tokens, start)?;
-    let verse_end = tokens.get(next).and_then(|separator| {
+    let (verse, mut next) = parse_number(tokens, start)?;
+    let range_candidate = tokens.get(next).and_then(|separator| {
         let named_second_verse = separator == "and"
             && tokens
                 .get(next + 1)
@@ -216,17 +216,24 @@ pub(crate) fn parse_verse_number(
         let is_range =
             separator == "-" || separator == "to" || (separator == "and" && plural_marker);
         if is_range {
-            parse_number(tokens, next + 1).map(|(end, _)| end)
+            parse_number(tokens, next + 1)
         } else if named_second_verse {
             // "verse 28 and verse 29" is an explicit range even though the
             // first marker is singular. Keep "verse 5 and then we go" from
             // treating ordinary prose as a range.
-            parse_number(tokens, next + 2).map(|(end, _)| end)
+            parse_number(tokens, next + 2)
         } else {
             None
         }
     });
-    Some((verse, next, verse_end.filter(|end| *end >= verse)))
+    let verse_end = match range_candidate {
+        Some((end, end_next)) if end >= verse => {
+            next = end_next;
+            Some(end)
+        }
+        _ => None,
+    };
+    Some((verse, next, verse_end))
 }
 
 /// In continuous preaching, a range is commonly spoken without a separator:
@@ -944,7 +951,7 @@ mod tests {
         let plural = parse_verse_number(&tokenize("verses eleven and twelve"), 1, true);
         assert_eq!(
             plural,
-            Some((11, 2, Some(12))),
+            Some((11, 4, Some(12))),
             "verses eleven and twelve should parse as an inclusive range"
         );
         let singular = parse_verse_number(&tokenize("verse ten and twelve"), 1, false);
@@ -960,11 +967,11 @@ mod tests {
         );
         assert_eq!(
             explicitly_marked_second,
-            Some((28, 3, Some(29))),
+            Some((28, 7, Some(29))),
             "a second explicit verse marker must form a range"
         );
         let spoken_range = parse_verse_number(&tokenize("verses 5 to 6"), 1, true);
-        assert_eq!(spoken_range, Some((5, 2, Some(6))));
+        assert_eq!(spoken_range, Some((5, 4, Some(6))));
         let descending = parse_verse_number(&tokenize("verses ten to eight"), 1, true);
         assert_eq!(descending, Some((10, 2, None)), "end must be >= start");
     }
