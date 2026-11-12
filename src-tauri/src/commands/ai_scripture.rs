@@ -1496,6 +1496,16 @@ pub fn ai_remove_semantic(
     semantic_scripture::engine(&state.app_data_dir).remove_local_model(&app)
 }
 
+fn websocket_base_url(base: &str) -> String {
+    if let Some(rest) = base.strip_prefix("https://") {
+        format!("wss://{rest}")
+    } else if let Some(rest) = base.strip_prefix("http://") {
+        format!("ws://{rest}")
+    } else {
+        base.to_owned()
+    }
+}
+
 async fn connect_provider_socket(
     adapter: &dyn providers::StreamingTranscriptionAdapter,
     provider: AsrProvider,
@@ -1503,9 +1513,10 @@ async fn connect_provider_socket(
     stop: &mut watch::Receiver<bool>,
     timeout: Duration,
 ) -> Result<Option<AsrWebSocket>, String> {
+    let gateway_ws_base = websocket_base_url(&crate::license::ai_gateway_url());
     let gateway_url = format!(
         "{}/v1/asr/{}",
-        crate::license::ai_gateway_url().trim_end_matches('/'),
+        gateway_ws_base.trim_end_matches('/'),
         provider.as_str()
     );
     let mut request = gateway_url.into_client_request().map_err(|error| {
@@ -3000,6 +3011,22 @@ fn quote_confidence(score: f32, asr_confidence: f32, evidence_words: usize) -> f
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_transcription_converts_the_http_gateway_base_to_websocket() {
+        assert_eq!(
+            websocket_base_url("https://wordlyte-ai-gateway.example.workers.dev"),
+            "wss://wordlyte-ai-gateway.example.workers.dev"
+        );
+        assert_eq!(
+            websocket_base_url("http://127.0.0.1:8787"),
+            "ws://127.0.0.1:8787"
+        );
+        assert_eq!(
+            websocket_base_url("wss://ai.example.test"),
+            "wss://ai.example.test"
+        );
+    }
 
     fn direct_test_suggestion(detection: &str, confidence: f32) -> ScriptureSuggestion {
         ScriptureSuggestion {
