@@ -29,6 +29,8 @@ export interface AiRuntimeStatus {
   audioDevice: string | null;
   version: string | null;
   message: string;
+  /** Wall-clock start of the active transcript session, in Unix milliseconds. */
+  startedAt?: number | null;
 }
 
 export interface TranscriptSegment {
@@ -136,6 +138,9 @@ interface AiScriptureContextValue {
   transcript: TranscriptSegment[];
   interim: TranscriptSegment | null;
   suggestions: ScriptureSuggestion[];
+  /** Start/end boundaries of the visible transcript session, in Unix milliseconds. */
+  sessionStartedAt: number | null;
+  sessionEndedAt: number | null;
   /** RMS-normalized level from the active transcription input, from 0 to 1. */
   audioLevel: number;
   lastCommand: AiVoiceCommandEvent | null;
@@ -184,6 +189,8 @@ export function AiScriptureProvider({
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
   const [interim, setInterim] = useState<TranscriptSegment | null>(null);
   const [suggestions, setSuggestions] = useState<ScriptureSuggestion[]>([]);
+  const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null);
+  const [sessionEndedAt, setSessionEndedAt] = useState<number | null>(null);
   const [audioLevel, setAudioLevel] = useState(0);
   const [lastCommand, setLastCommand] = useState<AiVoiceCommandEvent | null>(null);
   const metricsRef = useRef<PerformanceAccumulator>(loadPerformanceAccumulator());
@@ -273,6 +280,7 @@ export function AiScriptureProvider({
     setStatus(STOPPED);
     setInterim(null);
     setAudioLevel(0);
+    setSessionEndedAt((ended) => ended ?? Date.now());
   }, []);
 
   const stopOperatorAfterRecognition = useCallback(() => {
@@ -297,14 +305,29 @@ export function AiScriptureProvider({
     const unlisteners: Array<() => void> = [];
 
     void invoke<AiRuntimeStatus>("ai_status")
-      .then((next) => mounted && setStatus(next))
+      .then((next) => {
+        if (!mounted) return;
+        setStatus(next);
+        if (next.startedAt != null) {
+          setSessionStartedAt(next.startedAt);
+          setSessionEndedAt(null);
+        }
+      })
       .catch(() => undefined);
 
     void Promise.all([
       listen<AiRuntimeStatus>("ai-scripture-status", (event) => {
         if (!mounted) return;
-        setStatus(event.payload);
-        if (!["connecting", "running", "listening"].includes(event.payload.state)) setAudioLevel(0);
+        const next = event.payload;
+        setStatus(next);
+        if (next.startedAt != null) {
+          setSessionStartedAt(next.startedAt);
+          setSessionEndedAt(null);
+        }
+        if (!["connecting", "running", "listening"].includes(next.state)) {
+          setAudioLevel(0);
+          setSessionEndedAt((ended) => ended ?? Date.now());
+        }
       }),
       listen<{ level: number }>("ai-scripture-audio-level", (event) => {
         if (mounted) setAudioLevel(Math.max(0, Math.min(1, event.payload.level || 0)));
@@ -463,6 +486,8 @@ export function AiScriptureProvider({
       mode: modeRef.current,
     });
     setStatus(next);
+    setSessionStartedAt(next.startedAt ?? Date.now());
+    setSessionEndedAt(null);
   }, [provider]);
 
   const clearSession = useCallback(() => {
@@ -475,8 +500,8 @@ export function AiScriptureProvider({
   }, []);
 
   const value = useMemo<AiScriptureContextValue>(
-    () => ({ status, provider, setProvider, mode, setMode, transcript, interim, suggestions, audioLevel, lastCommand, performance, clearPerformance, recordManualStage, start, stop, clearSession }),
-    [status, provider, setProvider, mode, setMode, transcript, interim, suggestions, audioLevel, lastCommand, performance, clearPerformance, recordManualStage, start, stop, clearSession],
+    () => ({ status, provider, setProvider, mode, setMode, transcript, interim, suggestions, sessionStartedAt, sessionEndedAt, audioLevel, lastCommand, performance, clearPerformance, recordManualStage, start, stop, clearSession }),
+    [status, provider, setProvider, mode, setMode, transcript, interim, suggestions, sessionStartedAt, sessionEndedAt, audioLevel, lastCommand, performance, clearPerformance, recordManualStage, start, stop, clearSession],
   );
 
   return <AiScriptureContext.Provider value={value}>{children}</AiScriptureContext.Provider>;

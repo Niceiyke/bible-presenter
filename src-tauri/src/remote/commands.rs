@@ -147,6 +147,9 @@ pub fn op_commit_staged_locked(app: &AppHandle, state: &AppState, source: Option
     state.presentation.bump_revision();
     *live = committed.clone();
     drop(live);
+    if let Some(DisplayItem::Verse(verse)) = &committed {
+        crate::commands::ai_scripture::note_live_verse(verse);
+    }
     emit_live_update(app, state, committed.clone());
     state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": committed }), source);
     committed
@@ -156,6 +159,7 @@ pub fn op_clear_live(app: &AppHandle, state: &AppState, source: Option<String>) 
     let _guard = lock_presentation(state);
     state.presentation.bump_revision();
     *state.presentation.live_item.lock() = None;
+    crate::commands::ai_scripture::clear_live_verse_anchor();
     emit_live_update(app, state, None);
     let staged = state.presentation.staged_item.lock().clone();
     emit_checked(app, "item-staged", &staged);
@@ -176,6 +180,9 @@ pub fn op_go_live_item(app: &AppHandle, state: &AppState, item: DisplayItem, sou
     state.presentation.bump_revision();
     *live = Some(committed.clone());
     drop(live);
+    if let DisplayItem::Verse(verse) = &committed {
+        crate::commands::ai_scripture::note_live_verse(verse);
+    }
     emit_live_update(app, state, Some(committed.clone()));
     state.remote.hub.publish(RemoteEventKind::LiveChanged, json!({ "live_item": committed }), source);
 }
@@ -195,6 +202,7 @@ pub fn op_clear_all(app: &AppHandle, state: &AppState, source: Option<String>) -
     *state.presentation.staged_item.lock() = None;
     *state.presentation.lower_third.lock() = None;
     state.presentation.props_layer.lock().clear();
+    crate::commands::ai_scripture::clear_live_verse_anchor();
 
     emit_live_update(app, state, None);
     emit_checked(app, "item-staged", &Option::<DisplayItem>::None);

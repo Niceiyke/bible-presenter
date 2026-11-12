@@ -81,6 +81,10 @@ pub struct AiRuntimeStatus {
     pub audio_device: Option<String>,
     pub version: Option<String>,
     pub message: String,
+    /// Wall-clock start of the active transcription session. The operator UI
+    /// uses this to show a live session duration without keeping a second
+    /// timer that can drift from the saved transcript session.
+    pub started_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -190,6 +194,7 @@ fn pcm_level(bytes: &[u8]) -> f32 {
 
 struct AiSessionControl {
     id: String,
+    started_at: u64,
     stop: watch::Sender<bool>,
     audio_device: String,
     version: String,
@@ -213,6 +218,7 @@ struct AiRuntime {
 struct AiSessionRecorder {
     store: Arc<MediaScheduleStore>,
     session: Mutex<AiScriptureSavedSession>,
+    started_at: u64,
 }
 
 impl AiSessionRecorder {
@@ -224,11 +230,13 @@ impl AiSessionRecorder {
         audio_device: String,
         version: String,
     ) -> Result<Arc<Self>, String> {
+        let started_at = now_ms();
         let recorder = Arc::new(Self {
             store,
+            started_at,
             session: Mutex::new(AiScriptureSavedSession {
                 id,
-                started_at: now_ms(),
+                started_at,
                 ended_at: None,
                 provider: provider.as_str().into(),
                 mode,
@@ -397,6 +405,10 @@ struct DetectionConfig {
     /// verse fourteen" resolve against Isaiah rather than the last projected
     /// verse's book.
     last_spoken_book: Arc<Mutex<Option<String>>>,
+    /// When the last book name was spoken. A stale book mention must not
+    /// override the verse the congregation is currently seeing when the
+    /// preacher simply says "verse 10".
+    last_spoken_book_at: Arc<Mutex<Option<Instant>>>,
     /// True when the previous ASR segment ended on the word "chapter", so the
     /// next segment's leading number is the chapter rather than a verse.
     pending_chapter: Arc<Mutex<bool>>,
@@ -407,6 +419,9 @@ struct VerseAnchor {
     book: String,
     chapter: i32,
     verse: i32,
+    /// The anchor's freshness is used to arbitrate between a recently spoken
+    /// book name and the verse that is currently live.
+    updated_at: Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -473,6 +488,55 @@ struct ActiveDetectionSession(Arc<AtomicBool>);
 impl Drop for ActiveDetectionSession {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
+    }
+}
+
+/// Shared between the AI listener and the manual display commands. The anchor
+/// must follow every verse the operator sends live, not only AI-originated
+/// sends, so a following "verse 10" stays in Philippians 3 instead of jumping
+/// back to an older AI reference.
+static SHARED_NAVIGATION_ANCHOR: OnceLock<Arc<Mutex<Option<VerseAnchor>>>> = OnceLock::new();
+
+fn shared_navigation_anchor() -> Arc<Mutex<Option<VerseAnchor>>> {
+    SHARED_NAVIGATION_ANCHOR
+        .get_or_init(|| Arc::new(Mutex::new(None)))
+        .clone()
+}
+
+pub(crate) fn note_live_verse(verse: &Verse) {
+    if let Ok(mut anchor) = shared_navigation_anchor().lock() {
+        *anchor = Some(VerseAnchor {
+            book: verse.book.clone(),
+            chapter: verse.chapter,
+            verse: verse.verse,
+            updated_at: Instant::now(),
+        });
+    }
+}
+
+pub(crate) fn clear_live_verse_anchor() {
+    if let Ok(mut anchor) = shared_navigation_anchor().lock() {
+        *anchor = None;
+    }
+}
+
+fn sync_navigation_anchor_from_live(app: &AppHandle) {
+    let mut anchor = None;
+    if let Some(state) = app.try_state::<AppState>() {
+        for slot in [&state.presentation.live_item, &state.presentation.staged_item] {
+            if let Some(crate::store::DisplayItem::Verse(verse)) = slot.lock().as_ref() {
+                anchor = Some(VerseAnchor {
+                    book: verse.book.clone(),
+                    chapter: verse.chapter,
+                    verse: verse.verse,
+                    updated_at: Instant::now(),
+                });
+                break;
+            }
+        }
+    }
+    if let Ok(mut current) = shared_navigation_anchor().lock() {
+        *current = anchor;
     }
 }
 
@@ -796,6 +860,7 @@ fn set_navigation_anchor(detection: &DetectionConfig, verse: &Verse) {
             book: verse.book.clone(),
             chapter: verse.chapter,
             verse: verse.verse,
+            updated_at: Instant::now(),
         });
     }
 }
@@ -941,13 +1006,27 @@ fn navigation_anchor(detection: &DetectionConfig, app: &AppHandle) -> Option<Ver
         book: verse.book,
         chapter: verse.chapter,
         verse: verse.verse,
+        updated_at: Instant::now(),
     })
 }
 
+fn contextual_book_is_authoritative(
+    pending_chapter: bool,
+    recent_book_at: Option<Instant>,
+    anchor: Option<&VerseAnchor>,
+) -> bool {
+    pending_chapter
+        || anchor.is_none()
+        || recent_book_at.is_some_and(|at| {
+            anchor.is_some_and(|anchor| at > anchor.updated_at)
+        })
+}
+
 /// Sermons commonly continue through a chapter with "verse seventeen and
-/// eighteen" after naming the book once. Resolve that concise form against the
-/// most recently spoken book, falling back to the last verified reference only
-/// when no book has been named yet.
+/// eighteen" after naming the book once. Resolve that concise form against
+/// whichever is fresher: the last book actually spoken or the verse currently
+/// live. This lets a manual "Go live" update the following verse reference
+/// without letting a stale book name hijack it.
 fn detect_contextual_verse_reference_from_tokens(
     tokens: &[String],
     detection: &DetectionConfig,
@@ -958,15 +1037,30 @@ fn detect_contextual_verse_reference_from_tokens(
         .lock()
         .ok()
         .and_then(|book| book.clone());
+    let recent_book_at = detection
+        .last_spoken_book_at
+        .lock()
+        .ok()
+        .and_then(|at| *at);
     let pending_chapter = detection
         .pending_chapter
         .lock()
         .map(|pending| *pending)
         .unwrap_or(false);
     let anchor = navigation_anchor(detection, app);
+    // A book name from ten minutes ago must not beat the verse the operator
+    // just sent live. Book context wins only while it is newer than the live
+    // anchor, or while completing a split "Isaiah chapter" handoff.
+    let use_recent_book =
+        contextual_book_is_authoritative(pending_chapter, recent_book_at, anchor.as_ref());
+    let contextual_book = if use_recent_book {
+        recent_book.as_deref()
+    } else {
+        None
+    };
     let reference = contextual_verse_reference_for_tokens(
         tokens,
-        recent_book.as_deref(),
+        contextual_book,
         anchor.as_ref(),
         pending_chapter,
     );
@@ -998,6 +1092,9 @@ fn remember_last_spoken_book(
     if let Some(book) = book {
         if let Ok(mut current) = detection.last_spoken_book.lock() {
             *current = Some(book);
+        }
+        if let Ok(mut at) = detection.last_spoken_book_at.lock() {
+            *at = Some(Instant::now());
         }
     }
 }
@@ -1259,6 +1356,7 @@ pub fn ai_status() -> AiRuntimeStatus {
             audio_device: Some(session.audio_device.clone()),
             version: Some(session.version.clone()),
             message: guard.last_message.clone(),
+            started_at: Some(session.started_at),
         },
         None => AiRuntimeStatus {
             state: "stopped".into(),
@@ -1266,6 +1364,7 @@ pub fn ai_status() -> AiRuntimeStatus {
             audio_device: None,
             version: None,
             message: guard.last_message.clone(),
+            started_at: None,
         },
     }
 }
@@ -1280,8 +1379,10 @@ fn emit_status(
 ) {
     let message = message.into();
     crate::store::log_msg(app, &format!("[ai-scripture] {state}: {message}"));
+    let mut started_at = None;
     if let Ok(mut guard) = runtime().lock() {
         guard.last_message = message.clone();
+        started_at = guard.session.as_ref().map(|session| session.started_at);
     }
     let _ = app.emit(
         "ai-scripture-status",
@@ -1291,6 +1392,7 @@ fn emit_status(
             audio_device: device,
             version,
             message,
+            started_at,
         },
     );
 }
@@ -1374,6 +1476,7 @@ pub async fn ai_start(
         guard.last_provider = provider;
         guard.session = Some(AiSessionControl {
             id: session_id.clone(),
+            started_at: recorder.started_at,
             stop: stop_tx,
             audio_device: audio_device.clone(),
             version: version.clone(),
@@ -1391,6 +1494,7 @@ pub async fn ai_start(
         Some(version.clone()),
     );
 
+    let session_started_at = recorder.started_at;
     let bible = state.store.clone();
     let license = state.license.clone();
     let sync_license = license.clone();
@@ -1490,6 +1594,7 @@ pub async fn ai_start(
         audio_device: Some(audio_device),
         version: Some(version),
         message: format!("Connecting to {}…", provider.display_name()),
+        started_at: Some(session_started_at),
     })
 }
 
@@ -2017,12 +2122,14 @@ async fn run_asr_session(
     // The MVP is English-only, so every installed translation can help align
     // a quotation. The winning canonical reference is converted back to the
     // operator-selected output translation before it reaches the UI.
+    sync_navigation_anchor_from_live(&app);
     let detection = Arc::new(DetectionConfig {
         output_version: Arc::new(Mutex::new(version.clone())),
         available_versions,
         reference_aliases,
-        navigation_anchor: Arc::new(Mutex::new(None)),
+        navigation_anchor: shared_navigation_anchor(),
         last_spoken_book: Arc::new(Mutex::new(None)),
+        last_spoken_book_at: Arc::new(Mutex::new(None)),
         pending_chapter: Arc::new(Mutex::new(false)),
     });
     let recently_suggested = Arc::new(Mutex::new(HashMap::new()));
@@ -3869,6 +3976,7 @@ mod tests {
             book: "John".into(),
             chapter: 3,
             verse: 8,
+            updated_at: Instant::now(),
         };
         assert_eq!(
             contextual_verse_reference_for_tokens(&tokens, Some("Isaiah"), Some(&anchor), false),
@@ -3950,11 +4058,39 @@ mod tests {
     }
 
     #[test]
+    fn stale_spoken_book_does_not_override_a_newer_live_anchor() {
+        let now = Instant::now();
+        let live = VerseAnchor {
+            book: "Philippians".into(),
+            chapter: 3,
+            verse: 9,
+            updated_at: now,
+        };
+        assert!(!contextual_book_is_authoritative(
+            false,
+            Some(now - Duration::from_secs(60)),
+            Some(&live),
+        ));
+
+        let older_anchor = VerseAnchor {
+            updated_at: now - Duration::from_secs(60),
+            ..live.clone()
+        };
+        assert!(contextual_book_is_authoritative(
+            false,
+            Some(now),
+            Some(&older_anchor),
+        ));
+        assert!(contextual_book_is_authoritative(true, None, Some(&live)));
+    }
+
+    #[test]
     fn contextual_verses_follow_the_last_verified_chapter() {
         let anchor = VerseAnchor {
             book: "Matthew".into(),
             chapter: 6,
             verse: 10,
+            updated_at: Instant::now(),
         };
         assert_eq!(
             contextual_verse_reference_for_anchor(
