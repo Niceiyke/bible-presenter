@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Monitor, Play, Square } from "lucide-react";
 import { useAppStore } from "../../../store";
@@ -11,10 +11,39 @@ export function MonitorsSection({ onUpdateSettings }: SettingsSectionProps) {
   const t = useT();
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
   const [testing, setTesting] = useState(false);
+  const monitorsKey = useRef("");
+
+  const refreshMonitors = useCallback(async () => {
+    try {
+      const list = await invoke<MonitorInfo[]>("get_available_monitors");
+      setMonitors(list);
+      const key = list
+        .map((monitor) => `${monitor.name}:${monitor.width}x${monitor.height}@${monitor.x},${monitor.y}`)
+        .sort()
+        .join("|");
+      // A display was plugged in/removed or its geometry changed. Re-evaluate
+      // visible output placement immediately; no app restart or hide/show.
+      if (monitorsKey.current && monitorsKey.current !== key) {
+        void invoke("outputs_reposition").catch(() => {});
+      }
+      monitorsKey.current = key;
+    } catch {
+      // A transient enumeration failure should not clear a working monitor
+      // list; the next poll retries.
+    }
+  }, []);
 
   useEffect(() => {
-    invoke<MonitorInfo[]>("get_available_monitors").then(setMonitors).catch(() => {});
-  }, []);
+    void refreshMonitors();
+    const timer = window.setInterval(() => void refreshMonitors(), 2500);
+    return () => window.clearInterval(timer);
+  }, [refreshMonitors]);
+
+  const chooseMonitor = (name?: string) => {
+    void Promise.resolve(onUpdateSettings({ ...settings, preferred_monitor: name })).finally(() => {
+      void invoke("outputs_reposition").catch(() => {});
+    });
+  };
 
   const runTest = async () => {
     if (testing) {
@@ -40,7 +69,7 @@ export function MonitorsSection({ onUpdateSettings }: SettingsSectionProps) {
               type="radio"
               name="preferred_monitor"
               checked={!settings.preferred_monitor}
-              onChange={() => onUpdateSettings({ ...settings, preferred_monitor: undefined })}
+              onChange={() => chooseMonitor(undefined)}
               className="accent-amber-500"
             />
             <span className="text-xs text-slate-400 group-hover:text-slate-300">{t("settings.autoMonitor")}</span>
@@ -51,7 +80,7 @@ export function MonitorsSection({ onUpdateSettings }: SettingsSectionProps) {
                 type="radio"
                 name="preferred_monitor"
                 checked={settings.preferred_monitor === m.name}
-                onChange={() => onUpdateSettings({ ...settings, preferred_monitor: m.name })}
+                onChange={() => chooseMonitor(m.name)}
                 className="accent-amber-500"
               />
               <span className="text-xs text-slate-300 group-hover:text-white">

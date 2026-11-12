@@ -85,6 +85,9 @@ export interface PresentationSettings {
   version_font_size?: number;
   version_color?: string;
   auto_split_verses: boolean;
+  /** Fit verse text to the available output area. Short verses grow and long
+   *  verses shrink instead of using one fixed size for every passage. */
+  scripture_auto_fit?: boolean;
   verse_split_threshold: number;
   preferred_monitor?: string;
   custom_theme_colors?: Partial<ThemeColors>;
@@ -108,7 +111,12 @@ export interface MonitorInfo {
 }
 
 export const FONTS = [
-  "Arial", "Georgia", "Times New Roman", "Verdana", "Courier New", "Montserrat", "Oswald", "Playfair Display", "Roboto", "Open Sans"
+  "Arial", "Georgia", "Times New Roman", "Verdana", "Courier New",
+  "Montserrat", "Oswald", "Playfair Display", "Roboto", "Open Sans",
+  "Lora", "Merriweather", "EB Garamond", "Cinzel",
+  "Palatino Linotype", "Book Antiqua", "Garamond", "Cambria",
+  "Calibri", "Segoe UI", "Trebuchet MS", "Tahoma",
+  "Century Gothic", "Franklin Gothic Medium", "Rockwell", "Bahnschrift",
 ];
 
 export const DEFAULT_SETTINGS: PresentationSettings = {
@@ -118,7 +126,7 @@ export const DEFAULT_SETTINGS: PresentationSettings = {
   verse_font_family: "Georgia, serif", reference_font_size: 36,
   reference_color: "", reference_font_family: "Arial, sans-serif",
   chapter_verse_font_size: undefined, chapter_verse_font_family: undefined, chapter_verse_color: undefined,
-  disabled_bible_versions: [], default_bible_version: "KJV", auto_split_verses: true, verse_split_threshold: 200,
+  disabled_bible_versions: [], default_bible_version: "KJV", auto_split_verses: true, scripture_auto_fit: true, verse_split_threshold: 200,
   auto_clear_background_logo: true, stage_uses_theme: false,
   show_song_section_labels: false,
   reference_output_height: 1080,

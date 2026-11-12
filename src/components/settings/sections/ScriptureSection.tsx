@@ -184,6 +184,23 @@ export function ScriptureSection({ onUpdateSettings }: SettingsSectionProps) {
       </div>
 
       <div className="border-t border-slate-800 pt-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[10px] text-slate-300 font-bold uppercase">{t("settings.sec.autoFit")}</span>
+            <span className="text-[9px] text-slate-600">{t("settings.sec.autoFitDesc")}</span>
+          </div>
+          <button
+            role="switch"
+            aria-checked={settings.scripture_auto_fit !== false}
+            onClick={() => onUpdateSettings({ ...settings, scripture_auto_fit: settings.scripture_auto_fit === false })}
+            className={`shrink-0 w-10 h-5 rounded-full relative transition-colors ${settings.scripture_auto_fit !== false ? "bg-amber-500" : "bg-slate-700"}`}
+          >
+            <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${settings.scripture_auto_fit !== false ? "left-6" : "left-1"}`} />
+          </button>
+        </div>
+      </div>
+
+      <div className="border-t border-slate-800 pt-4">
         <p className="text-xs text-slate-400 font-bold uppercase mb-3">{t("settings.sec.dynamicStyling")}</p>
         <div className="flex items-center justify-between mb-4">
           <div className="flex flex-col gap-0.5">

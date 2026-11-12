@@ -296,6 +296,48 @@ fn main() {
                 }
             }
 
+            // Monitor hot-plug watcher. Tauri has no cross-platform display
+            // change event, so poll the cheap winit monitor list and reposition
+            // visible output windows when geometry changes. This keeps a newly
+            // connected projector usable without restarting Wordlyte.
+            let monitor_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut previous = String::new();
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    let Some(window) = monitor_app.get_webview_window("main") else {
+                        continue;
+                    };
+                    let Ok(monitors) = window.available_monitors() else {
+                        continue;
+                    };
+                    let key = monitors
+                        .iter()
+                        .map(|monitor| {
+                            format!(
+                                "{}:{}x{}@{},{}",
+                                monitor.name().map(String::as_str).unwrap_or(""),
+                                monitor.size().width,
+                                monitor.size().height,
+                                monitor.position().x,
+                                monitor.position().y,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("|");
+                    if key == previous {
+                        continue;
+                    }
+                    previous = key;
+                    if let Some(state) = monitor_app.try_state::<AppState>() {
+                        wordlyte_lib::commands::outputs::reposition_visible_outputs(
+                            &monitor_app,
+                            state.inner(),
+                        );
+                    }
+                }
+            });
+
             log_msg(app, "App state managed. Ready.");
             Ok(())
         })
@@ -406,6 +448,7 @@ fn main() {
             wordlyte_lib::commands::scenes::capture_scene,
             wordlyte_lib::commands::outputs::outputs_list,
             wordlyte_lib::commands::outputs::outputs_states,
+            wordlyte_lib::commands::outputs::outputs_reposition,
             wordlyte_lib::commands::outputs::output_buses_list,
             wordlyte_lib::commands::outputs::outputs_update,
             wordlyte_lib::commands::outputs::outputs_set_visible,

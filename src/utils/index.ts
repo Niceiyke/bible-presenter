@@ -641,7 +641,12 @@ export function importPresentation(data: unknown): { success: boolean; presentat
 }
 
 export const FONTS = [
-  "Arial", "Georgia", "Times New Roman", "Verdana", "Courier New", "Montserrat", "Oswald", "Playfair Display", "Roboto", "Open Sans"
+  "Arial", "Georgia", "Times New Roman", "Verdana", "Courier New",
+  "Montserrat", "Oswald", "Playfair Display", "Roboto", "Open Sans",
+  "Lora", "Merriweather", "EB Garamond", "Cinzel",
+  "Palatino Linotype", "Book Antiqua", "Garamond", "Cambria",
+  "Calibri", "Segoe UI", "Trebuchet MS", "Tahoma",
+  "Century Gothic", "Franklin Gothic Medium", "Rockwell", "Bahnschrift",
 ];
 
 // ─── P4.1: built-in starter templates ───────────────────────────────────────

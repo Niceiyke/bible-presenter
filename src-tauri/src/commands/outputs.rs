@@ -115,6 +115,25 @@ fn position_window_on_assigned_monitor(
                         .map_err(|e: tauri::Error| e.to_string())?;
                 }
             }
+        } else if label == "output" {
+            // The secondary projector disappeared. Bring the primary program
+            // back onto the remaining display instead of leaving it at
+            // off-screen coordinates.
+            if let Some(primary) = window
+                .primary_monitor()
+                .map_err(|e: tauri::Error| e.to_string())?
+            {
+                let pos = primary.position();
+                window
+                    .set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                        x: pos.x,
+                        y: pos.y,
+                    }))
+                    .map_err(|e: tauri::Error| e.to_string())?;
+                window
+                    .set_fullscreen(true)
+                    .map_err(|e: tauri::Error| e.to_string())?;
+            }
         }
     }
     Ok(())
@@ -283,6 +302,35 @@ pub async fn outputs_list(state: State<'_, AppState>) -> Result<Vec<OutputConfig
 #[tauri::command]
 pub async fn outputs_states(state: State<'_, AppState>) -> Result<Vec<OutputState>, String> {
     Ok(state.outputs.all_states())
+}
+
+/// Re-evaluate physical monitor placement for every visible window output.
+/// Called after a display is added/removed or the preferred monitor changes so
+/// the operator does not need to restart Wordlyte or hide/show the projector.
+pub fn reposition_visible_outputs(app: &AppHandle, state: &AppState) {
+    for cfg in state.outputs.list() {
+        if !cfg.visible {
+            continue;
+        }
+        let Some(label) = cfg.window_label.as_deref() else {
+            continue;
+        };
+        if let Err(error) = position_window_on_assigned_monitor(app, state, &cfg, label) {
+            crate::store::log_msg(
+                app,
+                &format!("Could not reposition output '{label}' after a monitor change: {error}"),
+            );
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn outputs_reposition(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    reposition_visible_outputs(&app, state.inner());
+    Ok(())
 }
 
 /// Lists logical presentation buses available for output targeting. The caller

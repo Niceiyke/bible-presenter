@@ -84,17 +84,19 @@ export function ProgramSurface({ frame, runtime, mode = "output", silent = false
 
   const { settings, baseSettings, colors, item, propItems, lowerThird, overlays, blanked, backgrounds, watermark } = frame;
 
-  // Verse auto-fit (only when verse splitting is disabled). DOM measurement,
-  // so it lives inside the surface rather than the pure resolver.
+  // Verse auto-fit. DOM measurement lives inside the surface rather than the
+  // pure resolver. Short passages can grow above the base size, while long
+  // passages shrink to fit the available projection area.
   const [fittedFontPt, setFittedFontPt] = useState<number | null>(null);
   useLayoutEffect(() => {
     const isVerse = item?.type === "Verse";
-    if (settings.auto_split_verses || !isVerse || !verseContainerRef.current) {
+    const autoFit = settings.scripture_auto_fit !== false;
+    if (!autoFit || !isVerse || !verseContainerRef.current) {
       setFittedFontPt(null);
       return;
     }
     const text = (item as { data: { text: string } }).data.text;
-    const maxPt = settings.font_size * windowScale;
+    const maxPt = Math.min(180, Math.max(settings.font_size, 24) * 1.8) * windowScale;
     const fontFamily = settings.verse_font_family ?? "Georgia, serif";
     const container = verseContainerRef.current;
 
@@ -133,8 +135,8 @@ export function ProgramSurface({ frame, runtime, mode = "output", silent = false
       }
     }
     container.removeChild(probe);
-    setFittedFontPt(best < maxPt ? Math.floor(best) : null);
-  }, [item, settings.auto_split_verses, settings.font_size, settings.verse_font_family, windowScale, verseContainerRef]);
+    setFittedFontPt(Math.floor(best));
+  }, [item, settings.scripture_auto_fit, settings.font_size, settings.verse_font_family, windowScale, verseContainerRef]);
 
   const isTop = settings.reference_position === "top";
   const bgStyle = getEffectiveBackground(settings, item, colors, appDataDir);

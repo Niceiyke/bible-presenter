@@ -515,6 +515,10 @@ pub struct PresentationSettings {
     pub version_color: String,
     #[serde(default = "default_auto_split_verses")]
     pub auto_split_verses: bool,
+    /// Fit each projected verse to the available output area. Short verses
+    /// grow; long verses shrink. On by default for church projection.
+    #[serde(default = "default_scripture_auto_fit")]
+    pub scripture_auto_fit: bool,
     #[serde(default = "default_verse_split_threshold")]
     pub verse_split_threshold: usize,
     #[serde(default)]
@@ -560,6 +564,9 @@ pub struct ThemeColors {
 }
 
 fn default_auto_split_verses() -> bool {
+    true
+}
+fn default_scripture_auto_fit() -> bool {
     true
 }
 fn default_bible_version() -> String {
@@ -641,6 +648,7 @@ impl Default for PresentationSettings {
             version_font_size: default_version_size(),
             version_color: String::new(),
             auto_split_verses: default_auto_split_verses(),
+            scripture_auto_fit: default_scripture_auto_fit(),
             verse_split_threshold: default_verse_split_threshold(),
             preferred_monitor: None,
             highlight_divine_words: default_highlight_divine_words(),
@@ -2588,6 +2596,19 @@ mod media_delete_tests {
         let _ = std::fs::remove_dir_all(&dir);
         let store = MediaScheduleStore::in_memory(dir.clone()).unwrap();
         (dir, store)
+    }
+
+    #[test]
+    fn scripture_auto_fit_defaults_on_for_existing_settings() {
+        let default = PresentationSettings::default();
+        assert!(default.scripture_auto_fit);
+        let mut value = serde_json::to_value(&default).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("scripture_auto_fit");
+        let parsed: PresentationSettings = serde_json::from_value(value).unwrap();
+        assert!(parsed.scripture_auto_fit);
     }
 
     #[test]

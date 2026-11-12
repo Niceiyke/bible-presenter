@@ -88,12 +88,13 @@ export function PreviewCard({
   useLayoutEffect(() => {
     const isVerse = item?.type === "Verse";
     const container = verseBoxRef.current;
-    if (!isVerse || !container || settings.auto_split_verses || slideScale <= 0) {
+    const autoFit = settings.scripture_auto_fit !== false;
+    if (!isVerse || !container || !autoFit || slideScale <= 0) {
       setFittedVersePt(null);
       return;
     }
     const text = (item as { data: { text: string } }).data.text;
-    const maxPt = settings.font_size * slideScale;
+    const maxPt = Math.min(180, Math.max(settings.font_size, 24) * 1.8) * slideScale;
     const availH = container.clientHeight * 0.8;
     const availW = Math.max(0, container.clientWidth - 128 * slideScale);
     if (availH <= 0 || availW <= 0 || maxPt <= 0) {
@@ -128,8 +129,8 @@ export function PreviewCard({
       }
     }
     container.removeChild(probe);
-    setFittedVersePt(best < maxPt ? Math.floor(best) : null);
-  }, [item, settings.auto_split_verses, settings.font_size, settings.verse_font_family, slideScale]);
+    setFittedVersePt(Math.floor(best));
+  }, [item, settings.scripture_auto_fit, settings.font_size, settings.verse_font_family, slideScale]);
 
   // Letterbox the 16:9 slide/song design inside the (possibly non-16:9)
   // preview card so text never overflows: the renderer fills the largest

@@ -37,8 +37,11 @@ export function OutputSection({ onUpdateSettings }: SettingsSectionProps) {
           type="range" min="24" max="144" step="2"
           value={settings.font_size}
           onChange={(e) => onUpdateSettings({ ...settings, font_size: parseInt(e.target.value) })}
-          className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500 mb-3"
+          className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500 mb-2"
         />
+        <p className="text-[9px] text-slate-600 mb-3">
+          Base size. With Auto-fit verse to screen enabled in Scripture settings, short verses grow and long verses shrink to fit.
+        </p>
         <div className="flex justify-between items-center mb-1">
           <span className="text-[10px] text-slate-500 uppercase font-bold">{t("settings.fontFamily")}</span>
         </div>

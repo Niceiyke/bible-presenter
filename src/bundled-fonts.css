@@ -1,0 +1,83 @@
+/*
+ * Bundled display and Scripture fonts.
+ *
+ * These are local copies of SIL Open Font License families so church
+ * presentation remains offline-safe. Keeping the files in the application
+ * bundle avoids the silent fallback that occurred when the font picker
+ * advertised families that were never loaded.
+ */
+
+@font-face {
+  font-family: "Montserrat";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./assets/fonts/montserrat-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Oswald";
+  font-style: normal;
+  font-weight: 200 700;
+  font-display: swap;
+  src: url("./assets/fonts/oswald-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Playfair Display";
+  font-style: normal;
+  font-weight: 400 900;
+  font-display: swap;
+  src: url("./assets/fonts/playfair-display-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Roboto";
+  font-style: normal;
+  font-weight: 100 900;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("./assets/fonts/roboto-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Open Sans";
+  font-style: normal;
+  font-weight: 300 800;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("./assets/fonts/open-sans-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Lora";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("./assets/fonts/lora-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Merriweather";
+  font-style: normal;
+  font-weight: 300 900;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("./assets/fonts/merriweather-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "EB Garamond";
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url("./assets/fonts/eb-garamond-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Cinzel";
+  font-style: normal;
+  font-weight: 400 900;
+  font-display: swap;
+  src: url("./assets/fonts/cinzel-latin.woff2") format("woff2");
+}
