@@ -10,11 +10,16 @@ const DEEPGRAM_BASE_URL = "https://api.deepgram.com/v1/listen?model=nova-3&langu
 const ASSEMBLYAI_BASE_URL = "https://streaming.assemblyai.com/v3/ws";
 
 const BIBLE_KEYTERMS = [
-  "Psalms", "Leviticus", "Deuteronomy", "Ecclesiastes", "Song of Solomon",
-  "Song of Songs", "Isaiah", "Jeremiah", "Lamentations", "Ezekiel", "Hosea",
-  "Obadiah", "Micah", "Nahum", "Habakkuk", "Zephaniah", "Haggai", "Zechariah",
-  "Malachi", "Corinthians", "Galatians", "Ephesians", "Philippians",
-  "Colossians", "Thessalonians", "Timothy", "Philemon", "Hebrews", "Revelation",
+  "Genesis", "Exodus", "Leviticus", "Numbers", "Deuteronomy", "Joshua",
+  "Judges", "Ruth", "Samuel", "Kings", "Chronicles", "Ezra", "Nehemiah",
+  "Esther", "Job", "Psalm", "Psalms", "Proverbs", "Ecclesiastes",
+  "Song of Solomon", "Song of Songs", "Isaiah", "Jeremiah", "Lamentations",
+  "Ezekiel", "Daniel", "Hosea", "Joel", "Amos", "Obadiah", "Jonah", "Micah",
+  "Nahum", "Habakkuk", "Zephaniah", "Haggai", "Zechariah", "Malachi",
+  "Matthew", "Mark", "Luke", "John", "Acts", "Romans", "Corinthians",
+  "Galatians", "Ephesians", "Philippians", "Colossians", "Thessalonians",
+  "Timothy", "Titus", "Philemon", "Hebrews", "James", "Peter", "Jude",
+  "Revelation", "Nebuchadnezzar",
   "First Corinthians", "Second Corinthians", "First Thessalonians",
   "Second Thessalonians", "First Timothy", "Second Timothy", "First Peter",
   "Second Peter", "First John", "Second John", "Third John",

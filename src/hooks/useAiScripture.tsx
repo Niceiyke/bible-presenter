@@ -56,6 +56,12 @@ export interface ScriptureSuggestion {
   passageEnd?: number;
   similarity?: number;
   margin?: number;
+  /** Quote cards are only automation-eligible when the backend found an anchor. */
+  quoteSupport?: "anchored" | "loose";
+  matchingVersion?: string;
+  rareWordCount?: number;
+  /** Warning when a spoken citation and the matched verse disagree. */
+  citationConflict?: string;
 }
 
 export interface AiVoiceCommandEvent {
@@ -86,7 +92,12 @@ export function shouldAutoStageSuggestion(suggestion: ScriptureSuggestion): bool
   if (suggestion.detection === "reference") {
     return suggestion.confidence >= AI_INTERIM_REFERENCE_CONFIDENCE;
   }
-  return suggestion.detection === "quote" && suggestion.confidence >= AI_AUTO_STAGE_CONFIDENCE;
+  // Loose lexical matches are useful review material, but a common phrase that
+  // happens to resemble a verse must never reach the automatic Stage/Live
+  // boundary without a spoken citation or an attribution cue.
+  return suggestion.detection === "quote"
+    && suggestion.quoteSupport === "anchored"
+    && suggestion.confidence >= AI_AUTO_STAGE_CONFIDENCE;
 }
 
 /**
@@ -306,7 +317,10 @@ export function AiScriptureProvider({
         });
         if (event.payload.isFinal) {
           setInterim(null);
-          setTranscript((current) => [...current, event.payload].slice(-100));
+          // Keep a full service's finalized text in the live view. The previous
+          // 100-segment cap silently discarded the beginning of longer
+          // sessions even though the saved session retained it.
+          setTranscript((current) => [...current, event.payload].slice(-500));
         } else {
           setInterim(event.payload);
         }

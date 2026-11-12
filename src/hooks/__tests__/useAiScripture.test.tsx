@@ -72,6 +72,57 @@ describe("AiScriptureProvider automatic staging", () => {
     expect(onStageVerse).toHaveBeenCalledWith(suggestion(0.9).verse);
   });
 
+  it("keeps a high-confidence loose quote manual", async () => {
+    const onStageVerse = vi.fn().mockResolvedValue(true);
+    render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);
+    await waitFor(() => expect(mocks.listeners.has("ai-scripture-suggestion")).toBe(true));
+
+    await emitSuggestion({
+      ...suggestion(0.98, "loose-quote"),
+      detection: "quote",
+      quoteSupport: "loose",
+    });
+
+    expect(onStageVerse).not.toHaveBeenCalled();
+  });
+
+  it("never takes a loose quote live even with quote auto-live enabled", async () => {
+    const onStageVerse = vi.fn().mockResolvedValue(true);
+    const onSendLiveVerse = vi.fn().mockResolvedValue(true);
+    useAppStore.getState().setSettings({
+      ...DEFAULT_SETTINGS,
+      ai_scripture_auto_live: true,
+      ai_scripture_auto_live_quotes: true,
+    });
+    render(<AiScriptureProvider onStageVerse={onStageVerse} onSendLiveVerse={onSendLiveVerse}><div /></AiScriptureProvider>);
+    await waitFor(() => expect(mocks.listeners.has("ai-scripture-suggestion")).toBe(true));
+
+    await emitSuggestion({
+      ...suggestion(0.98, "loose-live-quote"),
+      detection: "quote",
+      quoteSupport: "loose",
+    });
+
+    expect(onSendLiveVerse).not.toHaveBeenCalled();
+    expect(onStageVerse).not.toHaveBeenCalled();
+  });
+
+  it("auto-stages an anchored quote at 90% confidence", async () => {
+    const onStageVerse = vi.fn().mockResolvedValue(true);
+    render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);
+    await waitFor(() => expect(mocks.listeners.has("ai-scripture-suggestion")).toBe(true));
+
+    const anchored = {
+      ...suggestion(0.9, "anchored-quote"),
+      detection: "quote" as const,
+      quoteSupport: "anchored" as const,
+    };
+    await emitSuggestion(anchored);
+
+    expect(onStageVerse).toHaveBeenCalledOnce();
+    expect(onStageVerse).toHaveBeenCalledWith(anchored.verse);
+  });
+
   it("leaves direct references below the interim threshold for manual staging", async () => {
     const onStageVerse = vi.fn().mockResolvedValue(true);
     render(<AiScriptureProvider onStageVerse={onStageVerse}><div /></AiScriptureProvider>);

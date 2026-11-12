@@ -518,7 +518,7 @@ fn lcs_len(left: &[String], right: &[String]) -> usize {
     previous[right.len()]
 }
 
-fn is_quote_content_word(token: &str) -> bool {
+pub(crate) fn is_quote_content_word(token: &str) -> bool {
     !matches!(
         token,
         "a" | "all"

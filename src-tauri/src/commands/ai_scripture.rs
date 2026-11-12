@@ -1,20 +1,22 @@
 use crate::ai_detection::{
     detect_references_with_aliases, direct_quote_match_score, normalized_transcript_tokens,
     parse_number, quote_content_word_count, quote_tokens, quote_tokens_from_normalized,
-    reference_aliases_for_books, MIN_DIRECT_QUOTE_WORDS,
+    reference_aliases_for_books, ScriptureReference, MIN_DIRECT_QUOTE_WORDS,
 };
 use crate::commands::program_audio::{feed_diagnostics, subscribe_pcm_feed, AudioRelay};
 use crate::semantic_scripture::{self, SemanticScripture};
 use crate::state::AppState;
 use crate::store::{BibleStore, MediaScheduleStore, Verse};
 mod providers;
+mod quote_index;
 use self::providers::{adapter_for, AsrProvider, ProviderEvent, TranscriptUpdate};
+use self::quote_index::{QuoteHit, QuoteIndexCache, QuoteSearchCache, QuoteSearchIndex};
 use futures_util::{FutureExt, SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -30,6 +32,9 @@ const MAX_SEMANTIC_SENTENCES: usize = 2;
 const MIN_COMPLETE_THOUGHT_WORDS: usize = 5;
 const SUGGESTION_COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_SHORT_QUOTE_CONFIDENCE: f32 = 0.89;
+/// A quotation without an explicit citation or attribution cue is useful as a
+/// manual preview, but it must never reach the automatic Stage/Live gates.
+const MAX_LOOSE_QUOTE_CONFIDENCE: f32 = 0.88;
 const QUOTE_SEARCH_WINDOW_WORDS: usize = 24;
 const QUOTE_SEARCH_WINDOW_OVERLAP: usize = 8;
 const MAX_QUOTE_SEARCH_WINDOWS: usize = 24;
@@ -38,30 +43,16 @@ const MAX_QUOTE_SEARCH_WINDOWS: usize = 24;
 /// sentences that a quotation can straddle.
 const MAX_PAIRED_SENTENCE_WORDS: usize = QUOTE_SEARCH_WINDOW_WORDS * 2;
 const MAX_DIRECT_QUOTES_PER_TURN: usize = 3;
-/// Limits how many FTS-retrieved candidates are lexically aligned per search
-/// window; tier results arrive bm25-ordered, so the front is the strongest.
-const MAX_QUOTE_CANDIDATES_SCORED: usize = 96;
 const MIN_SHORT_WINDOW_CONTENT_WORDS: usize = 3;
 const STRONG_SEMANTIC_SIMILARITY: f32 = 0.80;
 const STRONG_SEMANTIC_MARGIN: f32 = 0.08;
-const PARTIAL_QUOTE_DETECTION_STEP_WORDS: usize = 6;
 /// A reference can only start a finite distance behind the newest interim
 /// words; finalized turns still scan their complete transcript.
 const MAX_INTERIM_REFERENCE_SCAN_WORDS: usize = 64;
-/// Words of already-submitted text repeated in the next interim quote job so a
-/// quotation straddling two submissions stays inside one search window.
-const QUOTE_SCAN_LOOKBACK_WORDS: usize = 12;
-/// Upper bound on words of unseen text in one interim quote job. The cursor
-/// only advances over words actually submitted, so a slow worker catches up
-/// across several jobs instead of dropping the middle of a long turn.
-const MAX_INTERIM_QUOTE_SCAN_WORDS: usize = 192;
-/// Tail of each recent finalized turn prefixed to interim evidence so a
-/// quotation split across an ASR turn boundary is still covered.
-const QUOTE_CROSS_TURN_WORDS: usize = 16;
-/// Interim submissions widen to this step when the quote worker falls behind,
-/// trading preview freshness for coverage during continuous speech.
-const PARTIAL_QUOTE_DETECTION_BACKLOG_STEP_WORDS: usize = 12;
-const QUOTE_WORKER_BACKLOG_MILLIS: u64 = 1200;
+/// Only this much of the previous final turn is used to recover a quotation
+/// split across an ASR boundary. Scanning the whole rolling context was a
+/// major source of repeated FTS work.
+const QUOTE_CROSS_TURN_WORDS: usize = 24;
 const PROACTIVE_REFERENCE_FINALIZATION_WINDOW: Duration = Duration::from_secs(5);
 const MAX_SPOKEN_REFERENCE_RANGE: i32 = 10;
 const MAX_AUDIO_RECOVERIES: usize = 2;
@@ -121,6 +112,20 @@ pub struct ScriptureSuggestion {
     pub similarity: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub margin: Option<f32>,
+    /// For quote cards: "anchored" when the same final turn carries a matching
+    /// explicit citation or an attribution cue. Loose quote cards are
+    /// deliberately ineligible for automatic Stage/Live.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote_support: Option<String>,
+    /// Translation whose verse text produced the lexical match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching_version: Option<String>,
+    /// Number of rare index terms that contributed to the candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rare_word_count: Option<usize>,
+    /// Set when the spoken citation and the lexically matched verse disagree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub citation_conflict: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -316,7 +321,9 @@ async fn sync_session_to_dashboard(
         "transcript_text": saved_session_transcript(session),
         "stop_reason": session.stop_reason,
     });
-    license.post_ai_authenticated("/transcripts/sync", &body).await
+    license
+        .post_ai_authenticated("/transcripts/sync", &body)
+        .await
 }
 
 fn is_direct_detection(detection: &str) -> bool {
@@ -416,12 +423,13 @@ struct QuoteJob {
     semantic_segments: usize,
     evidence: String,
     asr_confidence: f32,
-    is_interim: bool,
+    /// Explicit citation spoken in the same final turn, when present. It is
+    /// used to distinguish an anchored quotation from a loose lexical match.
+    reference: Option<ScriptureReference>,
+    /// True when the turn contains an attribution phrase such as "it is
+    /// written" or "the Bible says".
+    attribution_cue: bool,
     source_transcript_timestamp: u64,
-    /// Interim word cursor this job had examined when submitted. The worker
-    /// publishes it back so dropped (coalesced) jobs are rescanned rather than
-    /// skipped.
-    scanned_words: usize,
 }
 
 struct DetectionPipeline {
@@ -429,16 +437,6 @@ struct DetectionPipeline {
     recently_suggested: Arc<Mutex<HashMap<String, Instant>>>,
     generation: Arc<AtomicU64>,
     quote_tx: watch::Sender<Option<QuoteJob>>,
-    partial_turn_order: Option<u64>,
-    partial_words: usize,
-    /// Furthest word of the current interim turn submitted for quote lookup
-    /// (a high-water mark; the worker cursor may trail it).
-    partial_scanned_words: usize,
-    /// Word cursor the quote worker has actually processed; lags the
-    /// submission cursor when jobs are coalesced away.
-    quote_processed_words: Arc<AtomicUsize>,
-    /// Worker turnaround in milliseconds; widens the submission step under load.
-    quote_latency_millis: Arc<AtomicU64>,
 }
 
 struct DetectionWorker {
@@ -449,8 +447,8 @@ struct DetectionWorker {
     active: Arc<AtomicBool>,
     recently_suggested: Arc<Mutex<HashMap<String, Instant>>>,
     semantic: Arc<SemanticScripture>,
-    quote_processed_words: Arc<AtomicUsize>,
-    quote_latency_millis: Arc<AtomicU64>,
+    quote_indexes: Arc<Mutex<QuoteIndexCache>>,
+    quote_cache: Arc<Mutex<QuoteSearchCache>>,
 }
 
 struct ActiveDetectionSession(Arc<AtomicBool>);
@@ -861,6 +859,10 @@ fn apply_voice_version(
                     passage_end: None,
                     similarity: None,
                     margin: None,
+                    quote_support: None,
+                    matching_version: None,
+                    rare_word_count: None,
+                    citation_conflict: None,
                 },
             );
             Some(reference)
@@ -1060,6 +1062,10 @@ fn handle_voice_navigation(
             passage_end: None,
             similarity: None,
             margin: None,
+            quote_support: None,
+            matching_version: None,
+            rare_word_count: None,
+            citation_conflict: None,
         },
     );
     emit_voice_command(
@@ -1252,10 +1258,13 @@ pub async fn ai_start(
                 Ok(session) => {
                     let sync_app = task_app.clone();
                     tauri::async_runtime::spawn(async move {
-                        if let Err(error) = sync_session_to_dashboard(&sync_license, &session).await {
+                        if let Err(error) = sync_session_to_dashboard(&sync_license, &session).await
+                        {
                             crate::store::log_msg(
                                 &sync_app,
-                                &format!("[ai-scripture] dashboard transcript sync failed: {error}"),
+                                &format!(
+                                    "[ai-scripture] dashboard transcript sync failed: {error}"
+                                ),
                             );
                         }
                     });
@@ -1746,6 +1755,31 @@ async fn run_asr_session(
             .as_path(),
     );
     let access = license.ai_access().await?;
+    let quote_indexes = Arc::new(Mutex::new(QuoteIndexCache::new(bible.clone())));
+    // Build the selected translation's rare-word index before opening the
+    // provider socket, so a first-build pause cannot leave an idle ASR
+    // connection waiting. If it cannot be built, the session still runs;
+    // direct references and the semantic path are unaffected.
+    let index_started = Instant::now();
+    match quote_indexes
+        .lock()
+        .map_err(|error| error.to_string())
+        .and_then(|mut indexes| indexes.get_or_build(&version))
+    {
+        Ok(index) => crate::store::log_msg(
+            &app,
+            &format!(
+                "[ai-scripture] quote index ready for {} ({} verses, {} ms)",
+                index.version(),
+                index.verse_count(),
+                index_started.elapsed().as_millis()
+            ),
+        ),
+        Err(error) => crate::store::log_msg(
+            &app,
+            &format!("[ai-scripture] quote index unavailable: {error}"),
+        ),
+    }
     let Some(mut socket) = connect_provider_socket(
         adapter,
         provider,
@@ -1787,8 +1821,7 @@ async fn run_asr_session(
     let detection_generation = Arc::new(AtomicU64::new(0));
     let detection_active = Arc::new(AtomicBool::new(true));
     let _active_detection_session = ActiveDetectionSession(detection_active.clone());
-    let quote_processed_words = Arc::new(AtomicUsize::new(0));
-    let quote_latency_millis = Arc::new(AtomicU64::new(0));
+    let quote_cache = Arc::new(Mutex::new(QuoteSearchCache::default()));
     let (quote_tx, quote_rx) = watch::channel(None::<QuoteJob>);
     spawn_quote_worker(
         DetectionWorker {
@@ -1799,8 +1832,8 @@ async fn run_asr_session(
             active: detection_active,
             recently_suggested: recently_suggested.clone(),
             semantic,
-            quote_processed_words: quote_processed_words.clone(),
-            quote_latency_millis: quote_latency_millis.clone(),
+            quote_indexes,
+            quote_cache,
         },
         quote_rx,
     );
@@ -1809,11 +1842,6 @@ async fn run_asr_session(
         recently_suggested,
         generation: detection_generation,
         quote_tx,
-        partial_turn_order: None,
-        partial_words: 0,
-        partial_scanned_words: 0,
-        quote_processed_words,
-        quote_latency_millis,
     };
     let mut audio = vec![0u8; 3200];
     let mut last_audio_level_emit = Instant::now() - Duration::from_millis(100);
@@ -2048,84 +2076,81 @@ async fn run_asr_session(
 fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Option<QuoteJob>>) {
     tauri::async_runtime::spawn(async move {
         let mut previous_semantic_passages = std::collections::HashSet::new();
-        // Stable local verse candidate across two consecutive interim searches.
-        // This is intentionally separate from the final-turn cooldown.
-        let mut interim_quote = None;
         while quote_rx.changed().await.is_ok() {
             let Some(job) = quote_rx.borrow_and_update().clone() else {
                 continue;
             };
-            let worker_bible = worker.bible.clone();
-            let worker_detection = worker.detection.clone();
+            let output_version = current_output_version(&worker.detection);
+            let index = match worker
+                .quote_indexes
+                .lock()
+                .map_err(|error| error.to_string())
+                .and_then(|mut indexes| indexes.get_or_build(&output_version))
+            {
+                Ok(index) => index,
+                Err(error) => {
+                    crate::store::log_msg(
+                        &worker.app,
+                        &format!("[ai-scripture] quote index refresh failed: {error}"),
+                    );
+                    continue;
+                }
+            };
+            let quote_cache = worker.quote_cache.clone();
             let worker_job = job.clone();
-            let is_interim = worker_job.is_interim;
             let started = Instant::now();
             let mut suggestions = tokio::task::spawn_blocking(move || {
-                let output_version = current_output_version(&worker_detection);
+                let mut cache = match quote_cache.lock() {
+                    Ok(cache) => cache,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
                 detect_direct_quotes(
-                    &worker_bible,
+                    &index,
+                    &mut cache,
                     &worker_job.rolling_text,
                     &worker_job.evidence,
-                    &output_version,
+                    worker_job.reference.as_ref(),
+                    worker_job.attribution_cue,
                     worker_job.asr_confidence,
-                    // Interim evidence already walks the whole turn with a
-                    // cursor, so the expensive full-turn rescan is reserved
-                    // for finalized turns where cross-turn context matters.
-                    !is_interim,
                 )
             })
             .await
             .unwrap_or_default();
-            // Publish both metrics before emitting: the interim submitter
-            // widens its step when turnaround grows and rescans any span the
-            // watch channel coalesced away.
-            worker
-                .quote_latency_millis
-                .store(started.elapsed().as_millis() as u64, Ordering::Relaxed);
-            worker
-                .quote_processed_words
-                .store(job.scanned_words, Ordering::Relaxed);
+            if started.elapsed() > Duration::from_millis(1_200) {
+                crate::store::log_msg(
+                    &worker.app,
+                    &format!(
+                        "[ai-scripture] quote lookup took {} ms",
+                        started.elapsed().as_millis()
+                    ),
+                );
+            }
 
             for suggestion in &mut suggestions {
                 suggestion.source_transcript_timestamp = Some(job.source_transcript_timestamp);
             }
-
-            if !worker.active.load(Ordering::Acquire) {
-                continue;
-            }
-            if job.is_interim {
-                if !quote_generation_is_current(
-                    worker.generation.load(Ordering::Acquire),
-                    job.generation,
-                ) {
-                    // A finalized turn or voice command superseded this
-                    // in-flight preview while quote retrieval was running.
-                    interim_quote = None;
-                    continue;
-                }
-                if let Some(mut suggestion) = suggestions.into_iter().next() {
-                    let key = suggestion_cooldown_key(&suggestion.detection, &suggestion.verse);
-                    if confirm_interim_reference(&mut interim_quote, Some(key)) {
-                        // Provider interim text can still be revised. Show the
-                        // stable preview, but reserve automation for the final
-                        // transcript event.
-                        suggestion.confidence =
-                            suggestion.confidence.min(MAX_SHORT_QUOTE_CONFIDENCE);
+            if let Some(reference) = &job.reference {
+                for suggestion in &suggestions {
+                    if suggestion.detection == "quote"
+                        && !reference_matches_verse(reference, &suggestion.verse)
+                    {
                         crate::store::log_msg(
                             &worker.app,
                             &format!(
-                                "[ai-scripture] stable interim quote {} {}:{} confidence={:.3}",
+                                "[ai-scripture] citation/quote conflict: cited {} {}:{}, quote evidence matched {} {}:{}",
+                                reference.book,
+                                reference.chapter,
+                                reference.verse,
                                 suggestion.verse.book,
                                 suggestion.verse.chapter,
                                 suggestion.verse.verse,
-                                suggestion.confidence,
                             ),
                         );
-                        emit_suggestion(&worker.app, suggestion);
                     }
-                } else {
-                    confirm_interim_reference(&mut interim_quote, None);
                 }
+            }
+
+            if !worker.active.load(Ordering::Acquire) {
                 continue;
             }
 
@@ -2146,22 +2171,15 @@ fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Opt
                 set_navigation_anchor(&worker.detection, &suggestion.verse);
             }
 
-            let mut emitted_quote = false;
             // React prepends events. Emit weaker alternatives first so the
             // strongest quotation remains at the top of the suggestion list.
             for suggestion in suggestions.into_iter().rev() {
-                emitted_quote |=
-                    emit_suggestion_if_new(&worker.app, &worker.recently_suggested, suggestion);
-            }
-            if emitted_quote {
-                continue;
+                let _ = emit_suggestion_if_new(&worker.app, &worker.recently_suggested, suggestion);
             }
 
-            // An older quotation can remain in the rolling lexical window
-            // after its card has already been shown. A cooldown-suppressed
-            // duplicate must not starve semantic retrieval for the speaker's
-            // newer sentence-aware thought.
-
+            // Direct quote detection and paraphrase retrieval are deliberately
+            // independent. A valid direct quotation must not starve the
+            // speaker's newer sentence-aware thought for the rest of the turn.
             if !worker.semantic.is_ready() {
                 continue;
             }
@@ -2249,6 +2267,10 @@ fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Opt
                             passage_end: Some(found.passage_end),
                             similarity: Some(found.similarity),
                             margin: Some(found.margin),
+                            quote_support: None,
+                            matching_version: None,
+                            rare_word_count: None,
+                            citation_conflict: None,
                         };
                         let _ = emit_suggestion_if_new(
                             &worker.app,
@@ -2443,7 +2465,7 @@ fn handle_transcription_update(
     let transcript_quote_tokens = quote_tokens_from_normalized(&normalized_tokens);
     let is_final = provider_transcript.is_final;
     let confidence = provider_transcript.confidence;
-    let turn_order = provider_transcript.turn_order;
+    let min_word_confidence = provider_transcript.min_word_confidence;
     let transcript_timestamp = now_ms();
     let segment = TranscriptSegment {
         id: provider_transcript
@@ -2465,10 +2487,10 @@ fn handle_transcription_update(
     }
     let _ = app.emit("ai-scripture-transcript", &segment);
     if !is_final {
-        // Both providers stream revisable interim text. Use it for local,
-        // manual-only reference/quote lookup so the operator sees a likely
-        // passage before an ASR turn closes. AssemblyAI is sampled every six
-        // words; Deepgram's shorter revisions are stability-gated instead.
+        // Interim text is used only for cheap, deterministic reference
+        // previews. Quote retrieval is final-turn work: running broad lexical
+        // search on every six-word revision saturated the single quote worker
+        // and delayed final cards by seconds.
         handle_interim_transcript(
             app,
             bible,
@@ -2477,16 +2499,10 @@ fn handle_transcription_update(
             transcript,
             &normalized_tokens,
             &transcript_quote_tokens,
-            confidence,
-            turn_order,
             transcript_timestamp,
         );
         return Ok(());
     }
-    pipeline.partial_turn_order = None;
-    pipeline.partial_words = 0;
-    pipeline.partial_scanned_words = 0;
-
     let direct_references =
         detect_references_with_aliases(&normalized_tokens, &detection.reference_aliases);
     let transcript_reference = direct_references.last().cloned();
@@ -2589,41 +2605,55 @@ fn handle_transcription_update(
     } else {
         (direct_references, true)
     };
+    let reference_hint = final_references.0.first().cloned();
     if !final_references.0.is_empty() {
-        // Events are prepended in React. Emit a range in reverse so its first
-        // verse and earliest spoken reference remain at the top of the list.
+        // One spoken citation produces one passage card. Expanding every verse
+        // in a range used to flood the feed and, because all range verses shared
+        // the same 0.89 confidence, let a single range pass the automatic Stage
+        // gate many times. The card carries passage_start/passage_end so the
+        // operator can still navigate the full range.
         let output_version = current_output_version(detection);
         for reference in final_references.0.into_iter().rev() {
             let verses = verses_for_reference(bible, &reference, &output_version);
+            let Some(first) = verses.first().cloned() else {
+                continue;
+            };
+            let last_verse = verses.last().map(|verse| verse.verse);
             if let Some(last) = verses.last() {
                 set_navigation_anchor(detection, last);
             }
-            for verse in verses.into_iter().rev() {
-                let suggestion = ScriptureSuggestion {
-                    id: Uuid::new_v4().to_string(),
-                    detection: "reference".into(),
-                    evidence_types: Vec::new(),
-                    confidence: if verse.verse == reference.verse {
-                        (0.92 + confidence * 0.07).clamp(0.0, 0.99)
-                    } else {
-                        MAX_SHORT_QUOTE_CONFIDENCE
-                    },
-                    evidence: transcript.to_string(),
-                    verse,
-                    timestamp: now_ms(),
-                    source_transcript_timestamp: Some(transcript_timestamp),
-                    group_id: None,
-                    rank: None,
-                    passage_start: Some(reference.verse),
-                    passage_end: reference.verse_end,
-                    similarity: None,
-                    margin: None,
-                };
-                if final_references.1 {
-                    emit_fresh_reference(app, &pipeline.recently_suggested, suggestion);
-                } else {
-                    emit_suggestion_if_new(app, &pipeline.recently_suggested, suggestion);
-                }
+            let passage_end = last_verse.filter(|last| *last > first.verse);
+            let mut reference_confidence = (0.92 + confidence * 0.07).clamp(0.0, 0.99);
+            // A cited chapter/verse is only as reliable as its spoken numerals.
+            // If both the average and the weakest word are poor, keep the card
+            // reviewable but below the automatic Stage threshold.
+            if min_word_confidence.is_some_and(|word| word < 0.55) && confidence < 0.85 {
+                reference_confidence = reference_confidence.min(MAX_SHORT_QUOTE_CONFIDENCE);
+            }
+            let suggestion = ScriptureSuggestion {
+                id: Uuid::new_v4().to_string(),
+                detection: "reference".into(),
+                evidence_types: Vec::new(),
+                confidence: reference_confidence,
+                evidence: transcript.to_string(),
+                verse: first,
+                timestamp: now_ms(),
+                source_transcript_timestamp: Some(transcript_timestamp),
+                group_id: None,
+                rank: None,
+                passage_start: Some(reference.verse),
+                passage_end,
+                similarity: None,
+                margin: None,
+                quote_support: None,
+                matching_version: None,
+                rare_word_count: None,
+                citation_conflict: None,
+            };
+            if final_references.1 {
+                emit_fresh_reference(app, &pipeline.recently_suggested, suggestion);
+            } else {
+                emit_suggestion_if_new(app, &pipeline.recently_suggested, suggestion);
             }
         }
         // A finalized ASR turn can contain both an explicit reference and
@@ -2631,19 +2661,34 @@ fn handle_transcription_update(
         // still queue the same turn for quotation/semantic analysis.
     }
     let final_evidence = transcript.to_string();
-    let final_scanned_words = transcript_quote_tokens.len();
     pipeline.quote_tx.send_replace(Some(QuoteJob {
         generation: current_generation,
-        scanned_words: final_scanned_words,
         rolling_text,
         semantic_text,
         semantic_segments,
         evidence: final_evidence,
         asr_confidence: confidence,
-        is_interim: false,
+        reference: reference_hint,
+        attribution_cue: has_quote_attribution_cue(transcript),
         source_transcript_timestamp: transcript_timestamp,
     }));
     Ok(())
+}
+
+fn has_quote_attribution_cue(text: &str) -> bool {
+    let normalized = normalize_voice_phrase(text);
+    [
+        "it is written",
+        "as it is written",
+        "the scripture says",
+        "the scripture saith",
+        "the bible says",
+        "the word of god says",
+        "thus saith the lord",
+        "in the book of",
+    ]
+    .iter()
+    .any(|cue| contains_voice_phrase(&normalized, cue))
 }
 
 #[allow(clippy::too_many_arguments)] // internal pipeline helper, args mirror detection flow
@@ -2655,16 +2700,8 @@ fn handle_interim_transcript(
     transcript: &str,
     normalized_tokens: &[String],
     quote_token_cache: &[String],
-    asr_confidence: f32,
-    turn_order: Option<u64>,
     transcript_timestamp: u64,
 ) {
-    if turn_order.is_some() && pipeline.partial_turn_order != turn_order {
-        pipeline.partial_turn_order = turn_order;
-        pipeline.partial_words = 0;
-        pipeline.partial_scanned_words = 0;
-    }
-
     // References are the operator's real-time path. Search every provider
     // revision as soon as it contains a complete, locally verifiable reference
     // instead of waiting for a second revision, a word-count sample, or an ASR
@@ -2690,92 +2727,34 @@ fn handle_interim_transcript(
     };
     let output_version = current_output_version(detection);
     for reference in references {
-        for verse in verses_for_reference(bible, &reference, &output_version)
-            .into_iter()
-            .rev()
-        {
-            let suggestion = ScriptureSuggestion {
-                id: Uuid::new_v4().to_string(),
-                detection: "reference".into(),
-                evidence_types: Vec::new(),
-                confidence: MAX_SHORT_QUOTE_CONFIDENCE,
-                evidence: latest_word_suffix(transcript, MAX_SEMANTIC_CONTEXT_WORDS),
-                verse,
-                timestamp: now_ms(),
-                source_transcript_timestamp: Some(transcript_timestamp),
-                group_id: None,
-                rank: None,
-                passage_start: Some(reference.verse),
-                passage_end: reference.verse_end,
-                similarity: None,
-                margin: None,
-            };
-            emit_proactive_preview_reference(app, &pipeline.recently_suggested, suggestion);
-        }
+        let verses = verses_for_reference(bible, &reference, &output_version);
+        let Some(first) = verses.first().cloned() else {
+            continue;
+        };
+        let last_verse = verses.last().map(|verse| verse.verse);
+        let passage_end = last_verse.filter(|last| *last > first.verse);
+        let suggestion = ScriptureSuggestion {
+            id: Uuid::new_v4().to_string(),
+            detection: "reference".into(),
+            evidence_types: Vec::new(),
+            confidence: MAX_SHORT_QUOTE_CONFIDENCE,
+            evidence: latest_word_suffix(transcript, MAX_SEMANTIC_CONTEXT_WORDS),
+            verse: first,
+            timestamp: now_ms(),
+            source_transcript_timestamp: Some(transcript_timestamp),
+            group_id: None,
+            rank: None,
+            passage_start: Some(reference.verse),
+            passage_end,
+            similarity: None,
+            margin: None,
+            quote_support: None,
+            matching_version: None,
+            rare_word_count: None,
+            citation_conflict: None,
+        };
+        emit_proactive_preview_reference(app, &pipeline.recently_suggested, suggestion);
     }
-
-    // Quote and semantic retrieval can be comparatively expensive. Throttle
-    // only that background work; it must never delay explicit references.
-    let words = quote_token_cache.len();
-    if words < pipeline.partial_words {
-        // A provider revision shortened the turn. Rescan from the revised
-        // timeline rather than trusting a cursor past the new text.
-        pipeline.partial_words = words;
-        pipeline.partial_scanned_words = pipeline.partial_scanned_words.min(words);
-    }
-    // The worker coalesces jobs through a watch channel, so some submissions
-    // are never scored. Measure new text from the last *processed* cursor and
-    // rescan whatever it missed instead of leaving a silent gap in a
-    // continuous sermon.
-    let processed = pipeline
-        .quote_processed_words
-        .load(Ordering::Relaxed)
-        .min(pipeline.partial_scanned_words);
-    if words
-        < pipeline
-            .partial_scanned_words
-            .saturating_add(interim_quote_step(
-                pipeline.quote_latency_millis.load(Ordering::Relaxed),
-            ))
-    {
-        return;
-    }
-
-    // Walk the turn with a monotonic cursor instead of rescanning only the
-    // final words: continuous speech produces long unbroken turns, and the
-    // old tail-only suffix left early quotations unexamined. Recent finalized
-    // turn tails join the evidence so a quotation split at an ASR boundary is
-    // still covered.
-    let cross_turn_tails = pipeline
-        .context
-        .iter()
-        .rev()
-        .take(2)
-        .rev()
-        .map(|(_, text)| latest_word_suffix(text, QUOTE_CROSS_TURN_WORDS))
-        .collect::<Vec<_>>();
-    let Some((evidence, scanned_words)) =
-        interim_quote_evidence(quote_token_cache, processed, &cross_turn_tails)
-    else {
-        return;
-    };
-    pipeline.partial_words = words;
-    // Keep the submission cursor as a high-water mark: while the worker is
-    // behind, evidence restarts from its processed point, and the step gate
-    // must still measure against the furthest text already submitted.
-    pipeline.partial_scanned_words = pipeline.partial_scanned_words.max(scanned_words);
-
-    pipeline.quote_tx.send_replace(Some(QuoteJob {
-        generation: pipeline.generation.load(Ordering::Acquire),
-        scanned_words,
-        rolling_text: transcript.to_string(),
-        semantic_text: String::new(),
-        semantic_segments: 0,
-        evidence,
-        asr_confidence,
-        is_interim: true,
-        source_transcript_timestamp: transcript_timestamp,
-    }));
 }
 
 fn interim_reference_tokens(tokens: &[String]) -> &[String] {
@@ -2783,43 +2762,6 @@ fn interim_reference_tokens(tokens: &[String]) -> &[String] {
         .len()
         .saturating_sub(MAX_INTERIM_REFERENCE_SCAN_WORDS);
     &tokens[start..]
-}
-
-/// Interim submissions narrow to a short anchored slice at normal speed and
-/// widen during backlogs; the cursor guarantees coverage either way.
-fn interim_quote_step(quote_latency_millis: u64) -> usize {
-    if quote_latency_millis > QUOTE_WORKER_BACKLOG_MILLIS {
-        PARTIAL_QUOTE_DETECTION_BACKLOG_STEP_WORDS
-    } else {
-        PARTIAL_QUOTE_DETECTION_STEP_WORDS
-    }
-}
-
-/// Builds interim quote evidence for the next cursor span in `tokens`.
-/// Returns the anchored text and the word index the submission cursor
-/// advanced to.
-fn interim_quote_evidence(
-    tokens: &[String],
-    scanned_words: usize,
-    cross_turn_tails: &[String],
-) -> Option<(String, usize)> {
-    let words = tokens.len();
-    if words == 0 {
-        return None;
-    }
-    let scanned = scanned_words.min(words);
-    let start = scanned.saturating_sub(QUOTE_SCAN_LOOKBACK_WORDS);
-    let end = words.min(start.saturating_add(MAX_INTERIM_QUOTE_SCAN_WORDS));
-    if end <= start {
-        return None;
-    }
-    let mut evidence = String::new();
-    for tail in cross_turn_tails.iter().filter(|tail| !tail.is_empty()) {
-        evidence.push_str(tail);
-        evidence.push(' ');
-    }
-    evidence.push_str(&tokens[start..end].join(" "));
-    Some((evidence, end))
 }
 
 fn latest_word_suffix(text: &str, limit: usize) -> String {
@@ -2845,92 +2787,60 @@ fn verses_for_reference(
 }
 
 /// Quote candidates are probabilistic, unlike a complete explicit reference.
-/// Keep the two-update confirmation only for that background matching path.
-fn confirm_interim_reference(state: &mut Option<(String, u8)>, key: Option<String>) -> bool {
-    let Some(key) = key else {
-        *state = None;
-        return false;
-    };
-    match state {
-        Some((previous, confirmations)) if previous == &key => {
-            *confirmations = confirmations.saturating_add(1);
-            *confirmations == 2
-        }
-        _ => {
-            *state = Some((key, 1));
-            false
-        }
-    }
-}
+/// This worker runs only on finalized turns; interim revisions are handled by
+/// the deterministic reference path.
+type QuoteMatches = HashMap<(String, i32, i32), (Verse, f32, String, usize)>;
 
 fn detect_direct_quotes(
-    bible: &BibleStore,
+    index: &QuoteSearchIndex,
+    cache: &mut QuoteSearchCache,
     rolling_text: &str,
     evidence: &str,
-    output_version: &str,
+    reference: Option<&ScriptureReference>,
+    attribution_cue: bool,
     asr_confidence: f32,
-    search_rolling_context: bool,
 ) -> Vec<ScriptureSuggestion> {
-    // Interim jobs already carry bounded quote evidence. Avoid retokenizing
-    // their entire (potentially very long) growing ASR turn on every update.
-    if search_rolling_context && quote_tokens(rolling_text).len() < MIN_DIRECT_QUOTE_WORDS {
-        return Vec::new();
-    }
-
-    // A provider can finalize several sentences (or, after a network delay, a
-    // sizeable paragraph) as one turn. Search overlapping bounded windows so
-    // a quotation near the beginning is not hidden by the final 24 words.
-    let mut matches: HashMap<(String, i32, i32), (Verse, f32, String)> = HashMap::new();
+    let mut matches: QuoteMatches = HashMap::new();
     for window in quote_search_windows(evidence) {
-        if let Some((verse, score)) =
-            best_direct_quote_candidate(bible, &window, &window, search_rolling_context)
-        {
-            let key = (verse.book.clone(), verse.chapter, verse.verse);
-            let replace = matches
-                .get(&key)
-                .is_none_or(|(_, current_score, _)| score > *current_score);
-            if replace {
-                matches.insert(key, (verse, score, window));
-            }
-        }
+        consider_quote_window(index, cache, &mut matches, &window);
     }
 
-    // If the newest finalized turn did not contain a complete match, include
-    // the rolling context to recover a quotation split across ASR boundaries.
-    if matches.is_empty() && search_rolling_context && rolling_text != evidence {
-        for window in quote_search_windows(rolling_text) {
-            if let Some((verse, score)) =
-                best_direct_quote_candidate(bible, &window, &window, search_rolling_context)
-            {
-                let key = (verse.book.clone(), verse.chapter, verse.verse);
-                let replace = matches
-                    .get(&key)
-                    .is_none_or(|(_, current_score, _)| score > *current_score);
-                if replace {
-                    matches.insert(key, (verse, score, window));
-                }
-            }
+    // Recover a quotation split across an ASR turn boundary with one bounded
+    // tail window. The old implementation rescanned the whole 20-second rolling
+    // context whenever the newest turn missed, multiplying FTS work by up to 24
+    // windows per final.
+    if matches.is_empty() && rolling_text != evidence {
+        let tail = latest_word_suffix(rolling_text, QUOTE_CROSS_TURN_WORDS);
+        for window in quote_search_windows(&tail) {
+            consider_quote_window(index, cache, &mut matches, &window);
         }
     }
 
     let mut matches = matches.into_values().collect::<Vec<_>>();
-    matches.sort_by(|(_, left, _), (_, right, _)| right.total_cmp(left));
+    matches.sort_by(|(_, left, _, _), (_, right, _, _)| right.total_cmp(left));
     matches
         .into_iter()
         .take(MAX_DIRECT_QUOTES_PER_TURN)
-        .filter_map(|(matched_verse, score, matched_evidence)| {
-            let verse = bible
-                .get_verse(
-                    &matched_verse.book,
-                    matched_verse.chapter,
-                    matched_verse.verse,
-                    output_version,
-                )
-                .ok()
-                .flatten()?;
+        .map(|(verse, score, matched_evidence, rare_word_count)| {
+            let anchored = attribution_cue
+                || reference.is_some_and(|reference| reference_matches_verse(reference, &verse));
+            let citation_conflict = reference
+                .filter(|reference| !reference_matches_verse(reference, &verse))
+                .map(|reference| {
+                    format!(
+                        "Spoken citation {} {}:{} differs from the matched verse.",
+                        reference.book, reference.chapter, reference.verse
+                    )
+                });
             let confidence =
-                quote_confidence(score, asr_confidence, quote_tokens(&matched_evidence).len());
-            Some(ScriptureSuggestion {
+                quote_confidence(score, asr_confidence, quote_tokens(&matched_evidence).len()).min(
+                    if anchored {
+                        0.98
+                    } else {
+                        MAX_LOOSE_QUOTE_CONFIDENCE
+                    },
+                );
+            ScriptureSuggestion {
                 id: Uuid::new_v4().to_string(),
                 detection: "quote".into(),
                 evidence_types: Vec::new(),
@@ -2945,9 +2855,115 @@ fn detect_direct_quotes(
                 passage_end: None,
                 similarity: None,
                 margin: None,
-            })
+                quote_support: Some(if anchored { "anchored" } else { "loose" }.into()),
+                matching_version: Some(index.version().to_string()),
+                rare_word_count: Some(rare_word_count),
+                citation_conflict,
+            }
         })
         .collect()
+}
+
+fn consider_quote_window(
+    index: &QuoteSearchIndex,
+    cache: &mut QuoteSearchCache,
+    matches: &mut QuoteMatches,
+    window: &str,
+) {
+    let hit = match cache.get(index.version(), window) {
+        Some(cached) => cached,
+        None => {
+            let hit = best_indexed_quote_candidate(index, window);
+            cache.insert(index.version(), window, hit);
+            hit
+        }
+    };
+    let Some(hit) = hit else {
+        return;
+    };
+    let Some(verse) = index.verse(hit.verse_index) else {
+        return;
+    };
+    let key = (verse.book.clone(), verse.chapter, verse.verse);
+    let replace = matches
+        .get(&key)
+        .is_none_or(|(_, current_score, _, _)| hit.score > *current_score);
+    if replace {
+        matches.insert(
+            key,
+            (
+                verse.clone(),
+                hit.score,
+                quote_evidence_excerpt(window, &verse.text),
+                hit.rare_terms,
+            ),
+        );
+    }
+}
+
+/// Show the operator the matching phrase rather than the full 24-word search
+/// window. This makes a suggestion auditable and keeps the saved evidence field
+/// meaningful when a long ASR turn contains several sentences.
+fn quote_evidence_excerpt(window: &str, verse_text: &str) -> String {
+    let spoken = quote_tokens(window);
+    let verse = quote_tokens(verse_text);
+    let mut best_start = 0usize;
+    let mut best_len = 0usize;
+    for start in 0..spoken.len() {
+        for verse_start in 0..verse.len() {
+            let mut length = 0;
+            while start + length < spoken.len()
+                && verse_start + length < verse.len()
+                && spoken[start + length] == verse[verse_start + length]
+            {
+                length += 1;
+            }
+            if length > best_len {
+                best_len = length;
+                best_start = start;
+            }
+        }
+    }
+    if best_len < 4 {
+        return window.to_string();
+    }
+    let start = best_start.saturating_sub(4);
+    let end = (best_start + best_len + 6).min(spoken.len());
+    spoken[start..end].join(" ")
+}
+
+fn best_indexed_quote_candidate(index: &QuoteSearchIndex, window: &str) -> Option<QuoteHit> {
+    if quote_tokens(window).len() < MIN_DIRECT_QUOTE_WORDS {
+        return None;
+    }
+    let mut best: Option<QuoteHit> = None;
+    for candidate in index.candidates(window) {
+        let Some(verse) = index.verse(candidate.verse_index) else {
+            continue;
+        };
+        let Some(score) = direct_quote_match_score(window, &verse.text) else {
+            continue;
+        };
+        let hit = QuoteHit {
+            verse_index: candidate.verse_index,
+            score,
+            rare_terms: candidate.rare_terms,
+        };
+        let replace = best.is_none_or(|current| {
+            score > current.score
+                || (score == current.score && candidate.rare_terms > current.rare_terms)
+        });
+        if replace {
+            best = Some(hit);
+        }
+    }
+    best
+}
+
+fn reference_matches_verse(reference: &ScriptureReference, verse: &Verse) -> bool {
+    reference.book == verse.book
+        && reference.chapter == verse.chapter
+        && reference.verse == verse.verse
 }
 
 fn quote_search_windows(text: &str) -> Vec<String> {
@@ -3019,34 +3035,6 @@ fn append_quote_token_windows(windows: &mut Vec<String>, tokens: &[String]) {
     }
 }
 
-fn best_direct_quote_candidate(
-    bible: &BibleStore,
-    query: &str,
-    scoring_text: &str,
-    allow_like_fallback: bool,
-) -> Option<(Verse, f32)> {
-    if quote_tokens(query).len() < MIN_DIRECT_QUOTE_WORDS {
-        return None;
-    }
-    let candidates = if allow_like_fallback {
-        bible.search_quote_candidates(query)
-    } else {
-        bible.search_quote_candidates_fast(query)
-    };
-    candidates
-        .ok()?
-        .into_iter()
-        // `search_quote_candidates` orders each tier by bm25 relevance
-        // (exact-phrase tier first, then AND, OR, LIKE), so truncating the
-        // front preserves the strongest candidates while bounding alignment
-        // work when broad OR/LIKE tiers return hundreds of rows.
-        .take(MAX_QUOTE_CANDIDATES_SCORED)
-        .filter_map(|verse| {
-            direct_quote_match_score(scoring_text, &verse.text).map(|score| (verse, score))
-        })
-        .max_by(|(_, left), (_, right)| left.total_cmp(right))
-}
-
 fn quote_confidence(score: f32, asr_confidence: f32, evidence_words: usize) -> f32 {
     let confidence = (score * 0.85 + asr_confidence * 0.15).clamp(0.0, 0.98);
     if evidence_words <= MIN_DIRECT_QUOTE_WORDS {
@@ -3101,6 +3089,10 @@ mod tests {
             passage_end: None,
             similarity: None,
             margin: None,
+            quote_support: None,
+            matching_version: None,
+            rare_word_count: None,
+            citation_conflict: None,
         }
     }
 
@@ -3115,7 +3107,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_interim_quote_generations_are_rejected() {
+    fn stale_quote_generations_are_rejected() {
         assert!(quote_generation_is_current(4, 4));
         assert!(!quote_generation_is_current(5, 4));
     }
@@ -3180,6 +3172,10 @@ mod tests {
                 passage_end: None,
                 similarity: None,
                 margin: None,
+                quote_support: None,
+                matching_version: None,
+                rare_word_count: None,
+                citation_conflict: None,
             }],
             stop_reason: None,
         };
@@ -3509,30 +3505,7 @@ mod tests {
     }
 
     #[test]
-    fn interim_quotes_require_two_consistent_snapshots() {
-        let mut state = None;
-        assert!(!confirm_interim_reference(
-            &mut state,
-            Some("Psalms:149:6".into())
-        ));
-        assert!(confirm_interim_reference(
-            &mut state,
-            Some("Psalms:149:6".into())
-        ));
-        assert!(!confirm_interim_reference(
-            &mut state,
-            Some("Ephesians:6:17".into())
-        ));
-        assert!(confirm_interim_reference(
-            &mut state,
-            Some("Ephesians:6:17".into())
-        ));
-        assert!(!confirm_interim_reference(&mut state, None));
-        assert!(state.is_none());
-    }
-
-    #[test]
-    fn interim_evidence_is_bounded_to_the_latest_words() {
+    fn latest_word_suffix_is_bounded_to_the_latest_words() {
         assert_eq!(
             latest_word_suffix("one two three four five", 3),
             "three four five"
@@ -3573,80 +3546,66 @@ mod tests {
         );
     }
 
+    /// Calibration test for a real installed Bible database. CI uses synthetic
+    /// fixtures; run locally with:
+    /// `WORDLYTE_TEST_BIBLE_DB=... cargo test --lib quote_index_calibration -- --ignored`.
     #[test]
-    fn interim_evidence_walks_a_continuous_turn_without_gaps() {
-        let tokens = (0..420)
-            .map(|index| format!("token{index}"))
-            .collect::<Vec<_>>();
-        let mut scanned = 0;
-        let mut submitted = Vec::new();
-        while scanned < tokens.len() {
-            let (evidence, next) = interim_quote_evidence(&tokens, scanned, &[]).unwrap();
-            assert!(next > scanned);
+    #[ignore = "uses an installed Bible database via WORDLYTE_TEST_BIBLE_DB"]
+    fn quote_index_calibration_rejects_common_phrases_and_finds_quotes() {
+        let path = std::env::var_os("WORDLYTE_TEST_BIBLE_DB")
+            .map(std::path::PathBuf::from)
+            .expect("set WORDLYTE_TEST_BIBLE_DB to the installed Bible database");
+        let bible = BibleStore::open_for_tests(&path).expect("open Bible database");
+        let index = QuoteSearchIndex::build(
+            "KJV".into(),
+            bible.verses_for_version("KJV").expect("load KJV verses"),
+        );
+
+        for phrase in [
+            "the lord said to me again",
+            "now let me tell you this",
+            "making the kingdom of god real on the earth",
+            "and he said making the kingdom of god real on the earth",
+            "the lord said to me again said pastor come this year",
+            "every child of god is born into the family of the superlative",
+            "the spirit of god come in a revival season to move you away from",
+        ] {
             assert!(
-                evidence.split_whitespace().count()
-                    <= QUOTE_SCAN_LOOKBACK_WORDS + MAX_INTERIM_QUOTE_SCAN_WORDS
-            );
-            submitted.push(evidence);
-            scanned = next;
-        }
-        for index in 0..tokens.len() {
-            let needle = format!("token{index}");
-            assert!(
-                submitted
-                    .iter()
-                    .any(|evidence| evidence.split_whitespace().any(|word| word == needle)),
-                "word {index} was never submitted"
+                best_indexed_quote_candidate(&index, phrase).is_none(),
+                "common phrase should not produce a quote candidate: {phrase}"
             );
         }
-    }
 
-    #[test]
-    fn interim_evidence_carries_recent_finalized_turn_tails() {
-        let tokens = quote_tokens("verse seventeen continues the thought");
-        let (evidence, _) =
-            interim_quote_evidence(&tokens, 0, &["the lord is my shepherd".to_string()]).unwrap();
-        assert!(evidence.starts_with("the lord is my shepherd"));
-        assert!(evidence.contains("verse seventeen"));
-    }
-
-    #[test]
-    fn backlog_widens_the_interim_quote_step() {
-        assert_eq!(
-            interim_quote_step(QUOTE_WORKER_BACKLOG_MILLIS),
-            PARTIAL_QUOTE_DETECTION_STEP_WORDS
-        );
-        assert_eq!(
-            interim_quote_step(QUOTE_WORKER_BACKLOG_MILLIS + 1),
-            PARTIAL_QUOTE_DETECTION_BACKLOG_STEP_WORDS
-        );
-    }
-
-    #[test]
-    fn continuous_flow_submits_early_quotations_for_review() {
-        let mut text = String::from("the lord is my shepherd i shall not want");
-        for index in 0..600 {
-            text.push_str(&format!(" filler{index}"));
+        for (phrase, book, chapter, verse) in [
+            ("the lord is my shepherd i shall not want", "Psalms", 23, 1),
+            (
+                "he sent his word and healed them and delivered them from their destructions",
+                "Psalms",
+                107,
+                20,
+            ),
+            (
+                "teaching the hands of men to war and their fingers to fight",
+                "Psalms",
+                144,
+                1,
+            ),
+            (
+                "the fear of the lord is the beginning of wisdom a good understanding",
+                "Psalms",
+                111,
+                10,
+            ),
+        ] {
+            let hit = best_indexed_quote_candidate(&index, phrase)
+                .unwrap_or_else(|| panic!("expected a quote candidate for: {phrase}"));
+            let matched = index.verse(hit.verse_index).expect("candidate verse");
+            assert_eq!(
+                (matched.book.as_str(), matched.chapter, matched.verse),
+                (book, chapter, verse),
+                "unexpected verse for {phrase}"
+            );
         }
-        let tokens = quote_tokens(&text);
-        let mut scanned = 0;
-        let mut reviewed = false;
-        let mut words = 0;
-        while words < tokens.len() {
-            words = (words + PARTIAL_QUOTE_DETECTION_STEP_WORDS).min(tokens.len());
-            let (evidence, next) = interim_quote_evidence(&tokens[..words], scanned, &[]).unwrap();
-            if quote_search_windows(&evidence)
-                .iter()
-                .any(|window| window.contains("my shepherd i shall not want"))
-            {
-                reviewed = true;
-            }
-            scanned = next;
-        }
-        assert!(
-            reviewed,
-            "the early quotation never entered a submitted window"
-        );
     }
 
     #[test]

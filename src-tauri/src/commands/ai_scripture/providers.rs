@@ -34,7 +34,6 @@ impl AsrProvider {
             Self::AssemblyAi => "AssemblyAI",
         }
     }
-
 }
 
 /// Canonical transcript event consumed by Wordlyte's provider-independent
@@ -43,6 +42,9 @@ pub(super) struct TranscriptUpdate {
     pub text: String,
     pub is_final: bool,
     pub confidence: f32,
+    /// Lowest word confidence in the update, when the provider supplies it.
+    /// Used as a conservative guard for deterministic reference automation.
+    pub min_word_confidence: Option<f32>,
     pub turn_order: Option<u64>,
 }
 
@@ -159,6 +161,13 @@ struct DeepgramChannel {
 struct DeepgramAlternative {
     transcript: String,
     confidence: Option<f32>,
+    #[serde(default)]
+    words: Vec<DeepgramWord>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepgramWord {
+    confidence: Option<f32>,
 }
 
 fn parse_deepgram_transcript(text: &str) -> Option<TranscriptUpdate> {
@@ -167,10 +176,17 @@ fn parse_deepgram_transcript(text: &str) -> Option<TranscriptUpdate> {
         return None;
     }
     let alternative = response.channel?.alternatives.into_iter().next()?;
+    let min_word_confidence = alternative
+        .words
+        .iter()
+        .filter_map(|word| word.confidence)
+        .map(|confidence| confidence.clamp(0.0, 1.0))
+        .reduce(f32::min);
     Some(TranscriptUpdate {
         text: alternative.transcript,
         is_final: response.is_final.unwrap_or(false),
         confidence: alternative.confidence.unwrap_or(0.0).clamp(0.0, 1.0),
+        min_word_confidence,
         turn_order: None,
     })
 }
@@ -203,6 +219,11 @@ fn parse_assemblyai_turn(response: AssemblyAiResponse) -> Option<TranscriptUpdat
             .sum::<f32>()
             / words.len() as f32
     };
+    let min_word_confidence = words
+        .iter()
+        .filter_map(|word| word.confidence)
+        .map(|confidence| confidence.clamp(0.0, 1.0))
+        .reduce(f32::min);
     Some(TranscriptUpdate {
         text: response.transcript.unwrap_or_default(),
         // AssemblyAI emits a formatted final turn. Ignore unformatted end-of-
@@ -210,6 +231,7 @@ fn parse_assemblyai_turn(response: AssemblyAiResponse) -> Option<TranscriptUpdat
         is_final: response.end_of_turn.unwrap_or(false)
             && response.turn_is_formatted.unwrap_or(true),
         confidence,
+        min_word_confidence,
         turn_order: response.turn_order,
     })
 }
@@ -223,13 +245,14 @@ mod tests {
     fn deepgram_adapter_normalizes_interim_and_final_events() {
         let adapter = adapter_for(AsrProvider::Deepgram);
         let ProviderEvent::Transcript(final_turn) = adapter.decode_message(
-            r#"{"type":"Results","is_final":true,"channel":{"alternatives":[{"transcript":"John 3:16","confidence":0.97}]}}"#,
+            r#"{"type":"Results","is_final":true,"channel":{"alternatives":[{"transcript":"John 3:16","confidence":0.97,"words":[{"confidence":0.88},{"confidence":0.97}]}]}}"#,
         ) else {
             panic!("expected a normalized transcript event");
         };
         assert_eq!(final_turn.text, "John 3:16");
         assert!(final_turn.is_final);
         assert!((final_turn.confidence - 0.97).abs() < f32::EPSILON);
+        assert_eq!(final_turn.min_word_confidence, Some(0.88));
 
         let ProviderEvent::Transcript(interim) = adapter.decode_message(
             r#"{"type":"Results","is_final":false,"channel":{"alternatives":[{"transcript":"John chapter three verse sixteen","confidence":0.91}]}}"#,
@@ -255,6 +278,7 @@ mod tests {
         assert!(turn.is_final);
         assert_eq!(turn.turn_order, Some(7));
         assert!((turn.confidence - 0.94).abs() < f32::EPSILON);
+        assert_eq!(turn.min_word_confidence, Some(0.9));
         let ProviderEvent::Transcript(unformatted) = adapter.decode_message(
             r#"{"type":"Turn","transcript":"john 3 16","end_of_turn":true,"turn_is_formatted":false}"#,
         ) else {

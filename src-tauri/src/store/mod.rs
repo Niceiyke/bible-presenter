@@ -440,6 +440,31 @@ impl BibleStore {
         }
     }
 
+    /// Loads every verse for one installed English translation. Used to build
+    /// the in-memory rare-word quote index when a listening session starts.
+    pub fn verses_for_version(&self, version: &str) -> anyhow::Result<Vec<Verse>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT title, chapter, verse, text
+             FROM wordlyte_bible
+             WHERE version = ?1 AND language = 'EN' AND text IS NOT NULL AND text != ''
+             ORDER BY book, chapter, verse",
+        )?;
+        let rows = stmt.query_map(params![version], |row| {
+            Ok(Verse {
+                book: row.get(0)?,
+                chapter: row.get(1)?,
+                verse: row.get(2)?,
+                text: row.get(3)?,
+                version: version.to_string(),
+                split_index: None,
+                total_splits: None,
+                score: None,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     pub fn get_next_verse(&self, book: &str, chapter: i32, verse: i32, version: &str) -> anyhow::Result<Option<Verse>> {
         if let Some(v) = self.get_verse(book, chapter, verse + 1, version)? {
             return Ok(Some(v));

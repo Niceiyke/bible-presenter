@@ -109,7 +109,11 @@ export function AiScriptureTab({ onStage, onLive }: { onStage: (item: DisplayIte
             <div className="max-h-80 space-y-2 overflow-y-auto p-2.5 custom-scrollbar">
               {ai.suggestions.length === 0 ? <p className="p-1 text-[11px] italic leading-relaxed text-console-text-subtle">Detected references and close quotations will appear here.</p> : ai.suggestions.slice(0, 8).map((suggestion) => {
                 const confidence = confidenceOf(suggestion);
-                const evidenceLabel = suggestion.evidenceTypes?.length ? suggestion.evidenceTypes.join(" + ") : suggestion.detection;
+                const evidenceLabel = suggestion.evidenceTypes?.length
+                  ? suggestion.evidenceTypes.join(" + ")
+                  : suggestion.detection === "quote" && suggestion.quoteSupport === "loose"
+                    ? "possible quote"
+                    : suggestion.detection;
                 const key = verseKey(suggestion.verse);
                 const isLive = key === liveKey;
                 const isStaged = key === stagedKey;
@@ -124,6 +128,7 @@ export function AiScriptureTab({ onStage, onLive }: { onStage: (item: DisplayIte
                   </div>
                   <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-console-border" aria-label={`Detection confidence ${confidence}%`}><span className={`block h-full rounded-full ${confidence >= 90 ? "bg-state-success" : confidence >= 75 ? "bg-state-stage" : "bg-state-warning"}`} style={{ width: `${confidence}%` }} /></div>
                   <p className="mt-1.5 line-clamp-2 text-[11px] leading-relaxed text-console-text-muted">{suggestion.verse.text}</p>
+                  {suggestion.citationConflict ? <p className="mt-1 text-[10px] font-medium leading-relaxed text-state-warning">{suggestion.citationConflict}</p> : null}
                   <div className="mt-2 flex gap-1.5">
                     <Button variant="stage-outline" size="sm" icon={<Send size={11} />} onClick={() => void stageSuggestion(suggestion)}>Stage</Button>
                     <Button variant="live-outline" size="sm" icon={<Zap size={11} />} onClick={() => void liveSuggestion(suggestion)} title="Take this verse live immediately, without reviewing it in preview">Go live</Button>
