@@ -109,12 +109,28 @@ pub fn ffprobe_path() -> PathBuf {
     resolve_in_dir(bundled_dir().as_deref(), ffprobe_exe())
 }
 
+/// Suppress the console window Windows would otherwise create for a console
+/// child process (ffmpeg/ffprobe). Recording, probing, and streaming are
+/// background services; they must never flash a terminal on the operator's
+/// screen.
+pub fn hide_console(command: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
 /// Whether ffmpeg is usable right now (bundled or on PATH).
 pub fn ffmpeg_available() -> bool {
-    Command::new(ffmpeg_path())
+    let mut command = Command::new(ffmpeg_path());
+    command
         .arg("-version")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    hide_console(&mut command)
         .status()
         .map(|s| s.success())
         .unwrap_or(false)

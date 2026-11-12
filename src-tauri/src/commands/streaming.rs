@@ -317,21 +317,18 @@ pub fn stream_rtmp_start(
     };
     let mut child = if !urls.is_empty() {
         let args = stream_tee_args(w, h, f, &encoder, &urls, audio_feed_port);
-        Some(
-            match Command::new(crate::binpaths::ffmpeg_path())
-                .args(&args)
-                .stdin(
-                    stdin_stdio
-                        .expect("RTMP stdin configuration is present when ffmpeg is spawned"),
-                )
-                .stderr(Stdio::piped())
-                .stdout(Stdio::null())
-                .spawn()
-            {
-                Ok(c) => c,
-                Err(e) => return Err(format!("Failed to start ffmpeg: {e}")),
-            },
-        )
+        let mut command = Command::new(crate::binpaths::ffmpeg_path());
+        command
+            .args(&args)
+            .stdin(
+                stdin_stdio.expect("RTMP stdin configuration is present when ffmpeg is spawned"),
+            )
+            .stderr(Stdio::piped())
+            .stdout(Stdio::null());
+        Some(match crate::binpaths::hide_console(&mut command).spawn() {
+            Ok(c) => c,
+            Err(e) => return Err(format!("Failed to start ffmpeg: {e}")),
+        })
     } else {
         None
     };

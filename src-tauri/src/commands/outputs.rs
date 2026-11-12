@@ -249,11 +249,22 @@ pub fn set_output_visible(
         if visible {
             enforce_window_cap(app, state, label)?;
             position_window_on_assigned_monitor(app, state, &cfg, label)?;
-            let _ = window.set_ignore_cursor_events(true);
+            let audience_surface = label == "output" || label == "overflow";
+            if audience_surface {
+                // Keep the audience window under the cursor so its CSS
+                // `cursor: none` hides the pointer. It is non-focusable and
+                // pointer-inert, so clicks cannot operate or focus it.
+                let _ = window.set_ignore_cursor_events(false);
+                let _ = window.set_focusable(false);
+            } else {
+                let _ = window.set_ignore_cursor_events(true);
+            }
             window.show().map_err(|e: tauri::Error| e.to_string())?;
-            window
-                .set_focus()
-                .map_err(|e: tauri::Error| e.to_string())?;
+            if !audience_surface {
+                window
+                    .set_focus()
+                    .map_err(|e: tauri::Error| e.to_string())?;
+            }
             rebroadcast_presentation(app, state);
             // A live session should capture the real projector window now that
             // it is present. This must NOT fail the toggle (the session keeps

@@ -27,6 +27,7 @@
         "transparent": true,
         "alwaysOnTop": true,
         "fullscreen": false,
+        "focusable": false,
         "visible": false,
         "create": false
       },
@@ -53,6 +54,7 @@
         "transparent": true,
         "alwaysOnTop": true,
         "fullscreen": false,
+        "focusable": false,
         "visible": false,
         "create": false
       },

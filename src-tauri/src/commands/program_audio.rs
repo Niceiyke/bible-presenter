@@ -63,7 +63,8 @@ pub fn audio_devices() -> Vec<String> {
     if !crate::binpaths::ffmpeg_available() {
         return Vec::new();
     }
-    let out = Command::new(crate::binpaths::ffmpeg_path())
+    let mut command = Command::new(crate::binpaths::ffmpeg_path());
+    command
         .args([
             "-hide_banner",
             "-list_devices",
@@ -72,8 +73,8 @@ pub fn audio_devices() -> Vec<String> {
             "dshow",
             "-i",
             "dummy",
-        ])
-        .output();
+        ]);
+    let out = crate::binpaths::hide_console(&mut command).output();
     match out {
         Ok(o) => parse_devices(&String::from_utf8_lossy(&o.stderr)),
         Err(_) => Vec::new(),
@@ -292,11 +293,13 @@ fn start_feed(device: &str) -> Result<FeedPorts, String> {
 
     // Start ffmpeg: one dshow capture → AAC stdout + PCM loopback output.
     let ffmpeg = crate::binpaths::ffmpeg_path();
-    let mut child = Command::new(&ffmpeg)
+    let mut command = Command::new(&ffmpeg);
+    command
         .args(feed_ffmpeg_args(device, pcm_ingest_port))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .stdin(Stdio::null())
+        .stdin(Stdio::null());
+    let mut child = crate::binpaths::hide_console(&mut command)
         .spawn()
         .map_err(|e| format!("Audio feed ffmpeg failed to start: {e}"))?;
 

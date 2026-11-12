@@ -357,9 +357,9 @@ pub(crate) fn pick_h264_encoder() -> String {
     CACHE
         .get_or_init(|| {
             let ffmpeg = crate::binpaths::ffmpeg_path();
-            let out = Command::new(&ffmpeg)
-                .args(["-hide_banner", "-encoders"])
-                .output();
+            let mut command = Command::new(&ffmpeg);
+            command.args(["-hide_banner", "-encoders"]);
+            let out = crate::binpaths::hide_console(&mut command).output();
             let listed = out
                 .ok()
                 .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
@@ -382,7 +382,8 @@ pub(crate) fn pick_h264_encoder() -> String {
 /// Frames come from lavfi (not the OS capture path) so the check is cheap and
 /// self-contained; a hardware encoder that cannot reach its GPU fails here.
 fn h264_enc_inits(ffmpeg: &Path, encoder: &str) -> bool {
-    Command::new(ffmpeg)
+    let mut command = Command::new(ffmpeg);
+    command
         .args([
             "-y",
             "-hide_banner",
@@ -402,7 +403,8 @@ fn h264_enc_inits(ffmpeg: &Path, encoder: &str) -> bool {
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    crate::binpaths::hide_console(&mut command)
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
@@ -566,13 +568,13 @@ pub fn recording_start(
         ),
     );
     let (stdin_file, stdin_stdio) = encoder_stdin_stdio();
-    let mut child = match Command::new(crate::binpaths::ffmpeg_path())
+    let mut command = Command::new(crate::binpaths::ffmpeg_path());
+    command
         .args(record_ffmpeg_args(w, h, f, &encoder, &tmp_path, audio_feed_port))
         .stdin(stdin_stdio)
         .stderr(Stdio::piped())
-        .stdout(Stdio::null())
-        .spawn()
-    {
+        .stdout(Stdio::null());
+    let mut child = match crate::binpaths::hide_console(&mut command).spawn() {
         Ok(c) => c,
         Err(e) => return Err(format!("Failed to start ffmpeg: {e}")),
     };

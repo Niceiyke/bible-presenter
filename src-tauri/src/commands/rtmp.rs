@@ -307,11 +307,13 @@ pub fn rtmp_start(
         .map(|l| l.local_addr().map_err(|e| e.to_string()).map(|a| a.port()))
         .transpose()?;
 
-    let mut child = Command::new(crate::binpaths::ffmpeg_path())
+    let mut command = Command::new(crate::binpaths::ffmpeg_path());
+    command
         .args(ffmpeg_args(&url, audio_port))
         .stdin(Stdio::piped())
         .stderr(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::null());
+    let mut child = crate::binpaths::hide_console(&mut command)
         .spawn()
         .map_err(|e| format!("Failed to start ffmpeg: {e}"))?;
 

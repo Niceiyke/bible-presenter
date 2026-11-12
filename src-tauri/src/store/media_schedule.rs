@@ -1579,7 +1579,8 @@ impl MediaScheduleStore {
 
         // 1) Frame extraction (thumbnail). -y overwrite, scale to 320w.
         if !thumb_path.exists() {
-            let ok = Command::new(crate::binpaths::ffmpeg_path())
+            let mut command = Command::new(crate::binpaths::ffmpeg_path());
+            command
                 .args([
                     "-y",
                     "-ss",
@@ -1595,7 +1596,8 @@ impl MediaScheduleStore {
                 ])
                 .arg(&thumb_path)
                 .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            let ok = crate::binpaths::hide_console(&mut command)
                 .status()
                 .map(|s| s.success())
                 .unwrap_or(false);
@@ -1613,7 +1615,8 @@ impl MediaScheduleStore {
         let mut duration: Option<f64> = None;
         let mut width: Option<i64> = None;
         let mut height: Option<i64> = None;
-        if let Ok(out) = Command::new(crate::binpaths::ffprobe_path())
+        let mut probe = Command::new(crate::binpaths::ffprobe_path());
+        probe
             .args([
                 "-v",
                 "error",
@@ -1624,9 +1627,8 @@ impl MediaScheduleStore {
                 "-of",
                 "json",
             ])
-            .arg(media_path)
-            .output()
-        {
+            .arg(media_path);
+        if let Ok(out) = crate::binpaths::hide_console(&mut probe).output() {
             if out.status.success() {
                 if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
                     duration = json
@@ -1645,7 +1647,8 @@ impl MediaScheduleStore {
     /// Best-effort audio duration via ffprobe (None if ffmpeg is unavailable).
     fn probe_audio_duration(media_path: &str) -> Option<f64> {
         use std::process::Command;
-        if let Ok(out) = Command::new(crate::binpaths::ffprobe_path())
+        let mut probe = Command::new(crate::binpaths::ffprobe_path());
+        probe
             .args([
                 "-v",
                 "error",
@@ -1654,9 +1657,8 @@ impl MediaScheduleStore {
                 "-of",
                 "default=noprint_wrappers=1:nokey=1",
             ])
-            .arg(media_path)
-            .output()
-        {
+            .arg(media_path);
+        if let Ok(out) = crate::binpaths::hide_console(&mut probe).output() {
             if out.status.success() {
                 let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 if let Ok(d) = s.parse::<f64>() {

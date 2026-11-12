@@ -232,6 +232,19 @@ fn main() {
                 tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?.build()?;
             }
 
+            // Audience-facing outputs are pure display surfaces. They must not
+            // accept focus or mouse interaction. They are deliberately NOT
+            // click-through: click-through would let the cursor of whatever is
+            // behind the projector show through. The output DOM is
+            // pointer-events-none and cursor-none, so the cursor disappears
+            // while the window itself stays non-focusable.
+            for label in ["output", "overflow"] {
+                if let Some(win) = app.get_webview_window(label) {
+                    let _ = win.set_focusable(false);
+                    let _ = win.set_ignore_cursor_events(false);
+                }
+            }
+
             // The `capture` window is the dedicated, invisible-in-practice source
             // for the recorder/streamer. It renders the same program DOM surface as
             // the `output` window, so WGC pixels match projection exactly. It MUST

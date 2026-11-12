@@ -130,7 +130,8 @@ try {
 "#;
     fs::write(script_path, SCRIPT)
         .map_err(|e| format!("Could not prepare the PowerPoint converter: {e}"))?;
-    let result = Command::new("powershell.exe")
+    let mut command = Command::new("powershell.exe");
+    command
         .args([
             "-NoLogo",
             "-NoProfile",
@@ -142,7 +143,8 @@ try {
         ])
         .arg(script_path)
         .arg(source)
-        .arg(output)
+        .arg(output);
+    let result = crate::binpaths::hide_console(&mut command)
         .output()
         .map_err(|e| format!("Could not start PowerPoint conversion: {e}"))?;
     if result.status.success() {
