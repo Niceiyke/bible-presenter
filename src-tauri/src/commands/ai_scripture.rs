@@ -392,6 +392,9 @@ struct DetectionConfig {
     /// verse fourteen" resolve against Isaiah rather than the last projected
     /// verse's book.
     last_spoken_book: Arc<Mutex<Option<String>>>,
+    /// True when the previous ASR segment ended on the word "chapter", so the
+    /// next segment's leading number is the chapter rather than a verse.
+    pending_chapter: Arc<Mutex<bool>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -950,12 +953,23 @@ fn detect_contextual_verse_reference_from_tokens(
         .lock()
         .ok()
         .and_then(|book| book.clone());
+    let pending_chapter = detection
+        .pending_chapter
+        .lock()
+        .map(|pending| *pending)
+        .unwrap_or(false);
     let anchor = navigation_anchor(detection, app);
     let reference = contextual_verse_reference_for_tokens(
         tokens,
         recent_book.as_deref(),
         anchor.as_ref(),
+        pending_chapter,
     );
+    if pending_chapter {
+        if let Ok(mut pending) = detection.pending_chapter.lock() {
+            *pending = false;
+        }
+    }
     if let Some(reference) = &reference {
         if let Ok(mut book) = detection.last_spoken_book.lock() {
             *book = Some(reference.book.clone());
@@ -980,6 +994,23 @@ fn remember_last_spoken_book(
         if let Ok(mut current) = detection.last_spoken_book.lock() {
             *current = Some(book);
         }
+    }
+}
+
+fn mark_pending_chapter(
+    detection: &DetectionConfig,
+    tokens: &[String],
+    direct_references: &[crate::ai_detection::ScriptureReference],
+) {
+    let pending = direct_references.is_empty()
+        && tokens.last().is_some_and(|token| token == "chapter")
+        && detection
+            .last_spoken_book
+            .lock()
+            .map(|book| book.is_some())
+            .unwrap_or(false);
+    if let Ok(mut current) = detection.pending_chapter.lock() {
+        *current = pending;
     }
 }
 
@@ -1016,18 +1047,47 @@ fn contextual_verse_reference_for_anchor(
     anchor: &VerseAnchor,
 ) -> Option<crate::ai_detection::ScriptureReference> {
     let tokens = quote_tokens(transcript);
-    contextual_verse_reference_for_tokens(&tokens, Some(&anchor.book), Some(anchor))
+    contextual_verse_reference_for_tokens(&tokens, Some(&anchor.book), Some(anchor), false)
 }
 
 fn contextual_verse_reference_for_tokens(
     tokens: &[String],
     recent_book: Option<&str>,
     anchor: Option<&VerseAnchor>,
+    pending_chapter: bool,
 ) -> Option<crate::ai_detection::ScriptureReference> {
     let book = recent_book.or_else(|| anchor.map(|anchor| anchor.book.as_str()))?;
     let fallback_chapter = anchor.map(|anchor| anchor.chapter);
     let mut latest = None;
     let mut index = 0usize;
+    // If the previous ASR segment ended with "chapter", the next segment's
+    // leading number is the chapter: "Isaiah chapter" -> "seven and verse 14".
+    if pending_chapter {
+        if let Some((chapter, next)) = parse_number(tokens, 0) {
+            let mut marker = next;
+            if tokens.get(marker).is_some_and(|token| token == "and") {
+                marker += 1;
+            }
+            if tokens
+                .get(marker)
+                .is_some_and(|token| token == "verse" || token == "verses")
+            {
+                let plural = tokens[marker] == "verses";
+                if let Some((verse, _verse_next, verse_end)) =
+                    crate::ai_detection::parse_verse_number(tokens, marker + 1, plural)
+                {
+                    if chapter > 0 && (1..=176).contains(&verse) {
+                        return Some(crate::ai_detection::ScriptureReference {
+                            book: book.to_string(),
+                            chapter,
+                            verse,
+                            verse_end: verse_end.filter(|end| *end <= 176),
+                        });
+                    }
+                }
+            }
+        }
+    }
     while index < tokens.len() {
         // Explicit chapter followed by a verse: "chapter seven and verse 14".
         // The chapter wins over the navigation anchor so a new book mention is
@@ -1958,6 +2018,7 @@ async fn run_asr_session(
         reference_aliases,
         navigation_anchor: Arc::new(Mutex::new(None)),
         last_spoken_book: Arc::new(Mutex::new(None)),
+        pending_chapter: Arc::new(Mutex::new(false)),
     });
     let recently_suggested = Arc::new(Mutex::new(HashMap::new()));
     let detection_generation = Arc::new(AtomicU64::new(0));
@@ -2751,6 +2812,7 @@ fn handle_transcription_update(
     } else {
         (direct_references, true)
     };
+    mark_pending_chapter(detection, &normalized_tokens, &final_references.0);
     let reference_hints = final_references.0.clone();
     if !final_references.0.is_empty() {
         // One spoken citation produces one passage card. Expanding every verse
@@ -2879,6 +2941,7 @@ fn handle_interim_transcript(
         }
     };
     remember_last_spoken_book(detection, normalized_tokens, &references);
+    mark_pending_chapter(detection, normalized_tokens, &references);
     let output_version = current_output_version(detection);
     for reference in references {
         let verses = verses_for_reference(bible, &reference, &output_version);
@@ -3777,7 +3840,23 @@ mod tests {
             verse: 8,
         };
         assert_eq!(
-            contextual_verse_reference_for_tokens(&tokens, Some("Isaiah"), Some(&anchor)),
+            contextual_verse_reference_for_tokens(&tokens, Some("Isaiah"), Some(&anchor), false),
+            Some(ScriptureReference {
+                book: "Isaiah".into(),
+                chapter: 7,
+                verse: 14,
+                verse_end: None,
+            })
+        );
+
+        let split_tokens = quote_tokens("seven and verse fourteen");
+        assert_eq!(
+            contextual_verse_reference_for_tokens(
+                &split_tokens,
+                Some("Isaiah"),
+                Some(&anchor),
+                true,
+            ),
             Some(ScriptureReference {
                 book: "Isaiah".into(),
                 chapter: 7,
