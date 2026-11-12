@@ -13,7 +13,7 @@ export type ButtonVariant =
   | "ghost"      // Subtle neutral
   | "bare";      // Text-only, no background
 
-export type ButtonSize = "sm" | "md" | "lg";
+export type ButtonSize = "xs" | "sm" | "md" | "lg";
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
@@ -35,6 +35,7 @@ const VARIANTS: Record<ButtonVariant, string> = {
 };
 
 const SIZES: Record<ButtonSize, string> = {
+  xs: "h-7 px-2 text-[10px] gap-1",
   sm: "h-8 px-2.5 text-[11px] gap-1",
   md: "h-10 px-3.5 text-xs gap-1.5",
   lg: "h-11 px-4 text-[13px] gap-2",

@@ -38,6 +38,16 @@ html, body, #root {
   overflow: hidden;
 }
 
+/* Audience windows are pointer-inert display surfaces. Tauri cannot use
+   click-through here because the desktop cursor would show through; instead
+   hide the DOM cursor at the document root, before React mounts. */
+html.audience-cursor-none,
+html.audience-cursor-none body,
+html.audience-cursor-none #root,
+html.audience-cursor-none #root * {
+  cursor: none !important;
+}
+
 /* Native `<select>` dropdowns (and their option lists) must follow the
    app's dark theme. Without `color-scheme: dark` WebView2 paints the
    popup list white while inherited text stays light, making options

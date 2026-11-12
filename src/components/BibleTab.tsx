@@ -361,8 +361,8 @@ export function BibleTab({ onStage, onLive, onAddToSchedule }: BibleTabProps) {
       <div className="flex min-h-0 flex-col gap-3">
         <UpNextPanel onStage={onStage} onAddToSchedule={onAddToSchedule} className="workspace-upnext shrink-0" />
         <section className="flex min-h-0 flex-1 flex-col rounded-xl border border-console-border bg-console-canvas/35">
-          <button onClick={() => setAssistantOpen((open) => !open)} className="flex shrink-0 w-full items-center justify-between px-3 py-3 text-left"><span className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.12em] text-console-text-muted"><BrainCircuit size={14} className="text-violet-300" />Live Scripture Assistant</span>{assistantOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
-          {assistantOpen && <div className="min-h-0 flex-1 overflow-y-auto border-t border-console-border p-3 custom-scrollbar"><AiScriptureTab onStage={onStage} onLive={onLive} /></div>}
+          <button onClick={() => setAssistantOpen((open) => !open)} className="flex w-full shrink-0 items-center justify-between px-2.5 py-2 text-left"><span className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-[0.12em] text-console-text-muted"><BrainCircuit size={12} className="text-violet-300" />Live Scripture Assistant</span>{assistantOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}</button>
+          {assistantOpen && <div className="min-h-0 flex-1 overflow-y-auto border-t border-console-border p-2.5 custom-scrollbar"><AiScriptureTab onStage={onStage} onLive={onLive} /></div>}
         </section>
       </div>
       </div>
