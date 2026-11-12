@@ -10,12 +10,13 @@ account, AI, and Dashboard services.
 in progress. The clean v3 organization/device entitlement protocol, permanent
 activated-Free desktop model, server-signed plan limits, AI Add-on status, and
 an admin-provisioned AI Unit wallet are implemented. The first managed AI
-Gateway slice now provides device-to-AI token exchange, AI Unit
-reservation/settlement/release, an OpenAI Responses proxy with model
+Gateway slice now provides device-to-AI token exchange, SQLite-backed AI
+wallet reservations/settlement/release, an OpenAI Responses proxy with model
 allowlisting, a managed Deepgram/AssemblyAI WebSocket relay with fractional
-per-minute settlement, and a read-only Dashboard AI balance view. Desktop AI
-presentation and transcription are now off local provider keys. Billing
-checkout/webhooks and transcript sync remain subsequent phases.
+per-minute settlement and zero-balance cutoff, opt-in finalized transcript
+sync, and a read-only Dashboard AI/transcript view. Desktop AI presentation and
+transcription are now off local provider keys. Billing checkout/webhooks remain
+a subsequent phase.
 
 ## Product principles
 

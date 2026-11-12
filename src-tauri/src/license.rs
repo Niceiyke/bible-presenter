@@ -900,6 +900,32 @@ impl LicenseManager {
         })
     }
 
+    /// POST a JSON payload to a License Worker endpoint that accepts the
+    /// short-lived AI token. Used for explicit opt-in transcript sync.
+    pub async fn post_ai_authenticated(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<(), String> {
+        let access = self.ai_access().await?;
+        let url = format!("{}{}", self.server_url.trim_end_matches('/'), path);
+        let response = self
+            .client
+            .post(url)
+            .bearer_auth(access.token)
+            .json(body)
+            .send()
+            .await
+            .map_err(|error| format!("Could not reach the transcript sync service: {error}"))?;
+        if response.status().is_success() {
+            return Ok(());
+        }
+        let status = response.status();
+        let detail = response.text().await.unwrap_or_default();
+        let detail = detail.chars().take(300).collect::<String>();
+        Err(format!("Transcript sync failed ({status}): {detail}"))
+    }
+
     fn license_from_signed_nonactive(
         &self,
         response: ServerEntitlement,

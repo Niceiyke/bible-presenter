@@ -108,6 +108,23 @@ are intended for the AI Gateway only:
 `GET /admin/organizations/:id/ai` returns the organization, current balance, and
 recent wallet events for the Dashboard.
 
+AI balances, reservations, and wallet events are stored in the organization
+Durable Object's SQLite storage. The first access imports a legacy
+`organization.ai` wallet record from KV; after that, SQLite is the spendable
+authority.
+
+### Opt-in transcript sync
+
+The desktop can POST finalized text to `/transcripts/sync` with its short-lived
+AI token. Microphone audio is never accepted or stored. Admins can list, read,
+and delete synced sessions with:
+
+```text
+GET    /admin/organizations/:id/transcripts
+GET    /admin/organizations/:id/transcripts/:sessionId
+DELETE /admin/organizations/:id/transcripts/:sessionId
+```
+
 ## Signed entitlement protocol
 
 The Worker signs the following canonical payload. Field order is protocol and

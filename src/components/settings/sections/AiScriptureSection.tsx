@@ -210,6 +210,24 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
         <p className="text-[10px] text-console-text-subtle">Provider credentials stay in Wordlyte's managed AI Gateway. Audio is streamed only while listening, and no provider key is stored on this computer.</p>
       </section>
 
+      <section className="rounded-lg border border-console-border bg-console-surface-raised/40 p-3 flex flex-col gap-2">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-console-text-muted">Dashboard transcript sync</p>
+            <p className="mt-1 text-[10px] text-console-text-subtle">When enabled, finalized transcript text and Scripture suggestions are uploaded to your church Dashboard after each listening session. Microphone audio is never uploaded. Off by default.</p>
+          </div>
+          <label className="flex shrink-0 items-center gap-2 text-[11px] font-bold text-console-text">
+            <input
+              type="checkbox"
+              checked={settings.transcript_sync_enabled === true}
+              onChange={(event) => void onUpdateSettings({ ...settings, transcript_sync_enabled: event.target.checked })}
+              className="accent-action-primary"
+            />
+            Sync
+          </label>
+        </div>
+      </section>
+
       <section className={`rounded-lg border p-3 flex flex-col gap-3 ${settings.ai_scripture_auto_live ? "border-state-error/60 bg-state-error/5" : "border-console-border bg-console-surface-raised/40"}`}>
         <div className="flex items-start justify-between gap-3">
           <div>

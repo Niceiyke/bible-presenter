@@ -118,16 +118,60 @@ export default {
       }));
     }
 
+    if (url.pathname === "/transcripts/sync" && request.method === "POST") {
+      const supplied = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+      const claims = await verifyAiToken(env, supplied);
+      if (!claims) return json({ status: "invalid", message: "A valid Wordlyte AI token is required." }, 401);
+      const body = await request.json().catch(() => null);
+      if (!body || typeof body !== "object") return json({ status: "invalid", message: "Invalid transcript payload." }, 400);
+      const stub = env.ORGANIZATION_REGISTRY.get(env.ORGANIZATION_REGISTRY.idFromName(claims.org));
+      return forward(await stub.fetch("https://registry/transcripts/sync", {
+        method: "POST",
+        body: JSON.stringify({ organization_id: claims.org, ...body }),
+      }));
+    }
+
+    const transcriptListMatch = url.pathname.match(/^\/admin\/organizations\/(org_[a-f0-9]+)\/transcripts$/);
+    if (transcriptListMatch && request.method === "GET") {
+      if (!(await isAdmin(request, env))) return unauthorized();
+      const stub = env.ORGANIZATION_REGISTRY.get(env.ORGANIZATION_REGISTRY.idFromName(transcriptListMatch[1]));
+      return forward(await stub.fetch("https://registry/admin/transcripts/list", {
+        method: "POST",
+        body: JSON.stringify({ organization_id: transcriptListMatch[1] }),
+      }));
+    }
+
+    const transcriptMatch = url.pathname.match(/^\/admin\/organizations\/(org_[a-f0-9]+)\/transcripts\/([^/]+)$/);
+    if (transcriptMatch && (request.method === "GET" || request.method === "DELETE")) {
+      if (!(await isAdmin(request, env))) return unauthorized();
+      const sessionId = decodeURIComponent(transcriptMatch[2]);
+      const action = request.method === "DELETE" ? "delete" : "get";
+      const stub = env.ORGANIZATION_REGISTRY.get(env.ORGANIZATION_REGISTRY.idFromName(transcriptMatch[1]));
+      return forward(await stub.fetch(`https://registry/admin/transcripts/${action}`, {
+        method: "POST",
+        body: JSON.stringify({ organization_id: transcriptMatch[1], session_id: sessionId }),
+      }));
+    }
+
     const aiReadMatch = url.pathname.match(/^\/admin\/organizations\/(org_[a-f0-9]+)\/ai$/);
     if (aiReadMatch && request.method === "GET") {
       if (!(await isAdmin(request, env))) return unauthorized();
       const organization = await env.ORGANIZATIONS.get(orgKey(aiReadMatch[1]), "json");
       if (!organization) return json({ status: "error", message: "Organization not found." }, 404);
+      const stub = env.ORGANIZATION_REGISTRY.get(env.ORGANIZATION_REGISTRY.idFromName(organization.id));
+      const response = await stub.fetch("https://registry/internal/ai/balance", {
+        method: "POST",
+        body: JSON.stringify({ organization_id: organization.id }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.ai) {
+        return json({ status: "error", message: data?.message || "AI balance unavailable." }, 503);
+      }
       return json({
         status: "ok",
         organization: publicOrganization(organization),
-        ai: aiBalance(organization),
-        usage: (organization.ai?.ledger || []).slice(-50),
+        ai: data.ai,
+        usage: Array.isArray(data.usage) ? data.usage : [],
       });
     }
 
@@ -200,6 +244,54 @@ export class OrganizationRegistry {
     this.state = state;
     this.env = env;
     this.organization = null;
+    this.sql = state.storage.sql;
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS ai_wallet (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        monthly_allowance_millis INTEGER NOT NULL DEFAULT 0,
+        monthly_remaining_millis INTEGER NOT NULL DEFAULT 0,
+        topup_remaining_millis INTEGER NOT NULL DEFAULT 0,
+        reserved_millis INTEGER NOT NULL DEFAULT 0,
+        monthly_reset_at INTEGER,
+        monthly_cycle_days INTEGER NOT NULL DEFAULT 30,
+        updated_at INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS ai_wallet_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        delta_millis INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS ai_wallet_events_at_idx ON ai_wallet_events(at);
+      CREATE TABLE IF NOT EXISTS ai_reservations (
+        id TEXT PRIMARY KEY,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        units_millis INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        settled_units_millis INTEGER NOT NULL DEFAULT 0,
+        settled_at INTEGER,
+        released_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS ai_reservations_key_idx ON ai_reservations(idempotency_key);
+      CREATE INDEX IF NOT EXISTS ai_reservations_status_idx ON ai_reservations(status, expires_at);
+      CREATE TABLE IF NOT EXISTS transcripts (
+        id TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL,
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER,
+        provider TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        version TEXT NOT NULL,
+        transcript_text TEXT NOT NULL,
+        transcript_json TEXT NOT NULL,
+        suggestions_json TEXT NOT NULL,
+        stop_reason TEXT
+      );
+      CREATE INDEX IF NOT EXISTS transcripts_started_idx ON transcripts(started_at DESC);
+    `);
   }
 
   async fetch(request) {
@@ -216,6 +308,10 @@ export class OrganizationRegistry {
     if (path === "/internal/ai/settle") return this.settleAi(organization, body);
     if (path === "/internal/ai/release") return this.releaseAi(organization, body);
     if (path === "/internal/ai/balance") return this.aiBalance(organization);
+    if (path === "/transcripts/sync") return this.syncTranscript(organization, body);
+    if (path === "/admin/transcripts/list") return this.listTranscripts();
+    if (path === "/admin/transcripts/get") return this.getTranscript(body);
+    if (path === "/admin/transcripts/delete") return this.deleteTranscript(body);
     if (path === "/admin/plan") return this.updatePlan(organization, body);
     if (path === "/admin/activation-code") return this.createActivationCode(organization);
     if (path === "/admin/revoke") return this.revoke(organization, body);
@@ -290,6 +386,137 @@ export class OrganizationRegistry {
     return signedResponse(this.env, organization, machineId, "active", null);
   }
 
+  readAiWallet() {
+    return this.sql.exec("SELECT * FROM ai_wallet WHERE id = 1").toArray()[0] || null;
+  }
+
+  ensureAiWallet(organization) {
+    const existing = this.readAiWallet();
+    if (existing) return existing;
+    // One-time import from the legacy organization.ai record. All future
+    // balance, reservation, and ledger mutations live in SQLite.
+    const legacy = aiWallet(organization);
+    this.sql.exec(
+      "INSERT INTO ai_wallet (id, monthly_allowance_millis, monthly_remaining_millis, topup_remaining_millis, reserved_millis, monthly_reset_at, monthly_cycle_days, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?)",
+      legacy.monthly_units_allowance_millis,
+      legacy.monthly_units_remaining_millis,
+      legacy.topup_units_remaining_millis,
+      legacy.reserved_units_millis,
+      legacy.monthly_reset_at,
+      optionalWhole(legacy.monthly_cycle_days, 1, 366) ?? 30,
+      epoch(),
+    );
+    for (const event of legacy.ledger) {
+      this.sql.exec(
+        "INSERT INTO ai_wallet_events (at, type, delta_millis) VALUES (?, ?, ?)",
+        nonNegativeInt(event.at),
+        String(event.type || "legacy_event"),
+        Number.parseInt(event.delta_millis, 10) || 0,
+      );
+    }
+    for (const reservation of legacy.reservations) {
+      this.sql.exec(
+        "INSERT OR IGNORE INTO ai_reservations (id, idempotency_key, units_millis, kind, status, created_at, expires_at, settled_units_millis, settled_at, released_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        reservation.id,
+        reservation.idempotency_key || `legacy-${reservation.id}`,
+        nonNegativeInt(reservation.units_millis),
+        String(reservation.kind || "standard"),
+        String(reservation.status || "released"),
+        nonNegativeInt(reservation.created_at),
+        nonNegativeInt(reservation.expires_at),
+        nonNegativeInt(reservation.settled_units_millis),
+        reservation.settled_at || null,
+        reservation.released_at || null,
+      );
+    }
+    return this.readAiWallet();
+  }
+
+  recordAiEvent(at, type, deltaMillis) {
+    this.sql.exec(
+      "INSERT INTO ai_wallet_events (at, type, delta_millis) VALUES (?, ?, ?)",
+      at,
+      type,
+      deltaMillis,
+    );
+  }
+
+  usageEvents(limit = 50) {
+    return this.sql.exec(
+      "SELECT at, type, delta_millis FROM ai_wallet_events ORDER BY id DESC LIMIT ?",
+      limit,
+    ).toArray().reverse();
+  }
+
+  expireAiReservations(now) {
+    const expired = this.sql.exec(
+      "SELECT id, units_millis FROM ai_reservations WHERE status = 'reserved' AND expires_at <= ?",
+      now,
+    ).toArray();
+    for (const reservation of expired) {
+      this.sql.exec(
+        "UPDATE ai_reservations SET status = 'released', released_at = ? WHERE id = ? AND status = 'reserved'",
+        now,
+        reservation.id,
+      );
+      this.sql.exec(
+        "UPDATE ai_wallet SET reserved_millis = MAX(0, reserved_millis - ?), updated_at = ? WHERE id = 1",
+        reservation.units_millis,
+        now,
+      );
+    }
+  }
+
+  spendAiUnits(unitsMillis, now) {
+    const wallet = this.readAiWallet();
+    const monthly = nonNegativeInt(wallet.monthly_remaining_millis);
+    const topup = nonNegativeInt(wallet.topup_remaining_millis);
+    const fromMonthly = Math.min(monthly, unitsMillis);
+    const remaining = unitsMillis - fromMonthly;
+    this.sql.exec(
+      "UPDATE ai_wallet SET monthly_remaining_millis = ?, topup_remaining_millis = ?, updated_at = ? WHERE id = 1",
+      monthly - fromMonthly,
+      Math.max(0, topup - remaining),
+      now,
+    );
+  }
+
+  aiBalanceFor(organization) {
+    const now = epoch();
+    this.ensureAiWallet(organization);
+    this.expireAiReservations(now);
+    let wallet = this.readAiWallet();
+    const cycleDays = optionalWhole(wallet.monthly_cycle_days, 1, 366) ?? 30;
+    if (
+      wallet.monthly_reset_at &&
+      wallet.monthly_reset_at <= now &&
+      wallet.monthly_allowance_millis
+    ) {
+      const resetAt = now + cycleDays * 86_400;
+      this.sql.exec(
+        "UPDATE ai_wallet SET monthly_remaining_millis = ?, monthly_reset_at = ?, updated_at = ? WHERE id = 1",
+        wallet.monthly_allowance_millis,
+        resetAt,
+        now,
+      );
+      this.recordAiEvent(now, "monthly_allowance_reset", wallet.monthly_allowance_millis);
+      wallet = this.readAiWallet();
+    }
+    const monthly = nonNegativeInt(wallet.monthly_remaining_millis);
+    const topup = nonNegativeInt(wallet.topup_remaining_millis);
+    const reserved = nonNegativeInt(wallet.reserved_millis);
+    return {
+      addon_active: aiEntitlement(organization, now).addonActive,
+      monthly_units_remaining: monthly / 1000,
+      topup_units_remaining: topup / 1000,
+      reserved_units_remaining: reserved / 1000,
+      total_units_remaining: (monthly + topup) / 1000,
+      available_units_remaining: Math.max(0, monthly + topup - reserved) / 1000,
+      monthly_reset_at: wallet.monthly_reset_at || null,
+      rates: { transcription_units_per_minute: 1, standard_llm_request_units: 10 },
+    };
+  }
+
   async aiToken(organization, body) {
     const now = epoch();
     const machineId = String(body.machine_id || "").trim();
@@ -305,10 +532,7 @@ export class OrganizationRegistry {
     if (!ai.addonActive) {
       return json({ status: "ai_not_entitled", message: "The Wordlyte AI Add-on is not active for this organization." }, 403);
     }
-    const wallet = aiWallet(organization);
-    const resetBefore = wallet.monthly_reset_at;
-    const balance = aiBalance(organization, now);
-    if (wallet.monthly_reset_at !== resetBefore) await this.save(organization);
+    const balance = this.aiBalanceFor(organization);
     let accessToken;
     try {
       accessToken = await createAiToken(this.env, organization.id, machineId, ai, now);
@@ -324,12 +548,11 @@ export class OrganizationRegistry {
   }
 
   async aiBalance(organization) {
-    const now = epoch();
-    const wallet = aiWallet(organization);
-    const resetBefore = wallet.monthly_reset_at;
-    const balance = aiBalance(organization, now);
-    if (wallet.monthly_reset_at !== resetBefore) await this.save(organization);
-    return json({ status: "ok", ai: balance });
+    return json({
+      status: "ok",
+      ai: this.aiBalanceFor(organization),
+      usage: this.usageEvents(),
+    });
   }
 
   async reserveAi(organization, body) {
@@ -342,13 +565,16 @@ export class OrganizationRegistry {
     if (!aiEntitlement(organization, now).addonActive) {
       return json({ status: "ai_not_entitled", message: "The Wordlyte AI Add-on is not active." }, 403);
     }
-    const wallet = aiWallet(organization);
-    expireReservations(wallet, now);
-    const existing = wallet.reservations.find((entry) => entry.idempotency_key === key);
+    this.ensureAiWallet(organization);
+    this.expireAiReservations(now);
+    const existing = this.sql.exec(
+      "SELECT * FROM ai_reservations WHERE idempotency_key = ?",
+      key,
+    ).toArray()[0];
     if (existing) {
-      return json({ status: "ok", reservation: publicReservation(existing), ai: aiBalance(organization, now) });
+      return json({ status: "ok", reservation: publicReservation(existing), ai: this.aiBalanceFor(organization) });
     }
-    const balance = aiBalance(organization, now);
+    const balance = this.aiBalanceFor(organization);
     if (balance.available_units_remaining < units) {
       return json({ status: "ai_no_units", message: "Not enough AI Units available.", ai: balance }, 402);
     }
@@ -361,24 +587,37 @@ export class OrganizationRegistry {
       created_at: now,
       expires_at: now + AI_RESERVATION_TTL_SECONDS,
     };
-    wallet.reserved_units_millis = nonNegativeInt(wallet.reserved_units_millis) + reservation.units_millis;
-    wallet.reservations.push(reservation);
-    trimReservations(wallet);
-    recordWalletEvent(wallet, now, "reservation", 0);
-    await this.save(organization);
-    return json({ status: "ok", reservation: publicReservation(reservation), ai: aiBalance(organization, now) });
+    this.sql.exec(
+      "INSERT INTO ai_reservations (id, idempotency_key, units_millis, kind, status, created_at, expires_at) VALUES (?, ?, ?, ?, 'reserved', ?, ?)",
+      reservation.id,
+      reservation.idempotency_key,
+      reservation.units_millis,
+      reservation.kind,
+      reservation.created_at,
+      reservation.expires_at,
+    );
+    this.sql.exec(
+      "UPDATE ai_wallet SET reserved_millis = reserved_millis + ?, updated_at = ? WHERE id = 1",
+      reservation.units_millis,
+      now,
+    );
+    this.recordAiEvent(now, "reservation", 0);
+    return json({ status: "ok", reservation: publicReservation(reservation), ai: this.aiBalanceFor(organization) });
   }
 
   async settleAi(organization, body) {
     const now = epoch();
     const reservationId = cleanReservationId(body.reservation_id);
     if (!reservationId) return json({ status: "invalid", message: "reservation_id is required." }, 400);
-    const wallet = aiWallet(organization);
-    expireReservations(wallet, now);
-    const reservation = wallet.reservations.find((entry) => entry.id === reservationId);
+    this.ensureAiWallet(organization);
+    this.expireAiReservations(now);
+    const reservation = this.sql.exec(
+      "SELECT * FROM ai_reservations WHERE id = ?",
+      reservationId,
+    ).toArray()[0];
     if (!reservation) return json({ status: "not_found", message: "Reservation not found." }, 404);
     if (reservation.status === "settled") {
-      return json({ status: "ok", reservation: publicReservation(reservation), ai: aiBalance(organization, now) });
+      return json({ status: "ok", reservation: publicReservation(reservation), ai: this.aiBalanceFor(organization) });
     }
     if (reservation.status !== "reserved") {
       return json({ status: "invalid", message: "Reservation is no longer active." }, 409);
@@ -396,34 +635,129 @@ export class OrganizationRegistry {
     if (actualUnitsMillis > reservation.units_millis) {
       return json({ status: "invalid", message: "Settled usage exceeds the reservation." }, 400);
     }
-    wallet.reserved_units_millis = Math.max(0, nonNegativeInt(wallet.reserved_units_millis) - reservation.units_millis);
-    spendUnits(wallet, actualUnitsMillis);
-    reservation.status = "settled";
-    reservation.settled_units_millis = actualUnitsMillis;
-    reservation.settled_at = now;
-    recordWalletEvent(wallet, now, "usage_settled", -actualUnitsMillis);
-    await this.save(organization);
-    return json({ status: "ok", reservation: publicReservation(reservation), ai: aiBalance(organization, now) });
+    this.sql.exec(
+      "UPDATE ai_wallet SET reserved_millis = MAX(0, reserved_millis - ?), updated_at = ? WHERE id = 1",
+      reservation.units_millis,
+      now,
+    );
+    this.spendAiUnits(actualUnitsMillis, now);
+    this.sql.exec(
+      "UPDATE ai_reservations SET status = 'settled', settled_units_millis = ?, settled_at = ? WHERE id = ?",
+      actualUnitsMillis,
+      now,
+      reservationId,
+    );
+    this.recordAiEvent(now, "usage_settled", -actualUnitsMillis);
+    return json({ status: "ok", reservation: publicReservation({ ...reservation, status: "settled", settled_units_millis: actualUnitsMillis, settled_at: now }), ai: this.aiBalanceFor(organization) });
   }
 
   async releaseAi(organization, body) {
     const reservationId = cleanReservationId(body.reservation_id);
     if (!reservationId) return json({ status: "invalid", message: "reservation_id is required." }, 400);
-    const wallet = aiWallet(organization);
-    const reservation = wallet.reservations.find((entry) => entry.id === reservationId);
+    this.ensureAiWallet(organization);
+    const reservation = this.sql.exec(
+      "SELECT * FROM ai_reservations WHERE id = ?",
+      reservationId,
+    ).toArray()[0];
     if (!reservation) return json({ status: "not_found", message: "Reservation not found." }, 404);
     if (reservation.status === "released") {
-      return json({ status: "ok", reservation: publicReservation(reservation), ai: aiBalance(organization) });
+      return json({ status: "ok", reservation: publicReservation(reservation), ai: this.aiBalanceFor(organization) });
     }
     if (reservation.status !== "reserved") {
       return json({ status: "invalid", message: "Reservation is no longer active." }, 409);
     }
-    wallet.reserved_units_millis = Math.max(0, nonNegativeInt(wallet.reserved_units_millis) - reservation.units_millis);
-    reservation.status = "released";
-    reservation.released_at = epoch();
-    recordWalletEvent(wallet, reservation.released_at, "reservation_released", 0);
-    await this.save(organization);
-    return json({ status: "ok", reservation: publicReservation(reservation), ai: aiBalance(organization) });
+    this.sql.exec(
+      "UPDATE ai_wallet SET reserved_millis = MAX(0, reserved_millis - ?), updated_at = ? WHERE id = 1",
+      reservation.units_millis,
+      epoch(),
+    );
+    const releasedAt = epoch();
+    this.sql.exec(
+      "UPDATE ai_reservations SET status = 'released', released_at = ? WHERE id = ?",
+      releasedAt,
+      reservationId,
+    );
+    this.recordAiEvent(releasedAt, "reservation_released", 0);
+    return json({ status: "ok", reservation: publicReservation({ ...reservation, status: "released", released_at: releasedAt }), ai: this.aiBalanceFor(organization) });
+  }
+
+  async syncTranscript(_organization, body) {
+    const id = String(body.session_id || "").trim();
+    const transcript = Array.isArray(body.transcript) ? body.transcript : [];
+    const suggestions = Array.isArray(body.suggestions) ? body.suggestions : [];
+    const transcriptText = String(body.transcript_text || "").trim();
+    if (!id || id.length > 80 || transcriptText.length > 1_000_000 || transcript.length > 5_000) {
+      return json({ status: "invalid", message: "Invalid transcript payload." }, 400);
+    }
+    const createdAt = epoch();
+    const startedAt = nonNegativeInt(body.started_at) || createdAt;
+    const endedAt = body.ended_at ? nonNegativeInt(body.ended_at) : null;
+    this.sql.exec(
+      `INSERT INTO transcripts (id, created_at, started_at, ended_at, provider, mode, version, transcript_text, transcript_json, suggestions_json, stop_reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         ended_at = excluded.ended_at,
+         transcript_text = excluded.transcript_text,
+         transcript_json = excluded.transcript_json,
+         suggestions_json = excluded.suggestions_json,
+         stop_reason = excluded.stop_reason`,
+      id,
+      createdAt,
+      startedAt,
+      endedAt,
+      String(body.provider || "").slice(0, 40),
+      String(body.mode || "").slice(0, 40),
+      String(body.version || "").slice(0, 80),
+      transcriptText,
+      JSON.stringify(transcript),
+      JSON.stringify(suggestions),
+      body.stop_reason ? String(body.stop_reason).slice(0, 500) : null,
+    );
+    return json({ status: "ok", session_id: id });
+  }
+
+  async listTranscripts() {
+    const transcripts = this.sql.exec(
+      `SELECT id, created_at, started_at, ended_at, provider, mode, version,
+              substr(transcript_text, 1, 240) AS preview,
+              length(transcript_text) AS transcript_chars
+         FROM transcripts
+        ORDER BY started_at DESC
+        LIMIT 100`,
+    ).toArray();
+    return json({ status: "ok", transcripts });
+  }
+
+  async getTranscript(body) {
+    const id = String(body.session_id || "").trim();
+    if (!id) return json({ status: "invalid", message: "session_id is required." }, 400);
+    const row = this.sql.exec("SELECT * FROM transcripts WHERE id = ?", id).toArray()[0];
+    if (!row) return json({ status: "not_found", message: "Transcript not found." }, 404);
+    return json({
+      status: "ok",
+      transcript: {
+        id: row.id,
+        created_at: row.created_at,
+        started_at: row.started_at,
+        ended_at: row.ended_at,
+        provider: row.provider,
+        mode: row.mode,
+        version: row.version,
+        transcript_text: row.transcript_text,
+        transcript: JSON.parse(row.transcript_json || "[]"),
+        suggestions: JSON.parse(row.suggestions_json || "[]"),
+        stop_reason: row.stop_reason,
+      },
+    });
+  }
+
+  async deleteTranscript(body) {
+    const id = String(body.session_id || "").trim();
+    if (!id) return json({ status: "invalid", message: "session_id is required." }, 400);
+    const existing = this.sql.exec("SELECT id FROM transcripts WHERE id = ?", id).toArray()[0];
+    if (!existing) return json({ status: "not_found", message: "Transcript not found." }, 404);
+    this.sql.exec("DELETE FROM transcripts WHERE id = ?", id);
+    return json({ status: "ok" });
   }
 
   async updatePlan(organization, body) {
@@ -458,6 +792,7 @@ export class OrganizationRegistry {
    */
   async updateAi(organization, body) {
     const now = epoch();
+    this.ensureAiWallet(organization);
     const wallet = aiWallet(organization);
     const duration = optionalWhole(body.addon_duration_days, 0, 3650);
     if (duration !== null) {
@@ -466,25 +801,33 @@ export class OrganizationRegistry {
 
     const monthlyUnits = optionalWhole(body.monthly_units, 0, 1_000_000);
     if (monthlyUnits !== null) {
-      wallet.monthly_units_allowance_millis = monthlyUnits * 1000;
-      wallet.monthly_units_remaining_millis = monthlyUnits * 1000;
       const resetDays = optionalWhole(body.monthly_reset_days, 1, 366) ?? 30;
-      wallet.monthly_cycle_days = resetDays;
-      wallet.monthly_reset_at = now + resetDays * 86_400;
-      recordWalletEvent(wallet, now, "monthly_allowance_set", monthlyUnits * 1000);
+      this.sql.exec(
+        "UPDATE ai_wallet SET monthly_allowance_millis = ?, monthly_remaining_millis = ?, monthly_cycle_days = ?, monthly_reset_at = ?, updated_at = ? WHERE id = 1",
+        monthlyUnits * 1000,
+        monthlyUnits * 1000,
+        resetDays,
+        now + resetDays * 86_400,
+        now,
+      );
+      this.recordAiEvent(now, "monthly_allowance_set", monthlyUnits * 1000);
     }
 
     const topupUnits = optionalWhole(body.topup_units, 0, 1_000_000);
     if (topupUnits !== null && topupUnits > 0) {
-      wallet.topup_units_remaining_millis += topupUnits * 1000;
-      recordWalletEvent(wallet, now, "topup_granted", topupUnits * 1000);
+      this.sql.exec(
+        "UPDATE ai_wallet SET topup_remaining_millis = topup_remaining_millis + ?, updated_at = ? WHERE id = 1",
+        topupUnits * 1000,
+        now,
+      );
+      this.recordAiEvent(now, "topup_granted", topupUnits * 1000);
     }
 
     await this.save(organization);
     return json({
       status: "ok",
       organization: publicOrganization(organization),
-      ai: aiBalance(organization, now),
+      ai: this.aiBalanceFor(organization),
     });
   }
 }
@@ -538,7 +881,6 @@ function publicOrganization(organization) {
     devices_used: (organization.devices || []).length,
     revoked: organization.revoked === true,
     ai: aiEntitlement(organization),
-    ai_balance: aiBalance(organization),
     created_at: organization.created_at,
   };
 }
@@ -550,7 +892,20 @@ async function listOrganizations(env) {
     const page = await env.ORGANIZATIONS.list({ prefix: "org:", cursor });
     for (const key of page.keys) {
       const organization = await env.ORGANIZATIONS.get(key.name, "json");
-      if (organization) result.push(publicOrganization(organization));
+      if (!organization) continue;
+      const publicOrg = publicOrganization(organization);
+      try {
+        const stub = env.ORGANIZATION_REGISTRY.get(env.ORGANIZATION_REGISTRY.idFromName(organization.id));
+        const response = await stub.fetch("https://registry/internal/ai/balance", {
+          method: "POST",
+          body: JSON.stringify({ organization_id: organization.id }),
+        });
+        const data = await response.json().catch(() => null);
+        if (data?.ai) publicOrg.ai_balance = data.ai;
+      } catch (error) {
+        console.error("AI balance lookup failed for admin list", organization.id, error);
+      }
+      result.push(publicOrg);
     }
     cursor = page.cursor;
   } while (cursor);
@@ -578,6 +933,34 @@ async function isAdmin(request, env) {
 async function isGateway(request, env) {
   const supplied = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   return Boolean(env.AI_GATEWAY_SERVICE_TOKEN) && constantTimeEqual(supplied, env.AI_GATEWAY_SERVICE_TOKEN);
+}
+
+function decodeBase64urlText(value) {
+  const normalized = value.replaceAll("-", "+").replaceAll("_", "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  const raw = atob(padded);
+  return new TextDecoder().decode(Uint8Array.from(raw, (char) => char.charCodeAt(0)));
+}
+
+async function verifyAiToken(env, token) {
+  if (!env.AI_TOKEN_SECRET || !token) return null;
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  const [header, payload, signature] = parts;
+  const expected = await hmacBase64url(env.AI_TOKEN_SECRET, `${header}.${payload}`);
+  if (!constantTimeEqual(expected, signature)) return null;
+  let claims;
+  try {
+    claims = JSON.parse(decodeBase64urlText(payload));
+  } catch {
+    return null;
+  }
+  if (claims.aud !== AI_TOKEN_AUDIENCE) return null;
+  if (!Number.isInteger(claims.exp) || claims.exp <= epoch()) return null;
+  if (claims.addon_active !== true) return null;
+  if (Number(claims.addon_expires_at) > 0 && Number(claims.addon_expires_at) <= epoch()) return null;
+  if (typeof claims.org !== "string" || !validOrganizationId(claims.org)) return null;
+  return claims;
 }
 
 async function createAiToken(env, organizationId, machineId, ai, now) {
@@ -707,6 +1090,7 @@ function aiWallet(organization) {
   wallet.monthly_units_remaining_millis = nonNegativeInt(wallet.monthly_units_remaining_millis);
   wallet.topup_units_remaining_millis = nonNegativeInt(wallet.topup_units_remaining_millis);
   wallet.monthly_reset_at = positiveEpoch(wallet.monthly_reset_at);
+  wallet.monthly_cycle_days = optionalWhole(wallet.monthly_cycle_days, 1, 366) ?? 30;
   wallet.reserved_units_millis = nonNegativeInt(wallet.reserved_units_millis);
   if (!Array.isArray(wallet.ledger)) wallet.ledger = [];
   if (!Array.isArray(wallet.reservations)) wallet.reservations = [];
@@ -720,51 +1104,6 @@ function aiEntitlement(organization, now = epoch()) {
     addonExpiresAt: expiresAt,
   };
 }
-function aiBalance(organization, now = epoch()) {
-  const wallet = aiWallet(organization);
-  refreshMonthlyAllowance(wallet, now);
-  const monthly = wallet.monthly_units_remaining_millis;
-  const topup = wallet.topup_units_remaining_millis;
-  const reserved = nonNegativeInt(wallet.reserved_units_millis);
-  return {
-    addon_active: aiEntitlement(organization, now).addonActive,
-    monthly_units_remaining: monthly / 1000,
-    topup_units_remaining: topup / 1000,
-    reserved_units_remaining: reserved / 1000,
-    total_units_remaining: (monthly + topup) / 1000,
-    available_units_remaining: Math.max(0, monthly + topup - reserved) / 1000,
-    monthly_reset_at: wallet.monthly_reset_at,
-    rates: { transcription_units_per_minute: 1, standard_llm_request_units: 10 },
-  };
-}
-function recordWalletEvent(wallet, at, type, deltaMillis) {
-  wallet.ledger.push({ at, type, delta_millis: deltaMillis });
-  if (wallet.ledger.length > 200) wallet.ledger.splice(0, wallet.ledger.length - 200);
-}
-
-function spendUnits(wallet, unitsMillis) {
-  const fromMonthly = Math.min(nonNegativeInt(wallet.monthly_units_remaining_millis), unitsMillis);
-  wallet.monthly_units_remaining_millis = nonNegativeInt(wallet.monthly_units_remaining_millis) - fromMonthly;
-  const remaining = unitsMillis - fromMonthly;
-  wallet.topup_units_remaining_millis = Math.max(0, nonNegativeInt(wallet.topup_units_remaining_millis) - remaining);
-}
-
-function expireReservations(wallet, now) {
-  for (const reservation of wallet.reservations) {
-    if (reservation.status !== "reserved" || reservation.expires_at > now) continue;
-    reservation.status = "released";
-    reservation.released_at = now;
-    wallet.reserved_units_millis = Math.max(0, nonNegativeInt(wallet.reserved_units_millis) - reservation.units_millis);
-  }
-}
-
-function trimReservations(wallet) {
-  if (wallet.reservations.length <= 1000) return;
-  const active = wallet.reservations.filter((entry) => entry.status === "reserved");
-  const recent = wallet.reservations.filter((entry) => entry.status !== "reserved").slice(-900);
-  wallet.reservations = [...active, ...recent];
-}
-
 function publicReservation(reservation) {
   return {
     id: reservation.id,
@@ -785,15 +1124,6 @@ function cleanIdempotencyKey(value) {
 function cleanReservationId(value) {
   const id = String(value || "").trim();
   return /^res_[a-f0-9]{32}$/.test(id) ? id : null;
-}
-function refreshMonthlyAllowance(wallet, now) {
-  const cycleDays = optionalWhole(wallet.monthly_cycle_days, 1, 366) ?? 30;
-  if (!wallet.monthly_reset_at || wallet.monthly_reset_at > now || !wallet.monthly_units_allowance_millis) return;
-  // An extended outage should result in one current billing allowance, not an
-  // accumulation of missed monthly allocations.
-  wallet.monthly_units_remaining_millis = wallet.monthly_units_allowance_millis;
-  wallet.monthly_reset_at = now + cycleDays * 86_400;
-  recordWalletEvent(wallet, now, "monthly_allowance_reset", wallet.monthly_units_allowance_millis);
 }
 function positiveEpoch(value) { const number = Number.parseInt(value, 10); return Number.isSafeInteger(number) && number > 0 ? number : null; }
 function nonNegativeInt(value) { const number = Number.parseInt(value, 10); return Number.isSafeInteger(number) && number >= 0 ? number : 0; }

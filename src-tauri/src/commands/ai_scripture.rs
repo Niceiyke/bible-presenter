@@ -291,6 +291,32 @@ impl AiSessionRecorder {
         }
         self.persist()
     }
+
+    fn snapshot(&self) -> Result<AiScriptureSavedSession, String> {
+        self.session
+            .lock()
+            .map(|session| session.clone())
+            .map_err(|error| error.to_string())
+    }
+}
+
+async fn sync_session_to_dashboard(
+    license: &crate::license::LicenseManager,
+    session: &AiScriptureSavedSession,
+) -> Result<(), String> {
+    let body = serde_json::json!({
+        "session_id": session.id,
+        "started_at": session.started_at,
+        "ended_at": session.ended_at,
+        "provider": session.provider,
+        "mode": session.mode,
+        "version": session.version,
+        "transcript": session.transcript,
+        "suggestions": session.suggestions,
+        "transcript_text": saved_session_transcript(session),
+        "stop_reason": session.stop_reason,
+    });
+    license.post_ai_authenticated("/transcripts/sync", &body).await
 }
 
 fn is_direct_detection(detection: &str) -> bool {
@@ -1189,6 +1215,8 @@ pub async fn ai_start(
 
     let bible = state.store.clone();
     let license = state.license.clone();
+    let sync_license = license.clone();
+    let sync_enabled = state.presentation.settings.lock().transcript_sync_enabled;
     let task_app = app.clone();
     let task_device = audio_device.clone();
     let task_version = version.clone();
@@ -1217,6 +1245,26 @@ pub async fn ai_start(
                 &task_app,
                 &format!("[ai-scripture] could not finalize saved session: {error}"),
             );
+        }
+
+        if sync_enabled {
+            match recorder.snapshot() {
+                Ok(session) => {
+                    let sync_app = task_app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(error) = sync_session_to_dashboard(&sync_license, &session).await {
+                            crate::store::log_msg(
+                                &sync_app,
+                                &format!("[ai-scripture] dashboard transcript sync failed: {error}"),
+                            );
+                        }
+                    });
+                }
+                Err(error) => crate::store::log_msg(
+                    &task_app,
+                    &format!("[ai-scripture] could not snapshot transcript for sync: {error}"),
+                ),
+            }
         }
 
         let was_current = if let Ok(mut guard) = runtime().lock() {

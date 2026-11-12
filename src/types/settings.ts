@@ -98,6 +98,8 @@ export interface PresentationSettings {
   ai_scripture_auto_live_quotes?: boolean;
   ai_scripture_auto_live_paraphrases?: boolean;
   ai_scripture_auto_live_voice_commands?: boolean;
+  /** Explicit opt-in: sync finalized transcript text/suggestions to Dashboard. */
+  transcript_sync_enabled?: boolean;
 }
 
 export interface MonitorInfo {
@@ -125,6 +127,7 @@ export const DEFAULT_SETTINGS: PresentationSettings = {
   ai_scripture_auto_live_quotes: false,
   ai_scripture_auto_live_paraphrases: false,
   ai_scripture_auto_live_voice_commands: false,
+  transcript_sync_enabled: false,
 };
 
 export const THEMES: Record<string, { label: string; colors: ThemeColors }> = {

@@ -545,6 +545,10 @@ pub struct PresentationSettings {
     pub ai_scripture_auto_live_paraphrases: bool,
     #[serde(default)]
     pub ai_scripture_auto_live_voice_commands: bool,
+    /// Explicit opt-in: upload finalized transcript text and Scripture
+    /// suggestions to the organization Dashboard. Audio is never uploaded.
+    #[serde(default)]
+    pub transcript_sync_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -649,6 +653,7 @@ impl Default for PresentationSettings {
             ai_scripture_auto_live_quotes: false,
             ai_scripture_auto_live_paraphrases: false,
             ai_scripture_auto_live_voice_commands: false,
+            transcript_sync_enabled: false,
         }
     }
 }

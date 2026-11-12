@@ -75,7 +75,7 @@ The Rust backend owns audio transport and connects to the AI Gateway; provider c
 - The Live Scripture Assistant panel states which provider is receiving audio and provides an explicit Stop control. Provider credentials remain in the AI Gateway; the desktop holds only a short-lived AI token.
 - Churches are responsible for obtaining consent required by their policy and local law.
 - Provider API keys are never embedded in the distributed desktop app or returned to the frontend. Each listening session is authorized online and billed in AI Units.
-- The transcript and suggestions are held in memory only in this beta. They are not added to backups or service data.
+- Finalized transcript text and Scripture suggestions can be synced to the church Dashboard only when the operator explicitly enables Dashboard transcript sync. Microphone audio is never uploaded or retained. The local session remains available if sync is disabled or fails.
 - Settings → AI Scripture includes a local session Performance panel. It records only counters and timing samples (not audio, transcript text, Bible text, references, or credentials): ASR final/interim activity, suggestion source counts, automatic/manual stage/live outcomes, failures, and median/p95 ASR-update-to-verified-Scripture, verified-to-operator/stage/live timing. ASR verification samples are broken down by references, quotes, themes, and commands. “ASR update → verified Scripture” starts after a provider interim/final update reaches Wordlyte and must not be presented as speech or provider-recognition latency. “Live committed” ends at acknowledgement of Wordlyte’s atomic Send Live command; it must not be presented as a measure of display render time or downstream encoder/CDN latency.
 - Provider errors end the AI session and surface an error status without affecting live or staged content.
 - Auto Live is disabled by default. It requires a separate master confirmation and per-category choice for references, quotations, paraphrases, and voice-command cards. When disabled, voice navigation and translation changes never auto-stage and never mutate live output.
@@ -104,6 +104,7 @@ The Rust backend owns audio transport and connects to the AI Gateway; provider c
 - Validate managed Gateway authentication, reconnect/token-refresh behavior, fractional Unit settlement, zero-balance cutoff, and audio quality on representative church mixers.
 - Add a transcript export only if an explicit retention/consent policy is approved.
 - Add session usage and provider-cost diagnostics without logging credentials or sermon text.
+- Exercise a supervised zero-balance soak on a one-Unit organization. The gateway closes the provider stream with code `4402` when the next minute cannot be reserved.
 - Decide whether AI should be license-gated after beta; safety controls must remain backend-enforced regardless of tier.
 
 ### Later detection phases

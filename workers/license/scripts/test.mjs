@@ -170,6 +170,31 @@ try {
   response = await call("/ai/token", { method: "POST", body: { organization_id: freeOrganization.id, machine_id: M1, device_token: "wdv_invalid" } });
   check("AI token rejects a bad device credential", response.status === 400 || response.status === 200);
 
+  response = await call("/transcripts/sync", {
+    method: "POST", token: aiToken,
+    body: {
+      session_id: "session-test-1",
+      started_at: 1,
+      ended_at: 2,
+      provider: "deepgram",
+      mode: "service",
+      version: "KJV",
+      transcript_text: "For God so loved the world.",
+      transcript: [{ id: "turn-1", text: "For God so loved the world.", is_final: true, confidence: 0.98, timestamp: 1 }],
+      suggestions: [],
+    },
+  });
+  check("AI-token transcript sync is accepted", response.status === 200 && response.data.status === "ok");
+  response = await call(`/admin/organizations/${freeOrganization.id}/transcripts`, { token: ADMIN_TOKEN });
+  check("admins can list synced transcripts", response.status === 200 && response.data.transcripts?.length === 1);
+  response = await call(`/admin/organizations/${freeOrganization.id}/transcripts/session-test-1`, { token: ADMIN_TOKEN });
+  check("admins can read finalized transcript text", response.status === 200
+    && response.data.transcript?.transcript_text === "For God so loved the world.");
+  response = await call(`/admin/organizations/${freeOrganization.id}/transcripts/session-test-1`, {
+    method: "DELETE", token: ADMIN_TOKEN,
+  });
+  check("admins can delete a synced transcript", response.status === 200 && response.data.status === "ok");
+
   response = await call("/internal/ai/reserve", {
     method: "POST",
     body: { organization_id: freeOrganization.id, units: 10, kind: "llm", idempotency_key: "test-reserve-001" },
@@ -235,6 +260,25 @@ try {
 
   response = await call("/admin/organizations", { token: ADMIN_TOKEN });
   check("admin lists organizations", response.status === 200 && response.data.organizations.length === 1);
+
+  response = await call("/admin/organizations", {
+    method: "POST", token: ADMIN_TOKEN,
+    body: { church_name: "Zero AI Church", email: "zero@example.test", plan: "free" },
+  });
+  const zeroOrganization = response.data.organization;
+  response = await call(`/admin/organizations/${zeroOrganization.id}/ai`, {
+    method: "POST", token: ADMIN_TOKEN,
+    body: { addon_duration_days: 30, monthly_units: 0, topup_units: 0 },
+  });
+  check("zero-balance organization has an active Add-on with no Units", response.status === 200
+    && response.data.ai?.addon_active === true
+    && response.data.ai?.total_units_remaining === 0);
+  response = await call("/internal/ai/reserve", {
+    method: "POST", token: AI_GATEWAY_SERVICE_TOKEN,
+    body: { organization_id: zeroOrganization.id, units: 1, kind: "asr", idempotency_key: "zero-balance-asr-001" },
+  });
+  check("zero-balance transcription reservation is rejected", response.status === 402
+    && response.data.status === "ai_no_units");
 } catch (error) {
   check(`unexpected error: ${error.message}`, false);
 } finally {
