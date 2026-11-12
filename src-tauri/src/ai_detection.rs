@@ -209,14 +209,24 @@ pub(crate) fn parse_verse_number(
 ) -> Option<(i32, usize, Option<i32>)> {
     let (verse, next) = parse_number(tokens, start)?;
     let verse_end = tokens.get(next).and_then(|separator| {
+        let named_second_verse = separator == "and"
+            && tokens
+                .get(next + 1)
+                .is_some_and(|marker| marker == "verse" || marker == "verses");
         let is_range =
             separator == "-" || separator == "to" || (separator == "and" && plural_marker);
-        is_range
-            .then(|| parse_number(tokens, next + 1).map(|(end, _)| end))
-            .flatten()
-            .filter(|end| *end >= verse)
+        if is_range {
+            parse_number(tokens, next + 1).map(|(end, _)| end)
+        } else if named_second_verse {
+            // "verse 28 and verse 29" is an explicit range even though the
+            // first marker is singular. Keep "verse 5 and then we go" from
+            // treating ordinary prose as a range.
+            parse_number(tokens, next + 2).map(|(end, _)| end)
+        } else {
+            None
+        }
     });
-    Some((verse, next, verse_end))
+    Some((verse, next, verse_end.filter(|end| *end >= verse)))
 }
 
 /// In continuous preaching, a range is commonly spoken without a separator:
@@ -942,6 +952,16 @@ mod tests {
             singular,
             Some((10, 2, None)),
             "a singular marker must not treat 'and' as a range separator"
+        );
+        let explicitly_marked_second = parse_verse_number(
+            &tokenize("verse twenty eight and verse twenty nine"),
+            1,
+            false,
+        );
+        assert_eq!(
+            explicitly_marked_second,
+            Some((28, 3, Some(29))),
+            "a second explicit verse marker must form a range"
         );
         let spoken_range = parse_verse_number(&tokenize("verses 5 to 6"), 1, true);
         assert_eq!(spoken_range, Some((5, 2, Some(6))));
