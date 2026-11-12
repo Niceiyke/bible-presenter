@@ -12,6 +12,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const PAID_OFFLINE_GRACE_DAYS: u64 = 30;
 pub const CLOCK_TOLERANCE_SECS: u64 = 6 * 60 * 60;
 const LICENSE_FILE: &str = "license.json";
+/// Refresh the in-memory AI token this far before expiry. A small overlap keeps
+/// reconnecting transcription sessions alive across a transient service blip.
+const AI_TOKEN_REFRESH_WINDOW_SECS: u64 = 600;
 
 /// Ed25519 verification key for signed account/device entitlement snapshots.
 /// The matching private key exists only as a Worker secret.
@@ -300,6 +303,11 @@ pub struct LicenseManager {
     verified: AtomicBool,
     server_url: String,
     client: reqwest::Client,
+    /// Short-lived AI access is cached only in memory. Keeping it across
+    /// reconnect attempts avoids a token round trip during transient provider
+    /// disconnects, and lets a near-expiry token bridge a brief license-service
+    /// outage.
+    ai_token: Mutex<Option<AiAccessInfo>>,
 }
 
 pub fn now_secs() -> u64 {
@@ -570,6 +578,7 @@ impl LicenseManager {
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
+            ai_token: Mutex::new(None),
         }
     }
 
@@ -599,6 +608,7 @@ impl LicenseManager {
     fn set_license(&self, license: License) -> Result<(), String> {
         self.persist(&license)?;
         *self.license.lock() = Some(license);
+        *self.ai_token.lock() = None;
         self.verified.store(true, Ordering::SeqCst);
         Ok(())
     }
@@ -844,12 +854,19 @@ impl LicenseManager {
         if existing.machine_id != self.machine_id {
             return Err("This activation belongs to a different computer.".to_owned());
         }
+        let now = now_secs();
+        let cached = self.ai_token.lock().clone();
+        if let Some(cached) = cached.as_ref() {
+            if cached.expires_at > now.saturating_add(AI_TOKEN_REFRESH_WINDOW_SECS) {
+                return Ok(cached.clone());
+            }
+        }
         let url = format!(
             "{}{}",
             self.server_url.trim_end_matches('/'),
             "/ai/token"
         );
-        let response = self
+        let response = match self
             .client
             .post(url)
             .json(&serde_json::json!({
@@ -859,13 +876,33 @@ impl LicenseManager {
             }))
             .send()
             .await
-            .map_err(|error| format!("Could not reach the Wordlyte AI service: {error}"))?;
+        {
+            Ok(response) => response,
+            Err(error) => {
+                // A reconnect can happen while the license service is briefly
+                // unreachable. Keep using the still-valid in-memory token
+                // instead of failing the whole listening session.
+                if let Some(cached) = cached.as_ref() {
+                    if cached.expires_at > now {
+                        return Ok(cached.clone());
+                    }
+                }
+                return Err(format!("Could not reach the Wordlyte AI service: {error}"));
+            }
+        };
         let status = response.status();
         let payload: AiTokenResponse = response
             .json()
             .await
             .map_err(|error| format!("The Wordlyte AI service returned an invalid response: {error}"))?;
         if !status.is_success() || payload.status != "ok" {
+            // Keep a still-valid cached token through transient 5xx/429
+            // responses; only a definitive authorization/entitlement failure
+            // should discard it.
+            let transient = status.is_server_error() || status.as_u16() == 429;
+            if !transient {
+                *self.ai_token.lock() = None;
+            }
             return Err(payload
                 .message
                 .unwrap_or_else(|| "Wordlyte AI is not available for this organization.".to_owned()));
@@ -881,7 +918,7 @@ impl LicenseManager {
             transcription_units_per_minute: 1.0,
             standard_llm_request_units: 10.0,
         });
-        Ok(AiAccessInfo {
+        let access = AiAccessInfo {
             token,
             expires_at: payload.expires_at.unwrap_or_else(|| now_secs() + 900),
             ai: AiUnitBalance {
@@ -897,7 +934,9 @@ impl LicenseManager {
                     standard_llm_request_units: rates.standard_llm_request_units,
                 },
             },
-        })
+        };
+        *self.ai_token.lock() = Some(access.clone());
+        Ok(access)
     }
 
     /// POST a JSON payload to a License Worker endpoint that accepts the
@@ -1160,6 +1199,31 @@ mod tests {
     }
 
     #[test]
+    fn valid_cached_ai_token_avoids_a_network_round_trip() {
+        let manager = LicenseManager {
+            file: std::env::temp_dir().join("wordlyte-license-unused.json"),
+            machine_id: "machine".to_owned(),
+            license: Mutex::new(Some(license(LicenseTier::Pro, Some(9_999_999)))),
+            verified: AtomicBool::new(true),
+            server_url: "http://127.0.0.1:1".to_owned(),
+            client: reqwest::Client::new(),
+            ai_token: Mutex::new(Some(AiAccessInfo {
+                token: "cached-token".to_owned(),
+                expires_at: now_secs() + 3_600,
+                ai: AiUnitBalance::default(),
+            })),
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let access = runtime
+            .block_on(manager.ai_access())
+            .expect("cached token should be returned");
+        assert_eq!(access.token, "cached-token");
+    }
+
+    #[test]
     fn expired_paid_plan_uses_free_capacity_limits() {
         let manager = LicenseManager {
             file: std::env::temp_dir().join("wordlyte-license-unused.json"),
@@ -1168,6 +1232,7 @@ mod tests {
             verified: AtomicBool::new(true),
             server_url: "https://example.test".to_owned(),
             client: reqwest::Client::new(),
+            ai_token: Mutex::new(None),
         };
         let mut paid = license(LicenseTier::Premium, Some(101));
         paid.last_seen_at = 0;

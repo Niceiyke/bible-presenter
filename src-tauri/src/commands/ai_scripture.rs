@@ -57,9 +57,13 @@ const PROACTIVE_REFERENCE_FINALIZATION_WINDOW: Duration = Duration::from_secs(5)
 const MAX_SPOKEN_REFERENCE_RANGE: i32 = 10;
 const MAX_AUDIO_RECOVERIES: usize = 2;
 const MAX_PROVIDER_RECONNECT_ATTEMPTS: usize = 12;
-const PROVIDER_RECONNECT_BASE_DELAY_MILLIS: u64 = 250;
+const PROVIDER_RECONNECT_BASE_DELAY_MILLIS: u64 = 1_000;
+const PROVIDER_RECONNECT_MAX_DELAY_MILLIS: u64 = 60_000;
 const PROVIDER_RECONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const PROVIDER_RECONNECT_STABLE_WINDOW: Duration = Duration::from_secs(30);
+/// Proactively refresh the in-memory AI token while the session is healthy, so
+/// a later provider reconnect does not depend on a fresh license-service call.
+const AI_TOKEN_REFRESH_INTERVAL: Duration = Duration::from_secs(8 * 60);
 
 type AsrWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -383,6 +387,11 @@ struct DetectionConfig {
     available_versions: Vec<String>,
     reference_aliases: Vec<(Vec<String>, String)>,
     navigation_anchor: Arc<Mutex<Option<VerseAnchor>>>,
+    /// Last canonical book name spoken, even when the speaker has not yet
+    /// supplied a chapter. This lets "in Isaiah" followed by "chapter seven and
+    /// verse fourteen" resolve against Isaiah rather than the last projected
+    /// verse's book.
+    last_spoken_book: Arc<Mutex<Option<String>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -423,9 +432,9 @@ struct QuoteJob {
     semantic_segments: usize,
     evidence: String,
     asr_confidence: f32,
-    /// Explicit citation spoken in the same final turn, when present. It is
-    /// used to distinguish an anchored quotation from a loose lexical match.
-    reference: Option<ScriptureReference>,
+    /// Explicit citations spoken in the same final turn. Every citation is
+    /// retained so a quotation inside a spoken range can be anchored.
+    references: Vec<ScriptureReference>,
     /// True when the turn contains an attribution phrase such as "it is
     /// written" or "the Bible says".
     attribution_cue: bool,
@@ -928,16 +937,77 @@ fn navigation_anchor(detection: &DetectionConfig, app: &AppHandle) -> Option<Ver
 }
 
 /// Sermons commonly continue through a chapter with "verse seventeen and
-/// eighteen" after naming the book and chapter once. Resolve that concise form
-/// against the last verified reference instead of making the operator repeat
-/// the full citation.
+/// eighteen" after naming the book once. Resolve that concise form against the
+/// most recently spoken book, falling back to the last verified reference only
+/// when no book has been named yet.
 fn detect_contextual_verse_reference_from_tokens(
     tokens: &[String],
     detection: &DetectionConfig,
     app: &AppHandle,
 ) -> Option<crate::ai_detection::ScriptureReference> {
-    let anchor = navigation_anchor(detection, app)?;
-    contextual_verse_reference_for_anchor_tokens(tokens, &anchor)
+    let recent_book = detection
+        .last_spoken_book
+        .lock()
+        .ok()
+        .and_then(|book| book.clone());
+    let anchor = navigation_anchor(detection, app);
+    let reference = contextual_verse_reference_for_tokens(
+        tokens,
+        recent_book.as_deref(),
+        anchor.as_ref(),
+    );
+    if let Some(reference) = &reference {
+        if let Ok(mut book) = detection.last_spoken_book.lock() {
+            *book = Some(reference.book.clone());
+        }
+    }
+    reference
+}
+
+/// Records the last canonical book named in the transcript, even when no
+/// chapter/verse follows yet. The next ASR segment can then resolve "chapter
+/// seven and verse fourteen" against Isaiah.
+fn remember_last_spoken_book(
+    detection: &DetectionConfig,
+    tokens: &[String],
+    direct_references: &[crate::ai_detection::ScriptureReference],
+) {
+    let book = direct_references
+        .last()
+        .map(|reference| reference.book.clone())
+        .or_else(|| last_book_mention(tokens, &detection.reference_aliases));
+    if let Some(book) = book {
+        if let Ok(mut current) = detection.last_spoken_book.lock() {
+            *current = Some(book);
+        }
+    }
+}
+
+fn last_book_mention(
+    tokens: &[String],
+    aliases: &[(Vec<String>, String)],
+) -> Option<String> {
+    let mut best: Option<(usize, usize, String)> = None;
+    for (alias, canonical) in aliases {
+        if alias.is_empty() || alias.len() > tokens.len() {
+            continue;
+        }
+        for start in 0..=tokens.len() - alias.len() {
+            if tokens[start..start + alias.len()] != alias[..] {
+                continue;
+            }
+            let end = start + alias.len();
+            let replace = best
+                .as_ref()
+                .is_none_or(|(best_end, best_len, _)| {
+                    end > *best_end || (end == *best_end && alias.len() > *best_len)
+                });
+            if replace {
+                best = Some((end, alias.len(), canonical.clone()));
+            }
+        }
+    }
+    best.map(|(_, _, book)| book)
 }
 
 #[cfg(test)]
@@ -946,38 +1016,75 @@ fn contextual_verse_reference_for_anchor(
     anchor: &VerseAnchor,
 ) -> Option<crate::ai_detection::ScriptureReference> {
     let tokens = quote_tokens(transcript);
-    contextual_verse_reference_for_anchor_tokens(&tokens, anchor)
+    contextual_verse_reference_for_tokens(&tokens, Some(&anchor.book), Some(anchor))
 }
 
-fn contextual_verse_reference_for_anchor_tokens(
+fn contextual_verse_reference_for_tokens(
     tokens: &[String],
-    anchor: &VerseAnchor,
+    recent_book: Option<&str>,
+    anchor: Option<&VerseAnchor>,
 ) -> Option<crate::ai_detection::ScriptureReference> {
+    let book = recent_book.or_else(|| anchor.map(|anchor| anchor.book.as_str()))?;
+    let fallback_chapter = anchor.map(|anchor| anchor.chapter);
     let mut latest = None;
-    for index in 0..tokens.len() {
-        let plural_marker = tokens[index].as_str() == "verses";
-        if !plural_marker && tokens[index].as_str() != "verse" {
-            continue;
+    let mut index = 0usize;
+    while index < tokens.len() {
+        // Explicit chapter followed by a verse: "chapter seven and verse 14".
+        // The chapter wins over the navigation anchor so a new book mention is
+        // not misread as another passage in the previously projected book.
+        if tokens[index] == "chapter" {
+            if let Some((chapter, next)) = parse_number(tokens, index + 1) {
+                let mut marker = next;
+                if tokens.get(marker).is_some_and(|token| token == "and") {
+                    marker += 1;
+                }
+                if tokens
+                    .get(marker)
+                    .is_some_and(|token| token == "verse" || token == "verses")
+                {
+                    let plural = tokens[marker] == "verses";
+                    if let Some((verse, verse_next, verse_end)) =
+                        crate::ai_detection::parse_verse_number(tokens, marker + 1, plural)
+                    {
+                        if chapter > 0 && (1..=176).contains(&verse) {
+                            let verse_end = verse_end.filter(|end| *end <= 176);
+                            latest = Some(crate::ai_detection::ScriptureReference {
+                                book: book.to_string(),
+                                chapter,
+                                verse,
+                                verse_end,
+                            });
+                            index = verse_next;
+                            continue;
+                        }
+                    }
+                }
+            }
         }
-        // The anchor's contextual parser must agree with the explicit
-        // `ai_detection` reference parser on the same range policy, including
-        // that a singular "verse" marker does not extend a range with "and".
-        let Some((verse, _next, verse_end)) =
-            crate::ai_detection::parse_verse_number(tokens, index + 1, plural_marker)
-        else {
-            continue;
-        };
-        // Speech navigates within a chapter's verse numbers only.
-        if !(1..=176).contains(&verse) {
-            continue;
+        // Verse-only continuation: "verse seventeen and eighteen".
+        let plural_marker = tokens[index] == "verses";
+        if plural_marker || tokens[index] == "verse" {
+            if let Some(chapter) = fallback_chapter {
+                let Some((verse, next, verse_end)) =
+                    crate::ai_detection::parse_verse_number(tokens, index + 1, plural_marker)
+                else {
+                    index += 1;
+                    continue;
+                };
+                if (1..=176).contains(&verse) {
+                    let verse_end = verse_end.filter(|end| *end <= 176);
+                    latest = Some(crate::ai_detection::ScriptureReference {
+                        book: book.to_string(),
+                        chapter,
+                        verse,
+                        verse_end,
+                    });
+                    index = next;
+                    continue;
+                }
+            }
         }
-        let verse_end = verse_end.filter(|end| *end <= 176);
-        latest = Some(crate::ai_detection::ScriptureReference {
-            book: anchor.book.clone(),
-            chapter: anchor.chapter,
-            verse,
-            verse_end,
-        });
+        index += 1;
     }
     latest
 }
@@ -1624,8 +1731,15 @@ async fn reconnect_provider_socket(
     while *reconnect_attempts < MAX_PROVIDER_RECONNECT_ATTEMPTS {
         *reconnect_attempts += 1;
         let attempt = *reconnect_attempts;
-        let delay =
-            PROVIDER_RECONNECT_BASE_DELAY_MILLIS.saturating_mul(1_u64 << (attempt - 1).min(4));
+        let backoff = PROVIDER_RECONNECT_BASE_DELAY_MILLIS
+            .saturating_mul(1_u64 << (attempt - 1).min(6))
+            .min(PROVIDER_RECONNECT_MAX_DELAY_MILLIS);
+        let jitter = (SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos()
+            % 500) as u64;
+        let delay = backoff.saturating_add(jitter);
         emit_status(
             app,
             provider,
@@ -1780,6 +1894,33 @@ async fn run_asr_session(
             &format!("[ai-scripture] quote index unavailable: {error}"),
         ),
     }
+    let refresh_license = license.clone();
+    let refresh_app = app.clone();
+    let mut refresh_stop = stop.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut next_refresh = AI_TOKEN_REFRESH_INTERVAL;
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep(next_refresh) => {}
+                changed = refresh_stop.changed() => {
+                    if changed.is_err() || *refresh_stop.borrow() {
+                        break;
+                    }
+                    continue;
+                }
+            }
+            match refresh_license.ai_access().await {
+                Ok(_) => next_refresh = AI_TOKEN_REFRESH_INTERVAL,
+                Err(error) => {
+                    crate::store::log_msg(
+                        &refresh_app,
+                        &format!("[ai-scripture] proactive AI token refresh failed: {error}"),
+                    );
+                    next_refresh = Duration::from_secs(60);
+                }
+            }
+        }
+    });
     let Some(mut socket) = connect_provider_socket(
         adapter,
         provider,
@@ -1816,6 +1957,7 @@ async fn run_asr_session(
         available_versions,
         reference_aliases,
         navigation_anchor: Arc::new(Mutex::new(None)),
+        last_spoken_book: Arc::new(Mutex::new(None)),
     });
     let recently_suggested = Arc::new(Mutex::new(HashMap::new()));
     let detection_generation = Arc::new(AtomicU64::new(0));
@@ -2109,7 +2251,7 @@ fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Opt
                     &mut cache,
                     &worker_job.rolling_text,
                     &worker_job.evidence,
-                    worker_job.reference.as_ref(),
+                    &worker_job.references,
                     worker_job.attribution_cue,
                     worker_job.asr_confidence,
                 )
@@ -2129,18 +2271,21 @@ fn spawn_quote_worker(worker: DetectionWorker, mut quote_rx: watch::Receiver<Opt
             for suggestion in &mut suggestions {
                 suggestion.source_transcript_timestamp = Some(job.source_transcript_timestamp);
             }
-            if let Some(reference) = &job.reference {
+            if let Some(cited) = job.references.first() {
                 for suggestion in &suggestions {
                     if suggestion.detection == "quote"
-                        && !reference_matches_verse(reference, &suggestion.verse)
+                        && !job
+                            .references
+                            .iter()
+                            .any(|reference| reference_covers_verse(reference, &suggestion.verse))
                     {
                         crate::store::log_msg(
                             &worker.app,
                             &format!(
-                                "[ai-scripture] citation/quote conflict: cited {} {}:{}, quote evidence matched {} {}:{}",
-                                reference.book,
-                                reference.chapter,
-                                reference.verse,
+                                "[ai-scripture] citation/quote conflict: cited {} {}:{} (or a cited range), quote evidence matched {} {}:{}",
+                                cited.book,
+                                cited.chapter,
+                                cited.verse,
                                 suggestion.verse.book,
                                 suggestion.verse.chapter,
                                 suggestion.verse.verse,
@@ -2505,6 +2650,7 @@ fn handle_transcription_update(
     }
     let direct_references =
         detect_references_with_aliases(&normalized_tokens, &detection.reference_aliases);
+    remember_last_spoken_book(detection, &normalized_tokens, &direct_references);
     let transcript_reference = direct_references.last().cloned();
     if let Some(directive) = detect_voice_directive(
         transcript,
@@ -2605,7 +2751,7 @@ fn handle_transcription_update(
     } else {
         (direct_references, true)
     };
-    let reference_hint = final_references.0.first().cloned();
+    let reference_hints = final_references.0.clone();
     if !final_references.0.is_empty() {
         // One spoken citation produces one passage card. Expanding every verse
         // in a range used to flood the feed and, because all range verses shared
@@ -2668,7 +2814,7 @@ fn handle_transcription_update(
         semantic_segments,
         evidence: final_evidence,
         asr_confidence: confidence,
-        reference: reference_hint,
+        references: reference_hints,
         attribution_cue: has_quote_attribution_cue(transcript),
         source_transcript_timestamp: transcript_timestamp,
     }));
@@ -2682,8 +2828,14 @@ fn has_quote_attribution_cue(text: &str) -> bool {
         "as it is written",
         "the scripture says",
         "the scripture saith",
+        "the scripture tells us",
         "the bible says",
+        "the bible tells us",
+        "the bible declares",
+        "the word tells us",
         "the word of god says",
+        "the word of god tells us",
+        "it says",
         "thus saith the lord",
         "in the book of",
     ]
@@ -2708,6 +2860,7 @@ fn handle_interim_transcript(
     // turn boundary. They remain Preview-only until the provider sends its
     // final transcript: ASR can briefly revise a spoken number while the
     // preacher is still speaking.
+    remember_last_spoken_book(detection, normalized_tokens, &[]);
     let references = {
         let direct = detect_references_with_aliases(
             interim_reference_tokens(normalized_tokens),
@@ -2725,6 +2878,7 @@ fn handle_interim_transcript(
             direct
         }
     };
+    remember_last_spoken_book(detection, normalized_tokens, &references);
     let output_version = current_output_version(detection);
     for reference in references {
         let verses = verses_for_reference(bible, &reference, &output_version);
@@ -2796,7 +2950,7 @@ fn detect_direct_quotes(
     cache: &mut QuoteSearchCache,
     rolling_text: &str,
     evidence: &str,
-    reference: Option<&ScriptureReference>,
+    references: &[ScriptureReference],
     attribution_cue: bool,
     asr_confidence: f32,
 ) -> Vec<ScriptureSuggestion> {
@@ -2822,16 +2976,21 @@ fn detect_direct_quotes(
         .into_iter()
         .take(MAX_DIRECT_QUOTES_PER_TURN)
         .map(|(verse, score, matched_evidence, rare_word_count)| {
-            let anchored = attribution_cue
-                || reference.is_some_and(|reference| reference_matches_verse(reference, &verse));
-            let citation_conflict = reference
-                .filter(|reference| !reference_matches_verse(reference, &verse))
-                .map(|reference| {
+            let matching_reference = references
+                .iter()
+                .find(|reference| reference_covers_verse(reference, &verse));
+            let anchored = matching_reference.is_some()
+                || (attribution_cue && references.is_empty());
+            let citation_conflict = if matching_reference.is_some() {
+                None
+            } else {
+                references.first().map(|reference| {
                     format!(
                         "Spoken citation {} {}:{} differs from the matched verse.",
                         reference.book, reference.chapter, reference.verse
                     )
-                });
+                })
+            };
             let confidence =
                 quote_confidence(score, asr_confidence, quote_tokens(&matched_evidence).len()).min(
                     if anchored {
@@ -2960,10 +3119,11 @@ fn best_indexed_quote_candidate(index: &QuoteSearchIndex, window: &str) -> Optio
     best
 }
 
-fn reference_matches_verse(reference: &ScriptureReference, verse: &Verse) -> bool {
+fn reference_covers_verse(reference: &ScriptureReference, verse: &Verse) -> bool {
+    let end = reference.verse_end.unwrap_or(reference.verse);
     reference.book == verse.book
         && reference.chapter == verse.chapter
-        && reference.verse == verse.verse
+        && (reference.verse..=end).contains(&verse.verse)
 }
 
 fn quote_search_windows(text: &str) -> Vec<String> {
@@ -3606,6 +3766,57 @@ mod tests {
                 "unexpected verse for {phrase}"
             );
         }
+    }
+
+    #[test]
+    fn contextual_chapter_uses_the_most_recently_spoken_book() {
+        let tokens = quote_tokens("chapter seven and verse fourteen");
+        let anchor = VerseAnchor {
+            book: "John".into(),
+            chapter: 3,
+            verse: 8,
+        };
+        assert_eq!(
+            contextual_verse_reference_for_tokens(&tokens, Some("Isaiah"), Some(&anchor)),
+            Some(ScriptureReference {
+                book: "Isaiah".into(),
+                chapter: 7,
+                verse: 14,
+                verse_end: None,
+            })
+        );
+    }
+
+    #[test]
+    fn last_book_mention_ignores_a_later_verse_anchor() {
+        let aliases = reference_aliases_for_books(&["Isaiah".into(), "John".into()]);
+        assert_eq!(
+            last_book_mention(&quote_tokens("the Bible speaks in Isaiah"), &aliases),
+            Some("Isaiah".into())
+        );
+    }
+
+    #[test]
+    fn a_cited_range_covers_each_verse_in_the_range() {
+        let reference = ScriptureReference {
+            book: "Hebrews".into(),
+            chapter: 12,
+            verse: 28,
+            verse_end: Some(29),
+        };
+        let verse = |number| Verse {
+            book: "Hebrews".into(),
+            chapter: 12,
+            verse: number,
+            text: String::new(),
+            version: "KJV".into(),
+            split_index: None,
+            total_splits: None,
+            score: None,
+        };
+        assert!(reference_covers_verse(&reference, &verse(28)));
+        assert!(reference_covers_verse(&reference, &verse(29)));
+        assert!(!reference_covers_verse(&reference, &verse(30)));
     }
 
     #[test]
