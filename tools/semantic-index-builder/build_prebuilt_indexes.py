@@ -374,7 +374,10 @@ def build_version(version):
     # Parse it back the way the app will: header, entry layout, byte count.
     header = read_index_header(target)
     assert header and header[0] == fingerprint, f"{version}: written index failed verification"
-    expected_size = 8 + 32 + 8 + len(documents) * (2 + EMBEDDING_DIMENSION + 12)
+    expected_size = 8 + 32 + 8 + sum(
+        2 + len(document["book"].encode("utf-8")) + 12 + EMBEDDING_DIMENSION
+        for document in documents
+    )
     actual_size = os.path.getsize(target)
     assert actual_size == expected_size, f"{version}: index size {actual_size} != {expected_size}"
     return target
