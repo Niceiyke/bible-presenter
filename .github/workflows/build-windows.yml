@@ -90,9 +90,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # ffmpeg must be pinned to a specific autobuild tag, never `latest`.
+          # ffmpeg must be pinned to a specific month-end autobuild tag, never `latest`.
           if grep -qE '^\$ReleaseTag = "latest"' scripts/fetch-ffmpeg.ps1; then
-            echo "::error::fetch-ffmpeg.ps1 must pin a specific autobuild tag, not 'latest'."
+            echo "::error::fetch-ffmpeg.ps1 must pin a specific month-end autobuild tag, not 'latest'."
             exit 1
           fi
           # The Bible data ZIP must have a pinned SHA-256 before a release ships.

@@ -14,9 +14,10 @@
 # Reproducibility: BtbN publishes rolling auto-builds under a moving `latest`
 # tag (whose assets are also re-uploaded later the same day). To keep release
 # builds deterministic, pin `$ReleaseTag` to a specific immutable autobuild tag
-# (e.g. `autobuild-2026-09-05-13-10`, see
-# https://github.com/BtbN/FFmpeg-Builds/releases) rather than `latest`. The
-# archive name varies per build (it embeds the ffmpeg revision), so it is
+# (see https://github.com/BtbN/FFmpeg-Builds/releases) rather than `latest`.
+# BtbN prunes recent daily tags, but retains month-end tags indefinitely, so
+# pins MUST use a month-end build (for example `autobuild-2026-10-31-12-59`).
+# The archive name varies per build (it embeds the ffmpeg revision), so it is
 # resolved from that release's own `checksums.sha256`, and the downloaded zip
 # must match BOTH that published checksum AND the committed `$ExpectedSha256`
 # below - a mismatch fails the fetch instead of silently bundling an unexpected
@@ -25,14 +26,14 @@
 $ErrorActionPreference = "Stop"
 
 $BinDir = Join-Path $PSScriptRoot "..\src-tauri\binaries"
-# PINNED autobuild tag (NOT `latest`): a moving tag makes release builds
-# non-reproducible, so the tag must be a specific BtbN autobuild. Update both
-# the tag and `$ExpectedSha256` together when deliberately upgrading ffmpeg.
-$ReleaseTag = "autobuild-2026-09-05-13-10"
+# PINNED month-end autobuild tag (NOT `latest`): a moving tag makes release
+# builds non-reproducible, and BtbN deletes recent daily tags. Update both the
+# tag and `$ExpectedSha256` together when deliberately upgrading ffmpeg.
+$ReleaseTag = "autobuild-2026-10-31-12-59"
 # Committed SHA-256 of the NON-shared LGPL win64 zip for the pinned tag. This is
 # independent of the (moving) checksums.sha256 and makes the fetch tamper-proof
 # even if the release's own checksum file were replaced.
-$ExpectedSha256 = "fd5a992e91eb0637e17e2151dd34dc4ea4ff028a90b170ccf3f0a27c909bd974"
+$ExpectedSha256 = "6550f7abc950128fbb0069b4552f2972baccf5fbd819f2fd0abbe4ceb8d48734"
 $BaseUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$ReleaseTag"
 $ChecksumsUrl = "$BaseUrl/checksums.sha256"
 $Zip = Join-Path $env:TEMP "ffmpeg-lgpl.zip"
@@ -41,7 +42,24 @@ $Extract = Join-Path $env:TEMP "ffmpeg-lgpl"
 
 # Reproducibility gate: a release build must never use the moving `latest` tag.
 if ($ReleaseTag -eq "latest" -or $ReleaseTag -match "latest") {
-    throw "ReleaseTag must be pinned to a specific autobuild tag (e.g. autobuild-YYYY-MM-DD-HH-MM), not 'latest', for reproducible releases."
+    throw "ReleaseTag must be pinned to a specific month-end autobuild tag (e.g. autobuild-YYYY-MM-DD-HH-MM), not 'latest', for reproducible releases."
+}
+
+# BtbN retains month-end tags indefinitely but prunes recent daily tags. Reject
+# daily pins here so CI does not break weeks later when the tag is deleted.
+$tagDateText = $ReleaseTag.Substring(10, 10)
+$tagDate = [datetime]::MinValue
+if (-not [datetime]::TryParseExact(
+    $tagDateText,
+    "yyyy-MM-dd",
+    [Globalization.CultureInfo]::InvariantCulture,
+    [Globalization.DateTimeStyles]::None,
+    [ref]$tagDate
+)) {
+    throw "ReleaseTag must contain a valid date in the form autobuild-YYYY-MM-DD-HH-MM."
+}
+if ($tagDate.Day -ne [datetime]::DaysInMonth($tagDate.Year, $tagDate.Month)) {
+    throw "ReleaseTag must be a month-end autobuild (BtbN prunes daily tags); use the last day of a month."
 }
 
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
