@@ -273,7 +273,7 @@ export function useAppInitialization() {
       const entry = ev.payload;
       addLog(entry);
       if (entry?.level === "warn" || entry?.level === "error") {
-        setBackendError(entry.message ?? "Backend warning");
+        setBackendError(entry.message ?? "Wordlyte reported a service warning.");
       }
     });
     // P0.3 — Warnings signalled from other windows (output/stage).

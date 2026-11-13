@@ -79,13 +79,13 @@ export function AiScriptureSessions({ active }: { active: boolean }) {
       <div className="px-3 py-2 border-b border-console-border flex items-center justify-between gap-3">
         <div>
           <h3 className="text-[10px] font-black uppercase tracking-widest text-console-text-muted flex items-center gap-1.5"><History size={11} className="text-violet-400" /> Saved sessions</h3>
-          <p className="mt-0.5 text-[9px] text-console-text-subtle">Final transcripts and Scripture suggestions are stored locally and included in Wordlyte backups.</p>
+          <p className="mt-0.5 text-[9px] text-console-text-subtle">When local transcript retention is enabled, final transcripts and Scripture suggestions are stored locally and included in Wordlyte backups.</p>
         </div>
         <button type="button" onClick={() => void refresh()} disabled={loading} className="text-[10px] text-console-text-subtle hover:text-console-text flex items-center gap-1 disabled:opacity-50"><RefreshCw size={10} className={loading ? "animate-spin" : ""} /> Refresh</button>
       </div>
 
       {sessions.length === 0 ? (
-        <p className="p-3 text-[11px] italic text-console-text-subtle">A saved session will be created when listening starts.</p>
+        <p className="p-3 text-[11px] italic text-console-text-subtle">Saved sessions will appear here when local transcript retention is enabled.</p>
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-[minmax(280px,0.8fr)_minmax(0,1.2fr)] min-h-48 max-h-[360px]">
           <div className="overflow-y-auto custom-scrollbar border-b xl:border-b-0 xl:border-r border-console-border">
@@ -94,7 +94,7 @@ export function AiScriptureSessions({ active }: { active: boolean }) {
                 <button type="button" onClick={() => void openSession(session.id)} className="w-full text-left">
                   <div className="flex items-center justify-between gap-2">
                     <strong className="text-[11px] text-console-text">{sessionDate(session.startedAt)}</strong>
-                    <span className={`text-[9px] uppercase ${session.endedAt == null ? "text-state-success" : "text-console-text-subtle"}`}>{session.endedAt == null ? "In progress · " : ""}{session.mode} · {session.provider}</span>
+                    <span className={`text-[9px] uppercase ${session.endedAt == null ? "text-state-success" : "text-console-text-subtle"}`}>{session.endedAt == null ? "In progress · " : ""}{session.mode} session</span>
                   </div>
                   <p className="mt-1 text-[10px] text-console-text-muted line-clamp-2">{session.transcriptPreview || "No final transcript text was captured."}</p>
                   <p className="mt-1 text-[9px] text-console-text-subtle">{session.transcriptSegments} segments · {session.suggestions} suggestions · {session.version}</p>

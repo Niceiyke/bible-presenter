@@ -549,9 +549,13 @@ pub struct PresentationSettings {
     pub ai_scripture_auto_live_paraphrases: bool,
     #[serde(default)]
     pub ai_scripture_auto_live_voice_commands: bool,
-    /// Explicit opt-in: upload finalized transcript text and Scripture
-    /// suggestions to the organization Dashboard. Audio is never uploaded.
-    #[serde(default)]
+    /// Keep finalized AI Scripture transcript sessions on this computer.
+    /// Enabled by default; operators can opt out of local retention.
+    #[serde(default = "default_true")]
+    pub transcript_retention_enabled: bool,
+    /// Upload finalized transcript text and Scripture suggestions to the
+    /// organization Dashboard. Enabled by default; audio is never uploaded.
+    #[serde(default = "default_true")]
     pub transcript_sync_enabled: bool,
 }
 
@@ -563,6 +567,9 @@ pub struct ThemeColors {
     pub text: String,
 }
 
+fn default_true() -> bool {
+    true
+}
 fn default_auto_split_verses() -> bool {
     true
 }
@@ -661,7 +668,8 @@ impl Default for PresentationSettings {
             ai_scripture_auto_live_quotes: false,
             ai_scripture_auto_live_paraphrases: false,
             ai_scripture_auto_live_voice_commands: false,
-            transcript_sync_enabled: false,
+            transcript_retention_enabled: true,
+            transcript_sync_enabled: true,
         }
     }
 }
@@ -2179,7 +2187,24 @@ impl MediaScheduleStore {
             .kv_get("settings")
             .map_err(|e| anyhow::anyhow!(e))?
         {
-            Some(json) => Ok(serde_json::from_str(&json).unwrap_or_default()),
+            Some(json) => {
+                let value: serde_json::Value =
+                    serde_json::from_str(&json).unwrap_or_default();
+                // Existing installations predate the retention preference. A
+                // missing retention field marks settings from that era; enable
+                // both privacy defaults once so the operator can opt out from
+                // the new Transcript retention & sync controls.
+                let needs_privacy_defaults =
+                    value.get("transcript_retention_enabled").is_none();
+                let mut settings: PresentationSettings =
+                    serde_json::from_value(value).unwrap_or_default();
+                if needs_privacy_defaults {
+                    settings.transcript_retention_enabled = true;
+                    settings.transcript_sync_enabled = true;
+                    let _ = self.save_settings(&settings);
+                }
+                Ok(settings)
+            }
             None => Ok(PresentationSettings::default()),
         }
     }
@@ -2611,6 +2636,38 @@ mod media_delete_tests {
             .remove("scripture_auto_fit");
         let parsed: PresentationSettings = serde_json::from_value(value).unwrap();
         assert!(parsed.scripture_auto_fit);
+    }
+
+    #[test]
+    fn transcript_retention_and_sync_default_on_for_existing_settings() {
+        let default = PresentationSettings::default();
+        assert!(default.transcript_retention_enabled);
+        assert!(default.transcript_sync_enabled);
+        let mut value = serde_json::to_value(&default).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("transcript_retention_enabled");
+        object.remove("transcript_sync_enabled");
+        let parsed: PresentationSettings = serde_json::from_value(value).unwrap();
+        assert!(parsed.transcript_retention_enabled);
+        assert!(parsed.transcript_sync_enabled);
+    }
+
+    #[test]
+    fn existing_settings_receive_transcript_privacy_defaults_once() {
+        let (dir, store) = test_store("privacy-defaults");
+        let mut value = serde_json::to_value(PresentationSettings::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("transcript_retention_enabled");
+        object.insert("transcript_sync_enabled".into(), serde_json::Value::Bool(false));
+        store
+            .data_db
+            .kv_set("settings", &value.to_string())
+            .unwrap();
+
+        let migrated = store.load_settings().unwrap();
+        assert!(migrated.transcript_retention_enabled);
+        assert!(migrated.transcript_sync_enabled);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

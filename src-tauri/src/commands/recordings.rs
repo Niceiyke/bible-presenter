@@ -528,7 +528,7 @@ pub fn recording_start(
         }
     }
     if !crate::binpaths::ffmpeg_available() {
-        return Err("ffmpeg was not found — install ffmpeg to record.".into());
+        return Err("The built-in media engine is unavailable. Reinstall Wordlyte to record.".into());
     }
     let audio_device = audio_device.filter(|d| !d.trim().is_empty());
     if audio_device.is_some() {
@@ -576,7 +576,7 @@ pub fn recording_start(
         .stdout(Stdio::null());
     let mut child = match crate::binpaths::hide_console(&mut command).spawn() {
         Ok(c) => c,
-        Err(e) => return Err(format!("Failed to start ffmpeg: {e}")),
+        Err(e) => return Err(format!("Recording could not start: {e}")),
     };
     // Drain stderr from the start: an undrained pipe can stall ffmpeg, and the
     // retained tail turns a bare exit code into ffmpeg's real error message.
@@ -591,7 +591,7 @@ pub fn recording_start(
         (None, None) => {
             let _ = child.kill();
             let _ = child.wait();
-            return Err("ffmpeg stdin was not available.".to_string());
+            return Err("The media engine did not start correctly.".to_string());
         }
     };
 
@@ -808,13 +808,13 @@ pub async fn recording_stop_active(app: AppHandle, state: State<'_, AppState>) -
     // ffmpeg sees end-of-input on every stream and finalizes the MP4 footer.
 
     let mut child = session.child;
-    let status_code = child.wait().map_err(|e| format!("ffmpeg finalize failed: {e}"))?;
+    let status_code = child.wait().map_err(|e| format!("The recording could not be finalized: {e}"))?;
     if !status_code.success() {
         let _ = std::fs::remove_file(&session.tmp_path);
         let detail = stderr_tail_text(&session.stderr_tail)
             .map(|t| format!(" — ffmpeg said: {t}"))
             .unwrap_or_default();
-        return Err(format!("ffmpeg exited with {status_code}{detail} — recording not saved."));
+        return Err(format!("The recording could not be saved ({status_code}){detail}. Check available disk space and try again."));
     }
 
     std::fs::rename(&session.tmp_path, &session.final_path).map_err(|e| e.to_string())?;

@@ -491,7 +491,7 @@ mod storage {
                 CRYPTPROTECT_UI_FORBIDDEN,
                 &mut out,
             )
-            .map_err(|error| format!("Could not protect device entitlement: {error}"))?;
+            .map_err(|error| format!("Could not secure this device's Wordlyte activation: {error}"))?;
         }
         Ok(copy_and_free(&out))
     }
@@ -509,7 +509,7 @@ mod storage {
                 CRYPTPROTECT_UI_FORBIDDEN,
                 &mut out,
             )
-            .map_err(|error| format!("Could not open device entitlement: {error}"))?;
+            .map_err(|error| format!("Could not read this device's Wordlyte activation: {error}"))?;
             if !description.is_null() {
                 LocalFree(Some(HLOCAL(description.as_ptr().cast())));
             }
@@ -729,14 +729,14 @@ impl LicenseManager {
     ) -> Result<License, String> {
         if response.status != "active" || !verify_server(&response) {
             return Err(response.message.unwrap_or_else(|| {
-                "The account service returned an invalid activation response.".to_owned()
+                "Wordlyte received an invalid activation response. Please try again.".to_owned()
             }));
         }
         let server_time = response.server_time.unwrap_or_else(now_secs);
         let machine_id = response.machine_id.clone().unwrap_or_default();
         if machine_id != self.machine_id {
             return Err(
-                "The account service returned an activation for a different computer.".to_owned(),
+                "This activation belongs to a different computer.".to_owned(),
             );
         }
         let plan = parse_tier(response.plan.as_deref());
@@ -894,7 +894,7 @@ impl LicenseManager {
         let payload: AiTokenResponse = response
             .json()
             .await
-            .map_err(|error| format!("The Wordlyte AI service returned an invalid response: {error}"))?;
+            .map_err(|error| format!("Wordlyte AI returned an unexpected response: {error}"))?;
         if !status.is_success() || payload.status != "ok" {
             // Keep a still-valid cached token through transient 5xx/429
             // responses; only a definitive authorization/entitlement failure
@@ -910,10 +910,10 @@ impl LicenseManager {
         let token = payload
             .token
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| "The Wordlyte AI service did not issue an access token.".to_owned())?;
+            .ok_or_else(|| "Wordlyte AI could not start this session. Please try again.".to_owned())?;
         let server_ai = payload
             .ai
-            .ok_or_else(|| "The Wordlyte AI service did not return an AI Unit balance.".to_owned())?;
+            .ok_or_else(|| "Wordlyte AI could not verify your AI Unit balance. Please try again.".to_owned())?;
         let rates = server_ai.rates.unwrap_or(ServerAiRates {
             transcription_units_per_minute: 1.0,
             standard_llm_request_units: 10.0,
@@ -940,7 +940,7 @@ impl LicenseManager {
     }
 
     /// POST a JSON payload to a License Worker endpoint that accepts the
-    /// short-lived AI token. Used for explicit opt-in transcript sync.
+    /// short-lived AI token. Used for Dashboard transcript sync.
     pub async fn post_ai_authenticated(
         &self,
         path: &str,
@@ -971,7 +971,7 @@ impl LicenseManager {
         existing: License,
     ) -> Result<License, String> {
         if !verify_server(&response) || response.status != "revoked" {
-            return Err("The account service returned an invalid device status.".to_owned());
+            return Err("Wordlyte received an invalid account response.".to_owned());
         }
         let machine_id = response.machine_id.clone().unwrap_or_default();
         if machine_id != self.machine_id {

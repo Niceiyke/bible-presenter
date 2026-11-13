@@ -277,49 +277,46 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
 
   return (
     <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-4 pb-6">
-      <section className="flex flex-wrap items-center gap-2 rounded-xl border border-console-border bg-console-surface/80 px-3 py-2.5 shadow-lg shadow-black/10">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-tool-design/12 text-tool-design"><LayoutTemplate size={15} /></span>
+      <section className="sticky top-0 z-20 flex flex-wrap items-center gap-2 rounded-xl border border-console-border bg-console-surface/95 px-3 py-2 shadow-lg shadow-black/20 backdrop-blur-sm xl:flex-nowrap">
+        <div className="flex min-w-0 shrink-0 items-center gap-2">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-tool-design/12 text-tool-design"><LayoutTemplate size={13} /></span>
           <div className="min-w-0">
-            <h1 className="truncate text-sm font-black text-console-text">Presentation workspace</h1>
-            <p className="text-[9px] font-medium text-console-text-subtle">{studioList.length} decks · {totalSlides} slides</p>
+            <h1 className="truncate text-[12px] font-black text-console-text">Presentation workspace</h1>
+            <p className="text-[8px] font-medium text-console-text-subtle">{studioList.length} decks · {totalSlides} slides</p>
           </div>
         </div>
-        <div className="ml-auto flex flex-wrap items-center gap-1.5">
-          <Button size="sm" onClick={onNewPresentation}><Plus size={13} /> New</Button>
-          <Button variant="ghost" size="sm" onClick={() => setShowAiCreation(true)}><Sparkles size={13} className="text-tool-design" /> AI draft</Button>
-          <button type="button" onClick={() => void importPrayerDocx()} disabled={workingAction !== null} className="flex h-8 items-center gap-1.5 rounded-lg border border-console-border bg-console-canvas px-2 text-[9px] font-bold text-console-text-muted hover:text-console-text disabled:opacity-50" title="Import a prayer Word document">{workingAction === "prayer" ? <Loader2 size={13} className="animate-spin" /> : <FileText size={13} />} Prayer DOCX</button>
-          <button type="button" onClick={() => void importPowerPoint()} disabled={workingAction !== null} className="flex h-8 items-center gap-1.5 rounded-lg border border-console-border bg-console-canvas px-2 text-[9px] font-bold text-console-text-muted hover:text-console-text disabled:opacity-50" title="Import a PowerPoint presentation">{workingAction === "pptx" ? <Loader2 size={13} className="animate-spin" /> : <FileUp size={13} />} PowerPoint</button>
-        </div>
-      </section>
-
-      <section className="flex flex-wrap items-center gap-2 rounded-xl border border-console-border bg-console-surface/70 p-2.5">
-        <div className="relative min-w-[220px] flex-1">
-          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-console-text-subtle" />
+        <div className="relative min-w-[180px] flex-1">
+          <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-console-text-subtle" />
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search presentations…"
             aria-label="Search presentations"
-            className="h-10 w-full rounded-lg border border-console-border bg-console-canvas pl-9 pr-3 text-xs text-console-text outline-none transition-colors placeholder:text-console-text-subtle focus:border-tool-design/60"
+            className="h-8 w-full rounded-lg border border-console-border bg-console-canvas pl-8 pr-2.5 text-[11px] text-console-text outline-none transition-colors placeholder:text-console-text-subtle focus:border-tool-design/60"
           />
         </div>
-        <label className="relative flex h-10 items-center gap-2 rounded-lg border border-console-border bg-console-canvas px-3 text-[10px] font-bold text-console-text-muted">
-          <ArrowUpDown size={12} />
+        <label className="relative flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-console-border bg-console-canvas px-2 text-[9px] font-bold text-console-text-muted">
+          <ArrowUpDown size={11} />
           <span className="sr-only">Sort presentations</span>
           <select
             value={preferences.sort}
             onChange={(event) => setPreferences((current) => ({ ...current, sort: event.target.value as PresentationLibraryPreferences["sort"] }))}
-            className="appearance-none bg-transparent pr-3 text-[10px] font-bold text-console-text outline-none"
+            className="appearance-none bg-transparent pr-2 text-[9px] font-bold text-console-text outline-none"
           >
             <option value="updated">Recently updated</option>
             <option value="name">Name</option>
             <option value="slides">Most slides</option>
           </select>
         </label>
-        <div className="flex h-10 items-center rounded-lg border border-console-border bg-console-canvas p-1" aria-label="Presentation view">
-          <ViewButton active={preferences.view === "grid"} label="Grid view" onClick={() => setPreferences((current) => ({ ...current, view: "grid" }))}><Grid2X2 size={13} /></ViewButton>
-          <ViewButton active={preferences.view === "list"} label="List view" onClick={() => setPreferences((current) => ({ ...current, view: "list" }))}><List size={14} /></ViewButton>
+        <div className="flex h-8 shrink-0 items-center rounded-lg border border-console-border bg-console-canvas p-0.5" aria-label="Presentation view">
+          <ViewButton active={preferences.view === "grid"} label="Grid view" onClick={() => setPreferences((current) => ({ ...current, view: "grid" }))}><Grid2X2 size={12} /></ViewButton>
+          <ViewButton active={preferences.view === "list"} label="List view" onClick={() => setPreferences((current) => ({ ...current, view: "list" }))}><List size={13} /></ViewButton>
+        </div>
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <Button size="sm" onClick={onNewPresentation}><Plus size={12} /> New</Button>
+          <Button variant="ghost" size="sm" onClick={() => setShowAiCreation(true)}><Sparkles size={12} className="text-tool-design" /> AI draft</Button>
+          <button type="button" onClick={() => void importPrayerDocx()} disabled={workingAction !== null} className="flex h-8 items-center gap-1.5 rounded-lg border border-console-border bg-console-canvas px-2 text-[9px] font-bold text-console-text-muted hover:text-console-text disabled:opacity-50" title="Import a prayer Word document">{workingAction === "prayer" ? <Loader2 size={12} className="animate-spin" /> : <FileText size={12} />} Prayer DOCX</button>
+          <button type="button" onClick={() => void importPowerPoint()} disabled={workingAction !== null} className="flex h-8 items-center gap-1.5 rounded-lg border border-console-border bg-console-canvas px-2 text-[9px] font-bold text-console-text-muted hover:text-console-text disabled:opacity-50" title="Import a PowerPoint presentation">{workingAction === "pptx" ? <Loader2 size={12} className="animate-spin" /> : <FileUp size={12} />} PowerPoint</button>
         </div>
       </section>
 
@@ -335,7 +332,7 @@ export function StudioTab({ onStage, onLive, onAddToSchedule, onOpenEditor, onNe
           {filtered.length > 0 ? (
             <div className={cn(
               preferences.view === "grid"
-                ? "grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-3"
+                ? "grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
                 : "flex flex-col gap-2",
             )}>
               {filtered.map((summary) => {
@@ -412,7 +409,7 @@ function ViewButton({ active, label, onClick, children }: { active: boolean; lab
       aria-label={label}
       aria-pressed={active}
       title={label}
-      className={cn("flex h-8 w-8 items-center justify-center rounded-md transition-colors", active ? "bg-console-surface-strong text-console-text" : "text-console-text-subtle hover:text-console-text")}
+      className={cn("flex h-7 w-7 items-center justify-center rounded-md transition-colors", active ? "bg-console-surface-strong text-console-text" : "text-console-text-subtle hover:text-console-text")}
     >
       {children}
     </button>

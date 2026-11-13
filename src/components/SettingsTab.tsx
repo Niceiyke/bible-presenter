@@ -14,27 +14,65 @@ import { BrandingSection } from "./settings/sections/BrandingSection";
 import { BackgroundsSection } from "./settings/sections/BackgroundsSection";
 import { BibleVersionsSection } from "./settings/sections/BibleVersionsSection";
 import { MonitorsSection } from "./settings/sections/MonitorsSection";
+import { OverflowSection } from "./settings/sections/OverflowSection";
 import { StageSection } from "./settings/sections/StageSection";
-import { OperatorSection } from "./settings/sections/OperatorSection";
 import { LicenseSection } from "./settings/sections/LicenseSection";
 import { DataManagementSection } from "./settings/sections/DataManagementSection";
 
-const CATEGORIES: SettingsCategory[] = [
-  { id: "assets", labelKey: "settings.category.assets", keywords: ["asset", "bible", "database", "download", "install", "core", "scriptures", "required"] },
-  { id: "output", labelKey: "settings.category.output", keywords: ["font", "size", "transition", "blank", "fade", "slide", "verse font", "timing", "song label", "section label", "verse 1", "chorus"] },
-  { id: "scripture", labelKey: "settings.category.scripture", keywords: ["reference", "position", "chapter", "verse", "split", "divine", "highlight", "auto split"] },
-  { id: "ai-scripture", labelKey: "settings.category.aiScripture", keywords: ["ai", "transcription", "deepgram", "assemblyai", "api key", "paraphrase", "embedding", "model", "speech", "auto live", "automatic live", "reference", "quote", "voice command"] },
-  { id: "ai-creation", labelKey: "settings.category.aiCreation", keywords: ["ai", "presentation", "openai", "generate", "outline", "slides", "api key", "model"] },
-  { id: "theme", labelKey: "settings.category.theme", keywords: ["color", "dark", "light", "navy", "maroon", "forest", "overrides", "background color"] },
-  { id: "branding", labelKey: "settings.category.branding", keywords: ["logo", "splash", "corner", "watermark", "background logo", "brand"] },
-  { id: "backgrounds", labelKey: "settings.category.backgrounds", keywords: ["background", "image", "video", "camera", "bible background", "media background", "preview"] },
-  { id: "versions", labelKey: "settings.category.versions", keywords: ["version", "kjv", "niv", "translation", "enable", "disable", "tag"] },
-  { id: "monitors", labelKey: "settings.category.monitors", keywords: ["monitor", "screen", "display", "output monitor", "test", "projector"] },
-  { id: "stage", labelKey: "settings.category.stage", keywords: ["stage", "second monitor", "performer", "confidence", "themed"] },
-  { id: "operator", labelKey: "settings.category.operator", keywords: ["behaviour", "behavior", "auto hide", "logo clear", "locale", "language", "i18n"] },
-  { id: "data", labelKey: "settings.category.data", keywords: ["backup", "restore", "data", "archive", "transfer", "recovery"] },
-  { id: "license", labelKey: "settings.category.license", keywords: ["license", "key", "activate", "beta", "expiry", "expires", "church", "device", "deactivate"] },
+interface SettingsGroup {
+  id: string;
+  labelKey: string;
+  categories: SettingsCategory[];
+}
+
+const CATEGORY_GROUPS: SettingsGroup[] = [
+  {
+    id: "presentation",
+    labelKey: "settings.group.presentation",
+    categories: [
+      { id: "output", labelKey: "settings.category.output", keywords: ["font", "size", "transition", "blank", "fade", "slide", "verse font", "timing", "song label", "section label", "verse 1", "chorus"] },
+      { id: "scripture", labelKey: "settings.category.scripture", keywords: ["reference", "position", "chapter", "verse", "split", "divine", "highlight", "auto split"] },
+      { id: "theme", labelKey: "settings.category.theme", keywords: ["color", "dark", "light", "navy", "maroon", "forest", "overrides", "background color"] },
+      { id: "backgrounds", labelKey: "settings.category.backgrounds", keywords: ["background", "image", "video", "camera", "bible background", "media background", "preview"] },
+      { id: "branding", labelKey: "settings.category.branding", keywords: ["logo", "splash", "corner", "watermark", "background logo", "brand"] },
+    ],
+  },
+  {
+    id: "displays",
+    labelKey: "settings.group.displays",
+    categories: [
+      { id: "monitors", labelKey: "settings.category.monitors", keywords: ["primary", "monitor", "screen", "display", "output monitor", "test", "projector"] },
+      { id: "overflow", labelKey: "settings.category.overflow", keywords: ["overflow", "secondary", "second output", "aux", "monitor", "display"] },
+      { id: "stage", labelKey: "settings.category.stage", keywords: ["stage", "second monitor", "performer", "confidence", "themed"] },
+    ],
+  },
+  {
+    id: "bible",
+    labelKey: "settings.group.bible",
+    categories: [
+      { id: "versions", labelKey: "settings.category.versions", keywords: ["version", "kjv", "niv", "translation", "enable", "disable", "tag"] },
+      { id: "assets", labelKey: "settings.category.assets", keywords: ["asset", "bible", "database", "download", "install", "core", "scriptures", "required"] },
+    ],
+  },
+  {
+    id: "ai",
+    labelKey: "settings.group.ai",
+    categories: [
+      { id: "ai-scripture", labelKey: "settings.category.aiScripture", keywords: ["ai", "transcription", "deepgram", "assemblyai", "api key", "paraphrase", "embedding", "model", "speech", "auto live", "automatic live", "reference", "quote", "voice command"] },
+      { id: "ai-creation", labelKey: "settings.category.aiCreation", keywords: ["ai", "presentation", "openai", "generate", "outline", "slides", "api key", "model"] },
+    ],
+  },
+  {
+    id: "system",
+    labelKey: "settings.group.system",
+    categories: [
+      { id: "data", labelKey: "settings.category.data", keywords: ["backup", "restore", "data", "archive", "transfer", "recovery"] },
+      { id: "license", labelKey: "settings.category.license", keywords: ["license", "key", "activate", "beta", "expiry", "expires", "church", "device", "deactivate"] },
+    ],
+  },
 ];
+
+const CATEGORIES: SettingsCategory[] = CATEGORY_GROUPS.flatMap((group) => group.categories);
 
 const LOCALES: { id: Locale; label: string }[] = [
   { id: "en", label: "English" },
@@ -81,9 +119,16 @@ export function SettingsTab({ onUpdateSettings, onUploadMedia }: SettingsTabProp
     if (!query.trim()) return CATEGORIES.map((c) => c.id);
     const q = query.trim().toLowerCase();
     return CATEGORIES
-      .filter((c) => c.labelKey.toLowerCase().includes(q) || c.keywords.some((k) => k.includes(q)))
+      .filter((c) => t(c.labelKey).toLowerCase().includes(q) || c.keywords.some((k) => k.includes(q)))
       .map((c) => c.id);
-  }, [query]);
+  }, [query, t]);
+
+  const visibleGroups = useMemo(() => {
+    const allowed = new Set(matches);
+    return CATEGORY_GROUPS
+      .map((group) => ({ ...group, categories: group.categories.filter((category) => allowed.has(category.id)) }))
+      .filter((group) => group.categories.length > 0);
+  }, [matches]);
 
   // Auto-jump to the first matching category while searching.
   useEffect(() => {
@@ -103,51 +148,54 @@ export function SettingsTab({ onUpdateSettings, onUploadMedia }: SettingsTabProp
     if (category === "backgrounds") return <BackgroundsSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
     if (category === "versions") return <BibleVersionsSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
     if (category === "monitors") return <MonitorsSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
+    if (category === "overflow") return <OverflowSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
     if (category === "stage") return <StageSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
-    if (category === "operator") return <OperatorSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
     if (category === "data") return <DataManagementSection />;
     if (category === "license") return <LicenseSection onUpdateSettings={updateSettings} onUploadMedia={onUploadMedia} />;
     return null;
   };
 
   return (
-    <div className="flex gap-4 h-full min-h-0">
-      {/* Category navigation */}
-      <aside className="w-48 shrink-0 flex flex-col gap-1.5">
+    <div className="flex h-full min-h-0 gap-4">
+      <aside className="flex w-52 shrink-0 flex-col gap-1.5">
         <div className="flex items-center gap-1.5 px-1 pb-1">
           <Save size={12} className="text-console-text-subtle" />
           <span className="text-[10px] font-black uppercase tracking-widest text-console-text-muted">Settings</span>
         </div>
         <SearchField value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("settings.search")} />
-        <nav className="flex flex-col gap-0.5 mt-1" aria-label="Settings categories">
-          {CATEGORIES.map((c) => {
-            const disabled = !matches.includes(c.id);
-            return (
-              <button
-                key={c.id}
-                onClick={() => { setCategory(c.id); setQuery(""); }}
-                disabled={disabled}
-                aria-current={category === c.id ? "page" : undefined}
-                className={`text-left px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)] ${
-                  category === c.id
-                    ? "bg-action-primary/15 text-action-primary border border-action-primary/30"
-                    : disabled
-                      ? "text-console-text-subtle/40 line-through cursor-not-allowed"
-                      : "text-console-text-subtle hover:text-console-text hover:bg-console-surface-raised border border-transparent"
-                }`}
-              >
-                {t(c.labelKey)}
-              </button>
-            );
-          })}
+        <nav className="mt-1 flex min-h-0 flex-col gap-2 overflow-y-auto pr-0.5 custom-scrollbar" aria-label="Settings categories">
+          {visibleGroups.map((group) => (
+            <div key={group.id}>
+              <p className="px-2 pb-1 text-[8px] font-black uppercase tracking-[0.16em] text-console-text-subtle/70">{t(group.labelKey)}</p>
+              <div className="flex flex-col gap-0.5">
+                {group.categories.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => { setCategory(c.id); setQuery(""); }}
+                    aria-current={category === c.id ? "page" : undefined}
+                    className={`rounded-md border px-2.5 py-1.5 text-left text-[11px] font-bold transition-all focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-focus-ring)] ${
+                      category === c.id
+                        ? "border-action-primary/30 bg-action-primary/15 text-action-primary"
+                        : "border-transparent text-console-text-subtle hover:bg-console-surface-raised hover:text-console-text"
+                    }`}
+                  >
+                    {t(c.labelKey)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+          {visibleGroups.length === 0 && (
+            <p className="px-2 py-3 text-[10px] leading-relaxed text-console-text-subtle">No matching settings.</p>
+          )}
         </nav>
 
-        <div className="mt-auto px-1 pt-2 border-t border-console-border">
-          <label className="block text-[9px] font-black uppercase tracking-widest text-console-text-muted mb-1">{t("settings.language")}</label>
+        <div className="mt-auto border-t border-console-border px-1 pt-2">
+          <label className="mb-1 block text-[9px] font-black uppercase tracking-widest text-console-text-muted">{t("settings.language")}</label>
           <select
             value={locale}
             onChange={(e) => setLocale(e.target.value as Locale)}
-            className="w-full bg-console-surface-raised text-console-text text-[11px] rounded-md px-2 py-1.5 border border-console-border focus:border-console-border-strong focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
+            className="w-full rounded-md border border-console-border bg-console-surface-raised px-2 py-1.5 text-[11px] text-console-text focus:border-console-border-strong focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
           >
             {LOCALES.map((l) => (
               <option key={l.id} value={l.id}>{l.label}</option>
@@ -156,10 +204,9 @@ export function SettingsTab({ onUpdateSettings, onUploadMedia }: SettingsTabProp
         </div>
       </aside>
 
-      {/* Active category content */}
-      <div className="flex-1 min-w-0 overflow-y-auto custom-scrollbar pr-1">
-        <div className="flex items-center justify-between px-2 py-1.5 border-b border-console-border mb-3 sticky top-0 bg-slate-950/95 backdrop-blur z-10">
-          <h2 className="op-control-label text-console-text uppercase tracking-widest">
+      <div className="min-w-0 flex-1 overflow-y-auto pr-1 custom-scrollbar">
+        <div className="sticky top-0 z-10 mb-3 flex items-center justify-between border-b border-console-border bg-slate-950/95 px-2 py-1.5 backdrop-blur">
+          <h2 className="op-control-label uppercase tracking-widest text-console-text">
             {t(CATEGORIES.find((c) => c.id === category)?.labelKey ?? "")}
           </h2>
           <SaveStatus state={saveState} />

@@ -50,30 +50,30 @@ export function BibleAssetsSection() {
   };
 
   return (
-    <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-xl">
-      <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+    <div className="p-4 rounded-xl bg-console-surface border border-console-border shadow-xl">
+      <h2 className="text-xs font-bold text-console-text-muted uppercase tracking-widest mb-4 flex items-center gap-2">
         <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-        Required Core Assets
+        Bible Library
       </h2>
 
       <div className="grid grid-cols-1 gap-4">
-        <div className="p-3 rounded-lg bg-slate-800/50 border border-slate-700/50 flex flex-col gap-3">
+        <div className="p-3 rounded-lg bg-console-surface-raised/50 border border-console-border/50 flex flex-col gap-3">
           <div className="flex items-center justify-between">
-            <span className="text-[10px] text-slate-400 font-bold uppercase">Bible Database</span>
+            <span className="text-[10px] text-console-text-muted font-bold uppercase">Bible text</span>
             {startupStatus?.db_ok ? (
               <span className="text-[9px] font-black bg-emerald-900 text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-700">INSTALLED</span>
             ) : (
               <span className="text-[9px] font-black bg-red-900/50 text-red-400 px-1.5 py-0.5 rounded border border-red-800/50">MISSING</span>
             )}
           </div>
-          <p className="text-[10px] text-slate-500 leading-tight">Contains Scripture texts with built-in FTS5 full-text search for all Bible versions.</p>
+          <p className="text-[10px] text-console-text-subtle leading-tight">Installs the Scripture text used for search, reading, and projection.</p>
           {downloadProgress["bible_db"] ? (
             <div className="space-y-1">
-              <div className="flex justify-between text-[9px] text-slate-400 font-mono">
+              <div className="flex justify-between text-[9px] text-console-text-muted font-mono">
                 <span>{Math.round(downloadProgress["bible_db"].percent)}%</span>
                 <span>{Math.round(downloadProgress["bible_db"].bytes_downloaded/1024/1024)}MB</span>
               </div>
-              <div className="h-1 bg-slate-700 rounded-full overflow-hidden">
+              <div className="h-1 bg-console-surface-strong rounded-full overflow-hidden">
                 <div className="h-full bg-amber-500 transition-all" style={{ width: `${downloadProgress["bible_db"].percent}%` }} />
               </div>
             </div>
@@ -82,7 +82,7 @@ export function BibleAssetsSection() {
               onClick={handleDownloadBibleDb}
               className="mt-auto w-full py-2 bg-amber-600 hover:bg-amber-500 text-black text-[10px] font-black uppercase rounded-lg transition-all"
             >
-              Download Bible Database (~20MB)
+              Download Bible Library (~20 MB)
             </button>
           )}
         </div>

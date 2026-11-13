@@ -219,6 +219,10 @@ struct AiSessionRecorder {
     store: Arc<MediaScheduleStore>,
     session: Mutex<AiScriptureSavedSession>,
     started_at: u64,
+    /// Local transcript retention. When disabled the recorder still keeps the
+    /// session in memory for live metrics and optional Dashboard sync, but
+    /// never writes it to the local database.
+    persist_enabled: bool,
 }
 
 impl AiSessionRecorder {
@@ -229,11 +233,13 @@ impl AiSessionRecorder {
         mode: String,
         audio_device: String,
         version: String,
+        persist_enabled: bool,
     ) -> Result<Arc<Self>, String> {
         let started_at = now_ms();
         let recorder = Arc::new(Self {
             store,
             started_at,
+            persist_enabled,
             session: Mutex::new(AiScriptureSavedSession {
                 id,
                 started_at,
@@ -252,6 +258,9 @@ impl AiSessionRecorder {
     }
 
     fn persist(&self) -> Result<(), String> {
+        if !self.persist_enabled {
+            return Ok(());
+        }
         let session = self.session.lock().map_err(|error| error.to_string())?;
         let value = serde_json::to_value(&*session).map_err(|error| error.to_string())?;
         self.store
@@ -1455,6 +1464,13 @@ pub async fn ai_start(
             state.app_data_dir.clone(),
         );
     }
+    let (retention_enabled, sync_enabled) = {
+        let settings = state.presentation.settings.lock();
+        (
+            settings.transcript_retention_enabled,
+            settings.transcript_sync_enabled,
+        )
+    };
     let session_id = Uuid::new_v4().to_string();
     let (stop_tx, stop_rx) = watch::channel(false);
     let recorder;
@@ -1471,8 +1487,9 @@ pub async fn ai_start(
             mode,
             audio_device.clone(),
             version.clone(),
+            retention_enabled,
         )?;
-        guard.last_message = format!("Connecting to {}…", provider.display_name());
+        guard.last_message = "Connecting to transcription…".to_string();
         guard.last_provider = provider;
         guard.session = Some(AiSessionControl {
             id: session_id.clone(),
@@ -1489,7 +1506,7 @@ pub async fn ai_start(
         &app,
         provider,
         "connecting",
-        format!("Connecting to {}…", provider.display_name()),
+        "Connecting to transcription…".to_string(),
         Some(audio_device.clone()),
         Some(version.clone()),
     );
@@ -1498,7 +1515,7 @@ pub async fn ai_start(
     let bible = state.store.clone();
     let license = state.license.clone();
     let sync_license = license.clone();
-    let sync_enabled = state.presentation.settings.lock().transcript_sync_enabled;
+
     let task_app = app.clone();
     let task_device = audio_device.clone();
     let task_version = version.clone();
@@ -1593,7 +1610,7 @@ pub async fn ai_start(
         provider: provider.as_str().into(),
         audio_device: Some(audio_device),
         version: Some(version),
-        message: format!("Connecting to {}…", provider.display_name()),
+        message: "Connecting to transcription…".to_string(),
         started_at: Some(session_started_at),
     })
 }
@@ -1855,8 +1872,7 @@ async fn connect_provider_socket(
     );
     let mut request = gateway_url.into_client_request().map_err(|error| {
         format!(
-            "Could not create the {} gateway request: {error}",
-            provider.display_name()
+            "Could not start the transcription connection: {error}"
         )
     })?;
     adapter.configure_gateway_request(&mut request, access_token)?;
@@ -1867,14 +1883,8 @@ async fn connect_provider_socket(
         result = connection => result,
     };
     let (socket, _) = result
-        .map_err(|_| {
-            format!(
-                "{} connection timed out after {} seconds.",
-                provider.display_name(),
-                timeout.as_secs()
-            )
-        })?
-        .map_err(|error| format!("{} connection failed: {error}", provider.display_name()))?;
+        .map_err(|_| format!("Transcription connection timed out after {} seconds.", timeout.as_secs()))?
+        .map_err(|error| format!("Could not connect to the transcription service: {error}"))?;
     Ok(Some(socket))
 }
 
@@ -1915,8 +1925,7 @@ async fn reconnect_provider_socket(
             provider,
             "connecting",
             format!(
-                "Transcription connection lost; reconnecting to {} ({attempt}/{MAX_PROVIDER_RECONNECT_ATTEMPTS})…",
-                provider.display_name()
+                "Transcription connection lost; reconnecting ({attempt}/{MAX_PROVIDER_RECONNECT_ATTEMPTS})…"
             ),
             Some(audio_device.to_string()),
             Some(version.to_string()),
@@ -1946,7 +1955,7 @@ async fn reconnect_provider_socket(
                     app,
                     provider,
                     "listening",
-                    format!("Reconnected to {} transcription.", provider.display_name()),
+                    "Transcription reconnected.".to_string(),
                     Some(audio_device.to_string()),
                     Some(version.to_string()),
                 );
@@ -1965,11 +1974,10 @@ async fn reconnect_provider_socket(
             }
         }
     }
+    let _ = failures;
     Err(format!(
-        "{} transcription disconnected and could not reconnect after {} attempts: {}",
-        provider.display_name(),
-        MAX_PROVIDER_RECONNECT_ATTEMPTS,
-        failures.join("; ")
+        "Transcription disconnected and could not reconnect after {} attempts. Check your internet connection and try again.",
+        MAX_PROVIDER_RECONNECT_ATTEMPTS
     ))
 }
 
@@ -1979,8 +1987,8 @@ async fn connect_pcm_relay(relay: &AudioRelay) -> Result<tokio::net::TcpStream, 
         tokio::net::TcpStream::connect(("127.0.0.1", relay.port())),
     )
     .await
-    .map_err(|_| "Timed out connecting to the transcription PCM feed.".to_string())?
-    .map_err(|error| format!("Could not connect to the transcription PCM feed: {error}"))?;
+    .map_err(|_| "Timed out connecting to the AI Scripture audio feed.".to_string())?
+    .map_err(|error| format!("Could not connect to the AI Scripture audio feed: {error}"))?;
     connection.set_nodelay(true).ok();
     Ok(connection)
 }
@@ -2112,7 +2120,7 @@ async fn run_asr_session(
         &app,
         provider,
         "listening",
-        format!("Listening for Scripture via {}…", provider.display_name()),
+        "Listening for Scripture…".to_string(),
         Some(audio_device.clone()),
         Some(version.clone()),
     );
@@ -2167,7 +2175,7 @@ async fn run_asr_session(
                 if changed.is_ok() && *stop.borrow() { break; }
             }
             read = pcm.read(&mut audio) => {
-                let count = read.map_err(|e| format!("PCM audio feed failed: {e}"))?;
+                let count = read.map_err(|e| format!("AI Scripture audio feed failed: {e}"))?;
                 if count == 0 {
                     let feed_diagnostics = feed_diagnostics();
                     crate::store::log_msg(
@@ -2201,7 +2209,7 @@ async fn run_asr_session(
                         &app,
                         provider,
                         "listening",
-                        format!("Listening for Scripture via {}…", provider.display_name()),
+                        "Listening for Scripture…".to_string(),
                         Some(audio_device.clone()),
                         Some(version.clone()),
                     );
@@ -2247,10 +2255,7 @@ async fn run_asr_session(
                             adapter.decode_message(text.as_ref()),
                             &mut pipeline,
                         )? {
-                            return Err(format!(
-                                "{} ended the transcription session.",
-                                provider.display_name()
-                            ));
+                            return Err("The transcription service ended the session.".to_string());
                         }
                     }
                     Some(Ok(Message::Close(frame))) => {
@@ -2758,10 +2763,10 @@ fn handle_provider_event(
             handle_transcription_update(app, bible, detection, provider, transcript, pipeline)?;
             Ok(false)
         }
-        ProviderEvent::Error(error) => Err(format!(
-            "{} rejected the session: {error}",
-            provider.display_name()
-        )),
+        ProviderEvent::Error(error) => {
+            crate::store::log_msg(app, &format!("[ai-scripture] transcription error: {error}"));
+            Err("The transcription service reported an error. Wordlyte will try to reconnect.".to_string())
+        }
         ProviderEvent::Terminated => Ok(true),
         ProviderEvent::Ignored => Ok(false),
     }

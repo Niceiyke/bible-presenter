@@ -33,7 +33,7 @@ export function AiCreationSection() {
     } catch (error) {
       setStatus({
         ...EMPTY_STATUS,
-        message: `Could not read AI status: ${error}`,
+        message: `Could not check AI availability: ${error}`,
       });
     } finally {
       setLoading(false);
@@ -55,7 +55,7 @@ export function AiCreationSection() {
 
       <section className="rounded-lg border border-console-border bg-console-surface-raised/40 p-3 flex flex-col gap-3">
         <div className="flex items-center justify-between gap-3">
-          <p className="text-[10px] font-black uppercase tracking-widest text-console-text-muted flex items-center gap-1.5"><ShieldCheck size={12} /> Wordlyte managed AI</p>
+          <p className="text-[10px] font-black uppercase tracking-widest text-console-text-muted flex items-center gap-1.5"><ShieldCheck size={12} /> Wordlyte AI</p>
           <span className={`text-[10px] font-bold ${status.available ? "text-state-success" : "text-state-warning"}`}>
             {status.available ? "Ready" : status.addonActive ? "Needs Units" : "Add-on required"}
           </span>
@@ -78,7 +78,7 @@ export function AiCreationSection() {
             : status.message}
         </p>
         <p className="text-[10px] text-console-text-subtle">
-          Provider keys are managed by Wordlyte. Churches never enter an OpenAI key, and AI creation cannot change the live output.
+          No external API keys are needed. AI creation cannot change the live output.
         </p>
 
         <div className="flex justify-end">

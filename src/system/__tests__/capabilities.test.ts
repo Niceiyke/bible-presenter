@@ -32,7 +32,7 @@ describe("computeCapabilities", () => {
 
   it("explains WHY a service is disabled, not just that it is", () => {
     const noFfmpeg = computeCapabilities(inputs({ ffmpegAvailable: false }));
-    expect(noFfmpeg.rtmpReason).toContain("ffmpeg");
+    expect(noFfmpeg.rtmpReason).toContain("media engine");
   });
 
   it("gates NDI on the backend SDK probe and passes its reason through", () => {

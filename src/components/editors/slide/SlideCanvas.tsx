@@ -31,6 +31,16 @@ function backingBackgroundColor(bg: SlideBackground): string {
   }
 }
 
+/** A checkerboard makes the transparency slider visible in the editor. */
+function backingStyle(bg: SlideBackground): React.CSSProperties {
+  if ((bg.opacity ?? 1) >= 1) return { backgroundColor: backingBackgroundColor(bg) };
+  return {
+    backgroundColor: "#0f141a",
+    backgroundImage: "conic-gradient(#1a2330 25%, #0f141a 0 50%, #1a2330 0 75%, #0f141a 0)",
+    backgroundSize: "16px 16px",
+  };
+}
+
 const HANDLES: Record<Handle, React.CSSProperties> = {
   nw: { top: -5, left: -5, cursor: "nwse-resize" },
   n:  { top: -5, left: "50%", transform: "translateX(-50%)", cursor: "ns-resize" },
@@ -145,7 +155,7 @@ export function SlideCanvas({
         <span className="h-1.5 w-1.5 rounded-full bg-tool-design shadow-[0_0_8px_rgba(167,139,250,.8)]" />
         <span className="text-[8px] font-black uppercase tracking-[0.16em] text-console-text-subtle">Canvas · 16:9</span>
       </div>
-      <div ref={canvasRef} className="relative overflow-hidden rounded-sm shadow-[0_30px_90px_rgba(0,0,0,.65),0_0_0_1px_rgba(125,141,157,.35),0_0_50px_rgba(167,139,250,.08)]" style={{ aspectRatio: "16/9", backgroundColor: backingBackgroundColor(slide.background), width: canvasWidth }}>
+      <div ref={canvasRef} className="relative overflow-hidden rounded-sm shadow-[0_30px_90px_rgba(0,0,0,.65),0_0_0_1px_rgba(125,141,157,.35),0_0_50px_rgba(167,139,250,.08)]" style={{ aspectRatio: "16/9", width: canvasWidth, ...backingStyle(slide.background) }}>
         <CustomSlideRenderer slide={slide} scale={canvasScale} appDataDir={appDataDir} theme={theme} hiddenElementIds={editingElementId ? [editingElementId] : []} />
 
         {/* P3.2: visual grid overlay — shown only when snapping is on.

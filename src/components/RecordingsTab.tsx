@@ -197,7 +197,7 @@ export function RecordingsTab() {
                 </option>
               ))}
             </select>
-            <span className="text-[10px] text-slate-600">MP4 (H.264) — records the live program even when the projection window is closed.</span>
+            <span className="text-[10px] text-slate-600">MP4 video — records the live program even when the projection window is closed.</span>
           </div>
 
           {/* Program audio (external mic / line-in mix bus) */}
@@ -231,7 +231,7 @@ export function RecordingsTab() {
               <span className="text-[10px] text-amber-400">Select an input device below</span>
             )}
             <span className="text-[10px] text-slate-600">
-              Captures an external mic / line-in natively (ffmpeg DirectShow) into the MP4 as AAC. Premium.
+              Captures an external microphone or line-in into the recording. Premium.
             </span>
           </div>
 

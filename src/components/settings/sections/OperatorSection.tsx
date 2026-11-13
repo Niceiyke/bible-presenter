@@ -11,8 +11,8 @@ export function OperatorSection({ onUpdateSettings }: SettingsSectionProps) {
     <div className="flex flex-col gap-6">
       <label className="flex items-center justify-between gap-3 cursor-pointer">
         <div>
-          <span className="text-xs text-slate-300 font-medium">{t("settings.autoClearLogo")}</span>
-          <p className="text-[10px] text-slate-600">{t("settings.autoClearLogoDesc")}</p>
+          <span className="text-xs text-console-text font-medium">{t("settings.autoClearLogo")}</span>
+          <p className="text-[10px] text-console-text-subtle">{t("settings.autoClearLogoDesc")}</p>
         </div>
         <input
           type="checkbox"
@@ -22,9 +22,9 @@ export function OperatorSection({ onUpdateSettings }: SettingsSectionProps) {
         />
       </label>
 
-      <div className="border-t border-slate-800 pt-4">
-        <p className="text-xs text-slate-400 font-bold uppercase mb-2">{t("settings.op.liveWorkflow")}</p>
-        <p className="text-[10px] text-slate-600 leading-relaxed">
+      <div className="border-t border-console-border pt-4">
+        <p className="text-xs text-console-text-muted font-bold uppercase mb-2">{t("settings.op.liveWorkflow")}</p>
+        <p className="text-[10px] text-console-text-subtle leading-relaxed">
           {t("settings.op.liveWorkflowDesc")}
         </p>
       </div>

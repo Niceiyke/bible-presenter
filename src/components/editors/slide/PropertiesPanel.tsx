@@ -153,9 +153,10 @@ export function PropertiesPanel({
             <div className="flex flex-wrap gap-1">
               {(["color", "image", "video", "gradient"] as const).map(t => (
                 <button key={t} onClick={() => {
-                  if (t === "color") onSetBackground({ type: "color", value: bg.type === "color" ? bg.value : "#1a1a2e" });
-                  else if (t === "gradient") onSetBackground({ type: "gradient", from: bg.type === "gradient" ? bg.from : "#1a1a2e", to: bg.type === "gradient" ? bg.to : "#0a0a18", angle: bg.type === "gradient" ? bg.angle : 135 });
-                  else onSetBackground({ type: t, value: "" });
+                  const opacity = bg.opacity;
+                  if (t === "color") onSetBackground({ type: "color", value: bg.type === "color" ? bg.value : "#1a1a2e", opacity });
+                  else if (t === "gradient") onSetBackground({ type: "gradient", from: bg.type === "gradient" ? bg.from : "#1a1a2e", to: bg.type === "gradient" ? bg.to : "#0a0a18", angle: bg.type === "gradient" ? bg.angle : 135, opacity });
+                  else onSetBackground({ type: t, value: "", opacity });
                 }} className={`flex-1 py-1.5 text-[9px] font-bold rounded-lg capitalize transition-all ${bg.type === t ? "bg-tool-design text-console-text" : "bg-console-surface-raised text-console-text-muted hover:text-console-text hover:bg-console-surface-strong"}`}>
                   {t}
                 </button>
@@ -165,7 +166,7 @@ export function PropertiesPanel({
             {bg.type === "color" && (
               <label className="group mt-1 flex cursor-pointer items-center gap-3 rounded-xl border border-console-border bg-console-surface-raised p-2 transition-colors hover:border-tool-design/50">
                 <span className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg border-2 border-white/15 shadow-lg" style={{ backgroundColor: bg.value }}>
-                  <input type="color" value={bg.value} onChange={e => onSetBackground({ type: "color", value: e.target.value })} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" aria-label="Slide background color" />
+                  <input type="color" value={bg.value} onChange={e => onSetBackground({ ...bg, value: e.target.value })} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" aria-label="Slide background color" />
                 </span>
                 <span className="min-w-0">
                   <span className="block text-[8px] font-black uppercase tracking-wider text-console-text-subtle">Canvas color</span>
@@ -198,19 +199,6 @@ export function PropertiesPanel({
                       ))}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-[9px] text-console-text-muted w-10">Opacity</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      value={bg.opacity ?? 1}
-                      onChange={e => onSetBackground({ ...bg, opacity: Number(e.target.value) })}
-                      className="flex-1 accent-tool-design"
-                    />
-                    <span className="text-[9px] text-console-text-muted tabular-nums w-8 text-right">{Math.round((bg.opacity ?? 1) * 100)}%</span>
-                  </div>
                 </>
               )}
             </>}
@@ -239,19 +227,6 @@ export function PropertiesPanel({
                       ))}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[9px] text-console-text-muted w-10">Opacity</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      value={bg.opacity ?? 1}
-                      onChange={e => onSetBackground({ ...bg, opacity: Number(e.target.value) })}
-                      className="flex-1 accent-tool-design"
-                    />
-                    <span className="text-[9px] text-console-text-muted tabular-nums w-8 text-right">{Math.round((bg.opacity ?? 1) * 100)}%</span>
-                  </div>
                   <label className="flex items-center gap-1.5 cursor-pointer">
                     <input type="checkbox" checked={bg.loop !== false} onChange={e => onSetBackground({ ...bg, loop: e.target.checked })} className="accent-tool-design" />
                     <span className="text-[9px] text-console-text-muted">Loop</span>
@@ -275,6 +250,21 @@ export function PropertiesPanel({
                 <div className="h-6 rounded-lg border border-console-border" style={{ background: `linear-gradient(${bg.angle}deg, ${bg.from}, ${bg.to})` }} />
               </div>
             )}
+
+            <div className="mt-1 flex items-center gap-2" title="0% is fully transparent; 100% is fully opaque">
+              <span className="w-10 text-[9px] text-console-text-muted">Opacity</span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={bg.opacity ?? 1}
+                onChange={e => onSetBackground({ ...bg, opacity: Number(e.target.value) })}
+                className="flex-1 accent-tool-design"
+                aria-label="Background opacity"
+              />
+              <span className="w-8 text-right text-[9px] tabular-nums text-console-text-muted">{Math.round((bg.opacity ?? 1) * 100)}%</span>
+            </div>
           </Panel>
 
           <Panel label="Theme">

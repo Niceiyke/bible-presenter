@@ -30,7 +30,7 @@ interface SemanticStatus {
 
 const INITIAL_STATUS: SemanticStatus = {
   state: "notPrepared",
-  message: "Checking local paraphrase model…",
+  message: "Checking on-device theme matching…",
   indexed: 0,
   total: 0,
   model: "BAAI/bge-base-en-v1.5-quantized",
@@ -112,7 +112,7 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
     try {
       setSemanticStatus(await invoke<SemanticStatus>("ai_prepare_semantic"));
     } catch (error) {
-      setSemanticStatus({ ...INITIAL_STATUS, state: "error", message: `Could not prepare model: ${error}` });
+      setSemanticStatus({ ...INITIAL_STATUS, state: "error", message: `Could not set up theme matching: ${error}` });
     }
   };
 
@@ -121,12 +121,12 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
   };
 
   const removeModel = async () => {
-    if (!window.confirm("Remove the downloaded local AI model? Normal Scripture search and projection will remain available.")) return;
+    if (!window.confirm("Remove the optional on-device theme-matching model? Scripture search and projection will remain available.")) return;
     setRemovingModel(true);
     try {
       setSemanticStatus(await invoke<SemanticStatus>("ai_remove_semantic"));
     } catch (error) {
-      window.alert(`Could not remove the local model: ${error}`);
+      window.alert(`Could not remove the theme-matching model: ${error}`);
     } finally {
       setRemovingModel(false);
     }
@@ -136,7 +136,7 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
     <div className="flex flex-col gap-6 max-w-3xl">
       <div>
         <p className="text-xs text-console-text-muted font-bold uppercase mb-1">AI Scripture Assistant</p>
-        <p className="text-[10px] text-console-text-subtle">Configure transcription providers and the optional local paraphrase model here. Normal Scripture search never depends on these services.</p>
+        <p className="text-[10px] text-console-text-subtle">Configure AI transcription and optional on-device theme matching here. Scripture search never depends on these services.</p>
       </div>
 
       <section className="rounded-lg border border-console-border bg-console-surface-raised/40 p-3">
@@ -153,12 +153,12 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
 
       <section className="rounded-lg border border-console-border bg-console-surface-raised/40 p-3 flex flex-col gap-3">
         <div className="flex items-center justify-between gap-3">
-          <p className="text-[10px] font-black uppercase tracking-widest text-console-text-muted flex items-center gap-1.5"><ShieldCheck size={12} /> Managed transcription</p>
+          <p className="text-[10px] font-black uppercase tracking-widest text-console-text-muted flex items-center gap-1.5"><ShieldCheck size={12} /> AI transcription</p>
           <span className={`text-[10px] font-bold ${managedStatus?.available ? "text-state-success" : "text-state-warning"}`}>
             {managedStatus?.available ? "Ready" : managedStatus?.addonActive ? "Needs Units" : "Add-on required"}
           </span>
         </div>
-        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Transcription provider">
+        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Transcription service">
           {PROVIDERS.map((item) => {
             const selected = selectedProvider === item.value;
             return (
@@ -179,7 +179,7 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
                 }`}
               >
                 {item.label}
-                <span className="block mt-0.5 text-[9px] font-normal opacity-70">{selected ? "Selected for the next session" : "Use this provider"}</span>
+                <span className="block mt-0.5 text-[9px] font-normal opacity-70">{selected ? "Selected for the next session" : "Use this service"}</span>
               </button>
             );
           })}
@@ -207,23 +207,38 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
             <RotateCcw size={11} className={managedLoading ? "animate-spin" : ""} /> Refresh
           </button>
         </div>
-        <p className="text-[10px] text-console-text-subtle">Provider credentials stay in Wordlyte's managed AI Gateway. Audio is streamed only while listening, and no provider key is stored on this computer.</p>
+        <p className="text-[10px] text-console-text-subtle">Wordlyte securely manages transcription access. Audio is streamed only while listening, and no service keys are stored on this computer.</p>
       </section>
 
-      <section className="rounded-lg border border-console-border bg-console-surface-raised/40 p-3 flex flex-col gap-2">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-[10px] font-black uppercase tracking-widest text-console-text-muted">Dashboard transcript sync</p>
-            <p className="mt-1 text-[10px] text-console-text-subtle">When enabled, finalized transcript text and Scripture suggestions are uploaded to your church Dashboard after each listening session. Microphone audio is never uploaded. Off by default.</p>
-          </div>
-          <label className="flex shrink-0 items-center gap-2 text-[11px] font-bold text-console-text">
+      <section className="rounded-lg border border-console-border bg-console-surface-raised/40 p-3 flex flex-col gap-3">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-widest text-console-text-muted">Transcript retention &amp; sync</p>
+          <p className="mt-1 text-[10px] text-console-text-subtle">Both are on by default. Turn either option off to opt out. Microphone audio is never saved or uploaded.</p>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label className="flex cursor-pointer items-start justify-between gap-3 rounded-md border border-console-border bg-console-surface p-2.5">
+            <span>
+              <span className="block text-[11px] font-bold text-console-text">Keep transcripts on this computer</span>
+              <span className="mt-0.5 block text-[9px] leading-relaxed text-console-text-subtle">Saves finalized transcripts and Scripture suggestions locally for review and export.</span>
+            </span>
             <input
               type="checkbox"
-              checked={settings.transcript_sync_enabled === true}
-              onChange={(event) => void onUpdateSettings({ ...settings, transcript_sync_enabled: event.target.checked })}
-              className="accent-action-primary"
+              checked={settings.transcript_retention_enabled !== false}
+              onChange={(event) => void onUpdateSettings({ ...settings, transcript_retention_enabled: event.target.checked })}
+              className="mt-0.5 shrink-0 accent-action-primary"
             />
-            Sync
+          </label>
+          <label className="flex cursor-pointer items-start justify-between gap-3 rounded-md border border-console-border bg-console-surface p-2.5">
+            <span>
+              <span className="block text-[11px] font-bold text-console-text">Sync transcripts to Dashboard</span>
+              <span className="mt-0.5 block text-[9px] leading-relaxed text-console-text-subtle">Uploads finalized transcript text and suggestions after each listening session.</span>
+            </span>
+            <input
+              type="checkbox"
+              checked={settings.transcript_sync_enabled !== false}
+              onChange={(event) => void onUpdateSettings({ ...settings, transcript_sync_enabled: event.target.checked })}
+              className="mt-0.5 shrink-0 accent-action-primary"
+            />
           </label>
         </div>
       </section>
@@ -251,7 +266,7 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
           {[
             ["ai_scripture_auto_live_references", "Direct references", "Final references at 90% confidence or above."],
             ["ai_scripture_auto_live_quotes", "Direct quotations", "Final confirmed quotations at 90% confidence or above."],
-            ["ai_scripture_auto_live_paraphrases", "Paraphrase themes", "Only the stable top-ranked local theme suggestion."],
+            ["ai_scripture_auto_live_paraphrases", "Theme suggestions", "Only the best-matching theme suggestion."],
             ["ai_scripture_auto_live_voice_commands", "Voice commands", "Next/previous verse and translation-command cards."],
           ].map(([key, label, description]) => (
             <label key={key} className="flex items-start gap-2 rounded-md border border-console-border bg-console-surface px-2.5 py-2 text-[10px] text-console-text-subtle">
@@ -274,19 +289,19 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
       <section className="rounded-lg border border-console-border bg-console-surface-raised/40 p-3 flex flex-col gap-3">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-[10px] font-black uppercase tracking-widest text-console-text-muted flex items-center gap-1.5"><Database size={12} /> Local paraphrase matching</p>
+            <p className="text-[10px] font-black uppercase tracking-widest text-console-text-muted flex items-center gap-1.5"><Database size={12} /> On-device theme matching</p>
             <p className={`mt-1 text-[10px] ${semanticStatus.state === "error" ? "text-state-error" : semanticStatus.state === "ready" ? "text-state-success" : "text-console-text-subtle"}`}>{semanticStatus.message}</p>
           </div>
           {semanticStatus.state === "preparing" ? (
             <button onClick={() => void cancelPreparation()} className="px-3 py-1.5 rounded-md border border-state-stage/40 text-state-stage text-[10px] font-black uppercase">Cancel</button>
           ) : (
-            <button onClick={() => void prepareModel()} disabled={active || semanticStatus.state === "ready"} className="px-3 py-1.5 rounded-md border border-action-primary/40 text-action-primary text-[10px] font-black uppercase disabled:opacity-40">{semanticStatus.state === "ready" ? "Ready" : semanticStatus.state === "error" ? "Retry" : "Prepare"}</button>
+            <button onClick={() => void prepareModel()} disabled={active || semanticStatus.state === "ready"} className="px-3 py-1.5 rounded-md border border-action-primary/40 text-action-primary text-[10px] font-black uppercase disabled:opacity-40">{semanticStatus.state === "ready" ? "Ready" : semanticStatus.state === "error" ? "Retry" : "Set up"}</button>
           )}
         </div>
         {semanticStatus.state === "preparing" && semanticStatus.total > 0 && <div className="h-1.5 overflow-hidden rounded-full bg-console-surface-strong"><div className="h-full bg-action-primary" style={{ width: `${Math.min(100, (semanticStatus.indexed / semanticStatus.total) * 100)}%` }} /></div>}
-        <p className="text-[10px] text-console-text-subtle">Downloads the pinned local embedding and reranker models plus pre-built meaning indexes for each modern translation (NKJV, ASV, WEB, NIV, AMP); any translation that cannot be downloaded is built locally, which can take about an hour each. KJV reuses the NKJV index. Theme suggestions remain manual unless explicitly selected under Auto Live above.</p>
+        <p className="text-[10px] text-console-text-subtle">Prepares the optional on-device model used to find thematic Scripture matches. This is a one-time download and uses additional disk space. Theme suggestions remain manual unless selected under Auto Live above.</p>
         <div className="flex flex-wrap items-center justify-between gap-2 text-[9px] text-console-text-subtle">
-          <span>{semanticStatus.model} · {formatBytes(semanticStatus.diskBytes)} local storage{semanticStatus.verified ? " · model verified" : ""}</span>
+          <span>{formatBytes(semanticStatus.diskBytes)} on-device storage{semanticStatus.verified ? " · Ready" : ""}</span>
           {semanticStatus.diskBytes > 0 && semanticStatus.state !== "preparing" && <button onClick={() => void removeModel()} disabled={active || removingModel} className="text-console-text-muted font-bold disabled:opacity-40">{removingModel ? "Removing…" : "Remove model"}</button>}
         </div>
       </section>

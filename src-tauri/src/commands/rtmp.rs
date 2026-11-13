@@ -292,7 +292,7 @@ pub fn rtmp_start(
         return Err("RTMP server URL must start with rtmp://".into());
     }
     if !ffmpeg_available() {
-        return Err("ffmpeg was not found on PATH — install ffmpeg to use RTMP streaming.".into());
+        return Err("The built-in media engine is unavailable. Reinstall Wordlyte to stream.".into());
     }
 
     let audio_listener = if with_audio {
@@ -315,7 +315,7 @@ pub fn rtmp_start(
         .stdout(Stdio::null());
     let mut child = crate::binpaths::hide_console(&mut command)
         .spawn()
-        .map_err(|e| format!("Failed to start ffmpeg: {e}"))?;
+        .map_err(|e| format!("The broadcast could not start: {e}"))?;
 
     let stdin = child
         .stdin
@@ -369,7 +369,7 @@ pub fn rtmp_send(
     }
     enqueue_bounded(&session.stdin_tx, &session.queued, data)
         .map(|_| ())
-        .map_err(|_| "RTMP writer closed (ffmpeg exited).".to_string())
+        .map_err(|_| "The stream stopped unexpectedly.".to_string())
 }
 
 /// Feed one encoded AAC frame (ADTS, base64 over IPC) to a destination's
@@ -397,7 +397,7 @@ pub fn rtmp_send_audio(
     }
     enqueue_bounded(tx, &session.audio_queued, data)
         .map(|_| ())
-        .map_err(|_| "RTMP audio writer closed (ffmpeg exited).".to_string())
+        .map_err(|_| "The stream audio stopped unexpectedly.".to_string())
 }
 
 /// Stop one destination's ingest: signal EOF to ffmpeg, then wait (with a
@@ -422,7 +422,7 @@ pub async fn rtmp_stop(state: State<'_, AppState>, session_id: String) -> Result
                     if Instant::now() >= deadline {
                         let _ = child.kill();
                         let _ = child.wait();
-                        return Err("ffmpeg did not exit in time; the session was killed.".into());
+                        return Err("The stream did not stop in time and was closed.".into());
                     }
                     std::thread::sleep(Duration::from_millis(100));
                 }

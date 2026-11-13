@@ -32,9 +32,9 @@ export function BibleVersionsSection({ onUpdateSettings }: SettingsSectionProps)
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <p className="text-xs text-slate-400 font-bold uppercase mb-3">{t("settings.ver.title")}</p>
+        <p className="text-xs text-console-text-muted font-bold uppercase mb-3">{t("settings.ver.title")}</p>
         <label className="mb-5 block">
-          <span className="mb-1.5 block text-[10px] text-slate-500 uppercase font-bold">Default Bible translation</span>
+          <span className="mb-1.5 block text-[10px] text-console-text-subtle uppercase font-bold">Default Bible translation</span>
           <select
             value={settings.default_bible_version && enabledVersions.includes(settings.default_bible_version) ? settings.default_bible_version : (enabledVersions[0] ?? "")}
             onChange={(event) => {
@@ -42,13 +42,13 @@ export function BibleVersionsSection({ onUpdateSettings }: SettingsSectionProps)
               setBibleVersion(default_bible_version);
               void onUpdateSettings({ ...settings, default_bible_version });
             }}
-            className="w-full bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-2 cursor-pointer focus:outline-none focus:border-amber-500"
+            className="w-full bg-console-surface-raised border border-console-border text-console-text text-xs rounded-lg px-2 py-2 cursor-pointer focus:outline-none focus:border-amber-500"
           >
             {enabledVersions.map((version) => <option key={version} value={version}>{version}</option>)}
           </select>
-          <span className="mt-1 block text-[10px] text-slate-500">Scripture search, display, and AI Scripture use this translation.</span>
+          <span className="mt-1 block text-[10px] text-console-text-subtle">Scripture search, display, and AI Scripture use this translation.</span>
         </label>
-        <p className="text-[10px] text-slate-500 uppercase font-bold mb-2">{t("settings.ver.enableDisable")}</p>
+        <p className="text-[10px] text-console-text-subtle uppercase font-bold mb-2">{t("settings.ver.enableDisable")}</p>
         {caps.maxBibleVersions > 0 && versionCapReached && (
           <p className="text-[10px] text-amber-500 mb-2">
             The Free plan includes {caps.maxBibleVersions} Bible version. Upgrade to unlock all versions.
@@ -64,7 +64,7 @@ export function BibleVersionsSection({ onUpdateSettings }: SettingsSectionProps)
               className={`px-3 py-1.5 rounded-lg border text-[10px] font-bold transition-all disabled:opacity-40 ${
                 !disabled.includes(v)
                   ? "bg-green-600 border-green-500 text-white"
-                  : "bg-slate-800 border-slate-700 text-slate-500"
+                  : "bg-console-surface-raised border-console-border text-console-text-subtle"
               }`}
             >
               {v} {!disabled.includes(v) ? '✓' : '✕'}
@@ -72,21 +72,21 @@ export function BibleVersionsSection({ onUpdateSettings }: SettingsSectionProps)
           ))}
         </div>
 
-        <p className="text-[10px] text-slate-500 uppercase font-bold mb-2">{t("settings.ver.tagStyling")}</p>
+        <p className="text-[10px] text-console-text-subtle uppercase font-bold mb-2">{t("settings.ver.tagStyling")}</p>
         <div className="flex justify-between items-center mb-1">
-          <span className="text-[10px] text-slate-500 uppercase font-bold">{t("settings.fontSize")}</span>
+          <span className="text-[10px] text-console-text-subtle uppercase font-bold">{t("settings.fontSize")}</span>
           <span className="text-xs font-mono text-amber-500">{settings.version_font_size ?? 24}pt</span>
         </div>
         <input
           type="range" min="10" max="72" step="2"
           value={settings.version_font_size ?? 24}
           onChange={(e) => onUpdateSettings({ ...settings, version_font_size: parseInt(e.target.value) })}
-          className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500 mb-4"
+          className="w-full h-1.5 bg-console-surface-raised rounded-lg appearance-none cursor-pointer accent-amber-500 mb-4"
         />
 
         <div className="flex justify-between items-center mb-2">
-          <span className="text-[10px] text-slate-500 uppercase font-bold">{t("settings.sec.color")}</span>
-          <span className="text-[10px] text-slate-500">{t("settings.ver.colorEmpty")}</span>
+          <span className="text-[10px] text-console-text-subtle uppercase font-bold">{t("settings.sec.color")}</span>
+          <span className="text-[10px] text-console-text-subtle">{t("settings.ver.colorEmpty")}</span>
         </div>
         <div className="flex items-center gap-3 mb-4">
           <input
@@ -96,7 +96,7 @@ export function BibleVersionsSection({ onUpdateSettings }: SettingsSectionProps)
             className="w-10 h-8 rounded cursor-pointer bg-transparent border-0"
           />
           <span
-            className="text-xs font-mono text-slate-300"
+            className="text-xs font-mono text-console-text"
             style={{ color: settings.version_color && settings.version_color !== "" ? settings.version_color : undefined }}
           >
             {settings.version_color && settings.version_color !== "" ? settings.version_color : t("settings.ver.defaultOpacity")}
@@ -112,12 +112,12 @@ export function BibleVersionsSection({ onUpdateSettings }: SettingsSectionProps)
         </div>
 
         <div className="flex justify-between items-center mb-1">
-          <span className="text-[10px] text-slate-500 uppercase font-bold">{t("settings.fontFamily")}</span>
+          <span className="text-[10px] text-console-text-subtle uppercase font-bold">{t("settings.fontFamily")}</span>
         </div>
         <select
           value={settings.version_font_family ?? "Arial, sans-serif"}
           onChange={(e) => onUpdateSettings({ ...settings, version_font_family: e.target.value })}
-          className="w-full bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-2 cursor-pointer focus:outline-none focus:border-amber-500"
+          className="w-full bg-console-surface-raised border border-console-border text-console-text text-xs rounded-lg px-2 py-2 cursor-pointer focus:outline-none focus:border-amber-500"
           style={{ fontFamily: settings.version_font_family ?? "Arial, sans-serif" }}
         >
           {FONTS.map((f) => (

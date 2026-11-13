@@ -26,10 +26,10 @@ export type ProseMirrorJSON = { type: string; [key: string]: unknown };
 // ─── Slide background (discriminated union by `type`) ────────────────────────
 
 export type SlideBackground =
-  | { type: "color"; value: string }
+  | { type: "color"; value: string; opacity?: number }
   | { type: "image"; value: string; objectFit?: "cover" | "contain" | "fill"; opacity?: number }
   | { type: "video"; value: string; loop?: boolean; muted?: boolean; objectFit?: "cover" | "contain" | "fill"; opacity?: number }
-  | { type: "gradient"; from: string; to: string; angle: number };
+  | { type: "gradient"; from: string; to: string; angle: number; opacity?: number };
 
 /** Default fallback background when none is set on a slide. */
 export const DEFAULT_SLIDE_BACKGROUND: SlideBackground = {

@@ -116,7 +116,7 @@ const MAX_ALTERNATIVE_DELTA: f32 = 0.10;
 const MAX_PASSAGE_NEIGHBOR_DELTA: f32 = 0.05;
 const PASSAGE_CONTEXT_WEIGHT: f32 = 0.10;
 pub const MAX_PARAPHRASE_CONFIDENCE: f32 = 0.89;
-const PREPARATION_CANCELLED: &str = "Local paraphrase preparation was cancelled.";
+const PREPARATION_CANCELLED: &str = "Theme matching setup was cancelled.";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -289,7 +289,7 @@ impl IndexCache {
         let index = load_index(&root.join(index_file(version)))?;
         if index.dimension != dimension {
             return Err(format!(
-                "The {version} paraphrase index was built with a different model. Run preparation again."
+                "Theme matching for {version} needs to be set up again."
             ));
         }
         self.loaded.push((version.to_string(), index));
@@ -322,10 +322,9 @@ impl SemanticScripture {
             status: Mutex::new(SemanticStatus {
                 state: "notPrepared".into(),
                 message: if has_index {
-                    "Local paraphrase index is prepared and can be loaded.".into()
+                    "On-device theme matching is ready.".into()
                 } else {
-                    "Prepare the local model and Bible index to enable paraphrase suggestions."
-                        .into()
+                    "Set up on-device theme matching to suggest Scripture by theme.".into()
                 },
                 indexed: 0,
                 total: 0,
@@ -396,7 +395,7 @@ impl SemanticScripture {
             jobs.push(((*version).to_string(), documents, fingerprint, total));
         }
         if jobs.is_empty() {
-            return Err("Install one of the modern Bible translations (NKJV, ASV, WEB, NIV, or AMP) to enable paraphrase suggestions.".into());
+            return Err("Install one of the supported Bible translations (NKJV, ASV, WEB, NIV, or AMP) to enable theme suggestions.".into());
         }
         let grand_total: usize = jobs.iter().map(|(_, _, _, total)| total).sum();
 
@@ -405,18 +404,18 @@ impl SemanticScripture {
         self.update_status(
             app,
             "preparing",
-            "Loading the local paraphrase models. First preparation may download about 145 MB…",
+            "Preparing on-device theme matching. The first setup may download about 145 MB…",
             0,
             file_total,
         );
-        let mut model = load_pinned_model(&self.root, |completed, file| {
+        let mut model = load_pinned_model(&self.root, |completed, _file| {
             if self.cancel_requested.load(Ordering::Acquire) {
                 return Err(PREPARATION_CANCELLED.to_string());
             }
             self.update_status(
                 app,
                 "preparing",
-                format!("Preparing embedding files… {completed}/{file_total} verified ({file})"),
+                format!("Preparing theme-matching files… {completed}/{file_total} verified"),
                 completed,
                 file_total,
             );
@@ -429,27 +428,27 @@ impl SemanticScripture {
         self.update_status(
             app,
             "preparing",
-            "Warming the local paraphrase model…",
+            "Finishing theme-matching setup…",
             MODEL_FILES.len(),
             file_total,
         );
         let warmup = format!("{QUERY_PREFIX}local Bible passage retrieval");
         let model_dimension = model
             .embed(vec![warmup.as_str()], Some(1))
-            .map_err(|error| format!("Could not warm the local paraphrase model: {error}"))?
+            .map_err(|error| format!("Theme matching could not start: {error}"))?
             .pop()
             .map(|embedding| embedding.len())
             .filter(|dimension| *dimension > 0)
-            .ok_or_else(|| "The local paraphrase model returned no query vector.".to_string())?;
+            .ok_or_else(|| "Theme matching could not prepare the search.".to_string())?;
 
-        let mut reranker = load_pinned_reranker(&self.root, |completed, file| {
+        let mut reranker = load_pinned_reranker(&self.root, |completed, _file| {
             if self.cancel_requested.load(Ordering::Acquire) {
                 return Err(PREPARATION_CANCELLED.to_string());
             }
             self.update_status(
                 app,
                 "preparing",
-                format!("Preparing reranker files… {completed}/{file_total} verified ({file})"),
+                format!("Preparing theme-matching files… {completed}/{file_total} verified"),
                 MODEL_FILES.len() + completed,
                 file_total,
             );
@@ -462,7 +461,7 @@ impl SemanticScripture {
         // ONNX session initialization cost.
         reranker
             .rerank("warmup", ["warmup passage"], false, Some(1))
-            .map_err(|error| format!("Could not warm the local reranker: {error}"))?;
+            .map_err(|error| format!("Theme matching could not finish starting: {error}"))?;
 
         // Prefer the release bundle of pre-built indexes: it turns hours of
         // CPU embedding on the operator's machine into one download. Versions
@@ -473,21 +472,18 @@ impl SemanticScripture {
                 self.update_status(
                     app,
                     "preparing",
-                    format!(
-                        "Using {installed}/{job_total} pre-built meaning indexes…",
-                        job_total = jobs.len()
-                    ),
+                    "Loading prepared theme data…".to_string(),
                     0,
                     grand_total,
                 );
             }
             Ok(_) => {}
             Err(message) if message == PREPARATION_CANCELLED => return Err(message),
-            Err(message) => {
+            Err(_) => {
                 self.update_status(
                     app,
                     "preparing",
-                    format!("Pre-built indexes unavailable ({message}); building locally…"),
+                    "Preparing theme matching on this computer…".to_string(),
                     0,
                     grand_total,
                 );
@@ -501,7 +497,7 @@ impl SemanticScripture {
             self.update_status(
                 app,
                 "preparing",
-                format!("Checking the {label} meaning index…"),
+                format!("Preparing {label} theme data…"),
                 indexed_before,
                 grand_total,
             );
@@ -522,7 +518,7 @@ impl SemanticScripture {
                         self.update_status(
                             app,
                             "preparing",
-                            format!("Indexing {label} Bible passages… {indexed}/{total}"),
+                            format!("Preparing {label} Bible passages… {indexed}/{total}"),
                             indexed_before + indexed,
                             grand_total,
                         );
@@ -545,7 +541,7 @@ impl SemanticScripture {
         self.update_status(
             app,
             "ready",
-            format!("Local paraphrase matching is ready for {ready_versions}."),
+            format!("Theme matching is ready for {ready_versions}."),
             grand_total,
             grand_total,
         );
@@ -589,7 +585,7 @@ impl SemanticScripture {
         self.update_status(
             app,
             "preparing",
-            "Checking for pre-built meaning indexes…",
+            "Checking for prepared theme data…",
             0,
             0,
         );
@@ -605,7 +601,7 @@ impl SemanticScripture {
             return Err(format!("release asset returned HTTP {}", response.status()));
         }
         if response.content_length().unwrap_or(0) > PREBUILT_BUNDLE_MAX_BYTES {
-            return Err("the pre-built bundle exceeds the size limit".into());
+            return Err("The theme-matching download exceeds the size limit.".into());
         }
 
         let temp = self.root.join("prebuilt-bundle.zip.part");
@@ -621,7 +617,7 @@ impl SemanticScripture {
             // blocking::Response streams through its std::io::Read impl.
             let count = response
                 .read(&mut buffer)
-                .map_err(|error| format!("The pre-built bundle download failed: {error}"))?;
+                .map_err(|error| format!("The theme-matching download failed: {error}"))?;
             if count == 0 {
                 break;
             }
@@ -629,15 +625,15 @@ impl SemanticScripture {
             if downloaded > PREBUILT_BUNDLE_MAX_BYTES {
                 drop(file);
                 let _ = fs::remove_file(&temp);
-                return Err("the pre-built bundle exceeds the size limit".into());
+                return Err("The theme-matching download exceeds the size limit.".into());
             }
             file.write_all(&buffer[..count])
-                .map_err(|error| format!("Could not save the pre-built bundle: {error}"))?;
+                .map_err(|error| format!("Could not save the theme-matching data: {error}"))?;
             self.update_status(
                 app,
                 "preparing",
                 format!(
-                    "Downloading pre-built meaning indexes… {:.0} MB",
+                    "Downloading theme-matching data… {:.0} MB",
                     downloaded as f64 / (1024.0 * 1024.0)
                 ),
                 0,
@@ -648,7 +644,7 @@ impl SemanticScripture {
 
         let archive_file = File::open(&temp).map_err(|error| error.to_string())?;
         let mut archive = zip::ZipArchive::new(BufReader::new(archive_file))
-            .map_err(|error| format!("The pre-built bundle could not be opened: {error}"))?;
+            .map_err(|error| format!("The theme-matching data could not be opened: {error}"))?;
         let mut installed = 0_usize;
         for (version, fingerprint, total) in &needed {
             let Ok(mut entry) = archive.by_name(&index_file(version)) else {
@@ -741,7 +737,7 @@ impl SemanticScripture {
                 matches: Vec::new(),
                 diagnostic: diagnostic(
                     "skipped",
-                    "Local paraphrase matching is not ready.",
+                    "Theme matching is not ready.",
                     None,
                     None,
                     Vec::new(),
@@ -753,12 +749,12 @@ impl SemanticScripture {
             .model
             .lock()
             .as_mut()
-            .ok_or_else(|| "Local paraphrase model is not loaded.".to_string())?
+            .ok_or_else(|| "Theme matching is not ready.".to_string())?
             .embed(vec![query_input.as_str()], Some(1))
             .map_err(|error| format!("Could not embed sermon context: {error}"))?;
         let mut query_vector = embeddings
             .pop()
-            .ok_or_else(|| "The local paraphrase model returned no query vector.".to_string())?;
+            .ok_or_else(|| "Theme matching could not prepare the search.".to_string())?;
         normalize(&mut query_vector);
 
         // Paraphrase ranking runs against the output version's own text so
@@ -772,7 +768,7 @@ impl SemanticScripture {
                 matches: Vec::new(),
                 diagnostic: diagnostic(
                     "skipped",
-                    "Paraphrase matching covers NKJV, ASV, WEB, NIV, and AMP; explicit references and quotations still work.",
+                    "Theme matching supports NKJV, ASV, WEB, NIV, and AMP; references and quotations still work.",
                     None,
                     None,
                     Vec::new(),
@@ -788,7 +784,7 @@ impl SemanticScripture {
                 matches: Vec::new(),
                 diagnostic: diagnostic(
                     "skipped",
-                    "The local paraphrase index for this translation could not be loaded. Run preparation again.",
+                    "Theme matching for this translation could not be loaded. Set it up again.",
                     None,
                     None,
                     Vec::new(),
@@ -880,7 +876,7 @@ impl SemanticScripture {
                     matches: Vec::new(),
                     diagnostic: diagnostic(
                         "skipped",
-                        "Local paraphrase matching is not ready.",
+                        "Theme matching is not ready.",
                         None,
                         None,
                         Vec::new(),
@@ -1026,14 +1022,14 @@ impl SemanticScripture {
 
     pub fn remove_local_model(&self, app: &AppHandle) -> Result<SemanticStatus, String> {
         if self.preparing.load(Ordering::Acquire) {
-            return Err("Cancel paraphrase preparation before removing local files.".into());
+            return Err("Cancel theme matching setup before removing its files.".into());
         }
         *self.model.lock() = None;
         *self.reranker.lock() = None;
         self.indexes.lock().loaded.clear();
         if self.root.exists() {
             if let Err(error) = fs::remove_dir_all(&self.root) {
-                let message = format!("Could not remove the local AI model: {error}");
+                let message = format!("Could not remove the theme-matching model: {error}");
                 self.update_status(app, "error", &message, 0, 0);
                 return Err(message);
             }
@@ -1041,7 +1037,7 @@ impl SemanticScripture {
         self.update_status(
             app,
             "notPrepared",
-            "Local paraphrase model removed. Normal Scripture features are unaffected.",
+            "Theme-matching model removed. Scripture features are unaffected.",
             0,
             0,
         );

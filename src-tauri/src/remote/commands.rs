@@ -1281,7 +1281,7 @@ pub async fn dispatch(
                 None => err_result(&command.command_id, control.hub.current_revision(), "missing_payload", "Missing camera ICE payload"),
             }
         }
-        _ => err_result(&command.command_id, control.hub.current_revision(), NOT_IMPLEMENTED, "Command not implemented in this build"),
+        _ => err_result(&command.command_id, control.hub.current_revision(), NOT_IMPLEMENTED, "This action is not available on this device"),
     }
 }
 

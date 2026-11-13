@@ -139,7 +139,7 @@ export function AppHeader({ onPersistSchedule }: { onPersistSchedule?: () => Pro
           <StatusBadge
             tone="error"
             icon={<Signal size={10} />}
-            label="Backend Offline"
+            label="Service Offline"
             className="hidden lg:inline-flex"
           />
         )}
@@ -152,11 +152,11 @@ export function AppHeader({ onPersistSchedule }: { onPersistSchedule?: () => Pro
             className="flex items-center gap-1.5 rounded-full px-1 py-0.5 text-state-live transition-colors hover:bg-state-live/15"
             title={backendError}
           >
-            <StatusBadge tone="error" label="Backend issue" icon={<AlertTriangle size={11} />} className="border-transparent bg-transparent py-0" />
+            <StatusBadge tone="error" label="Service issue" icon={<AlertTriangle size={11} />} className="border-transparent bg-transparent py-0" />
           </button>
           <button
             onClick={() => setBackendError(null)}
-            aria-label="Dismiss backend error"
+            aria-label="Dismiss service error"
             className="flex h-6 w-6 items-center justify-center rounded-full text-state-live/70 transition-colors hover:bg-state-live/15 hover:text-state-live"
           >
             <X size={11} />

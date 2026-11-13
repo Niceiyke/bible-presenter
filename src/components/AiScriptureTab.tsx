@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Clock, MessageSquareText, Mic, RotateCcw, Send, Square, Zap, BookOpen } from "lucide-react";
+import { Clock, MessageSquareText, Mic, RotateCcw, Send, Square, Zap, BookOpen, ThumbsUp, ThumbsDown, Quote, EyeOff } from "lucide-react";
 import { type ScriptureSuggestion, useAiScripture } from "../hooks/useAiScripture";
 import { useProgramAudio } from "../hooks/useProgramAudio";
 import { useAppStore } from "../store";
+import { recordScriptureFeedback, type ScriptureFeedbackKind } from "../ai/scriptureFeedback";
 import { Button, cn } from "./ui";
 import type { DisplayItem } from "../types";
 
@@ -50,8 +51,13 @@ export function AiScriptureTab({ onStage, onLive }: { onStage: (item: DisplayIte
   const listening = ["connecting", "running", "listening"].includes(ai.status.state);
   const [now, setNow] = useState(() => Date.now());
   const [followTranscript, setFollowTranscript] = useState(true);
+  const [hiddenSuggestionIds, setHiddenSuggestionIds] = useState<Set<string>>(() => new Set());
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const suggestionsRef = useRef<HTMLDivElement | null>(null);
+  const visibleSuggestions = useMemo(
+    () => ai.suggestions.filter((suggestion) => !hiddenSuggestionIds.has(suggestion.id)),
+    [ai.suggestions, hiddenSuggestionIds],
+  );
 
   const startedAt = ai.sessionStartedAt ?? ai.status.startedAt ?? null;
   const durationSeconds = startedAt == null
@@ -110,6 +116,7 @@ export function AiScriptureTab({ onStage, onLive }: { onStage: (item: DisplayIte
 
   const clearSession = () => {
     ai.clearSession();
+    setHiddenSuggestionIds(new Set());
     setFollowTranscript(true);
   };
 
@@ -229,11 +236,11 @@ export function AiScriptureTab({ onStage, onLive }: { onStage: (item: DisplayIte
           <div className="flex min-w-0 items-center gap-1.5">
             <BookOpen size={11} className="shrink-0 text-violet-300" />
             <h3 className="text-[9px] font-black uppercase tracking-[0.12em] text-console-text-muted">Detected Scripture</h3>
-            {ai.suggestions.length > 0 && <span className="text-[8px] font-bold text-console-text-subtle">{ai.suggestions.length} found</span>}
+            {visibleSuggestions.length > 0 && <span className="text-[8px] font-bold text-console-text-subtle">{visibleSuggestions.length} found</span>}
           </div>
         </header>
         <div ref={suggestionsRef} className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-1.5 custom-scrollbar">
-          {ai.suggestions.length === 0 ? <p className="p-2 text-[11px] italic leading-relaxed text-console-text-subtle">Detected references and close quotations will appear here.</p> : ai.suggestions.map((suggestion) => {
+          {visibleSuggestions.length === 0 ? <p className="p-2 text-[11px] italic leading-relaxed text-console-text-subtle">Detected references and close quotations will appear here.</p> : visibleSuggestions.map((suggestion) => {
             const confidence = confidenceOf(suggestion);
             const evidenceLabel = evidenceLabelOf(suggestion);
             const key = verseKey(suggestion.verse);
@@ -262,15 +269,59 @@ export function AiScriptureTab({ onStage, onLive }: { onStage: (item: DisplayIte
               </div>
               <p className="mt-1.5 whitespace-pre-wrap text-[11.5px] leading-[1.5] text-console-text">{suggestion.verse.text}</p>
               {suggestion.citationConflict ? <p className="mt-1 text-[10px] font-medium leading-snug text-state-warning">{suggestion.citationConflict}</p> : null}
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 <Button variant="stage-outline" size="xs" icon={<Send size={10} />} onClick={() => void stageSuggestion(suggestion)}>Stage</Button>
                 <Button variant="live-outline" size="xs" icon={<Zap size={10} />} onClick={() => void liveSuggestion(suggestion)} title="Take this verse live immediately, without reviewing it in preview">Go live</Button>
+                <SuggestionFeedback
+                  suggestion={suggestion}
+                  onSuppress={() => setHiddenSuggestionIds((current) => new Set(current).add(suggestion.id))}
+                />
               </div>
             </article>;
           })}
         </div>
       </section>
       </div>
+    </div>
+  );
+}
+
+function SuggestionFeedback({
+  suggestion,
+  onSuppress,
+}: {
+  suggestion: ScriptureSuggestion;
+  onSuppress: () => void;
+}) {
+  const [given, setGiven] = useState<ScriptureFeedbackKind | null>(null);
+  const offersNotQuote = suggestion.detection === "quote" || suggestion.evidenceTypes?.includes("quote");
+  const buttonClass = (active: boolean) => cn(
+    "flex h-6 w-6 items-center justify-center rounded border transition-colors",
+    active
+      ? "border-tool-design/50 bg-tool-design/15 text-tool-design"
+      : "border-console-border text-console-text-subtle hover:text-console-text",
+  );
+  const give = (kind: ScriptureFeedbackKind) => {
+    recordScriptureFeedback(kind, suggestion);
+    setGiven(kind);
+    if (kind === "suppress") onSuppress();
+  };
+  return (
+    <div className="ml-auto flex items-center gap-1 border-l border-console-border pl-1.5" role="group" aria-label="Suggestion feedback">
+      <button type="button" onClick={() => give("correct")} aria-label="Correct verse" title="Correct verse" className={buttonClass(given === "correct")}>
+        <ThumbsUp size={10} />
+      </button>
+      <button type="button" onClick={() => give("wrong")} aria-label="Wrong verse" title="Wrong verse" className={buttonClass(given === "wrong")}>
+        <ThumbsDown size={10} />
+      </button>
+      {offersNotQuote && (
+        <button type="button" onClick={() => give("not_quote")} aria-label="Not a quotation" title="Not a quotation" className={buttonClass(given === "not_quote")}>
+          <Quote size={10} />
+        </button>
+      )}
+      <button type="button" onClick={() => give("suppress")} aria-label="Do not suggest again" title="Do not suggest again" className={buttonClass(given === "suppress")}>
+        <EyeOff size={10} />
+      </button>
     </div>
   );
 }

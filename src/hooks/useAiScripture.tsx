@@ -15,6 +15,7 @@ import {
   type PerformanceAccumulator,
 } from "../ai/scripturePerformance";
 import { mergeSuggestionFeed } from "../ai/scriptureSuggestions";
+import { isSuggestionSuppressed } from "../ai/scriptureFeedback";
 
 export const AI_AUTO_STAGE_CONFIDENCE = 0.9;
 /** Direct references are deterministic enough to act on the backend's interim 89% result. */
@@ -351,6 +352,9 @@ export function AiScriptureProvider({
       listen<ScriptureSuggestion>("ai-scripture-suggestion", (event) => {
         if (!mounted) return;
         const suggestion = event.payload;
+        // Local operator feedback suppresses repeats before metrics, cards, or
+        // automatic actions see them.
+        if (isSuggestionSuppressed(suggestion)) return;
         registerSuggestion(suggestion);
         // One canonical verse card can retain both the spoken-reference and
         // direct-quote evidence without conflating their automation policies.

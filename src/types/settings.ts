@@ -101,7 +101,9 @@ export interface PresentationSettings {
   ai_scripture_auto_live_quotes?: boolean;
   ai_scripture_auto_live_paraphrases?: boolean;
   ai_scripture_auto_live_voice_commands?: boolean;
-  /** Explicit opt-in: sync finalized transcript text/suggestions to Dashboard. */
+  /** Keep finalized AI Scripture sessions locally. On by default; opt out to disable. */
+  transcript_retention_enabled?: boolean;
+  /** Sync finalized transcript text/suggestions to Dashboard. On by default; opt out to disable. */
   transcript_sync_enabled?: boolean;
 }
 
@@ -135,7 +137,8 @@ export const DEFAULT_SETTINGS: PresentationSettings = {
   ai_scripture_auto_live_quotes: false,
   ai_scripture_auto_live_paraphrases: false,
   ai_scripture_auto_live_voice_commands: false,
-  transcript_sync_enabled: false,
+  transcript_retention_enabled: true,
+  transcript_sync_enabled: true,
 };
 
 export const THEMES: Record<string, { label: string; colors: ThemeColors }> = {

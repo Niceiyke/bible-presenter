@@ -86,7 +86,7 @@ ffmpeg_available: boolean;
     probeH264(),
     navigator.mediaDevices?.enumerateDevices?.().catch(() => []) ?? Promise.resolve([] as MediaDeviceInfo[]),
     isTauri()
-      ? invoke<{ supported: boolean; reason: string }>("ndi_status").catch(() => ({ supported: false, reason: "Could not query the backend for NDI support." }))
+      ? invoke<{ supported: boolean; reason: string }>("ndi_status").catch(() => ({ supported: false, reason: "Could not check NDI support." }))
       : Promise.resolve({ supported: false, reason: "NDI output requires the desktop app." }),
   ]);
 
@@ -186,7 +186,7 @@ async function runReadinessChecks(systemChecks: SystemChecks | null): Promise<Re
   if (!isTauri()) {
     return {
       checkedAt: Date.now(),
-      checks: [createReadinessCheck("desktop", "Desktop backend", "warn", "Run this gate inside the Wordlyte desktop app.")],
+      checks: [createReadinessCheck("desktop", "Wordlyte desktop", "warn", "Run this check inside the Wordlyte desktop app.")],
     };
   }
 
@@ -213,48 +213,48 @@ async function runReadinessChecks(systemChecks: SystemChecks | null): Promise<Re
 
   checks.push(startup
     ? startup.db_ok && startup.issues.length === 0
-      ? createReadinessCheck("storage", "Persistent app storage", "pass", "Database opened successfully with no startup issues.")
-      : createReadinessCheck("storage", "Persistent app storage", "fail", startup.issues.join(" ") || "The Bible database is unavailable.")
-    : createReadinessCheck("storage", "Persistent app storage", "fail", "Could not query startup storage status."));
+      ? createReadinessCheck("storage", "Saved Wordlyte data", "pass", "Your Wordlyte data opened successfully.")
+      : createReadinessCheck("storage", "Saved Wordlyte data", "fail", startup.issues.join(" ") || "Wordlyte could not open your saved Bible data.")
+    : createReadinessCheck("storage", "Saved Wordlyte data", "fail", "Could not verify your saved Wordlyte data."));
 
   checks.push(versions
     ? versions.length > 0
       ? createReadinessCheck("bible", "Bible library", "pass", `${versions.length} Bible version${versions.length === 1 ? "" : "s"} available.`)
-      : createReadinessCheck("bible", "Bible library", "fail", "No Bible versions are available. Download or restore the Bible database before service.")
-    : createReadinessCheck("bible", "Bible library", "fail", "Could not query Bible versions."));
+      : createReadinessCheck("bible", "Bible library", "fail", "No Bible versions are available. Download or restore the Bible library before service.")
+    : createReadinessCheck("bible", "Bible library", "fail", "Could not check Bible versions."));
 
   checks.push(audioDevices
     ? audioDevices.length > 0
-      ? createReadinessCheck("audio", "Audio input", "pass", `${audioDevices.length} DirectShow audio input${audioDevices.length === 1 ? "" : "s"} detected.`)
-      : createReadinessCheck("audio", "Audio input", "warn", "No DirectShow audio input detected. AI Scripture, recording, and stream audio need a selected device.")
-    : createReadinessCheck("audio", "Audio input", "warn", "Could not enumerate audio inputs."));
+      ? createReadinessCheck("audio", "Audio input", "pass", `${audioDevices.length} audio input${audioDevices.length === 1 ? "" : "s"} detected.`)
+      : createReadinessCheck("audio", "Audio input", "warn", "No audio input detected. AI Scripture, recording, and stream audio need a selected device.")
+    : createReadinessCheck("audio", "Audio input", "warn", "Could not check audio inputs."));
 
   checks.push(managedAi?.available
-    ? createReadinessCheck("ai-provider", "Managed AI", "pass", `${managedAi.availableUnitsRemaining.toLocaleString()} AI Units available for transcription and drafting.`)
-    : createReadinessCheck("ai-provider", "Managed AI", "warn", managedAi?.message || "AI Add-on or AI Units are unavailable. Add-on features will not start until the organization has managed AI access."));
+    ? createReadinessCheck("ai-provider", "Wordlyte AI", "pass", `${managedAi.availableUnitsRemaining.toLocaleString()} AI Units available for transcription and drafting.`)
+    : createReadinessCheck("ai-provider", "Wordlyte AI", "warn", managedAi?.message || "AI features are unavailable until your organization has AI Units or an active AI Add-on."));
 
   const outputIds = new Set((outputConfigs ?? []).map((output) => output.id));
   const outputStateErrors = (outputStates ?? []).filter((state) => state.error).map((state) => `${state.id}: ${state.error}`);
   const outputConfigured = outputIds.has("output") && outputIds.has("stage");
   const outputVisible = outputConfigs?.find((output) => output.id === "output")?.visible === true;
   checks.push(outputConfigured && outputStateErrors.length === 0
-    ? createReadinessCheck("output", "Preview / Program output path", outputVisible ? "pass" : "warn", outputVisible ? "Output and stage surfaces are configured and the output window is open." : "Output and stage surfaces are configured. Open the output window before service.")
-    : createReadinessCheck("output", "Preview / Program output path", "fail", outputStateErrors.join(" ") || "Output or stage surface configuration is missing."));
+    ? createReadinessCheck("output", "Audience output", outputVisible ? "pass" : "warn", outputVisible ? "The audience output and stage monitor are configured and the output window is open." : "The audience output and stage monitor are configured. Open the output window before service.")
+    : createReadinessCheck("output", "Audience output", "fail", outputStateErrors.join(" ") || "The audience output or stage monitor is not configured."));
 
   const captureReady = systemChecks?.info?.ffmpeg_available && systemChecks.info.windows_graphics_capture_supported;
   checks.push(captureReady
-    ? createReadinessCheck("capture", "Recording / streaming capture", "pass", `ffmpeg and native capture are ready (${systemChecks.info?.h264_encoder ?? "H.264"}).`)
-    : createReadinessCheck("capture", "Recording / streaming capture", "fail", systemChecks?.info?.windows_graphics_capture_reason || "ffmpeg or native output capture is unavailable."));
+    ? createReadinessCheck("capture", "Recording and streaming", "pass", "Recording and streaming are ready on this computer.")
+    : createReadinessCheck("capture", "Recording and streaming", "fail", systemChecks?.info?.windows_graphics_capture_reason || "Recording or streaming is unavailable on this computer."));
 
   const recordingError = recording?.error;
   checks.push(recordingError
-    ? createReadinessCheck("recording", "Recording transport", "fail", `Recording reports an error: ${recordingError}`)
-    : createReadinessCheck("recording", "Recording transport", "pass", recording?.active ? "Recording is active and has not reported an error." : "Recording transport is idle and ready."));
+    ? createReadinessCheck("recording", "Recording", "fail", `Recording reported an error: ${recordingError}`)
+    : createReadinessCheck("recording", "Recording", "pass", recording?.active ? "Recording is active." : "Recording is ready."));
 
-  const streamErrors = streaming?.destinations?.filter((destination) => destination.error || (streaming.active && !destination.active)).map((destination) => `${destination.label}: ${destination.error || "inactive"}`) ?? [];
+  const streamErrors = streaming?.destinations?.filter((destination) => destination.error || (streaming.active && !destination.active)).map((destination) => `${destination.label}: ${destination.error || "not connected"}`) ?? [];
   checks.push(streamErrors.length > 0
-    ? createReadinessCheck("streaming", "RTMP transport", "fail", streamErrors.join(" "))
-    : createReadinessCheck("streaming", "RTMP transport", "pass", streaming?.active ? "RTMP broadcast is active and destinations report healthy." : "RTMP transport is idle and ready."));
+    ? createReadinessCheck("streaming", "Streaming", "fail", streamErrors.join(" "))
+    : createReadinessCheck("streaming", "Streaming", "pass", streaming?.active ? "The broadcast is active and destinations are healthy." : "Streaming is ready."));
 
   return { checks, checkedAt: Date.now() };
 }

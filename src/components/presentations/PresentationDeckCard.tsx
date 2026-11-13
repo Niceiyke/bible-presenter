@@ -86,7 +86,7 @@ export function PresentationDeckCard({
       title={dragItem ? "Drag to Up Next" : undefined}
       onDragStart={(event) => dragItem && setDisplayItemDragData(event, dragItem)}
       className={cn(
-        "group min-w-0 overflow-hidden rounded-2xl border bg-console-surface text-left transition-all",
+        "group min-w-0 overflow-hidden rounded-xl border bg-console-surface text-left transition-all",
         "hover:-translate-y-0.5 hover:border-console-border-strong hover:shadow-xl hover:shadow-black/25",
         selected && "border-tool-design/70 ring-2 ring-tool-design/20",
       )}
@@ -98,14 +98,14 @@ export function PresentationDeckCard({
           <DeckPlaceholder name={summary.name} />
         )}
         <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/70 to-transparent" />
-        <div className="absolute bottom-2 left-2 rounded-md border border-white/10 bg-black/60 px-2 py-1 text-[9px] font-bold text-white/85 backdrop-blur-sm">
+        <div className="absolute bottom-1.5 left-1.5 rounded border border-white/10 bg-black/60 px-1.5 py-0.5 text-[8px] font-bold text-white/85 backdrop-blur-sm">
           {summary.slide_count} {summary.slide_count === 1 ? "slide" : "slides"}
         </div>
         <div className="absolute right-2 top-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           <CardActions favorite={favorite} onEdit={onEdit} onToggleFavorite={onToggleFavorite} overlay />
         </div>
       </div>
-      <DeckMeta summary={summary} className="p-3" />
+      <DeckMeta summary={summary} className="p-2.5" />
     </div>
   );
 }
@@ -113,8 +113,8 @@ export function PresentationDeckCard({
 function DeckMeta({ summary, className }: { summary: PresentationSummary; className?: string }) {
   return (
     <div className={cn("min-w-0", className)}>
-      <p className="truncate text-[13px] font-bold text-console-text" title={summary.name}>{summary.name}</p>
-      <p className="mt-1 text-[10px] text-console-text-subtle">{formatPresentationUpdatedAt(summary.updated_at)}</p>
+      <p className="truncate text-[12px] font-bold text-console-text" title={summary.name}>{summary.name}</p>
+      <p className="mt-0.5 truncate text-[9px] text-console-text-subtle">{formatPresentationUpdatedAt(summary.updated_at)}</p>
     </div>
   );
 }

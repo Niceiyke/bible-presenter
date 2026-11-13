@@ -39,7 +39,7 @@ export function SystemTab() {
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
-          <Gauge size={12} /> System Diagnostics
+          <Gauge size={12} /> System Health
         </h2>
         <button
           onClick={refresh}
@@ -58,12 +58,12 @@ export function SystemTab() {
 
       {!checks ? (
         <p className="text-[11px] text-slate-500 p-3 rounded-lg border border-dashed border-slate-700">
-          Running system checks… (H.264 encode probe can take a moment)
+          Checking your system… This can take a moment.
         </p>
       ) : (
         <>
           <HardwareSummary checks={checks} />
-          <ReleaseGate readiness={readiness} onRun={refresh} />
+          <ServiceReadiness readiness={readiness} onRun={refresh} />
           <ReadinessChecklist checks={checks} />
           <CapabilityReport checks={checks} />
           <PerformanceMonitor checks={checks} metrics={metrics} monitoring={monitorActive} />
@@ -73,7 +73,7 @@ export function SystemTab() {
   );
 }
 
-function ReleaseGate({ readiness, onRun }: { readiness: ReleaseReadiness | null; onRun: () => Promise<void> }) {
+function ServiceReadiness({ readiness, onRun }: { readiness: ReleaseReadiness | null; onRun: () => Promise<void> }) {
   const [running, setRunning] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
   const failed = readiness?.checks.filter((check) => check.status === "fail").length ?? 0;
@@ -92,7 +92,7 @@ function ReleaseGate({ readiness, onRun }: { readiness: ReleaseReadiness | null;
   const copyReport = async () => {
     if (!readiness) return;
     const report = [
-      "Wordlyte P0 release readiness",
+      "Wordlyte service readiness",
       `Checked: ${new Date(readiness.checkedAt).toLocaleString()}`,
       ...readiness.checks.map((check) => `[${check.status.toUpperCase()}] ${check.label}: ${check.detail}`),
     ].join("\n");
@@ -106,12 +106,12 @@ function ReleaseGate({ readiness, onRun }: { readiness: ReleaseReadiness | null;
   };
 
   return (
-    <Card title="P0 release gate">
+    <Card title="Service readiness">
       {!readiness ? (
         <div className="flex items-center justify-between gap-3">
-          <p className="text-[10px] text-slate-500">Run the release gate before a live service.</p>
+          <p className="text-[10px] text-slate-500">Run a readiness check before a live service.</p>
           <button onClick={() => void run()} disabled={running} className="rounded-md border border-cyan-700/60 px-2.5 py-1.5 text-[10px] font-bold uppercase text-cyan-300 disabled:opacity-50">
-            {running ? "Checking…" : "Run gate"}
+            {running ? "Checking…" : "Run check"}
           </button>
         </div>
       ) : (
@@ -119,7 +119,7 @@ function ReleaseGate({ readiness, onRun }: { readiness: ReleaseReadiness | null;
           <div className="mb-3 flex items-center justify-between gap-3">
             <div className={`flex items-center gap-2 text-[11px] font-black uppercase ${overall === "pass" ? "text-green-400" : overall === "warn" ? "text-amber-400" : "text-red-400"}`}>
               {overall === "pass" ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
-              {overall === "pass" ? "Ready for controlled beta service" : overall === "warn" ? "Ready with warnings" : "Do not start service yet"}
+              {overall === "pass" ? "Ready for service" : overall === "warn" ? "Ready with warnings" : "Attention needed before service"}
             </div>
             <div className="flex items-center gap-2">
               <button onClick={() => void copyReport()} className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500 hover:text-slate-300"><Clipboard size={10} /> {copied ? "Copied" : "Copy report"}</button>
@@ -137,7 +137,7 @@ function ReleaseGate({ readiness, onRun }: { readiness: ReleaseReadiness | null;
               </li>
             ))}
           </ul>
-          <p className="mt-3 text-[9px] text-slate-600">This gate checks the current machine and active transport state. It does not replace a supervised rehearsal or physical output/stream smoke test.</p>
+          <p className="mt-3 text-[9px] text-slate-600">This check covers the current computer and active output state. It does not replace a supervised rehearsal or a physical output and stream test.</p>
         </>
       )}
     </Card>
@@ -185,13 +185,13 @@ function HardwareSummary({ checks }: { checks: SystemChecks }) {
         <SummaryItem icon={HardDrive} label="Disk" value={info ? `${(info.total_disk_mb / 1024).toFixed(0)} GB` : "Unknown"} />
 <SummaryItem
           icon={Radio}
-          label="ffmpeg"
+          label="Media engine"
           value={info?.ffmpeg_available ? "Available" : "Missing"}
           ok={info?.ffmpeg_available}
         />
         <SummaryItem
           icon={Video}
-          label="H.264 encoder"
+          label="Video encoder"
           value={info?.h264_encoder ? encoderLabel(info.h264_encoder) : "Unknown"}
           ok={info ? isHardwareEncoder(info.h264_encoder) : undefined}
           detail={info ? encoderMode(info.h264_encoder) : undefined}
@@ -206,7 +206,7 @@ function HardwareSummary({ checks }: { checks: SystemChecks }) {
       </div>
       {!info && (
         <p className="text-[10px] text-slate-600 mt-2">
-          Backend unavailable (running in a browser) — hardware details not collected.
+          System details are unavailable in this environment.
         </p>
       )}
     </Card>
@@ -242,17 +242,17 @@ function SummaryItem({
 
 function ReadinessChecklist({ checks }: { checks: SystemChecks }) {
   const rows = [
-    { label: "WebCodecs H.264 encode", ok: checks.h264Supported, detail: checks.h264Supported ? "VideoEncoder + avc1 supported" : "Unavailable in this WebView2 build" },
-    { label: "ffmpeg on PATH", ok: checks.info?.ffmpeg_available ?? false, detail: "Required for the native RTMP destinations" },
+    { label: "Video encoding", ok: checks.h264Supported, detail: checks.h264Supported ? "Supported on this computer" : "Not available on this computer" },
+    { label: "Media engine", ok: checks.info?.ffmpeg_available ?? false, detail: "Required for streaming" },
     {
       label: "Native output capture",
       ok: checks.info?.windows_graphics_capture_supported ?? false,
-      detail: checks.info?.windows_graphics_capture_reason ?? "Backend unavailable",
+      detail: checks.info?.windows_graphics_capture_reason ?? "System details unavailable",
     },
     { label: "Audio input", ok: checks.audioInputPresent, detail: checks.audioInputPresent ? "Microphone / line-in detected" : "No microphone / line-in detected" },
     { label: "Camera", ok: checks.cameraPresent, detail: checks.cameraPresent ? "Camera detected" : "No camera detected" },
-    { label: "Displays", ok: checks.monitors >= 1, detail: checks.monitors >= 1 ? `${checks.monitors} monitor(s) for output/stage` : "No external displays detected" },
-    { label: "Web assets", ok: true, detail: `${checks.hardwareConcurrency} threads, ${checks.deviceMemory} GB device memory` },
+    { label: "Displays", ok: checks.monitors >= 1, detail: checks.monitors >= 1 ? `${checks.monitors} monitor(s) available for output and stage` : "No displays detected" },
+    { label: "Processing resources", ok: true, detail: `${checks.hardwareConcurrency} threads, ${checks.deviceMemory} GB device memory` },
   ];
   return (
     <Card title="Readiness Checklist">
@@ -283,10 +283,9 @@ function CapabilityReport({ checks }: { checks: SystemChecks }) {
     { name: "Output / stage windows", available: c.monitorsAvailable, reason: c.monitorsAvailable ? "At least one display is available." : "No display detected for output/stage windows." },
   ];
   return (
-    <Card title="Capabilities & Service Gating">
+    <Card title="Capabilities">
       <p className="text-[10px] text-slate-500 mb-2">
-        Services are gated by these checks — disabled ones stay visible in their workspaces but can't be started, so the
-        operator always knows <em>why</em>.
+        Unavailable features remain visible in their workspaces with a clear reason, but cannot be started.
       </p>
       <ul className="flex flex-col gap-1.5">
         {services.map((s) => (
@@ -306,13 +305,10 @@ function CapabilityReport({ checks }: { checks: SystemChecks }) {
       <div className="mt-3 flex items-center gap-2 p-2 rounded-md border border-slate-800 bg-slate-950/50">
         <Radio size={13} className="text-slate-500 shrink-0" />
         <span className="text-[10px] text-slate-500">
-          Estimated capacity:{" "}
-          <span className="font-bold text-slate-300">
-            {c.streamingCapacityTier.toUpperCase()} tier
-          </span>{" "}
-          — about <span className="font-bold text-slate-300">{c.recommendedMaxStreams} simultaneous</span>{" "}
+          Recommended capacity: about{" "}
+          <span className="font-bold text-slate-300">{c.recommendedMaxStreams} simultaneous</span>{" "}
           RTMP stream(s){" "}
-          {c.hwAccelLikely ? "with hardware-accelerated encoding likely" : "(software encoding)"}.
+          {c.hwAccelLikely ? "with hardware-accelerated encoding" : "using software encoding"}.
         </span>
       </div>
     </Card>
@@ -367,7 +363,7 @@ function PerformanceMonitor({
           </>
         ) : (
           <p className="text-[10px] text-slate-600 flex items-center gap-1.5">
-            <Activity size={11} /> Polling is active while this panel is open — CPU / RAM / disk / RTMP sessions update every 3s.
+            <Activity size={11} /> Live usage updates while this panel is open.
           </p>
         )}
       </div>

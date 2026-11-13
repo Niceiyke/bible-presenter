@@ -18,6 +18,12 @@ describe("Phase 5 — layouts, migration, theme, templates, media", () => {
     expect((ref as any).font_family).toBe("Georgia");
   });
 
+  it("default slide starts with one Insert Content placeholder and no header", () => {
+    const s = newDefaultSlide();
+    expect(s.elements).toHaveLength(1);
+    expect(JSON.stringify((s.elements[0] as any).content)).toContain("Insert Content");
+  });
+
   it("every built-in layout factory returns a slide with stable ids and 16:9-ish geometry", () => {
     for (const factory of [newTitleSlide, newDefaultSlide, newQuoteSlide, newAnnouncementSlide, newImageCaptionSlide, newScriptureSlide]) {
       const s = factory();

@@ -240,7 +240,7 @@ fn validate_request(request: &AiPresentationRequest) -> Result<(), String> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'))
     {
-        return Err("The OpenAI model name is invalid.".into());
+        return Err("The Wordlyte AI model name is invalid.".into());
     }
     Ok(())
 }
@@ -297,7 +297,7 @@ fn validate_edit_request(request: &AiSlideEditRequest) -> Result<(), String> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'))
     {
-        return Err("The OpenAI model name is invalid.".into());
+        return Err("The Wordlyte AI model name is invalid.".into());
     }
     Ok(())
 }
@@ -326,23 +326,23 @@ async fn generate_openai_plan(
         .json(&body)
         .send();
     let response = tokio::select! {
-        result = send => result.map_err(|e| format!("OpenAI request failed: {e}"))?,
+        result = send => result.map_err(|e| format!("Wordlyte AI request failed: {e}"))?,
         _ = cancel_rx.changed() => return Err("Presentation generation cancelled.".into()),
     };
     let status = response.status();
     let text = tokio::select! {
-        result = response.text() => result.map_err(|e| format!("Could not read the OpenAI response: {e}"))?,
+        result = response.text() => result.map_err(|e| format!("Could not read the Wordlyte AI response: {e}"))?,
         _ = cancel_rx.changed() => return Err("Presentation generation cancelled.".into()),
     };
     if !status.is_success() {
         return Err(openai_error_message(status.as_u16(), &text));
     }
     let envelope: Value = serde_json::from_str(&text)
-        .map_err(|_| "OpenAI returned an unreadable response.".to_string())?;
+        .map_err(|_| "Wordlyte AI returned an unreadable response.".to_string())?;
     let output = extract_output_text(&envelope)
-        .ok_or_else(|| "OpenAI did not return a presentation plan.".to_string())?;
+        .ok_or_else(|| "Wordlyte AI did not return a presentation plan.".to_string())?;
     let mut plan: AiDeckPlan = serde_json::from_str(output)
-        .map_err(|e| format!("OpenAI returned an invalid presentation plan: {e}"))?;
+        .map_err(|e| format!("Wordlyte AI returned an invalid presentation plan: {e}"))?;
     apply_request_preferences(&mut plan, request);
     sanitize_emphasis(&mut plan);
     validate_plan(&mut plan, request.slide_count)?;
@@ -366,23 +366,23 @@ async fn generate_openai_slide_edit(
         .json(&openai_slide_edit_request_body(request))
         .send();
     let response = tokio::select! {
-        result = send => result.map_err(|e| format!("OpenAI request failed: {e}"))?,
+        result = send => result.map_err(|e| format!("Wordlyte AI request failed: {e}"))?,
         _ = cancel_rx.changed() => return Err("AI slide editing cancelled.".into()),
     };
     let status = response.status();
     let text = tokio::select! {
-        result = response.text() => result.map_err(|e| format!("Could not read the OpenAI response: {e}"))?,
+        result = response.text() => result.map_err(|e| format!("Could not read the Wordlyte AI response: {e}"))?,
         _ = cancel_rx.changed() => return Err("AI slide editing cancelled.".into()),
     };
     if !status.is_success() {
         return Err(openai_error_message(status.as_u16(), &text));
     }
     let envelope: Value = serde_json::from_str(&text)
-        .map_err(|_| "OpenAI returned an unreadable response.".to_string())?;
+        .map_err(|_| "Wordlyte AI returned an unreadable response.".to_string())?;
     let output = extract_output_text(&envelope)
-        .ok_or_else(|| "OpenAI did not return an edited slide.".to_string())?;
+        .ok_or_else(|| "Wordlyte AI did not return an edited slide.".to_string())?;
     let mut slide: AiPlannedSlide = serde_json::from_str(output)
-        .map_err(|e| format!("OpenAI returned invalid slide content: {e}"))?;
+        .map_err(|e| format!("Wordlyte AI returned invalid slide content: {e}"))?;
     let mut warnings = Vec::new();
 
     match request.action.as_str() {
@@ -434,13 +434,13 @@ async fn generate_openai_slide_edit(
     }
     validate_slide(&slide)?;
     if matches!(request.action.as_str(), "shorten" | "rewrite") && slide.body.trim().is_empty() {
-        return Err("OpenAI did not return edited slide text.".into());
+        return Err("Wordlyte AI did not return edited slide text.".into());
     }
     if request.action == "bullets" && slide.bullets.is_empty() {
-        return Err("OpenAI did not return a bullet list.".into());
+        return Err("Wordlyte AI did not return a bullet list.".into());
     }
     if request.action == "speaker-notes" && slide.speaker_notes.trim().is_empty() {
-        return Err("OpenAI did not return speaker notes.".into());
+        return Err("Wordlyte AI did not return speaker notes.".into());
     }
     verify_slide_scriptures(&mut slide, &bible, &request.bible_version, &mut warnings);
     if request.action == "regenerate-slide"
@@ -613,9 +613,9 @@ fn openai_error_message(status: u16, body: &str) -> String {
         });
     match detail {
         Some(detail) if detail.len() <= 500 => {
-            format!("OpenAI rejected the request ({status}): {detail}")
+            format!("Wordlyte AI rejected the request ({status}): {detail}")
         }
-        _ => format!("OpenAI rejected the request ({status})."),
+        _ => format!("Wordlyte AI rejected the request ({status})."),
     }
 }
 
@@ -677,7 +677,7 @@ fn validate_plan(plan: &mut AiDeckPlan, requested_slides: u8) -> Result<(), Stri
     }
     if plan.slides.len() != requested_slides as usize {
         plan.warnings.push(format!(
-            "OpenAI returned {} slides instead of the requested {}.",
+            "Wordlyte AI returned {} slides instead of the requested {}.",
             plan.slides.len(),
             requested_slides
         ));

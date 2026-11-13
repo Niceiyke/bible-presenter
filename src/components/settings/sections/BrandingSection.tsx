@@ -28,7 +28,7 @@ function BrandSourceSelector({ value, onChange, onLabel }: {
           className={`flex-1 py-1.5 rounded text-[10px] font-bold border transition-all capitalize ${
             value === s
               ? "border-amber-500 bg-amber-500/10 text-amber-400"
-              : "border-slate-700 bg-slate-800/50 text-slate-500 hover:border-slate-600"
+              : "border-console-border bg-console-surface-raised/50 text-console-text-subtle hover:border-console-border"
           }`}
         >
           {onLabel[s]}
@@ -56,7 +56,7 @@ function SourceFileRow({
       <div className="flex items-center gap-2">
         <button
           onClick={onChange}
-          className="flex-1 py-2 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-all"
+          className="flex-1 py-2 rounded-lg border border-console-border bg-console-surface-raised hover:bg-console-surface-strong text-console-text text-xs font-bold transition-all"
         >
           {path ? changeLabel : chooseLabel}
         </button>
@@ -69,7 +69,7 @@ function SourceFileRow({
         )}
       </div>
       {path && (
-        <p className="text-[9px] text-slate-600 truncate">
+        <p className="text-[9px] text-console-text-subtle truncate">
           {path.split(/[/\\]/).pop()}
         </p>
       )}
@@ -84,14 +84,14 @@ function ColorRow({ label, value, onChange }: {
 }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="text-[9px] text-slate-500 uppercase font-bold">{label}</span>
+      <span className="text-[9px] text-console-text-subtle uppercase font-bold">{label}</span>
       <input
         type="color"
         value={value ?? "#ffffff"}
         onChange={(e) => onChange(e.target.value)}
-        className="w-8 h-8 rounded cursor-pointer border border-slate-700 bg-transparent"
+        className="w-8 h-8 rounded cursor-pointer border border-console-border bg-transparent"
       />
-      <span className="text-[9px] font-mono text-slate-500">{value ?? "#ffffff"}</span>
+      <span className="text-[9px] font-mono text-console-text-subtle">{value ?? "#ffffff"}</span>
     </div>
   );
 }
@@ -175,8 +175,8 @@ export function BrandingSection({ onUpdateSettings, onUploadMedia }: SettingsSec
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <p className="text-xs text-slate-400 font-bold uppercase mb-2">{t("settings.branding.title")}</p>
-        <p className="text-[10px] text-slate-600 mb-3">
+        <p className="text-xs text-console-text-muted font-bold uppercase mb-2">{t("settings.branding.title")}</p>
+        <p className="text-[10px] text-console-text-subtle mb-3">
           {t("settings.branding.desc")}
         </p>
         <div className="flex flex-col gap-1.5">
@@ -187,13 +187,13 @@ export function BrandingSection({ onUpdateSettings, onUploadMedia }: SettingsSec
               className={`flex items-start gap-2.5 p-2.5 rounded-lg border text-left transition-all ${
                 activeMode === m.id
                   ? "border-amber-500 bg-amber-500/10"
-                  : "border-slate-700 bg-slate-800/50 hover:border-slate-600 hover:bg-slate-800"
+                  : "border-console-border bg-console-surface-raised/50 hover:border-console-border hover:bg-console-surface-raised"
               }`}
             >
-              <span className={`mt-0.5 w-3 h-3 rounded-full border shrink-0 ${activeMode === m.id ? "border-amber-500 bg-amber-500" : "border-slate-600"}`} />
+              <span className={`mt-0.5 w-3 h-3 rounded-full border shrink-0 ${activeMode === m.id ? "border-amber-500 bg-amber-500" : "border-console-border"}`} />
               <span className="min-w-0">
-                <span className={`block text-xs font-bold ${activeMode === m.id ? "text-amber-400" : "text-slate-300"}`}>{m.label}</span>
-                <span className="block text-[10px] text-slate-500 mt-0.5">{m.desc}</span>
+                <span className={`block text-xs font-bold ${activeMode === m.id ? "text-amber-400" : "text-console-text"}`}>{m.label}</span>
+                <span className="block text-[10px] text-console-text-subtle mt-0.5">{m.desc}</span>
               </span>
             </button>
           ))}
@@ -201,10 +201,10 @@ export function BrandingSection({ onUpdateSettings, onUploadMedia }: SettingsSec
       </div>
 
       {activeMode !== "off" && (
-        <div className="border-t border-slate-800 pt-4 flex flex-col gap-3">
+        <div className="border-t border-console-border pt-4 flex flex-col gap-3">
           {activeMode === "corner" ? (
             <>
-              <p className="text-xs text-slate-400 font-bold uppercase mb-1">{t("settings.branding.cornerTitle")}</p>
+              <p className="text-xs text-console-text-muted font-bold uppercase mb-1">{t("settings.branding.cornerTitle")}</p>
               <BrandSourceSelector value={cornerSource} onChange={setCornerSource} onLabel={srcLabels} />
               {cornerSource === "text" ? (
                 <div className="flex flex-col gap-2">
@@ -212,7 +212,7 @@ export function BrandingSection({ onUpdateSettings, onUploadMedia }: SettingsSec
                     value={settings.logo_text ?? ""}
                     onChange={(e) => onUpdateSettings({ ...settings, logo_text: e.target.value })}
                     placeholder={t("settings.branding.textPlaceholder")}
-                    className="w-full bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-3 py-2 focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
+                    className="w-full bg-console-surface-raised border border-console-border text-console-text text-xs rounded-lg px-3 py-2 focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
                   />
                   <ColorRow
                     label={t("settings.branding.color")}
@@ -234,10 +234,10 @@ export function BrandingSection({ onUpdateSettings, onUploadMedia }: SettingsSec
             </>
           ) : (
             <>
-              <p className="text-xs text-slate-400 font-bold uppercase mb-1">
+              <p className="text-xs text-console-text-muted font-bold uppercase mb-1">
                 {activeMode === "splash" ? t("settings.branding.splashTitle") : t("settings.branding.persistentTitle")}
               </p>
-              <p className="text-[10px] text-slate-600 mb-1">
+              <p className="text-[10px] text-console-text-subtle mb-1">
                 {activeMode === "splash"
                   ? t("settings.branding.splashDesc2")
                   : t("settings.branding.persistentDesc2")}
@@ -249,7 +249,7 @@ export function BrandingSection({ onUpdateSettings, onUploadMedia }: SettingsSec
                     value={settings.background_logo_text ?? ""}
                     onChange={(e) => onUpdateSettings({ ...settings, background_logo_text: e.target.value })}
                     placeholder={t("settings.branding.textPlaceholder")}
-                    className="w-full bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-3 py-2 focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
+                    className="w-full bg-console-surface-raised border border-console-border text-console-text text-xs rounded-lg px-3 py-2 focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
                   />
                   <ColorRow
                     label={t("settings.branding.color")}
@@ -268,8 +268,8 @@ export function BrandingSection({ onUpdateSettings, onUploadMedia }: SettingsSec
               )}
               <label className="flex items-center justify-between gap-3 cursor-pointer mt-1">
                 <div>
-                  <span className="text-xs text-slate-300 font-medium">{t("settings.branding.autoClear")}</span>
-                  <p className="text-[10px] text-slate-600">{t("settings.branding.autoClearDesc")}</p>
+                  <span className="text-xs text-console-text font-medium">{t("settings.branding.autoClear")}</span>
+                  <p className="text-[10px] text-console-text-subtle">{t("settings.branding.autoClearDesc")}</p>
                 </div>
                 <input
                   type="checkbox"

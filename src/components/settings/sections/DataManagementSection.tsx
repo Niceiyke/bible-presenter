@@ -98,7 +98,7 @@ export function DataManagementSection() {
       <ConfirmModal
         open={!!restorePath}
         title="Restore this Wordlyte backup?"
-        description="The current database and content folders will be replaced after a restart. A timestamped copy of the current data will be retained for recovery."
+        description="Your current Wordlyte data and content folders will be replaced after a restart. A timestamped copy of the current data will be kept for recovery."
         confirmLabel={busy === "restore" ? "Validating…" : "Restore & Restart"}
         confirmVariant="primary"
         onConfirm={restore}

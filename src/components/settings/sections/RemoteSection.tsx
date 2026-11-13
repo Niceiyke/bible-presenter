@@ -123,11 +123,11 @@ export function RemoteSection(_props: SettingsSectionProps) {
     <div className="flex flex-col gap-6">
       {/* Enable / disable */}
       <div>
-        <p className="text-xs text-slate-400 font-bold uppercase mb-3">{t("settings.remote.server")}</p>
+        <p className="text-xs text-console-text-muted font-bold uppercase mb-3">{t("settings.remote.server")}</p>
         <div className="flex items-center justify-between gap-3">
           <div>
-            <span className="text-xs text-slate-300 font-medium">{t("settings.remote.serverDesc")}</span>
-            <p className="text-[10px] text-slate-600 mt-0.5">{t("settings.remote.serverHint")}</p>
+            <span className="text-xs text-console-text font-medium">{t("settings.remote.serverDesc")}</span>
+            <p className="text-[10px] text-console-text-subtle mt-0.5">{t("settings.remote.serverHint")}</p>
           </div>
           <button
             onClick={() =>
@@ -157,7 +157,7 @@ export function RemoteSection(_props: SettingsSectionProps) {
       {status?.enabled && (
         <>
           {/* Pairing code */}
-          <div className="border-t border-slate-800 pt-4">
+          <div className="border-t border-console-border pt-4">
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-1.5 min-w-0">
                 <KeyRound size={14} className="text-amber-400 shrink-0" />
@@ -165,10 +165,10 @@ export function RemoteSection(_props: SettingsSectionProps) {
                   {status.pairing_code ?? "——————"}
                 </span>
                 {status.pairing_expires_at && (
-                  <span className="text-[10px] text-slate-500 shrink-0">
+                  <span className="text-[10px] text-console-text-subtle shrink-0">
                     {t("settings.remote.expiresAt")} {formatClock(status.pairing_expires_at)}
                     {formatRemaining(status.pairing_expires_at) && (
-                      <span className="text-slate-400"> · {formatRemaining(status.pairing_expires_at)}</span>
+                      <span className="text-console-text-muted"> · {formatRemaining(status.pairing_expires_at)}</span>
                     )}
                   </span>
                 )}
@@ -178,7 +178,7 @@ export function RemoteSection(_props: SettingsSectionProps) {
               <button
                 onClick={() => copy(status.pairing_code ?? "")}
                 disabled={!status.pairing_code}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase border border-slate-700 text-slate-300 hover:text-white hover:border-slate-500 transition-all disabled:opacity-40"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase border border-console-border text-console-text hover:text-white hover:border-console-border-strong transition-all disabled:opacity-40"
               >
                 {copied ? <Check size={12} className="text-green-400" /> : <ClipboardCopy size={12} />}
                 {copied ? t("settings.remote.copied") : t("settings.remote.copy")}
@@ -186,30 +186,30 @@ export function RemoteSection(_props: SettingsSectionProps) {
               <button
                 onClick={() => run(() => invoke("remote_regenerate_pairing"))}
                 disabled={busy}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase border border-slate-700 text-slate-300 hover:text-white hover:border-slate-500 transition-all disabled:opacity-40"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase border border-console-border text-console-text hover:text-white hover:border-console-border-strong transition-all disabled:opacity-40"
               >
                 <RefreshCcw size={12} />
                 {t("settings.remote.regenerate")}
               </button>
             </div>
-            <p className="text-[10px] text-slate-600 mt-2">{t("settings.remote.pairingDesc")}</p>
+            <p className="text-[10px] text-console-text-subtle mt-2">{t("settings.remote.pairingDesc")}</p>
           </div>
 
           {/* Access URLs */}
-          <div className="border-t border-slate-800 pt-4">
-            <p className="text-[10px] text-slate-500 uppercase font-bold mb-2 flex items-center gap-1">
+          <div className="border-t border-console-border pt-4">
+            <p className="text-[10px] text-console-text-subtle uppercase font-bold mb-2 flex items-center gap-1">
               <Wifi size={12} /> {t("settings.remote.urls")}
             </p>
             <div className="flex flex-col gap-1.5">
               {status.urls.length === 0 && (
-                <p className="text-[10px] text-slate-600 italic">{t("settings.remote.noUrls")}</p>
+                <p className="text-[10px] text-console-text-subtle italic">{t("settings.remote.noUrls")}</p>
               )}
               {status.urls.map((url) => (
-                <div key={url} className="flex items-center justify-between gap-2 bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5">
+                <div key={url} className="flex items-center justify-between gap-2 bg-console-surface border border-console-border rounded-lg px-3 py-1.5">
                   <code className="text-[11px] text-cyan-300 truncate">{url}</code>
                   <button
                     onClick={() => copy(url)}
-                    className="shrink-0 text-slate-500 hover:text-white transition-colors"
+                    className="shrink-0 text-console-text-subtle hover:text-white transition-colors"
                     aria-label={t("settings.remote.copy")}
                   >
                     {copied === url ? <Check size={12} className="text-green-400" /> : <ClipboardCopy size={12} />}
@@ -220,14 +220,14 @@ export function RemoteSection(_props: SettingsSectionProps) {
           </div>
 
           {/* Controller lease */}
-          <div className="border-t border-slate-800 pt-4">
+          <div className="border-t border-console-border pt-4">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-[10px] text-slate-500 uppercase font-bold flex items-center gap-1">
+                <p className="text-[10px] text-console-text-subtle uppercase font-bold flex items-center gap-1">
                   {remoteHolds ? <ShieldAlert size={12} className="text-red-400" /> : <ShieldCheck size={12} className="text-green-400" />}
                   {t("settings.remote.lease")}
                 </p>
-                <p className="text-[10px] text-slate-600 mt-1">
+                <p className="text-[10px] text-console-text-subtle mt-1">
                   {status.controller_state.kind === "held"
                     ? (status.controller_state.device_name ?? status.controller_state.device_id ?? "")
                     : status.controller_state.kind === "requested"
@@ -247,38 +247,38 @@ export function RemoteSection(_props: SettingsSectionProps) {
           </div>
 
           {/* Paired devices */}
-          <div className="border-t border-slate-800 pt-4">
+          <div className="border-t border-console-border pt-4">
             <div className="flex items-center justify-between mb-2">
-              <p className="text-[10px] text-slate-500 uppercase font-bold flex items-center gap-1">
+              <p className="text-[10px] text-console-text-subtle uppercase font-bold flex items-center gap-1">
                 <Cast size={12} /> {t("settings.remote.devices")}
               </p>
               <button
                 onClick={() => run(() => invoke("remote_revoke_all"))}
                 disabled={busy || status.devices.length === 0}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase border border-slate-700 text-slate-400 hover:text-red-300 hover:border-red-700 transition-all disabled:opacity-40"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase border border-console-border text-console-text-muted hover:text-red-300 hover:border-red-700 transition-all disabled:opacity-40"
               >
                 <Trash2 size={12} />
                 {t("settings.remote.revokeAll")}
               </button>
             </div>
             {status.devices.length === 0 && (
-              <p className="text-[10px] text-slate-600 italic">{t("settings.remote.noDevices")}</p>
+              <p className="text-[10px] text-console-text-subtle italic">{t("settings.remote.noDevices")}</p>
             )}
-            <p className="text-[10px] text-slate-600 mb-2">{t("settings.remote.roleHint")}</p>
+            <p className="text-[10px] text-console-text-subtle mb-2">{t("settings.remote.roleHint")}</p>
             <div className="flex flex-col gap-2">
               {status.devices.map((d) => (
-                <div key={d.id} className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2">
+                <div key={d.id} className="bg-console-surface border border-console-border rounded-lg px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
-                      <span className={`w-2 h-2 rounded-full shrink-0 ${d.connected ? "bg-green-400" : "bg-slate-600"}`} />
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${d.connected ? "bg-green-400" : "bg-console-surface-strong"}`} />
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="text-[11px] text-slate-200 font-semibold truncate">{d.name}</span>
-                          <span className="text-[9px] uppercase font-black px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
+                          <span className="text-[11px] text-console-text font-semibold truncate">{d.name}</span>
+                          <span className="text-[9px] uppercase font-black px-1.5 py-0.5 rounded bg-console-surface-raised text-console-text-muted">
                             {d.role}
                           </span>
                         </div>
-                        <p className="text-[9px] text-slate-600">
+                        <p className="text-[9px] text-console-text-subtle">
                           {d.connected ? t("settings.remote.connected") : t("settings.remote.disconnected")}
                         </p>
                       </div>
@@ -288,7 +288,7 @@ export function RemoteSection(_props: SettingsSectionProps) {
                         value={d.role}
                         disabled={busy}
                         onChange={(e) => run(() => invoke("remote_set_role", { deviceId: d.id, role: e.target.value }))}
-                        className="bg-slate-800 border border-slate-700 rounded-md text-[10px] text-slate-200 px-1.5 py-1 disabled:opacity-50"
+                        className="bg-console-surface-raised border border-console-border rounded-md text-[10px] text-console-text px-1.5 py-1 disabled:opacity-50"
                       >
                         {ROLE_OPTIONS.map((o) => (
                           <option key={o.value} value={o.value}>{o.label}</option>
@@ -297,7 +297,7 @@ export function RemoteSection(_props: SettingsSectionProps) {
                       <button
                         onClick={() => run(() => invoke("remote_revoke_device", { deviceId: d.id }))}
                         disabled={busy}
-                        className="text-slate-500 hover:text-red-300 transition-colors p-1"
+                        className="text-console-text-subtle hover:text-red-300 transition-colors p-1"
                         aria-label={t("settings.remote.revoke")}
                       >
                         <UserX size={13} />
@@ -324,10 +324,10 @@ export function RemoteSection(_props: SettingsSectionProps) {
                           className={`flex items-center gap-1 px-2 py-1 rounded-md text-[9px] font-bold uppercase border transition-all disabled:opacity-50 ${
                             on
                               ? "bg-cyan-500/15 border-cyan-500/60 text-cyan-300"
-                              : "bg-slate-800/60 border-slate-700 text-slate-500 hover:text-slate-300"
+                              : "bg-console-surface-raised/60 border-console-border text-console-text-subtle hover:text-console-text"
                           }`}
                         >
-                          <span className={`w-1.5 h-1.5 rounded-full ${on ? "bg-cyan-400" : "bg-slate-600"}`} />
+                          <span className={`w-1.5 h-1.5 rounded-full ${on ? "bg-cyan-400" : "bg-console-surface-strong"}`} />
                           {p.label}
                         </button>
                       );

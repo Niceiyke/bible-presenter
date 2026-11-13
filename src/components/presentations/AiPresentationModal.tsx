@@ -253,7 +253,7 @@ export function AiPresentationModal({ open, defaultBibleVersion, onClose, onCrea
               <label className="flex items-center gap-2 text-xs text-console-text-muted"><input type="checkbox" checked={includeSpeakerNotes} onChange={(event) => setIncludeSpeakerNotes(event.target.checked)} className="accent-action-primary" /> Generate speaker notes</label>
               <label className="flex items-center gap-2 text-xs text-console-text-muted"><input type="checkbox" checked={highlightKeyPoints} onChange={(event) => setHighlightKeyPoints(event.target.checked)} className="accent-action-primary" /> Highlight key phrases</label>
             </div>
-            <p className="md:col-span-2 text-[10px] text-console-text-subtle">OpenAI receives the text above only after Generate. Scripture references are checked against the installed {bibleVersion || "Bible"} database, and verse text is loaded locally.</p>
+            <p className="md:col-span-2 text-[10px] text-console-text-subtle">Wordlyte AI processes the text above only after you choose Generate. Scripture references are checked against your installed {bibleVersion || "Bible"} Bible, and verse text is loaded locally.</p>
           </div>
         )}
       </div>

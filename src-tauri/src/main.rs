@@ -118,7 +118,7 @@ fn main() {
                 }
                 Err(e) => {
                     log_msg(app, &format!(
-                        "Warning: Could not connect to Bible Database: {}. Using empty placeholder.", e
+                        "Bible data could not be opened ({}). Wordlyte will start without Bible text.", e
                     ));
                     let empty = store::BibleStore::new_empty(app.handle())
                         .map_err(|e| format!("Could not create empty Bible store: {e}"))?;
@@ -149,11 +149,11 @@ fn main() {
                     let fallback = store::MediaScheduleStore::in_memory(app_data_dir.clone())?;
                     let issue = if is_corrupt {
                         format!(
-                            "Your saved data database could not be recovered even after being quarantined ({e}). Using a temporary in-memory store — changes will not survive a restart."
+                            "Your saved Wordlyte data could not be recovered ({e}). Wordlyte is using temporary storage, so changes will not be saved after closing the app."
                         )
                     } else {
                         format!(
-                            "Your saved data database could not be opened ({e}). Using a temporary in-memory store — your data may be hidden and changes will not survive a restart."
+                            "Your saved Wordlyte data could not be opened ({e}). Your existing data may be hidden, and changes will not be saved after closing the app."
                         )
                     };
                     log_msg(app, &issue);

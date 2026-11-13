@@ -40,10 +40,10 @@ export function computeCapabilities(inputs: CapabilityInputs): SystemCapabilitie
   const recommendedMaxStreams = score >= 4 ? 4 : score >= 2 ? 2 : 1;
 
   const rtmpReason = !ffmpegAvailable
-    ? "ffmpeg was not found (bundled or on PATH); RTMP destinations are disabled. Reinstall or restore the bundled binaries."
+    ? "The built-in media engine is unavailable. Reinstall Wordlyte to restore streaming."
     : hardwareConcurrency < 4
-      ? "ffmpeg is available but CPU is limited — keep simultaneous RTMP streams low."
-      : "RTMP destinations are available.";
+      ? "The media engine is available, but this computer has limited processing power. Keep simultaneous streams low."
+      : "Streaming destinations are available.";
 
   const audioReason = !audioInputPresent
     ? "No audio input device detected — shared audio in the Streaming workspace is disabled."

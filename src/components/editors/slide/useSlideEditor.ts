@@ -21,6 +21,7 @@ import { useAutoSave, type EditorSaveState } from "./useAutoSave";
 import { useCanvasScale } from "./useCanvasScale";
 import { useElementDrag, useElementResize, useElementRotation } from "./useElementDragResize";
 import type { GuideLine } from "./useElementDragResize";
+import { clampElementGeometry } from "./geometry";
 import { useSlideDragDrop } from "./useSlideDragDrop";
 import { migratePresentation, alignElements, adjustZOrder, collectGroupMembers, synthesizeDefaultTheme, type AlignmentAxis, type ZDirection } from "./helpers";
 import { elementFontSize, stepFontSize } from "./textStyleSystem";
@@ -355,6 +356,8 @@ export function useSlideEditor({ initialPres, onClose, onStageSlide, onAddToServ
   // site. Phase 2 can introduce a per-kind contract if needed.
   const updateElement = (id: string, updates: Partial<SlideElement>, save = true, coalesceKey: string | null = null) =>
     setPres(prev => {
+      const merge = (element: SlideElement) =>
+        clampElementGeometry({ ...element, ...updates } as SlideElement);
       if (editingMasterId) {
         const masters = [...(prev.masters ?? [])];
         const mi = masters.findIndex(m => m.id === editingMasterId);
@@ -363,34 +366,36 @@ export function useSlideEditor({ initialPres, onClose, onStageSlide, onAddToServ
         const touched = masters[mi].elements.find(e => e.id === id);
         const role = touched?.kind === "text" ? touched.role : undefined;
         let nextMasters = masters;
-        nextMasters[mi] = { ...masters[mi], elements: masters[mi].elements.map(e => e.id === id ? ({ ...e, ...updates } as SlideElement) : e) };
+        nextMasters[mi] = { ...masters[mi], elements: masters[mi].elements.map(e => e.id === id ? merge(e) : e) };
         // P4.2 cascade: when a master element is edited, dependent slides
         // with the same role inherit geometry + style but keep their text.
         const slides = prev.slides.map(s =>
           s.masterRef === editingMasterId && role
-            ? { ...s, elements: s.elements.map(e => e.kind === "text" && e.role === role ? ({ ...e, ...updates } as SlideElement) : e) }
+            ? { ...s, elements: s.elements.map(e => e.kind === "text" && e.role === role ? merge(e) : e) }
             : s
         );
         return { ...prev, masters: nextMasters, slides };
       }
       const cs = prev.slides[activeSlideIdx];
       const ns = [...prev.slides];
-      ns[activeSlideIdx] = { ...cs, elements: cs.elements.map(e => e.id === id ? ({ ...e, ...updates } as SlideElement) : e) };
+      ns[activeSlideIdx] = { ...cs, elements: cs.elements.map(e => e.id === id ? merge(e) : e) };
       return { ...prev, slides: ns };
     }, { save, coalesceKey });
 
   const updateElements = (ids: string[], updates: Partial<SlideElement>, save = true) =>
     setPres(prev => {
+      const merge = (element: SlideElement) =>
+        clampElementGeometry({ ...element, ...updates } as SlideElement);
       if (editingMasterId) {
         const masters = [...(prev.masters ?? [])];
         const mi = masters.findIndex(m => m.id === editingMasterId);
         if (mi < 0) return prev;
-        masters[mi] = { ...masters[mi], elements: masters[mi].elements.map(e => ids.includes(e.id) ? ({ ...e, ...updates } as SlideElement) : e) };
+        masters[mi] = { ...masters[mi], elements: masters[mi].elements.map(e => ids.includes(e.id) ? merge(e) : e) };
         return { ...prev, masters };
       }
       const cs = prev.slides[activeSlideIdx];
       const ns = [...prev.slides];
-      ns[activeSlideIdx] = { ...cs, elements: cs.elements.map(e => ids.includes(e.id) ? ({ ...e, ...updates } as SlideElement) : e) };
+      ns[activeSlideIdx] = { ...cs, elements: cs.elements.map(e => ids.includes(e.id) ? merge(e) : e) };
       return { ...prev, slides: ns };
     }, { save });
 
@@ -951,12 +956,29 @@ export function useSlideEditor({ initialPres, onClose, onStageSlide, onAddToServ
 
   const handleBgVideoSelect = (path: string) => {
     const rel = relativizePath(path, appDataDir);
-    updateSlide({ ...slide, background: { type: "video", value: rel, loop: true, muted: true } });
+    updateSlide({
+      ...slide,
+      background: {
+        type: "video",
+        value: rel,
+        loop: true,
+        muted: true,
+        opacity: slide.background.opacity,
+      },
+    });
     setShowBgVideoPicker(false);
   };
 
   const handleBgImageSelect = (path: string) => {
-    updateSlide({ ...slide, background: { type: "image", value: relativizePath(path, appDataDir), objectFit: "cover" } });
+    updateSlide({
+      ...slide,
+      background: {
+        type: "image",
+        value: relativizePath(path, appDataDir),
+        objectFit: "cover",
+        opacity: slide.background.opacity,
+      },
+    });
   };
 
   /** P2.1: builder for any kind of background swap from the PropertiesPanel.

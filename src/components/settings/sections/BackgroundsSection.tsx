@@ -35,7 +35,7 @@ export function BackgroundsSection({ onUpdateSettings, onUploadMedia }: Settings
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <p className="text-xs text-slate-400 font-bold uppercase mb-3">{t("settings.bg.output")}</p>
+        <p className="text-xs text-console-text-muted font-bold uppercase mb-3">{t("settings.bg.output")}</p>
         <div className="flex gap-2 mb-3">
           {(["None", "Color", "Image"] as const).map((mode) => (
             <button
@@ -50,7 +50,7 @@ export function BackgroundsSection({ onUpdateSettings, onUploadMedia }: Settings
               className={`flex-1 py-2 rounded-lg border text-xs font-bold transition-all ${
                 settings.background.type === mode
                   ? "border-amber-500 bg-amber-500/10 text-amber-400"
-                  : "border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600 hover:bg-slate-800"
+                  : "border-console-border bg-console-surface-raised/50 text-console-text-muted hover:border-console-border hover:bg-console-surface-raised"
               }`}
             >
               {mode === "None" ? t("settings.bg.theme") : mode === "Color" ? t("settings.bg.color") : t("settings.bg.image")}
@@ -63,9 +63,9 @@ export function BackgroundsSection({ onUpdateSettings, onUploadMedia }: Settings
               type="color"
               value={(settings.background as { type: "Color"; value: string }).value}
               onChange={(e) => onUpdateSettings({ ...settings, background: { type: "Color", value: e.target.value } })}
-              className="w-10 h-10 rounded cursor-pointer border border-slate-700 bg-transparent"
+              className="w-10 h-10 rounded cursor-pointer border border-console-border bg-transparent"
             />
-            <span className="text-xs text-slate-400 font-mono">
+            <span className="text-xs text-console-text-muted font-mono">
               {(settings.background as { type: "Color"; value: string }).value}
             </span>
           </div>
@@ -78,7 +78,7 @@ export function BackgroundsSection({ onUpdateSettings, onUploadMedia }: Settings
                   if (media.filter((m) => m.media_type === "Image").length > 0) setShowGlobalBgPicker(true);
                   else handlePickBackgroundImage();
                 }}
-                className="flex-1 py-2 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-all"
+                className="flex-1 py-2 rounded-lg border border-console-border bg-console-surface-raised hover:bg-console-surface-strong text-console-text text-xs font-bold transition-all"
               >
                 {(settings.background as { type: "Image"; value: ImageBackground }).value?.path ? t("settings.bg.changeFromLib") : t("settings.bg.chooseFromLib")}
               </button>
@@ -91,12 +91,12 @@ export function BackgroundsSection({ onUpdateSettings, onUploadMedia }: Settings
               )}
             </div>
             {(settings.background as { type: "Image"; value: ImageBackground }).value?.path && (
-              <p className="text-[9px] text-slate-600 truncate">
+              <p className="text-[9px] text-console-text-subtle truncate">
                 {(settings.background as { type: "Image"; value: ImageBackground }).value.path.split(/[/\\]/).pop()}
               </p>
             )}
             <div className="flex items-center gap-2">
-              <span className="text-[9px] text-slate-500 uppercase font-bold w-10">{t("settings.bg.fit")}</span>
+              <span className="text-[9px] text-console-text-subtle uppercase font-bold w-10">{t("settings.bg.fit")}</span>
               <div className="flex gap-1 flex-1">
                 {(["cover", "contain", "fill"] as const).map((fit) => (
                   <button
@@ -111,7 +111,7 @@ export function BackgroundsSection({ onUpdateSettings, onUploadMedia }: Settings
                     className={`flex-1 py-1 rounded text-[9px] font-bold capitalize transition-all ${
                       (settings.background as any).value.objectFit === fit
                         ? "border-amber-500 bg-amber-500/10 text-amber-400"
-                        : "border-slate-700 bg-slate-800/50 text-slate-500"
+                        : "border-console-border bg-console-surface-raised/50 text-console-text-subtle"
                     }`}
                   >
                     {fit === "contain" ? t("settings.bg.fitContain") : fit === "cover" ? t("settings.bg.fitCover") : t("settings.bg.fitFill")}
@@ -120,7 +120,7 @@ export function BackgroundsSection({ onUpdateSettings, onUploadMedia }: Settings
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[9px] text-slate-500 uppercase font-bold w-10">{t("settings.bg.opacity")}</span>
+              <span className="text-[9px] text-console-text-subtle uppercase font-bold w-10">{t("settings.bg.opacity")}</span>
               <input
                 type="range"
                 min={0}
@@ -134,9 +134,9 @@ export function BackgroundsSection({ onUpdateSettings, onUploadMedia }: Settings
                     value: { ...(settings.background as any).value, opacity: parseFloat(e.target.value) },
                   },
                 })}
-                className="flex-1 h-1 appearance-none bg-slate-700 rounded accent-amber-500 cursor-pointer"
+                className="flex-1 h-1 appearance-none bg-console-surface-strong rounded accent-amber-500 cursor-pointer"
               />
-              <span className="text-[9px] text-slate-500 w-9 text-right font-mono">{Math.round(((settings.background as any).value.opacity ?? 1) * 100)}%</span>
+              <span className="text-[9px] text-console-text-subtle w-9 text-right font-mono">{Math.round(((settings.background as any).value.opacity ?? 1) * 100)}%</span>
             </div>
           </div>
         )}
@@ -151,8 +151,8 @@ export function BackgroundsSection({ onUpdateSettings, onUploadMedia }: Settings
       </div>
 
       <div>
-        <p className="text-xs text-slate-400 font-bold uppercase mb-1">{t("settings.bg.content")}</p>
-        <div className="flex flex-col gap-3 p-3 rounded-lg bg-slate-900/60 border border-slate-700/50">
+        <p className="text-xs text-console-text-muted font-bold uppercase mb-1">{t("settings.bg.content")}</p>
+        <div className="flex flex-col gap-3 p-3 rounded-lg bg-console-surface/60 border border-console-border/50">
           <BackgroundEditor
             label={t("settings.bg.bibleVerses")}
             value={settings.bible_background}
@@ -160,7 +160,7 @@ export function BackgroundsSection({ onUpdateSettings, onUploadMedia }: Settings
             media={media}
             onUploadMedia={onUploadMedia}
           />
-          <div className="border-t border-slate-800" />
+          <div className="border-t border-console-border" />
           <BackgroundEditor
             label={t("settings.bg.media")}
             value={settings.media_background}
@@ -168,7 +168,7 @@ export function BackgroundsSection({ onUpdateSettings, onUploadMedia }: Settings
             media={media}
             onUploadMedia={onUploadMedia}
           />
-          <div className="border-t border-slate-800" />
+          <div className="border-t border-console-border" />
           <BackgroundEditor
             label={t("settings.bg.songs")}
             value={settings.song_background}
@@ -180,7 +180,7 @@ export function BackgroundsSection({ onUpdateSettings, onUploadMedia }: Settings
       </div>
 
       <div>
-        <p className="text-xs text-slate-400 font-bold uppercase mb-3">{t("settings.bg.preview")}</p>
+        <p className="text-xs text-console-text-muted font-bold uppercase mb-3">{t("settings.bg.preview")}</p>
         <div className="flex items-center gap-1 mb-2">
           {([
             ["dark", t("settings.bg.previewDark")],
@@ -190,14 +190,14 @@ export function BackgroundsSection({ onUpdateSettings, onUploadMedia }: Settings
             <button
               key={id}
               onClick={() => setPreviewBg(id)}
-              className={`px-2 py-1 text-[10px] font-bold rounded ${previewBg === id ? "bg-amber-600 text-black" : "bg-slate-800 text-slate-400"}`}
+              className={`px-2 py-1 text-[10px] font-bold rounded ${previewBg === id ? "bg-amber-600 text-black" : "bg-console-surface-raised text-console-text-muted"}`}
             >
               {label}
             </button>
           ))}
         </div>
         <div
-          className="rounded-xl p-5 flex flex-col items-center text-center gap-3 border border-slate-800 overflow-hidden relative"
+          className="rounded-xl p-5 flex flex-col items-center text-center gap-3 border border-console-border overflow-hidden relative"
           style={{
             ...computePreviewBackground(settings, THEMES[settings.theme]?.colors.background ?? "#000", appDataDir),
             ...(previewBg === "green"
@@ -235,7 +235,7 @@ export function BackgroundsSection({ onUpdateSettings, onUploadMedia }: Settings
             </p>
           )}
         </div>
-        <p className="text-[9px] text-slate-600 mt-1 italic">
+        <p className="text-[9px] text-console-text-subtle mt-1 italic">
           {t("settings.bg.previewDesc")}
         </p>
       </div>

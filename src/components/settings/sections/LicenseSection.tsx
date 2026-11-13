@@ -80,7 +80,7 @@ export function LicenseSection(_props: SettingsSectionProps) {
           <span
             className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full border ${
               license.tier === "free"
-                ? "bg-slate-500/15 text-slate-300 border-slate-500/30"
+                ? "bg-console-surface-strong/15 text-console-text border-console-border-strong/30"
                 : license.tier === "pro"
                   ? "bg-cyan-500/15 text-cyan-300 border-cyan-500/30"
                   : "bg-purple-500/15 text-purple-300 border-purple-500/30"

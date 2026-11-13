@@ -301,7 +301,7 @@ fn start_feed(device: &str) -> Result<FeedPorts, String> {
         .stdin(Stdio::null());
     let mut child = crate::binpaths::hide_console(&mut command)
         .spawn()
-        .map_err(|e| format!("Audio feed ffmpeg failed to start: {e}"))?;
+        .map_err(|e| format!("Audio input could not start: {e}"))?;
 
     let stdout = child.stdout.take().expect("stdout piped");
     let stderr = child.stderr.take().expect("stderr piped");
@@ -347,14 +347,14 @@ fn start_feed(device: &str) -> Result<FeedPorts, String> {
                 if child.try_wait().ok().flatten().is_some() || Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err("Audio feed could not start its PCM transcription branch.".into());
+                    return Err("Audio input could not start for AI Scripture.".into());
                 }
                 std::thread::sleep(Duration::from_millis(10));
             }
             Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("PCM transcription feed failed: {error}"));
+                return Err(format!("AI Scripture audio feed failed: {error}"));
             }
         }
     };

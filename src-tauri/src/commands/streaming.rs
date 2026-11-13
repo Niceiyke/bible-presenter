@@ -244,7 +244,7 @@ pub fn stream_rtmp_start(
     let rtmp_enabled: Vec<&StreamDest> = enabled.iter().filter(|d| d.mode != "ndi").collect();
     let ndi_enabled: Vec<&StreamDest> = enabled.iter().filter(|d| d.mode == "ndi").collect();
     if !rtmp_enabled.is_empty() && !crate::binpaths::ffmpeg_available() {
-        return Err("ffmpeg was not found — RTMP destinations cannot start.".into());
+        return Err("The built-in media engine is unavailable. Reinstall Wordlyte to stream.".into());
     }
     if !ndi_enabled.is_empty() {
         let status = crate::commands::ndi::ndi_status();
@@ -327,7 +327,7 @@ pub fn stream_rtmp_start(
             .stdout(Stdio::null());
         Some(match crate::binpaths::hide_console(&mut command).spawn() {
             Ok(c) => c,
-            Err(e) => return Err(format!("Failed to start ffmpeg: {e}")),
+            Err(e) => return Err(format!("The broadcast could not start: {e}")),
         })
     } else {
         None
@@ -406,7 +406,7 @@ pub fn stream_rtmp_start(
             (None, None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err("ffmpeg stdin was not available.".to_string());
+                return Err("The media engine did not start correctly.".to_string());
             }
         },
         None => None,

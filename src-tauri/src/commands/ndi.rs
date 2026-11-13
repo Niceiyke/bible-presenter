@@ -19,7 +19,7 @@ pub struct NdiStatus {
 
 #[cfg(not(feature = "ndi"))]
 fn not_compiled_reason() -> String {
-    "NDI output is not compiled into this build (requires the NDI 6 SDK and the `ndi` cargo feature).".to_string()
+    "NDI output is not available in this edition of Wordlyte.".to_string()
 }
 
 #[cfg(any(feature = "ndi", test))]
@@ -107,7 +107,7 @@ unsafe impl Sync for NdiApi {}
 impl NdiApi {
     fn load() -> Result<std::sync::Arc<Self>, String> {
         let path = find_runtime().ok_or_else(|| {
-            "Processing.NDI.Lib.x64.dll was not found. Run scripts/prepare-ndi.ps1 before building.".to_string()
+            "The NDI runtime was not found. Reinstall Wordlyte or install the NDI runtime.".to_string()
         })?;
         let library = unsafe { libloading::Library::new(&path) }
             .map_err(|error| format!("Could not load the NDI runtime: {error}"))?;
@@ -327,7 +327,7 @@ mod tests {
             assert!(!status.supported);
             assert!(!status.compiled);
             assert!(!status.runtime_present);
-            assert!(status.reason.contains("not compiled"));
+            assert!(status.reason.contains("not available"));
         }
     }
 

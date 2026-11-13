@@ -144,15 +144,8 @@ export function newDefaultSlide(): CustomSlide {
       {
         id: stableId(),
         kind: "text",
-        x: 10, y: 10, w: 80, h: 20, z_index: 1,
-        content: textToDoc("Header Text"),
-        font_size: 48, font_family: "Arial", color: "#ffffff", align: "center", v_align: "middle", bold: true, italic: false,
-      },
-      {
-        id: stableId(),
-        kind: "text",
-        x: 10, y: 35, w: 80, h: 50, z_index: 2,
-        content: textToDoc("Body Content Goes Here"),
+        x: 10, y: 25, w: 80, h: 50, z_index: 1,
+        content: textToDoc("Insert Content"),
         font_size: 32, font_family: "Arial", color: "#ffffff", align: "center", v_align: "middle", bold: false, italic: false,
       },
     ],

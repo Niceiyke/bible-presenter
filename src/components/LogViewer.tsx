@@ -56,7 +56,7 @@ export function LogViewer() {
               <option value="info">Info</option>
               <option value="warn">Warning</option>
               <option value="error">Error</option>
-              <option value="debug">Debug</option>
+              <option value="debug">Detailed</option>
             </select>
           </div>
         </div>

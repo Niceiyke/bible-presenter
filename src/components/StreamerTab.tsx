@@ -331,7 +331,7 @@ export function StreamerTab() {
               ))}
             </select>
             <span className="text-[10px] text-slate-600">
-              RTMP uses one shared H.264 encode; NDI sends the captured program video on the local network.
+              RTMP uses one shared video encode; NDI sends the program video over your local network.
             </span>
           </div>
 
@@ -366,8 +366,7 @@ export function StreamerTab() {
               <span className="text-[10px] text-amber-400">Select an input device below</span>
             )}
             <span className="text-[10px] text-slate-600">
-              Captures an external mic / line-in natively (ffmpeg DirectShow) into RTMP destinations as AAC. NDI
-              audio is not included yet. Premium.
+              Captures an external microphone or line-in and sends it to RTMP destinations. Premium.
             </span>
           </div>
         </div>
@@ -388,7 +387,7 @@ export function StreamerTab() {
 
           {destinations.length === 0 && (
             <p className="text-[11px] text-slate-600 p-3 rounded-lg border border-dashed border-slate-700">
-              No destinations yet. Add an RTMP endpoint or NDI — the master transport sends every enabled
+              No destinations yet. Add an RTMP endpoint or NDI — Wordlyte will send to every enabled
               destination at once.
             </p>
           )}
@@ -421,8 +420,8 @@ export function StreamerTab() {
       </div>
 
       <p className="text-[10px] text-slate-600">
-        One backend broadcast captures the output window and fans the video out to RTMP and local NDI destinations.
-        Program audio (external mic / line-in) is currently available for RTMP destinations.
+        One broadcast captures the output window and sends it to RTMP and local NDI destinations.
+        Program audio from an external microphone or line-in is available for RTMP destinations.
       </p>
     </div>
   );

@@ -98,9 +98,9 @@ fn graphics_capture_probe() -> (bool, String) {
     }
 
     match result {
-        Ok(true) => (true, "Windows Graphics Capture is available for the native output-capture spike.".into()),
-        Ok(false) => (false, "Windows Graphics Capture is unavailable on this Windows installation or is disabled by policy.".into()),
-        Err(error) => (false, format!("Windows Graphics Capture could not be activated: {error}")),
+        Ok(true) => (true, "Native capture is available for recording and streaming.".into()),
+        Ok(false) => (false, "Native screen capture is unavailable on this computer or is disabled by policy.".into()),
+        Err(error) => (false, format!("Native screen capture could not start: {error}")),
     }
 }
 
@@ -108,7 +108,7 @@ fn graphics_capture_probe() -> (bool, String) {
 fn graphics_capture_probe() -> (bool, String) {
     (
         false,
-        "Native output-window capture is currently implemented for Windows only.".into(),
+        "Native output capture is available on Windows only.".into(),
     )
 }
 

@@ -182,7 +182,7 @@ export default function App() {
         <p className="text-xs font-black uppercase tracking-widest text-slate-400">
           {label === "design" ? "Design Hub" : "Audio Studio"}
         </p>
-        <p className="text-[11px] text-slate-600">This window is not implemented yet.</p>
+        <p className="text-[11px] text-slate-600">This workspace is not available in this version of Wordlyte.</p>
       </div>
     );
   }
@@ -195,10 +195,10 @@ export default function App() {
         <div className="w-12 h-12 rounded-full bg-red-500/15 flex items-center justify-center">
           <AlertTriangle size={22} className="text-red-400" />
         </div>
-        <h1 className="text-base font-black text-slate-200">Backend unavailable</h1>
+        <h1 className="text-base font-black text-slate-200">Wordlyte could not start</h1>
         <p className="text-xs text-slate-500 max-w-md text-center leading-relaxed">
-          Wordlyte could not reach its local service to load your Bibles, media, and service plans.
-          Check that the app is not blocked by security software and try again.
+          Wordlyte could not load your Bibles, media, and service plans.
+          Check that the app is not blocked by security software, then try again.
         </p>
         <button
           onClick={() => window.location.reload()}

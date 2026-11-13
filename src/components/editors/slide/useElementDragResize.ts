@@ -39,6 +39,7 @@
 
 import { useCallback, useEffect, useRef, type RefObject } from "react";
 import type { SlideElement } from "../../../types";
+import { clampElementGeometry, clampGroupDelta, MIN_ELEMENT_SIZE } from "./geometry";
 
 /** A single dashed guide line the canvas overlay renders. `orientation`
  *  describes the line's axis; `pos` is its canvas-coordinate position
@@ -215,11 +216,23 @@ export function useElementDrag(opts: DragOptions) {
         : opts.activeElementIds.includes(id)
           ? opts.activeElementIds
           : [id];
+      const sourceElement = opts.elements.find((el) => el.id === id);
       const startPositions = duplicateStart
-        ? [{ id: duplicateStart.id, ix: duplicateStart.x, iy: duplicateStart.y }]
+        ? (() => {
+            const box = clampElementGeometry({
+              x: duplicateStart.x,
+              y: duplicateStart.y,
+              w: sourceElement?.w ?? MIN_ELEMENT_SIZE,
+              h: sourceElement?.h ?? MIN_ELEMENT_SIZE,
+            });
+            return [{ id: duplicateStart.id, ix: box.x, iy: box.y, iw: box.w, ih: box.h }];
+          })()
         : opts.elements
             .filter((el) => baseIds.includes(el.id) && !el.locked)
-            .map((el) => ({ id: el.id, ix: el.x, iy: el.y }));
+            .map((el) => {
+              const box = clampElementGeometry(el);
+              return { id: el.id, ix: box.x, iy: box.y, iw: box.w, ih: box.h };
+            });
       if (startPositions.length === 0) return;
 
       const sx = e.clientX;
@@ -267,9 +280,14 @@ export function useElementDrag(opts: DragOptions) {
           );
           snapDx = res.dx; snapDy = res.dy; guides = res.guides;
         }
+        const clamped = clampGroupDelta(
+          startPositions.map((sp) => ({ x: sp.ix, y: sp.iy, w: sp.iw, h: sp.ih })),
+          dx + snapDx,
+          dy + snapDy,
+        );
         for (const sp of startPositions) {
-          const nx = sp.ix + dx + snapDx;
-          const ny = sp.iy + dy + snapDy;
+          const nx = sp.ix + clamped.dx;
+          const ny = sp.iy + clamped.dy;
           finalPositions.set(sp.id, { x: nx, y: ny });
           opts.onMoved(sp.id, { x: nx, y: ny });
         }
@@ -285,9 +303,13 @@ export function useElementDrag(opts: DragOptions) {
             if (final) {
               // P3.2: snap on commit only, so the snap is a "settle"
               // rather than a sticky grinder mid-drag.
-              const snappedX = snapTo(final.x, opts.gridSize);
-              const snappedY = snapTo(final.y, opts.gridSize);
-              opts.onCommitted(sp.id, { x: snappedX, y: snappedY });
+              const clampedFinal = clampElementGeometry({
+                x: snapTo(final.x, opts.gridSize),
+                y: snapTo(final.y, opts.gridSize),
+                w: sp.iw,
+                h: sp.ih,
+              });
+              opts.onCommitted(sp.id, { x: clampedFinal.x, y: clampedFinal.y });
             }
           }
         }
@@ -395,12 +417,21 @@ export function useElementResize(opts: DragOptions) {
         const dx = ((mv.clientX - sx) / rect.width) * 100;
         const dy = ((mv.clientY - sy) / rect.height) * 100;
         let nx = ix, ny = iy, nw = iw, nh = ih;
-        if (h.includes("e")) nw = Math.max(5, iw + dx);
-        if (h.includes("s")) nh = Math.max(5, ih + dy);
-        if (h.includes("w")) { const d = Math.min(iw - 5, dx); nx = ix + d; nw = iw - d; }
-        if (h.includes("n")) { const d = Math.min(ih - 5, dy); ny = iy + d; nh = ih - d; }
-        lx = nx; ly = ny; lw = nw; lh = nh;
-        opts.onMoved(id, { x: nx, y: ny, w: nw, h: nh });
+        if (h.includes("e")) nw = Math.max(MIN_ELEMENT_SIZE, iw + dx);
+        if (h.includes("s")) nh = Math.max(MIN_ELEMENT_SIZE, ih + dy);
+        if (h.includes("w")) {
+          const d = Math.max(-ix, Math.min(iw - MIN_ELEMENT_SIZE, dx));
+          nx = ix + d;
+          nw = iw - d;
+        }
+        if (h.includes("n")) {
+          const d = Math.max(-iy, Math.min(ih - MIN_ELEMENT_SIZE, dy));
+          ny = iy + d;
+          nh = ih - d;
+        }
+        const clamped = clampElementGeometry({ x: nx, y: ny, w: nw, h: nh });
+        lx = clamped.x; ly = clamped.y; lw = clamped.w; lh = clamped.h;
+        opts.onMoved(id, { x: lx, y: ly, w: lw, h: lh });
       };
       const up = () => {
         controller.abort();
@@ -408,11 +439,17 @@ export function useElementResize(opts: DragOptions) {
         // P3.2: snap the bottom-right corner to the grid (top-left
         // follows via the resulting width/height delta). Keeps
         // resize dismissive — you settle onto the grid on release.
-        opts.onCommitted(id, {
+        const committed = clampElementGeometry({
           x: snapTo(lx, opts.gridSize),
           y: snapTo(ly, opts.gridSize),
           w: snapTo(lw, opts.gridSize),
           h: snapTo(lh, opts.gridSize),
+        });
+        opts.onCommitted(id, {
+          x: committed.x,
+          y: committed.y,
+          w: committed.w,
+          h: committed.h,
         });
       };
       window.addEventListener("pointermove", move, { signal: controller.signal });

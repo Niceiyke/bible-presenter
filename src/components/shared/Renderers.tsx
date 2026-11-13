@@ -70,7 +70,6 @@ function backgroundToStyle(
         backgroundImage: `url(${convertFileSrc(resolved)})`,
         backgroundSize: bg.objectFit === "contain" ? "contain" : bg.objectFit === "fill" ? "100% 100%" : "cover",
         backgroundPosition: "center",
-        opacity: bg.opacity ?? 1,
       };
     }
     case "video": {
@@ -262,6 +261,12 @@ export function CustomSlideRenderer({
   const elements: SlideElement[] = ((slide as any).elements as SlideElement[]) ?? [];
 
   const bgStyle = useMemo(() => backgroundToStyle(background, appDataDir), [background, appDataDir]);
+  // Opacity belongs to the background layer, never the slide container:
+  // applying it to the container would make text and media elements fade too.
+  const bgLayerStyle = useMemo<React.CSSProperties>(() => ({
+    ...bgStyle,
+    opacity: background.type === "video" ? 1 : (background.opacity ?? 1),
+  }), [background, bgStyle]);
 
   // Render the video background only when the union covers a video.
   const bgVideoEl = useMemo(() => {
@@ -452,7 +457,8 @@ export function CustomSlideRenderer({
     : renderedElements;
 
   return (
-    <div className="w-full h-full relative overflow-hidden" style={bgStyle}>
+    <div className="w-full h-full relative overflow-hidden">
+      <div aria-hidden className="pointer-events-none absolute inset-0 z-0" style={bgLayerStyle} />
       {bgVideoEl}
       {entranceEnabled ? animatedElements : renderedElements}
     </div>

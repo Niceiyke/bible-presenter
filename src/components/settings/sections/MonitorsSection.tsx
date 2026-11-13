@@ -62,7 +62,7 @@ export function MonitorsSection({ onUpdateSettings }: SettingsSectionProps) {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <p className="text-xs text-slate-400 font-bold uppercase mb-3">{t("settings.outputMonitor")}</p>
+        <p className="text-xs text-console-text-muted font-bold uppercase mb-3">{t("settings.outputMonitor")}</p>
         <div className="flex flex-col gap-2">
           <label className="flex items-center gap-3 cursor-pointer group">
             <input
@@ -72,7 +72,7 @@ export function MonitorsSection({ onUpdateSettings }: SettingsSectionProps) {
               onChange={() => chooseMonitor(undefined)}
               className="accent-amber-500"
             />
-            <span className="text-xs text-slate-400 group-hover:text-slate-300">{t("settings.autoMonitor")}</span>
+            <span className="text-xs text-console-text-muted group-hover:text-console-text">{t("settings.autoMonitor")}</span>
           </label>
           {monitors.map((m) => (
             <label key={m.name} className="flex items-center gap-3 cursor-pointer group">
@@ -83,20 +83,20 @@ export function MonitorsSection({ onUpdateSettings }: SettingsSectionProps) {
                 onChange={() => chooseMonitor(m.name)}
                 className="accent-amber-500"
               />
-              <span className="text-xs text-slate-300 group-hover:text-white">
+              <span className="text-xs text-console-text group-hover:text-white">
                 {m.name} — {m.width}×{m.height}
-                {m.is_primary && <span className="ml-1 text-[10px] text-slate-500">{t("settings.mon.primary")}</span>}
+                {m.is_primary && <span className="ml-1 text-[10px] text-console-text-subtle">{t("settings.mon.primary")}</span>}
               </span>
             </label>
           ))}
         </div>
       </div>
 
-      <div className="border-t border-slate-800 pt-4">
+      <div className="border-t border-console-border pt-4">
         <div className="flex items-center justify-between mb-2">
           <div>
-            <p className="text-xs text-slate-400 font-bold uppercase">{t("settings.mon.test")}</p>
-            <p className="text-[10px] text-slate-600 mt-0.5">
+            <p className="text-xs text-console-text-muted font-bold uppercase">{t("settings.mon.test")}</p>
+            <p className="text-[10px] text-console-text-subtle mt-0.5">
               {t("settings.mon.testDesc")}
             </p>
           </div>
@@ -113,15 +113,15 @@ export function MonitorsSection({ onUpdateSettings }: SettingsSectionProps) {
           </button>
         </div>
         {monitors.length === 0 && (
-          <p className="text-[10px] text-slate-600 italic">{t("settings.mon.none")}</p>
+          <p className="text-[10px] text-console-text-subtle italic">{t("settings.mon.none")}</p>
         )}
       </div>
 
-      <div className="border-t border-slate-800 pt-4">
-        <p className="text-[10px] text-slate-500 uppercase font-bold mb-2 flex items-center gap-1">
+      <div className="border-t border-console-border pt-4">
+        <p className="text-[10px] text-console-text-subtle uppercase font-bold mb-2 flex items-center gap-1">
           <Monitor size={12} /> {t("settings.mon.resNote")}
         </p>
-        <p className="text-[10px] text-slate-600 leading-relaxed">
+        <p className="text-[10px] text-console-text-subtle leading-relaxed">
           {t("settings.mon.resDesc")}
         </p>
       </div>
