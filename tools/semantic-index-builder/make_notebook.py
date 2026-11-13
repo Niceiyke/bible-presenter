@@ -29,7 +29,8 @@ preparation instead of embedding ~232k passages on the church machine.
 
 **Before you run**
 
-1. `Runtime → Change runtime type → T4 GPU` (CPU works, ~10x slower).
+1. `Runtime → Change runtime type → T4 GPU` (CPU works but is far slower).
+   GPU workers use the pinned fp16 graph; CPU workers use the quantized graph.
 2. `Runtime → Run all`. The cells below mirror `build_prebuilt_indexes.py`
    exactly (this notebook is generated from it by `make_notebook.py`).
 3. Bible source: `wordlyte_bible.zip` from the pinned `v2.0.0` release is

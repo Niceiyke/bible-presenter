@@ -24,8 +24,9 @@ silently rejected per-version and those versions build locally instead.
 
 Runtime notes:
 - GPU runtime recommended (Runtime > Change runtime type > T4). The script
-  installs onnxruntime-gpu automatically when CUDA is available; the quantized
-  ONNX still runs correctly on a CPU runtime, just much slower.
+  installs onnxruntime-gpu automatically when CUDA is available and uses the
+  pinned fp16 graph, because ORT-CUDA cannot efficiently run the quantized
+  MatMul/QuantizeLinear nodes. CPU runtimes use the quantized graph.
 - Re-running is safe: finished indexes are cached in /content/semantic-cache
   and skipped when their fingerprint matches.
 """
@@ -62,7 +63,11 @@ BIBLE_DB_RELEASE_URL = (
 # asset, and a changed DB silently invalidates every cached index fingerprint.
 BIBLE_DATA_ZIP_SHA256 = "3d05357e5d292b74547c544d2a78d58ce7cf1529d2df888de002d00f0c211281"
 MODEL_FILES = {
+    # CPU index builds use the same dynamic-quantized graph as the app. GPU
+    # builds use the fp16 graph because ORT-CUDA cannot efficiently execute the
+    # quantized MatMul/QuantizeLinear nodes and silently falls back to CPU.
     "onnx/model_quantized.onnx": "c9729cc84cbd0e9fecc759505d2be65916c9fe05222d7ea26c65fcb3382af38d",
+    "onnx/model_fp16.onnx": "6bf19e68279b88e325598658ef0cccc58ac2f085f8c81fadd87e9d2075d868eb",
     "tokenizer.json": "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
     "config.json": "d83c21fa7366994560727112ef0a31d8a2ec1c280c2a3e66326fdb877f64c91e",
     "special_tokens_map.json": "b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3",
@@ -120,16 +125,29 @@ def sha256_file(path):
 # ---------------------------------------------------------------------------
 # Step 2 — pinned model files
 # ---------------------------------------------------------------------------
-print(f"Downloading pinned model files (revision {MODEL_REVISION[:12]}…)…")
+default_index_model = "onnx/model_fp16.onnx" if HAS_CUDA else "onnx/model_quantized.onnx"
+INDEX_MODEL_FILE = os.environ.get("WORDLYTE_INDEX_MODEL_FILE", default_index_model)
+assert INDEX_MODEL_FILE in MODEL_FILES, f"unsupported index model: {INDEX_MODEL_FILE}"
+download_files = {
+    relative: expected
+    for relative, expected in MODEL_FILES.items()
+    if relative not in ("onnx/model_quantized.onnx", "onnx/model_fp16.onnx")
+}
+download_files[INDEX_MODEL_FILE] = MODEL_FILES[INDEX_MODEL_FILE]
+
+print(
+    f"Downloading pinned model files (revision {MODEL_REVISION[:12]}..., "
+    f"index graph: {INDEX_MODEL_FILE})..."
+)
 from huggingface_hub import snapshot_download
 
 model_dir = snapshot_download(
     repo_id=MODEL_REPOSITORY,
     revision=MODEL_REVISION,
-    allow_patterns=list(MODEL_FILES.keys()),
+    allow_patterns=list(download_files.keys()),
     local_dir=os.path.join(WORK, "model"),
 )
-for relative, expected in MODEL_FILES.items():
+for relative, expected in download_files.items():
     local = os.path.join(model_dir, relative)
     actual = sha256_file(local)
     assert actual == expected, f"SHA256 mismatch for {relative}: {actual}"
@@ -276,7 +294,25 @@ tokenizer.enable_padding()  # longest-in-batch, like fastembed
 
 providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if HAS_CUDA else ["CPUExecutionProvider"]
 print(f"ONNX Runtime providers available: {ort.get_available_providers()}")
-session = ort.InferenceSession(os.path.join(model_dir, "onnx", "model_quantized.onnx"), providers=providers)
+try:
+    session = ort.InferenceSession(os.path.join(model_dir, INDEX_MODEL_FILE), providers=providers)
+except Exception:
+    if INDEX_MODEL_FILE != "onnx/model_fp16.onnx":
+        raise
+    print("FP16 session could not start; falling back to the quantized graph.")
+    INDEX_MODEL_FILE = "onnx/model_quantized.onnx"
+    # The fallback graph may not have been downloaded. Fetch it now.
+    fallback_dir = snapshot_download(
+        repo_id=MODEL_REPOSITORY,
+        revision=MODEL_REVISION,
+        allow_patterns=[INDEX_MODEL_FILE],
+        local_dir=os.path.join(WORK, "model"),
+    )
+    fallback_path = os.path.join(fallback_dir, INDEX_MODEL_FILE)
+    actual = sha256_file(fallback_path)
+    assert actual == MODEL_FILES[INDEX_MODEL_FILE], f"SHA256 mismatch for {INDEX_MODEL_FILE}: {actual}"
+    session = ort.InferenceSession(fallback_path, providers=providers)
+print(f"Index embedding graph: {INDEX_MODEL_FILE}")
 print(f"ONNX session providers: {session.get_providers()}")
 if HAS_CUDA and "CUDAExecutionProvider" not in session.get_providers():
     print("WARNING: CUDA is available but this session fell back to CPU. Step 6 will be much slower.")
@@ -369,6 +405,7 @@ bundle_path = os.path.join("/content", BUNDLE_NAME)
 manifest = {
     "modelRepository": MODEL_REPOSITORY,
     "modelRevision": MODEL_REVISION,
+    "embeddingModel": INDEX_MODEL_FILE,
     "format": "WLYSEM04",
     "dimension": EMBEDDING_DIMENSION,
     "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

@@ -40,8 +40,11 @@ Two equivalent entry points; the notebook is generated from the script by
 
 Step 1 selects `onnxruntime-gpu` when a CUDA runtime is available and prints
 the available and session providers. If the session falls back to
-`CPUExecutionProvider`, step 6 is dramatically slower. The builder embeds in
-length-sorted batches of 128, and stores the final zip without deflating the
+`CPUExecutionProvider`, step 6 is dramatically slower. GPU workers use the
+pinned fp16 graph; CPU workers use the quantized graph. This is important
+because ORT-CUDA cannot efficiently execute the quantized MatMul/QuantizeLinear
+nodes and otherwise falls back to CPU for most of the model. The builder embeds
+in length-sorted batches of 128, and stores the final zip without deflating the
 already-compressed int8 indexes.
 
 For a quick test bundle, set the optional version filter before running step 6:
