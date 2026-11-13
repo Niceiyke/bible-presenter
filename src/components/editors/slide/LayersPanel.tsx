@@ -35,8 +35,8 @@ const KIND_ICON = {
 
 const KIND_STYLE = {
   text: "bg-tool-design/15 text-tool-design",
-  image: "bg-fuchsia-500/15 text-fuchsia-300",
-  video: "bg-teal-500/15 text-teal-300",
+  image: "bg-action-primary/15 text-action-primary",
+  video: "bg-console-surface-strong text-console-text-muted",
   shape: "bg-orange-500/15 text-orange-300",
 } as const;
 

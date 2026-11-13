@@ -126,7 +126,7 @@ export function App() {
 
   const doPair = async () => {
     if (!code.trim()) {
-      setPairErr("Enter the pairing code shown in the operator's Settings.");
+      setPairErr("Enter the pairing code shown in Wordlyte Settings.");
       return;
     }
     if (!deviceName.trim()) {
@@ -261,7 +261,7 @@ export function App() {
         <div className="flex-1 flex items-center justify-center">
           <Card className="text-center max-w-xs">
             <p className="text-sm text-slate-300 font-semibold">Connecting…</p>
-            <p className="text-[11px] text-slate-500 mt-1">Waiting for the Wordlyte operator on this network.</p>
+            <p className="text-[11px] text-slate-500 mt-1">Waiting for Wordlyte on this network.</p>
           </Card>
         </div>
       )}
@@ -270,7 +270,7 @@ export function App() {
         <div className="flex-1 flex items-center justify-center p-4">
           <Card className="text-center max-w-xs w-full">
             <p className="text-sm text-red-300 font-semibold">Can't reach Wordlyte</p>
-            <p className="text-[11px] text-slate-500 mt-1">Make sure the operator enabled Remote Control, then stay on the same Wi-Fi and retry.</p>
+            <p className="text-[11px] text-slate-500 mt-1">Make sure Remote Control is enabled in Wordlyte, then stay on the same Wi-Fi and retry.</p>
             <div className="mt-3">
               <Btn variant="primary" onClick={client.connect} className="w-full"><RefreshCw size={13} /> Retry</Btn>
             </div>
@@ -293,7 +293,7 @@ export function App() {
               </Btn>
             </div>
             <p className="mt-3 text-[10px] text-slate-500 leading-relaxed">
-              {pairing ? "Pairing…" : "Scan the QR code in the operator's Remote tab to pair automatically, or enter the code shown there."}
+              {pairing ? "Pairing…" : "Scan the QR code in Wordlyte's Remote Control tab to pair automatically, or enter the code shown there."}
             </p>
           </Card>
         </div>

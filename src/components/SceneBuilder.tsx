@@ -938,7 +938,7 @@ export function SceneBuilder({ scene, onSceneChange, onSave, onApply, onClose }:
                           setSelectedId(z.id);
                           if (e.button === 0) startDrag(e, z.id, "move");
                         }}
-                        className={`absolute cursor-move transition-shadow ${isSel ? "ring-2 ring-action-primary shadow-[inset_0_0_0_1px_rgba(244,183,64,0.35)]" : "hover:ring-1 hover:ring-white/30"}`}
+                        className={`absolute cursor-move transition-shadow ${isSel ? "ring-2 ring-action-primary shadow-[inset_0_0_0_1px_rgba(247,181,0,0.35)]" : "hover:ring-1 hover:ring-white/30"}`}
                         style={{ left: `${z.x * 100}%`, top: `${z.y * 100}%`, width: `${z.w * 100}%`, height: `${z.h * 100}%`, zIndex: z.z + 100 }}
                       >
                         {isSel && (

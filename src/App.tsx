@@ -19,6 +19,7 @@ import { ProgramAudioProvider } from "./hooks/useProgramAudio";
 import { AiScriptureProvider } from "./hooks/useAiScripture";
 import { tauriPresentationRepository } from "./presentations/repository";
 import { LicenseGate, OfflineLicenseBanner } from "./components/LicenseGate";
+import { BrandLockup } from "./components/brand/Brand";
 import { isLicenseBlocked } from "./types/license";
 
 import { AppHeader } from "./components/layout/AppHeader";
@@ -164,9 +165,9 @@ export default function App() {
   // initialization finishes so the license gate never flashes the console.
   if (!label || (label === "main" && !isInitialized)) {
     return (
-      <div className="h-screen bg-slate-950 flex items-center justify-center flex-col gap-4 select-none">
-        <div className="w-8 h-8 bg-amber-500 rounded-md flex items-center justify-center text-black font-black text-xs">WL</div>
-        <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-500">Preparing Wordlyte…</p>
+      <div className="flex h-screen select-none flex-col items-center justify-center gap-4 bg-console-canvas">
+        <BrandLockup className="h-8 w-auto" />
+        <p className="text-xs font-black uppercase tracking-[0.2em] text-console-text-subtle">Preparing Wordlyte…</p>
       </div>
     );
   }
@@ -175,14 +176,14 @@ export default function App() {
   // neutral role surface instead of silently rendering the operator console.
   if (label === "design" || label === "studio") {
     return (
-      <div className="h-screen bg-slate-950 flex items-center justify-center flex-col gap-4 select-none">
-        <div className="w-8 h-8 bg-purple-500/80 rounded-md flex items-center justify-center text-black font-black text-xs">
+      <div className="flex h-screen select-none flex-col items-center justify-center gap-4 bg-console-canvas">
+        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-action-primary text-xs font-black text-black">
           {label === "design" ? "D" : "A"}
         </div>
-        <p className="text-xs font-black uppercase tracking-widest text-slate-400">
+        <p className="text-xs font-black uppercase tracking-widest text-console-text-muted">
           {label === "design" ? "Design Hub" : "Audio Studio"}
         </p>
-        <p className="text-[11px] text-slate-600">This workspace is not available in this version of Wordlyte.</p>
+        <p className="text-[11px] text-console-text-subtle">This workspace is not available in this version of Wordlyte.</p>
       </div>
     );
   }
@@ -191,18 +192,18 @@ export default function App() {
   // remediation instead of an empty, non-functional console.
   if (label === "main" && !backendAvailable) {
     return (
-      <div className="h-screen bg-slate-950 flex items-center justify-center flex-col gap-4 select-none px-8">
-        <div className="w-12 h-12 rounded-full bg-red-500/15 flex items-center justify-center">
-          <AlertTriangle size={22} className="text-red-400" />
+      <div className="flex h-screen select-none flex-col items-center justify-center gap-4 bg-console-canvas px-8">
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-state-error/15">
+          <AlertTriangle size={22} className="text-state-error" />
         </div>
-        <h1 className="text-base font-black text-slate-200">Wordlyte could not start</h1>
-        <p className="text-xs text-slate-500 max-w-md text-center leading-relaxed">
+        <h1 className="text-base font-black text-console-text">Wordlyte could not start</h1>
+        <p className="max-w-md text-center text-xs leading-relaxed text-console-text-subtle">
           Wordlyte could not load your Bibles, media, and service plans.
           Check that the app is not blocked by security software, then try again.
         </p>
         <button
           onClick={() => window.location.reload()}
-          className="mt-1 px-4 py-2 text-xs font-black uppercase bg-amber-500 hover:bg-amber-400 text-black rounded-md transition-all"
+          className="mt-1 rounded-md bg-action-primary px-4 py-2 text-xs font-black uppercase text-black transition-all hover:bg-action-primary-hover"
         >
           Retry
         </button>
@@ -223,7 +224,7 @@ export default function App() {
       <RecordingProvider>
       <ProgramAudioProvider>
       <AiScriptureProvider onStageVerse={stageVerse} onSendLiveVerse={async (verse) => sendLive({ type: "Verse", data: verse })}>
-      <div className="h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden select-none">
+      <div className="flex h-screen flex-col overflow-hidden bg-console-canvas font-sans text-console-text select-none">
 
        <AppHeader onPersistSchedule={persistSchedule} />
 

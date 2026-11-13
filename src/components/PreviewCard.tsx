@@ -416,8 +416,8 @@ export function PreviewCard({
                   />
                 ) : (item.data as MediaItem).media_type === "Audio" ? (
                   <div className="w-full h-full flex flex-col items-center justify-center gap-3 bg-slate-900/70 rounded-xl backdrop-blur-sm">
-                    <div className="w-16 h-16 rounded-full bg-gradient-to-br from-amber-500/30 to-purple-500/30 border border-amber-500/40 flex items-center justify-center">
-                      <Music size={26} className="text-amber-300" />
+                    <div className="flex h-16 w-16 items-center justify-center rounded-full border border-action-primary/40 bg-gradient-to-br from-action-primary/30 to-action-primary/10">
+                      <Music size={26} className="text-action-primary" />
                     </div>
                     <audio
                       src={convertFileSrc((item.data as MediaItem).path)}

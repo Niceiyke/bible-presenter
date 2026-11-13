@@ -199,7 +199,7 @@ export function newQuoteSlide(): CustomSlide {
         kind: "text",
         x: 12, y: 62, w: 76, h: 12, z_index: 2,
         content: textToDoc("— Attribution"),
-        font_size: 30, font_family: "Arial", color: "#f4b740", align: "center", v_align: "middle", bold: true, italic: false,
+        font_size: 30, font_family: "Arial", color: "#f7b500", align: "center", v_align: "middle", bold: true, italic: false,
       },
     ],
   };
@@ -264,7 +264,7 @@ export function newScriptureSlide(): CustomSlide {
         kind: "text",
         x: 10, y: 14, w: 80, h: 14, z_index: 1,
         content: textToDoc("John 3:16"),
-        font_size: 40, font_family: "Georgia", color: "#f4b740", align: "center", v_align: "middle", bold: true, italic: false,
+        font_size: 40, font_family: "Georgia", color: "#f7b500", align: "center", v_align: "middle", bold: true, italic: false,
       },
       {
         id: stableId(),
@@ -634,7 +634,7 @@ export function importPresentation(data: unknown): { success: boolean; presentat
 }
 
 export const FONTS = [
-  "Arial", "Georgia", "Times New Roman", "Verdana", "Courier New",
+  "Inter", "Arial", "Georgia", "Times New Roman", "Verdana", "Courier New",
   "Montserrat", "Oswald", "Playfair Display", "Roboto", "Open Sans",
   "Lora", "Merriweather", "EB Garamond", "Cinzel",
   "Palatino Linotype", "Book Antiqua", "Garamond", "Cambria",

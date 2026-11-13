@@ -82,8 +82,8 @@ export function LicenseSection(_props: SettingsSectionProps) {
               license.tier === "free"
                 ? "bg-console-surface-strong/15 text-console-text border-console-border-strong/30"
                 : license.tier === "pro"
-                  ? "bg-cyan-500/15 text-cyan-300 border-cyan-500/30"
-                  : "bg-purple-500/15 text-purple-300 border-purple-500/30"
+                  ? "border-action-primary/30 bg-action-primary/10 text-action-primary"
+                  : "border-action-primary bg-action-primary text-black"
             }`}
           >
             {TIER_LABELS[license.tier]}

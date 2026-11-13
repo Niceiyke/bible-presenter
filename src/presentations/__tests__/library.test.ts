@@ -38,7 +38,7 @@ describe("presentation library", () => {
     const deck = createBlankPresentation("Vision Night");
     expect(deck).toMatchObject({ name: "Vision Night", version: 2 });
     expect(deck.slides).toHaveLength(1);
-    expect(deck.theme?.accentColor).toBe("#f4b740");
+    expect(deck.theme?.accentColor).toBe("#f7b500");
   });
 
   it("duplicates every mutable identity while preserving media content", () => {

@@ -86,7 +86,7 @@ export function LeftNav() {
             : "text-console-text-muted hover:bg-console-surface-strong hover:text-console-text"
         } ${collapsed ? "justify-center" : ""}`}
       >
-        {active && <span className="absolute -left-1 h-5 w-1 rounded-r-full bg-action-primary shadow-[0_0_10px_rgba(244,183,64,.55)]" />}
+        {active && <span className="absolute -left-1 h-5 w-1 rounded-r-full bg-action-primary shadow-[0_0_10px_rgba(247,181,0,.55)]" />}
         <Icon size={16} className="shrink-0" />
         {!collapsed && <>
           <span className="min-w-0 flex-1 truncate text-left text-[11px] font-bold">{entry.label}</span>

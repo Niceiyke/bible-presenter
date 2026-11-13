@@ -92,7 +92,7 @@ export function TimersPanel({ client, pushToast }: PanelProps) {
               className={cx(
                 "flex-1 py-2 text-[9px] font-black uppercase rounded-lg border transition-all",
                 timerType === t.value
-                  ? "bg-cyan-600 border-cyan-500 text-white"
+                  ? "bg-cyan-600 border-cyan-500 text-black"
                   : "bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500"
               )}
             >
@@ -143,7 +143,7 @@ export function TimersPanel({ client, pushToast }: PanelProps) {
             onClick={liveTimer ? toggle : start}
             className={cx(
               "flex-1 py-3 rounded-xl flex items-center justify-center gap-2 font-black uppercase transition-all active:scale-[0.98]",
-              timerRunning ? "bg-amber-500 hover:bg-amber-400 text-black" : "bg-cyan-600 hover:bg-cyan-500 text-white"
+              timerRunning ? "bg-amber-500 hover:bg-amber-400 text-black" : "bg-cyan-600 hover:bg-cyan-500 text-black"
             )}
           >
             {timerRunning ? <Pause size={16} /> : liveTimer ? <Play size={16} /> : <Play size={16} />}

@@ -172,7 +172,7 @@ export function ScenesTab({ saveScene, deleteScene, applyScene, captureScene }: 
                         </span>
                       )}
                       {s.layout?.zones.length ? (
-                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-purple-400 border border-slate-700">
+                        <span className="rounded border border-console-border bg-console-surface-strong px-1.5 py-0.5 text-[9px] font-bold text-action-primary">
                           Split {s.layout.zones.length}
                         </span>
                       ) : null}

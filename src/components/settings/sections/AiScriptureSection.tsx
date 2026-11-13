@@ -129,7 +129,7 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
       </div>
 
       <section className="rounded-lg border border-console-border bg-console-surface-raised/40 p-3">
-        <div className="mb-3 flex items-center gap-1.5"><Mic size={12} className="text-violet-300" /><p className="text-[10px] font-black uppercase tracking-widest text-console-text-muted">AI Scripture microphone</p></div>
+        <div className="mb-3 flex items-center gap-1.5"><Mic size={12} className="text-action-primary" /><p className="text-[10px] font-black uppercase tracking-widest text-console-text-muted">AI Scripture microphone</p></div>
         <div className="flex gap-2">
           <select value={programAudio.device ?? ""} onChange={(event) => programAudio.setDevice(event.target.value || null)} disabled={active} className="min-w-0 flex-1 rounded-md border border-console-border bg-console-surface px-2.5 py-2 text-xs text-console-text disabled:opacity-50">
             <option value="">Choose a mixer or microphone…</option>

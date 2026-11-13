@@ -91,7 +91,7 @@ export function createBlankPresentation(name = "Untitled Presentation"): CustomP
       titleStyle: { font_family: "Arial", font_size: 60, color: "#ffffff", bold: true },
       bodyStyle: { font_family: "Arial", font_size: 32, color: "#ffffff" },
       textColor: "#ffffff",
-      accentColor: "#f4b740",
+      accentColor: "#f7b500",
       background: { type: "color", value: "#101722" },
     },
   };

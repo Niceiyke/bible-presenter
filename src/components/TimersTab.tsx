@@ -66,7 +66,7 @@ export function TimersTab({ onStage, onLive }: TimersTabProps) {
             <button
               key={t}
               onClick={() => setTimerType(t)}
-              className={`flex-1 py-1.5 text-[9px] font-black uppercase rounded-lg border transition-all ${timerType === t ? "bg-cyan-600 border-cyan-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500"}`}
+              className={`flex-1 py-1.5 text-[9px] font-black uppercase rounded-lg border transition-all ${timerType === t ? "bg-cyan-600 border-cyan-500 text-black" : "bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500"}`}
             >
               {t}
             </button>
@@ -111,7 +111,7 @@ export function TimersTab({ onStage, onLive }: TimersTabProps) {
           <button
             onClick={timerRunning ? handleStopTimer : handleStartTimer}
             className={`flex-1 py-3 rounded-xl flex items-center justify-center gap-2 font-black uppercase transition-all ${
-              timerRunning ? "bg-red-600 hover:bg-red-500 text-white" : "bg-cyan-600 hover:bg-cyan-500 text-white"
+              timerRunning ? "bg-red-600 hover:bg-red-500 text-white" : "bg-cyan-600 hover:bg-cyan-500 text-black"
             }`}
           >
             {timerRunning ? <Square size={16} /> : <Play size={16} />}

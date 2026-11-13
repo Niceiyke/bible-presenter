@@ -14,7 +14,7 @@ export const DEFAULT_BRAND_KIT: PresentationBrandKit = {
   name: "Church Brand",
   fontFamily: "Arial",
   textColor: "#ffffff",
-  accentColor: "#f4b740",
+  accentColor: "#f7b500",
   backgroundColor: "#101722",
 };
 

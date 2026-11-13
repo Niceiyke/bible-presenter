@@ -159,7 +159,7 @@ function PresetsPanel({ ltTemplate, ltSavedTemplates, setLtTemplate, onSetToast 
                 };
               }
               return {
-                badge: "FT", cls: "bg-purple-900/40 text-purple-400",
+                badge: "FT", cls: "bg-console-surface-strong text-console-text-muted",
                 summary: (p.data as { kind: "FreeText"; data: { text: string } }).data.text,
               };
             })();
@@ -463,7 +463,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
           <button
             type="button"
             onClick={() => setActiveTab("lt-designer")}
-            className="text-[10px] font-bold text-tool-design hover:text-purple-300 transition-colors"
+            className="text-[10px] font-bold text-tool-design transition-colors hover:text-action-primary-hover"
           >
             Open designer
           </button>
@@ -548,7 +548,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
                     scrollEnabled: opt.enabled,
                     ...(opt.dir ? { scrollDirection: opt.dir } : {}),
                   }))}
-                  className={`px-2 py-1 text-[10px] font-bold rounded transition-all ${active ? "bg-amber-600 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}
+                  className={`px-2 py-1 text-[10px] font-bold rounded transition-all ${active ? "bg-amber-600 text-black" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}
                 >
                   {opt.label}
                 </button>
@@ -630,7 +630,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
                     setBackendError(`Save failed: ${err?.message ?? err}`);
                   }
                 }}
-                className="text-[10px] font-bold uppercase bg-amber-600 hover:bg-amber-500 text-white px-2 py-1 rounded transition-all"
+                className="rounded bg-amber-600 px-2 py-1 text-[10px] font-bold uppercase text-black transition-all hover:bg-amber-500"
               >
                 Save as Song
               </button>
@@ -642,7 +642,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
               <span className="text-[10px] text-slate-400 uppercase font-bold">Lines:</span>
               {([1, 2] as const).map((n) => (
                 <button key={n} onClick={() => setLtLinesPerDisplay(n)}
-                  className={`text-[10px] font-bold w-6 h-6 rounded ${ltLinesPerDisplay === n ? "bg-amber-600 text-white" : "bg-slate-700 text-slate-400"}`}>
+                  className={`text-[10px] font-bold w-6 h-6 rounded ${ltLinesPerDisplay === n ? "bg-amber-600 text-black" : "bg-slate-700 text-slate-400"}`}>
                   {n}
                 </button>
               ))}
@@ -659,7 +659,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
             </div>
             <div className="flex items-center gap-1">
               <button onClick={() => setLtAutoAdvance(!ltAutoAdvance)}
-                className={`text-[10px] font-bold uppercase px-2 py-1 rounded ${ltAutoAdvance ? "bg-amber-600 text-white" : "bg-slate-700 text-slate-400"}`}>
+                className={`text-[10px] font-bold uppercase px-2 py-1 rounded ${ltAutoAdvance ? "bg-amber-600 text-black" : "bg-slate-700 text-slate-400"}`}>
                 Auto {ltAutoAdvance ? "ON" : "OFF"}
               </button>
               {ltAutoAdvance && (
@@ -771,7 +771,7 @@ export function LowerThirdTab({ onSetToast }: LowerThirdTabProps) {
           className={`w-full min-h-12 text-sm font-black uppercase rounded-xl transition-all ${
             ltVisible
               ? "bg-console-surface-strong hover:bg-state-live-soft text-state-live border border-state-live/60"
-              : "bg-state-live hover:bg-red-400 text-white shadow-[0_0_16px_rgba(240,68,85,0.24)] disabled:cursor-not-allowed disabled:opacity-40"
+              : "bg-state-live hover:bg-red-500 text-white shadow-[0_0_16px_rgba(225,29,46,0.24)] disabled:cursor-not-allowed disabled:opacity-40"
           }`}
         >
           {ltVisible ? "Hide lower third" : "Show lower third"}

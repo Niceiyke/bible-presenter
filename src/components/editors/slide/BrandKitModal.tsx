@@ -26,7 +26,7 @@ export function BrandKitModal({ open, onClose, onApply }: { open: boolean; onClo
     <div className="fixed inset-0 z-[180] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Brand kit">
       <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-console-border-strong bg-console-surface shadow-2xl shadow-black/60">
         <header className="flex items-center gap-3 border-b border-console-border bg-gradient-to-r from-tool-design/15 to-state-stage/5 px-5 py-4">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-tool-design text-white shadow-lg shadow-tool-design/25"><Palette size={18} /></span>
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-tool-design text-console-canvas shadow-lg shadow-tool-design/25"><Palette size={18} /></span>
           <div className="flex-1">
             <h2 className="text-sm font-black text-console-text">Presentation Brand Kit</h2>
             <p className="mt-0.5 text-[10px] text-console-text-subtle">Apply consistent typography and colors across the entire deck.</p>

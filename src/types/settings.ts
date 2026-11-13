@@ -113,7 +113,7 @@ export interface MonitorInfo {
 }
 
 export const FONTS = [
-  "Arial", "Georgia", "Times New Roman", "Verdana", "Courier New",
+  "Inter", "Arial", "Georgia", "Times New Roman", "Verdana", "Courier New",
   "Montserrat", "Oswald", "Playfair Display", "Roboto", "Open Sans",
   "Lora", "Merriweather", "EB Garamond", "Cinzel",
   "Palatino Linotype", "Book Antiqua", "Garamond", "Cambria",

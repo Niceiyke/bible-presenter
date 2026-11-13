@@ -20,8 +20,8 @@ import type { RemotePermissions, RemoteRole, RemoteStatus } from "../../../types
 import type { SettingsSectionProps } from "../shared";
 
 const ROLE_OPTIONS: { value: RemoteRole; label: string }[] = [
-  { value: "viewer", label: "Viewer" },
-  { value: "operator", label: "Operator" },
+  { value: "viewer", label: "Read-only" },
+  { value: "operator", label: "Controller" },
   { value: "admin", label: "Admin" },
 ];
 

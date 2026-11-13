@@ -368,7 +368,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                     onClick={() => setCameraOrientation(selectedCameraId!, mode)}
                     className={`px-3 py-1 text-[10px] font-black uppercase transition-all ${
                       effectiveOrientation(selectedCameraId!) === mode
-                        ? "bg-cyan-600 text-white"
+                        ? "bg-cyan-600 text-black"
                         : "bg-slate-800 hover:bg-slate-700 text-slate-300"
                     }`}
                   >
@@ -399,7 +399,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
                 <button
                   onClick={toggleMirror}
                   className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase transition-all ${
-                    mirrorOn ? "bg-cyan-600 text-white" : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+                    mirrorOn ? "bg-cyan-600 text-black" : "bg-slate-800 hover:bg-slate-700 text-slate-300"
                   }`}
                   title="Mirror this camera's feed when staged"
                 >
@@ -542,7 +542,7 @@ export function CameraTab({ onStage, onLive }: CameraTabProps) {
             <button 
               onClick={setAsGlobalBg}
               disabled={!selectedCameraId}
-              className="py-3 px-4 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded-xl font-bold transition-all shadow-lg shadow-amber-900/20 flex items-center justify-center gap-2"
+              className="flex items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 py-3 font-bold text-black transition-all shadow-lg shadow-amber-900/20 hover:bg-amber-500 disabled:opacity-50"
             >
               <Monitor size={18} />
               Set as Global Background

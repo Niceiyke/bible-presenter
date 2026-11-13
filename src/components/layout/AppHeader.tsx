@@ -2,6 +2,7 @@ import React from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertTriangle, CalendarDays, Clock3, Monitor, Keyboard, X, Signal, EyeOff, MonitorSmartphone, Save, ScrollText, Loader2 } from "lucide-react";
 import { useAppStore } from "../../store";
+import { BrandLockup } from "../brand/Brand";
 import { IconButton, StatusBadge } from "../ui";
 
 export function AppHeader({ onPersistSchedule }: { onPersistSchedule?: () => Promise<void> }) {
@@ -80,12 +81,8 @@ export function AppHeader({ onPersistSchedule }: { onPersistSchedule?: () => Pro
   return (
     <header className="z-30 flex h-14 shrink-0 items-center gap-3 border-b border-console-border bg-console-surface px-3 shadow-lg shadow-black/10">
       <div className="flex min-w-0 items-center gap-3">
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-action-primary text-[10px] font-black text-black shadow-lg shadow-action-primary/20">WL</div>
-          <div className="hidden md:block">
-            <span className="block text-[10px] font-black uppercase tracking-[0.18em] text-console-text">Wordlyte</span>
-            <span className="block text-[9px] font-black uppercase tracking-[0.16em] text-console-text-subtle">Operator</span>
-          </div>
+        <div className="flex shrink-0 items-center">
+          <BrandLockup className="h-7 w-auto" />
         </div>
 
         <div className="hidden h-6 w-px bg-console-border sm:block" />

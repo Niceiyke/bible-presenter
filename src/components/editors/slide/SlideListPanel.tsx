@@ -127,12 +127,12 @@ export function SlideListPanel({
             >
               <SlideThumbnail slide={s} className="absolute inset-0 w-full h-full" appDataDir={appDataDir} theme={theme} alt={`Slide ${i + 1}`} />
                <span className={`absolute top-1.5 left-1.5 min-w-5 h-5 px-1 rounded-md border border-white/10 flex items-center justify-center text-[9px] font-black backdrop-blur-sm ${
-                 isActive ? "bg-tool-design text-white" : "bg-black/65 text-white/75"
+                 isActive ? "bg-tool-design text-console-canvas" : "bg-black/65 text-white/75"
               }`}>
                 {i + 1}
               </span>
               {isActive && (
-                 <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 bg-tool-design text-white text-[7px] font-black uppercase tracking-wider rounded-md shadow-lg">
+                 <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 bg-tool-design text-console-canvas text-[7px] font-black uppercase tracking-wider rounded-md shadow-lg">
                   Editing
                 </span>
               )}
@@ -166,7 +166,7 @@ export function SlideListPanel({
           items={ADD_MENU_ITEMS}
           onSelect={v => (v === "template" ? onOpenTemplates() : onAddSlide(v))}
           className="w-full"
-          triggerClassName="w-full justify-center bg-gradient-to-r from-tool-design to-indigo-500 text-white border-tool-design/40 hover:brightness-110 shadow-lg shadow-tool-design/15"
+          triggerClassName="w-full justify-center bg-action-primary text-black border-action-primary/40 hover:bg-action-primary-hover shadow-lg shadow-action-primary/15"
         />
       </div>
     </aside>

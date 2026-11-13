@@ -75,7 +75,7 @@ export function AppHeader({
       >
         <X size={18} />
       </button>
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-tool-design to-state-stage text-white shadow-lg shadow-tool-design/15">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-tool-design text-console-canvas shadow-lg shadow-tool-design/15">
         <Palette size={17} />
       </div>
       <div className="min-w-0 flex-1">
@@ -126,7 +126,7 @@ export function AppHeader({
         title="Live preview (Space) — plays entrance animation, nothing is broadcast"
           className={`flex items-center gap-1.5 min-h-[42px] px-3.5 rounded-xl border transition-all font-bold focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)] ${
             previewOpen
-            ? "bg-tool-design text-white border-tool-design shadow-lg shadow-tool-design/25"
+            ? "bg-tool-design text-console-canvas border-tool-design shadow-lg shadow-tool-design/25"
             : "bg-tool-design/10 hover:bg-tool-design/20 text-tool-design border-tool-design/30"
         }`}
       >

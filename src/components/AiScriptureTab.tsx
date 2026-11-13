@@ -157,7 +157,7 @@ export function AiScriptureTab({ onStage, onLive }: { onStage: (item: DisplayIte
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      <section className="shrink-0 overflow-hidden rounded-lg border border-violet-400/20 bg-gradient-to-r from-violet-500/[0.08] to-console-surface">
+      <section className="shrink-0 overflow-hidden rounded-lg border border-action-primary/20 bg-gradient-to-r from-action-primary/[0.08] to-console-surface">
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 px-2.5 py-1.5">
           <span className={cn(
             "inline-flex h-5 shrink-0 items-center gap-1.5 rounded-full border px-1.5 text-[8px] font-black uppercase tracking-[0.12em]",
@@ -189,7 +189,7 @@ export function AiScriptureTab({ onStage, onLive }: { onStage: (item: DisplayIte
               "ml-auto flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-3 text-[10px] font-black uppercase tracking-wide transition-colors",
               listening
                 ? "bg-state-live text-white hover:bg-state-live/85"
-                : "bg-violet-600 text-white hover:bg-violet-500",
+                : "bg-action-primary text-black hover:bg-action-primary-hover",
             )}
           >
             {listening ? <><Square size={10} fill="currentColor" /> Stop</> : <><Mic size={11} /> Start</>}
@@ -201,7 +201,7 @@ export function AiScriptureTab({ onStage, onLive }: { onStage: (item: DisplayIte
       <section className="flex min-h-64 min-w-0 flex-col overflow-hidden rounded-lg border border-console-border bg-console-canvas/35">
         <header className="flex items-center justify-between gap-1.5 border-b border-console-border bg-console-surface/45 px-2.5 py-1.5">
           <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-            <MessageSquareText size={11} className="shrink-0 text-violet-300" />
+            <MessageSquareText size={11} className="shrink-0 text-action-primary" />
             <h3 className="shrink-0 text-[9px] font-black uppercase tracking-[0.12em] text-console-text-muted">Live transcription</h3>
             <span className="truncate whitespace-nowrap text-[8px] font-bold text-console-text-subtle">{finalSegments} · {finalWords}w</span>
           </div>
@@ -223,7 +223,7 @@ export function AiScriptureTab({ onStage, onLive }: { onStage: (item: DisplayIte
             <button
               type="button"
               onClick={() => { setFollowTranscript(true); scrollTranscriptToBottom("smooth"); }}
-              className="absolute bottom-2 right-2 rounded-md border border-violet-400/30 bg-console-surface px-2.5 py-1 text-[9px] font-black uppercase tracking-wide text-violet-200 shadow-lg hover:bg-console-surface-strong"
+              className="absolute bottom-2 right-2 rounded-md border border-action-primary/30 bg-console-surface px-2.5 py-1 text-[9px] font-black uppercase tracking-wide text-action-primary shadow-lg hover:bg-console-surface-strong"
             >
               Jump to latest
             </button>
@@ -234,7 +234,7 @@ export function AiScriptureTab({ onStage, onLive }: { onStage: (item: DisplayIte
       <section className="flex min-h-64 min-w-0 flex-col overflow-hidden rounded-lg border border-console-border bg-console-canvas/35">
         <header className="flex items-center justify-between gap-1.5 border-b border-console-border bg-console-surface/45 px-2.5 py-1.5">
           <div className="flex min-w-0 items-center gap-1.5">
-            <BookOpen size={11} className="shrink-0 text-violet-300" />
+            <BookOpen size={11} className="shrink-0 text-action-primary" />
             <h3 className="text-[9px] font-black uppercase tracking-[0.12em] text-console-text-muted">Detected Scripture</h3>
             {visibleSuggestions.length > 0 && <span className="text-[8px] font-bold text-console-text-subtle">{visibleSuggestions.length} found</span>}
           </div>
@@ -254,7 +254,7 @@ export function AiScriptureTab({ onStage, onLive }: { onStage: (item: DisplayIte
                   ? "border-state-live/45 bg-state-live/[0.06]"
                   : isStaged
                     ? "border-state-stage/45 bg-state-stage/[0.06]"
-                    : "border-console-border bg-console-surface hover:border-violet-400/30",
+                    : "border-console-border bg-console-surface hover:border-action-primary/30",
               )}
             >
               <div className="flex items-start justify-between gap-2">
@@ -262,7 +262,7 @@ export function AiScriptureTab({ onStage, onLive }: { onStage: (item: DisplayIte
                   <span className="text-[12px] font-black text-console-text">{referenceOf(suggestion)}</span>
                   <span className="rounded border border-console-border bg-console-canvas/60 px-1 py-px text-[8px] font-bold uppercase tracking-wide text-console-text-subtle">{suggestion.verse.version}</span>
                   {isLive ? <span className="rounded border border-state-live/35 bg-state-live/10 px-1 py-px text-[8px] font-black uppercase tracking-wide text-state-live">On air</span> : isStaged ? <span className="rounded border border-state-stage/35 bg-state-stage/10 px-1 py-px text-[8px] font-black uppercase tracking-wide text-state-stage">Staged</span> : null}
-                  <span className="rounded bg-violet-400/10 px-1 py-px text-[8px] font-bold uppercase tracking-wide text-violet-300">{evidenceLabel}</span>
+                  <span className="rounded bg-action-primary/10 px-1 py-px text-[8px] font-bold uppercase tracking-wide text-action-primary">{evidenceLabel}</span>
                   {suggestion.detection === "quote" && suggestion.quoteSupport === "loose" && <span className="rounded border border-state-warning/30 bg-state-warning/10 px-1 py-px text-[8px] font-bold uppercase tracking-wide text-state-warning">Review only</span>}
                 </div>
                 <span className={cn("shrink-0 text-[12px] font-black tabular-nums leading-4", confidenceTone(confidence))} title={`Detection confidence: ${confidence}%`}>{confidence}%</span>

@@ -225,7 +225,7 @@ export function AiPresentationModal({ open, defaultBibleVersion, onClose, onCrea
               <label className="block text-[10px] font-black uppercase tracking-widest text-console-text-muted mb-1">Notes or manuscript <span className="font-normal normal-case">(optional)</span></label>
               {savedSessions.length > 0 && (
                 <div className="mb-2 flex gap-2 rounded-lg border border-console-border bg-console-surface-raised/40 p-2">
-                  <History size={14} className="mt-2 text-violet-400 shrink-0" />
+                  <History size={14} className="mt-2 shrink-0 text-action-primary" />
                   <select value={savedSessionId} onChange={(event) => setSavedSessionId(event.target.value)} className="min-w-0 flex-1 rounded-md border border-console-border bg-console-canvas px-2 py-1.5 text-[10px] text-console-text">
                     <option value="">Choose a saved AI Scripture transcript…</option>
                     {savedSessions.map((session) => <option key={session.id} value={session.id}>{session.endedAt == null ? "IN PROGRESS · " : ""}{new Date(session.startedAt).toLocaleString()} · {session.transcriptSegments} segments · {session.suggestions} suggestions</option>)}

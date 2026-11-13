@@ -145,17 +145,17 @@ export function SlideCanvas({
       ref={viewportRef}
       className={`flex-1 flex items-center justify-center p-10 overflow-hidden relative ${editingElementId ? '' : 'select-none'}`}
       style={{
-        backgroundImage: "radial-gradient(circle at 18% 12%, rgba(167,139,250,.14), transparent 28%), radial-gradient(circle at 84% 82%, rgba(56,189,248,.10), transparent 30%), radial-gradient(circle, rgba(125,141,157,.20) 1px, transparent 1px)",
+        backgroundImage: "radial-gradient(circle at 18% 12%, rgba(247,181,0,.14), transparent 28%), radial-gradient(circle at 84% 82%, rgba(139,14,26,.12), transparent 30%), radial-gradient(circle, rgba(168,179,192,.18) 1px, transparent 1px)",
         backgroundSize: "auto, auto, 24px 24px",
-        backgroundColor: "#090d13",
+        backgroundColor: "#0b1117",
       }}
       onClick={onCanvasClick}
     >
       <div className="absolute left-4 top-4 flex items-center gap-2 rounded-lg border border-console-border/80 bg-console-surface/75 px-2.5 py-1.5 backdrop-blur-xl">
-        <span className="h-1.5 w-1.5 rounded-full bg-tool-design shadow-[0_0_8px_rgba(167,139,250,.8)]" />
+        <span className="h-1.5 w-1.5 rounded-full bg-tool-design shadow-[0_0_8px_rgba(247,181,0,.8)]" />
         <span className="text-[8px] font-black uppercase tracking-[0.16em] text-console-text-subtle">Canvas · 16:9</span>
       </div>
-      <div ref={canvasRef} className="relative overflow-hidden rounded-sm shadow-[0_30px_90px_rgba(0,0,0,.65),0_0_0_1px_rgba(125,141,157,.35),0_0_50px_rgba(167,139,250,.08)]" style={{ aspectRatio: "16/9", width: canvasWidth, ...backingStyle(slide.background) }}>
+      <div ref={canvasRef} className="relative overflow-hidden rounded-sm shadow-[0_30px_90px_rgba(0,0,0,.65),0_0_0_1px_rgba(168,179,192,.35),0_0_50px_rgba(247,181,0,.08)]" style={{ aspectRatio: "16/9", width: canvasWidth, ...backingStyle(slide.background) }}>
         <CustomSlideRenderer slide={slide} scale={canvasScale} appDataDir={appDataDir} theme={theme} hiddenElementIds={editingElementId ? [editingElementId] : []} />
 
         {/* P3.2: visual grid overlay — shown only when snapping is on.
@@ -222,7 +222,7 @@ export function SlideCanvas({
                   left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`,
                   zIndex: el.z_index + 100,
                   opacity: isHidden ? 0.3 : 1,
-                   outline: isHidden ? "2px dashed #a8b5c1" : isEditing ? "2px solid #35c98b" : isActive ? "2px solid #38bdf8" : isGroupedSelected ? "2px dashed #a78bfa" : "2px solid transparent",
+                   outline: isHidden ? "2px dashed #a8b3c0" : isEditing ? "2px solid #35c98b" : isActive ? "2px solid #f7b500" : isGroupedSelected ? "2px dashed #ffc72c" : "2px solid transparent",
                   outlineOffset: "1px",
                 }}
                 onClick={e => onElementClick(el.id, e)}

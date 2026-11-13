@@ -74,7 +74,7 @@ export function StudioSlideCard({
           {onAddToSchedule && (
             <button
               onClick={(e) => { e.stopPropagation(); onAddToSchedule(); }}
-              className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-tool-design/20 text-tool-design transition-colors hover:bg-tool-design hover:text-white"
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-tool-design/20 text-tool-design transition-colors hover:bg-tool-design hover:text-console-canvas"
               title="Add slide to service plan"
               aria-label="Add slide to service plan"
             >

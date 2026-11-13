@@ -176,7 +176,7 @@ const customSlideKind: ItemKind<Extract<DisplayItem, { type: "CustomSlide" }>> =
       .join("\n");
   },
   ScheduleTile: ({ item }) => (
-    <p className="text-purple-400 text-[10px] font-bold uppercase truncate">
+    <p className="text-action-primary text-[10px] font-bold uppercase truncate">
       STUDIO: {item.data.presentation_name} — Slide {item.data.slide_index + 1}
     </p>
   ),

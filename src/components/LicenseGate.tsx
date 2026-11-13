@@ -12,6 +12,7 @@ import {
   WifiOff,
 } from "lucide-react";
 import { useAppStore } from "../store";
+import { BrandLockup } from "./brand/Brand";
 import type { LicenseInfo, LicenseStatus } from "../types/license";
 
 const STATUS_META: Record<LicenseStatus, { title: string; icon: React.ReactNode; accent: string }> = {
@@ -108,23 +109,21 @@ export function LicenseGate() {
   const needsActivationInput = status === "unactivated";
 
   return (
-    <div className="h-screen bg-slate-950 text-slate-200 flex items-center justify-center select-none">
+    <div className="flex h-screen select-none items-center justify-center bg-console-canvas text-console-text">
       <div className="w-full max-w-md px-6">
         {/* Brand */}
-        <div className="flex flex-col items-center gap-3 mb-8">
-          <div className="w-12 h-12 bg-amber-500 rounded-xl flex items-center justify-center text-black font-black text-lg">
-            WL
-          </div>
-          <p className="text-xs font-black uppercase tracking-[0.25em] text-slate-500">Wordlyte</p>
+        <div className="mb-8 flex flex-col items-center gap-3">
+          <BrandLockup className="h-11 w-auto" />
+          <p className="text-[9px] font-black uppercase tracking-[0.25em] text-console-text-subtle">Church Production Suite</p>
         </div>
 
         <div className={`rounded-xl border ${meta.accent} p-5`}>
           <div className="flex items-center gap-3 mb-1">
             {meta.icon}
-            <h1 className="text-base font-black text-slate-100">{meta.title}</h1>
+            <h1 className="text-base font-black text-console-text">{meta.title}</h1>
           </div>
 
-          <p className="text-xs text-slate-400 leading-relaxed mt-1">
+          <p className="mt-1 text-xs leading-relaxed text-console-text-muted">
               {license?.message ||
                "Ask your Wordlyte organization owner for a device activation code for this computer."}
             </p>
@@ -132,9 +131,9 @@ export function LicenseGate() {
            {needsActivationInput && (
             <div className="mt-4 flex flex-col gap-2">
               {license?.offline && (
-                <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
-                  <WifiOff size={12} className="text-amber-400 shrink-0 mt-0.5" />
-                  <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                <div className="flex items-start gap-2 rounded-lg border border-action-primary/30 bg-action-primary/10 px-3 py-2">
+                  <WifiOff size={12} className="mt-0.5 shrink-0 text-action-primary" />
+                  <p className="text-[11px] leading-relaxed text-action-primary">
                     This computer is offline and cannot reach the license server.
                      Activating this computer requires an internet connection. Check the
                     connection (or the license server), then retry.
@@ -148,22 +147,22 @@ export function LicenseGate() {
                 onKeyDown={(e) => { if (e.key === "Enter") activate(); }}
                 placeholder="WACT-XXXXXXXXXXXXXXXXXXXX"
                 spellCheck={false}
-                className="w-full bg-slate-900 text-slate-100 text-sm rounded-lg px-3 py-2.5 border border-slate-700 focus:border-amber-500 focus:outline-none focus-visible:outline-2 focus-visible:outline-amber-500/50 uppercase tracking-wider"
+                className="w-full rounded-lg border border-console-border bg-console-surface-raised px-3 py-2.5 text-sm uppercase tracking-wider text-console-text focus:border-action-primary focus:outline-none focus-visible:outline-2 focus-visible:outline-action-primary/50"
               />
               <button
                 onClick={activate}
                 disabled={busy || !activationCode.trim()}
-                className="mt-1 w-full py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-black text-xs font-black uppercase tracking-widest transition-all"
+                className="mt-1 w-full rounded-lg bg-action-primary py-2.5 text-xs font-black uppercase tracking-widest text-black transition-all hover:bg-action-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {busy ? "Activating…" : "Activate this computer"}
               </button>
-              <p className="text-[11px] text-slate-500 text-center">
+              <p className="text-center text-[11px] text-console-text-subtle">
                 Need a code? Ask the owner of your Wordlyte organization to create one for this computer.
               </p>
               <button
                 type="button"
                 onClick={openDashboard}
-                className="text-[11px] font-bold text-amber-400 hover:text-amber-300 underline underline-offset-2 transition-colors"
+                className="text-[11px] font-bold text-action-primary underline underline-offset-2 transition-colors hover:text-action-primary-hover"
               >
                 New to Wordlyte? Sign up in the Dashboard
               </button>
@@ -173,7 +172,7 @@ export function LicenseGate() {
            {!needsActivationInput && (
             <div className="mt-4 flex flex-col gap-2">
               {status === "clock_tampered" && (
-                <p className="text-[11px] text-slate-500">
+                <p className="text-[11px] text-console-text-subtle">
                   Set the correct date and time on this computer, then refresh the license.
                 </p>
               )}
@@ -181,7 +180,7 @@ export function LicenseGate() {
                 <button
                   onClick={refresh}
                   disabled={busy}
-                  className="flex-1 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-black text-xs font-black uppercase tracking-widest transition-all"
+                  className="flex-1 rounded-lg bg-action-primary py-2.5 text-xs font-black uppercase tracking-widest text-black transition-all hover:bg-action-primary-hover disabled:opacity-40"
                 >
                   <span className="inline-flex items-center justify-center gap-1.5">
                     <RefreshCcw size={12} /> Retry / Refresh
@@ -190,7 +189,7 @@ export function LicenseGate() {
                 <button
                   onClick={switchKey}
                   disabled={busy}
-                  className="flex-1 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 text-xs font-black uppercase tracking-widest border border-slate-700 transition-all"
+                  className="flex-1 rounded-lg border border-console-border bg-console-surface-strong py-2.5 text-xs font-black uppercase tracking-widest text-console-text-muted transition-all hover:bg-console-surface-raised disabled:opacity-40"
                 >
                     Use a different account
                 </button>
@@ -199,18 +198,18 @@ export function LicenseGate() {
           )}
 
           {error && (
-            <p className="mt-3 text-[11px] text-red-400 leading-relaxed">{error}</p>
+            <p className="mt-3 text-[11px] leading-relaxed text-state-error">{error}</p>
           )}
         </div>
 
         {/* Status footer */}
         <div className="mt-5 flex flex-col items-center gap-1.5">
           {license?.offline ? (
-            <span className="inline-flex items-center gap-1.5 text-[11px] text-amber-400/90">
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-action-primary/90">
               <WifiOff size={12} /> Offline — could not reach the license server
             </span>
           ) : (
-            <span className="inline-flex items-center gap-1.5 text-[11px] text-slate-500">
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-console-text-subtle">
               <Wifi size={12} /> Online license checks enabled
             </span>
           )}
@@ -220,7 +219,7 @@ export function LicenseGate() {
               {license.plan_expires_at ? ` · ${license.tier} plan until ${new Date(license.plan_expires_at * 1000).toLocaleDateString()}` : " · Activated"}
             </span>
           )}
-          <span className="text-[10px] text-slate-600 font-mono">
+          <span className="font-mono text-[10px] text-console-text-subtle">
             {license?.machine_id_hash ? `machine ${license.machine_id_hash.slice(0, 12)}…` : ""}
           </span>
         </div>
@@ -238,17 +237,17 @@ export function OfflineLicenseBanner() {
     : null;
 
   return (
-    <div className="bg-sky-950/90 border-b border-sky-700 px-4 py-2 flex items-center gap-2 text-xs text-sky-200">
-      <ShieldCheck size={14} className="text-sky-400 shrink-0" />
+    <div className="flex items-center gap-2 border-b border-action-primary/30 bg-action-primary/10 px-4 py-2 text-xs text-console-text">
+      <ShieldCheck size={14} className="shrink-0 text-action-primary" />
       <div className="flex-1">
-        <span className="font-bold text-sky-300">Offline license mode: </span>
+        <span className="font-bold text-action-primary">Offline license mode: </span>
         {daysLeft === null
           ? "Wordlyte could not reach the license server and is running on its offline grace period."
           : `Wordlyte could not reach the license server. Reconnect the internet within ${daysLeft} day${daysLeft === 1 ? "" : "s"} to keep it active.`}
       </div>
       <button
         onClick={() => invoke<LicenseInfo>("license_refresh").then(setLicense).catch(() => {})}
-        className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-md bg-sky-800 hover:bg-sky-700 text-sky-100 font-bold uppercase tracking-wide transition-colors"
+        className="inline-flex shrink-0 items-center gap-1 rounded-md bg-action-primary px-2 py-1 font-bold uppercase tracking-wide text-black transition-colors hover:bg-action-primary-hover"
       >
         <RefreshCcw size={11} /> Check now
       </button>

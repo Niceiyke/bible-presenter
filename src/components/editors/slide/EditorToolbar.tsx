@@ -112,9 +112,9 @@ export function EditorToolbar({
       {/* ── No selection: Insert tools ── */}
       {selectedCount === 0 && <>
         <span className="mr-1 rounded-lg bg-console-canvas px-2 py-1 text-[8px] font-black uppercase tracking-[0.18em] text-console-text-subtle shrink-0">Add</span>
-        <Btn onClick={onAddText} icon={<Type size={14} />} className="bg-tool-design/10 text-tool-design border-tool-design/25 hover:bg-tool-design hover:text-white">Text</Btn>
-        <Btn onClick={onOpenImgPicker} icon={<ImageIcon size={14} />} className="bg-fuchsia-500/10 text-fuchsia-300 border-fuchsia-400/20 hover:bg-fuchsia-500 hover:text-white">Image</Btn>
-        <Btn onClick={onOpenVideoPicker} icon={<Video size={14} />} className="bg-teal-500/10 text-teal-300 border-teal-400/20 hover:bg-teal-500 hover:text-white">Video</Btn>
+        <Btn onClick={onAddText} icon={<Type size={14} />} className="bg-tool-design/10 text-tool-design border-tool-design/25 hover:bg-tool-design hover:text-console-canvas">Text</Btn>
+        <Btn onClick={onOpenImgPicker} icon={<ImageIcon size={14} />} className="bg-action-primary/10 text-action-primary border-action-primary/20 hover:bg-action-primary hover:text-black">Image</Btn>
+        <Btn onClick={onOpenVideoPicker} icon={<Video size={14} />} className="border-console-border bg-console-surface-raised text-console-text-muted hover:bg-console-surface-strong hover:text-console-text">Video</Btn>
         <EditorMenu
           label="Insert shape"
           trigger={<><Square size={14} /> Shape</>}
@@ -242,7 +242,7 @@ export function EditorToolbar({
         <EditorMenu<SmartLayout>
           label="Smart layout"
           trigger={<><WandSparkles size={14} /> Layout</>}
-          triggerClassName="text-fuchsia-300 border-fuchsia-400/30 bg-fuchsia-500/10 hover:bg-fuchsia-500 hover:text-white"
+          triggerClassName="text-action-primary border-action-primary/30 bg-action-primary/10 hover:bg-action-primary hover:text-black"
           items={[
             { value: "balanced", label: "Balanced" },
             { value: "hero", label: "Full-bleed hero" },
@@ -254,7 +254,7 @@ export function EditorToolbar({
         />
       )}
       <Btn onClick={onOpenBrandKit} icon={<Palette size={14} />} className="text-orange-300 border-orange-400/25 bg-orange-500/10 hover:bg-orange-500 hover:text-white">Brand</Btn>
-      <Btn onClick={onToggleOutline} icon={<ListTree size={14} />} className={outlineOpen ? "text-white border-tool-design bg-tool-design" : "text-tool-design border-tool-design/25 bg-tool-design/10 hover:bg-tool-design hover:text-white"}>Outline</Btn>
+      <Btn onClick={onToggleOutline} icon={<ListTree size={14} />} className={outlineOpen ? "text-console-canvas border-tool-design bg-tool-design" : "text-tool-design border-tool-design/25 bg-tool-design/10 hover:bg-tool-design hover:text-console-canvas"}>Outline</Btn>
       <Btn onClick={onTogglePreflight} icon={<ShieldCheck size={14} />} className={preflightOpen ? "text-black border-state-warning bg-state-warning" : "text-state-warning border-state-warning/25 bg-state-warning/10 hover:bg-state-warning hover:text-black"}>Check</Btn>
       <Btn onClick={onOpenRehearsal} icon={<Presentation size={14} />} className="text-state-success border-state-success/25 bg-state-success/10 hover:bg-state-success hover:text-slate-950">Rehearse</Btn>
 

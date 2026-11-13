@@ -78,7 +78,7 @@ export function AiScriptureSessions({ active }: { active: boolean }) {
     <section className="rounded-lg border border-console-border bg-console-surface-raised/30">
       <div className="px-3 py-2 border-b border-console-border flex items-center justify-between gap-3">
         <div>
-          <h3 className="text-[10px] font-black uppercase tracking-widest text-console-text-muted flex items-center gap-1.5"><History size={11} className="text-violet-400" /> Saved sessions</h3>
+          <h3 className="text-[10px] font-black uppercase tracking-widest text-console-text-muted flex items-center gap-1.5"><History size={11} className="text-action-primary" /> Saved sessions</h3>
           <p className="mt-0.5 text-[9px] text-console-text-subtle">When local transcript retention is enabled, final transcripts and Scripture suggestions are stored locally and included in Wordlyte backups.</p>
         </div>
         <button type="button" onClick={() => void refresh()} disabled={loading} className="text-[10px] text-console-text-subtle hover:text-console-text flex items-center gap-1 disabled:opacity-50"><RefreshCw size={10} className={loading ? "animate-spin" : ""} /> Refresh</button>
@@ -90,7 +90,7 @@ export function AiScriptureSessions({ active }: { active: boolean }) {
         <div className="grid grid-cols-1 xl:grid-cols-[minmax(280px,0.8fr)_minmax(0,1.2fr)] min-h-48 max-h-[360px]">
           <div className="overflow-y-auto custom-scrollbar border-b xl:border-b-0 xl:border-r border-console-border">
             {sessions.slice(0, 50).map((session) => (
-              <article key={session.id} className={`p-3 border-b border-console-border/70 ${selected?.id === session.id ? "bg-violet-500/10" : "hover:bg-console-surface-raised/50"}`}>
+              <article key={session.id} className={`p-3 border-b border-console-border/70 ${selected?.id === session.id ? "bg-action-primary/10" : "hover:bg-console-surface-raised/50"}`}>
                 <button type="button" onClick={() => void openSession(session.id)} className="w-full text-left">
                   <div className="flex items-center justify-between gap-2">
                     <strong className="text-[11px] text-console-text">{sessionDate(session.startedAt)}</strong>

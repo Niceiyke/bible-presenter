@@ -23,7 +23,7 @@ export interface ThemePreset {
 }
 
 export const THEME_PRESETS: ThemePreset[] = [
-  { id: "midnight", name: "Midnight", textColor: "#f4f7fa", accentColor: "#f4b740", defaultFontFamily: "Arial", defaultFontSize: 32, background: "#0b0f14" },
+  { id: "midnight", name: "Midnight", textColor: "#f5f5f7", accentColor: "#f7b500", defaultFontFamily: "Inter", defaultFontSize: 32, background: "#0b1117" },
   { id: "ivory", name: "Ivory", textColor: "#1a1a2e", accentColor: "#b45309", defaultFontFamily: "Georgia", defaultFontSize: 32, background: "#faf6ee" },
   { id: "royal", name: "Royal", textColor: "#ffffff", accentColor: "#a78bfa", defaultFontFamily: "Georgia", defaultFontSize: 34, background: "#1e1b4b" },
   { id: "forest", name: "Forest", textColor: "#f0fdf4", accentColor: "#67d4c0", defaultFontFamily: "Arial", defaultFontSize: 30, background: "#0f2419" },
@@ -42,7 +42,7 @@ export function ThemePicker({ theme, onApplyPreset }: ThemePickerProps) {
   return (
     <div className="grid grid-cols-2 gap-2">
       {THEME_PRESETS.map(p => {
-        const isActive = (theme?.accentColor ?? "#f4b740") === p.accentColor && (theme?.textColor ?? "#f4f7fa") === p.textColor;
+        const isActive = (theme?.accentColor ?? "#f7b500") === p.accentColor && (theme?.textColor ?? "#f5f5f7") === p.textColor;
         return (
           <button
             key={p.id}

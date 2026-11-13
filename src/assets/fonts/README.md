@@ -5,6 +5,7 @@ silently fall back to the system default.
 
 | Family | Source |
 | --- | --- |
+| Inter | Google Fonts / Fontsource |
 | Montserrat | Google Fonts |
 | Oswald | Google Fonts |
 | Playfair Display | Google Fonts |

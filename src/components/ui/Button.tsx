@@ -3,10 +3,10 @@ import { Loader2 } from "lucide-react";
 import { cn } from "./cn";
 
 export type ButtonVariant =
-  | "primary"    // Main operator action (amber)
+  | "primary"    // Main action (amber)
   | "live"       // On-air / destructive (red)
   | "live-outline" // Direct-to-air action that bypasses preview (hot outline)
-  | "stage"      // Prepared / up-next (cyan)
+  | "stage"      // Prepared / up-next (amber)
   | "stage-outline" // Prepared/up-next secondary action
   | "success"    // Saved / connected (green)
   | "warning"    // Attention

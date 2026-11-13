@@ -159,7 +159,7 @@ function CardActions({
 
 function DeckPlaceholder({ name }: { name: string }) {
   return (
-    <div className="relative flex h-full w-full items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_20%_20%,rgba(167,139,250,0.24),transparent_40%),linear-gradient(145deg,#192432,#0b0f14)] px-5 text-center">
+    <div className="relative flex h-full w-full items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_20%_20%,rgba(247,181,0,0.22),transparent_40%),linear-gradient(145deg,#1a2430,#0b1117)] px-5 text-center">
       <div className="absolute -right-8 -top-8 h-24 w-24 rounded-full border border-tool-design/15" />
       <div className="absolute -bottom-10 -left-7 h-28 w-28 rounded-full border border-action-primary/10" />
       <p className="line-clamp-2 text-sm font-black tracking-tight text-white/85">{name}</p>

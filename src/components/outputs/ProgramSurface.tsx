@@ -536,7 +536,7 @@ function ProjectionErrorFallback() {
         <span className="text-red-400 text-3xl font-black">!</span>
       </div>
       <p className="text-red-300 text-2xl font-bold mb-1">Projection Error</p>
-      <p className="text-slate-400 text-sm">See operator console. Output will recover on the next slide.</p>
+      <p className="text-slate-400 text-sm">See the Wordlyte console. Output will recover on the next slide.</p>
     </div>
   );
 }

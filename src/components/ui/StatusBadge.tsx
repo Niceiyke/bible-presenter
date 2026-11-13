@@ -15,9 +15,9 @@ const TONES: Record<StatusTone, { dot: string; text: string; bg: string; border:
   neutral: { dot: "bg-console-text-subtle", text: "text-console-text-subtle", bg: "bg-console-surface-raised", border: "border-console-border" },
   live: { dot: "bg-state-live", text: "text-state-live", bg: "bg-state-live-soft", border: "border-state-live/40" },
   stage: { dot: "bg-state-stage", text: "text-state-stage", bg: "bg-state-stage-soft", border: "border-state-stage/40" },
-  success: { dot: "bg-state-success", text: "text-state-success", bg: "bg-state-stage-soft", border: "border-state-success/40" },
-  warning: { dot: "bg-state-warning", text: "text-state-warning", bg: "bg-state-live-soft", border: "border-state-warning/40" },
-  error: { dot: "bg-state-error", text: "text-state-error", bg: "bg-state-live-soft", border: "border-state-error/40" },
+  success: { dot: "bg-state-success", text: "text-state-success", bg: "bg-state-success/10", border: "border-state-success/40" },
+  warning: { dot: "bg-state-warning", text: "text-state-warning", bg: "bg-state-warning/10", border: "border-state-warning/40" },
+  error: { dot: "bg-state-error", text: "text-state-error", bg: "bg-state-error/10", border: "border-state-error/40" },
   design: { dot: "bg-tool-design", text: "text-tool-design", bg: "bg-tool-design/10", border: "border-tool-design/40" },
   audio: { dot: "bg-tool-audio", text: "text-tool-audio", bg: "bg-tool-audio/10", border: "border-tool-audio/40" },
 };

@@ -1,36 +1,93 @@
 @import "./bundled-fonts.css";
 @import "tailwindcss";
 
-/* ---- Operator console semantic tokens (Phase 2) -----------------------------
-   Mapped from docs/UI_UX_MODERNIZATION_PLAN.md §4. Kept entirely separate from
-   the audience output themes in `src/types/settings.ts` (THEMES). Do not apply
-   these tokens to projected content; projection uses persisted theme colors. */
+/* ---- Wordlyte console semantic tokens --------------------------------------
+   Derived from the Wordlyte brand system (Revision 01). Kept separate from the
+   audience output themes in `src/types/settings.ts` (THEMES). Do not apply these
+   tokens to projected content; projection uses persisted theme colors. */
 @theme {
-  --color-console-canvas: #0b0f14;
-  --color-console-surface: #111820;
-  --color-console-surface-raised: #17212b;
-  --color-console-surface-strong: #1d2a36;
-  --color-console-border: #2a3947;
-  --color-console-border-strong: #3a4d5d;
-  --color-console-text: #f4f7fa;
-  --color-console-text-muted: #a8b5c1;
-  --color-console-text-subtle: #7d8d9d;
+  /* Brand system — dark operator surface. Exact values from the Wordlyte
+     brand board (Revision 01). New UI should use these semantic tokens. */
+  --color-console-canvas: #0b1117;
+  --color-console-surface: #141b24;
+  --color-console-surface-raised: #1a2430;
+  --color-console-surface-strong: #22303d;
+  --color-console-border: #2b3947;
+  --color-console-border-strong: #3c4c5b;
+  --color-console-text: #f5f5f7;
+  --color-console-text-muted: #a8b3c0;
+  --color-console-text-subtle: #7f8c99;
 
-  --color-action-primary: #f4b740;
-  --color-action-primary-hover: #ffd166;
+  /* Amber is the only action accent. Burgundy is decor/background only;
+     live red is reserved for live/on-air states. */
+  --color-action-primary: #f7b500;
+  --color-action-primary-hover: #ffc72c;
 
-  --color-state-live: #f04455;
-  --color-state-live-soft: #3a1820;
-  --color-state-stage: #38bdf8;
-  --color-state-stage-soft: #102c3b;
+  --color-state-live: #e11d2e;
+  --color-state-live-soft: #3a1017;
+  --color-state-stage: #f7b500;
+  --color-state-stage-soft: #2a2108;
   --color-state-success: #35c98b;
-  --color-state-warning: #f4b740;
-  --color-state-error: #ff6b78;
+  --color-state-warning: #f7b500;
+  --color-state-error: #ff7a85;
 
-  --color-tool-design: #a78bfa;
-  --color-tool-audio: #67d4c0;
+  --color-tool-design: #f7b500;
+  --color-tool-audio: #f7b500;
 
-  --color-focus-ring: #7dd3fc;
+  --color-focus-ring: #f5f5f7;
+
+  /* Inter is the UI/display family; Lora remains the editorial/Scripture
+     family. Both are bundled locally so the app stays offline-safe. */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-serif: "Lora", Georgia, serif;
+
+  /* Legacy utility classes still used in older panels. Mapping the cool
+     slate and amber/red ramps here keeps those surfaces on-brand while they
+     are migrated to semantic tokens. */
+  --color-slate-950: #0b1117;
+  --color-slate-900: #141b24;
+  --color-slate-800: #1a2430;
+  --color-slate-700: #2b3947;
+  --color-slate-600: #3c4c5b;
+  --color-slate-500: #6f7d8b;
+  --color-slate-400: #a8b3c0;
+  --color-slate-300: #c9d2dc;
+  --color-slate-200: #dde4eb;
+  --color-slate-100: #f5f5f7;
+
+  --color-amber-300: #ffd65c;
+  --color-amber-400: #ffc72c;
+  --color-amber-500: #f7b500;
+  --color-amber-600: #d99e00;
+
+  --color-red-300: #ffa0a8;
+  --color-red-400: #ff7a85;
+  --color-red-500: #e11d2e;
+  --color-red-600: #c1121f;
+  --color-red-900: #5b0f17;
+  --color-red-950: #3a1016;
+
+  /* Retire legacy cyan/teal utility accents in favor of amber. These classes
+     are still present in older panels and the paired remote control. */
+  --color-cyan-950: #2a2108;
+  --color-cyan-900: #3a2a05;
+  --color-cyan-800: #5a4100;
+  --color-cyan-700: #8a5a00;
+  --color-cyan-600: #d99e00;
+  --color-cyan-500: #f7b500;
+  --color-cyan-400: #ffc72c;
+  --color-cyan-300: #ffd65c;
+  --color-cyan-200: #ffe39a;
+  --color-teal-900: #3a2a05;
+  --color-teal-400: #ffc72c;
+  --color-teal-300: #ffd65c;
+}
+
+@layer base {
+  body {
+    font-family: var(--font-sans);
+  }
 }
 
 html, body, #root {
@@ -219,10 +276,10 @@ select option {
    Scoped to the authoring workspace so these creative-tool controls never
    affect audience output windows or the rest of the operator console. */
 .presentation-editor {
-  --editor-control: #17212b;
-  --editor-control-hover: #1d2a36;
-  --editor-accent: #a78bfa;
-  --editor-accent-2: #38bdf8;
+  --editor-control: #1a2430;
+  --editor-control-hover: #22303d;
+  --editor-accent: #f7b500;
+  --editor-accent-2: #ffc72c;
 }
 
 .presentation-editor input[type="text"],
@@ -265,7 +322,7 @@ select option {
   width: 15px;
   height: 15px;
   border-radius: 999px;
-  border: 2px solid #f4f7fa;
+  border: 2px solid #f5f5f7;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
 }
 
@@ -284,11 +341,11 @@ select option {
 }
 
 .presentation-editor .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(167, 139, 250, 0.45), rgba(56, 189, 248, 0.35));
+  background: linear-gradient(180deg, rgba(247, 181, 0, 0.45), rgba(255, 199, 44, 0.3));
 }
 
 /* The editable text box already has the element-level green editing boundary.
-   Suppress the generic app focus ring on ProseMirror itself so a second cyan
+   Suppress the generic app focus ring on ProseMirror itself so a second focus
    rectangle does not cut through the slide while typing. */
 .presentation-editor .ProseMirror:focus,
 .presentation-editor .ProseMirror:focus-visible,

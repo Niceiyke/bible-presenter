@@ -79,7 +79,7 @@ export function StudioPanel({ client, pushToast }: PanelProps) {
       ) : presentations.length === 0 ? (
         <Card className="text-center py-6">
           <p className="text-xs text-slate-400 font-semibold">No presentations yet</p>
-          <p className="text-[10px] text-slate-500 mt-1">Create one in the operator's Studio tab.</p>
+          <p className="text-[10px] text-slate-500 mt-1">Create one in the Wordlyte Studio tab.</p>
         </Card>
       ) : (
         presentations.map((p) => {
