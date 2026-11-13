@@ -403,15 +403,35 @@ versions_to_build = (
 unknown_versions = [version for version in versions_to_build if version not in SEMANTIC_INDEX_VERSIONS]
 assert not unknown_versions, f"unsupported semantic versions: {unknown_versions}"
 
+def validated_cached_index(version):
+    """Returns an index path only when its header matches the current corpus."""
+    corpus = semantic_corpus(version)
+    target = os.path.join(CACHE, f"{INDEX_FILE_BASE}-{version}.index")
+    header = read_index_header(target)
+    if (
+        header
+        and header[0] == corpus_fingerprint(corpus)
+        and header[2] == len(semantic_documents(corpus))
+    ):
+        return target
+    return None
+
+
 built = {}
 failures = {}
 for version in versions_to_build:
     try:
         path = build_version(version)
     except Exception as error:
-        # A long Colab run must not throw away indexes that already finished.
-        # Report the failed version, continue with the rest, and let a rerun
-        # retry it from the cache.
+        # A long Colab run must not throw away an index that was written and
+        # verified before a post-write check failed. Recover it if its header
+        # still matches the corpus; otherwise report it and continue.
+        recovered = validated_cached_index(version)
+        if recovered:
+            print(f"{version}: {error}")
+            print(f"{version}: using the valid cached index written before the check failed.")
+            built[version] = recovered
+            continue
         failures[version] = str(error)
         print(f"{version}: FAILED - {error}")
         continue
