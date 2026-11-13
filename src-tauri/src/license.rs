@@ -939,6 +939,43 @@ impl LicenseManager {
         Ok(access)
     }
 
+    /// Reads the platform-selected transcription provider from the managed AI
+    /// Gateway. The desktop never exposes this as an operator choice.
+    pub async fn ai_asr_provider(&self) -> Result<String, String> {
+        let access = self.ai_access().await?;
+        let url = format!(
+            "{}/v1/asr/config",
+            ai_gateway_url().trim_end_matches('/')
+        );
+        let response = self
+            .client
+            .get(url)
+            .bearer_auth(access.token)
+            .send()
+            .await
+            .map_err(|error| format!("Could not load managed transcription settings: {error}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            return Err(format!(
+                "Managed transcription settings are unavailable ({status})."
+            ));
+        }
+        let value: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|error| format!("Managed transcription settings were invalid: {error}"))?;
+        let provider = value
+            .get("provider")
+            .and_then(|provider| provider.as_str())
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        if provider.is_empty() {
+            return Err("Managed transcription settings did not name a provider.".to_owned());
+        }
+        Ok(provider)
+    }
+
     /// POST a JSON payload to a License Worker endpoint that accepts the
     /// short-lived AI token. Used for Dashboard transcript sync.
     pub async fn post_ai_authenticated(

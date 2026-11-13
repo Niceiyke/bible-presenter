@@ -290,7 +290,10 @@ describe("AiScriptureProvider automatic staging", () => {
 
     await emitSuggestion(suggestion(0.5, "operator-one-result"));
 
-    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("ai_stop"));
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith(
+      "ai_stop",
+      expect.objectContaining({ performance: expect.any(Object) }),
+    ));
   });
 
   it("does not stop Operator mode for a possible paraphrase theme", async () => {
@@ -317,6 +320,9 @@ describe("AiScriptureProvider automatic staging", () => {
       await Promise.resolve();
     });
 
-    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("ai_stop"));
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith(
+      "ai_stop",
+      expect.objectContaining({ performance: expect.any(Object) }),
+    ));
   });
 });

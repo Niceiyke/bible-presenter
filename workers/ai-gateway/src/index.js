@@ -254,6 +254,11 @@ async function llmResponses(request, env) {
   });
 }
 
+function asrProvider(env) {
+  const configured = String(env.ASR_PROVIDER || "deepgram").trim().toLowerCase();
+  return configured === "assemblyai" ? "assemblyai" : "deepgram";
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -268,18 +273,34 @@ export default {
         return json({ error: "The AI Gateway encountered an unexpected error." }, 500);
       }
     }
-    const asrMatch = url.pathname.match(/^\/v1\/asr\/(deepgram|assemblyai)$/);
+    if (url.pathname === "/v1/asr/config" && request.method === "GET") {
+      const claims = await verifyAiToken(env, bearer(request));
+      if (!claims) return json({ error: "A valid Wordlyte AI access token is required." }, 401);
+      return json({ status: "ok", provider: asrProvider(env) });
+    }
+    // Provider selection belongs to the platform admin, not the desktop. The
+    // unprefixed route is what clients use; legacy provider routes stay during
+    // the transition for older installed versions.
+    const asrMatch = url.pathname.match(/^\/v1\/asr(?:\/(deepgram|assemblyai))?$/);
     if (asrMatch && request.headers.get("Upgrade") === "websocket") {
       const claims = await verifyAiToken(env, bearer(request));
       if (!claims) return json({ error: "A valid Wordlyte AI access token is required." }, 401);
       if (!env.TRANSCRIPTION_SESSION) {
         return json({ error: "Managed transcription is not configured." }, 503);
       }
+      const provider = asrMatch[1] || asrProvider(env);
+      if (provider === "deepgram" && !env.DEEPGRAM_API_KEY) {
+        return json({ error: "Managed transcription is temporarily unavailable." }, 503);
+      }
+      if (provider === "assemblyai" && !env.ASSEMBLYAI_API_KEY) {
+        return json({ error: "Managed transcription is temporarily unavailable." }, 503);
+      }
       const id = env.TRANSCRIPTION_SESSION.idFromName(`${claims.org}:${crypto.randomUUID()}`);
       const stub = env.TRANSCRIPTION_SESSION.get(id);
       const headers = new Headers(request.headers);
       headers.set("x-wordlyte-org", claims.org);
       headers.set("x-wordlyte-addon-expires", String(claims.addon_expires_at || 0));
+      headers.set("x-wordlyte-provider", provider);
       return stub.fetch(new Request(request, { headers }));
     }
     return json({ error: "Not found" }, 404);

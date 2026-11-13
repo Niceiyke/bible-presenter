@@ -2,11 +2,10 @@ import React, { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Database, Mic, RotateCcw, ShieldCheck } from "lucide-react";
-import { useAiScripture, type AiProvider } from "../../../hooks/useAiScripture";
+import { useAiScripture } from "../../../hooks/useAiScripture";
 import { useProgramAudio } from "../../../hooks/useProgramAudio";
 import { useAppStore } from "../../../store";
 import type { PresentationSettings } from "../../../types";
-import { AiScripturePerformancePanel } from "./AiScripturePerformancePanel";
 
 interface ManagedAiStatus {
   available: boolean;
@@ -38,11 +37,6 @@ const INITIAL_STATUS: SemanticStatus = {
   verified: false,
 };
 
-const PROVIDERS: Array<{ value: AiProvider; label: string }> = [
-  { value: "deepgram", label: "Deepgram" },
-  { value: "assemblyai", label: "AssemblyAI" },
-];
-
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 MB";
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -52,16 +46,11 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
   const ai = useAiScripture();
   const programAudio = useProgramAudio();
   const settings = useAppStore((state) => state.settings);
-  const [selectedProvider, setSelectedProvider] = useState<AiProvider>(ai.provider);
   const [managedStatus, setManagedStatus] = useState<ManagedAiStatus | null>(null);
   const [managedLoading, setManagedLoading] = useState(true);
   const [semanticStatus, setSemanticStatus] = useState<SemanticStatus>(INITIAL_STATUS);
   const [removingModel, setRemovingModel] = useState(false);
   const active = ["connecting", "running", "listening"].includes(ai.status.state);
-
-  useEffect(() => {
-    setSelectedProvider(ai.provider);
-  }, [ai.provider]);
 
   useEffect(() => {
     void programAudio.refreshDevices();
@@ -158,31 +147,9 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
             {managedStatus?.available ? "Ready" : managedStatus?.addonActive ? "Needs Units" : "Add-on required"}
           </span>
         </div>
-        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Transcription service">
-          {PROVIDERS.map((item) => {
-            const selected = selectedProvider === item.value;
-            return (
-              <button
-                key={item.value}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                onClick={() => {
-                  if (selected) return;
-                  setSelectedProvider(item.value);
-                  ai.setProvider(item.value);
-                }}
-                className={`px-3 py-2 rounded-md border text-left text-xs font-bold transition-colors ${
-                  selected
-                    ? "border-action-primary bg-action-primary/15 text-action-primary"
-                    : "border-console-border bg-console-surface text-console-text-muted hover:border-console-text-subtle hover:text-console-text"
-                }`}
-              >
-                {item.label}
-                <span className="block mt-0.5 text-[9px] font-normal opacity-70">{selected ? "Selected for the next session" : "Use this service"}</span>
-              </button>
-            );
-          })}
+        <div className="rounded-md border border-console-border bg-console-surface p-2.5">
+          <p className="text-[11px] font-bold text-console-text">Managed transcription</p>
+          <p className="mt-0.5 text-[10px] leading-relaxed text-console-text-subtle">Wordlyte selects and manages the transcription service for your organization. There is nothing to configure on this computer.</p>
         </div>
         <div className="grid grid-cols-2 gap-2">
           <div className="rounded-md border border-console-border bg-console-surface p-2.5">
@@ -283,8 +250,6 @@ export function AiScriptureSection({ onUpdateSettings }: { onUpdateSettings: (se
         </div>
         <p className="text-[10px] text-state-stage">Auto Live uses the same normal output path as Send Live. Turning off the master switch immediately restores Stage-only behavior; category choices are retained for the next time it is enabled.</p>
       </section>
-
-      <AiScripturePerformancePanel />
 
       <section className="rounded-lg border border-console-border bg-console-surface-raised/40 p-3 flex flex-col gap-3">
         <div className="flex items-center justify-between gap-3">

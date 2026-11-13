@@ -8,14 +8,20 @@ Worker and the Gateway enforces AI Add-on and AI Unit access.
 
 - `POST /v1/llm/responses` — OpenAI Responses proxy with a model allowlist,
   AI Unit reservation, settlement on success, and release on failure.
-- `GET /v1/asr/deepgram` and `GET /v1/asr/assemblyai` — managed WebSocket
-  transcription relays. A Durable Object owns one client/provider socket pair,
+- `GET /v1/asr` — provider-neutral managed WebSocket transcription relay. The
+  gateway selects the upstream provider from `ASR_PROVIDER`; desktop clients
+  never choose it. A Durable Object owns one client/provider socket pair,
   reserves one Unit per minute, settles fractional Units on close, and cuts the
   stream when Units run out.
+- `GET /v1/asr/config` — authenticated client bootstrap that returns the
+  platform-selected provider needed by the wire adapter.
+- Legacy `GET /v1/asr/deepgram` and `GET /v1/asr/assemblyai` routes remain
+  during the installed-version transition.
 - `GET /health` — health check.
 
-The desktop provider adapters keep their existing frame decoders; only the
-upstream URL and authentication changed.
+`ASR_PROVIDER` is a Worker var set by the platform admin (`deepgram` or
+`assemblyai`). It is not a desktop setting and is never sent to church users as
+a choice.
 
 ## Required secrets
 

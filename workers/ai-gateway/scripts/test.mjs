@@ -121,15 +121,39 @@ async function main() {
     assert.equal(calls.length, 0);
   });
 
-  const wsRequest = new Request("https://ai.test/v1/asr/deepgram", {
+  response = await worker.fetch(new Request("https://ai.test/v1/asr/config", {
+    headers: { Authorization: `Bearer ${token()}` },
+  }), env());
+  await check("admin-selected ASR provider is returned to the client", async () => {
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).provider, "deepgram");
+  });
+
+  response = await worker.fetch(new Request("https://ai.test/v1/asr/config", {
+    headers: { Authorization: `Bearer ${token()}` },
+  }), env({ ASR_PROVIDER: "assemblyai" }));
+  await check("ASR provider changes from gateway configuration", async () => {
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).provider, "assemblyai");
+  });
+
+  const wsRequest = new Request("https://ai.test/v1/asr", {
     headers: { Upgrade: "websocket", Authorization: `Bearer ${token()}` },
   });
   response = await worker.fetch(wsRequest, env());
-  await check("ASR route requires the Durable Object binding", async () => {
+  await check("provider-neutral ASR route requires the Durable Object binding", async () => {
     assert.equal(response.status, 503);
   });
 
-  const unauthenticatedWs = new Request("https://ai.test/v1/asr/deepgram", {
+  const legacyWsRequest = new Request("https://ai.test/v1/asr/deepgram", {
+    headers: { Upgrade: "websocket", Authorization: `Bearer ${token()}` },
+  });
+  response = await worker.fetch(legacyWsRequest, env());
+  await check("legacy ASR route requires the Durable Object binding", async () => {
+    assert.equal(response.status, 503);
+  });
+
+  const unauthenticatedWs = new Request("https://ai.test/v1/asr", {
     headers: { Upgrade: "websocket" },
   });
   response = await worker.fetch(unauthenticatedWs, env());

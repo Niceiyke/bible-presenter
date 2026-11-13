@@ -182,14 +182,22 @@ try {
       transcript_text: "For God so loved the world.",
       transcript: [{ id: "turn-1", text: "For God so loved the world.", is_final: true, confidence: 0.98, timestamp: 1 }],
       suggestions: [],
+      performance: { suggestions: 4, finalTranscriptSegments: 1, detectionToOperatorMs: { p50Ms: 12 } },
     },
   });
   check("AI-token transcript sync is accepted", response.status === 200 && response.data.status === "ok");
   response = await call(`/admin/organizations/${freeOrganization.id}/transcripts`, { token: ADMIN_TOKEN });
-  check("admins can list synced transcripts", response.status === 200 && response.data.transcripts?.length === 1);
+  check("admins can list synced transcripts", response.status === 200
+    && response.data.transcripts?.length === 1
+    && response.data.transcripts[0]?.performance?.suggestions === 4);
   response = await call(`/admin/organizations/${freeOrganization.id}/transcripts/session-test-1`, { token: ADMIN_TOKEN });
   check("admins can read finalized transcript text", response.status === 200
-    && response.data.transcript?.transcript_text === "For God so loved the world.");
+    && response.data.transcript?.transcript_text === "For God so loved the world."
+    && response.data.transcript?.performance?.suggestions === 4);
+  response = await call("/admin/insights", { token: ADMIN_TOKEN });
+  check("platform admin can read cross-organization AI insights", response.status === 200
+    && response.data.organizations?.some((entry) => entry.organization?.id === freeOrganization.id
+      && entry.transcripts?.[0]?.performance?.suggestions === 4));
   response = await call(`/admin/organizations/${freeOrganization.id}/transcripts/session-test-1`, {
     method: "DELETE", token: ADMIN_TOKEN,
   });

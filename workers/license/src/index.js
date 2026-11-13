@@ -214,6 +214,31 @@ export default {
       return json({ status: "ok", organizations: await listOrganizations(env) });
     }
 
+    // Platform-admin cross-church view. Each organization remains isolated in
+    // its own Durable Object; this endpoint only fans out the read.
+    if (url.pathname === "/admin/insights" && request.method === "GET") {
+      if (!(await isAdmin(request, env))) return unauthorized();
+      const organizations = await listOrganizations(env);
+      const insights = await Promise.all(organizations.map(async (organization) => {
+        try {
+          const stub = env.ORGANIZATION_REGISTRY.get(env.ORGANIZATION_REGISTRY.idFromName(organization.id));
+          const response = await stub.fetch("https://registry/admin/transcripts/list", {
+            method: "POST",
+            body: JSON.stringify({ organization_id: organization.id }),
+          });
+          const data = await response.json().catch(() => null);
+          return {
+            organization,
+            transcripts: Array.isArray(data?.transcripts) ? data.transcripts : [],
+          };
+        } catch (error) {
+          console.error("Admin insights read failed", organization.id, error);
+          return { organization, transcripts: [], error: "Insights unavailable." };
+        }
+      }));
+      return json({ status: "ok", organizations: insights });
+    }
+
     const organizationMatch = url.pathname.match(/^\/admin\/organizations\/(org_[a-f0-9]+)$/);
     if (organizationMatch && request.method === "GET") {
       if (!(await isAdmin(request, env))) return unauthorized();
@@ -288,10 +313,15 @@ export class OrganizationRegistry {
         transcript_text TEXT NOT NULL,
         transcript_json TEXT NOT NULL,
         suggestions_json TEXT NOT NULL,
-        stop_reason TEXT
+        stop_reason TEXT,
+        performance_json TEXT NOT NULL DEFAULT '{}'
       );
       CREATE INDEX IF NOT EXISTS transcripts_started_idx ON transcripts(started_at DESC);
     `);
+    const columns = this.sql.exec("PRAGMA table_info(transcripts)").toArray();
+    if (!columns.some((column) => column.name === "performance_json")) {
+      this.sql.exec("ALTER TABLE transcripts ADD COLUMN performance_json TEXT NOT NULL DEFAULT '{}'");
+    }
   }
 
   async fetch(request) {
@@ -692,15 +722,17 @@ export class OrganizationRegistry {
     const createdAt = epoch();
     const startedAt = nonNegativeInt(body.started_at) || createdAt;
     const endedAt = body.ended_at ? nonNegativeInt(body.ended_at) : null;
+    const performance = body.performance && typeof body.performance === "object" ? body.performance : {};
     this.sql.exec(
-      `INSERT INTO transcripts (id, created_at, started_at, ended_at, provider, mode, version, transcript_text, transcript_json, suggestions_json, stop_reason)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO transcripts (id, created_at, started_at, ended_at, provider, mode, version, transcript_text, transcript_json, suggestions_json, stop_reason, performance_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          ended_at = excluded.ended_at,
          transcript_text = excluded.transcript_text,
          transcript_json = excluded.transcript_json,
          suggestions_json = excluded.suggestions_json,
-         stop_reason = excluded.stop_reason`,
+         stop_reason = excluded.stop_reason,
+         performance_json = excluded.performance_json`,
       id,
       createdAt,
       startedAt,
@@ -712,6 +744,7 @@ export class OrganizationRegistry {
       JSON.stringify(transcript),
       JSON.stringify(suggestions),
       body.stop_reason ? String(body.stop_reason).slice(0, 500) : null,
+      JSON.stringify(performance),
     );
     return json({ status: "ok", session_id: id });
   }
@@ -720,12 +753,19 @@ export class OrganizationRegistry {
     const transcripts = this.sql.exec(
       `SELECT id, created_at, started_at, ended_at, provider, mode, version,
               substr(transcript_text, 1, 240) AS preview,
-              length(transcript_text) AS transcript_chars
+              length(transcript_text) AS transcript_chars,
+              performance_json
          FROM transcripts
         ORDER BY started_at DESC
         LIMIT 100`,
     ).toArray();
-    return json({ status: "ok", transcripts });
+    return json({
+      status: "ok",
+      transcripts: transcripts.map(({ performance_json, ...transcript }) => ({
+        ...transcript,
+        performance: JSON.parse(performance_json || "{}"),
+      })),
+    });
   }
 
   async getTranscript(body) {
@@ -746,6 +786,7 @@ export class OrganizationRegistry {
         transcript_text: row.transcript_text,
         transcript: JSON.parse(row.transcript_json || "[]"),
         suggestions: JSON.parse(row.suggestions_json || "[]"),
+        performance: JSON.parse(row.performance_json || "{}"),
         stop_reason: row.stop_reason,
       },
     });

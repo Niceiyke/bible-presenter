@@ -132,8 +132,6 @@ export function shouldAutoLiveSuggestion(
 
 interface AiScriptureContextValue {
   status: AiRuntimeStatus;
-  provider: AiProvider;
-  setProvider: (provider: AiProvider) => void;
   mode: AiListeningMode;
   setMode: (mode: AiListeningMode) => void;
   transcript: TranscriptSegment[];
@@ -181,9 +179,7 @@ export function AiScriptureProvider({
   onSendLiveVerse?: (verse: Verse) => Promise<boolean>;
 }) {
   const [status, setStatus] = useState<AiRuntimeStatus>(STOPPED);
-  const [provider, setProviderState] = useState<AiProvider>(() => (
-    localStorage.getItem("pref_aiProvider") === "assemblyai" ? "assemblyai" : "deepgram"
-  ));
+
   const [mode, setModeState] = useState<AiListeningMode>(() => (
     localStorage.getItem("pref_aiListeningMode") === "operator" ? "operator" : "service"
   ));
@@ -265,11 +261,6 @@ export function AiScriptureProvider({
     setPerformance(snapshotPerformance(metricsRef.current));
   }, []);
 
-  const setProvider = useCallback((next: AiProvider) => {
-    setProviderState(next);
-    localStorage.setItem("pref_aiProvider", next);
-  }, []);
-
   const setMode = useCallback((next: AiListeningMode) => {
     setModeState(next);
     modeRef.current = next;
@@ -277,7 +268,9 @@ export function AiScriptureProvider({
   }, []);
 
   const stop = useCallback(async () => {
-    await invoke("ai_stop");
+    await invoke("ai_stop", {
+      performance: snapshotPerformance(metricsRef.current),
+    });
     setStatus(STOPPED);
     setInterim(null);
     setAudioLevel(0);
@@ -470,12 +463,10 @@ export function AiScriptureProvider({
     const currentMetrics = metricsRef.current;
     if (
       currentMetrics.sessionStartedAt == null
-      || currentMetrics.provider !== provider
       || currentMetrics.mode !== modeRef.current
     ) {
       metricsRef.current = createPerformanceAccumulator();
       metricsRef.current.sessionStartedAt = Date.now();
-      metricsRef.current.provider = provider;
       metricsRef.current.mode = modeRef.current;
     }
     observedSuggestionsRef.current.clear();
@@ -486,13 +477,12 @@ export function AiScriptureProvider({
     const next = await invoke<AiRuntimeStatus>("ai_start", {
       audioDevice,
       version,
-      provider,
       mode: modeRef.current,
     });
     setStatus(next);
     setSessionStartedAt(next.startedAt ?? Date.now());
     setSessionEndedAt(null);
-  }, [provider]);
+  }, []);
 
   const clearSession = useCallback(() => {
     setTranscript([]);
@@ -504,8 +494,8 @@ export function AiScriptureProvider({
   }, []);
 
   const value = useMemo<AiScriptureContextValue>(
-    () => ({ status, provider, setProvider, mode, setMode, transcript, interim, suggestions, sessionStartedAt, sessionEndedAt, audioLevel, lastCommand, performance, clearPerformance, recordManualStage, start, stop, clearSession }),
-    [status, provider, setProvider, mode, setMode, transcript, interim, suggestions, sessionStartedAt, sessionEndedAt, audioLevel, lastCommand, performance, clearPerformance, recordManualStage, start, stop, clearSession],
+    () => ({ status, mode, setMode, transcript, interim, suggestions, sessionStartedAt, sessionEndedAt, audioLevel, lastCommand, performance, clearPerformance, recordManualStage, start, stop, clearSession }),
+    [status, mode, setMode, transcript, interim, suggestions, sessionStartedAt, sessionEndedAt, audioLevel, lastCommand, performance, clearPerformance, recordManualStage, start, stop, clearSession],
   );
 
   return <AiScriptureContext.Provider value={value}>{children}</AiScriptureContext.Provider>;

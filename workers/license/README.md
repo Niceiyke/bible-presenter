@@ -123,7 +123,15 @@ and delete synced sessions with:
 GET    /admin/organizations/:id/transcripts
 GET    /admin/organizations/:id/transcripts/:sessionId
 DELETE /admin/organizations/:id/transcripts/:sessionId
+GET    /admin/insights
 ```
+
+`/admin/insights` is the platform-admin cross-church view. It returns each
+organization with its synced session summaries and local AI Scripture timing
+metrics. It requires `ADMIN_TOKEN`; church-level roles are not allowed to call
+it. Session sync also carries the performance snapshot (counts and latency
+only), so admins can evaluate detection quality without reconstructing it from
+the transcript.
 
 ## Signed entitlement protocol
 

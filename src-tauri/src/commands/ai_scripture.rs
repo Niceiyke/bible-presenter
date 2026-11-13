@@ -155,6 +155,10 @@ pub struct AiScriptureSavedSession {
     pub transcript: Vec<TranscriptSegment>,
     pub suggestions: Vec<ScriptureSuggestion>,
     pub stop_reason: Option<String>,
+    /// End-of-session timing and detection counters used by the platform
+    /// admin dashboard. Contains no transcript or evidence text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub performance: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -252,6 +256,7 @@ impl AiSessionRecorder {
                 transcript: Vec::new(),
                 suggestions: Vec::new(),
                 stop_reason: None,
+                performance: None,
             }),
         });
         recorder.persist()?;
@@ -307,6 +312,14 @@ impl AiSessionRecorder {
         self.persist()
     }
 
+    fn record_performance(&self, performance: serde_json::Value) -> Result<(), String> {
+        self.session
+            .lock()
+            .map_err(|error| error.to_string())?
+            .performance = Some(performance);
+        self.persist()
+    }
+
     fn update_version(&self, version: &str) -> Result<(), String> {
         self.session
             .lock()
@@ -347,6 +360,7 @@ async fn sync_session_to_dashboard(
         "suggestions": session.suggestions,
         "transcript_text": saved_session_transcript(session),
         "stop_reason": session.stop_reason,
+        "performance": session.performance,
     });
     license
         .post_ai_authenticated("/transcripts/sync", &body)
@@ -1422,13 +1436,14 @@ fn emit_status(
 pub async fn ai_start(
     app: AppHandle,
     state: State<'_, AppState>,
-    provider: String,
     audio_device: String,
     version: String,
     mode: String,
 ) -> Result<AiRuntimeStatus, String> {
     crate::license::ensure_core_activated(&state)?;
-    let provider = AsrProvider::parse(&provider)?;
+    // The platform admin selects the transcription provider in the gateway.
+    // Operators never choose or see the upstream service.
+    let provider = AsrProvider::parse(&state.license.ai_asr_provider().await?)?;
     // Managed transcription replaces the beta BYOK path. Remove any legacy
     // provider credentials so they can never be used again after this update.
     for legacy in ["deepgram-api-key.dpapi", "assemblyai-api-key.dpapi"] {
@@ -1628,17 +1643,20 @@ pub async fn ai_start(
 }
 
 #[tauri::command]
-pub async fn ai_stop() -> Result<(), String> {
+pub async fn ai_stop(performance: Option<serde_json::Value>) -> Result<(), String> {
     let session = {
         let guard = runtime().lock().map_err(|e| e.to_string())?;
         guard
             .session
             .as_ref()
-            .map(|session| (session.id.clone(), session.stop.clone()))
+            .map(|session| (session.id.clone(), session.stop.clone(), session.recorder.clone()))
     };
-    let Some((session_id, stop)) = session else {
+    let Some((session_id, stop, recorder)) = session else {
         return Ok(());
     };
+    if let Some(performance) = performance {
+        recorder.record_performance(performance)?;
+    }
     let _ = stop.send(true);
 
     // Wait for the provider's final turn and recorder flush before allowing a
@@ -1871,17 +1889,15 @@ fn websocket_base_url(base: &str) -> String {
 
 async fn connect_provider_socket(
     adapter: &dyn providers::StreamingTranscriptionAdapter,
-    provider: AsrProvider,
+    _provider: AsrProvider,
     access_token: &str,
     stop: &mut watch::Receiver<bool>,
     timeout: Duration,
 ) -> Result<Option<AsrWebSocket>, String> {
     let gateway_ws_base = websocket_base_url(&crate::license::ai_gateway_url());
-    let gateway_url = format!(
-        "{}/v1/asr/{}",
-        gateway_ws_base.trim_end_matches('/'),
-        provider.as_str()
-    );
+    // Provider-neutral route. The gateway selects the upstream service from
+    // platform-admin configuration; `provider` is only the local wire adapter.
+    let gateway_url = format!("{}/v1/asr", gateway_ws_base.trim_end_matches('/'));
     let mut request = gateway_url.into_client_request().map_err(|error| {
         format!(
             "Could not start the transcription connection: {error}"
@@ -3620,6 +3636,7 @@ mod tests {
                 citation_conflict: None,
             }],
             stop_reason: None,
+            performance: None,
         };
 
         assert_eq!(

@@ -85,9 +85,11 @@ export class TranscriptionSession {
       return Response.json({ error: "Expected a WebSocket upgrade." }, { status: 426 });
     }
     const url = new URL(request.url);
-    const provider = url.pathname.split("/").filter(Boolean).pop();
+    const provider =
+      request.headers.get("x-wordlyte-provider") ||
+      url.pathname.split("/").filter(Boolean).pop();
     if (provider !== "deepgram" && provider !== "assemblyai") {
-      return Response.json({ error: "Unsupported transcription provider." }, { status: 404 });
+      return Response.json({ error: "Managed transcription is not configured." }, { status: 404 });
     }
     const organizationId = request.headers.get("x-wordlyte-org");
     if (!organizationId) return Response.json({ error: "Missing AI organization." }, { status: 401 });
