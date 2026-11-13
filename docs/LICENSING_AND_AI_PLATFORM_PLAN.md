@@ -288,9 +288,17 @@ The desktop app and Dashboard call a Wordlyte AI Gateway. The Gateway:
 - checks and atomically deducts AI Units;
 - creates metered transcription sessions;
 - proxies or controls provider sessions so it can end ASR exactly at zero Units;
+- selects the transcription provider from platform-admin configuration, never
+  from a desktop setting;
 - reserves and settles LLM requests;
 - keeps provider API credentials server-side; and
 - records metering/audit events without retaining microphone audio.
+
+Platform-admin AI Scripture insights are cross-organization and protected by the
+platform `ADMIN_TOKEN`; church-level roles cannot access another organization's
+sessions. During the current beta, finalized transcripts, suggestions, and local
+detection timing are synced by default for product-quality evaluation, with the
+organization able to opt out of transcript sync.
 
 The existing Deepgram, AssemblyAI, and OpenAI API-key setup in the desktop app
 is beta-only and must be removed before commercial managed-AI release.
