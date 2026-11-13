@@ -1,7 +1,8 @@
 use crate::ai_detection::{
-    detect_references_with_aliases, direct_quote_match_score, normalized_transcript_tokens,
+    detect_references_with_aliases, direct_quote_match_score_tokens, normalized_transcript_tokens,
     parse_number, quote_content_word_count, quote_tokens, quote_tokens_from_normalized,
     reference_aliases_for_books, ScriptureReference, MIN_DIRECT_QUOTE_WORDS,
+    MIN_LOOSE_QUOTE_CONTENT_WORDS, MIN_QUOTE_CONTENT_WORDS,
 };
 use crate::commands::program_audio::{feed_diagnostics, subscribe_pcm_feed, AudioRelay};
 use crate::semantic_scripture::{self, SemanticScripture};
@@ -3143,7 +3144,15 @@ fn verses_for_reference(
 /// Quote candidates are probabilistic, unlike a complete explicit reference.
 /// This worker runs only on finalized turns; interim revisions are handled by
 /// the deterministic reference path.
-type QuoteMatches = HashMap<(String, i32, i32), (Verse, f32, String, usize)>;
+struct QuoteMatch {
+    verse: Verse,
+    score: f32,
+    rank_score: f32,
+    evidence: String,
+    rare_word_count: usize,
+}
+
+type QuoteMatches = HashMap<(String, i32, i32), QuoteMatch>;
 
 fn detect_direct_quotes(
     index: &QuoteSearchIndex,
@@ -3154,9 +3163,24 @@ fn detect_direct_quotes(
     attribution_cue: bool,
     asr_confidence: f32,
 ) -> Vec<ScriptureSuggestion> {
+    // An explicit citation or an attribution cue may carry a very short exact
+    // quotation. Loose quotation cards need three meaningful words so common
+    // phrases do not become Scripture cards.
+    let minimum_content_words = if references.is_empty() && !attribution_cue {
+        MIN_LOOSE_QUOTE_CONTENT_WORDS
+    } else {
+        MIN_QUOTE_CONTENT_WORDS
+    };
+
     let mut matches: QuoteMatches = HashMap::new();
     for window in quote_search_windows(evidence) {
-        consider_quote_window(index, cache, &mut matches, &window);
+        consider_quote_window(
+            index,
+            cache,
+            &mut matches,
+            &window,
+            minimum_content_words,
+        );
     }
 
     // Recover a quotation split across an ASR turn boundary with one bounded
@@ -3166,19 +3190,30 @@ fn detect_direct_quotes(
     if matches.is_empty() && rolling_text != evidence {
         let tail = latest_word_suffix(rolling_text, QUOTE_CROSS_TURN_WORDS);
         for window in quote_search_windows(&tail) {
-            consider_quote_window(index, cache, &mut matches, &window);
+            consider_quote_window(
+                index,
+                cache,
+                &mut matches,
+                &window,
+                minimum_content_words,
+            );
         }
     }
 
     let mut matches = matches.into_values().collect::<Vec<_>>();
-    matches.sort_by(|(_, left, _, _), (_, right, _, _)| right.total_cmp(left));
+    matches.sort_by(|left, right| {
+        right
+            .rank_score
+            .total_cmp(&left.rank_score)
+            .then_with(|| right.score.total_cmp(&left.score))
+    });
     matches
         .into_iter()
         .take(MAX_DIRECT_QUOTES_PER_TURN)
-        .map(|(verse, score, matched_evidence, rare_word_count)| {
+        .map(|matched| {
             let matching_reference = references
                 .iter()
-                .find(|reference| reference_covers_verse(reference, &verse));
+                .find(|reference| reference_covers_verse(reference, &matched.verse));
             let anchored = matching_reference.is_some()
                 || (attribution_cue && references.is_empty());
             let citation_conflict = if matching_reference.is_some() {
@@ -3191,21 +3226,23 @@ fn detect_direct_quotes(
                     )
                 })
             };
-            let confidence =
-                quote_confidence(score, asr_confidence, quote_tokens(&matched_evidence).len()).min(
-                    if anchored {
-                        0.98
-                    } else {
-                        MAX_LOOSE_QUOTE_CONFIDENCE
-                    },
-                );
+            let confidence = quote_confidence(
+                matched.score,
+                asr_confidence,
+                quote_tokens(&matched.evidence).len(),
+            )
+            .min(if anchored {
+                0.98
+            } else {
+                MAX_LOOSE_QUOTE_CONFIDENCE
+            });
             ScriptureSuggestion {
                 id: Uuid::new_v4().to_string(),
                 detection: "quote".into(),
                 evidence_types: Vec::new(),
                 confidence,
-                evidence: matched_evidence,
-                verse,
+                evidence: matched.evidence,
+                verse: matched.verse,
                 timestamp: now_ms(),
                 source_transcript_timestamp: None,
                 group_id: None,
@@ -3216,7 +3253,7 @@ fn detect_direct_quotes(
                 margin: None,
                 quote_support: Some(if anchored { "anchored" } else { "loose" }.into()),
                 matching_version: Some(index.version().to_string()),
-                rare_word_count: Some(rare_word_count),
+                rare_word_count: Some(matched.rare_word_count),
                 citation_conflict,
             }
         })
@@ -3228,12 +3265,13 @@ fn consider_quote_window(
     cache: &mut QuoteSearchCache,
     matches: &mut QuoteMatches,
     window: &str,
+    minimum_content_words: usize,
 ) {
-    let hit = match cache.get(index.version(), window) {
+    let hit = match cache.get(index.version(), window, minimum_content_words) {
         Some(cached) => cached,
         None => {
-            let hit = best_indexed_quote_candidate(index, window);
-            cache.insert(index.version(), window, hit);
+            let hit = best_indexed_quote_candidate(index, window, minimum_content_words);
+            cache.insert(index.version(), window, minimum_content_words, hit);
             hit
         }
     };
@@ -3246,16 +3284,17 @@ fn consider_quote_window(
     let key = (verse.book.clone(), verse.chapter, verse.verse);
     let replace = matches
         .get(&key)
-        .is_none_or(|(_, current_score, _, _)| hit.score > *current_score);
+        .is_none_or(|current| hit.rank_score > current.rank_score);
     if replace {
         matches.insert(
             key,
-            (
-                verse.clone(),
-                hit.score,
-                quote_evidence_excerpt(window, &verse.text),
-                hit.rare_terms,
-            ),
+            QuoteMatch {
+                verse: verse.clone(),
+                score: hit.score,
+                rank_score: hit.rank_score,
+                evidence: quote_evidence_excerpt(window, &verse.text),
+                rare_word_count: hit.rare_terms,
+            },
         );
     }
 }
@@ -3291,8 +3330,13 @@ fn quote_evidence_excerpt(window: &str, verse_text: &str) -> String {
     spoken[start..end].join(" ")
 }
 
-fn best_indexed_quote_candidate(index: &QuoteSearchIndex, window: &str) -> Option<QuoteHit> {
-    if quote_tokens(window).len() < MIN_DIRECT_QUOTE_WORDS {
+fn best_indexed_quote_candidate(
+    index: &QuoteSearchIndex,
+    window: &str,
+    minimum_content_words: usize,
+) -> Option<QuoteHit> {
+    let spoken_tokens = quote_tokens(window);
+    if spoken_tokens.len() < MIN_DIRECT_QUOTE_WORDS {
         return None;
     }
     let mut best: Option<QuoteHit> = None;
@@ -3300,17 +3344,37 @@ fn best_indexed_quote_candidate(index: &QuoteSearchIndex, window: &str) -> Optio
         let Some(verse) = index.verse(candidate.verse_index) else {
             continue;
         };
-        let Some(score) = direct_quote_match_score(window, &verse.text) else {
+        let verse_tokens = quote_tokens(&verse.text);
+        let Some((score, content_ordered)) = direct_quote_match_score_tokens(
+            &spoken_tokens,
+            &verse_tokens,
+            minimum_content_words,
+        ) else {
             continue;
         };
+        // Confidence stays anchored to the calibrated full-token score. IDF and
+        // content ordering only choose between otherwise plausible candidates.
+        let rank_score =
+            (score * 0.92 + content_ordered * 0.05 + candidate.idf_coverage * 0.03).clamp(0.0, 1.0);
         let hit = QuoteHit {
             verse_index: candidate.verse_index,
             score,
+            content_ordered,
+            rank_score,
             rare_terms: candidate.rare_terms,
+            idf_coverage: candidate.idf_coverage,
         };
         let replace = best.is_none_or(|current| {
-            score > current.score
-                || (score == current.score && candidate.rare_terms > current.rare_terms)
+            rank_score > current.rank_score
+                || (rank_score == current.rank_score
+                    && content_ordered > current.content_ordered)
+                || (rank_score == current.rank_score
+                    && content_ordered == current.content_ordered
+                    && candidate.idf_coverage > current.idf_coverage)
+                || (rank_score == current.rank_score
+                    && content_ordered == current.content_ordered
+                    && candidate.idf_coverage == current.idf_coverage
+                    && candidate.rare_terms > current.rare_terms)
         });
         if replace {
             best = Some(hit);
@@ -3424,6 +3488,7 @@ fn quote_confidence(score: f32, asr_confidence: f32, evidence_words: usize) -> f
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai_detection::direct_quote_match_score;
 
     #[test]
     fn managed_transcription_converts_the_http_gateway_base_to_websocket() {
@@ -3882,6 +3947,55 @@ mod tests {
     }
 
     #[test]
+    fn loose_quote_requires_three_content_words_but_anchored_quote_allows_two() {
+        let index = QuoteSearchIndex::build(
+            "KJV".into(),
+            vec![Verse {
+                book: "Psalms".into(),
+                chapter: 24,
+                verse: 1,
+                text: "The earth is the LORD's, and the fullness thereof.".into(),
+                version: "KJV".into(),
+                split_index: None,
+                total_splits: None,
+                score: None,
+            }],
+        );
+        let evidence = "truly the earth is the Lord";
+
+        let mut loose_cache = QuoteSearchCache::default();
+        let loose = detect_direct_quotes(
+            &index,
+            &mut loose_cache,
+            evidence,
+            evidence,
+            &[],
+            false,
+            1.0,
+        );
+        assert!(loose.is_empty());
+
+        let mut anchored_cache = QuoteSearchCache::default();
+        let reference = ScriptureReference {
+            book: "Psalms".into(),
+            chapter: 24,
+            verse: 1,
+            verse_end: None,
+        };
+        let anchored = detect_direct_quotes(
+            &index,
+            &mut anchored_cache,
+            evidence,
+            evidence,
+            &[reference],
+            false,
+            1.0,
+        );
+        assert_eq!(anchored.len(), 1);
+        assert_eq!(anchored[0].verse.book, "Psalms");
+    }
+
+    #[test]
     fn latest_word_suffix_is_bounded_to_the_latest_words() {
         assert_eq!(
             latest_word_suffix("one two three four five", 3),
@@ -3918,7 +4032,7 @@ mod tests {
         assert!(
             windows
                 .iter()
-                .any(|window| window.contains("shall not want he makes")),
+                .any(|window| window.contains("shall not want he make")),
             "a quotation crossing a sentence boundary must stay inside one window"
         );
     }
@@ -3948,7 +4062,8 @@ mod tests {
             "the spirit of god come in a revival season to move you away from",
         ] {
             assert!(
-                best_indexed_quote_candidate(&index, phrase).is_none(),
+                best_indexed_quote_candidate(&index, phrase, MIN_LOOSE_QUOTE_CONTENT_WORDS)
+                    .is_none(),
                 "common phrase should not produce a quote candidate: {phrase}"
             );
         }
@@ -3974,8 +4089,9 @@ mod tests {
                 10,
             ),
         ] {
-            let hit = best_indexed_quote_candidate(&index, phrase)
-                .unwrap_or_else(|| panic!("expected a quote candidate for: {phrase}"));
+            let hit =
+                best_indexed_quote_candidate(&index, phrase, MIN_LOOSE_QUOTE_CONTENT_WORDS)
+                    .unwrap_or_else(|| panic!("expected a quote candidate for: {phrase}"));
             let matched = index.verse(hit.verse_index).expect("candidate verse");
             assert_eq!(
                 (matched.book.as_str(), matched.chapter, matched.verse),

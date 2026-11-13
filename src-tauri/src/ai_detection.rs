@@ -5,7 +5,9 @@ pub(crate) const MIN_DIRECT_QUOTE_WORDS: usize = 5;
 const EMBEDDED_QUOTE_WINDOW_WORDS: usize = 8;
 const EMBEDDED_QUOTE_ANCHOR_WORDS: usize = 4;
 const REPEATED_PHRASE_WORDS: usize = 4;
-const MIN_QUOTE_CONTENT_WORDS: usize = 2;
+pub(crate) const MIN_QUOTE_CONTENT_WORDS: usize = 2;
+#[allow(dead_code)] // also compiled into the standalone evaluator
+pub(crate) const MIN_LOOSE_QUOTE_CONTENT_WORDS: usize = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptureReference {
@@ -489,27 +491,139 @@ pub(crate) fn quote_tokens(text: &str) -> Vec<String> {
     quote_tokens_from_normalized(&tokenize(text))
 }
 
-pub(crate) fn quote_tokens_from_normalized(tokens: &[String]) -> Vec<String> {
-    tokens
-        .iter()
-        .filter(|word| word.as_str() != ":" && word.as_str() != "-")
-        // ASR commonly drops possessive endings ("the Lord" for "the
-        // Lord's"). Ignore only the possessive suffix so short, otherwise
-        // exact quotations can still align without broadly stemming words.
-        .map(|word| {
-            let word = word.replace('’', "'");
-            word.strip_suffix("'s")
-                // Some legacy Bible rows contain U+FFFD where an apostrophe
-                // was decoded incorrectly (for example, "LORD�s").
-                .or_else(|| word.strip_suffix("�s"))
-                .unwrap_or(&word)
-                .to_string()
-        })
-        .collect()
+fn contraction_parts(word: &str) -> Option<&'static [&'static str]> {
+    Some(match word {
+        "don't" | "dont" => &["do", "not"],
+        "doesn't" | "doesnt" => &["does", "not"],
+        "didn't" | "didnt" => &["did", "not"],
+        "isn't" | "isnt" => &["is", "not"],
+        "aren't" | "arent" => &["are", "not"],
+        "wasn't" | "wasnt" => &["was", "not"],
+        "weren't" | "werent" => &["were", "not"],
+        "haven't" | "havent" => &["have", "not"],
+        "hasn't" | "hasnt" => &["has", "not"],
+        "hadn't" | "hadnt" => &["had", "not"],
+        "won't" | "wont" => &["will", "not"],
+        "wouldn't" | "wouldnt" => &["would", "not"],
+        "can't" | "cant" => &["cannot"],
+        "couldn't" | "couldnt" => &["could", "not"],
+        "shouldn't" | "shouldnt" => &["should", "not"],
+        "mustn't" | "mustnt" => &["must", "not"],
+        "shan't" | "shant" => &["shall", "not"],
+        "ain't" | "aint" => &["is", "not"],
+        "i'm" => &["i", "am"],
+        "i've" => &["i", "have"],
+        "i'll" => &["i", "will"],
+        "i'd" => &["i", "would"],
+        "you're" | "youre" => &["you", "are"],
+        "you've" | "youve" => &["you", "have"],
+        "you'll" | "youll" => &["you", "will"],
+        "we're" => &["we", "are"],
+        "we've" | "weve" => &["we", "have"],
+        "we'll" => &["we", "will"],
+        "they're" | "theyre" => &["they", "are"],
+        "they've" | "theyve" => &["they", "have"],
+        "they'll" | "theyll" => &["they", "will"],
+        "he's" => &["he", "is"],
+        "she's" => &["she", "is"],
+        "it's" => &["it", "is"],
+        "that's" | "thats" => &["that", "is"],
+        "there's" | "theres" => &["there", "is"],
+        "what's" | "whats" => &["what", "is"],
+        "who's" | "whos" => &["who", "is"],
+        "where's" | "wheres" => &["where", "is"],
+        "how's" | "hows" => &["how", "is"],
+        "let's" | "lets" => &["let", "us"],
+        _ => return None,
+    })
 }
 
-pub(crate) fn has_repeated_phrase(text: &str) -> bool {
-    let tokens = quote_tokens(text);
+fn archaic_variant(word: &str) -> &str {
+    match word {
+        "hath" => "has",
+        "doth" => "does",
+        "saith" => "says",
+        "shalt" => "shall",
+        "art" => "are",
+        "thy" | "thine" => "your",
+        "thee" | "thou" => "you",
+        "unto" => "to",
+        "shew" => "show",
+        "shewed" => "showed",
+        "shewn" => "shown",
+        "brethren" => "brothers",
+        "whosoever" => "whoever",
+        "whatsoever" => "whatever",
+        "wheresoever" => "wherever",
+        "verily" => "truly",
+        "thyself" => "yourself",
+        "goeth" => "goes",
+        _ => word,
+    }
+}
+
+/// Conservative singular/plural fold for quote alignment only. It is applied to
+/// both the spoken words and the verse text, so even an imperfect fold remains
+/// symmetric and cannot favor one side.
+fn stem_plural(word: &str) -> String {
+    let length = word.len();
+    if length < 4
+        || word.ends_with("ss")
+        || word.ends_with("us")
+        || word.ends_with("is")
+        || matches!(word, "verse" | "verses" | "chapter" | "chapters")
+    {
+        return word.to_string();
+    }
+    if word.ends_with("sses") {
+        return word[..length - 2].to_string();
+    }
+    if word.ends_with("ies") {
+        return format!("{}y", &word[..length - 3]);
+    }
+    if word.ends_with("ches")
+        || word.ends_with("shes")
+        || word.ends_with("xes")
+    {
+        return word[..length - 2].to_string();
+    }
+    if word.ends_with('s') {
+        return word[..length - 1].to_string();
+    }
+    word.to_string()
+}
+
+pub(crate) fn quote_tokens_from_normalized(tokens: &[String]) -> Vec<String> {
+    let mut normalized = Vec::with_capacity(tokens.len());
+    for token in tokens {
+        if token.as_str() == ":" || token.as_str() == "-" {
+            continue;
+        }
+        let word = token.replace('’', "'");
+        if let Some(parts) = contraction_parts(&word) {
+            normalized.extend(parts.iter().map(|part| (*part).to_string()));
+            continue;
+        }
+        // ASR commonly drops possessive endings ("the Lord" for "the Lord's").
+        // Strip only the possessive suffix so short, otherwise exact quotations
+        // can still align.
+        let word = word
+            .strip_suffix("'s")
+            // Some legacy Bible rows contain U+FFFD where an apostrophe was
+            // decoded incorrectly (for example, "LORD�s").
+            .or_else(|| word.strip_suffix("�s"))
+            .unwrap_or(&word);
+        let word = archaic_variant(word);
+        if is_quote_content_word(word) {
+            normalized.push(stem_plural(word));
+        } else {
+            normalized.push(word.to_string());
+        }
+    }
+    normalized
+}
+
+fn has_repeated_token_phrase(tokens: &[String]) -> bool {
     if tokens.len() < REPEATED_PHRASE_WORDS * 2 {
         return false;
     }
@@ -517,6 +631,11 @@ pub(crate) fn has_repeated_phrase(text: &str) -> bool {
     tokens
         .windows(REPEATED_PHRASE_WORDS)
         .any(|phrase| !seen.insert(phrase.join(" ")))
+}
+
+#[allow(dead_code)] // also compiled into the standalone evaluator
+pub(crate) fn has_repeated_phrase(text: &str) -> bool {
+    has_repeated_token_phrase(&quote_tokens(text))
 }
 
 fn lcs_len(left: &[String], right: &[String]) -> usize {
@@ -724,9 +843,13 @@ fn token_quote_score(spoken: &[String], verse: &[String]) -> f32 {
     base * if starts_verse { 1.0 } else { 0.98 }
 }
 
-fn quote_alignment_is_strong(spoken: &[String], verse: &[String]) -> bool {
+fn quote_alignment_is_strong(
+    spoken: &[String],
+    verse: &[String],
+    minimum_content_words: usize,
+) -> bool {
     let content = content_overlap(spoken, verse);
-    if content < MIN_QUOTE_CONTENT_WORDS {
+    if content < minimum_content_words {
         return false;
     }
 
@@ -739,7 +862,7 @@ fn quote_alignment_is_strong(spoken: &[String], verse: &[String]) -> bool {
     // possessive punctuation (for example, "the earth is the Lord").
     let nearly_exact_short = spoken.len() <= 8
         && contiguous >= spoken.len().saturating_sub(1)
-        && content >= MIN_QUOTE_CONTENT_WORDS;
+        && content >= minimum_content_words;
 
     // Longer quotations need an unmistakable phrase anchor. This prevents
     // common words from making unrelated commentary look like a quotation.
@@ -776,43 +899,77 @@ fn quote_alignment_is_strong(spoken: &[String], verse: &[String]) -> bool {
         || close_short_quote
 }
 
-fn direct_quote_score(spoken: &str, verse: &str) -> f32 {
-    if has_repeated_phrase(spoken) {
+fn direct_quote_score_tokens(
+    spoken: &[String],
+    verse: &[String],
+    minimum_content_words: usize,
+) -> f32 {
+    if has_repeated_token_phrase(spoken) {
         return 0.0;
     }
-    let spoken = quote_tokens(spoken);
-    let verse = quote_tokens(verse);
-    let mut best = token_quote_score(&spoken, &verse);
-    if !quote_alignment_is_strong(&spoken, &verse) {
+    let mut best = token_quote_score(spoken, verse);
+    if !quote_alignment_is_strong(spoken, verse, minimum_content_words) {
         best = 0.0;
     }
     if spoken.len() > EMBEDDED_QUOTE_WINDOW_WORDS {
         for window in spoken.windows(EMBEDDED_QUOTE_WINDOW_WORDS) {
-            if quote_alignment_is_strong(window, &verse) {
-                best = best.max(token_quote_score(window, &verse));
+            if quote_alignment_is_strong(window, verse, minimum_content_words) {
+                best = best.max(token_quote_score(window, verse));
             }
         }
     }
     best
 }
 
-/// Return the calibrated lexical-alignment score when `spoken` is close enough
-/// to `verse` to qualify as a direct quotation suggestion.
-pub fn direct_quote_match_score(spoken: &str, verse: &str) -> Option<f32> {
-    let spoken_tokens = quote_tokens(spoken);
-    let verse_tokens = quote_tokens(verse);
-    let score = direct_quote_score(spoken, verse);
-    let ordered_words = lcs_len(&spoken_tokens, &verse_tokens);
+/// Ordered agreement over meaningful words only. This is a secondary signal:
+/// it breaks near-ties and helps when ASR inserts or drops function words, but
+/// the full-token alignment and content-word gate remain authoritative.
+pub(crate) fn content_ordered_score_tokens(spoken: &[String], verse: &[String]) -> f32 {
+    let spoken = content_words(spoken);
+    let verse = content_words(verse);
+    let denominator = spoken.len().min(verse.len());
+    if denominator < 3 {
+        return 0.0;
+    }
+    (lcs_len(&spoken, &verse) as f32 / denominator as f32).clamp(0.0, 1.0)
+}
+
+pub(crate) fn direct_quote_match_score_tokens(
+    spoken_tokens: &[String],
+    verse_tokens: &[String],
+    minimum_content_words: usize,
+) -> Option<(f32, f32)> {
+    let score = direct_quote_score_tokens(spoken_tokens, verse_tokens, minimum_content_words);
+    let ordered_words = lcs_len(spoken_tokens, verse_tokens);
     let close_short_quote = (7..=14).contains(&spoken_tokens.len())
         && ordered_words >= 7
         && lcs_len(
-            &content_words(&spoken_tokens),
-            &content_words(&verse_tokens),
+            &content_words(spoken_tokens),
+            &content_words(verse_tokens),
         ) >= 3
-        && content_overlap(&spoken_tokens, &verse_tokens) >= 3;
+        && content_overlap(spoken_tokens, verse_tokens) >= 3;
+    let content_ordered = content_ordered_score_tokens(spoken_tokens, verse_tokens);
     ((score >= 0.72 || (close_short_quote && score >= 0.66))
         && ordered_words >= MIN_DIRECT_QUOTE_WORDS)
-        .then_some(score)
+        .then_some((score, content_ordered))
+}
+
+pub(crate) fn direct_quote_match_score_with_content(
+    spoken: &str,
+    verse: &str,
+    minimum_content_words: usize,
+) -> Option<(f32, f32)> {
+    let spoken_tokens = quote_tokens(spoken);
+    let verse_tokens = quote_tokens(verse);
+    direct_quote_match_score_tokens(&spoken_tokens, &verse_tokens, minimum_content_words)
+}
+
+/// Return the calibrated lexical-alignment score when `spoken` is close enough
+/// to `verse` to qualify as a direct quotation suggestion. Callers that know
+/// whether the quotation is anchored should use the minimum-content variant.
+pub fn direct_quote_match_score(spoken: &str, verse: &str) -> Option<f32> {
+    direct_quote_match_score_with_content(spoken, verse, MIN_QUOTE_CONTENT_WORDS)
+        .map(|(score, _)| score)
 }
 
 #[cfg(test)]
@@ -1199,6 +1356,44 @@ mod tests {
         )
         .expect("the preserved quote structure and content should qualify");
         assert!(score >= 0.66);
+    }
+
+    #[test]
+    fn normalizes_contractions_archaic_spellings_and_plurals() {
+        assert_eq!(quote_tokens("do not"), quote_tokens("don't"));
+        assert_eq!(quote_tokens("you shall not"), quote_tokens("thou shalt not"));
+        assert_eq!(quote_tokens("brothers"), quote_tokens("brethren"));
+        assert_eq!(quote_tokens("sin"), quote_tokens("sins"));
+        assert_eq!(quote_tokens("the Lord"), quote_tokens("the Lord's"));
+        assert_eq!(quote_tokens("show"), quote_tokens("shew"));
+    }
+
+    #[test]
+    fn content_ordered_score_rewards_meaningful_word_order() {
+        let verse = quote_tokens("The LORD is my shepherd; I shall not want.");
+        let ordered =
+            content_ordered_score_tokens(&quote_tokens("lord shepherd want"), &verse);
+        let reordered =
+            content_ordered_score_tokens(&quote_tokens("lord want shepherd"), &verse);
+        assert!(ordered > reordered);
+        assert!(ordered > 0.9);
+    }
+
+    #[test]
+    fn loose_quotes_require_three_content_words() {
+        let verse = "The earth is the Lord's, and the fullness thereof.";
+        assert!(
+            direct_quote_match_score_with_content("The earth is the Lord", verse, 2).is_some()
+        );
+        assert!(
+            direct_quote_match_score_with_content("The earth is the Lord", verse, 3).is_none()
+        );
+        assert!(direct_quote_match_score_with_content(
+            "The Lord is my shepherd I shall not want",
+            "The LORD is my shepherd; I shall not want.",
+            3,
+        )
+        .is_some());
     }
 
     #[test]

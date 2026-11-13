@@ -28,17 +28,21 @@ const MAX_QUERY_TERMS: usize = 8;
 /// such as "The Lord is my shepherd", but only when its posting list is small.
 const MAX_SINGLE_TERM_DF: usize = 500;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct QuoteCandidate {
     pub verse_index: usize,
     pub rare_terms: usize,
+    pub idf_coverage: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct QuoteHit {
     pub verse_index: usize,
     pub score: f32,
+    pub content_ordered: f32,
+    pub rank_score: f32,
     pub rare_terms: usize,
+    pub idf_coverage: f32,
 }
 
 pub(super) struct QuoteSearchIndex {
@@ -91,8 +95,15 @@ impl QuoteSearchIndex {
         self.verses.len()
     }
 
-    /// Returns candidates ordered by the number of matching rare query terms.
-    /// No FTS query or full-corpus LIKE scan is performed here.
+    fn inverse_document_frequency(&self, document_frequency: usize) -> f32 {
+        let total = self.verses.len().max(1) as f32;
+        (1.0 + total / (1.0 + document_frequency as f32)).ln()
+    }
+
+    /// Returns candidates ordered by weighted rare-query-term coverage. A rare
+    /// word such as "shepherd" contributes more than a common one such as
+    /// "lord", even when both are content words. No FTS query or full-corpus
+    /// LIKE scan is performed here.
     pub(super) fn candidates(&self, text: &str) -> Vec<QuoteCandidate> {
         let mut seen = HashSet::new();
         let mut terms: Vec<(String, usize)> = quote_tokens(text)
@@ -124,22 +135,33 @@ impl QuoteSearchIndex {
         } else {
             return Vec::new();
         };
+        let total_idf: f32 = terms
+            .iter()
+            .map(|(_, df)| self.inverse_document_frequency(*df))
+            .sum();
+        if total_idf <= f32::EPSILON {
+            return Vec::new();
+        }
 
-        let mut counts: HashMap<u32, usize> = HashMap::new();
-        for (term, _) in &terms {
+        let mut counts: HashMap<u32, (usize, f32)> = HashMap::new();
+        for (term, df) in &terms {
+            let weight = self.inverse_document_frequency(*df);
             if let Some(postings) = self.postings.get(term) {
                 for index in postings {
-                    *counts.entry(*index).or_default() += 1;
+                    let entry = counts.entry(*index).or_insert((0, 0.0));
+                    entry.0 += 1;
+                    entry.1 += weight;
                 }
             }
         }
 
         let mut candidates: Vec<QuoteCandidate> = counts
             .into_iter()
-            .filter(|(_, count)| *count >= required)
-            .map(|(verse_index, rare_terms)| QuoteCandidate {
+            .filter(|(_, (count, _))| *count >= required)
+            .map(|(verse_index, (rare_terms, idf))| QuoteCandidate {
                 verse_index: verse_index as usize,
                 rare_terms,
+                idf_coverage: (idf / total_idf).clamp(0.0, 1.0),
             })
             .collect();
 
@@ -151,6 +173,8 @@ impl QuoteSearchIndex {
                 if *df > MAX_SINGLE_TERM_DF {
                     continue;
                 }
+                let idf_coverage =
+                    (self.inverse_document_frequency(*df) / total_idf).clamp(0.0, 1.0);
                 if let Some(postings) = self.postings.get(term) {
                     for index in postings {
                         if !candidates
@@ -160,6 +184,7 @@ impl QuoteSearchIndex {
                             candidates.push(QuoteCandidate {
                                 verse_index: *index as usize,
                                 rare_terms: 1,
+                                idf_coverage,
                             });
                         }
                     }
@@ -169,8 +194,9 @@ impl QuoteSearchIndex {
 
         candidates.sort_by(|left, right| {
             right
-                .rare_terms
-                .cmp(&left.rare_terms)
+                .idf_coverage
+                .total_cmp(&left.idf_coverage)
+                .then_with(|| right.rare_terms.cmp(&left.rare_terms))
                 .then_with(|| left.verse_index.cmp(&right.verse_index))
         });
         candidates.truncate(MAX_QUOTE_CANDIDATES);
@@ -213,22 +239,37 @@ pub(super) struct QuoteSearchCache {
 }
 
 impl QuoteSearchCache {
-    pub(super) fn get(&self, version: &str, window: &str) -> Option<Option<QuoteHit>> {
-        self.entries.get(&cache_key(version, window)).copied()
+    pub(super) fn get(
+        &self,
+        version: &str,
+        window: &str,
+        minimum_content_words: usize,
+    ) -> Option<Option<QuoteHit>> {
+        self.entries
+            .get(&cache_key(version, window, minimum_content_words))
+            .copied()
     }
 
-    pub(super) fn insert(&mut self, version: &str, window: &str, hit: Option<QuoteHit>) {
+    pub(super) fn insert(
+        &mut self,
+        version: &str,
+        window: &str,
+        minimum_content_words: usize,
+        hit: Option<QuoteHit>,
+    ) {
         if self.entries.len() > 4_096 {
             self.entries.clear();
         }
-        self.entries.insert(cache_key(version, window), hit);
+        self.entries
+            .insert(cache_key(version, window, minimum_content_words), hit);
     }
 }
 
-fn cache_key(version: &str, window: &str) -> u64 {
+fn cache_key(version: &str, window: &str, minimum_content_words: usize) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     version.hash(&mut hasher);
     window.hash(&mut hasher);
+    minimum_content_words.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -285,18 +326,43 @@ mod tests {
     }
 
     #[test]
+    fn idf_prefers_the_candidate_with_the_rarer_content_term() {
+        let index = QuoteSearchIndex::build(
+            "KJV".into(),
+            vec![
+                verse("Psalms", 23, 1, "The LORD is my shepherd."),
+                verse("Psalms", 23, 2, "The LORD is my light."),
+                verse("Psalms", 23, 3, "The LORD is my strength."),
+                verse("Psalms", 23, 4, "The LORD is my portion."),
+            ],
+        );
+        let candidates = index.candidates("lord shepherd");
+        assert_eq!(candidates[0].verse_index, 0);
+        assert!(candidates[0].idf_coverage > candidates[1].idf_coverage);
+        assert!(candidates[0].idf_coverage > 0.5);
+    }
+
+    #[test]
     fn cache_is_scoped_to_the_selected_translation() {
         let mut cache = QuoteSearchCache::default();
         let hit = QuoteHit {
             verse_index: 4,
             score: 0.9,
+            content_ordered: 0.8,
+            rank_score: 0.89,
             rare_terms: 2,
+            idf_coverage: 0.75,
         };
-        cache.insert("KJV", "the ark went upon the waters", Some(hit));
+        cache.insert("KJV", "the ark went upon the waters", 3, Some(hit));
         assert!(cache
-            .get("KJV", "the ark went upon the waters")
+            .get("KJV", "the ark went upon the waters", 3)
             .unwrap()
             .is_some());
-        assert!(cache.get("NIV", "the ark went upon the waters").is_none());
+        assert!(cache
+            .get("NIV", "the ark went upon the waters", 3)
+            .is_none());
+        assert!(cache
+            .get("KJV", "the ark went upon the waters", 2)
+            .is_none());
     }
 }
