@@ -99,6 +99,7 @@ try {
   const adminHtml = await adminPage.text();
   check("browser administrator console is available", adminPage.status === 200 && adminHtml.includes("Wordlyte Account Admin"));
   check("browser administrator console exposes AI provisioning", adminHtml.includes('data-action="ai"'));
+  check("browser administrator console exposes platform AI insights", adminHtml.includes("AI Scripture insights") && adminHtml.includes("loadInsights"));
   response = await call("/admin/organizations");
   check("admin organization creation requires authentication", response.status === 401);
 
