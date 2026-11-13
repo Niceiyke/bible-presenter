@@ -51,7 +51,6 @@ const ABBREVIATIONS: &[(&str, &str)] = &[
     ("ecc", "Ecclesiastes"),
     ("sos", "Song of Solomon"),
     ("isa", "Isaiah"),
-    ("is", "Isaiah"),
     ("jer", "Jeremiah"),
     ("lam", "Lamentations"),
     ("ezek", "Ezekiel"),
@@ -239,6 +238,16 @@ mod tests {
         assert_eq!(
             resolve_book_name("1 Kgs", &books).as_deref(),
             Some("1 Kings")
+        );
+    }
+
+    #[test]
+    fn common_word_is_is_not_an_isaiah_alias() {
+        let books = vec!["Isaiah".into()];
+        assert_eq!(resolve_book_name("is", &books), None);
+        assert_eq!(
+            resolve_book_name("isa", &books).as_deref(),
+            Some("Isaiah")
         );
     }
 }

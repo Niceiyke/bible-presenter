@@ -1139,6 +1139,17 @@ fn last_book_mention(
                 continue;
             }
             let end = start + alias.len();
+            // Bare aliases are only safe at a natural thought boundary. A
+            // common word in the middle of prose ("this is the day", "do not
+            // judge him") must not become the book context for a later
+            // "verse 31". Also keep the split "Isaiah chapter" -> "seven and
+            // verse fourteen" handoff working.
+            let at_thought_end = end == tokens.len();
+            let before_split_chapter = tokens.get(end).is_some_and(|token| token == "chapter")
+                && end + 1 == tokens.len();
+            if !at_thought_end && !before_split_chapter {
+                continue;
+            }
             let replace = best
                 .as_ref()
                 .is_none_or(|(best_end, best_len, _)| {
@@ -4015,6 +4026,28 @@ mod tests {
         let aliases = reference_aliases_for_books(&["Isaiah".into(), "John".into()]);
         assert_eq!(
             last_book_mention(&quote_tokens("the Bible speaks in Isaiah"), &aliases),
+            Some("Isaiah".into())
+        );
+    }
+
+    #[test]
+    fn common_words_do_not_poison_book_context() {
+        let aliases =
+            reference_aliases_for_books(&["Isaiah".into(), "Judges".into(), "Matthew".into()]);
+        assert_eq!(
+            last_book_mention(&quote_tokens("this is the day"), &aliases),
+            None
+        );
+        assert_eq!(
+            last_book_mention(&quote_tokens("Jesus did not judge him"), &aliases),
+            None
+        );
+        assert_eq!(
+            last_book_mention(&quote_tokens("turn with me to Isaiah"), &aliases),
+            Some("Isaiah".into())
+        );
+        assert_eq!(
+            last_book_mention(&quote_tokens("Isaiah chapter"), &aliases),
             Some("Isaiah".into())
         );
     }

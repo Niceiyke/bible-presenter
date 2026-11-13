@@ -1285,6 +1285,24 @@ mod tests {
     }
 
     #[test]
+    fn common_word_is_is_not_a_spoken_isaiah_reference() {
+        let books = vec!["Isaiah".into(), "Matthew".into()];
+        assert_eq!(
+            detect_reference("this is chapter fourteen verse thirty one", &books),
+            None
+        );
+        assert_eq!(
+            detect_reference("Matthew chapter fourteen verse thirty one", &books),
+            Some(ScriptureReference {
+                book: "Matthew".into(),
+                chapter: 14,
+                verse: 31,
+                verse_end: None,
+            })
+        );
+    }
+
+    #[test]
     fn detects_singular_numbered_kings_aliases() {
         for (transcript, book) in [
             ("First King three five", "1 Kings"),
