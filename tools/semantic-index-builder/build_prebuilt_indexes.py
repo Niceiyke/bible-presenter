@@ -47,7 +47,9 @@ MODEL_REPOSITORY = "Xenova/bge-base-en-v1.5"
 MODEL_REVISION = "4d6cd88e18e51a5e020c2c305726d76ada9c03cf"
 EMBEDDING_DIMENSION = 768
 MAX_LENGTH = 256
-BATCH_SIZE = 32
+# 32 left the GPU mostly idle. T4 memory comfortably handles 128 passages at
+# the 256-token limit; CPU-only Colab still benefits from fewer session calls.
+BATCH_SIZE = 128
 INDEX_MAGIC = b"WLYSEM04"
 INDEX_FILE_BASE = "bible-semantic-bge-base-v1"
 SEMANTIC_INDEX_VERSIONS = ["NKJV", "ASV", "WEB", "NIV", "AMP"]
@@ -74,18 +76,37 @@ os.makedirs(CACHE, exist_ok=True)
 # ---------------------------------------------------------------------------
 # Step 1 — dependencies (Colab: paste-and-run handles pip itself)
 # ---------------------------------------------------------------------------
-print("Installing Python dependencies…")
-subprocess.run([sys.executable, "-m", "pip", "install", "-q", "onnxruntime", "tokenizers"], check=True)
-HAS_CUDA = False
+print("Installing Python dependencies...")
 try:
     import torch
 
     HAS_CUDA = torch.cuda.is_available()
-    if HAS_CUDA:
-        print("CUDA detected — installing onnxruntime-gpu…")
-        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "onnxruntime-gpu"], check=True)
 except Exception:
-    pass
+    HAS_CUDA = False
+
+# Installing the CPU and GPU wheels together can leave the CPU module first on
+# sys.path, which silently makes step 6 run on the CPU. Pick one runtime.
+subprocess.run(
+    [sys.executable, "-m", "pip", "uninstall", "-y", "onnxruntime", "onnxruntime-gpu"],
+    check=False,
+)
+runtime_package = "onnxruntime-gpu" if HAS_CUDA else "onnxruntime"
+try:
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-q", runtime_package, "tokenizers"],
+        check=True,
+    )
+except subprocess.CalledProcessError:
+    if not HAS_CUDA:
+        raise
+    print("GPU runtime install failed; falling back to CPU.")
+    HAS_CUDA = False
+    runtime_package = "onnxruntime"
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-q", runtime_package, "tokenizers"],
+        check=True,
+    )
+print(f"Embedding runtime: {runtime_package} (CUDA available: {HAS_CUDA})")
 
 
 def sha256_file(path):
@@ -254,8 +275,11 @@ tokenizer.enable_truncation(max_length=MAX_LENGTH)
 tokenizer.enable_padding()  # longest-in-batch, like fastembed
 
 providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if HAS_CUDA else ["CPUExecutionProvider"]
+print(f"ONNX Runtime providers available: {ort.get_available_providers()}")
 session = ort.InferenceSession(os.path.join(model_dir, "onnx", "model_quantized.onnx"), providers=providers)
-print(f"ONNX session ready on: {session.get_providers()}")
+print(f"ONNX session providers: {session.get_providers()}")
+if HAS_CUDA and "CUDAExecutionProvider" not in session.get_providers():
+    print("WARNING: CUDA is available but this session fell back to CPU. Step 6 will be much slower.")
 
 
 def embed_batch(texts):
@@ -294,15 +318,21 @@ def build_version(version):
 
     documents = semantic_documents(corpus)
     vectors = np.empty((len(documents), EMBEDDING_DIMENSION), dtype=np.float32)
+    # Batches are padded to the longest passage they contain. Sorting by text
+    # length keeps short verses together and long windows together, which cuts
+    # wasted attention work substantially. Vectors are written back by their
+    # original index, so the on-disk entry order is unchanged.
+    order = sorted(range(len(documents)), key=lambda index: len(documents[index]["text"]))
     started = time.time()
-    for start in range(0, len(documents), BATCH_SIZE):
-        batch = documents[start : start + BATCH_SIZE]
-        vectors[start : start + len(batch)] = embed_batch([document["text"] for document in batch])
+    for start in range(0, len(order), BATCH_SIZE):
+        positions = order[start : start + BATCH_SIZE]
+        batch = [documents[index] for index in positions]
+        vectors[positions] = embed_batch([document["text"] for document in batch])
         if (start // BATCH_SIZE) % 50 == 0:
             elapsed = max(time.time() - started, 1.0)
-            rate = (start + len(batch)) / elapsed
-            remaining = (len(documents) - start - len(batch)) / max(rate, 1.0)
-            print(f"{version}: {start + len(batch)}/{len(documents)} ({rate:.1f} docs/s, ~{remaining/60:.0f} min left)")
+            rate = (start + len(positions)) / elapsed
+            remaining = (len(order) - start - len(positions)) / max(rate, 1.0)
+            print(f"{version}: {start + len(positions)}/{len(order)} ({rate:.1f} docs/s, ~{remaining/60:.0f} min left)")
     print(f"{version}: embedding finished in {(time.time() - started)/60:.1f} min")
     write_index(target, fingerprint, documents, vectors)
     # Parse it back the way the app will: header, entry layout, byte count.
@@ -317,12 +347,23 @@ def build_version(version):
 # ---------------------------------------------------------------------------
 # Step 6 — build every version, then bundle
 # ---------------------------------------------------------------------------
+# Set WORDLYTE_SEMANTIC_VERSIONS=NKJV for a quick test bundle (KJV projects
+# from the NKJV index). Leave unset for the full release bundle.
+requested_versions = os.environ.get("WORDLYTE_SEMANTIC_VERSIONS")
+versions_to_build = (
+    [version.strip().upper() for version in requested_versions.split(",") if version.strip()]
+    if requested_versions
+    else SEMANTIC_INDEX_VERSIONS
+)
+unknown_versions = [version for version in versions_to_build if version not in SEMANTIC_INDEX_VERSIONS]
+assert not unknown_versions, f"unsupported semantic versions: {unknown_versions}"
+
 built = {}
-for version in SEMANTIC_INDEX_VERSIONS:
+for version in versions_to_build:
     path = build_version(version)
     if path:
         built[version] = path
-assert built, "none of the supported translations are installed in this database"
+assert built, "none of the selected translations are installed in this database"
 
 bundle_path = os.path.join("/content", BUNDLE_NAME)
 manifest = {
@@ -340,7 +381,9 @@ manifest = {
         for version, path in built.items()
     },
 }
-with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+# Index payloads are already int8 vectors, so deflate spends minutes for almost
+# no size reduction. Store them directly so the bundle step finishes quickly.
+with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_STORED) as archive:
     for path in built.values():
         archive.write(path, os.path.basename(path))
     archive.writestr("manifest.json", json.dumps(manifest, indent=2))

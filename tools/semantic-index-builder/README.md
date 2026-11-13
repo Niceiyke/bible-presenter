@@ -38,6 +38,21 @@ Two equivalent entry points; the notebook is generated from the script by
 - **Script**: create a notebook and paste all of `build_prebuilt_indexes.py`
   into one cell and run it.
 
+Step 1 selects `onnxruntime-gpu` when a CUDA runtime is available and prints
+the available and session providers. If the session falls back to
+`CPUExecutionProvider`, step 6 is dramatically slower. The builder embeds in
+length-sorted batches of 128, and stores the final zip without deflating the
+already-compressed int8 indexes.
+
+For a quick test bundle, set the optional version filter before running step 6:
+
+```python
+os.environ["WORDLYTE_SEMANTIC_VERSIONS"] = "NKJV"
+```
+
+Leave it unset for the full release bundle. KJV projection uses the NKJV index,
+so an NKJV-only bundle is enough for a KJV test.
+
 Either way:
 
 1. Set *Runtime → Change runtime type → T4 GPU* (CPU works but is ~10× slower).
