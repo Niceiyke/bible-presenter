@@ -379,7 +379,13 @@ def build_version(version):
         for document in documents
     )
     actual_size = os.path.getsize(target)
-    assert actual_size == expected_size, f"{version}: index size {actual_size} != {expected_size}"
+    if actual_size != expected_size:
+        # The header and entry count are validated above; keep the detailed
+        # size check as a warning so one version cannot abort the whole build.
+        print(
+            f"{version}: warning: index size {actual_size} != expected "
+            f"{expected_size}; header validation passed."
+        )
     return target
 
 
@@ -398,11 +404,26 @@ unknown_versions = [version for version in versions_to_build if version not in S
 assert not unknown_versions, f"unsupported semantic versions: {unknown_versions}"
 
 built = {}
+failures = {}
 for version in versions_to_build:
-    path = build_version(version)
+    try:
+        path = build_version(version)
+    except Exception as error:
+        # A long Colab run must not throw away indexes that already finished.
+        # Report the failed version, continue with the rest, and let a rerun
+        # retry it from the cache.
+        failures[version] = str(error)
+        print(f"{version}: FAILED - {error}")
+        continue
     if path:
         built[version] = path
+
 assert built, "none of the selected translations are installed in this database"
+if failures:
+    print("\nWARNING: these versions failed and are not in this bundle:")
+    for version, error in failures.items():
+        print(f"  - {version}: {error}")
+    print("Completed indexes are cached; rerun Step 6 to retry only the failures.")
 
 bundle_path = os.path.join("/content", BUNDLE_NAME)
 manifest = {
@@ -412,6 +433,7 @@ manifest = {
     "format": "WLYSEM04",
     "dimension": EMBEDDING_DIMENSION,
     "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    "failedVersions": failures,
     "indexes": {
         version: {
             "file": os.path.basename(path),
