@@ -74,18 +74,14 @@ jobs:
             'src-tauri\binaries\ffmpeg.exe',
             'src-tauri\binaries\ffprobe.exe',
             'src-tauri\binaries\ndi\Processing.NDI.Lib.x64.dll',
-            'src-tauri\bible_data\hymns.json',
-            'src-tauri\bible_data\bible-semantic-bge-v1.index'
+            'src-tauri\bible_data\hymns.json'
           )
           foreach ($file in $required) {
             if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
               throw "Required release resource is missing: $file"
             }
           }
-          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath 'src-tauri\bible_data\bible-semantic-bge-v1.index').Hash.ToLower()
-          if ($hash -ne 'a541018334369d5a41212e4bbccc8738dad472f64345d8c95e6bc7e0a22db4ec') {
-            throw "Bundled Bible semantic index failed its pinned SHA-256 check."
-          }
+          # Per-translation semantic indexes are downloaded at setup time.
 
       - name: test NDI feature
         working-directory: src-tauri
