@@ -16,6 +16,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const ADMIN_TOKEN = "local-test-token";
 const AI_GATEWAY_SERVICE_TOKEN = "EXAMPLE-local-ai-gateway-token";
 const AI_TOKEN_SECRET = "EXAMPLE-local-ai-token-secret";
+const CUSTOMER_SERVICE_SECRET = "EXAMPLE-local-customer-service-secret";
 const M1 = "a".repeat(64);
 const M2 = "b".repeat(64);
 
@@ -70,6 +71,23 @@ async function call(path, { method = "GET", token, body } = {}) {
   return { status: response.status, data: await response.json().catch(() => null) };
 }
 
+async function customerCall(path, { method = "GET", organizationId = "", body } = {}) {
+  const timestamp = Math.floor(Date.now() / 1000);
+  const signature = createHmac("sha256", CUSTOMER_SERVICE_SECRET)
+    .update(`${method}\n${path}\n${organizationId}\n${timestamp}`)
+    .digest("base64url");
+  const response = await fetch(`${BASE}${path}`, {
+    method,
+    headers: {
+      "content-type": "application/json",
+      "x-wordlyte-timestamp": String(timestamp),
+      "x-wordlyte-signature": signature,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return { status: response.status, data: await response.json().catch(() => null) };
+}
+
 async function waitForServer() {
   const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
@@ -81,7 +99,7 @@ async function waitForServer() {
 
 const persist = await mkdtemp(join(tmpdir(), "wordlyte-account-test-"));
 const wrangler = join(ROOT, "node_modules", "wrangler", "bin", "wrangler.js");
-writeFileSync(devVarsPath, `ADMIN_TOKEN=${ADMIN_TOKEN}\nAI_GATEWAY_SERVICE_TOKEN=${AI_GATEWAY_SERVICE_TOKEN}\nAI_TOKEN_SECRET=${AI_TOKEN_SECRET}\nLICENSE_SIGN_PRIVATE_KEY=${privateJwk}\n`);
+writeFileSync(devVarsPath, `ADMIN_TOKEN=${ADMIN_TOKEN}\nAI_GATEWAY_SERVICE_TOKEN=${AI_GATEWAY_SERVICE_TOKEN}\nAI_TOKEN_SECRET=${AI_TOKEN_SECRET}\nCUSTOMER_SERVICE_SECRET=${CUSTOMER_SERVICE_SECRET}\nLICENSE_SIGN_PRIVATE_KEY=${privateJwk}\n`);
 const worker = spawn(process.execPath, [wrangler, "dev", "--local", "--port", String(PORT), "--persist-to", persist], {
   cwd: ROOT,
   stdio: ["ignore", "pipe", "pipe"],
@@ -191,6 +209,19 @@ try {
   check("admins can list synced transcripts", response.status === 200
     && response.data.transcripts?.length === 1
     && response.data.transcripts[0]?.performance?.suggestions === 4);
+  response = await call(`/internal/customer/organizations/${freeOrganization.id}/transcripts`);
+  check("customer service transcript access requires a signature", response.status === 401);
+  response = await customerCall(`/internal/customer/organizations/${freeOrganization.id}/transcripts`, {
+    organizationId: freeOrganization.id,
+  });
+  check("customer service can list transcripts", response.status === 200
+    && response.data.transcripts?.length === 1
+    && response.data.transcripts[0]?.performance?.suggestions === 4);
+  response = await customerCall(`/internal/customer/organizations/${freeOrganization.id}/transcripts/session-test-1`, {
+    organizationId: freeOrganization.id,
+  });
+  check("customer service can read finalized transcript text", response.status === 200
+    && response.data.transcript?.transcript_text === "For God so loved the world.");
   response = await call(`/admin/organizations/${freeOrganization.id}/transcripts/session-test-1`, { token: ADMIN_TOKEN });
   check("admins can read finalized transcript text", response.status === 200
     && response.data.transcript?.transcript_text === "For God so loved the world."
@@ -249,6 +280,28 @@ try {
   check("admins can read the AI Unit balance", response.status === 200
     && response.data.ai?.total_units_remaining === 135
     && Array.isArray(response.data.usage));
+  response = await customerCall(`/internal/customer/organizations/${freeOrganization.id}`, {
+    organizationId: freeOrganization.id,
+  });
+  check("customer service can read organization plan", response.status === 200
+    && response.data.organization?.id === freeOrganization.id);
+  response = await customerCall(`/internal/customer/organizations/${freeOrganization.id}/devices`, {
+    organizationId: freeOrganization.id,
+  });
+  check("customer service can read sanitized devices", response.status === 200
+    && response.data.devices?.length >= 1
+    && !("token_hash" in (response.data.devices?.[0] || {})));
+  response = await customerCall(`/internal/customer/organizations/${freeOrganization.id}/activation-code`, {
+    method: "POST",
+    organizationId: freeOrganization.id,
+  });
+  check("customer service can create an activation code", response.status === 200
+    && /^WACT-/.test(response.data.activation_code || ""));
+  response = await customerCall(`/internal/customer/organizations/${freeOrganization.id}/ai`, {
+    organizationId: freeOrganization.id,
+  });
+  check("customer service can read AI balance", response.status === 200
+    && response.data.ai?.total_units_remaining === 135);
 
   response = await call("/internal/ai/reserve", {
     method: "POST", token: AI_GATEWAY_SERVICE_TOKEN,
@@ -288,6 +341,19 @@ try {
   });
   check("zero-balance transcription reservation is rejected", response.status === 402
     && response.data.status === "ai_no_units");
+
+  response = await call("/internal/customer/organizations", {
+    method: "POST",
+    body: { church_name: "Unsigned Church", email: "unsigned@example.test", plan: "free" },
+  });
+  check("customer service organization creation requires a signature", response.status === 401);
+  response = await customerCall("/internal/customer/organizations", {
+    method: "POST",
+    body: { church_name: "Customer Service Church", email: "customer@example.test", plan: "free" },
+  });
+  check("customer service can create an organization", response.status === 200
+    && response.data.organization?.id?.startsWith("org_")
+    && /^WACT-/.test(response.data.activation_code || ""));
 } catch (error) {
   check(`unexpected error: ${error.message}`, false);
 } finally {

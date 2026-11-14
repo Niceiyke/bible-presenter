@@ -30,7 +30,7 @@ export default {
         headers: {
           ...jsonHeaders,
           "access-control-allow-methods": "POST, GET, OPTIONS",
-          "access-control-allow-headers": "content-type, authorization",
+          "access-control-allow-headers": "content-type, authorization, x-wordlyte-timestamp, x-wordlyte-signature",
         },
       });
     }
@@ -118,6 +118,89 @@ export default {
       }));
     }
 
+    if (url.pathname === "/internal/customer/organizations" && request.method === "POST") {
+      if (!(await isCustomerService(request, env, ""))) return unauthorized();
+      const body = await request.json().catch(() => null);
+      const created = await createOrganizationRecord(env, body);
+      if (created.error) return json({ status: "error", message: created.error }, 400);
+      return json({ status: "ok", ...created });
+    }
+
+    const customerOrganizationMatch = url.pathname.match(
+      /^\/internal\/customer\/organizations\/(org_[a-f0-9]+)(?:\/(activation-code|devices|ai|transcripts))?$/,
+    );
+    if (customerOrganizationMatch) {
+      const [, organizationId, section] = customerOrganizationMatch;
+      if (!(await isCustomerService(request, env, organizationId))) return unauthorized();
+      if (!section && request.method === "GET") {
+        const organization = await env.ORGANIZATIONS.get(orgKey(organizationId), "json");
+        if (!organization) return json({ status: "error", message: "Organization not found." }, 404);
+        return json({ status: "ok", organization: publicOrganization(organization) });
+      }
+      if (section === "devices" && request.method === "GET") {
+        const organization = await env.ORGANIZATIONS.get(orgKey(organizationId), "json");
+        if (!organization) return json({ status: "error", message: "Organization not found." }, 404);
+        return json({
+          status: "ok",
+          devices: (organization.devices || []).map((device) => ({
+            machine_id: device.machine_id,
+            device_name: device.device_name,
+            activated_at: device.activated_at,
+            last_seen_at: device.last_seen_at,
+            revoked: device.revoked === true,
+          })),
+        });
+      }
+      if (section === "activation-code" && request.method === "POST") {
+        const stub = env.ORGANIZATION_REGISTRY.get(env.ORGANIZATION_REGISTRY.idFromName(organizationId));
+        return forward(await stub.fetch("https://registry/admin/activation-code", {
+          method: "POST",
+          body: JSON.stringify({ organization_id: organizationId }),
+        }));
+      }
+      if (section === "ai" && request.method === "GET") {
+        const organization = await env.ORGANIZATIONS.get(orgKey(organizationId), "json");
+        if (!organization) return json({ status: "error", message: "Organization not found." }, 404);
+        const stub = env.ORGANIZATION_REGISTRY.get(env.ORGANIZATION_REGISTRY.idFromName(organizationId));
+        const response = await stub.fetch("https://registry/internal/ai/balance", {
+          method: "POST",
+          body: JSON.stringify({ organization_id: organizationId }),
+        });
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data?.ai) {
+          return json({ status: "error", message: data?.message || "AI balance unavailable." }, 503);
+        }
+        return json({
+          status: "ok",
+          organization: publicOrganization(organization),
+          ai: data.ai,
+          usage: Array.isArray(data.usage) ? data.usage : [],
+        });
+      }
+      if (section === "transcripts" && request.method === "GET") {
+        const stub = env.ORGANIZATION_REGISTRY.get(env.ORGANIZATION_REGISTRY.idFromName(organizationId));
+        return forward(await stub.fetch("https://registry/admin/transcripts/list", {
+          method: "POST",
+          body: JSON.stringify({ organization_id: organizationId }),
+        }));
+      }
+    }
+
+    const customerTranscriptMatch = url.pathname.match(
+      /^\/internal\/customer\/organizations\/(org_[a-f0-9]+)\/transcripts\/([^/]+)$/,
+    );
+    if (customerTranscriptMatch && (request.method === "GET" || request.method === "DELETE")) {
+      const [, organizationId, encodedSessionId] = customerTranscriptMatch;
+      if (!(await isCustomerService(request, env, organizationId))) return unauthorized();
+      const sessionId = decodeURIComponent(encodedSessionId);
+      const action = request.method === "DELETE" ? "delete" : "get";
+      const stub = env.ORGANIZATION_REGISTRY.get(env.ORGANIZATION_REGISTRY.idFromName(organizationId));
+      return forward(await stub.fetch(`https://registry/admin/transcripts/${action}`, {
+        method: "POST",
+        body: JSON.stringify({ organization_id: organizationId, session_id: sessionId }),
+      }));
+    }
+
     if (url.pathname === "/transcripts/sync" && request.method === "POST") {
       const supplied = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
       const claims = await verifyAiToken(env, supplied);
@@ -178,35 +261,9 @@ export default {
     if (url.pathname === "/admin/organizations" && request.method === "POST") {
       if (!(await isAdmin(request, env))) return unauthorized();
       const body = await request.json().catch(() => null);
-      const name = String(body?.church_name || "").trim();
-      const email = String(body?.email || "").trim().toLowerCase();
-      const plan = normalizePlan(body?.plan);
-      if (!name || !email) return json({ status: "error", message: "church_name and email are required." }, 400);
-      const now = epoch();
-      const id = `org_${crypto.randomUUID().replaceAll("-", "")}`;
-      const deviceLimit = clampDevices(plan, body?.device_limit);
-      const planDurationDays = Math.max(0, Math.min(3650, Number.parseInt(body?.plan_duration_days, 10) || 0));
-      const activationCode = activationCodeFor();
-      const activation = {
-        code_hash: await sha256(activationCode),
-        expires_at: now + 14 * 86_400,
-        claimed_by_machine_id: null,
-      };
-      const organization = {
-        id,
-        church_name: name,
-        owner_email: email,
-        plan,
-        plan_expires_at: plan === "free" ? null : now + Math.max(1, planDurationDays || 30) * 86_400,
-        device_limit: deviceLimit,
-        devices: [],
-        activation_codes: [activation],
-        revoked: false,
-        created_at: now,
-        updated_at: now,
-      };
-      await env.ORGANIZATIONS.put(orgKey(id), JSON.stringify(organization));
-      return json({ status: "ok", organization: publicOrganization(organization), activation_code: activationCode });
+      const created = await createOrganizationRecord(env, body);
+      if (created.error) return json({ status: "error", message: created.error }, 400);
+      return json({ status: "ok", ...created });
     }
 
     if (url.pathname === "/admin/organizations" && request.method === "GET") {
@@ -904,6 +961,38 @@ async function signedResponse(env, organization, machineId, status, deviceToken)
   });
 }
 
+async function createOrganizationRecord(env, body) {
+  const name = String(body?.church_name || "").trim();
+  const email = String(body?.email || "").trim().toLowerCase();
+  const plan = normalizePlan(body?.plan);
+  if (!name || !email) return { error: "church_name and email are required." };
+  const now = epoch();
+  const id = `org_${crypto.randomUUID().replaceAll("-", "")}`;
+  const deviceLimit = clampDevices(plan, body?.device_limit);
+  const planDurationDays = Math.max(0, Math.min(3650, Number.parseInt(body?.plan_duration_days, 10) || 0));
+  const activationCode = activationCodeFor();
+  const activation = {
+    code_hash: await sha256(activationCode),
+    expires_at: now + 14 * 86_400,
+    claimed_by_machine_id: null,
+  };
+  const organization = {
+    id,
+    church_name: name,
+    owner_email: email,
+    plan,
+    plan_expires_at: plan === "free" ? null : now + Math.max(1, planDurationDays || 30) * 86_400,
+    device_limit: deviceLimit,
+    devices: [],
+    activation_codes: [activation],
+    revoked: false,
+    created_at: now,
+    updated_at: now,
+  };
+  await env.ORGANIZATIONS.put(orgKey(id), JSON.stringify(organization));
+  return { organization: publicOrganization(organization), activation_code: activationCode };
+}
+
 function publicOrganization(organization) {
   const now = epoch();
   const subscriptionPlan = normalizePlan(organization.plan);
@@ -974,6 +1063,17 @@ async function isAdmin(request, env) {
 async function isGateway(request, env) {
   const supplied = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   return Boolean(env.AI_GATEWAY_SERVICE_TOKEN) && constantTimeEqual(supplied, env.AI_GATEWAY_SERVICE_TOKEN);
+}
+
+async function isCustomerService(request, env, organizationId) {
+  if (!env.CUSTOMER_SERVICE_SECRET) return false;
+  const timestamp = Number(request.headers.get("x-wordlyte-timestamp") || 0);
+  if (!Number.isInteger(timestamp) || Math.abs(epoch() - timestamp) > 300) return false;
+  const supplied = request.headers.get("x-wordlyte-signature") || "";
+  if (!supplied) return false;
+  const value = `${request.method}\n${new URL(request.url).pathname}\n${organizationId}\n${timestamp}`;
+  const expected = await hmacBase64url(env.CUSTOMER_SERVICE_SECRET, value);
+  return constantTimeEqual(supplied, expected);
 }
 
 function decodeBase64urlText(value) {

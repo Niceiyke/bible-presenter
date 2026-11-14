@@ -44,10 +44,15 @@ Set these secrets before deployment:
 
 ```text
 ADMIN_TOKEN
+CUSTOMER_SERVICE_SECRET
 LICENSE_SIGN_PRIVATE_KEY
 AI_TOKEN_SECRET
 AI_GATEWAY_SERVICE_TOKEN
 ```
+
+`CUSTOMER_SERVICE_SECRET` authenticates the customer API's organization-scoped
+internal calls. It is separate from the platform `ADMIN_TOKEN` and must never be
+shipped to a browser.
 
 `AI_TOKEN_SECRET` must match the AI Gateway Worker's value. It signs
 short-lived AI access tokens. `AI_GATEWAY_SERVICE_TOKEN` protects the internal
@@ -92,6 +97,35 @@ All administrator endpoints require `Authorization: Bearer <ADMIN_TOKEN>`.
 in milli-Units for future exact per-second transcription settlement. This is a
 transitional provisioning endpoint only: only the managed AI Gateway may
 reserve or spend Units, and customer AI provider keys are never accepted.
+
+### Internal customer API endpoints
+
+These endpoints require a signed customer-service request. The signature is
+HMAC-SHA-256 over:
+
+```text
+METHOD
+request-path
+organization-id
+unix-timestamp
+```
+
+using `CUSTOMER_SERVICE_SECRET`, sent as `x-wordlyte-signature` with
+`x-wordlyte-timestamp`. Timestamps expire after five minutes. Organization id is
+empty only for creation.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/internal/customer/organizations` | Create an organization. |
+| `GET` | `/internal/customer/organizations/:id` | Read plan and organization summary. |
+| `GET` | `/internal/customer/organizations/:id/devices` | Read sanitized devices. |
+| `POST` | `/internal/customer/organizations/:id/activation-code` | Create a device activation code. |
+| `GET` | `/internal/customer/organizations/:id/ai` | Read AI balance and usage. |
+| `GET` | `/internal/customer/organizations/:id/transcripts` | List synced transcripts. |
+| `GET` | `/internal/customer/organizations/:id/transcripts/:sessionId` | Read one transcript. |
+| `DELETE` | `/internal/customer/organizations/:id/transcripts/:sessionId` | Delete one transcript. |
+
+The platform admin routes remain separate and require `ADMIN_TOKEN`.
 
 ### Internal AI Gateway endpoints
 
