@@ -233,6 +233,13 @@ pub struct License {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct PlatformIdentity {
+    pub organization_id: String,
+    pub machine_id: String,
+    pub device_token: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct LicenseStatusInfo {
     pub status: LicenseStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -720,6 +727,24 @@ impl LicenseManager {
             }
         }
         self.evaluate(self.license.lock().clone(), false)
+    }
+
+    /// Device-scoped credentials for the platform API. This is deliberately
+    /// kept inside the Rust process; the frontend never receives `device_token`.
+    pub fn platform_identity(&self) -> Option<PlatformIdentity> {
+        if !self.verified.load(Ordering::SeqCst) {
+            return None;
+        }
+        let guard = self.license.lock();
+        let license = guard.as_ref()?;
+        if license.status != "active" || license.machine_id != self.machine_id {
+            return None;
+        }
+        Some(PlatformIdentity {
+            organization_id: license.organization_id.clone(),
+            machine_id: self.machine_id.clone(),
+            device_token: license.device_token.clone(),
+        })
     }
 
     fn license_from_server(

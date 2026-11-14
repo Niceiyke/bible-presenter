@@ -25,3 +25,4 @@ pub mod pptx;
 pub mod ai_scripture;
 pub mod ai_presentations;
 pub mod prayer_docx;
+pub mod platform_sync;

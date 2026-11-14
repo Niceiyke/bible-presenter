@@ -512,6 +512,7 @@ fn main() {
             wordlyte_lib::commands::license::license_activate,
             wordlyte_lib::commands::license::license_refresh,
             wordlyte_lib::commands::license::license_deactivate,
+            wordlyte_lib::commands::platform_sync::platform_sync_pull,
             wordlyte_lib::commands::backup::backup_create,
             wordlyte_lib::commands::backup::backup_stage_restore,
             wordlyte_lib::commands::backup::restart_application,

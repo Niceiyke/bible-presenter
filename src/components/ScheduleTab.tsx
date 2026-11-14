@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Settings, Edit2, Trash2, Repeat, Zap, GripVertical, Undo2, Redo2, ListPlus, Play, X } from "lucide-react";
+import { Settings, Edit2, Trash2, Repeat, Zap, GripVertical, Undo2, Redo2, ListPlus, Play, X, CloudDownload } from "lucide-react";
 import { Reorder } from "framer-motion";
 import { useAppStore } from "../store";
 import { stableId } from "../utils";
 import { ScheduleTile } from "../items/registry";
 import { Button, IconButton, ConfirmModal, SaveStatus, type SaveStatusState } from "./ui";
+import { CloudSyncPanel } from "./CloudSyncPanel";
 import type { DisplayItem, Schedule, ScheduleEntry, ServiceMeta } from "../types";
 
 interface ScheduleTabProps {
@@ -26,6 +27,7 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
     newServiceName, setNewServiceName,
     isSchedulePersistent, setIsSchedulePersistent,
     saveState, setSaveState,
+    bibleVersion,
     setToast,
   } = useAppStore();
 
@@ -33,6 +35,7 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
   const [renameValue, setRenameValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [createValue, setCreateValue] = useState("");
+  const [cloudSyncOpen, setCloudSyncOpen] = useState(false);
   const saveTimerRef = useRef<number | null>(null);
   const reorderStartRef = useRef<ScheduleEntry[] | null>(null);
   const playingEntryRef = useRef<string | null>(null);
@@ -171,6 +174,18 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
     setToast("Service deleted");
   };
 
+  const importCloudPlan = async (entries: ScheduleEntry[], planTitle: string) => {
+    const existing = new Set(scheduleEntries.map((entry) => entry.id));
+    const fresh = entries.filter((entry) => !existing.has(entry.id));
+    if (fresh.length === 0) {
+      setToast("Those cloud items are already in this service");
+      return;
+    }
+    pushScheduleState([...scheduleEntries, ...fresh]);
+    setToast(`Imported ${fresh.length} item${fresh.length === 1 ? "" : "s"} from ${planTitle}`);
+    debouncedPersist();
+  };
+
   const activeServiceName = services.find((s) => s.id === activeServiceId)?.name ?? "Service";
 
   return (
@@ -231,6 +246,14 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
         </div>
       )}
 
+      {cloudSyncOpen && (
+        <CloudSyncPanel
+          defaultBibleVersion={bibleVersion}
+          onClose={() => setCloudSyncOpen(false)}
+          onImport={(entries, plan) => importCloudPlan(entries, plan.title)}
+        />
+      )}
+
       {/* Header: service status + save state + behavior */}
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
@@ -244,6 +267,15 @@ export function ScheduleTab({ onSendItem, onPersist, stageItem }: ScheduleTabPro
         </div>
 
         <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setCloudSyncOpen((open) => !open)}
+            title="Pull published service plans from the Wordlyte Dashboard"
+            className="flex items-center gap-1 px-1.5 py-1 rounded text-[9px] font-bold border border-action-primary/40 bg-action-primary/15 text-action-primary hover:bg-action-primary/25 transition-all focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring)]"
+          >
+            <CloudDownload size={9} />
+            Cloud
+          </button>
+
           <button
             onClick={() => setIsSchedulePersistent(!isSchedulePersistent)}
             title={isSchedulePersistent ? "Items stay after playing — keep for repeat services" : "Items are removed after playing"}

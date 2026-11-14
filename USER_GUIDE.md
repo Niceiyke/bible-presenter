@@ -5,6 +5,7 @@
 1. Open **Settings → Monitors** and assign the projector and confidence display.
 2. Show the test pattern and confirm that each display is framed correctly.
 3. Build the running order in **Service Plan**. Leave **Keep after playing** on when you may need to revisit items.
+   If the church prepared a published plan in the Wordlyte Dashboard, open **Service Plan → Cloud** to pull it. The first sync imports presentation slides, Scripture references, notes, and custom text items; song and local-media content remain local-only for now.
 4. Stage and preview one Scripture, song, media item, and presentation slide.
 5. Check camera, recording, audio, remote control, and streaming inputs that the service will use.
 6. Open **Settings → Data & Backup** and save a backup after major preparation.
