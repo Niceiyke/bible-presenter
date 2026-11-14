@@ -186,6 +186,40 @@ export default {
       }
     }
 
+    const customerDeviceValidateMatch = url.pathname.match(
+      /^\/internal\/customer\/organizations\/(org_[a-f0-9]+)\/device\/validate$/,
+    );
+    if (customerDeviceValidateMatch && request.method === "POST") {
+      const [, organizationId] = customerDeviceValidateMatch;
+      if (!(await isCustomerService(request, env, organizationId))) return unauthorized();
+      const body = await request.json().catch(() => null);
+      const machineId = String(body?.machine_id || "").trim();
+      const deviceToken = String(body?.device_token || "").trim();
+      if (!validMachineId(machineId) || !validDeviceToken(deviceToken)) {
+        return json({ status: "invalid", message: "Invalid device credentials." }, 400);
+      }
+      const organization = await env.ORGANIZATIONS.get(orgKey(organizationId), "json");
+      if (!organization) return json({ status: "error", message: "Organization not found." }, 404);
+      const device = (organization.devices || []).find((entry) => entry.machine_id === machineId);
+      if (!device || !(await constantTimeEqual(await sha256(deviceToken), device.token_hash))) {
+        return json({ status: "invalid", message: "This computer is not activated for the organization." }, 200);
+      }
+      if (organization.revoked || device.revoked) {
+        return json({ status: "revoked", message: "This device or organization has been revoked." }, 403);
+      }
+      return json({
+        status: "ok",
+        organization: publicOrganization(organization),
+        device: {
+          machine_id: device.machine_id,
+          device_name: device.device_name,
+          activated_at: device.activated_at,
+          last_seen_at: device.last_seen_at,
+          revoked: false,
+        },
+      });
+    }
+
     const customerTranscriptMatch = url.pathname.match(
       /^\/internal\/customer\/organizations\/(org_[a-f0-9]+)\/transcripts\/([^/]+)$/,
     );

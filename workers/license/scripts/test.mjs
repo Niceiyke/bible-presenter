@@ -291,6 +291,28 @@ try {
   check("customer service can read sanitized devices", response.status === 200
     && response.data.devices?.length >= 1
     && !("token_hash" in (response.data.devices?.[0] || {})));
+  response = await customerCall(`/internal/customer/organizations/${freeOrganization.id}/device/validate`, {
+    method: "POST",
+    organizationId: freeOrganization.id,
+    body: { machine_id: M1, device_token: freeDeviceToken },
+  });
+  check("customer service can validate a device credential", response.status === 200
+    && response.data.status === "ok"
+    && response.data.organization?.id === freeOrganization.id
+    && response.data.device?.machine_id === M1
+    && !("token_hash" in (response.data.device || {})));
+  response = await customerCall(`/internal/customer/organizations/${freeOrganization.id}/device/validate`, {
+    method: "POST",
+    organizationId: freeOrganization.id,
+    body: { machine_id: M1, device_token: "wdv_invalid_but_long_enough" },
+  });
+  check("customer service rejects an invalid device credential", response.status === 200
+    && response.data.status === "invalid");
+  response = await call(`/internal/customer/organizations/${freeOrganization.id}/device/validate`, {
+    method: "POST",
+    body: { machine_id: M1, device_token: freeDeviceToken },
+  });
+  check("customer service device validation requires a signature", response.status === 401);
   response = await customerCall(`/internal/customer/organizations/${freeOrganization.id}/activation-code`, {
     method: "POST",
     organizationId: freeOrganization.id,
@@ -319,6 +341,13 @@ try {
   check("admin revokes organization", response.status === 200 && response.data.organization.revoked === true);
   response = await call("/entitlement", { method: "POST", body: { organization_id: freeOrganization.id, machine_id: M1, device_token: freeDeviceToken } });
   check("revoked entitlement remains signed", response.status === 200 && response.data.status === "revoked" && validSignature(response.data));
+  response = await customerCall(`/internal/customer/organizations/${freeOrganization.id}/device/validate`, {
+    method: "POST",
+    organizationId: freeOrganization.id,
+    body: { machine_id: M1, device_token: freeDeviceToken },
+  });
+  check("customer service reports a revoked device", response.status === 403
+    && response.data.status === "revoked");
 
   response = await call("/admin/organizations", { token: ADMIN_TOKEN });
   check("admin lists organizations", response.status === 200 && response.data.organizations.length === 1);

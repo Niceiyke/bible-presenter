@@ -119,6 +119,7 @@ empty only for creation.
 | `POST` | `/internal/customer/organizations` | Create an organization. |
 | `GET` | `/internal/customer/organizations/:id` | Read plan and organization summary. |
 | `GET` | `/internal/customer/organizations/:id/devices` | Read sanitized devices. |
+| `POST` | `/internal/customer/organizations/:id/device/validate` | Validate a device credential for platform device-token exchange. |
 | `POST` | `/internal/customer/organizations/:id/activation-code` | Create a device activation code. |
 | `GET` | `/internal/customer/organizations/:id/ai` | Read AI balance and usage. |
 | `GET` | `/internal/customer/organizations/:id/transcripts` | List synced transcripts. |
